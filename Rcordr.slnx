@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Rcordr.Core/Rcordr.Core.csproj" />
+    <Project Path="src/Rcordr.Onvif/Rcordr.Onvif.csproj" />
+    <Project Path="src/Rcordr.Media/Rcordr.Media.csproj" />
+    <Project Path="src/Rcordr.Infrastructure/Rcordr.Infrastructure.csproj" />
+    <Project Path="src/Rcordr.Web/Rcordr.Web.csproj" />
+    <Project Path="src/Rcordr.Node/Rcordr.Node.csproj" />
+    <Project Path="src/Rcordr.NodeUpdater/Rcordr.NodeUpdater.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Rcordr.Tests/Rcordr.Tests.csproj" />
+  </Folder>
+</Solution>

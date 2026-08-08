@@ -1,0 +1,50 @@
+@page
+@model Rcordr.Web.Pages.Admin.NodesModel
+@{
+    ViewData["Title"] = "Nodes";
+}
+<h1>Recorder nodes</h1>
+<p class="text-muted">
+    Recording runs in a separate Windows Service ("node") per the architecture plan, not inside this
+    IIS-hosted app, so it survives app pool recycles and deploys. Install a node with
+    <code>install-node.ps1</code> using the registration key from
+    <a asp-page="/Setup/Node">Setup &rarr; Node</a>.
+</p>
+
+@if (Model.Nodes.Count == 0)
+{
+    <p class="text-muted">No nodes have registered yet.</p>
+}
+else
+{
+    <table class="table align-middle">
+        <thead><tr><th>Name</th><th>Status</th><th>Version</th><th>Platform</th><th>Last seen</th><th>Cameras</th></tr></thead>
+        <tbody>
+            @foreach (var n in Model.Nodes)
+            {
+                <tr>
+                    <td>@n.Name</td>
+                    <td>
+                        @{
+                            var stale = n.LastSeenAt is null || n.LastSeenAt < DateTime.UtcNow.AddMinutes(-2);
+                        }
+                        <span class="badge @(stale ? "text-bg-secondary" : "text-bg-success")">@n.Status</span>
+                    </td>
+                    <td>@n.Version</td>
+                    <td>@n.Platform</td>
+                    <td>
+                        @if (n.LastSeenAt is { } seen)
+                        {
+                            <span title="@seen.ToString("u")">@seen.ToString("g")</span>
+                        }
+                        else
+                        {
+                            <span class="text-muted">never</span>
+                        }
+                    </td>
+                    <td>@Model.CameraCountByNode.GetValueOrDefault(n.Id, 0)</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}

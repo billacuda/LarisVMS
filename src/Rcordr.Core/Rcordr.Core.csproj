@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- Version drives the footer via AppVersions, but this is the assembly's own version marker,
+         bumped alongside CHANGELOG.md as described in the README. -->
+    <Version>0.3.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Domain-only project: IAuthorizationRequirement, HttpContext-adjacent types used by Auth/,
+         no other package dependencies. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+</Project>
