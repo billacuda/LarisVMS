@@ -140,6 +140,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.ProfileToken).HasMaxLength(200).IsRequired();
             e.Property(x => x.Codec).HasMaxLength(50);
             e.Property(x => x.AudioCodec).HasMaxLength(50);
+            e.Property(x => x.CustomName).HasMaxLength(200);
             e.HasOne(x => x.Camera).WithMany(c => c.Streams)
                 .HasForeignKey(x => x.CameraId).OnDelete(DeleteBehavior.Cascade);
             e.HasIndex(x => new { x.CameraId, x.Role });
@@ -154,6 +155,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.PreviousApiKeyHash).HasMaxLength(200);
             e.Property(x => x.Version).HasMaxLength(50);
             e.Property(x => x.Platform).HasMaxLength(50);
+            e.Property(x => x.LastIpAddress).HasMaxLength(45);
         });
 
         // ── Segment ──────────────────────────────────────────────────────────

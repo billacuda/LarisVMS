@@ -42,7 +42,8 @@ public class NodeAuthMiddleware(RequestDelegate next)
         var nodeId = token[..separator];
         var secret = token[(separator + 1)..];
 
-        var node = await nodeService.AuthenticateAsync(nodeId, secret, version: null, context.RequestAborted);
+        var remoteIp = context.Connection.RemoteIpAddress?.ToString();
+        var node = await nodeService.AuthenticateAsync(nodeId, secret, remoteIp, context.RequestAborted);
         if (node is null)
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;

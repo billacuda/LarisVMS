@@ -12,6 +12,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     private readonly ILogger<NodeWorker> _logger = loggerFactory.CreateLogger<NodeWorker>();
     private readonly Dictionary<Guid, CameraRecorder> _active = [];
     private readonly ConcurrentQueue<SegmentReportItem> _pendingSegments = new();
+    private readonly ConcurrentQueue<StreamInfoReportItem> _pendingStreamInfo = new();
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -28,6 +29,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             foreach (var recorder in _active.Values) recorder.Cts.Cancel();
             await Task.WhenAll(_active.Values.Select(r => r.RunTask));
             await FlushSegmentsAsync(CancellationToken.None);
+            await FlushStreamInfoAsync(CancellationToken.None);
         }
     }
 
@@ -40,7 +42,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 var config = await api.GetConfigAsync(ct);
                 var storageRoot = Reconcile(config, ct);
                 var usage = DiskSpace.TryGetUsage(storageRoot);
-                await api.HeartbeatAsync(new NodeHeartbeatRequest("0.4.0", usage?.FreeBytes, usage?.TotalBytes), ct);
+                await api.HeartbeatAsync(new NodeHeartbeatRequest(NodeVersion.Current, usage?.FreeBytes, usage?.TotalBytes), ct);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -60,6 +62,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             catch (OperationCanceledException) { break; }
 
             await FlushSegmentsAsync(ct);
+            await FlushStreamInfoAsync(ct);
         }
     }
 
@@ -81,6 +84,27 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             // control plane knows about it yet.
             foreach (var item in batch) _pendingSegments.Enqueue(item);
             _logger.LogWarning(ex, "Failed to report {Count} segment(s) — will retry next cycle.", batch.Count);
+        }
+    }
+
+    private async Task FlushStreamInfoAsync(CancellationToken ct)
+    {
+        var batch = new List<StreamInfoReportItem>();
+        while (_pendingStreamInfo.TryDequeue(out var item)) batch.Add(item);
+        if (batch.Count == 0) return;
+
+        try
+        {
+            await api.ReportStreamInfoAsync(batch, ct);
+            _logger.LogInformation("Reported stream info for {Count} stream(s).", batch.Count);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Same re-queue-on-failure reasoning as segments — ffmpeg only prints this once per
+            // (re)start, so losing it here means waiting for the next restart rather than the next
+            // report cycle.
+            foreach (var item in batch) _pendingStreamInfo.Enqueue(item);
+            _logger.LogWarning(ex, "Failed to report stream info for {Count} stream(s) — will retry next cycle.", batch.Count);
         }
     }
 
@@ -119,6 +143,8 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             session.SegmentCompleted += segment => _pendingSegments.Enqueue(new SegmentReportItem(
                 camera.CameraId, "Main", segment.StartUtc, segment.EndUtc, segment.FilePath, segment.SizeBytes,
                 mainStream.Codec, mainStream.Width, mainStream.Height, mainStream.HasAudio));
+            session.StreamResolutionDetected += resolution => _pendingStreamInfo.Enqueue(new StreamInfoReportItem(
+                camera.CameraId, "Main", resolution.Width, resolution.Height, resolution.Codec));
 
             var runTask = session.RunAsync(cts.Token);
             _active[camera.CameraId] = new CameraRecorder(cts, runTask, session);

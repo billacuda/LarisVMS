@@ -29,6 +29,12 @@ public class Node
     public DateTime? LastSeenAt { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
+    /// <summary>The remote IP the node last authenticated from (register or heartbeat), captured
+    /// server-side from the connection rather than self-reported — a node can't spoof what it
+    /// doesn't get to say. Useful for spotting a node on the wrong subnet/VLAN or one whose IP
+    /// changed unexpectedly.</summary>
+    public string? LastIpAddress { get; set; }
+
     /// <summary>Free/total bytes on the storage root's volume, self-reported by the node on every
     /// heartbeat (it's the only side that can actually measure its own disk/SMB share). Drives the
     /// Admin/Nodes usage bar and the M4 "days of retention remaining" estimate.</summary>

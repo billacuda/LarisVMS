@@ -14,6 +14,11 @@
     — including a re-run of this script to change settings — loads that file and skips
     re-registration, so re-running this script is safe.
 
+    Re-running against an already-installed node (upgrade) stops the existing service rather than
+    deleting and recreating it, and reuses the ffmpeg already copied into $InstallDir\ffmpeg from a
+    previous run instead of re-resolving it from PATH/winget/-FfmpegPath every time — pass
+    -FfmpegPath explicitly only when you actually want to replace ffmpeg itself.
+
     Storage access: if the storage root is a network share (\\server\share\...), the service must
     run as an account with access to it — the default LocalSystem account generally cannot
     authenticate to SMB shares. Pass -ServiceCredential for a domain/service account in that case.
@@ -47,6 +52,43 @@ function Write-Ok([string]$msg)   { Write-Host "    $msg"  -ForegroundColor Gree
 function Format-ServiceArg([string]$value) {
     if ($value -match '[\s"]') { return '"' + ($value -replace '"', '\"') + '"' }
     return $value
+}
+
+# Windows does not kill child processes when their parent dies or is stopped — Rcordr.Node's own
+# graceful shutdown is supposed to kill each ffmpeg.exe it spawned, but if the SCM's stop timeout is
+# hit before that finishes (confirmed happening on a real node), ffmpeg.exe is left running,
+# orphaned, and still holding its DLLs open, which fails a same-path copy with "being used by
+# another process". An earlier version of this function tried to filter to only ffmpeg processes
+# under this node's install dir by checking each process's .Path — that's the wrong tool here:
+# querying .Path on a process running as a different account (the service, and therefore its
+# ffmpeg.exe children, normally run as LocalSystem) can silently fail even from an elevated
+# Administrator session, which meant the filter matched nothing and killed nothing. ffmpeg is only
+# ever run by Rcordr.Node on this machine, so unconditionally stopping every ffmpeg.exe still around
+# after the service reports Stopped is both safe and reliable.
+function Stop-OrphanedFfmpeg {
+    $procs = Get-Process -Name ffmpeg -ErrorAction SilentlyContinue
+    if ($procs) {
+        Write-Host "    Found $($procs.Count) orphaned ffmpeg process(es) still running - stopping..."
+        $procs | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+    }
+}
+
+# Belt-and-suspenders on top of Stop-OrphanedFfmpeg above: a just-killed process's file handles can
+# take the OS a moment longer to fully release even after Stop-Process returns, so a same-path copy
+# right afterward can still transiently fail. Retrying beats making the whole upgrade fail on a race
+# that clears itself within a couple of seconds.
+function Copy-ItemWithRetry([string]$Source, [string]$Destination, [int]$MaxAttempts = 5) {
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            Copy-Item $Source $Destination -Recurse -Force
+            return
+        } catch {
+            if ($attempt -eq $MaxAttempts) { throw }
+            Write-Host "    Copy attempt $attempt/$MaxAttempts failed (file still in use) - retrying in 2s..." -ForegroundColor Yellow
+            Start-Sleep -Seconds 2
+        }
+    }
 }
 
 # Installs an ffmpeg package via winget.exe directly and returns the path ffmpeg.exe landed at.
@@ -106,24 +148,30 @@ if (-not (Test-Path $BinaryPath)) {
     throw "Binary not found: $BinaryPath`nBuild it first with: .\build-node.ps1 (run on a dev machine, then copy the publish\Rcordr.Node\win\ folder here)."
 }
 
-# ── stop + remove existing service ───────────────────────────────────────────
+# ── stop existing service ────────────────────────────────────────────────────
 # Must happen before anything below touches $InstallDir: a running node's ffmpeg.exe/DLLs and its
 # own Rcordr.Node.exe can be locked by the currently-running process, so overwriting them while the
 # old service is still up (the normal case for an in-place upgrade of a live recorder) can fail
 # mid-copy. Stopping first — even on a fresh install where $existingSvc is null and this is a no-op —
 # guarantees every copy below lands on an unlocked target.
+#
+# Deliberately stop-only, not delete+recreate: an upgrade updates the same ServiceName in place
+# (possibly with changed arguments) further down instead of tearing the service down and rebuilding
+# it — less disruptive to anything referencing the service (monitoring, Event Viewer history) and
+# there's no reason deleting it was ever necessary for this.
 
+$ffmpegInstallDir = Join-Path $InstallDir 'ffmpeg'
+$isUpgrade = $false
 $existingSvc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($existingSvc) {
+    $isUpgrade = $true
     Write-Step "Stopping existing service '$ServiceName'"
     if ($existingSvc.Status -ne 'Stopped') {
         Stop-Service -Name $ServiceName -Force
         $existingSvc.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
         Write-Ok "Stopped"
     }
-    sc.exe delete $ServiceName | Out-Null
-    Start-Sleep -Seconds 2
-    Write-Ok "Removed (node.config and any recordings already on disk are untouched)"
+    Stop-OrphanedFfmpeg
 }
 
 # ── resolve ffmpeg ───────────────────────────────────────────────────────────
@@ -133,11 +181,21 @@ if ($existingSvc) {
 # for; BtbN.FFmpeg.LGPL.Shared on winget matches that.
 
 Write-Step "Resolving ffmpeg"
+$alreadyInstalledFfmpeg = Join-Path $ffmpegInstallDir 'ffmpeg.exe'
 $resolvedFfmpeg = $null
+$reusingInstalledFfmpeg = $false
+
 if (-not [string]::IsNullOrWhiteSpace($FfmpegPath)) {
     if (-not (Test-Path $FfmpegPath)) { throw "Specified -FfmpegPath does not exist: $FfmpegPath" }
     $resolvedFfmpeg = $FfmpegPath
     Write-Ok "Using: $resolvedFfmpeg"
+} elseif (Test-Path $alreadyInstalledFfmpeg) {
+    # Upgrade path: a previous run of this script already copied ffmpeg into this node's own
+    # install dir — reuse it rather than re-resolving from PATH/winget every time this script is
+    # re-run just to pick up a new Rcordr.Node.exe build. Pass -FfmpegPath explicitly to replace it.
+    $resolvedFfmpeg = $alreadyInstalledFfmpeg
+    $reusingInstalledFfmpeg = $true
+    Write-Ok "Reusing already-installed ffmpeg: $resolvedFfmpeg"
 } else {
     $onPath = Get-Command ffmpeg -ErrorAction SilentlyContinue
     if ($onPath) {
@@ -152,39 +210,41 @@ if (-not [string]::IsNullOrWhiteSpace($FfmpegPath)) {
     }
 }
 
-# Copied into the node's own install directory regardless of where it was found — a shared build
-# resolved from PATH, a manually-supplied -FfmpegPath, or a winget install under the *installing
-# user's* %LOCALAPPDATA% are all locations the Windows Service (running as LocalSystem or a
-# dedicated service account, never as whoever happened to run this script) has no guarantee of
-# being able to read. $InstallDir is machine-wide (Program Files) and was just created below, so
-# copying there once, up front, sidesteps that permission gap entirely rather than depending on the
-# service account's access to wherever ffmpeg happened to be resolved from.
-$ffmpegInstallDir = Join-Path $InstallDir 'ffmpeg'
-Write-Step "Copying ffmpeg into $ffmpegInstallDir"
-New-Item -ItemType Directory -Path $ffmpegInstallDir -Force | Out-Null
-# A "shared" ffmpeg build's exe depends on sibling DLLs (avcodec-*.dll etc.) in the same folder —
-# copy everything alongside it, not just ffmpeg.exe.
-Copy-Item (Join-Path (Split-Path $resolvedFfmpeg -Parent) '*') $ffmpegInstallDir -Recurse -Force
-$FfmpegPath = Join-Path $ffmpegInstallDir 'ffmpeg.exe'
-if (-not (Test-Path $FfmpegPath)) { throw "Copy completed but ffmpeg.exe is not at the expected path: $FfmpegPath" }
-Write-Ok "ffmpeg ready at $FfmpegPath"
+if ($reusingInstalledFfmpeg) {
+    $FfmpegPath = $alreadyInstalledFfmpeg
+} else {
+    # Copied into the node's own install directory regardless of where it was found — a shared
+    # build resolved from PATH, a manually-supplied -FfmpegPath, or a winget install under the
+    # *installing user's* %LOCALAPPDATA% are all locations the Windows Service (running as
+    # LocalSystem or a dedicated service account, never as whoever happened to run this script) has
+    # no guarantee of being able to read. $InstallDir is machine-wide (Program Files), so copying
+    # there once, up front, sidesteps that permission gap entirely.
+    Write-Step "Copying ffmpeg into $ffmpegInstallDir"
+    New-Item -ItemType Directory -Path $ffmpegInstallDir -Force | Out-Null
+    # A "shared" ffmpeg build's exe depends on sibling DLLs (avcodec-*.dll etc.) in the same folder —
+    # copy everything alongside it, not just ffmpeg.exe. Retried: on an upgrade this overwrites the
+    # previous install's files, and Stop-OrphanedFfmpeg above closes most but not necessarily every
+    # instance of the handle-release race that can leave one still transiently locked.
+    Copy-ItemWithRetry (Join-Path (Split-Path $resolvedFfmpeg -Parent) '*') $ffmpegInstallDir
+    $FfmpegPath = Join-Path $ffmpegInstallDir 'ffmpeg.exe'
+    if (-not (Test-Path $FfmpegPath)) { throw "Copy completed but ffmpeg.exe is not at the expected path: $FfmpegPath" }
+    Write-Ok "ffmpeg ready at $FfmpegPath"
+}
 
 # ── install files ─────────────────────────────────────────────────────────────
 
 Write-Step "Installing node to $InstallDir"
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-Copy-Item $BinaryPath (Join-Path $InstallDir 'Rcordr.Node.exe') -Force
+Copy-ItemWithRetry $BinaryPath (Join-Path $InstallDir 'Rcordr.Node.exe')
 Write-Ok "Files installed"
 
-# ── register service ──────────────────────────────────────────────────────────
+# ── register / update service ────────────────────────────────────────────────
 # Registration/heartbeat arguments are baked into the service's own command line rather than a
 # config file: Program.cs already accepts them as CLI args (and RCORDR_* environment variables) for
 # interactive testing, so reusing that same surface here needs no extra code path. They're only
 # actually used on the very first start — once node.config exists, Program.cs skips registration
 # and just loads the persisted NodeId/secret, so re-running this script to rotate, say, the ffmpeg
 # path is safe and won't re-register a second node.
-
-Write-Step "Registering Windows Service '$ServiceName'"
 
 $exePath = Join-Path $InstallDir 'Rcordr.Node.exe'
 $argParts = @('--server-url', $ServerUrl, '--registration-key', $RegistrationKey, '--ffmpeg-path', $FfmpegPath)
@@ -193,23 +253,50 @@ if ($InsecureTls) { $argParts += '--insecure-tls' }
 
 $binPath = (Format-ServiceArg $exePath) + ' ' + (($argParts | ForEach-Object { Format-ServiceArg $_ }) -join ' ')
 
-$serviceParams = @{
-    Name            = $ServiceName
-    DisplayName     = $ServiceDisplay
-    Description     = 'Rcordr recorder node - supervises FFmpeg-based 24/7 camera recording.'
-    BinaryPathName  = $binPath
-    StartupType     = 'Automatic'
-}
 if ($ServiceCredential) {
-    $serviceParams['Credential'] = $ServiceCredential
     Write-Host "    Running as $($ServiceCredential.UserName) (needed for network/SMB storage access)."
 } else {
     Write-Host "    Running as LocalSystem - this CANNOT access a network (\\server\share) storage root." -ForegroundColor Yellow
     Write-Host "    Re-run with -ServiceCredential (Get-Credential) if the storage root is a network share." -ForegroundColor Yellow
 }
 
-New-Service @serviceParams | Out-Null
-Write-Ok "Registered"
+if ($isUpgrade) {
+    # Updates the existing service's binary path/display name/credential in place via WMI
+    # (Win32_Service.Change) rather than `sc.exe config` — sc.exe's `key= value` argument syntax and
+    # $binPath's own embedded quoting (from Format-ServiceArg, needed for the exe path and each
+    # argument that itself contains spaces) is a well-known minefield for PowerShell's native-command
+    # argument passing, especially on Windows PowerShell 5.1. Change() takes PathName as a normal
+    # .NET string parameter, so none of that applies. Any Change() parameter left out of $changeArgs
+    # (ServiceType, ErrorControl, Description, ...) is left as-is, not reset.
+    Write-Step "Updating existing service '$ServiceName'"
+    $svc = Get-CimInstance -ClassName Win32_Service -Filter "Name='$ServiceName'"
+    $changeArgs = @{
+        DisplayName = $ServiceDisplay
+        PathName    = $binPath
+        StartMode   = 'Automatic'
+    }
+    if ($ServiceCredential) {
+        $changeArgs['StartName'] = $ServiceCredential.UserName
+        $changeArgs['StartPassword'] = $ServiceCredential.GetNetworkCredential().Password
+    }
+    $result = Invoke-CimMethod -InputObject $svc -MethodName Change -Arguments $changeArgs
+    if ($result.ReturnValue -ne 0) {
+        throw "Failed to update service '$ServiceName' (Win32_Service.Change ReturnValue=$($result.ReturnValue))."
+    }
+    Write-Ok "Updated"
+} else {
+    Write-Step "Registering Windows Service '$ServiceName'"
+    $serviceParams = @{
+        Name            = $ServiceName
+        DisplayName     = $ServiceDisplay
+        Description     = 'Rcordr recorder node - supervises FFmpeg-based 24/7 camera recording.'
+        BinaryPathName  = $binPath
+        StartupType     = 'Automatic'
+    }
+    if ($ServiceCredential) { $serviceParams['Credential'] = $ServiceCredential }
+    New-Service @serviceParams | Out-Null
+    Write-Ok "Registered"
+}
 
 # ── configure service recovery ────────────────────────────────────────────────
 
@@ -224,7 +311,7 @@ Write-Step "Starting service '$ServiceName'"
 Start-Service -Name $ServiceName
 Write-Ok "Started"
 
-Write-Host "`nNode installed successfully." -ForegroundColor Green
+Write-Host "`nNode $(if ($isUpgrade) { 'upgraded' } else { 'installed' }) successfully." -ForegroundColor Green
 Write-Host "Logs:        Event Viewer > Windows Logs > Application  (source: $ServiceName)"
 Write-Host "Install dir: $InstallDir"
 Write-Host "Assign cameras to this node from Admin -> Nodes / the camera edit page in Rcordr.Web."

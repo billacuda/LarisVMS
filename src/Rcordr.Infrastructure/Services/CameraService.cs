@@ -132,6 +132,14 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
             .Select(g => new { CameraId = g.Key, Bytes = g.Sum(s => s.SizeBytes) })
             .ToDictionaryAsync(x => x.CameraId, x => x.Bytes, ct);
 
+    public async Task UpdateStreamAsync(Guid streamId, bool isEnabled, string? customName, CancellationToken ct = default)
+    {
+        var name = string.IsNullOrWhiteSpace(customName) ? null : customName.Trim();
+        await db.CameraStreams.Where(s => s.Id == streamId).ExecuteUpdateAsync(u => u
+            .SetProperty(s => s.IsEnabled, isEnabled)
+            .SetProperty(s => s.CustomName, name), ct);
+    }
+
     public async Task DeleteAsync(Guid id, CancellationToken ct = default)
     {
         // ExecuteDeleteAsync issues the DELETE directly rather than loading the entity first — a
@@ -239,49 +247,78 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
 
     /// <summary>Ranks profiles by resolution (highest first) and assigns Main/Sub/Third — ONVIF
     /// doesn't label which profile is "the" main stream, so pixel count is the practical proxy
-    /// every other role assignment (recording, wall auto-switch) in later milestones builds on.</summary>
+    /// every other role assignment (recording, wall auto-switch) in later milestones builds on.
+    ///
+    /// Not a blind delete+recreate: IsEnabled and CustomName are user overrides that must survive a
+    /// re-probe, so existing rows are matched to the freshly-probed profiles by ProfileToken first
+    /// (the stable ONVIF identifier), falling back to Role for a camera whose firmware reassigns
+    /// tokens on every probe. Matched rows keep their Id/IsEnabled/CustomName and have everything
+    /// else refreshed in place; unmatched old rows (a profile that's gone) are removed; unmatched new
+    /// profiles are inserted fresh with IsEnabled defaulting true.</summary>
     private async Task<int> ReplaceStreamsAsync(Guid cameraId, CameraProbeResult result,
         OnvifMediaClient mediaClient, OnvifCredentials? credentials, CancellationToken ct)
     {
         var existing = await db.CameraStreams.Where(s => s.CameraId == cameraId).ToListAsync(ct);
-        db.CameraStreams.RemoveRange(existing);
 
-        if (result.Profiles.Count == 0) return 0;
+        if (result.Profiles.Count == 0)
+        {
+            db.CameraStreams.RemoveRange(existing);
+            return 0;
+        }
 
         var mediaXAddrText = result.RawXAddrs.GetValueOrDefault("Media");
         if (mediaXAddrText is null || !Uri.TryCreate(mediaXAddrText, UriKind.Absolute, out var mediaXAddr))
+        {
+            db.CameraStreams.RemoveRange(existing);
             return 0;
+        }
 
         var ranked = CameraProfileRanker.Rank(result.Profiles);
-
         var roles = new[] { CameraStreamRole.Main, CameraStreamRole.Sub, CameraStreamRole.Third };
+        var byToken = existing.ToDictionary(s => s.ProfileToken);
+        var byRole = existing.ToDictionary(s => s.Role);
+        var matched = new HashSet<Guid>();
         var count = 0;
 
         for (var i = 0; i < ranked.Count; i++)
         {
             var profile = ranked[i];
+            var role = roles[i];
             Uri? streamUri;
             try { streamUri = await mediaClient.GetStreamUriAsync(mediaXAddr, profile.Token, credentials, ct); }
             catch (OnvifFaultException) { continue; }
             if (streamUri is null) continue;
 
-            db.CameraStreams.Add(new CameraStream
+            var current = byToken.GetValueOrDefault(profile.Token) ?? byRole.GetValueOrDefault(role);
+            if (current is null)
             {
-                Id = Guid.NewGuid(),
-                CameraId = cameraId,
-                Role = roles[i],
-                RtspUri = streamUri.ToString(),
-                ProfileToken = profile.Token,
-                Codec = profile.VideoEncoding,
-                Width = profile.Width,
-                Height = profile.Height,
-                Fps = profile.FrameRateLimit,
-                BitrateKbps = profile.BitrateLimitKbps,
-                HasAudio = profile.HasAudio,
-                AudioCodec = profile.AudioEncoding
-            });
+                current = new CameraStream { Id = Guid.NewGuid(), CameraId = cameraId };
+                db.CameraStreams.Add(current);
+            }
+            else
+            {
+                matched.Add(current.Id);
+            }
+
+            current.Role = role;
+            current.RtspUri = streamUri.ToString();
+            current.ProfileToken = profile.Token;
+            // ?? current.*, not a flat overwrite: ONVIF omits VideoEncoderConfiguration entirely for
+            // some cameras/profiles (confirmed: Amcrest, H.265), so a re-probe reporting null here
+            // must not clobber a real value RecordingSession already measured from ffmpeg's own
+            // stderr and reported back via UpdateStreamInfoAsync — a fresher ONVIF-reported value
+            // still wins when the camera actually provides one.
+            current.Codec = profile.VideoEncoding ?? current.Codec;
+            current.Width = profile.Width ?? current.Width;
+            current.Height = profile.Height ?? current.Height;
+            current.Fps = profile.FrameRateLimit;
+            current.BitrateKbps = profile.BitrateLimitKbps;
+            current.HasAudio = profile.HasAudio;
+            current.AudioCodec = profile.AudioEncoding;
             count++;
         }
+
+        db.CameraStreams.RemoveRange(existing.Where(s => !matched.Contains(s.Id)));
 
         return count;
     }

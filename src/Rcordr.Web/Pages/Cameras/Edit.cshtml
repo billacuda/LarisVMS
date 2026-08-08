@@ -131,19 +131,30 @@
     }
     else
     {
-        <table class="table">
-            <thead><tr><th>Role</th><th>Resolution</th><th>Codec</th><th>FPS</th><th>Bitrate</th><th>Audio</th><th>RTSP</th></tr></thead>
+        <table class="table align-middle">
+            <thead><tr><th>Enabled</th><th>Name</th><th>Role</th><th>Resolution</th><th>Codec</th><th>FPS</th><th>Bitrate</th><th>Audio</th><th>RTSP</th><th></th></tr></thead>
             <tbody>
                 @foreach (var s in Model.Streams.OrderBy(s => s.Role))
                 {
-                    <tr>
-                        <td>@s.Role</td>
-                        <td>@(s.Width is not null ? $"{s.Width}x{s.Height}" : "—")</td>
-                        <td>@(s.Codec ?? "—")</td>
-                        <td>@(s.Fps?.ToString() ?? "—")</td>
-                        <td>@(s.BitrateKbps is not null ? $"{s.BitrateKbps} kbps" : "—")</td>
-                        <td>@(s.HasAudio ? s.AudioCodec ?? "yes" : "no")</td>
-                        <td class="font-monospace small">@s.RtspUri</td>
+                    <tr class="@(s.IsEnabled ? "" : "text-muted")">
+                        <form method="post" asp-page-handler="UpdateStream">
+                            <input type="hidden" name="Id" value="@Model.Id" />
+                            <input type="hidden" name="streamId" value="@s.Id" />
+                            <td>
+                                <input type="checkbox" class="form-check-input" name="streamIsEnabled" value="true" @(s.IsEnabled ? "checked" : "") />
+                            </td>
+                            <td style="min-width: 10rem;">
+                                <input name="customName" class="form-control form-control-sm" value="@s.CustomName" placeholder="@s.Role" />
+                            </td>
+                            <td>@s.Role</td>
+                            <td>@(s.Width is not null ? $"{s.Width}x{s.Height}" : "—")</td>
+                            <td>@(s.Codec ?? "—")</td>
+                            <td>@(s.Fps?.ToString() ?? "—")</td>
+                            <td>@(s.BitrateKbps is not null ? $"{s.BitrateKbps} kbps" : "—")</td>
+                            <td>@(s.HasAudio ? s.AudioCodec ?? "yes" : "no")</td>
+                            <td class="font-monospace small">@s.RtspUri</td>
+                            <td class="text-end"><button type="submit" class="btn btn-sm btn-outline-primary">Save</button></td>
+                        </form>
                     </tr>
                 }
             </tbody>

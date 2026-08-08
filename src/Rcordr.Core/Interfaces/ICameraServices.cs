@@ -30,6 +30,12 @@ public interface ICameraService
     /// <summary>Sum of Segments.SizeBytes per camera — what M4's per-camera quota is checked
     /// against, and what Cameras/Index shows as "in use".</summary>
     Task<Dictionary<Guid, long>> GetStorageUsageAsync(CancellationToken ct = default);
+
+    /// <summary>Toggles a stream's IsEnabled and/or sets its display-name override. A disabled Main
+    /// stream stops being handed to nodes (NodeService.GetConfigAsync), so this is how recording on
+    /// a specific stream is turned off without touching the camera itself. A blank customName clears
+    /// the override back to the default Role-based label.</summary>
+    Task UpdateStreamAsync(Guid streamId, bool isEnabled, string? customName, CancellationToken ct = default);
 }
 
 public interface ICameraGroupService

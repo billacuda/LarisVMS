@@ -24,7 +24,7 @@ if (config is null)
     var insecure = HasFlag(args, "--insecure-tls") || Environment.GetEnvironmentVariable("RCORDR_INSECURE_TLS") == "1";
     var registerClient = new NodeApiClient(serverUrl, insecure);
     var response = await registerClient.RegisterAsync(
-        new Rcordr.Core.Dtos.NodeRegisterRequest(registrationKey, Environment.MachineName, "0.4.0", Environment.OSVersion.Platform.ToString()),
+        new Rcordr.Core.Dtos.NodeRegisterRequest(registrationKey, Environment.MachineName, NodeVersion.Current, Environment.OSVersion.Platform.ToString()),
         CancellationToken.None);
 
     config = new NodeConfig(serverUrl, response.NodeId, response.Secret);

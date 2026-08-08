@@ -31,6 +31,7 @@
     <ProjectReference Include="..\..\src\Rcordr.Infrastructure\Rcordr.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Rcordr.Onvif\Rcordr.Onvif.csproj" />
     <ProjectReference Include="..\..\src\Rcordr.Node\Rcordr.Node.csproj" />
+    <ProjectReference Include="..\..\src\Rcordr.Media\Rcordr.Media.csproj" />
   </ItemGroup>
 
 </Project>

@@ -24,3 +24,10 @@ public record NodeStatusReportItem(Guid CameraId, string State, DateTime? LastSe
 /// per-camera quota, or watermark eviction) — the web deletes the matching Segment rows so the DB
 /// index never claims a file that no longer exists.</summary>
 public record SegmentDeleteRequest(List<string> FilePaths);
+
+/// <summary>Real resolution/codec parsed from ffmpeg's own stderr when it opens a camera's stream —
+/// sent once per ffmpeg (re)start, more trustworthy than ONVIF's advertised
+/// VideoEncoderConfiguration, which some cameras omit entirely. Only ever reported for the Main
+/// stream today, since that's the only one the node actually opens with ffmpeg (Sub/Third aren't
+/// consumed by anything until M5's live view).</summary>
+public record StreamInfoReportItem(Guid CameraId, string StreamRole, int Width, int Height, string? Codec);

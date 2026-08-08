@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-08
+
+### Added
+
+- `Admin → Nodes` shows each node's IP address, captured server-side from the connection on every
+  authenticated register/heartbeat/config/segments request (`Node.LastIpAddress`) rather than
+  self-reported by the node — useful for spotting a node on the wrong subnet/VLAN or one whose IP
+  changed unexpectedly.
+- Real stream resolution/codec, read from ffmpeg's own stderr the moment it opens a camera's Main
+  stream and reported back to the web (`POST /api/nodes/streams/info`). ONVIF's advertised
+  VideoEncoderConfiguration is unreliable — confirmed: Amcrest omits it entirely for H.265 profiles
+  — so `CameraStream.Width/Height/Codec` used to stay blank for those cameras even though the RTSP
+  URI itself was correct and recording worked fine. Only ever reported for Main today, since that's
+  the only stream a node's ffmpeg process actually opens (Sub/Third aren't consumed until M5's live
+  view starts a process for them too).
+- Per-stream enable/disable and a display-name override, on `Cameras/Edit`'s Streams table.
+  Disabling a stream removes it from what `NodeService.GetConfigAsync` hands to nodes, so disabling
+  Main stops that camera recording without touching the camera itself — same mechanism, one level
+  more granular than `Camera.IsEnabled`. Both survive a re-probe: `CameraService.ReplaceStreamsAsync`
+  now matches existing rows to freshly-probed profiles (by ProfileToken, falling back to Role) and
+  carries IsEnabled/CustomName forward instead of deleting and recreating the whole set, which would
+  otherwise have silently wiped any customization on the next "Re-probe" click.
+
+### Changed
+
+- `install-node.ps1`'s upgrade path (re-running it against an already-installed node) no longer
+  deletes and recreates the Windows Service — it stops the existing one and updates its binary
+  path/display name/credential in place via WMI (`Win32_Service.Change`), leaving Event Viewer
+  history and anything else referencing the service intact. It also no longer re-resolves ffmpeg
+  from PATH/winget on every upgrade: if ffmpeg is already sitting in this node's own install dir from
+  a previous run, it's reused as-is, and the winget fetch/copy step is skipped entirely unless
+  `-FfmpegPath` is passed explicitly to replace it.
+
+### Fixed
+
+- `install-node.ps1` stopping the Windows Service only waits for `Rcordr.Node.exe` itself to exit —
+  Windows doesn't kill child processes when their parent dies, so if `Rcordr.Node`'s own graceful
+  shutdown doesn't finish killing each `ffmpeg.exe` it spawned before the SCM's stop timeout hits,
+  those are left running, orphaned, and still holding their DLLs open. Confirmed on a real node: this
+  made re-running the script to upgrade an already-running node fail with "the process cannot access
+  the file... being used by another process" while copying ffmpeg. The script now unconditionally
+  stops any `ffmpeg.exe` still running after the service reports Stopped, plus retries the copy
+  itself a few times as a second line of defense against the same handle-release race. (An earlier
+  version of this fix tried to filter to only ffmpeg processes under the node's own install
+  directory by checking each process's `.Path` — that filter silently matched nothing, since
+  querying `.Path` on a process running as a different account, LocalSystem by default here, can
+  fail even from an elevated session. Simpler and correct: ffmpeg is only ever run by Rcordr.Node on
+  this machine, so there's nothing to filter for.)
+- Nodes kept reporting a stale version in `Admin → Nodes` no matter how many times they were
+  upgraded. Two compounding bugs: `NodeHeartbeatRequest.Version` was sent on every heartbeat but the
+  heartbeat endpoint never read it, so `Node.Version` only ever got set once, at first-ever
+  registration, and never again — confirmed live: two real nodes stuck showing `0.3.0` despite
+  running an already-upgraded `0.4.0` binary. Separately, the node's own reported version was a hand
+  maintained string literal (`"0.4.0"`) rather than read from the build, which is exactly what let it
+  drift two releases behind in the first place. Fixed both: the heartbeat handler now persists
+  `Version` alongside the disk-usage stats it already recorded, and the node reads its version from
+  its own assembly metadata (`Rcordr.Node.csproj`'s `<Version>`) via a new `NodeVersion.Current`
+  instead of a literal anyone could forget to bump. Confirmed live: both real nodes corrected to
+  `0.4.0` on their next heartbeat, with no redeploy needed for the server-side half of the fix.
+- The `AddCameraStreamEnabledAndCustomName` migration (added for the enable/disable/rename feature
+  above) would have defaulted every *existing* stream's new `IsEnabled` column to `false` — EF's
+  migration scaffolding defaults a new non-nullable bool column to the CLR default, not the C#
+  property initializer's `true`. Combined with `NodeService.GetConfigAsync`'s new
+  `Where(s => s.IsEnabled)` filter, applying this as generated would have silently stopped recording
+  on every camera already in production the moment it deployed. Caught before deploying; the
+  migration explicitly backfills `defaultValue: true` instead. Confirmed live post-deploy: all 18
+  existing `CameraStreams` rows came through with `IsEnabled = true`.
+
 ## [0.4.0] - 2026-08-08
 
 ### Added

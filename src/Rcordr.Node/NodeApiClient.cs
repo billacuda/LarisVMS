@@ -59,4 +59,11 @@ public class NodeApiClient
         var response = await _http.PostAsJsonAsync("api/nodes/segments/delete", new SegmentDeleteRequest(filePaths), ct);
         response.EnsureSuccessStatusCode();
     }
+
+    public async Task ReportStreamInfoAsync(List<StreamInfoReportItem> items, CancellationToken ct)
+    {
+        if (items.Count == 0) return;
+        var response = await _http.PostAsJsonAsync("api/nodes/streams/info", items, ct);
+        response.EnsureSuccessStatusCode();
+    }
 }

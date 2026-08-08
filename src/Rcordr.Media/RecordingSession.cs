@@ -1,8 +1,14 @@
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Rcordr.Core.Enums;
 
 namespace Rcordr.Media;
+
+/// <summary>Real resolution/codec parsed from ffmpeg's own stderr when it opens the input stream —
+/// more trustworthy than ONVIF's advertised VideoEncoderConfiguration, which some cameras (confirmed:
+/// Amcrest, on H.265 profiles) omit from GetProfiles/GetVideoEncoderConfiguration entirely.</summary>
+public record StreamResolution(int Width, int Height, string? Codec);
 
 public record RecordingSessionOptions(
     string FfmpegPath,
@@ -35,6 +41,24 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
     public string? LastError { get; private set; }
 
     public event Action<RecordingSegment>? SegmentCompleted;
+    public event Action<StreamResolution>? StreamResolutionDetected;
+
+    // ffmpeg prints each input stream's summary once, right after it opens the RTSP connection, e.g.
+    // "Stream #0:0: Video: hevc (Main), yuv420p(tv, bt709), 2560x1440, 15 fps, ...". Matches the
+    // codec name and the first WxH pair on that line — good enough since ffmpeg's own format for this
+    // line hasn't changed across the versions this has been tested against.
+    private static readonly Regex VideoStreamLine = new(
+        @"Stream #\d+:\d+.*?Video:\s*([A-Za-z0-9_]+).*?(\d{2,5})x(\d{2,5})",
+        RegexOptions.Compiled);
+
+    /// <summary>Pure parsing extracted from DrainStderrAsync so it's unit-testable against real
+    /// captured ffmpeg output lines without spawning a process.</summary>
+    internal static StreamResolution? TryParseVideoStreamLine(string line)
+    {
+        var match = VideoStreamLine.Match(line);
+        if (!match.Success) return null;
+        return new StreamResolution(int.Parse(match.Groups[2].Value), int.Parse(match.Groups[3].Value), match.Groups[1].Value);
+    }
 
     public async Task RunAsync(CancellationToken ct)
     {
@@ -276,6 +300,7 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
 
     private async Task DrainStderrAsync(Process process, CancellationToken ct)
     {
+        var resolutionReported = false;
         try
         {
             string? line;
@@ -288,6 +313,13 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
                 // header (incorrect codec parameters?): Invalid argument"), leaving only the generic
                 // "Conversion failed!" summary line visible in the log.
                 logger.LogDebug("ffmpeg: {Line}", line);
+
+                if (!resolutionReported && TryParseVideoStreamLine(line) is { } resolution)
+                {
+                    resolutionReported = true;
+                    StreamResolutionDetected?.Invoke(resolution);
+                }
+
                 if (line.Contains("error", StringComparison.OrdinalIgnoreCase)
                     || line.Contains("failed", StringComparison.OrdinalIgnoreCase)
                     || line.Contains("could not", StringComparison.OrdinalIgnoreCase)

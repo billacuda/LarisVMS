@@ -44,7 +44,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         return new NodeRegisterResponse(node.Id, secret);
     }
 
-    public async Task<Node?> AuthenticateAsync(string nodeId, string secret, string? version, CancellationToken ct = default)
+    public async Task<Node?> AuthenticateAsync(string nodeId, string secret, string? remoteIp, CancellationToken ct = default)
     {
         if (!Guid.TryParse(nodeId, out var id)) return null;
 
@@ -58,7 +58,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
 
         node.LastSeenAt = DateTime.UtcNow;
         node.Status = NodeStatus.Active;
-        if (version is not null) node.Version = version;
+        if (remoteIp is not null) node.LastIpAddress = remoteIp;
         await db.SaveChangesAsync(ct);
 
         return node;
@@ -88,7 +88,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             var retentionDays = await settings.GetAsync<int?>("Retention.Days", 30, cameraId: c.Id, nodeId: nodeId, ct: ct);
             cameraDtos.Add(new NodeConfigCameraDto(
                 c.Id, c.Name, c.Username, c.Password,
-                c.Streams.Select(s => new NodeConfigStreamDto(
+                c.Streams.Where(s => s.IsEnabled).Select(s => new NodeConfigStreamDto(
                     s.Id, s.Role.ToString(), s.RtspUri, s.Codec, s.Width, s.Height, s.HasAudio)).ToList(),
                 retentionDays, c.QuotaBytes));
         }
@@ -104,12 +104,31 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             .ExecuteDeleteAsync(ct);
     }
 
-    public async Task UpdateStorageStatsAsync(Guid nodeId, long? freeBytes, long? totalBytes, CancellationToken ct = default)
+    public async Task UpdateStorageStatsAsync(Guid nodeId, long? freeBytes, long? totalBytes, string? version, CancellationToken ct = default)
     {
         await db.Nodes.Where(n => n.Id == nodeId).ExecuteUpdateAsync(s => s
             .SetProperty(n => n.StorageFreeBytes, freeBytes)
             .SetProperty(n => n.StorageTotalBytes, totalBytes)
-            .SetProperty(n => n.StorageStatsUpdatedAt, DateTime.UtcNow), ct);
+            .SetProperty(n => n.StorageStatsUpdatedAt, DateTime.UtcNow)
+            .SetProperty(n => n.Version, n => version ?? n.Version), ct);
+    }
+
+    public async Task UpdateStreamInfoAsync(Guid nodeId, IReadOnlyList<StreamInfoReportItem> items, CancellationToken ct = default)
+    {
+        foreach (var item in items)
+        {
+            if (!Enum.TryParse<CameraStreamRole>(item.StreamRole, out var role)) continue;
+
+            // Scoped to Camera.NodeId == nodeId, not just CameraId: a report from a node the camera
+            // has since been reassigned away from is stale by definition and must not overwrite what
+            // the camera's *current* node measured.
+            await db.CameraStreams
+                .Where(s => s.CameraId == item.CameraId && s.Role == role && s.Camera.NodeId == nodeId)
+                .ExecuteUpdateAsync(u => u
+                    .SetProperty(s => s.Width, item.Width)
+                    .SetProperty(s => s.Height, item.Height)
+                    .SetProperty(s => s.Codec, item.Codec), ct);
+        }
     }
 
     public async Task<Dictionary<Guid, double?>> GetEstimatedDaysRemainingAsync(CancellationToken ct = default)

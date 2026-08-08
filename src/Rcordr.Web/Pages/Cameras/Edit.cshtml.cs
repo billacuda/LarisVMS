@@ -134,4 +134,10 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
         if (Id is not null) await cameraService.DeleteAsync(Id.Value);
         return RedirectToPage("Index");
     }
+
+    public async Task<IActionResult> OnPostUpdateStreamAsync(Guid streamId, bool streamIsEnabled, string? customName)
+    {
+        await cameraService.UpdateStreamAsync(streamId, streamIsEnabled, customName);
+        return RedirectToPage("Edit", new { id = Id });
+    }
 }
