@@ -39,6 +39,7 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
     public async Task RunAsync(CancellationToken ct)
     {
         Directory.CreateDirectory(options.OutputDirectory);
+        EnsureUpcomingHourDirectories();
         var consecutiveFailures = 0;
         // Scoped to the whole session, not the per-attempt loop below: it was previously recreated
         // on every ffmpeg restart, which meant every reconnect after a crash rescanned the output
@@ -63,6 +64,13 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
                 {
                     try { await Task.Delay(TimeSpan.FromSeconds(options.PollIntervalSeconds), ct); }
                     catch (OperationCanceledException) { break; }
+
+                    // Cheap and idempotent — re-creating an existing directory is a no-op. Run every
+                    // poll tick (every 5s by default) rather than once at startup so a session that
+                    // keeps the same ffmpeg process alive across an hour boundary (the common case —
+                    // ffmpeg only restarts on failure) always has the *next* hour's folder ready well
+                    // before it needs it, regardless of how long this attempt has been running.
+                    EnsureUpcomingHourDirectories();
 
                     PollForCompletedSegments(reportedPaths);
 
@@ -130,7 +138,18 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
 
     private Process StartFfmpeg()
     {
-        var outputPattern = Path.Combine(options.OutputDirectory, "%Y%m%dT%H%M%SZ.mp4");
+        // Nested Y/m/d/H folders, not flat: a busy camera at the default 60s segment length writes
+        // ~1,440 files/day, and a single flat directory holding tens to hundreds of thousands of
+        // files (a realistic 30-90 day retention window) makes every directory listing measurably
+        // slower — including this class's own poll every few seconds. ffmpeg's segment muxer has no
+        // option to create missing directories on its own (confirmed: no -strftime_mkdir in this
+        // build, only -strftime), so EnsureUpcomingHourDirectories() has to stay ahead of it or an
+        // hour boundary would abort the whole recording, not just roll to a new folder. The folder
+        // names land in the *node's local* time zone (whatever -strftime expands them as), not UTC —
+        // deliberately: this path is a human browsing the filesystem, and the timestamps that
+        // actually matter for correctness (Segment.StartUtc/EndUtc) are computed independently, in
+        // C#, from file metadata — see RecordingSegment's doc comment.
+        var outputPattern = $"{options.OutputDirectory.TrimEnd('/', '\\')}/%Y/%m/%d/%H/%Y%m%dT%H%M%SZ.mp4";
 
         var psi = new ProcessStartInfo
         {
@@ -193,8 +212,12 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
         string[] files;
         try
         {
-            files = Directory.GetFiles(options.OutputDirectory, "*.mp4");
-            Array.Sort(files, StringComparer.Ordinal); // strftime names sort chronologically as strings
+            // AllDirectories: segments now live under nested Y/m/d/H folders, not flat in
+            // OutputDirectory. Full paths still sort chronologically as strings — the folder
+            // hierarchy is itself zero-padded and chronological (2026/08/09/14/... sorts before
+            // .../15/...), same as the zero-padded filename underneath it.
+            files = Directory.GetFiles(options.OutputDirectory, "*.mp4", SearchOption.AllDirectories);
+            Array.Sort(files, StringComparer.Ordinal);
         }
         catch (IOException)
         {
@@ -235,7 +258,7 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
     private void FinalizeInProgressSegment(HashSet<string> reportedPaths)
     {
         string[] files;
-        try { files = Directory.GetFiles(options.OutputDirectory, "*.mp4"); }
+        try { files = Directory.GetFiles(options.OutputDirectory, "*.mp4", SearchOption.AllDirectories); }
         catch (IOException) { return; }
         if (files.Length == 0) return;
 
@@ -283,6 +306,21 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
             logger.LogDebug(ex, "stderr drain ended.");
         }
     }
+
+    /// <summary>Pre-creates the current and next hour's output folder. Local time, matching
+    /// whatever -strftime will actually expand to — see StartFfmpeg's comment on why the folder
+    /// names are local rather than UTC. Creating a directory that already exists is a no-op, so
+    /// this is safe (and cheap) to call on every poll tick rather than only at startup.</summary>
+    private void EnsureUpcomingHourDirectories()
+    {
+        var now = DateTime.Now;
+        Directory.CreateDirectory(HourDirectory(now));
+        Directory.CreateDirectory(HourDirectory(now.AddHours(1)));
+    }
+
+    private string HourDirectory(DateTime when)
+        => Path.Combine(options.OutputDirectory,
+            when.ToString("yyyy"), when.ToString("MM"), when.ToString("dd"), when.ToString("HH"));
 
     private void TryKill(Process process)
     {

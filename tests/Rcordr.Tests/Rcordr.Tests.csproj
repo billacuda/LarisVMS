@@ -19,6 +19,7 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" />
   </ItemGroup>
 
   <ItemGroup>
@@ -29,6 +30,7 @@
     <ProjectReference Include="..\..\src\Rcordr.Core\Rcordr.Core.csproj" />
     <ProjectReference Include="..\..\src\Rcordr.Infrastructure\Rcordr.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Rcordr.Onvif\Rcordr.Onvif.csproj" />
+    <ProjectReference Include="..\..\src\Rcordr.Node\Rcordr.Node.csproj" />
   </ItemGroup>
 
 </Project>

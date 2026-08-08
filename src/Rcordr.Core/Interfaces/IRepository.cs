@@ -1,3 +1,5 @@
+using Rcordr.Core.Enums;
+
 namespace Rcordr.Core.Interfaces;
 
 public interface IRepository<T> where T : class
@@ -49,15 +51,36 @@ public interface ISetupService
 }
 
 /// <summary>
-/// Walks Camera → group ancestors (nearest first) → Global → compiled-in default, memory-cached
-/// with invalidation on write. Every feature that is "global with per-camera override"
-/// (retention, recording mode, motion sensitivity, ...) reads through this rather than querying
-/// Settings/SettingOverride directly. See CHANGELOG / plan for the resolution order.
+/// Walks Camera → Node → Global → compiled-in default, memory-cached with invalidation on write.
+/// Every feature that is "global with per-camera override" (retention, recording mode, motion
+/// sensitivity, ...) reads through this rather than querying Settings/SettingOverride directly.
+/// <c>nodeId</c> is optional on every call — if omitted but <c>cameraId</c> is given, the camera's
+/// current Node is looked up so a camera-level default still falls through its node's override
+/// before Global. CameraGroup-scoped overrides (<see cref="SettingScope.CameraGroup"/>) are modeled
+/// in the schema and the enum but there's no UI yet to set one and no ancestor-walk implemented —
+/// deferred until a feature actually needs it, per CHANGELOG / plan.
 /// </summary>
 public interface ISettingsResolver
 {
-    Task<string?> GetRawAsync(string key, Guid? cameraId = null, CancellationToken ct = default);
-    Task<T> GetAsync<T>(string key, T defaultValue, Guid? cameraId = null, CancellationToken ct = default);
+    Task<string?> GetRawAsync(string key, Guid? cameraId = null, Guid? nodeId = null, CancellationToken ct = default);
+    Task<T> GetAsync<T>(string key, T defaultValue, Guid? cameraId = null, Guid? nodeId = null, CancellationToken ct = default);
+
+    /// <summary>Which scope actually supplied the resolved value — Camera/Node/Global — or null if
+    /// nothing is set anywhere and the caller's compiled-in default applies. Drives "inherited" vs
+    /// "override" badges in the UI without duplicating the resolution walk.</summary>
+    Task<SettingScope?> GetSourceAsync(string key, Guid? cameraId = null, Guid? nodeId = null, CancellationToken ct = default);
+
+    /// <summary>The raw value of exactly this scope's own override row, with no walk — null if this
+    /// scope has no override of its own (regardless of what Global or a narrower scope resolves to).
+    /// For populating an edit form's override field, distinct from GetRawAsync's resolved/effective
+    /// value used everywhere else.</summary>
+    Task<string?> GetOwnOverrideAsync(SettingScope scope, Guid scopeId, string key, CancellationToken ct = default);
+
     Task SetGlobalAsync(string key, string value, string? modifiedBy = null, CancellationToken ct = default);
+
+    /// <summary>Sets or clears a Camera/Node/CameraGroup-scoped override. A null or blank value
+    /// removes the override row, reverting that scope to whatever the next scope down resolves to.</summary>
+    Task SetOverrideAsync(SettingScope scope, Guid scopeId, string key, string? value, string? modifiedBy = null, CancellationToken ct = default);
+
     Task InvalidateAsync();
 }

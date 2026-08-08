@@ -197,11 +197,13 @@ nodesApi.MapPost("/register", async (NodeRegisterRequest request, INodeService n
     }
 });
 
-nodesApi.MapPost("/heartbeat", (HttpContext ctx) =>
+nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest request, INodeService nodeService, CancellationToken ct) =>
 {
     // LastSeenAt/Version/Status are already updated by NodeAuthMiddleware's AuthenticateAsync call
-    // for every authenticated request — the heartbeat endpoint only needs to hand back the interval.
-    _ = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
+    // for every authenticated request — the heartbeat endpoint only needs to record disk usage (the
+    // node is the only side that can measure its own storage root) and hand back the interval.
+    var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
+    await nodeService.UpdateStorageStatsAsync(node.Id, request.FreeBytes, request.TotalBytes, ct);
     return Results.Json(new NodeHeartbeatResponse(IntervalSeconds: 30));
 });
 
@@ -215,6 +217,13 @@ nodesApi.MapPost("/segments", async (HttpContext ctx, List<SegmentReportItem> se
 {
     var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
     await nodeService.RecordSegmentsAsync(node.Id, segments, ct);
+    return Results.Ok();
+});
+
+nodesApi.MapPost("/segments/delete", async (HttpContext ctx, SegmentDeleteRequest request, INodeService nodeService, CancellationToken ct) =>
+{
+    var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
+    await nodeService.DeleteSegmentsAsync(node.Id, request.FilePaths, ct);
     return Results.Ok();
 });
 

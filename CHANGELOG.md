@@ -7,6 +7,116 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-08
+
+### Added
+
+- **M4 — Storage manager.** Every node now runs a `StorageManager` background service that
+  enforces, in order: age-based retention (per camera, resolved through `ISettingsResolver`),
+  per-camera storage quota (`Camera.QuotaBytes`, oldest segments evicted first once over the cap),
+  and a global watermark backstop (delete the oldest segments across every camera on the node,
+  regardless of retention/quota settings, once the storage volume passes a configurable % used —
+  the hard "the disk is nearly full" fallback the plan calls out as independent of retention days).
+  It's purely filesystem-driven — `Rcordr.Node` has no DB connection by design — and reports back
+  which files it deleted via a new `POST /api/nodes/segments/delete` so the web deletes the matching
+  `Segment` rows; the never-touch-a-file-younger-than-5-minutes guard keeps it from ever racing
+  `RecordingSession`'s in-progress segment. Empty date/hour folders left behind by eviction are
+  pruned in the same pass.
+- `ISettingsResolver` gained a `Node` scope: retention now resolves **Camera → Node → Global →
+  30-day compiled-in default**, the specific case the plan called out `SettingScope.Node` for
+  ("global retention, overridable per node, overridable again per camera on top of that"). New
+  `GetSourceAsync` (which scope actually supplied the value) and `GetOwnOverrideAsync` (a scope's
+  own override with no walk, for populating edit forms) support the "inherited vs. overridden" UI
+  without duplicating the resolution logic. `SetOverrideAsync` sets or clears a Camera/Node-scoped
+  override; a blank value removes it. CameraGroup-scoped overrides remain schema-ready but
+  unimplemented — no feature has needed the ancestor walk yet.
+- Nodes self-report free/total storage bytes on every heartbeat (`GetDiskFreeSpaceEx`, which
+  — unlike `System.IO.DriveInfo` — resolves UNC paths, so this works identically for a local
+  storage root and a `\\server\share` one). `Admin → Nodes` shows a usage bar per node plus a rough
+  "days of retention remaining" estimate (free bytes ÷ that node's write rate over the last 24h —
+  a projection from recent activity, not SMART/disk health).
+- New `Admin → Retention` page for the global retention-days and watermark-% defaults. `Admin →
+  Nodes` gained a per-node retention override column; `Cameras/Edit` gained a per-camera retention
+  override and a storage quota (GB) field. `Cameras/Index` and `Admin/Nodes` both show the
+  *effective* resolved value, never a separate "has an override" query, so the display can't drift
+  from what the storage manager actually enforces.
+- `Cameras/Index` shows each camera's storage usage (sum of `Segments.SizeBytes`) against its quota.
+- `StorageManager`'s eviction-decision helpers (age cutoff, oldest-first quota selection, bottom-up
+  empty-directory pruning) are unit tested against a real temp directory tree, not just built and
+  trusted — `Rcordr.Node` now has `InternalsVisibleTo` for `Rcordr.Tests` for exactly this.
+
+### Fixed
+
+- The node's self-reported version (sent on registration and every heartbeat) was hardcoded to
+  `"0.3.0"` since M3 and had drifted two releases behind the actual build. Now `0.4.0`, matching
+  `<Version>`; still a literal rather than read from the assembly, so this will drift again next
+  milestone unless whoever bumps the version remembers to grep for it — worth automating properly
+  before it causes real confusion in `Admin → Nodes`' Version column.
+
+### Changed
+
+- Recording segments now write into nested `<camera>/main/yyyy/MM/dd/HH/` folders instead of one
+  flat directory. At the default 60s segment length a single camera writes ~1,440 files/day, and a
+  flat directory holding a realistic 30-90 day retention window (tens to hundreds of thousands of
+  files) makes every directory listing measurably slower — including `RecordingSession`'s own poll
+  every few seconds. ffmpeg's segment muxer has no option to create missing directories itself (this
+  build has no `-strftime_mkdir`, only `-strftime`), so a naive nested pattern would abort the whole
+  recording at the first hour boundary; `RecordingSession` now pre-creates the current *and next*
+  hour's folder before starting ffmpeg and on every poll tick, so the next folder always exists well
+  before ffmpeg needs it regardless of how long the current attempt has been running. Verified live:
+  clean recording across an hour-folder pre-creation (confirmed the next hour's empty folder exists
+  ahead of time) with segments landing correctly. Folder names are the *node's local* time, not UTC,
+  deliberately — they're for a human browsing the filesystem, and `Segment.StartUtc`/`EndUtc` (what
+  actually matters for correctness) are computed independently from file metadata, not parsed from
+  the path.
+
+## [0.3.1] - 2026-08-08
+
+### Added
+
+- Node management: `Admin → Nodes` now supports editing a node's name and per-node storage root
+  override (blank falls back to the global `Storage.RootPath` setting — useful when one node records
+  to its own local disk instead of the shared target) and deleting a node outright. Deleting a node
+  unassigns its cameras (`Camera.NodeId` set null via `DeleteBehavior.SetNull`) rather than deleting
+  them, and leaves already-written `Segment` rows untouched — they're historical recordings, not live
+  node state. `Cameras → Index` now shows which node each camera records through, linking to
+  `Admin → Nodes`, so an unassigned (non-recording) camera is visible at a glance.
+
+- `build-node.ps1` / `install-node.ps1`, replacing the M3 stub. `build-node.ps1` publishes
+  `Rcordr.Node` as a self-contained single-file win-x64 executable (Windows only — the node's
+  registration store is DPAPI-based and throws on Linux; that support isn't implemented yet, so
+  publishing a linux-x64 build would just fail at first run) and bundles `install-node.ps1`
+  alongside it, mirroring `dploid`'s `build-agent.ps1`/`install-agent.ps1` shape. `install-node.ps1`
+  installs to `C:\Program Files\Rcordr\Node`, registers a Windows Service with the registration
+  arguments baked into its command line (only actually used on first start — after that,
+  `node.config` exists and registration is skipped, so re-running the installer to change settings
+  is safe), configures restart-on-failure recovery, and can fetch the LGPL "shared" FFmpeg build via
+  `-InstallFfmpeg`. Takes `-ServiceCredential` for nodes whose storage root is a network share, since
+  the default LocalSystem account can't authenticate to SMB. Verified end-to-end: `build-node.ps1`
+  produces a working 50MB self-contained exe that runs standalone.
+
+### Fixed
+
+- `-InstallFfmpeg`'s winget bootstrap went through three failure modes in a row on real recorder
+  machines while going through a PowerShell module layer (`Microsoft.WinGet.Client`): depending on
+  `Repair-WinGetPackageManager`, which doesn't exist on every version of that module;
+  `Install-Module -Force` refusing to run at all when some of the module's cmdlets were already
+  present without that one ("commands are already available... use `-AllowClobber`"); and, on one
+  machine, a third-party `Cobalt` module shadowing the same cmdlet names (`Install-WinGetPackage`
+  etc.) with its own broken `winget.exe` lookup. The module layer is dropped entirely — `winget.exe`
+  is now located directly by its own well-known install path (`PATH`, then `%ProgramFiles%\WindowsApps
+  \Microsoft.DesktopAppInstaller_*\`, matching `dploid`'s `deploy.ps1` probe) and invoked directly, no
+  cmdlet resolution involved.
+- Whichever way ffmpeg was resolved (found on `PATH`, `-FfmpegPath`, or freshly installed by
+  `-InstallFfmpeg`), the resolved location was baked into the service's command line as-is. A winget
+  install lands under the *installing user's* `%LOCALAPPDATA%`, which the Windows Service — running
+  as LocalSystem or a dedicated service account, never as whoever happened to run the installer —
+  has no access to; the service would have started but failed to launch ffmpeg at all. The resolved
+  ffmpeg (its `.exe` and the DLLs a shared build depends on) is now always copied into the node's own
+  `C:\Program Files\Rcordr\Node\ffmpeg\` before the service is registered, regardless of where it was
+  originally found, so the service account's access to it no longer depends on where installation
+  happened to leave it.
+
 ## [0.3.0] - 2026-08-08
 
 ### Added

@@ -15,6 +15,12 @@ public class Node
 {
     public Guid Id { get; set; }
     public string Name { get; set; } = string.Empty;
+
+    /// <summary>Per-node override of the global Storage.RootPath setting — a node writing to its
+    /// own local disk instead of the shared SMB target, for example. Null means "use the global
+    /// default"; see NodeService.GetConfigAsync for the resolution order.</summary>
+    public string? StorageRootPath { get; set; }
+
     public string ApiKeyHash { get; set; } = string.Empty;
     public string? PreviousApiKeyHash { get; set; }
     public string? Version { get; set; }
@@ -22,6 +28,13 @@ public class Node
     public NodeStatus Status { get; set; } = NodeStatus.Pending;
     public DateTime? LastSeenAt { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>Free/total bytes on the storage root's volume, self-reported by the node on every
+    /// heartbeat (it's the only side that can actually measure its own disk/SMB share). Drives the
+    /// Admin/Nodes usage bar and the M4 "days of retention remaining" estimate.</summary>
+    public long? StorageFreeBytes { get; set; }
+    public long? StorageTotalBytes { get; set; }
+    public DateTime? StorageStatsUpdatedAt { get; set; }
 
     public ICollection<Camera> Cameras { get; set; } = [];
 }

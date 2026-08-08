@@ -149,6 +149,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
         builder.Entity<Node>(e =>
         {
             e.Property(x => x.Name).HasMaxLength(200).IsRequired();
+            e.Property(x => x.StorageRootPath).HasMaxLength(500);
             e.Property(x => x.ApiKeyHash).HasMaxLength(200).IsRequired();
             e.Property(x => x.PreviousApiKeyHash).HasMaxLength(200);
             e.Property(x => x.Version).HasMaxLength(50);

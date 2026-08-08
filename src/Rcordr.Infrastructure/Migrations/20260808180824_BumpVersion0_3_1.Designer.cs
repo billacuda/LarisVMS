@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Rcordr.Infrastructure.Data;
 
@@ -11,9 +12,11 @@ using Rcordr.Infrastructure.Data;
 namespace Rcordr.Infrastructure.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260808180824_BumpVersion0_3_1")]
+    partial class BumpVersion0_3_1
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -571,18 +574,9 @@ namespace Rcordr.Infrastructure.Migrations
                     b.Property<int>("Status")
                         .HasColumnType("int");
 
-                    b.Property<long?>("StorageFreeBytes")
-                        .HasColumnType("bigint");
-
                     b.Property<string>("StorageRootPath")
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
-
-                    b.Property<DateTime?>("StorageStatsUpdatedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<long?>("StorageTotalBytes")
-                        .HasColumnType("bigint");
 
                     b.Property<string>("Version")
                         .HasMaxLength(50)

@@ -15,7 +15,7 @@ work on phone, tablet, and desktop.
 
 ---
 
-## **Current version [0.3.0](CHANGELOG.md)**
+## **Current version [0.4.0](CHANGELOG.md)**
 
 ## Stack
 
@@ -28,16 +28,18 @@ work on phone, tablet, and desktop.
 
 ## Status
 
-Milestones **M1 (skeleton, setup, deploy)**, **M2 (ONVIF discovery & camera management)**, and
-**M3 (recorder node & 24/7 recording)** are in place: solution layout, Identity + RBAC, encryption at
-rest, the setup wizard, `deploy.ps1`, WS-Discovery LAN scan, ONVIF capability probing (Profile
-S/T/G/M), camera CRUD, and a Windows Service recorder node that supervises `ffmpeg -c copy` per
-camera with crash/stall auto-recovery — all verified end-to-end against real Amcrest cameras,
-including killing the recording process and the node process mid-recording and confirming both
-recover cleanly. Live view, playback, and storage/retention are not implemented yet — see
+Milestones **M1 (skeleton, setup, deploy)**, **M2 (ONVIF discovery & camera management)**,
+**M3 (recorder node & 24/7 recording)**, and **M4 (storage & retention)** are in place: solution
+layout, Identity + RBAC, encryption at rest, the setup wizard, `deploy.ps1`, WS-Discovery LAN scan,
+ONVIF capability probing (Profile S/T/G/M), camera CRUD, a Windows Service recorder node that
+supervises `ffmpeg -c copy` per camera with crash/stall auto-recovery, and a per-node storage manager
+that enforces retention (global → per-node → per-camera, `Admin → Retention`), per-camera quota, and
+a global watermark backstop — all verified end-to-end against real Amcrest cameras and real recorded
+segments, including killing the recording process and the node process mid-recording and confirming
+both recover cleanly. Live view, playback, and object detection are not implemented yet — see
 [CHANGELOG.md](CHANGELOG.md) for what's shipped and the architecture plan for the full milestone
-roadmap (storage/retention → live view → views/layout → playback/timeline → motion/events →
-PTZ/audio → export/investigation → operations).
+roadmap (live view → views/layout → playback/timeline → motion/events → PTZ/audio →
+export/investigation → operations).
 
 Recorder nodes require **FFmpeg** on the machine they run on (LGPL "shared" build recommended — see
 the plan's licensing note). Point a node at it with `--ffmpeg-path` or `RCORDR_FFMPEG_PATH`, or put

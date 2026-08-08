@@ -3,12 +3,14 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Rcordr.Core.Dtos;
 using Rcordr.Core.Entities;
+using Rcordr.Core.Enums;
 using Rcordr.Core.Interfaces;
 
 namespace Rcordr.Web.Pages.Cameras;
 
 [Authorize("Cameras.Edit")]
-public class EditModel(ICameraService cameraService, ICameraGroupService groupService, INodeService nodeService) : PageModel
+public class EditModel(ICameraService cameraService, ICameraGroupService groupService, INodeService nodeService,
+    ISettingsResolver settings) : PageModel
 {
     [BindProperty] public Guid? Id { get; set; }
     [BindProperty] public string Name { get; set; } = string.Empty;
@@ -18,6 +20,8 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
     [BindProperty] public string? Username { get; set; }
     [BindProperty] public string? Password { get; set; }
     [BindProperty] public bool IsEnabled { get; set; } = true;
+    [BindProperty] public decimal? QuotaGb { get; set; }
+    [BindProperty] public int? RetentionDaysOverride { get; set; }
 
     public bool IsNew => Id is null;
     public List<CameraGroup> Groups { get; set; } = [];
@@ -26,6 +30,8 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
     public List<CameraStream> Streams { get; set; } = [];
     public string? ErrorMessage { get; set; }
     public string? ProbeMessage { get; set; }
+    public int EffectiveRetentionDays { get; set; }
+    public long StorageUsedBytes { get; set; }
 
     public async Task<IActionResult> OnGetAsync(Guid? id, string? deviceServiceUri, string? suggestedName)
     {
@@ -45,6 +51,12 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
             IsEnabled = camera.IsEnabled;
             Capabilities = camera.Capabilities;
             Streams = camera.Streams.ToList();
+            QuotaGb = camera.QuotaBytes is { } q ? Math.Round(q / 1024m / 1024 / 1024, 2) : null;
+
+            var ownOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, id.Value, "Retention.Days");
+            RetentionDaysOverride = int.TryParse(ownOverride, out var days) ? days : null;
+            EffectiveRetentionDays = await settings.GetAsync("Retention.Days", 30, cameraId: id.Value, nodeId: camera.NodeId);
+            StorageUsedBytes = (await cameraService.GetStorageUsageAsync()).GetValueOrDefault(id.Value);
         }
         else
         {
@@ -64,14 +76,20 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
         {
             if (Id is null)
             {
+                // Stays on Edit (rather than Index) so the auto-probe this triggers — capabilities,
+                // streams — is immediately visible; that feedback matters most right when a camera
+                // is first added.
                 var camera = await cameraService.AddAsync(new AddCameraRequest(Name, DeviceServiceUri, Username, Password, GroupId));
                 if (NodeId is not null)
                     await nodeService.AssignCameraAsync(camera.Id, NodeId);
                 return RedirectToPage("Edit", new { id = camera.Id });
             }
 
-            await cameraService.UpdateAsync(Id.Value, Name, GroupId, NodeId, Username, Password, IsEnabled);
-            return RedirectToPage("Edit", new { id = Id });
+            var quotaBytes = QuotaGb is { } gb ? (long)(gb * 1024 * 1024 * 1024) : (long?)null;
+            await cameraService.UpdateAsync(Id.Value, Name, GroupId, NodeId, Username, Password, IsEnabled, quotaBytes);
+            await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Retention.Days",
+                RetentionDaysOverride?.ToString(), User.Identity?.Name);
+            return RedirectToPage("Index");
         }
         catch (Exception ex)
         {
@@ -99,6 +117,12 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
             IsEnabled = camera.IsEnabled;
             Capabilities = camera.Capabilities;
             Streams = camera.Streams.ToList();
+            QuotaGb = camera.QuotaBytes is { } q ? Math.Round(q / 1024m / 1024 / 1024, 2) : null;
+
+            var ownOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, Id.Value, "Retention.Days");
+            RetentionDaysOverride = int.TryParse(ownOverride, out var days) ? days : null;
+            EffectiveRetentionDays = await settings.GetAsync("Retention.Days", 30, cameraId: Id.Value, nodeId: camera.NodeId);
+            StorageUsedBytes = (await cameraService.GetStorageUsageAsync()).GetValueOrDefault(Id.Value);
         }
         Groups = await groupService.GetTreeAsync();
         Nodes = await nodeService.ListAsync();

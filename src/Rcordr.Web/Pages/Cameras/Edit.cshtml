@@ -74,6 +74,20 @@
                 <label class="form-check-label" asp-for="IsEnabled">Enabled</label>
             </div>
         </div>
+        <div class="col-6">
+            <label class="form-label">Storage quota (GB)</label>
+            <input asp-for="QuotaGb" type="number" step="0.1" min="0" class="form-control" placeholder="(no quota — shares the pool)" />
+            <div class="form-text">
+                Using @ByteFormat.Format(Model.StorageUsedBytes) now. Oldest footage is
+                evicted first once this camera goes over quota.
+            </div>
+        </div>
+        <div class="col-6">
+            <label class="form-label">Retention override (days)</label>
+            <input asp-for="RetentionDaysOverride" type="number" min="0" class="form-control"
+                   placeholder="(inherit — currently @Model.EffectiveRetentionDays days)" />
+            <div class="form-text">0 = keep forever on this camera. Blank inherits the node's/global setting.</div>
+        </div>
     }
     <div class="col-12">
         <button type="submit" class="btn btn-primary">@(Model.IsNew ? "Add & probe" : "Save")</button>

@@ -71,6 +71,7 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
         CreatedAt = c.CreatedAt,
         LastProbedAt = c.LastProbedAt,
         Group = c.Group,
+        Node = c.Node,
         Capabilities = c.Capabilities,
         Streams = c.Streams
     };
@@ -106,7 +107,7 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
     }
 
     public async Task UpdateAsync(Guid id, string name, Guid? groupId, Guid? nodeId, string? username, string? password,
-        bool isEnabled, CancellationToken ct = default)
+        bool isEnabled, long? quotaBytes, CancellationToken ct = default)
     {
         var camera = await db.Cameras.FirstOrDefaultAsync(c => c.Id == id, ct)
             ?? throw new InvalidOperationException("Camera not found.");
@@ -115,6 +116,7 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
         camera.GroupId = groupId;
         camera.NodeId = nodeId;
         camera.IsEnabled = isEnabled;
+        camera.QuotaBytes = quotaBytes;
         // Blank fields leave the stored credential alone — the edit form never round-trips the
         // decrypted password back to the browser, so an empty submission must mean "unchanged",
         // not "clear it".
@@ -123,6 +125,12 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
 
         await db.SaveChangesAsync(ct);
     }
+
+    public async Task<Dictionary<Guid, long>> GetStorageUsageAsync(CancellationToken ct = default)
+        => await db.Segments
+            .GroupBy(s => s.CameraId)
+            .Select(g => new { CameraId = g.Key, Bytes = g.Sum(s => s.SizeBytes) })
+            .ToDictionaryAsync(x => x.CameraId, x => x.Bytes, ct);
 
     public async Task DeleteAsync(Guid id, CancellationToken ct = default)
     {

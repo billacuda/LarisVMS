@@ -24,7 +24,7 @@ if (config is null)
     var insecure = HasFlag(args, "--insecure-tls") || Environment.GetEnvironmentVariable("RCORDR_INSECURE_TLS") == "1";
     var registerClient = new NodeApiClient(serverUrl, insecure);
     var response = await registerClient.RegisterAsync(
-        new Rcordr.Core.Dtos.NodeRegisterRequest(registrationKey, Environment.MachineName, "0.3.0", Environment.OSVersion.Platform.ToString()),
+        new Rcordr.Core.Dtos.NodeRegisterRequest(registrationKey, Environment.MachineName, "0.4.0", Environment.OSVersion.Platform.ToString()),
         CancellationToken.None);
 
     config = new NodeConfig(serverUrl, response.NodeId, response.Secret);
@@ -54,6 +54,8 @@ builder.Services.AddWindowsService(o => o.ServiceName = "Rcordr Node");
 builder.Services.AddSingleton(apiClient);
 builder.Services.AddSingleton<IHostedService>(sp => new NodeWorker(
     apiClient, ffmpegPath, fallbackStorageRoot, sp.GetRequiredService<ILoggerFactory>()));
+builder.Services.AddSingleton<IHostedService>(sp => new StorageManager(
+    apiClient, fallbackStorageRoot, sp.GetRequiredService<ILoggerFactory>().CreateLogger<StorageManager>()));
 
 await builder.Build().RunAsync();
 

@@ -52,4 +52,11 @@ public class NodeApiClient
         var response = await _http.PostAsJsonAsync("api/nodes/segments", segments, ct);
         response.EnsureSuccessStatusCode();
     }
+
+    public async Task DeleteSegmentsAsync(List<string> filePaths, CancellationToken ct)
+    {
+        if (filePaths.Count == 0) return;
+        var response = await _http.PostAsJsonAsync("api/nodes/segments/delete", new SegmentDeleteRequest(filePaths), ct);
+        response.EnsureSuccessStatusCode();
+    }
 }

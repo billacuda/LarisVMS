@@ -38,8 +38,9 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             try
             {
                 var config = await api.GetConfigAsync(ct);
-                Reconcile(config, ct);
-                await api.HeartbeatAsync(new NodeHeartbeatRequest(Version: "0.3.0"), ct);
+                var storageRoot = Reconcile(config, ct);
+                var usage = DiskSpace.TryGetUsage(storageRoot);
+                await api.HeartbeatAsync(new NodeHeartbeatRequest("0.4.0", usage?.FreeBytes, usage?.TotalBytes), ct);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -83,7 +84,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         }
     }
 
-    private void Reconcile(NodeConfigResponse config, CancellationToken stoppingToken)
+    private string Reconcile(NodeConfigResponse config, CancellationToken stoppingToken)
     {
         var storageRoot = string.IsNullOrWhiteSpace(config.StorageRootPath) ? fallbackStorageRoot : config.StorageRootPath;
         var desired = config.Cameras.ToDictionary(c => c.CameraId);
@@ -123,6 +124,8 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             _active[camera.CameraId] = new CameraRecorder(cts, runTask, session);
             _logger.LogInformation("Started recording camera {CameraId} ({Name}) -> {OutputDir}", camera.CameraId, camera.Name, outputDir);
         }
+
+        return storageRoot;
     }
 
     private static string InjectCredentials(string rtspUri, string? username, string? password)

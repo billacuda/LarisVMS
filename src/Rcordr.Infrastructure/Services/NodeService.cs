@@ -71,15 +71,73 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             .Include(c => c.Streams)
             .ToListAsync(ct);
 
-        var storageRoot = await settings.GetRawAsync("Storage.RootPath", ct: ct);
+        // Per-node override (a node writing to its own local disk, say) takes priority over the
+        // global default — see Node.StorageRootPath's doc comment.
+        var nodeStorageRoot = await db.Nodes.Where(n => n.Id == nodeId).Select(n => n.StorageRootPath).FirstOrDefaultAsync(ct);
+        var storageRoot = string.IsNullOrWhiteSpace(nodeStorageRoot)
+            ? await settings.GetRawAsync("Storage.RootPath", ct: ct)
+            : nodeStorageRoot;
 
-        return new NodeConfigResponse(
-            cameras.Select(c => new NodeConfigCameraDto(
+        var watermarkPercent = await settings.GetAsync("Storage.WatermarkPercent", 90, ct: ct);
+
+        var cameraDtos = new List<NodeConfigCameraDto>();
+        foreach (var c in cameras)
+        {
+            // 0 or negative means "keep forever" — an explicit admin choice, not "unset". Unset
+            // (no override anywhere) falls through to the 30-day compiled-in default below.
+            var retentionDays = await settings.GetAsync<int?>("Retention.Days", 30, cameraId: c.Id, nodeId: nodeId, ct: ct);
+            cameraDtos.Add(new NodeConfigCameraDto(
                 c.Id, c.Name, c.Username, c.Password,
                 c.Streams.Select(s => new NodeConfigStreamDto(
-                    s.Id, s.Role.ToString(), s.RtspUri, s.Codec, s.Width, s.Height, s.HasAudio)).ToList()
-            )).ToList(),
-            storageRoot);
+                    s.Id, s.Role.ToString(), s.RtspUri, s.Codec, s.Width, s.Height, s.HasAudio)).ToList(),
+                retentionDays, c.QuotaBytes));
+        }
+
+        return new NodeConfigResponse(cameraDtos, storageRoot, watermarkPercent);
+    }
+
+    public async Task DeleteSegmentsAsync(Guid nodeId, IReadOnlyList<string> filePaths, CancellationToken ct = default)
+    {
+        if (filePaths.Count == 0) return;
+        await db.Segments
+            .Where(s => s.NodeId == nodeId && filePaths.Contains(s.FilePath))
+            .ExecuteDeleteAsync(ct);
+    }
+
+    public async Task UpdateStorageStatsAsync(Guid nodeId, long? freeBytes, long? totalBytes, CancellationToken ct = default)
+    {
+        await db.Nodes.Where(n => n.Id == nodeId).ExecuteUpdateAsync(s => s
+            .SetProperty(n => n.StorageFreeBytes, freeBytes)
+            .SetProperty(n => n.StorageTotalBytes, totalBytes)
+            .SetProperty(n => n.StorageStatsUpdatedAt, DateTime.UtcNow), ct);
+    }
+
+    public async Task<Dictionary<Guid, double?>> GetEstimatedDaysRemainingAsync(CancellationToken ct = default)
+    {
+        var since = DateTime.UtcNow.AddDays(-1);
+        var bytesPerNodeLastDay = await db.Segments
+            .Where(s => s.StartUtc >= since)
+            .GroupBy(s => s.NodeId)
+            .Select(g => new { NodeId = g.Key, Bytes = g.Sum(s => s.SizeBytes) })
+            .ToDictionaryAsync(x => x.NodeId, x => x.Bytes, ct);
+
+        var nodes = await db.Nodes.AsNoTracking().Select(n => new { n.Id, n.StorageFreeBytes }).ToListAsync(ct);
+
+        var result = new Dictionary<Guid, double?>();
+        foreach (var n in nodes)
+        {
+            if (n.StorageFreeBytes is not { } free
+                || !bytesPerNodeLastDay.TryGetValue(n.Id, out var bytesPerDay)
+                || bytesPerDay <= 0)
+            {
+                result[n.Id] = null;
+                continue;
+            }
+
+            result[n.Id] = free / (double)bytesPerDay;
+        }
+
+        return result;
     }
 
     public async Task RecordSegmentsAsync(Guid nodeId, IReadOnlyList<SegmentReportItem> segments, CancellationToken ct = default)
@@ -135,6 +193,24 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             ?? throw new InvalidOperationException("Camera not found.");
         camera.NodeId = nodeId;
         await db.SaveChangesAsync(ct);
+    }
+
+    public async Task UpdateAsync(Guid nodeId, string name, string? storageRootPath, CancellationToken ct = default)
+    {
+        var node = await db.Nodes.FirstOrDefaultAsync(n => n.Id == nodeId, ct)
+            ?? throw new InvalidOperationException("Node not found.");
+        node.Name = name;
+        node.StorageRootPath = string.IsNullOrWhiteSpace(storageRootPath) ? null : storageRootPath;
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task DeleteAsync(Guid nodeId, CancellationToken ct = default)
+    {
+        // Cameras.NodeId is configured DeleteBehavior.SetNull, so this unassigns rather than
+        // deletes the cameras that were on this node — their recording just stops until they're
+        // reassigned. Segments already written keep their NodeId as-is (no FK on it); they're
+        // historical recordings, not live node state, and shouldn't disappear with the node.
+        await db.Nodes.Where(n => n.Id == nodeId).ExecuteDeleteAsync(ct);
     }
 
     private static string Hash(string secret)

@@ -4,11 +4,17 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>0.3.0</Version>
+    <Version>0.4.0</Version>
     <!-- Recorder nodes are self-contained single-file per platform (see build-node.ps1),
          the same shape as dploid.Agent. -->
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- StorageManager's pure eviction-decision helpers (internal static) are unit tested directly
+         against real temp directories rather than only through the networked BackgroundService. -->
+    <InternalsVisibleTo Include="Rcordr.Tests" />
+  </ItemGroup>
 
   <!-- Deliberately no reference to Rcordr.Infrastructure or Rcordr.Onvif: the node talks to
        Rcordr.Web over the REST control plane (register/heartbeat/config/segments), never touches

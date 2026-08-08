@@ -19,13 +19,17 @@ public interface ICameraService
     Task<Camera> AddAsync(AddCameraRequest request, CancellationToken ct = default);
 
     Task UpdateAsync(Guid id, string name, Guid? groupId, Guid? nodeId, string? username, string? password,
-        bool isEnabled, CancellationToken ct = default);
+        bool isEnabled, long? quotaBytes, CancellationToken ct = default);
 
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 
     /// <summary>Re-runs GetDeviceInformation/GetCapabilities/GetServices/GetProfiles against a
     /// saved camera and persists the refreshed CameraCapabilities + CameraStream rows.</summary>
     Task<CameraProbeSummary> ProbeAsync(Guid cameraId, CancellationToken ct = default);
+
+    /// <summary>Sum of Segments.SizeBytes per camera — what M4's per-camera quota is checked
+    /// against, and what Cameras/Index shows as "in use".</summary>
+    Task<Dictionary<Guid, long>> GetStorageUsageAsync(CancellationToken ct = default);
 }
 
 public interface ICameraGroupService
