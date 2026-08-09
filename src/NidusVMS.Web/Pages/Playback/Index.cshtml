@@ -1,0 +1,82 @@
+@page
+@using System.Text.Json
+@using NidusVMS.Core.Enums
+@model NidusVMS.Web.Pages.Playback.IndexModel
+@{
+    ViewData["Title"] = "Playback";
+    var camerasJson = JsonSerializer.Serialize(Model.Cameras.Select(c =>
+    {
+        var main = c.Streams.FirstOrDefault(s => s.Role == CameraStreamRole.Main);
+        return new { id = c.Id, name = c.Name, codec = main?.Codec, hasAudio = main?.HasAudio ?? false };
+    }));
+    var viewsJson = JsonSerializer.Serialize(Model.Views.Select(v => new { id = v.Id, name = v.Name, layoutJson = v.LayoutJson }));
+}
+<h1>Playback</h1>
+
+@if (Model.Cameras.Count == 0)
+{
+    <p class="text-muted">No cameras are both enabled and assigned to a node yet.</p>
+}
+else if (Model.Views.Count == 0)
+{
+    <p class="text-muted">
+        Playback plays back a saved view's layout, the same arrangement you'd watch live.
+        <a asp-page="/Views/Index">Build a view</a> first, then come back here to play it back.
+    </p>
+}
+else
+{
+    <div class="row g-3 mb-3">
+        <div class="col-md-3">
+            <label class="form-label small">View</label>
+            <select id="playbackViewPicker" class="form-select">
+                <option value="">(choose a view)</option>
+                @foreach (var v in Model.Views)
+                {
+                    <option value="@v.Id">@v.Name</option>
+                }
+            </select>
+            <p class="text-muted small mt-2">
+                Every camera in the view plays back in lockstep, each resolving its own
+                recordings/gaps independently. The view's top-left-most camera drives the
+                per-camera timeline below.
+            </p>
+        </div>
+        <div class="col-md-9">
+            <div class="d-flex align-items-center gap-2 mb-2">
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="pbPlayPause" disabled>▶ Play</button>
+                <span id="pbCurrentTime" class="text-muted small"></span>
+            </div>
+
+            <label class="form-label small mb-0">Selected camera</label>
+            <canvas id="playbackTimeline" style="width: 100%; height: 60px; cursor: pointer;"></canvas>
+
+            <label class="form-label small mb-0 mt-2">All cameras (recording on any camera)</label>
+            <canvas id="playbackGlobalTimeline" style="width: 100%; height: 60px; cursor: pointer;"></canvas>
+
+            <p class="text-muted small mt-1">
+                Scroll either timeline to zoom (weeks down to seconds), drag to pan, click to jump
+                every tile to that instant. No motion coloring yet on either timeline (M8).
+            </p>
+        </div>
+    </div>
+
+    <div id="playbackTiles"></div>
+}
+
+@section Scripts {
+    <script src="~/js/timeline.js" asp-append-version="true"></script>
+    <script src="~/js/playback-player.js" asp-append-version="true"></script>
+    <script>
+        window.nidusvmsPlaybackPage.init({
+            cameras: @Html.Raw(camerasJson),
+            views: @Html.Raw(viewsJson),
+            pickerId: 'playbackViewPicker',
+            tilesId: 'playbackTiles',
+            timelineCanvasId: 'playbackTimeline',
+            globalTimelineCanvasId: 'playbackGlobalTimeline',
+            playPauseBtnId: 'pbPlayPause',
+            currentTimeId: 'pbCurrentTime'
+        });
+    </script>
+}

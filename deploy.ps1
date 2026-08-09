@@ -11,17 +11,21 @@
          (or use -ConnectionString to override)
       5. Guards against a misconfigured storage root — see "Storage root guard" below
       6. Builds and publishes the web project
-      7. Stops the IIS app pool
-      8. Applies any pending EF Core migrations
-      9. Copies published files to the IIS site, preserving setup-generated.json,
+      7. Builds the recorder node package (build-node.ps1) so publish\NidusVMS.Node\win — and,
+         if -ExtraNodePublishPath is given, that second location too — stays current with every
+         deploy instead of only when someone remembers to run build-node.ps1 by hand. Skippable
+         with -SkipNodeBuild.
+      8. Stops the IIS app pool
+      9. Applies any pending EF Core migrations
+     10. Copies published files to the IIS site, preserving setup-generated.json,
          appsettings.Production.json, data-protection-keys\, and every recording/spool/export
          directory
-     10. Starts the IIS app pool (always, even on failure)
-     11. Probes /health once the pool is back up
+     11. Starts the IIS app pool (always, even on failure)
+     12. Probes /health once the pool is back up
 
-    This script only deploys NidusVMS.Web. Recorder nodes are separate Windows Services deployed with
-    build-node.ps1 / install-node.ps1 (milestone M3) — they are not part of the IIS site and must
-    never be inside $DestinationPath.
+    This script deploys NidusVMS.Web to IIS and (by default) refreshes the node install package
+    alongside it — recorder nodes are still separate Windows Services installed with
+    install-node.ps1, never part of the IIS site, and must never be inside $DestinationPath.
 
     Must be run as Administrator (required for IIS management).
 
@@ -29,19 +33,26 @@
     .\deploy.ps1 -IISSiteName "NidusVMS"
     .\deploy.ps1 -IISSiteName "NidusVMS" -SkipMigrations
     .\deploy.ps1 -IISSiteUrl "https://nidusvms.example.com"
+    .\deploy.ps1 -IISSiteName "NidusVMS" -ExtraNodePublishPath '\\files1\Install\NidusVMS\Node\win'
 #>
 
 param(
-    [string]$WebProject        = (Join-Path $PSScriptRoot 'src\NidusVMS.Web\NidusVMS.Web.csproj'),
-    [string]$MigrationsProject = (Join-Path $PSScriptRoot 'src\NidusVMS.Infrastructure\NidusVMS.Infrastructure.csproj'),
-    [string]$PublishDir        = (Join-Path $PSScriptRoot 'publish\NidusVMS.Web'),
-    [string]$Configuration     = 'Release',
-    [string]$DestinationPath   = 'E:\Sites\NidusVMS', # will be overridden if IIS site or URL is specified
-    [string]$IISAppPoolName    = 'NidusVMS',
-    [string]$IISSiteName       = 'NidusVMS',
-    [string]$IISSiteUrl        = '',
-    [string]$ConnectionString  = '',
+    [string]$WebProject           = (Join-Path $PSScriptRoot 'src\NidusVMS.Web\NidusVMS.Web.csproj'),
+    [string]$MigrationsProject    = (Join-Path $PSScriptRoot 'src\NidusVMS.Infrastructure\NidusVMS.Infrastructure.csproj'),
+    [string]$PublishDir           = (Join-Path $PSScriptRoot 'publish\NidusVMS.Web'),
+    [string]$Configuration        = 'Release',
+    [string]$DestinationPath      = 'E:\Sites\NidusVMS', # will be overridden if IIS site or URL is specified
+    [string]$IISAppPoolName       = 'NidusVMS',
+    [string]$IISSiteName          = 'NidusVMS',
+    [string]$IISSiteUrl           = '',
+    [string]$ConnectionString     = '',
+    # Mirrors the built node package here too (e.g. a network share a recorder machine reads
+    # directly) — passed straight through to build-node.ps1's own -ExtraPublishPath. Left blank
+    # by default since this is inherently environment-specific, not something to hardcode for
+    # every clone of this repo.
+    [string]$ExtraNodePublishPath = '',
     [switch]$SkipMigrations,
+    [switch]$SkipNodeBuild,
     [switch]$SkipHealthCheck
 )
 
@@ -218,6 +229,32 @@ if (Test-Path $PublishDir) {
 
 Invoke-Cmd 'dotnet' @('publish', $WebProject, '-c', $Configuration, '-o', $PublishDir)
 Write-Ok "Published to: $PublishDir"
+
+# ── build recorder node package ───────────────────────────────────────────────
+# Keeps publish\NidusVMS.Node\win (and -ExtraNodePublishPath, if given) current with every web
+# deploy rather than depending on someone remembering to run build-node.ps1 separately. Failing
+# here aborts before the app pool is touched, same as any other build failure above.
+
+if (-not $SkipNodeBuild) {
+    Write-Step "Building recorder node package"
+    $buildNodeScript = Join-Path $PSScriptRoot 'build-node.ps1'
+    $buildNodeArgs = @{ Configuration = $Configuration }
+    if (-not [string]::IsNullOrWhiteSpace($ExtraNodePublishPath)) {
+        $buildNodeArgs['ExtraPublishPath'] = $ExtraNodePublishPath
+    }
+    # No $LASTEXITCODE check needed here: build-node.ps1 (Set-StrictMode + $ErrorActionPreference
+    # = 'Stop') already throws on every failure path it has, including a non-zero exit from the
+    # native commands it runs itself — that propagates as a terminating error through this call on
+    # its own. Checking $LASTEXITCODE again here would actually be wrong: it's a session-wide
+    # variable, so after a *successful* call it could still hold a leftover non-zero value from,
+    # say, robocopy's own "some files copied" code (1) inside build-node.ps1, which build-node.ps1
+    # itself correctly treats as success (only >= 8 is a real robocopy failure) — re-checking it
+    # here would misreport that as this step having failed.
+    & $buildNodeScript @buildNodeArgs
+    Write-Ok "Node package built."
+} else {
+    Write-Host "Node package build skipped (-SkipNodeBuild)."
+}
 
 # ── stop app pool ─────────────────────────────────────────────────────────────
 

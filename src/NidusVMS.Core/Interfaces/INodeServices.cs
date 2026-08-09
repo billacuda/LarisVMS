@@ -46,6 +46,11 @@ public interface INodeService
 
     Task AssignCameraAsync(Guid cameraId, Guid? nodeId, CancellationToken ct = default);
 
+    /// <summary>Batch version of AssignCameraAsync — re-points every camera in cameraIds to nodeId
+    /// (null unassigns) in one statement. Moving a camera to a new node never touches its Segment
+    /// rows; footage already recorded stays attached to whichever NodeId actually wrote it.</summary>
+    Task ReassignCamerasAsync(IReadOnlyCollection<Guid> cameraIds, Guid? nodeId, CancellationToken ct = default);
+
     /// <summary>Updates the node's name and per-node storage root override. A blank
     /// storageRootPath clears the override, falling back to the global Storage.RootPath setting.</summary>
     Task UpdateAsync(Guid nodeId, string name, string? storageRootPath, CancellationToken ct = default);

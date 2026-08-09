@@ -7,7 +7,7 @@ using NidusVMS.Media;
 namespace NidusVMS.Node;
 
 public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackStorageRoot, int livePort,
-    string? initialMediaSigningKey, ILoggerFactory loggerFactory) : BackgroundService
+    NodeConfig registration, ILoggerFactory loggerFactory) : BackgroundService
 {
     private readonly ILogger<NodeWorker> _logger = loggerFactory.CreateLogger<NodeWorker>();
 
@@ -17,6 +17,12 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     private readonly ConcurrentDictionary<Guid, CameraRecorder> _active = new();
     private readonly ConcurrentQueue<SegmentReportItem> _pendingSegments = new();
     private readonly ConcurrentQueue<StreamInfoReportItem> _pendingStreamInfo = new();
+
+    // Only ever touched from ReconcileLoopAsync's single loop — never concurrently, unlike
+    // MediaSigningKey below, so this doesn't need to be volatile. Seeded from whatever this node
+    // had cached from its last successful reconcile before this process started; see
+    // TryStartFromCacheIfIdle.
+    private NodeConfigResponse? _cachedConfig = registration.CachedConfig;
 
     /// <summary>The active RecordingSession for a camera this node is currently recording, or null
     /// if it isn't assigned here (or isn't recording yet). Used by the live-view WebSocket endpoint
@@ -30,7 +36,15 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// M5 (and so has none stored locally) self-heals within one cycle without needing to
     /// re-register, which would mean a brand new NodeId. Volatile: read from the live endpoint's
     /// request threads, written from the reconcile loop.</summary>
-    public volatile string? MediaSigningKey = initialMediaSigningKey;
+    public volatile string? MediaSigningKey = registration.MediaSigningKey;
+
+    /// <summary>The storage root the most recent reconcile resolved (config's StorageRootPath, or
+    /// fallbackStorageRoot when unset) — M7's /playback-segment endpoint needs this to build the
+    /// same cam-{cameraId}/main path RecordingSession writes to, without a second source of truth
+    /// for where recordings live. Null until the first reconcile (live or cached-fallback)
+    /// completes. Volatile for the same reason as MediaSigningKey: read from request threads,
+    /// written from the reconcile loop.</summary>
+    public volatile string? StorageRoot;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -60,16 +74,53 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 var config = await api.GetConfigAsync(ct);
                 MediaSigningKey = config.MediaSigningKey;
                 var storageRoot = Reconcile(config, ct);
+                PersistConfigCache(config);
                 var usage = DiskSpace.TryGetUsage(storageRoot);
                 await api.HeartbeatAsync(new NodeHeartbeatRequest(NodeVersion.Current, usage?.FreeBytes, usage?.TotalBytes, livePort), ct);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.LogError(ex, "Heartbeat/config cycle failed — will retry.");
+                TryStartFromCacheIfIdle(ct);
             }
 
             try { await Task.Delay(TimeSpan.FromSeconds(30), ct); }
             catch (OperationCanceledException) { break; }
+        }
+    }
+
+    /// <summary>Called only when a GetConfigAsync attempt has just failed. If nothing is recording
+    /// yet — the case that matters is a fresh process start (reboot, service restart) while the
+    /// central server happens to be unreachable — falls back to the last config this node
+    /// successfully fetched (persisted to node.config) rather than sitting idle until the server
+    /// answers. A no-op once at least one camera is already active: an already-running node
+    /// surviving a *later* outage needs no help here, since a failed cycle already leaves _active
+    /// untouched on its own (see Reconcile's callers above).</summary>
+    private void TryStartFromCacheIfIdle(CancellationToken ct)
+    {
+        if (!_active.IsEmpty || _cachedConfig is null) return;
+
+        _logger.LogWarning(
+            "Server unreachable and no cameras are recording yet — starting from the last config " +
+            "cached locally so this node doesn't sit idle for the rest of the outage.");
+        MediaSigningKey = _cachedConfig.MediaSigningKey;
+        Reconcile(_cachedConfig, ct);
+    }
+
+    /// <summary>Persists the most recent successful config to node.config (DPAPI-protected, same as
+    /// the registration secret it travels with — it carries camera credentials) so a future cold
+    /// start has something to fall back on if the server is unreachable at that moment. Best
+    /// effort: a failure to write it shouldn't take recording down.</summary>
+    private void PersistConfigCache(NodeConfigResponse config)
+    {
+        _cachedConfig = config;
+        try
+        {
+            NodeConfigStore.Save(registration with { MediaSigningKey = config.MediaSigningKey, CachedConfig = config });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to persist cached node config to disk — offline resume after a restart won't have this camera list until the next successful reconcile.");
         }
     }
 
@@ -130,6 +181,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     private string Reconcile(NodeConfigResponse config, CancellationToken stoppingToken)
     {
         var storageRoot = string.IsNullOrWhiteSpace(config.StorageRootPath) ? fallbackStorageRoot : config.StorageRootPath;
+        StorageRoot = storageRoot;
         var desired = config.Cameras.ToDictionary(c => c.CameraId);
 
         foreach (var cameraId in _active.Keys.Except(desired.Keys).ToList())

@@ -1,0 +1,41 @@
+@page "{id:guid?}"
+@using System.Text.Json
+@using NidusVMS.Core.Enums
+@model NidusVMS.Web.Pages.Views.PlayModel
+@{
+    ViewData["Title"] = Model.Name;
+    var camerasJson = JsonSerializer.Serialize(Model.Cameras.Select(c =>
+    {
+        var main = c.Streams.FirstOrDefault(s => s.Role == CameraStreamRole.Main);
+        return new { id = c.Id, name = c.Name, codec = main?.Codec, hasAudio = main?.HasAudio ?? false };
+    }));
+}
+<div class="d-flex justify-content-between align-items-center mb-2" id="viewPlayToolbar">
+    <h1 class="mb-0 h4">@Model.Name</h1>
+    <div class="d-flex gap-2">
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="kioskBtn" title="Toggle fullscreen kiosk mode">⛶ Fullscreen</button>
+        <a class="btn btn-sm btn-outline-secondary" asp-page="Index">Back to views</a>
+    </div>
+</div>
+
+<div id="viewPlayGrid"></div>
+
+@section Scripts {
+    <script src="~/js/aspect-ratio.js" asp-append-version="true"></script>
+    <script src="~/js/live-view.js" asp-append-version="true"></script>
+    <script src="~/js/view-play.js" asp-append-version="true"></script>
+    <script>
+        window.nidusvmsViewPlay.init({
+            layoutJson: @Html.Raw(JsonSerializer.Serialize(Model.LayoutJson)),
+            cameras: @Html.Raw(camerasJson),
+            gridElId: 'viewPlayGrid',
+            kioskBtnId: 'kioskBtn',
+            navElId: 'mainNav',
+            toolbarElId: 'viewPlayToolbar',
+            isTour: @Html.Raw(Model.IsTour ? "true" : "false"),
+            tourViewIds: @Html.Raw(JsonSerializer.Serialize(Model.TourViewIds)),
+            tourIndex: @Model.TourIndex,
+            tourIntervalSeconds: @Model.TourIntervalSeconds
+        });
+    </script>
+}

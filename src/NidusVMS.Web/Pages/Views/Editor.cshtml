@@ -1,0 +1,123 @@
+@page "{id:guid}"
+@using System.Text.Json
+@using NidusVMS.Core.Enums
+@model NidusVMS.Web.Pages.Views.EditorModel
+@{
+    ViewData["Title"] = "Edit view: " + Model.Name;
+    var camerasJson = JsonSerializer.Serialize(Model.Cameras.Select(c =>
+    {
+        var main = c.Streams.FirstOrDefault(s => s.Role == CameraStreamRole.Main);
+        return new { id = c.Id, name = c.Name, codec = main?.Codec, hasAudio = main?.HasAudio ?? false };
+    }));
+}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="mb-0">Edit view</h1>
+    <div class="d-flex gap-2">
+        <a class="btn btn-outline-secondary" asp-page="Play" asp-route-id="@Model.Id">Open</a>
+        <a class="btn btn-outline-secondary" asp-page="Index">Back to views</a>
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger">@Model.ErrorMessage</div>
+}
+
+<form method="post" id="viewEditorForm">
+    <input type="hidden" name="id" value="@Model.Id" />
+    <input type="hidden" name="layoutJson" id="layoutJsonInput" value="@Model.LayoutJson" />
+
+    <div class="row g-2 align-items-end mb-3">
+        <div class="col-sm-4">
+            <label class="form-label small">Name</label>
+            <input type="text" name="name" class="form-control" value="@Model.Name" required />
+        </div>
+        <div class="col-sm-2">
+            <div class="form-check mt-4">
+                <input type="checkbox" name="isShared" id="isSharedCheck" class="form-check-input" value="true" @(Model.IsShared ? "checked" : "") />
+                <label class="form-check-label" for="isSharedCheck">Shared</label>
+            </div>
+        </div>
+        <div class="col-sm-3">
+            <label class="form-label small">Tour interval (seconds, 0 = off)</label>
+            <input type="number" name="sequenceIntervalSeconds" class="form-control" min="0" value="@Model.SequenceIntervalSeconds" />
+        </div>
+        <div class="col-sm-2">
+            <div class="form-check mt-4">
+                <input type="checkbox" id="mobileTwoColumnCheck" class="form-check-input" />
+                <label class="form-check-label" for="mobileTwoColumnCheck">2 columns on phone</label>
+            </div>
+        </div>
+        <div class="col-sm-1 text-end">
+            <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+    </div>
+</form>
+
+<div class="row g-3">
+    <div class="col-md-3">
+        <h6>Cameras</h6>
+        @if (Model.Cameras.Count == 0)
+        {
+            <p class="text-muted small">No cameras are both enabled and assigned to a node yet.</p>
+        }
+        else
+        {
+            <div id="cameraPalette">
+                @foreach (var c in Model.Cameras)
+                {
+                    <div class="grid-stack-item camera-palette-item mb-1" gs-w="4" gs-h="3">
+                        <div class="grid-stack-item-content list-group-item list-group-item-action d-flex justify-content-between align-items-center py-1"
+                             data-camera-id="@c.Id" data-camera-name="@c.Name" style="cursor: grab;">
+                            @c.Name
+                            <span class="text-primary">+</span>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+        <p class="text-muted small mt-2">Drag a camera onto the wall (or click it to add), then drag/resize its tile to arrange the wall. Each tile's aspect ratio and remove button are in its titlebar.</p>
+    </div>
+    <div class="col-md-9">
+        <div id="viewGrid" class="grid-stack border rounded bg-body-tertiary"></div>
+    </div>
+</div>
+
+@section Styles {
+    <link rel="stylesheet" href="~/lib/gridstack/dist/gridstack.min.css" asp-append-version="true" />
+    <style>
+        /* Keep the camera palette in normal list layout. GridStack's own stylesheet absolutely
+           positions .grid-stack-item / .grid-stack-item-content on the assumption that they're
+           already inside a .grid-stack container — the palette needs the same classes for
+           GridStack.setupDragIn to recognize it as a drag source, but isn't itself a grid. */
+        #cameraPalette .camera-palette-item {
+            position: relative !important;
+            width: auto !important;
+            height: auto !important;
+            inset: auto !important;
+            margin: 0 0 4px 0 !important;
+        }
+        #cameraPalette .camera-palette-item > .grid-stack-item-content {
+            position: relative !important;
+            inset: auto !important;
+            width: auto !important;
+            height: auto !important;
+        }
+    </style>
+}
+
+@section Scripts {
+    <script src="~/lib/gridstack/dist/gridstack-all.js" asp-append-version="true"></script>
+    <script src="~/js/aspect-ratio.js" asp-append-version="true"></script>
+    <script src="~/js/live-view.js" asp-append-version="true"></script>
+    <script src="~/js/view-editor.js" asp-append-version="true"></script>
+    <script>
+        window.nidusvmsViewEditor.init({
+            layoutJson: document.getElementById('layoutJsonInput').value,
+            cameras: @Html.Raw(camerasJson),
+            mobileTwoColumnCheckId: 'mobileTwoColumnCheck',
+            formId: 'viewEditorForm',
+            layoutInputId: 'layoutJsonInput'
+        });
+    </script>
+}

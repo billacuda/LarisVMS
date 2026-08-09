@@ -2,10 +2,14 @@ namespace NidusVMS.Web.Middleware;
 
 /// <summary>
 /// rsolva's SecurityHeadersMiddleware, with the CSP extended for NidusVMS's media path: `media-src
-/// blob:` for MSE-backed <video> playback, and `connect-src` widened for the WebSocket connections
-/// live/playback open directly to recorder nodes (wss://&lt;node&gt;). The node hostnames are only
-/// known once Nodes exist (M3) — for now `connect-src 'self'` covers same-origin API calls, and this
-/// gets revisited when the direct-to-node media path (see the plan's "Media path" section) lands.
+/// blob:` for MSE-backed <video> playback. `connect-src 'self'` covers every API call this app
+/// makes — confirmed by the actual M5/M7 design (see the plan's "Media path" section): the browser
+/// never talks to a recorder node directly, IIS/NidusVMS.Web proxies every live and playback byte,
+/// so there's no cross-origin `wss://`/`https://` node connection to widen this for.
+///
+/// Bootstrap and GridStack are vendored locally (`wwwroot/lib/`) rather than loaded from a CDN, so
+/// script-src/style-src/font-src don't need a CDN host allow-listed — one less origin to trust, and
+/// the app works with no outbound internet access from the browser at all.
 /// </summary>
 public class SecurityHeadersMiddleware(RequestDelegate next)
 {
@@ -21,9 +25,9 @@ public class SecurityHeadersMiddleware(RequestDelegate next)
             headers["Permissions-Policy"] = "geolocation=()";
             headers["Content-Security-Policy"] =
                 "default-src 'self'; " +
-                "script-src 'self' 'unsafe-inline' cdn.jsdelivr.net; " +
-                "style-src 'self' 'unsafe-inline' cdn.jsdelivr.net; " +
-                "font-src 'self' cdn.jsdelivr.net; " +
+                "script-src 'self' 'unsafe-inline'; " +
+                "style-src 'self' 'unsafe-inline'; " +
+                "font-src 'self'; " +
                 "img-src 'self' data: https:; " +
                 "media-src 'self' blob:; " +
                 "connect-src 'self'; " +

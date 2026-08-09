@@ -18,10 +18,40 @@
 }
 else
 {
+    <div class="row g-2 align-items-center mb-2">
+        <div class="col-sm-4">
+            <input type="search" class="form-control" data-filter-table="camerasTable"
+                   placeholder="Filter by name, host, group, node&hellip;" />
+        </div>
+    </div>
+
+    @* This form has no visible fields of its own — the node <select>, the Reassign button, and
+       every row's checkbox below all point at it via the HTML5 form="bulkReassignForm"
+       attribute instead of DOM nesting, since the table already has its own per-row forms
+       (ToggleEnabled, Probe) and nested <form> elements are invalid HTML with unpredictable
+       submit behavior. *@
+    <form method="post" asp-page-handler="Reassign" id="bulkReassignForm"></form>
+
+    <div class="d-flex align-items-center gap-2 mb-2">
+        <select name="nodeId" form="bulkReassignForm" class="form-select form-select-sm" style="max-width: 16rem;">
+            <option value="">(unassign)</option>
+            @foreach (var n in Model.Nodes)
+            {
+                <option value="@n.Id">@n.Name</option>
+            }
+        </select>
+        <button type="submit" form="bulkReassignForm" class="btn btn-sm btn-outline-primary" id="bulkReassignBtn" disabled>
+            Reassign selected to node
+        </button>
+        <span id="bulkSelectedCount" class="text-muted small"></span>
+    </div>
+
     <div class="table-responsive">
-        <table class="table table-hover align-middle">
+        <table class="table table-hover align-middle" id="camerasTable" data-sortable>
             <thead>
                 <tr>
+                    <th data-no-sort><input type="checkbox" class="form-check-input" id="selectAllCameras" /></th>
+                    <th data-no-sort>Status</th>
                     <th>Name</th>
                     <th>Host</th>
                     <th>Group</th>
@@ -29,22 +59,33 @@ else
                     <th>Manufacturer / Model</th>
                     <th>Profiles</th>
                     <th>Capabilities</th>
-                    <th>Streams</th>
-                    <th>Storage used</th>
-                    <th>Retention</th>
+                    <th data-sort-numeric>Streams</th>
+                    <th data-sort-numeric>Storage used</th>
+                    <th data-sort-numeric>Retention</th>
                     <th>Last probed</th>
-                    <th></th>
+                    <th data-no-sort></th>
                 </tr>
             </thead>
             <tbody>
                 @foreach (var c in Model.Cameras)
                 {
+                    var staleNodeIds = Model.StaleSegmentNodeIds.GetValueOrDefault(c.Id);
                     <tr>
+                        <td><input type="checkbox" class="form-check-input camera-select" name="ids" form="bulkReassignForm" value="@c.Id" /></td>
+                        <td>
+                            <form method="post" asp-page-handler="ToggleEnabled" asp-route-id="@c.Id" class="d-inline">
+                                <button type="submit" class="btn btn-sm btn-link p-0 border-0" style="font-size: 1.1rem; line-height: 1;"
+                                        title="@(c.IsEnabled ? "Enabled — click to disable" : "Disabled — click to enable")">
+                                    @(c.IsEnabled ? "🟢" : "🔴")
+                                </button>
+                            </form>
+                        </td>
                         <td>
                             <a asp-page="Edit" asp-route-id="@c.Id">@c.Name</a>
-                            @if (!c.IsEnabled)
+                            @if (staleNodeIds is { Count: > 0 })
                             {
-                                <span class="badge text-bg-secondary ms-1">Disabled</span>
+                                var staleNames = string.Join(", ", staleNodeIds.Select(id => Model.Nodes.FirstOrDefault(n => n.Id == id)?.Name ?? "a deleted node"));
+                                <span class="ms-1" title="Has recordings still on @staleNames — no longer this camera's assigned node">⚠️</span>
                             }
                         </td>
                         <td>@c.Host</td>
@@ -83,15 +124,15 @@ else
                             }
                         </td>
                         <td>@c.Streams.Count</td>
-                        <td>
+                        <td data-sort-value="@Model.StorageUsedBytes.GetValueOrDefault(c.Id)">
                             @ByteFormat.Format(Model.StorageUsedBytes.GetValueOrDefault(c.Id))
                             @if (c.QuotaBytes is { } quota)
                             {
                                 <span class="text-muted">/ @ByteFormat.Format(quota)</span>
                             }
                         </td>
-                        <td>@Model.EffectiveRetentionDays.GetValueOrDefault(c.Id, 30) day(s)</td>
-                        <td>
+                        <td data-sort-value="@Model.EffectiveRetentionDays.GetValueOrDefault(c.Id, 30)">@Model.EffectiveRetentionDays.GetValueOrDefault(c.Id, 30) day(s)</td>
+                        <td data-sort-value="@(c.LastProbedAt?.Ticks ?? 0)">
                             @if (c.LastProbedAt is { } probed)
                             {
                                 <span title="@probed.ToString("u")">@probed.ToString("g")</span>
@@ -111,4 +152,39 @@ else
             </tbody>
         </table>
     </div>
+}
+
+@section Scripts {
+    <script>
+        (function () {
+            var selectAll = document.getElementById('selectAllCameras');
+            var reassignBtn = document.getElementById('bulkReassignBtn');
+            var countLabel = document.getElementById('bulkSelectedCount');
+            var reassignForm = document.getElementById('bulkReassignForm');
+            if (!selectAll || !reassignBtn || !reassignForm) return;
+
+            function checkboxes() {
+                return Array.prototype.slice.call(document.querySelectorAll('.camera-select'));
+            }
+
+            function updateBulkState() {
+                var checked = checkboxes().filter(function (cb) { return cb.checked; });
+                reassignBtn.disabled = checked.length === 0;
+                countLabel.textContent = checked.length > 0 ? checked.length + ' selected' : '';
+            }
+
+            selectAll.addEventListener('change', function () {
+                checkboxes().forEach(function (cb) { cb.checked = selectAll.checked; });
+                updateBulkState();
+            });
+
+            document.addEventListener('change', function (e) {
+                if (e.target.classList && e.target.classList.contains('camera-select')) updateBulkState();
+            });
+
+            reassignForm.addEventListener('submit', function (e) {
+                if (checkboxes().filter(function (cb) { return cb.checked; }).length === 0) e.preventDefault();
+            });
+        })();
+    </script>
 }

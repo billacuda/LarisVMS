@@ -36,6 +36,17 @@ public interface ICameraService
     /// a specific stream is turned off without touching the camera itself. A blank customName clears
     /// the override back to the default Role-based label.</summary>
     Task UpdateStreamAsync(Guid streamId, bool isEnabled, string? customName, CancellationToken ct = default);
+
+    /// <summary>Flips Camera.IsEnabled in one round trip (SQL-side NOT, no read-modify-write race) —
+    /// the fast path for "stop this one camera without opening Edit" on Cameras/Index.</summary>
+    Task ToggleEnabledAsync(Guid id, CancellationToken ct = default);
+
+    /// <summary>Cameras with Segment rows recorded under a NodeId other than their current
+    /// Camera.NodeId — footage still sitting on a node the camera is no longer assigned to. Keyed
+    /// by CameraId, each value is the distinct set of stale NodeIds that footage sits on. A live
+    /// query, not a stored flag: once those rows are gone (retention sweep or manual delete), a
+    /// camera drops out on its own with no explicit "clear" step.</summary>
+    Task<Dictionary<Guid, List<Guid>>> GetStaleSegmentNodeIdsAsync(CancellationToken ct = default);
 }
 
 public interface ICameraGroupService

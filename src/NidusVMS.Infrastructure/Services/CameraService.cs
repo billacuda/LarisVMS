@@ -140,6 +140,25 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
             .SetProperty(s => s.CustomName, name), ct);
     }
 
+    public async Task ToggleEnabledAsync(Guid id, CancellationToken ct = default)
+        => await db.Cameras.Where(c => c.Id == id)
+            .ExecuteUpdateAsync(u => u.SetProperty(c => c.IsEnabled, c => !c.IsEnabled), ct);
+
+    public async Task<Dictionary<Guid, List<Guid>>> GetStaleSegmentNodeIdsAsync(CancellationToken ct = default)
+    {
+        var staleRows = await (
+            from s in db.Segments
+            join c in db.Cameras on s.CameraId equals c.Id
+            where s.NodeId != c.NodeId
+            select new { s.CameraId, s.NodeId })
+            .Distinct()
+            .ToListAsync(ct);
+
+        return staleRows
+            .GroupBy(r => r.CameraId)
+            .ToDictionary(g => g.Key, g => g.Select(r => r.NodeId).ToList());
+    }
+
     public async Task DeleteAsync(Guid id, CancellationToken ct = default)
     {
         // ExecuteDeleteAsync issues the DELETE directly rather than loading the entity first — a

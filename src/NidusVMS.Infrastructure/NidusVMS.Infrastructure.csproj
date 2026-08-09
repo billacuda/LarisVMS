@@ -7,6 +7,14 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- TimelineService.NormalizeToUtc (internal static) is unit tested directly — it's the guard
+         against query-string DateTime binding silently shifting every range query by the server's
+         UTC offset, which is worth testing on its own rather than only through a full query. Same
+         pattern as NidusVMS.Node's StorageManager helpers. -->
+    <InternalsVisibleTo Include="NidusVMS.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\NidusVMS.Core\NidusVMS.Core.csproj" />
     <ProjectReference Include="..\NidusVMS.Onvif\NidusVMS.Onvif.csproj" />
   </ItemGroup>

@@ -18,6 +18,7 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
     public Dictionary<Guid, int> EffectiveRetentionDays { get; set; } = [];
     public Dictionary<Guid, int?> RetentionOverride { get; set; } = [];
     public Dictionary<Guid, double?> DaysRemaining { get; set; } = [];
+    public Dictionary<Guid, int> StaleCameraCountByNode { get; set; } = [];
     public string? ErrorMessage { get; set; }
 
     public async Task OnGetAsync()
@@ -27,6 +28,14 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
         CameraCountByNode = cameras
             .Where(c => c.NodeId is not null)
             .GroupBy(c => c.NodeId!.Value)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        // Cameras/Index shows the same underlying data per-camera (which node(s) still hold its
+        // stale footage); here it's inverted to "how many cameras have footage stranded on this
+        // node" — a live query, no stored flag, same reasoning as the per-camera badge.
+        StaleCameraCountByNode = (await cameraService.GetStaleSegmentNodeIdsAsync())
+            .SelectMany(kv => kv.Value.Select(nodeId => nodeId))
+            .GroupBy(nodeId => nodeId)
             .ToDictionary(g => g.Key, g => g.Count());
 
         DaysRemaining = await nodeService.GetEstimatedDaysRemainingAsync();

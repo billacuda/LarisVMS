@@ -5,11 +5,26 @@
     ViewData["Title"] = "Live";
 }
 <h1>Live</h1>
-<p class="text-muted">
-    Every camera below connects automatically. Video is proxied through this server — nothing
-    connects to a recorder node directly. Requires a browser with Media Source Extensions support
-    (Chrome, Edge, Firefox, Safari 17+).
-</p>
+
+@if (Model.Views.Count > 0)
+{
+    <div class="row g-2 align-items-center mb-3">
+        <div class="col-sm-4">
+            <select class="form-select" id="liveViewPicker" onchange="if (this.value) location.href = '/Views/Play/' + this.value;">
+                <option value="">All cameras (below)</option>
+                @foreach (var v in Model.Views)
+                {
+                    <option value="@v.Id">@v.Name</option>
+                }
+            </select>
+        </div>
+        <div class="col-sm-8 text-muted small">
+            Pick a saved view to watch its own layout live, with kiosk mode and (if it has a tour
+            interval set) rotation through other views. This page's own grid below shows every
+            camera flat, always available as a quick fallback.
+        </div>
+    </div>
+}
 
 @if (Model.Cameras.Count == 0)
 {

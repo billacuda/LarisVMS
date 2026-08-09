@@ -233,6 +233,13 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         await db.SaveChangesAsync(ct);
     }
 
+    public async Task ReassignCamerasAsync(IReadOnlyCollection<Guid> cameraIds, Guid? nodeId, CancellationToken ct = default)
+    {
+        if (cameraIds.Count == 0) return;
+        await db.Cameras.Where(c => cameraIds.Contains(c.Id))
+            .ExecuteUpdateAsync(u => u.SetProperty(c => c.NodeId, nodeId), ct);
+    }
+
     public async Task UpdateAsync(Guid nodeId, string name, string? storageRootPath, CancellationToken ct = default)
     {
         var node = await db.Nodes.FirstOrDefaultAsync(n => n.Id == nodeId, ct)

@@ -7,6 +7,329 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `deploy.ps1` now builds the recorder node package (`build-node.ps1`) as part of every web
+  deploy, so `publish\NidusVMS.Node\win` stays current instead of depending on someone remembering
+  to run `build-node.ps1` separately. New `-ExtraNodePublishPath` passes straight through to
+  `build-node.ps1 -ExtraPublishPath` for mirroring the package to a second location (e.g. a network
+  share a recorder machine reads directly); left blank by default since the path is inherently
+  environment-specific. New `-SkipNodeBuild` opts back out for a web-only deploy. No app-version
+  bump for this one — it's a deploy-tooling change, not a change to the deployed application itself.
+
+### Fixed
+
+- `install-node.ps1`'s network-storage warning claimed LocalSystem "CANNOT access a network
+  (\\server\share) storage root", which overstates it — LocalSystem authenticates to the network as
+  the machine's own computer account (`DOMAIN\COMPUTERNAME$`), and that account can read/write an
+  SMB share perfectly well once granted share + NTFS permissions on it, no `-ServiceCredential`
+  needed. The warning (and the doc comment above it) now says permissions need to be set up for the
+  computer account when running as LocalSystem, instead of implying it's simply impossible. Same
+  no-app-version-bump reasoning as the `deploy.ps1` change above.
+
+## [0.17.0] - 2026-08-09
+
+**No `NidusVMS.Node` changes in this release — no recorder-node update needed.**
+
+### Fixed
+
+- **Playback never loaded any video, root cause found: every timeline/segment range query was
+  silently shifted by the server's UTC offset.** ASP.NET's query-string binding parses a value like
+  `2026-08-08T21:45:31.890Z` into a `DateTime` with `Kind=Local`, *converted* to the server's zone —
+  verified directly: on this UTC-7 host it binds as `14:45:31 Local`, seven hours off. SQL Server's
+  `datetime2` carries no offset, so EF sent that shifted wall-clock value straight into
+  `WHERE StartUtc < @to AND EndUtc > @from` and every range query searched the wrong window. The
+  failure was asymmetric, which is why it was hard to spot: the *timeline* still looked fine (its
+  whole visible window shifts together, so it just looks like a different stretch of footage), but
+  the per-instant segment lookup returned segments hours away from the requested time, so
+  `findSegment()` never matched and no tile ever loaded a video — matching the reported "blank cells
+  / stuck on Loading…" exactly. `TimelineService` now normalizes every incoming range bound through
+  a new `NormalizeToUtc` before it touches the database (Local → converted back to the true instant;
+  Utc → untouched; Unspecified → stamped UTC rather than assumed local, so a client that omits the
+  trailing `Z` can't reintroduce the same shift). Covered by 4 new unit tests, including an
+  end-to-end one that passes a range the exact way binding delivers it and asserts the segment is
+  still found — both new tests were confirmed to fail against the unfixed code before the fix landed.
+- The `AbortError` console noise introduced by 0.16.0's fetch cancellation is gone. Aborting a fetch
+  mid-body-read rejects at `resp.arrayBuffer()`, not at `fetch()` — that call sat outside the
+  try/catch, so every superseded drag-scrub surfaced an "Uncaught (in promise) AbortError". It's now
+  inside the guard, and the tile's public `seekTo` additionally swallows expected aborts so a
+  rejection can never escape as an unhandled promise (no caller awaits it).
+
+## [0.16.0] - 2026-08-09
+
+**No `NidusVMS.Node` changes in this release — no recorder-node update needed.**
+
+### Fixed
+
+- Found the real cause of Playback's "stuck on Loading…" symptom, confirmed live via
+  `net::ERR_INSUFFICIENT_RESOURCES` in the browser console: the 0.15.0 tape-scrubber redesign fired
+  `onScrub` on **every raw `mousemove` event** while dragging — a browser dispatches those at a far
+  higher rate than any seek pipeline can use, so a half-second drag fired 50-100+ scrub calls, each
+  fanning out to one fetch per camera in the view. With several cameras that flooded the browser's
+  connection pool almost instantly; what looked like a recorder node "grinding" on a slow SMB read
+  was actually storage trying to keep up with hundreds of already-abandoned, superseded requests,
+  not a single hung one. Two-part fix: (1) `timeline.js` now throttles live-scrub firing during a
+  drag to ~8/sec instead of every mousemove tick (still always fires once more, unthrottled, on
+  mouseup so the exact release position is never missed); (2) `playback-player.js`'s per-tile player
+  now actually **cancels** a superseded fetch via `AbortController` instead of only marking its
+  eventual result stale — the previous token-check-on-arrival guard stopped a stale response from
+  being *applied*, but never stopped the request itself from running to completion and holding a
+  connection slot the whole time.
+- Playback tiles are now click-to-select-primary-camera on the whole cell (video, background, zoom
+  buttons — all bubble up), not just the small camera-name label from 0.15.0.
+- The Web-tier's `/playback-segment` proxy now applies a 25s timeout to its call to the recorder
+  node (was `HttpClient`'s 100s default) — a genuinely stuck/very slow storage read now surfaces as
+  a clear timeout error within half a minute instead of leaving the browser's "Loading…" up
+  indefinitely with no feedback.
+
+## [0.15.0] - 2026-08-09
+
+### Fixed
+
+- Playback's initial playhead defaulted to `Date.now()` (literally "right now"), which is almost
+  never covered by an actual recording — footage is always somewhat behind live, and nothing may
+  be recording at all in a dev/test setup. Every tile's first seek found no segment, nothing ever
+  loaded into a `<video>`, and pressing Play had no source to play — confirmed live as the reported
+  "blank cells, nothing plays" symptom. Selecting a view now resolves the most recent actual
+  recording (looked up per the view's primary camera, last 7 days) and starts there instead,
+  same as a DVR defaulting to "most recent footage" rather than a bare clock reading.
+
+### Changed
+
+- Bootstrap (5.3.3 → **5.3.8**) and GridStack (**12.6.0**, pinned — was the floating `@12` CDN tag)
+  are now vendored locally under `wwwroot/lib/` instead of loaded from `cdn.jsdelivr.net`, matching
+  frcastr's existing pattern for Bootstrap. `SecurityHeadersMiddleware`'s CSP no longer allow-lists
+  `cdn.jsdelivr.net` in `script-src`/`style-src`/`font-src` — nothing needs it anymore, and the app
+  now works with zero outbound requests from the browser. This also eliminates the CSP-blocked
+  `.map` sourcemap-fetch console warnings the CDN's own files triggered (harmless noise, but noise
+  a user reported while diagnosing the playback bug above — same session, easy to conflate with a
+  real error).
+- **Playback timeline redesigned as a tape scrubber.** The yellow playhead marker is now always
+  drawn at the horizontal center of the canvas and never moves; dragging slides the timeline strip
+  underneath it instead, live-seeking every tile continuously as you drag rather than just panning
+  the view and leaving playback wherever it was. Wheel-zoom now anchors on the playhead (always the
+  center point) instead of the cursor, so zooming can't shift the marker off-center. A plain click
+  still jump-seeks straight to the clicked instant. Both timelines (per-camera and the merged one)
+  stay recentered on the same shared playhead during normal playback too, not just while dragging —
+  the strip visibly scrolls as the video plays.
+- Playback tiles are now clickable to change which camera drives the per-camera timeline — click a
+  tile's camera-name label (⭐ marks the current one, tile gets a highlighted border) instead of
+  always being stuck with the view's top-left-most camera.
+
+## [0.13.0] - 2026-08-09
+
+### Fixed
+
+- Playback's per-tile digital-zoom button group (−/⤢/+) covered the entire video tile instead of
+  sitting as a small corner overlay — the exact same Bootstrap `.ratio > *` bug Pages/Live's mute
+  button hit (see 0.7.0): the button group was a *direct child* of the `.ratio` container, so
+  Bootstrap's rule forced it (and its buttons) to `position:absolute;width:100%;height:100%`.
+  Fixed the same way: video/status/buttons now live inside one plain inner wrapper div, the only
+  direct `.ratio` child.
+
+### Changed
+
+- **Playback is now driven by saved Views, not an ad-hoc camera picker.** Pick a view and its cell
+  layout (positions, aspect ratios, cameras — the same arrangement you'd watch live) renders with
+  playback video instead of live video. `Pages/Playback`'s camera checkboxes are gone; a view
+  dropdown replaces them, and the tile grid is now positioned by the view's own `x/y/w/h` (CSS
+  grid) instead of a uniform Bootstrap column layout. The view's top-left-most camera (reading
+  order, same convention `Pages/Views/Play` uses for its mobile layout) drives the per-camera
+  timeline.
+- `Pages/Live` gained a view picker too: choosing a saved view sends you to `Pages/Views/Play`
+  (M6's already-built "watch a saved layout live" page, complete with kiosk mode and tours) instead
+  of duplicating view-rendering logic on the Live page itself. The page's own flat all-cameras grid
+  is unchanged and stays as the default/no-view-picked fallback.
+
+### Added
+
+- A second, merged timeline on `Pages/Playback`: `GET /api/timeline?from=&to=&buckets=` (new
+  `TimelineService.GetGlobalBucketsAsync`) reports a bucket as recorded if *any* camera has footage
+  there, not just the one driving the per-camera timeline — useful for finding when something
+  happened before you know which camera caught it. Both timelines share the same playhead and
+  scrubbing either one seeks every tile. No motion aggregation yet, same M8 dependency as the
+  per-camera timeline's missing motion coloring — there's no `MotionSpans` data anywhere in the
+  system yet for either timeline to draw from.
+- 2 new unit tests for the merged-timeline bucketing (a bucket recorded if any camera covers it;
+  all-gap when nothing has ever recorded).
+
+## [0.12.0] - 2026-08-09
+
+### Added
+
+- **M7 (pass 1) — Playback & timeline.** Scrub a camera's recorded history and play it back,
+  synchronized across multiple cameras.
+  - `GET /api/cameras/{id}/timeline?from=&to=&buckets=` — coverage buckets (recorded/gap) for the
+    canvas timeline, backed by `TimelineService` reading `Segments`. No motion coloring yet —
+    that's M8 (`MotionSpans` doesn't exist until then).
+  - `GET /api/cameras/{id}/segments?from=&to=` — the segment list a player resolves "which file
+    covers this instant" against.
+  - `Pages/Playback`: a camera picker (first checked camera drives the timeline; every checked
+    camera plays in lockstep, each resolving its own recordings/gaps independently), a canvas
+    timeline (`timeline.js` — wheel to zoom weeks→seconds around the cursor, drag to pan, click to
+    scrub), one MSE player per selected camera (`playback-player.js`), and per-tile digital zoom
+    (CSS transform scale/pan on the `<video>` element, drag to pan once zoomed).
+  - `/playback-segment/{cameraId}/{segmentId}` on `NidusVMS.Web` proxies exactly one segment
+    file's bytes from its owning node — same "browser never talks to a node directly" shape as
+    `/live`, over HTTP GET instead of a WebSocket. `MediaToken` gained `IssueForSegment`/
+    `TryValidateSegment`, a separate token family from the live-view one (deliberately — the
+    already-verified `/live` path wasn't touched) that binds a token to one exact file path.
+  - Node gained `GET /playback-segment/{cameraId}` (serves the file, validated against the token
+    and a directory-prefix check) and `NodeWorker.StorageRoot` (so that endpoint can resolve the
+    same `cam-{id}/main` path `RecordingSession` writes to, without a second source of truth for
+    where recordings live).
+  - **Architecture choice, not a corner cut:** the plan describes `/playback` as one
+    server-side-synthesized, timestamp-rebased fMP4 stream spanning multiple segments. This pass
+    does it differently — each segment file is already a self-contained fMP4 (its own
+    ftyp+moov+moof+mdat), and MSE natively accepts a new initialization segment mid-stream, so a
+    player just fetches one segment's full bytes per seek/advance and appends them. No server-side
+    MP4 box rewriting needed. Trade-off: a brief decode restart at every segment boundary instead
+    of frame-perfect continuity — see Known limitations.
+  - 12 new unit tests: `TimelineService`'s bucketing (including the boundary case where integer
+    bucket-tick division would otherwise leave a sliver of the requested range uncovered) and
+    segment/playback-lookup queries, plus `MediaToken`'s new segment-token family (round-trip,
+    camera/path/expiry mismatches, and confirming a live-view token doesn't validate as a segment
+    token or vice versa).
+
+### Known limitations (M7 pass 1)
+
+- **Nothing in this pass has been exercised in a real browser** — no browser is available in this
+  environment. Unlike M5 (which needed five rounds of real-browser debugging before it actually
+  worked despite looking correct on paper each time — codec mismatches, seek bugs, audio track
+  issues), this shipped on code review, build, and the 12 unit tests above only. Canvas rendering,
+  wheel-zoom math, the MSE multi-segment player, and synchronized playback are all exactly the kind
+  of thing that could need real debugging before they work at all. Test before relying on this.
+- No hover thumbnails on the timeline — the plan's `/thumb/{cameraId}/{ts}` endpoint and the
+  scrub-preview JPEGs it would serve were never actually built in M3 despite being in the original
+  storage-layout sketch; adding them is its own scope (frame extraction at arbitrary timestamps),
+  not something this pass could fold in.
+- Segment-boundary playback restarts the decoder for each new file rather than gapless continuity
+  — see the architecture-choice note above.
+- No frame-accurate synchronization across tiles during continuous playback — every tile seeks to
+  the same wall-clock instant, but each `<video>` then plays natively at 1x on its own; the
+  timeline's playhead is driven by the primary tile's own `currentTime`, not a shared driving
+  clock, so long playback runs can drift slightly between tiles.
+- Digital zoom is CSS transform scale/pan on the video element, not a server-side crop/re-encode —
+  zooms into whatever resolution the stream already is.
+
+## [0.11.0] - 2026-08-09
+
+### Changed
+
+- `Pages/Live` no longer shows the "Every camera below connects automatically..." explainer
+  paragraph — it was accurate but not something a user needs told every time the page loads.
+
+## [0.10.0] - 2026-08-09
+
+### Added
+
+- Recorder nodes now resume recording on their own after rebooting during a central-server/DB
+  outage, instead of sitting idle until the server answers again. `node.config` gained a
+  `CachedConfig` field holding the most recent successful camera-config response (camera list,
+  RTSP URIs, credentials, resolved retention/quota) — DPAPI-protected the same way the node's
+  registration secret already is, since it carries camera credentials — persisted after every
+  successful reconcile. If a `GetConfigAsync` call fails while nothing is recording yet (the
+  cold-start-during-an-outage case), the node falls back to that cached config and starts recording
+  from it immediately; the moment the server answers for real, it reconciles against the fresh
+  response as normal. An already-*running* node hitting an outage was never affected by this gap —
+  a failed reconcile cycle has always left active recording sessions alone — this only closes the
+  restart-during-outage case.
+
+### Known limitations
+
+- `StorageManager` (retention/quota/watermark eviction) has the same "depends on reaching the
+  server" shape and doesn't get the cache fallback this pass — a long outage still pauses cleanup on
+  affected nodes until the server is reachable again. Left out deliberately: this is a disk-usage
+  concern, not a recording-continuity one, and didn't need to block the fix above.
+- No video is ever lost either way, cache or no cache: `RecordingSession` always rescans its whole
+  output directory from empty state whenever a session (re)starts, so segments written while
+  disconnected still get indexed once the node reconnects — this change is purely about *starting*
+  recording sooner during an outage, not about recovering data that was already safe.
+
+## [0.9.0] - 2026-08-09
+
+### Added
+
+- **M6 (pass 1) — Views & layout editor.** Save a camera-wall layout and open it later instead of
+  rebuilding it every visit.
+  - `View` entity (`Pages/Views/{Index,Editor,Play}`): name, owner, shared/personal, a GridStack
+    cell layout (`LayoutJson`), and a tour interval. Personal views are only editable/deletable by
+    their owner; shared views are visible and editable by anyone with `Views.View`/`Views.Edit`
+    (seeded onto the Viewer role — building your own camera wall doesn't need elevated access).
+  - `Pages/Views/Editor`: GridStack drag-to-arrange and resize, a camera palette to add tiles
+    (click-to-add — see Known limitations), a per-cell aspect-ratio dropdown (the plan's full list:
+    1:1, 4:3, 3:2, 16:10, 16:9, 1.85:1, 21:9, 2.39:1, and the vertical inverses), and a per-cell
+    "hide on phone" toggle. Every tile plays real live video via the same `nidusvmsLiveView` player
+    `Pages/Live` uses, letterboxed to its aspect ratio with `object-fit: contain` regardless of the
+    grid rectangle's actual shape, so dragging/resizing a tile never distorts the picture.
+  - `Pages/Views/Play`: read-only display of a saved view. Desktop renders the exact saved
+    geometry with plain CSS grid (no GridStack JS needed just to display a fixed layout). Phones
+    get a **derived** layout — cameras ordered top-to-bottom/left-to-right from the desktop
+    positions, stacked one or two columns (`mobileTwoColumn`), sized from each cell's aspect ratio,
+    cells flagged "hide on phone" skipped — never persisted, so a view built on desktop always gets
+    a usable phone layout for free.
+  - Fullscreen kiosk button on `Pages/Views/Play` (real Fullscreen API, not just a URL flag) —
+    hides the nav bar and toolbar while active for a clean wall-mounted display.
+  - "Start tour" on `Pages/Views/Index`: cycles through every shared view that has a tour interval
+    set, each shown for its own interval (default 15s if unset when reached directly), looping.
+
+### Known limitations (M6 pass 1 — tracked for a follow-up pass, not silently dropped)
+
+- Adding a camera to the grid is click-to-add from the palette, not drag-and-drop onto a cell —
+  GridStack's own drag/resize for arranging *already-added* tiles works normally; only the initial
+  "camera → grid" step was simplified. Native drag-in wasn't implemented this pass because it's the
+  more failure-prone half of GridStack's interactivity and this environment has no browser to
+  verify it in live.
+- None of this milestone's UI (editor drag/resize, aspect-ratio letterboxing, the derived mobile
+  layout, kiosk fullscreen) has been visually confirmed in a real browser yet — verified by build +
+  the existing test suite only, same caveat as always applies to browser-only behavior with no
+  browser available to check it in.
+- `Pages/Views/Index` shows "You" vs "another user" for a shared view's owner rather than their
+  actual name — no `UserManager` lookup wired into the list query yet.
+- Per-camera ACL (`CameraAccess`) isn't wired into view visibility — a shared view shows every
+  camera in its layout to anyone who can see the view, same as `Cameras/Index` today. Consistent
+  with the rest of the app: `CameraAccess` has been schema-ready since M1 but isn't enforced by any
+  page yet, so adding enforcement just for Views would be inventing a check nothing else has.
+
+## [0.8.0] - 2026-08-08
+
+### Added
+
+- Dark mode toggle (🌙/☀️ nav-bar button), completing the M1 groundwork (`data-bs-theme`,
+  anti-flash inline script) with the visible switch and `theme.js` logic the plan always called
+  for. Defaults to the system's `prefers-color-scheme` ("auto") when no preference is stored yet,
+  live-updates if the OS theme changes while auto is in effect, and otherwise persists an explicit
+  choice to `localStorage`.
+- Every table on `Cameras/Index` and `Admin/Nodes` is now click-to-sort by any column (ascending/
+  descending, with a ▲/▼ indicator), and both pages gained a filter box above the table that
+  narrows rows by substring match as you type. Both are one small shared, dependency-free IIFE
+  each (`sortable-table.js`, `list-filter.js`) — no server round-trip, since these list sizes fit
+  comfortably in one page — meant to be applied to every table/list page built from here on, not
+  just these two.
+- Quick enable/disable on `Cameras/Index`: a 🟢/🔴 button next to each camera's name toggles
+  `Camera.IsEnabled` in place, without opening `Edit`. Disabling never touches the camera's group/
+  node assignment, credentials, or settings — recording just stops on the node's next reconcile
+  cycle (`NodeService.GetConfigAsync` already only hands out enabled cameras), and re-enabling
+  resumes with whatever configuration was already there.
+- Bulk camera re-pointing: select multiple cameras on `Cameras/Index` via row checkboxes and
+  reassign them all to a different node (or unassign) in one action, instead of one `Edit` page at
+  a time — the real case this covers is moving a batch of cameras off a node being decommissioned.
+  Reassigning never touches `Segment` rows already written under the old node; that footage stays
+  attached to whichever node actually recorded it.
+- Stale-segment warning (⚠️): a badge next to a camera on `Cameras/Index`, and a per-node count on
+  `Admin/Nodes`, shown whenever a camera has `Segment` rows recorded under a `NodeId` other than
+  its *current* `Camera.NodeId` — footage still sitting on a node the camera is no longer assigned
+  to (surfaced after the bulk re-pointing above, or any manual reassignment). A live query against
+  `Segments`, not a stored flag, so it clears on its own once those rows are gone (retention sweep
+  or manual delete) with no explicit dismissal step. Covered by three unit tests: flagged while
+  present, not flagged when a camera's segments are all on its current node, and clears once the
+  stale rows are removed.
+
+This closes out the cross-cutting UI backlog the plan had been carrying since M4/M5 ("must land
+before the plan is done") — `Cameras/Index` and `Admin/Nodes` were the two pages that needed the
+retrofit; every list page built from M6 onward gets sortable/filterable for free by using the same
+convention.
+
 ## [0.7.0] - 2026-08-08
 
 ### Added

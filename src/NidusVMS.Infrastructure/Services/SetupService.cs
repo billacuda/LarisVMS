@@ -180,7 +180,8 @@ public class SetupService(
         var role = await roleManager.FindByNameAsync("Viewer");
         if (role is null) return;
 
-        (string Resource, string Action)[] viewerPermissions = [("AuditLog", "View"), ("Settings", "View")];
+        (string Resource, string Action)[] viewerPermissions =
+            [("AuditLog", "View"), ("Settings", "View"), ("Views", "View"), ("Views", "Edit"), ("Playback", "View")];
 
         foreach (var (resource, action) in viewerPermissions)
         {

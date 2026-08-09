@@ -1,0 +1,74 @@
+@page
+@model NidusVMS.Web.Pages.Views.IndexModel
+@{
+    ViewData["Title"] = "Views";
+}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1>Views</h1>
+    <div class="d-flex gap-2">
+        @if (Model.TourViews.Count > 0)
+        {
+            <a class="btn btn-outline-secondary" asp-page="Play" asp-route-tour="true">Start tour (@Model.TourViews.Count)</a>
+        }
+        <form method="post" asp-page-handler="Create" class="d-inline">
+            <input type="hidden" name="name" value="New view" />
+            <button type="submit" class="btn btn-primary">+ New view</button>
+        </form>
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger">@Model.ErrorMessage</div>
+}
+
+@if (Model.Views.Count == 0)
+{
+    <p class="text-muted">No views yet. A view is a saved camera-wall layout — click "+ New view" to build one.</p>
+}
+else
+{
+    <div class="row g-2 align-items-center mb-2">
+        <div class="col-sm-4">
+            <input type="search" class="form-control" data-filter-table="viewsTable" placeholder="Filter by name&hellip;" />
+        </div>
+    </div>
+
+    <div class="table-responsive">
+        <table class="table table-hover align-middle" id="viewsTable" data-sortable>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Owner</th>
+                    <th>Shared</th>
+                    <th data-sort-numeric>Cameras</th>
+                    <th data-sort-numeric>Tour interval</th>
+                    <th data-no-sort></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var v in Model.Views)
+                {
+                    var cellCount = ViewLayout.CountCells(v.LayoutJson);
+                    var isOwner = v.OwnerId == Model.CurrentUserId;
+                    <tr>
+                        <td><a asp-page="Play" asp-route-id="@v.Id">@v.Name</a></td>
+                        <td>@(isOwner ? "You" : "another user")</td>
+                        <td>@(v.IsShared ? "Shared" : "Personal")</td>
+                        <td>@cellCount</td>
+                        <td data-sort-value="@v.SequenceIntervalSeconds">
+                            @(v.SequenceIntervalSeconds > 0 ? $"{v.SequenceIntervalSeconds}s" : "—")
+                        </td>
+                        <td class="text-end text-nowrap">
+                            <a class="btn btn-sm btn-outline-secondary" asp-page="Editor" asp-route-id="@v.Id">Edit</a>
+                            <form method="post" asp-page-handler="Delete" asp-route-id="@v.Id" class="d-inline"
+                                  onclick="return confirm('Delete view &quot;@v.Name&quot;? This only removes the saved layout, not any cameras or recordings.');">
+                                <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}

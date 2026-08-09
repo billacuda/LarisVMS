@@ -19,9 +19,13 @@
     previous run instead of re-resolving it from PATH/winget/-FfmpegPath every time — pass
     -FfmpegPath explicitly only when you actually want to replace ffmpeg itself.
 
-    Storage access: if the storage root is a network share (\\server\share\...), the service must
-    run as an account with access to it — the default LocalSystem account generally cannot
-    authenticate to SMB shares. Pass -ServiceCredential for a domain/service account in that case.
+    Storage access: if the storage root is a network share (\\server\share\...), the account the
+    service runs as needs read/write access to it. The default LocalSystem account can still work
+    for this — Windows authenticates LocalSystem to the network as the machine's own computer
+    account (DOMAIN\COMPUTERNAME$) — but only once that computer account has been explicitly
+    granted share and NTFS permissions on the target; it has none by default. Pass
+    -ServiceCredential for a domain/service account instead if you'd rather manage access that way,
+    or the share doesn't support computer-account auth (e.g. a workgroup/non-domain NAS).
 
 .EXAMPLE
     .\install-node.ps1 -ServerUrl "https://nidusvms.example.com" -RegistrationKey "abc123"
@@ -261,8 +265,11 @@ $binPath = (Format-ServiceArg $exePath) + ' ' + (($argParts | ForEach-Object { F
 if ($ServiceCredential) {
     Write-Host "    Running as $($ServiceCredential.UserName) (needed for network/SMB storage access)."
 } else {
-    Write-Host "    Running as LocalSystem - this CANNOT access a network (\\server\share) storage root." -ForegroundColor Yellow
-    Write-Host "    Re-run with -ServiceCredential (Get-Credential) if the storage root is a network share." -ForegroundColor Yellow
+    Write-Host "    Running as LocalSystem." -ForegroundColor Yellow
+    Write-Host "    If the storage root is a network share, LocalSystem authenticates to it as this" -ForegroundColor Yellow
+    Write-Host "    machine's own computer account ($env:COMPUTERNAME`$) - make sure that account has" -ForegroundColor Yellow
+    Write-Host "    share and NTFS permissions on the target, or recording will fail. Re-run with" -ForegroundColor Yellow
+    Write-Host "    -ServiceCredential (Get-Credential) instead if you'd rather use a domain/service account." -ForegroundColor Yellow
 }
 
 if ($isUpgrade) {

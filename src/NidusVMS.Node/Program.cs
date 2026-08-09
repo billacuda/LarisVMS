@@ -66,7 +66,7 @@ builder.WebHost.ConfigureKestrel(o => o.ListenAnyIP(livePort));
 builder.Services.AddWindowsService(o => o.ServiceName = "NidusVMS Node");
 builder.Services.AddSingleton(apiClient);
 builder.Services.AddSingleton(sp => new NodeWorker(
-    apiClient, ffmpegPath, fallbackStorageRoot, livePort, config.MediaSigningKey, sp.GetRequiredService<ILoggerFactory>()));
+    apiClient, ffmpegPath, fallbackStorageRoot, livePort, config, sp.GetRequiredService<ILoggerFactory>()));
 builder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<NodeWorker>());
 builder.Services.AddSingleton<IHostedService>(sp => new StorageManager(
     apiClient, fallbackStorageRoot, sp.GetRequiredService<ILoggerFactory>().CreateLogger<StorageManager>()));
@@ -113,6 +113,65 @@ app.Map("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWork
 
     using var socket = await ctx.WebSockets.AcceptWebSocketAsync();
     await LiveViewerHandler.RunAsync(socket, session, liveLogger, ctx.RequestAborted);
+});
+
+// M7 playback: serves exactly one segment file's raw bytes to NidusVMS.Web's proxy — never reached
+// by a browser directly, same "IIS proxies every byte" shape as /live above. The token binds
+// cameraId + this exact path, so path itself can't be tampered with independently of the
+// signature; the directory-prefix check below is a second, independent line of defense in case
+// that ever changes, not a substitute for it.
+app.MapGet("/playback-segment/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWorker worker) =>
+{
+    var token = ctx.Request.Query["token"].ToString();
+    var path = ctx.Request.Query["path"].ToString();
+    var currentKey = worker.MediaSigningKey;
+    if (currentKey is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
+        return;
+    }
+    if (string.IsNullOrEmpty(path))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync("missing path");
+        return;
+    }
+    if (!MediaToken.TryValidateSegment(token, cameraId, path, currentKey, out var tokenError))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync(tokenError);
+        return;
+    }
+
+    var storageRoot = worker.StorageRoot;
+    if (storageRoot is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
+        return;
+    }
+
+    string fullPath, cameraDir;
+    try
+    {
+        fullPath = Path.GetFullPath(path);
+        cameraDir = Path.GetFullPath(Path.Combine(storageRoot, $"cam-{cameraId}", "main")) + Path.DirectorySeparatorChar;
+    }
+    catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+
+    if (!fullPath.StartsWith(cameraDir, StringComparison.OrdinalIgnoreCase) || !File.Exists(fullPath))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+    }
+
+    ctx.Response.ContentType = "video/mp4";
+    await ctx.Response.SendFileAsync(fullPath, ctx.RequestAborted);
 });
 
 await app.RunAsync();

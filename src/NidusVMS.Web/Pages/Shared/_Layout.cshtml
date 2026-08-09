@@ -22,7 +22,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>@ViewData["Title"] - @pageTitle</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" />
+    <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
     @if (!string.IsNullOrWhiteSpace(primaryColor))
     {
@@ -32,15 +32,21 @@
         </style>
     }
     <script>
-        // Anti-flash: applies the stored theme before first paint.
+        // Anti-flash: applies the stored theme (or the system preference, when unset — 'auto' is
+        // the default) before first paint.
         (function () {
             var t = localStorage.getItem('nidusvms.theme');
-            if (t === 'dark' || t === 'light') document.documentElement.setAttribute('data-bs-theme', t);
+            if (t === 'dark' || t === 'light') {
+                document.documentElement.setAttribute('data-bs-theme', t);
+            } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                document.documentElement.setAttribute('data-bs-theme', 'dark');
+            }
         })();
     </script>
+    @await RenderSectionAsync("Styles", required: false)
 </head>
 <body>
-    <nav class="navbar navbar-expand-sm navbar-dark bg-dark mb-3">
+    <nav class="navbar navbar-expand-sm navbar-dark bg-dark mb-3" id="mainNav">
         <div class="container-fluid">
             <a class="navbar-brand" href="/">@pageTitle</a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMenu">
@@ -50,9 +56,17 @@
                 <ul class="navbar-nav me-auto">
                     <li class="nav-item"><a class="nav-link" href="/">Dashboard</a></li>
                     <li class="nav-item"><a class="nav-link" href="/Live">Live</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/Playback">Playback</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/Views">Views</a></li>
                     <li class="nav-item"><a class="nav-link" href="/Cameras">Cameras</a></li>
                     <li class="nav-item"><a class="nav-link" href="/Admin/Nodes">Nodes</a></li>
                     <li class="nav-item"><a class="nav-link" href="/Admin/Retention">Retention</a></li>
+                </ul>
+                <ul class="navbar-nav me-2">
+                    <li class="nav-item">
+                        <button class="btn btn-sm btn-outline-light" id="themeToggle" type="button"
+                                onclick="toggleTheme()" title="Toggle theme"><span id="themeIcon">🌙</span></button>
+                    </li>
                 </ul>
                 <partial name="_LoginPartial" />
             </div>
@@ -69,8 +83,10 @@
         </div>
     </footer>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js" asp-append-version="true"></script>
     <script src="~/js/theme.js" asp-append-version="true"></script>
+    <script src="~/js/sortable-table.js" asp-append-version="true"></script>
+    <script src="~/js/list-filter.js" asp-append-version="true"></script>
     @await RenderSectionAsync("Scripts", required: false)
 </body>
 </html>

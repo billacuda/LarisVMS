@@ -1,15 +1,24 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using NidusVMS.Core.Dtos;
 
 namespace NidusVMS.Node;
 
-public record NodeConfig(string ServerUrl, Guid NodeId, string Secret, string MediaSigningKey);
+/// <summary>CachedConfig is the last NodeConfigResponse this node successfully fetched — carried
+/// along so a node that reboots while the central server is unreachable can resume recording from
+/// it immediately instead of sitting idle until the server answers again (see NodeWorker's
+/// reconcile loop). It's stale by definition; a live GetConfigAsync response always supersedes it
+/// the moment one succeeds.</summary>
+public record NodeConfig(string ServerUrl, Guid NodeId, string Secret, string MediaSigningKey,
+    NodeConfigResponse? CachedConfig = null);
 
 /// <summary>
 /// Persists the node's registration (server URL, assigned NodeId, and secret) to
 /// %ProgramData%\NidusVMS\node.config so a restart doesn't need to re-register. DPAPI-protected to
 /// the local machine on Windows, matching dploid.Agent's config store. Linux support (AES-256-GCM
 /// keyed off /etc/machine-id, per the plan) is not implemented yet — nodes are Windows-only for now.
+/// Also carries the cached camera config (CachedConfig) — protected the same way since it includes
+/// camera credentials, same sensitivity as the registration secret it travels with.
 /// </summary>
 public static class NodeConfigStore
 {

@@ -47,6 +47,9 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<Node> Nodes => Set<Node>();
     public DbSet<Segment> Segments => Set<Segment>();
 
+    // ── Views (M6) ───────────────────────────────────────────────────────────
+    public DbSet<View> Views => Set<View>();
+
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
@@ -183,6 +186,15 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             // catches the resulting constraint violation and skips the duplicate rather than losing
             // the rest of the batch.
             e.HasIndex(x => x.FilePath).IsUnique();
+        });
+
+        // ── View ─────────────────────────────────────────────────────────────
+        builder.Entity<View>(e =>
+        {
+            e.Property(x => x.Name).HasMaxLength(200).IsRequired();
+            e.Property(x => x.OwnerId).HasMaxLength(450).IsRequired();
+            e.Property(x => x.LayoutJson).IsRequired();
+            e.HasIndex(x => x.OwnerId);
         });
     }
 }

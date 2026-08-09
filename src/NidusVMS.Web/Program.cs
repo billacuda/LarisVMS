@@ -127,6 +127,8 @@ builder.Services.AddScoped<ICameraDiscoveryService, CameraDiscoveryService>();
 builder.Services.AddScoped<ICameraService, CameraService>();
 builder.Services.AddScoped<ICameraGroupService, CameraGroupService>();
 builder.Services.AddScoped<INodeService, NodeService>();
+builder.Services.AddScoped<IViewService, ViewService>();
+builder.Services.AddScoped<ITimelineService, TimelineService>();
 
 // ── ONVIF HTTP client ────────────────────────────────────────────────────────
 // CameraService takes a Func<HttpClient> rather than IHttpClientFactory directly so
@@ -289,6 +291,69 @@ app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICame
     using var browserSocket = await ctx.WebSockets.AcceptWebSocketAsync();
     await ProxyLiveViewAsync(nodeSocket, browserSocket, ct);
 }).RequireAuthorization("Cameras.View");
+
+// ── Playback & timeline (M7) ─────────────────────────────────────────────────
+// GetBucketsAsync/GetSegmentsAsync are plain DB reads (no node involved). /playback-segment
+// mirrors /live's proxy shape above — the browser never talks to a node directly, this process
+// relays the bytes — but over a plain HTTP GET instead of a WebSocket, and authorizes exactly one
+// segment file per request via MediaToken.IssueForSegment rather than a whole camera's live feed.
+var playbackApi = app.MapGroup("/api/cameras/{cameraId:guid}").RequireAuthorization("Playback.View");
+
+playbackApi.MapGet("/timeline", async (Guid cameraId, DateTime from, DateTime to, int? buckets, ITimelineService timeline, CancellationToken ct) =>
+    Results.Json(await timeline.GetBucketsAsync(cameraId, from, to, buckets ?? 200, ct)));
+
+playbackApi.MapGet("/segments", async (Guid cameraId, DateTime from, DateTime to, ITimelineService timeline, CancellationToken ct) =>
+    Results.Json(await timeline.GetSegmentsAsync(cameraId, from, to, ct)));
+
+// Merged across every camera, not scoped to one — the "was anything recording anywhere" overview
+// timeline on Pages/Playback, separate from the per-camera one above.
+app.MapGet("/api/timeline", async (DateTime from, DateTime to, int? buckets, ITimelineService timeline, CancellationToken ct) =>
+    Results.Json(await timeline.GetGlobalBucketsAsync(from, to, buckets ?? 200, ct))
+).RequireAuthorization("Playback.View");
+
+app.MapGet("/playback-segment/{cameraId:guid}/{segmentId:long}", async (
+    Guid cameraId, long segmentId, ITimelineService timeline, IHttpClientFactory httpFactory, CancellationToken ct) =>
+{
+    var segment = await timeline.GetSegmentForPlaybackAsync(cameraId, segmentId, ct);
+    if (segment is null) return Results.NotFound();
+    if (segment.NodeIp is null || segment.NodeLivePort is null || segment.NodeMediaSigningKey is null)
+    {
+        return Results.Problem(
+            "This segment's node hasn't reported live-view readiness yet (needs at least one heartbeat since being upgraded to a build with live view).",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    var token = MediaToken.IssueForSegment(cameraId, segment.FilePath, segment.NodeMediaSigningKey, TimeSpan.FromSeconds(30));
+    var nodeUri = $"http://{segment.NodeIp}:{segment.NodeLivePort}/playback-segment/{cameraId}" +
+        $"?path={Uri.EscapeDataString(segment.FilePath)}&token={Uri.EscapeDataString(token)}";
+
+    // Shorter than HttpClient's 100s default — a genuinely stuck node/storage read (confirmed
+    // possible: a slow SMB share) shouldn't be able to hold this request open for nearly two
+    // minutes with the browser just showing "Loading…" the whole time.
+    var client = httpFactory.CreateClient();
+    client.Timeout = TimeSpan.FromSeconds(25);
+    HttpResponseMessage nodeResponse;
+    try
+    {
+        nodeResponse = await client.GetAsync(nodeUri, HttpCompletionOption.ResponseHeadersRead, ct);
+    }
+    catch (TaskCanceledException) when (!ct.IsCancellationRequested)
+    {
+        return Results.Problem("Timed out waiting for the recorder node to start responding (its storage may be slow or unreachable).",
+            statusCode: StatusCodes.Status504GatewayTimeout);
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException)
+    {
+        return Results.Problem($"Could not reach recorder node: {ex.Message}", statusCode: StatusCodes.Status502BadGateway);
+    }
+
+    if (!nodeResponse.IsSuccessStatusCode)
+    {
+        return Results.StatusCode((int)nodeResponse.StatusCode);
+    }
+
+    return Results.Stream(await nodeResponse.Content.ReadAsStreamAsync(ct), "video/mp4");
+}).RequireAuthorization("Playback.View");
 
 app.Run();
 
