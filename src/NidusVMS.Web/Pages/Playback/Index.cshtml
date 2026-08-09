@@ -46,6 +46,10 @@ else
             <div class="d-flex align-items-center gap-2 mb-2">
                 <button type="button" class="btn btn-sm btn-outline-secondary" id="pbPlayPause" disabled>▶ Play</button>
                 <span id="pbCurrentTime" class="text-muted small"></span>
+                <div class="form-check form-switch ms-auto mb-0">
+                    <input type="checkbox" class="form-check-input" id="pbHour24" />
+                    <label class="form-check-label small" for="pbHour24">24-hour clock</label>
+                </div>
             </div>
 
             <label class="form-label small mb-0">Selected camera</label>
@@ -56,7 +60,9 @@ else
 
             <p class="text-muted small mt-1">
                 Scroll either timeline to zoom (weeks down to seconds), drag to pan, click to jump
-                every tile to that instant. No motion coloring yet on either timeline (M8).
+                every tile to that instant — neither can scroll past right now. Your position and
+                zoom level are remembered between visits. No motion coloring yet on either timeline
+                (M8).
             </p>
         </div>
     </div>
@@ -76,7 +82,8 @@ else
             timelineCanvasId: 'playbackTimeline',
             globalTimelineCanvasId: 'playbackGlobalTimeline',
             playPauseBtnId: 'pbPlayPause',
-            currentTimeId: 'pbCurrentTime'
+            currentTimeId: 'pbCurrentTime',
+            hour24ToggleId: 'pbHour24'
         });
     </script>
 }

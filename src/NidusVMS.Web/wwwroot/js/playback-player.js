@@ -32,6 +32,9 @@
     function createTile(cameraId, videoEl, statusEl, codecHint, hasAudio) {
         var segments = []; // [{id, startUtc, endUtc}] as epoch ms, sorted by startUtc
         var currentSegmentId = null;
+        // Media-timeline value corresponding to the loaded segment's wall-clock start. Usually 0,
+        // but not guaranteed — see the buffered-range handling in loadSegment.
+        var currentSegmentTimeOrigin = 0;
         var loadToken = 0; // bumped on every seek so a superseded in-flight fetch's *result* is a no-op on arrival
         var abortController = null; // actually cancels the superseded fetch itself, not just its result
 
@@ -55,17 +58,28 @@
                 var url = '/api/cameras/' + cameraId + '/segments?from=' + encodeURIComponent(new Date(fromMs).toISOString()) +
                     '&to=' + encodeURIComponent(new Date(toMs).toISOString());
                 var resp = await fetch(url, { signal: signal });
-                if (!resp.ok) return;
+                if (!resp.ok) {
+                    // Previously silent — a tile that failed here just sat blank forever with
+                    // nothing in the console to explain why, indistinguishable from "still loading".
+                    console.error('[playback] segment list fetch failed for camera', cameraId, 'status', resp.status);
+                    if (statusEl) statusEl.textContent = 'Could not load recordings (' + resp.status + ').';
+                    return;
+                }
                 var list = await resp.json();
                 segments = list.map(function (s) {
                     return { id: s.id, startUtc: new Date(s.startUtc).getTime(), endUtc: new Date(s.endUtc).getTime() };
                 });
-            } catch (e) { /* aborted (superseded by a newer seek) or a real network error — either way, keep whatever was already loaded */ }
+            } catch (e) {
+                if (signal.aborted) return; // superseded by a newer seek — expected, not an error
+                console.error('[playback] segment list fetch threw for camera', cameraId, e);
+                if (statusEl) statusEl.textContent = 'Could not load recordings.';
+            }
         }
 
         function teardown() {
             loadToken++;
             currentSegmentId = null;
+            currentSegmentTimeOrigin = 0;
             try { videoEl.pause(); } catch (e) { /* ignore */ }
             try { videoEl.removeAttribute('src'); videoEl.load(); } catch (e) { /* ignore */ }
         }
@@ -126,8 +140,37 @@
                 }
                 sourceBuffer.addEventListener('updateend', function () {
                     if (myToken !== loadToken) return;
+
+                    // The whole (self-contained) segment is now appended, so the stream is complete.
+                    // Without endOfStream the MediaSource stays 'open', meaning duration stays
+                    // unbounded and the element never fires 'ended' — which the auto-advance to the
+                    // next segment below depends on, so it silently never advanced.
+                    if (mediaSource.readyState === 'open') {
+                        try { mediaSource.endOfStream(); } catch (e) { /* already ended/detached */ }
+                    }
+
+                    // seekSeconds is an offset from the segment's *wall-clock* start, but a
+                    // recorded fMP4's internal timeline doesn't have to begin at zero — these carry
+                    // the baseMediaDecodeTime they were written with, so buffered can start at an
+                    // arbitrary large value. Seeking to a raw offset then lands outside the buffered
+                    // range entirely and the element renders nothing at all: no error, no event, and
+                    // the status text still clears normally, which is exactly how this presented
+                    // (tile shows "Loading…", then goes blank and stays blank).
+                    var buffered = sourceBuffer.buffered;
+                    if (buffered.length) {
+                        var bufStart = buffered.start(0);
+                        var bufEnd = buffered.end(buffered.length - 1);
+                        var target = bufStart + seekSeconds;
+                        if (!(target >= bufStart && target <= bufEnd)) target = bufStart;
+                        currentSegmentTimeOrigin = bufStart;
+                        videoEl.currentTime = target;
+                    } else {
+                        console.error('[playback] segment appended but nothing buffered for camera', cameraId);
+                        if (statusEl) statusEl.textContent = 'Segment could not be decoded.';
+                        return;
+                    }
+
                     if (statusEl) statusEl.textContent = '';
-                    videoEl.currentTime = seekSeconds;
                     if (autoplay) videoEl.play().catch(function () { /* blocked by autoplay policy — stays paused with a visible control */ });
                 });
                 try {
@@ -152,6 +195,11 @@
             var segment = findSegment(targetMs);
 
             if (!segment) {
+                // Status was previously left untouched for this whole lookup — a tile just looked
+                // blank the entire time it was in flight, identical whether that took 50ms or never
+                // resolved at all. "Loading…" itself is set separately once a segment is actually
+                // found and its bytes are being fetched (loadSegment); this is the step before that.
+                if (statusEl) statusEl.textContent = 'Looking for a recording…';
                 await ensureSegmentsLoaded(targetMs - 2 * 3600 * 1000, targetMs + 2 * 3600 * 1000, signal);
                 if (myToken !== loadToken) return;
                 segment = findSegment(targetMs);
@@ -169,7 +217,7 @@
             }
 
             if (segment.id === currentSegmentId) {
-                videoEl.currentTime = (targetMs - segment.startUtc) / 1000;
+                videoEl.currentTime = currentSegmentTimeOrigin + (targetMs - segment.startUtc) / 1000;
                 if (autoplay) videoEl.play().catch(function () { /* see above */ });
                 return;
             }
@@ -196,7 +244,7 @@
             },
             currentWallClockMs: function () {
                 var seg = segments.find(function (s) { return s.id === currentSegmentId; });
-                return seg ? seg.startUtc + videoEl.currentTime * 1000 : null;
+                return seg ? seg.startUtc + (videoEl.currentTime - currentSegmentTimeOrigin) * 1000 : null;
             },
             teardown: teardown
         };
@@ -221,6 +269,45 @@
     var primaryCameraId = null;
     var playheadMs = Date.now();
     var playing = false;
+
+    // ── Remembered timeline position / display preference ──────────────────
+    // localStorage, not sessionStorage: "remember between refreshes" means a normal page reload,
+    // which sessionStorage would also survive, but the user's actual ask was persistence across
+    // browser restarts too, and there's nothing sensitive in a timestamp+zoom-level pair.
+    var POSITION_KEY = 'nidusvms.playback.position';
+    var HOUR24_KEY = 'nidusvms.playback.hour24';
+    var savePositionTimer = null;
+
+    function loadPersistedPosition() {
+        try {
+            var raw = localStorage.getItem(POSITION_KEY);
+            if (!raw) return null;
+            var parsed = JSON.parse(raw);
+            if (typeof parsed.centerMs === 'number' && typeof parsed.rangeMs === 'number') return parsed;
+        } catch (e) { /* corrupted/blocked storage — fall back to the usual default */ }
+        return null;
+    }
+
+    // Debounced — this fires on every playback tick (500ms) and every throttled drag-scrub tick,
+    // and a write on each one would be needless localStorage churn for a value that only needs to
+    // be current by the time the tab actually closes or reloads.
+    function schedulePositionSave() {
+        clearTimeout(savePositionTimer);
+        savePositionTimer = setTimeout(function () {
+            if (!timeline) return;
+            try {
+                localStorage.setItem(POSITION_KEY, JSON.stringify({ centerMs: playheadMs, rangeMs: timeline.getRange() }));
+            } catch (e) { /* private browsing or storage full — position just won't survive a reload */ }
+        }, 500);
+    }
+
+    function loadHour24Preference() {
+        try { return localStorage.getItem(HOUR24_KEY) === '1'; } catch (e) { return false; }
+    }
+
+    function saveHour24Preference(on) {
+        try { localStorage.setItem(HOUR24_KEY, on ? '1' : '0'); } catch (e) { /* ignore */ }
+    }
 
     function escHtml(s) {
         return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -316,6 +403,7 @@
         playheadMs = targetMs;
         Object.keys(tiles).forEach(function (id) { tiles[id].player.seekTo(targetMs, autoplay); });
         syncTimelineCenters();
+        schedulePositionSave();
         var el = opts.currentTimeId && document.getElementById(opts.currentTimeId);
         if (el) el.textContent = new Date(targetMs).toLocaleString();
     }
@@ -438,7 +526,14 @@
         var playBtn = document.getElementById(opts.playPauseBtnId);
         if (playBtn) playBtn.disabled = cells.length === 0;
 
-        var initialMs = await resolveInitialPlayheadMs(primaryCameraId);
+        // A remembered position (from a previous visit) wins over "jump to most recent recording"
+        // — once the user has scrubbed anywhere, that's a stronger signal of where they want to be
+        // than a fresh guess. The most-recent-recording default only applies until the first
+        // position is ever saved.
+        var persisted = loadPersistedPosition();
+        var initialMs = persisted ? persisted.centerMs : await resolveInitialPlayheadMs(primaryCameraId);
+        if (persisted && timeline) timeline.setRange(persisted.rangeMs);
+        if (persisted && globalTimeline) globalTimeline.setRange(persisted.rangeMs);
         if (timeline) timeline.setCenter(initialMs);
         if (globalTimeline) globalTimeline.setCenter(initialMs);
         // setCenter only redraws with whatever buckets are already loaded — reload() re-fetches
@@ -472,6 +567,7 @@
         if (current === null) return;
         playheadMs = current;
         syncTimelineCenters();
+        schedulePositionSave();
         var el = opts.currentTimeId && document.getElementById(opts.currentTimeId);
         if (el) el.textContent = new Date(playheadMs).toLocaleString();
     }
@@ -488,19 +584,39 @@
             picker.addEventListener('change', function () { rebuildTilesFromView(picker.value); });
         }
 
+        var hour24 = loadHour24Preference();
+
+        // Both timelines always show the same time window and zoom level — zooming or scrubbing
+        // either one mirrors onto the other via setRange/setCenter (no-callback setters, so this
+        // can't bounce a change back and forth between them).
         var canvas = document.getElementById(o.timelineCanvasId);
         if (canvas) {
             timeline = window.nidusvmsTimeline.create(canvas, {
+                hour24: hour24,
                 getBuckets: getBucketsForPrimary,
-                onScrub: function (ms) { seekAll(ms, playing); }
+                onScrub: function (ms) { seekAll(ms, playing); },
+                onRangeChange: function (ms) { if (globalTimeline) globalTimeline.setRange(ms); schedulePositionSave(); }
             });
         }
 
         var globalCanvas = o.globalTimelineCanvasId && document.getElementById(o.globalTimelineCanvasId);
         if (globalCanvas) {
             globalTimeline = window.nidusvmsTimeline.create(globalCanvas, {
+                hour24: hour24,
                 getBuckets: getGlobalBuckets,
-                onScrub: function (ms) { seekAll(ms, playing); }
+                onScrub: function (ms) { seekAll(ms, playing); },
+                onRangeChange: function (ms) { if (timeline) timeline.setRange(ms); schedulePositionSave(); }
+            });
+        }
+
+        var hour24Toggle = o.hour24ToggleId && document.getElementById(o.hour24ToggleId);
+        if (hour24Toggle) {
+            hour24Toggle.checked = hour24;
+            hour24Toggle.addEventListener('change', function () {
+                var on = hour24Toggle.checked;
+                saveHour24Preference(on);
+                if (timeline) timeline.setHour24(on);
+                if (globalTimeline) globalTimeline.setHour24(on);
             });
         }
 

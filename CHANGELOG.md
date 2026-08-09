@@ -5,7 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.21.2] - 2026-08-09
+
+### Added
+
+- `fix-legacy-segments.ps1` — repairs footage recorded before the 0.21.1 recorder fix so it plays
+  back in a browser. Rewrites each affected segment's container in place with `-c copy` (no decode,
+  no re-encode, no bitstream or quality change), adding the `default_base_moof` flag that MSE
+  requires. Dry run unless `-Apply` is passed; detects and skips files that already carry the flag,
+  so it's idempotent; skips the segment the recorder is currently writing (both a recency window and
+  a write-lock check) so it can run against a live node without stopping the service; verifies each
+  remuxed file actually carries the flag before it replaces anything, leaving the original untouched
+  on any failure; and preserves original file timestamps, which matter because segment start/end
+  times are derived from file metadata rather than the filename. Database rows are unaffected since
+  every file is rewritten at its existing path.
+
+  Resolves ffmpeg itself rather than requiring a path: an explicit `-FfmpegPath`, then the recorder
+  node's own bundled copy, then `PATH`, then `-InstallFfmpeg` to download the LGPL shared build.
+  That download goes straight to BtbN's GitHub release rather than through winget, which
+  `install-node.ps1` uses but which is frequently unavailable on a file server (App Installer isn't
+  present on Windows Server by default and the Store isn't an option). A dry run needs no ffmpeg at
+  all, and `-StorageRoot` takes a UNC path — so the least-setup option is running it from a recorder
+  node against the share, with nothing installed on the file server.
 
 ### Changed
 
@@ -14,18 +35,134 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to run `build-node.ps1` separately. New `-ExtraNodePublishPath` passes straight through to
   `build-node.ps1 -ExtraPublishPath` for mirroring the package to a second location (e.g. a network
   share a recorder machine reads directly); left blank by default since the path is inherently
-  environment-specific. New `-SkipNodeBuild` opts back out for a web-only deploy. No app-version
-  bump for this one — it's a deploy-tooling change, not a change to the deployed application itself.
+  environment-specific. New `-SkipNodeBuild` opts back out for a web-only deploy.
 
 ### Fixed
+
+- `TimelineService.NormalizeToUtc`'s doc comment asserted that ASP.NET binds a Z-suffixed
+  query-string `DateTime` as `Kind=Local` converted to the server's zone, and that this was the
+  cause of playback never finding a segment. Both claims were wrong — the original finding came from
+  a scratch `DateTime.TryParse` call, which is not what minimal APIs use; re-checked against a real
+  running minimal API, a Z-suffixed value binds as `Kind=Utc` with no shift, and playback's actual
+  cause was the recorder's muxer flags (see 0.21.1). The method itself is unchanged and still
+  correct — it does real work for any caller omitting the trailing Z — but it's no longer documented
+  as load-bearing for a bug it never fixed.
 
 - `install-node.ps1`'s network-storage warning claimed LocalSystem "CANNOT access a network
   (\\server\share) storage root", which overstates it — LocalSystem authenticates to the network as
   the machine's own computer account (`DOMAIN\COMPUTERNAME$`), and that account can read/write an
   SMB share perfectly well once granted share + NTFS permissions on it, no `-ServiceCredential`
   needed. The warning (and the doc comment above it) now says permissions need to be set up for the
-  computer account when running as LocalSystem, instead of implying it's simply impossible. Same
-  no-app-version-bump reasoning as the `deploy.ps1` change above.
+  computer account when running as LocalSystem, instead of implying it's simply impossible.
+
+## [0.21.1] - 2026-08-09
+
+### Fixed
+
+- Recorded segments could not be decoded by a browser at all, which is why Playback never showed
+  video. The recorder's ffmpeg `-f tee` writes two legs — a pipe leg feeding live view and a segment
+  leg writing the files kept on disk — and `default_base_moof` was set only on the pipe leg. It was
+  correct when written (live view was the only MSE consumer; the recorded files were just files),
+  but M7 then started feeding those same files to MSE and inherited the gap. Without that flag a
+  fragment's sample offsets are file-relative rather than relative to its own `moof`, which the MSE
+  byte-stream format does not accept: Chrome takes the append, fires `updateend` normally, and
+  produces no buffered range at all — no error, no event, nothing in the console. Verified by
+  parsing the `tfhd` flags out of both legs' real output (pipe leg `0x020038` with
+  default-base-is-moof set, segment leg `0x000039` with base-data-offset-present instead) and
+  confirming the flag makes the segment leg byte-structurally identical to the pipe leg. Both legs
+  now share one flag constant so they cannot drift apart again, covered by a unit test.
+
+  **Only newly recorded segments are affected.** Footage already on disk was written without the
+  flag and stays unplayable in the browser; it is still valid MP4 and plays fine in VLC, ffplay, or
+  any normal player. Playback in the browser will work for anything recorded after the recorder
+  nodes are updated.
+
+  **This is a `NidusVMS.Node` change** — `deploy.ps1` does not push it. Re-run `install-node.ps1`
+  on every recorder node for it to take effect.
+
+## [0.21.0] - 2026-08-09
+
+### Fixed
+
+- Playback tiles showed "Loading…", then went blank and stayed blank, with nothing in the browser
+  console. The MSE append was actually succeeding — the seek afterwards was the problem. A tile
+  seeked to a raw offset from the segment's wall-clock start, which assumes the recorded fMP4's
+  internal timeline begins at zero; these segments carry the `baseMediaDecodeTime` they were written
+  with, so the buffered range can start at an arbitrary large value instead. The seek then landed
+  outside the buffered range entirely and the element rendered nothing — with no error, no event,
+  and the status text clearing normally, which is why it looked identical to a tile that had simply
+  given up. Tiles now seek relative to the actual buffered start and clamp into the buffered range.
+- Playback never auto-advanced to a camera's next segment when one finished. `MediaSource.endOfStream()`
+  was never called after appending a segment, so the MediaSource stayed `open`, the media element
+  kept waiting for more data that would never arrive, and the `ended` event the auto-advance depends
+  on could not fire. The full segment is appended in one shot and is self-contained, so the stream is
+  now explicitly ended once the append completes.
+- Timeline drew recorded (blue) coverage in the future when sitting at "now". The future-clamp added
+  in 0.19.0 capped the wrong thing: it clamped the visible window's right edge rather than the
+  playhead, which quietly pinned the marker half a span into the past — at the 24h default the marker
+  sat at now-12h with twelve hours of real, still-being-recorded footage drawn to its right. The
+  clamp now applies to the playhead itself, so the marker is "now" when scrubbed fully forward.
+
+### Changed
+
+- Timeline now renders the stretch after "now" as unreachable future (flatly darker than the
+  empty-track color, with a divider at the current instant) instead of leaving it looking like time
+  that merely hasn't been recorded yet. A bucket straddling "now" is truncated at it, so an actively
+  recording camera's newest bucket no longer paints coverage over time that hasn't happened.
+- Zooming a timeline no longer triggers a seek. The playhead's clamp no longer depends on the zoom
+  level, so zooming can't move the play position and shouldn't re-seek every camera per scroll notch.
+
+## [0.20.0] - 2026-08-09
+
+**No `NidusVMS.Node` changes in this release — no recorder-node update needed.**
+
+### Fixed
+
+- A Playback tile's status text had a blind spot: it's only ever set once a segment is actually
+  found ("Loading…", while its bytes download) or once the lookup conclusively finds nothing ("No
+  recording…"). The lookup itself — fetching the segment list to work out which file covers the
+  requested instant — set nothing at all while in flight, so a tile looked identically blank
+  whether that resolved in 50ms or never resolved at all. Now shows "Looking for a recording…"
+  immediately when a seek starts. A genuine fetch failure during that lookup was also silently
+  swallowed with no console output; both the non-OK-response and thrown-exception paths now log to
+  `console.error` and set a status message instead of leaving the tile blank with no trace of why.
+
+## [0.19.0] - 2026-08-09
+
+**No `NidusVMS.Node` changes in this release — no recorder-node update needed.**
+
+### Fixed
+
+- Chased a reported "timeline shows 12 hours in the future" as a suspected timezone/data bug
+  through several dead ends (query-string `DateTime` binding — verified with a real minimal API
+  test harness, not just a scratch simulation, and it's already correct: `Kind=Utc`, exact value;
+  recorder node clocks — confirmed correct; web server clock — confirmed correct, and it's one of
+  the node machines) before finding the real explanation: it was never a data bug. The timeline's
+  default view is a 24-hour window *centered* on the playhead — when the playhead starts at "now"
+  (the common case), the right half of that window is mathematically always ~12 hours into the
+  future, because nothing sits to the right of "now" but time that hasn't happened yet. Correct
+  math, confusing default. `timeline.js` now clamps so neither timeline can scroll or zoom past the
+  real current instant at all — there's never a recording there, so a view that could show one just
+  looked broken.
+
+### Added
+
+- The Playback timelines now remember your scrub position and zoom level between visits
+  (`localStorage`, keyed independent of which view is selected) — reloading the page resumes where
+  you left off instead of jumping back to "most recent recording." That default only applies until
+  a position has ever been saved.
+- A 24-hour clock toggle for both timelines' time labels (`timeline.js` gained `setHour24`),
+  persisted the same way. Also finished wiring this — the previous release only built the
+  internal formatting support and never added the actual UI control, so the toggle didn't exist
+  anywhere to click.
+
+### Added
+
+- The two Playback timelines (selected-camera and merged-across-all-cameras) now stay in sync on
+  both time position and zoom level — scrubbing or wheel-zooming either one mirrors onto the other,
+  via new `setRange`/`getRange` on `timeline.js`'s instance API alongside the existing `setCenter`.
+  All three are no-callback setters so mirroring a change from one timeline to the other can't
+  bounce back and re-trigger itself.
 
 ## [0.17.0] - 2026-08-09
 

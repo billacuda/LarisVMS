@@ -11,15 +11,18 @@ public class TimelineService(ApplicationDbContext db) : ITimelineService
     /// Normalizes an incoming range bound to a true UTC value before it's compared against the
     /// database's UTC columns.
     ///
-    /// This is load-bearing, not defensive tidying. ASP.NET's query-string binding parses
-    /// "2026-08-08T21:45:31.890Z" into a DateTime with <c>Kind=Local</c>, *converted* to the
-    /// server's local zone (confirmed: on a UTC-7 host that value binds as 14:45:31 Local). Since
-    /// SQL Server's datetime2 carries no offset, EF then sends that wall-clock number as-is and
-    /// every range query silently searches a window shifted by the server's UTC offset. That made
-    /// playback look broken in exactly one direction: the timeline still rendered plausibly (its
-    /// whole window shifts uniformly, so it just looks like different footage), but the segment
-    /// lookup for a specific instant returned segments hours away from it, so no segment ever
-    /// covered the requested time and no video ever loaded.
+    /// Defensive, not load-bearing for the current callers. An earlier version of this comment
+    /// claimed ASP.NET's query-string binding turns "2026-08-08T21:45:31.890Z" into
+    /// <c>Kind=Local</c> converted to the server's zone, and that this was the cause of playback
+    /// never finding a segment. That was wrong on both counts: re-checked against a real running
+    /// minimal API (not a hand-rolled DateTime.TryParse, which is what produced the bogus result),
+    /// a Z-suffixed value binds as <c>Kind=Utc</c> directly, with no shift. Playback's actual bug
+    /// was in the recorder's muxer flags — see RecordingSession.MseMovFlags.
+    ///
+    /// It stays because the conversion is still correct and cheap, and it does real work for any
+    /// caller that supplies a bound without the trailing Z: SQL Server's datetime2 carries no
+    /// offset, so EF would send whatever wall-clock number it was given straight into a comparison
+    /// against UTC columns.
     ///
     /// Local → convert (recovers the original instant). Utc → already correct. Unspecified →
     /// stamp as UTC rather than assume local: every caller here is passing something that means
@@ -91,8 +94,6 @@ public class TimelineService(ApplicationDbContext db) : ITimelineService
 
     public async Task<List<SegmentSummaryDto>> GetSegmentsAsync(Guid cameraId, DateTime fromUtc, DateTime toUtc, CancellationToken ct = default)
     {
-        // See NormalizeToUtc — this is the query whose silent offset shift kept playback from ever
-        // finding a segment covering the requested instant.
         fromUtc = NormalizeToUtc(fromUtc);
         toUtc = NormalizeToUtc(toUtc);
 

@@ -243,26 +243,29 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
         // -f tee fans the one RTSP connection out to two muxers so recording and live view never
         // need a second session against the camera (some cameras cap concurrent RTSP sessions quite
         // low) — matches the plan's original pipeline design:
-        //   leg 1: the existing segment muxer, unchanged (segment_atclocktime aligns boundaries to
-        //   the wall clock; frag_keyframe+empty_moov means a segment truncated by power loss is still
-        //   playable).
-        //   leg 2: a single continuous fMP4 stream to pipe:1 (this process's own stdout) —
-        //   default_base_moof is required here specifically for MSE: without it, a fragment's moof
-        //   describes sample offsets relative to the *file*, which only makes sense once, at the
-        //   start; MSE needs each fragment self-contained, offsets relative to its own moof. (Note
-        //   the flag name: verified against this build's own `-h muxer=mov` output as
-        //   "default_base_moof" — "default_base_is_moof", the name used in ffmpeg's own CLI docs and
-        //   this project's architecture plan, is not accepted by this muxer and silently aborts the
-        //   *entire* tee, both legs, the moment ffmpeg tries to write the first header. Confirmed by
-        //   running the exact command locally against a synthetic source before this ever reached a
-        //   real recording node — worth remembering if a future ffmpeg version renames it again.)
+        //   leg 1: the segment muxer writing the files kept on disk (segment_atclocktime aligns
+        //   boundaries to the wall clock; frag_keyframe+empty_moov means a segment truncated by
+        //   power loss is still playable).
+        //   leg 2: a single continuous fMP4 stream to pipe:1 (this process's own stdout).
+        // Both legs need default_base_moof, for the same reason: without it a fragment's moof
+        // describes sample offsets relative to the *file*, which only makes sense once, at the
+        // start; MSE needs each fragment self-contained, offsets relative to its own moof. This was
+        // originally set only on leg 2, back when the live viewer was the only MSE consumer and the
+        // recorded files were just files. M7's playback then started feeding those same files to
+        // MSE and inherited a latent bug: Chrome *accepts* the append, fires updateend normally, and
+        // produces no buffered range whatsoever — no error, no event — so a tile rendered nothing
+        // while looking exactly like one still loading. Verified by parsing the tfhd flags out of
+        // both legs' real output: leg 2 had 0x020038 (default-base-is-moof set), leg 1 had 0x000039
+        // (base-data-offset-present instead), and adding the flag makes leg 1 byte-structurally
+        // match leg 2. (Note the flag name: verified against this build's own `-h muxer=mov` output
+        // as "default_base_moof" — "default_base_is_moof", the name used in ffmpeg's own CLI docs
+        // and this project's architecture plan, is not accepted by this muxer and silently aborts
+        // the *entire* tee, both legs, the moment ffmpeg tries to write the first header — worth
+        // remembering if a future ffmpeg version renames it again.)
         // Tee's own bracket syntax uses ':' as its option separator, which collides with a Windows
         // drive letter (e.g. "C:\...") in the segment output path — escaped below, tee-syntax only,
         // never touching the path actually handed to the filesystem.
-        var teeOutputs = string.Join('|',
-            $"[f=segment:segment_time={options.SegmentSeconds}:segment_atclocktime=1:reset_timestamps=1:strftime=1:" +
-            $"segment_format=mp4:segment_format_options=movflags=+frag_keyframe+empty_moov]{EscapeForTee(outputPattern)}",
-            "[f=mp4:movflags=+frag_keyframe+empty_moov+default_base_moof]pipe:1");
+        var teeOutputs = BuildTeeOutputs(options.SegmentSeconds, outputPattern);
 
         string[] args =
         [
@@ -469,6 +472,20 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
     /// which is now unambiguous since no other backslashes remain in the string.
     /// Only ever applied to the string embedded in the tee argument, never to the path actually used
     /// for filesystem operations elsewhere in this class.</summary>
+    /// <summary>Builds the -f tee output spec (both legs). Extracted so the muxer flags can be
+    /// asserted directly in a unit test — the bug this guards against was a flag present on one leg
+    /// and missing from the other, which produced no error anywhere and only surfaced as a browser
+    /// rendering nothing.</summary>
+    internal static string BuildTeeOutputs(int segmentSeconds, string outputPattern) => string.Join('|',
+        $"[f=segment:segment_time={segmentSeconds}:segment_atclocktime=1:reset_timestamps=1:strftime=1:" +
+        $"segment_format=mp4:segment_format_options=movflags={MseMovFlags}]{EscapeForTee(outputPattern)}",
+        $"[f=mp4:movflags={MseMovFlags}]pipe:1");
+
+    /// <summary>The mov muxer flags every leg must use. Both legs are consumed by MSE (live view
+    /// reads the pipe, playback reads the recorded files), and MSE requires default_base_moof on
+    /// both — see the commentary in StartFfmpeg for what happens when a leg is missing it.</summary>
+    private const string MseMovFlags = "+frag_keyframe+empty_moov+default_base_moof";
+
     private static string EscapeForTee(string path) => path.Replace('\\', '/').Replace(":", "\\:");
 
     /// <summary>Pre-creates the current and next hour's output folder. Local time, matching
