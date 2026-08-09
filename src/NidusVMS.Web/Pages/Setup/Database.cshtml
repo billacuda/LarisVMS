@@ -1,0 +1,30 @@
+@page
+@model NidusVMS.Web.Pages.Setup.DatabaseModel
+@{
+    Layout = "_SetupLayout";
+    ViewData["Title"] = "Database";
+}
+<h5 class="mb-3">1. Database</h5>
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger">@Model.ErrorMessage</div>
+}
+<form method="post">
+    <div class="mb-3">
+        <label class="form-label">SQL Server</label>
+        <input asp-for="ServerName" class="form-control" placeholder="." />
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Database name</label>
+        <input asp-for="DatabaseName" class="form-control" />
+    </div>
+    <div class="mb-3">
+        <label class="form-label">SQL login (optional — blank uses Windows/Integrated Security)</label>
+        <input asp-for="Username" class="form-control" />
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Password</label>
+        <input asp-for="Password" type="password" class="form-control" />
+    </div>
+    <button type="submit" class="btn btn-primary">Create database &amp; continue</button>
+</form>

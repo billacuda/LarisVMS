@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Deploy Rcordr's web tier to IIS - applies EF migrations, publishes the web app.
+    Deploy NidusVMS's web tier to IIS - applies EF migrations, publishes the web app.
 
 .DESCRIPTION
     Steps performed:
@@ -19,26 +19,26 @@
      10. Starts the IIS app pool (always, even on failure)
      11. Probes /health once the pool is back up
 
-    This script only deploys Rcordr.Web. Recorder nodes are separate Windows Services deployed with
+    This script only deploys NidusVMS.Web. Recorder nodes are separate Windows Services deployed with
     build-node.ps1 / install-node.ps1 (milestone M3) — they are not part of the IIS site and must
     never be inside $DestinationPath.
 
     Must be run as Administrator (required for IIS management).
 
 .EXAMPLE
-    .\deploy.ps1 -IISSiteName "Rcordr"
-    .\deploy.ps1 -IISSiteName "Rcordr" -SkipMigrations
-    .\deploy.ps1 -IISSiteUrl "https://rcordr.example.com"
+    .\deploy.ps1 -IISSiteName "NidusVMS"
+    .\deploy.ps1 -IISSiteName "NidusVMS" -SkipMigrations
+    .\deploy.ps1 -IISSiteUrl "https://nidusvms.example.com"
 #>
 
 param(
-    [string]$WebProject        = (Join-Path $PSScriptRoot 'src\Rcordr.Web\Rcordr.Web.csproj'),
-    [string]$MigrationsProject = (Join-Path $PSScriptRoot 'src\Rcordr.Infrastructure\Rcordr.Infrastructure.csproj'),
-    [string]$PublishDir        = (Join-Path $PSScriptRoot 'publish\Rcordr.Web'),
+    [string]$WebProject        = (Join-Path $PSScriptRoot 'src\NidusVMS.Web\NidusVMS.Web.csproj'),
+    [string]$MigrationsProject = (Join-Path $PSScriptRoot 'src\NidusVMS.Infrastructure\NidusVMS.Infrastructure.csproj'),
+    [string]$PublishDir        = (Join-Path $PSScriptRoot 'publish\NidusVMS.Web'),
     [string]$Configuration     = 'Release',
-    [string]$DestinationPath   = 'E:\Sites\Rcordr', # will be overridden if IIS site or URL is specified
-    [string]$IISAppPoolName    = 'Rcordr',
-    [string]$IISSiteName       = 'Rcordr',
+    [string]$DestinationPath   = 'E:\Sites\NidusVMS', # will be overridden if IIS site or URL is specified
+    [string]$IISAppPoolName    = 'NidusVMS',
+    [string]$IISSiteName       = 'NidusVMS',
     [string]$IISSiteUrl        = '',
     [string]$ConnectionString  = '',
     [switch]$SkipMigrations,

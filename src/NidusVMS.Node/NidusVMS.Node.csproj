@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Version>0.7.0</Version>
+    <!-- Recorder nodes are self-contained single-file per platform (see build-node.ps1),
+         the same shape as dploid.Agent. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- StorageManager's pure eviction-decision helpers (internal static) are unit tested directly
+         against real temp directories rather than only through the networked BackgroundService. -->
+    <InternalsVisibleTo Include="NidusVMS.Tests" />
+  </ItemGroup>
+
+  <!-- Deliberately no reference to NidusVMS.Infrastructure or NidusVMS.Onvif: the node talks to
+       NidusVMS.Web over the REST control plane (register/heartbeat/config/segments), never touches
+       SQL Server directly, and gets ready-made RTSP URIs from GetConfigAsync rather than doing its
+       own ONVIF calls. Core is enough for the shared DTOs. -->
+  <ItemGroup>
+    <ProjectReference Include="..\NidusVMS.Core\NidusVMS.Core.csproj" />
+    <ProjectReference Include="..\NidusVMS.Media\NidusVMS.Media.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Microsoft.Extensions.Hosting itself comes transitively via the ASP.NET Core shared
+         framework (Sdk.Web) — only the pieces that aren't already part of it need a reference. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,89 @@
+@page
+@using NidusVMS.Core.Enums
+@model NidusVMS.Web.Pages.Live.IndexModel
+@{
+    ViewData["Title"] = "Live";
+}
+<h1>Live</h1>
+<p class="text-muted">
+    Every camera below connects automatically. Video is proxied through this server — nothing
+    connects to a recorder node directly. Requires a browser with Media Source Extensions support
+    (Chrome, Edge, Firefox, Safari 17+).
+</p>
+
+@if (Model.Cameras.Count == 0)
+{
+    <p class="text-muted">No cameras are both enabled and assigned to a node yet.</p>
+}
+else
+{
+    <div class="row g-3">
+        @foreach (var c in Model.Cameras)
+        {
+            var mainStream = c.Streams.FirstOrDefault(s => s.Role == CameraStreamRole.Main);
+            var hasAudio = mainStream?.HasAudio ?? false;
+            <div class="col-12 col-md-6 col-lg-4" data-camera-tile="@c.Id" data-has-audio="@hasAudio.ToString().ToLowerInvariant()" data-codec="@mainStream?.Codec">
+                <div class="card h-100">
+                    <div class="ratio ratio-16x9 bg-dark">
+                        @* No positioning classes here on purpose: this is a direct child of .ratio,
+                           so Bootstrap's own ".ratio > *" rule already makes it position:absolute
+                           and 100% width/height — adding position-relative (a `!important` utility
+                           class) fights that rule instead of complementing it and broke the ratio box
+                           entirely (cells rendered square, video never appeared). It still works as a
+                           positioning context for the status/mute-button children below, since
+                           position:absolute (which it gets for free) is a valid containing block. *@
+                        <div>
+                            <video class="w-100 h-100" muted playsinline></video>
+                            <div class="position-absolute top-50 start-50 translate-middle text-white small text-center live-status px-2"></div>
+                            @if (hasAudio)
+                            {
+                                <button type="button"
+                                        class="btn btn-sm position-absolute bottom-0 end-0 m-1 live-mute-toggle d-none"
+                                        style="background-color: rgba(0,0,0,.5); color: #fff; line-height: 1; padding: .2rem .35rem; font-size: .75rem;"
+                                        title="Unmute">🔇</button>
+                            }
+                        </div>
+                    </div>
+                    <div class="card-body py-2">
+                        <span>@c.Name</span>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@section Scripts {
+    <script src="~/js/live-view.js" asp-append-version="true"></script>
+    <script>
+        document.querySelectorAll('[data-camera-tile]').forEach(function (tile) {
+            var video = tile.querySelector('video');
+            var status = tile.querySelector('.live-status');
+            var muteBtn = tile.querySelector('.live-mute-toggle');
+
+            function setMuteIcon() {
+                if (!muteBtn) return;
+                var muted = video.muted;
+                muteBtn.textContent = muted ? '🔇' : '🔊';
+                muteBtn.title = muted ? 'Unmute' : 'Mute';
+            }
+
+            if (muteBtn) {
+                muteBtn.addEventListener('click', function () {
+                    video.muted = !video.muted;
+                    setMuteIcon();
+                });
+            }
+
+            // Starts muted regardless of any previous session's state — autoplay-with-sound is
+            // blocked by browser policy anyway, and starting muted keeps behavior consistent across
+            // tiles instead of depending on whichever camera happened to be unmuted last.
+            video.muted = true;
+            if (muteBtn) { setMuteIcon(); muteBtn.classList.remove('d-none'); }
+            // No stop() is kept: every camera connects for as long as this page stays open, and
+            // start()'s own auto-reconnect handles drops (network blips, wifi roaming) on its own —
+            // there is currently no user action on this page that should end a session early.
+            window.nidusvmsLiveView.start(tile.dataset.cameraTile, video, status, tile.dataset.codec, tile.dataset.hasAudio === 'true');
+        });
+    </script>
+}

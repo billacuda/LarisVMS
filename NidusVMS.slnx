@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/NidusVMS.Core/NidusVMS.Core.csproj" />
+    <Project Path="src/NidusVMS.Onvif/NidusVMS.Onvif.csproj" />
+    <Project Path="src/NidusVMS.Media/NidusVMS.Media.csproj" />
+    <Project Path="src/NidusVMS.Infrastructure/NidusVMS.Infrastructure.csproj" />
+    <Project Path="src/NidusVMS.Web/NidusVMS.Web.csproj" />
+    <Project Path="src/NidusVMS.Node/NidusVMS.Node.csproj" />
+    <Project Path="src/NidusVMS.NodeUpdater/NidusVMS.NodeUpdater.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/NidusVMS.Tests/NidusVMS.Tests.csproj" />
+  </Folder>
+</Solution>

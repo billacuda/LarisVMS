@@ -1,0 +1,23 @@
+@page
+@model NidusVMS.Web.Pages.Setup.NodeModel
+@{
+    Layout = "_SetupLayout";
+    ViewData["Title"] = "Recorder node";
+}
+<h5 class="mb-3">4. Recorder node</h5>
+<p class="text-muted small">
+    Recording runs in a separate Windows Service ("node"), not inside this IIS-hosted web app, so it
+    keeps running through app pool recycles and deploys. Install at least one node with the
+    registration key below — this can also be done later from Admin &rarr; Nodes.
+</p>
+<div class="mb-3">
+    <label class="form-label">Registration key</label>
+    <input class="form-control" value="@Model.RegistrationKey" readonly />
+</div>
+<div class="mb-3">
+    <label class="form-label">Install command (run on the recorder machine)</label>
+    <textarea class="form-control font-monospace" rows="2" readonly>.\install-node.ps1 -ServerUrl "@Model.ServerUrl" -RegistrationKey "@Model.RegistrationKey"</textarea>
+</div>
+<form method="post">
+    <button type="submit" class="btn btn-primary">Continue</button>
+</form>
