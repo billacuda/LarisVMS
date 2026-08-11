@@ -98,17 +98,29 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
 
         var watermarkPercent = await settings.GetAsync("Storage.WatermarkPercent", 90, ct: ct);
 
+        var cameraIds = cameras.Select(c => c.Id).ToList();
+        var zonesByCamera = await db.Zones
+            .Where(z => cameraIds.Contains(z.CameraId) && z.IsEnabled
+                && (z.Kind == ZoneKind.ServerMotion || z.Kind == ZoneKind.Ignore))
+            .ToListAsync(ct);
+        var zonesLookup = zonesByCamera.ToLookup(z => z.CameraId);
+
         var cameraDtos = new List<NodeConfigCameraDto>();
         foreach (var c in cameras)
         {
             // 0 or negative means "keep forever" — an explicit admin choice, not "unset". Unset
             // (no override anywhere) falls through to the 30-day compiled-in default below.
             var retentionDays = await settings.GetAsync<int?>("Retention.Days", 30, cameraId: c.Id, nodeId: nodeId, ct: ct);
+            var recordingMode = await settings.GetAsync("Recording.Mode", "Continuous", cameraId: c.Id, nodeId: nodeId, ct: ct);
+            var motionPreRollSeconds = await settings.GetAsync("Recording.MotionPreRollSeconds", 10, cameraId: c.Id, nodeId: nodeId, ct: ct);
+            var motionPostRollSeconds = await settings.GetAsync("Recording.MotionPostRollSeconds", 30, cameraId: c.Id, nodeId: nodeId, ct: ct);
             cameraDtos.Add(new NodeConfigCameraDto(
                 c.Id, c.Name, c.Username, c.Password,
                 c.Streams.Where(s => s.IsEnabled).Select(s => new NodeConfigStreamDto(
                     s.Id, s.Role.ToString(), s.RtspUri, s.Codec, s.Width, s.Height, s.HasAudio)).ToList(),
-                retentionDays, c.QuotaBytes));
+                retentionDays, c.QuotaBytes,
+                zonesLookup[c.Id].Select(z => new NodeConfigZoneDto(z.Id, z.Kind.ToString(), z.PolygonJson, z.Sensitivity)).ToList(),
+                recordingMode, motionPreRollSeconds, motionPostRollSeconds));
         }
 
         return new NodeConfigResponse(cameraDtos, storageRoot, watermarkPercent, mediaSigningKey);
@@ -211,6 +223,60 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         // cost the rest of the batch: retry, each time detaching exactly the entries EF identifies
         // as the cause of that attempt's failure, until either everything savable is saved or a
         // failure can't be attributed to specific entries (in which case it propagates normally).
+        while (true)
+        {
+            try
+            {
+                await db.SaveChangesAsync(ct);
+                break;
+            }
+            catch (DbUpdateException ex) when (ex.Entries.Count > 0)
+            {
+                foreach (var entry in ex.Entries) entry.State = EntityState.Detached;
+            }
+        }
+    }
+
+    public async Task RecordMotionSpansAsync(Guid nodeId, IReadOnlyList<MotionSpanReportItem> spans, CancellationToken ct = default)
+    {
+        // M8: a still-open span is checkpointed periodically (NodeWorker.EnqueueMotionCheckpoints),
+        // not just reported once on close — without upserting, every checkpoint of the same
+        // long-running span would pile up as its own row instead of one row that keeps extending.
+        // (CameraId, ZoneId, StartUtc) is a natural identity for "the same span": StartUtc never
+        // changes once a span is confirmed open (MotionHysteresis backdates it once, at
+        // confirmation, and never moves it again), so every checkpoint and the eventual close-report
+        // for one span all carry the same triple.
+        foreach (var item in spans)
+        {
+            var existing = await db.MotionSpans.FirstOrDefaultAsync(m =>
+                m.CameraId == item.CameraId && m.ZoneId == item.ZoneId && m.StartUtc == item.StartUtc, ct);
+
+            if (existing is not null)
+            {
+                // Only ever extends forward — a checkpoint racing a slightly-stale retry of an
+                // older report should never pull EndUtc backward.
+                if (item.EndUtc > existing.EndUtc) existing.EndUtc = item.EndUtc;
+                existing.Score = Math.Max(existing.Score, item.Score);
+                continue;
+            }
+
+            db.MotionSpans.Add(new MotionSpan
+            {
+                CameraId = item.CameraId,
+                ZoneId = item.ZoneId,
+                Source = MotionSource.ServerMotion,
+                StartUtc = item.StartUtc,
+                EndUtc = item.EndUtc,
+                Score = item.Score
+            });
+        }
+
+        // Same detach-and-retry shape as RecordSegmentsAsync — a failing row is dropped (not saved),
+        // not repaired, but that's still better than losing the whole batch over it. Realistic cause
+        // here is a race between a zone being deleted (ZoneService.DeleteAsync nulls out matching
+        // MotionSpans rows first, but can't retroactively fix a report already in flight) and an
+        // in-flight MotionSession reporting a span that still names the now-gone Id — the FK is
+        // still enforced on insert regardless of ON DELETE behavior, so that insert fails here.
         while (true)
         {
             try

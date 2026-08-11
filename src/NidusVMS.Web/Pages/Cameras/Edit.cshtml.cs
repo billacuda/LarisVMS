@@ -10,7 +10,7 @@ namespace NidusVMS.Web.Pages.Cameras;
 
 [Authorize("Cameras.Edit")]
 public class EditModel(ICameraService cameraService, ICameraGroupService groupService, INodeService nodeService,
-    ISettingsResolver settings) : PageModel
+    ISettingsResolver settings, IZoneService zoneService) : PageModel
 {
     [BindProperty] public Guid? Id { get; set; }
     [BindProperty] public string Name { get; set; } = string.Empty;
@@ -22,6 +22,11 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
     [BindProperty] public bool IsEnabled { get; set; } = true;
     [BindProperty] public decimal? QuotaGb { get; set; }
     [BindProperty] public int? RetentionDaysOverride { get; set; }
+    /// <summary>"" (blank) means inherit — same convention as every other override field here, just
+    /// expressed as an empty select option instead of a blank number input.</summary>
+    [BindProperty] public string RecordingModeOverride { get; set; } = "";
+    [BindProperty] public int? MotionPreRollSecondsOverride { get; set; }
+    [BindProperty] public int? MotionPostRollSecondsOverride { get; set; }
 
     public bool IsNew => Id is null;
     public List<CameraGroup> Groups { get; set; } = [];
@@ -31,6 +36,13 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
     public string? ErrorMessage { get; set; }
     public string? ProbeMessage { get; set; }
     public int EffectiveRetentionDays { get; set; }
+    public string EffectiveRecordingMode { get; set; } = "Continuous";
+    public int EffectiveMotionPreRollSeconds { get; set; }
+    public int EffectiveMotionPostRollSeconds { get; set; }
+    /// <summary>Whether this camera has at least one enabled ServerMotion zone — Motion mode does
+    /// nothing without one (NodeWorker falls back to recording everything, logging a warning) so
+    /// the Edit page can surface that up front instead of the operator discovering it in node logs.</summary>
+    public bool HasServerMotionZone { get; set; }
     public long StorageUsedBytes { get; set; }
 
     public async Task<IActionResult> OnGetAsync(Guid? id, string? deviceServiceUri, string? suggestedName)
@@ -53,9 +65,7 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
             Streams = camera.Streams.ToList();
             QuotaGb = camera.QuotaBytes is { } q ? Math.Round(q / 1024m / 1024 / 1024, 2) : null;
 
-            var ownOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, id.Value, "Retention.Days");
-            RetentionDaysOverride = int.TryParse(ownOverride, out var days) ? days : null;
-            EffectiveRetentionDays = await settings.GetAsync("Retention.Days", 30, cameraId: id.Value, nodeId: camera.NodeId);
+            await LoadEffectiveSettingsAsync(id.Value, camera.NodeId);
             StorageUsedBytes = (await cameraService.GetStorageUsageAsync()).GetValueOrDefault(id.Value);
         }
         else
@@ -65,6 +75,32 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
         }
 
         return Page();
+    }
+
+    /// <summary>Retention + M8 recording-mode fields (Recording.Mode, MotionPreRollSeconds,
+    /// MotionPostRollSeconds) — the "own override" + "effective resolved value" pair every
+    /// settings-backed field on this page follows, loaded identically in OnGetAsync and
+    /// OnPostProbeAsync (both need to show the same picture after their respective actions), so
+    /// it's factored here rather than duplicated a third time.</summary>
+    private async Task LoadEffectiveSettingsAsync(Guid cameraId, Guid? nodeId)
+    {
+        var ownRetentionOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "Retention.Days");
+        RetentionDaysOverride = int.TryParse(ownRetentionOverride, out var days) ? days : null;
+        EffectiveRetentionDays = await settings.GetAsync("Retention.Days", 30, cameraId: cameraId, nodeId: nodeId);
+
+        RecordingModeOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "Recording.Mode") ?? "";
+        EffectiveRecordingMode = await settings.GetAsync("Recording.Mode", "Continuous", cameraId: cameraId, nodeId: nodeId);
+
+        var ownPreRollOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "Recording.MotionPreRollSeconds");
+        MotionPreRollSecondsOverride = int.TryParse(ownPreRollOverride, out var preRoll) ? preRoll : null;
+        EffectiveMotionPreRollSeconds = await settings.GetAsync("Recording.MotionPreRollSeconds", 10, cameraId: cameraId, nodeId: nodeId);
+
+        var ownPostRollOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "Recording.MotionPostRollSeconds");
+        MotionPostRollSecondsOverride = int.TryParse(ownPostRollOverride, out var postRoll) ? postRoll : null;
+        EffectiveMotionPostRollSeconds = await settings.GetAsync("Recording.MotionPostRollSeconds", 30, cameraId: cameraId, nodeId: nodeId);
+
+        var zones = await zoneService.ListAsync(cameraId);
+        HasServerMotionZone = zones.Any(z => z.Kind == ZoneKind.ServerMotion && z.IsEnabled);
     }
 
     public async Task<IActionResult> OnPostAsync()
@@ -89,6 +125,12 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
             await cameraService.UpdateAsync(Id.Value, Name, GroupId, NodeId, Username, Password, IsEnabled, quotaBytes);
             await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Retention.Days",
                 RetentionDaysOverride?.ToString(), User.Identity?.Name);
+            await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Recording.Mode",
+                string.IsNullOrEmpty(RecordingModeOverride) ? null : RecordingModeOverride, User.Identity?.Name);
+            await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Recording.MotionPreRollSeconds",
+                MotionPreRollSecondsOverride?.ToString(), User.Identity?.Name);
+            await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Recording.MotionPostRollSeconds",
+                MotionPostRollSecondsOverride?.ToString(), User.Identity?.Name);
             return RedirectToPage("Index");
         }
         catch (Exception ex)
@@ -119,9 +161,7 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
             Streams = camera.Streams.ToList();
             QuotaGb = camera.QuotaBytes is { } q ? Math.Round(q / 1024m / 1024 / 1024, 2) : null;
 
-            var ownOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, Id.Value, "Retention.Days");
-            RetentionDaysOverride = int.TryParse(ownOverride, out var days) ? days : null;
-            EffectiveRetentionDays = await settings.GetAsync("Retention.Days", 30, cameraId: Id.Value, nodeId: camera.NodeId);
+            await LoadEffectiveSettingsAsync(Id.Value, camera.NodeId);
             StorageUsedBytes = (await cameraService.GetStorageUsageAsync()).GetValueOrDefault(Id.Value);
         }
         Groups = await groupService.GetTreeAsync();

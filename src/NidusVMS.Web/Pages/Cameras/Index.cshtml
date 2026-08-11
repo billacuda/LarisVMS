@@ -74,7 +74,7 @@ else
                         <td><input type="checkbox" class="form-check-input camera-select" name="ids" form="bulkReassignForm" value="@c.Id" /></td>
                         <td>
                             <form method="post" asp-page-handler="ToggleEnabled" asp-route-id="@c.Id" class="d-inline">
-                                <button type="submit" class="btn btn-sm btn-link p-0 border-0" style="font-size: 1.1rem; line-height: 1;"
+                                <button type="submit" class="btn btn-sm btn-link p-0 border-0 text-decoration-none" style="font-size: 1.1rem; line-height: 1;"
                                         title="@(c.IsEnabled ? "Enabled — click to disable" : "Disabled — click to enable")">
                                     @(c.IsEnabled ? "🟢" : "🔴")
                                 </button>

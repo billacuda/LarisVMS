@@ -23,6 +23,16 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
 {
     private static readonly TimeSpan SweepInterval = TimeSpan.FromMinutes(5);
 
+    // Files this deleted from disk but hasn't yet successfully told the web tier about — carried
+    // over to the next sweep's report attempt on failure. Without this, a deletion report that
+    // fails (a network blip, the web tier restarting mid-sweep) permanently orphans the Segment
+    // row: the file is already gone from disk by the time the report is attempted, so a later
+    // sweep's EnumerateEvictable can never rediscover it to try again. Every other node→web report
+    // in this codebase (segments, stream info, motion spans) already re-queues on failure; this one
+    // didn't. Plain List, not a ConcurrentQueue: SweepAsync only ever runs from this single
+    // BackgroundService's own sequential loop, never concurrently with itself.
+    private readonly List<string> _pendingDeletionReports = [];
+
     // Never touch a file this fresh — the safety margin against evicting the segment ffmpeg might
     // still be writing (default segment length is 60s; this is generous headroom against clock skew
     // and a slow SMB write finishing late).
@@ -81,10 +91,25 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
 
         await ApplyWatermarkAsync(config, storageRoot, now, deletedPaths, ct);
 
+        // Anything left over from a prior sweep's failed report rides along with this sweep's own
+        // batch — one retry attempt covers both, rather than needing its own separate call.
+        deletedPaths.AddRange(_pendingDeletionReports);
+        _pendingDeletionReports.Clear();
+
         if (deletedPaths.Count > 0)
         {
             logger.LogInformation("Evicted {Count} segment(s) for storage limits.", deletedPaths.Count);
-            await api.DeleteSegmentsAsync(deletedPaths, ct);
+            try
+            {
+                await api.DeleteSegmentsAsync(deletedPaths, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // The files are already gone from disk regardless of whether this succeeds — only
+                // the *report* is being retried, not the deletion itself.
+                _pendingDeletionReports.AddRange(deletedPaths);
+                logger.LogWarning(ex, "Failed to report {Count} deleted segment(s) to the server — will retry next sweep.", deletedPaths.Count);
+            }
         }
     }
 

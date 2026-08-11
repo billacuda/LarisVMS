@@ -13,10 +13,17 @@ public interface ITimelineService
     Task<List<TimelineBucketDto>> GetBucketsAsync(Guid cameraId, DateTime fromUtc, DateTime toUtc, int bucketCount, CancellationToken ct = default);
 
     /// <summary>Same bucketing as GetBucketsAsync but merged across every camera, not just one —
-    /// a bucket is recorded if *any* camera has footage there. No motion aggregation yet (same
-    /// reason single-camera buckets have none: MotionSpans doesn't exist until M8) — once it does,
-    /// this is where "motion on any camera" would be OR'd in the same way.</summary>
+    /// a bucket is recorded (recording and/or motion) if *any* camera has it there.</summary>
     Task<List<TimelineBucketDto>> GetGlobalBucketsAsync(DateTime fromUtc, DateTime toUtc, int bucketCount, CancellationToken ct = default);
+
+    /// <summary>M8: camera IDs with a MotionSpan row recent enough to still count as "motion is
+    /// active right now" — the Live-view indicator's signal. Deliberately derived from the same
+    /// MotionSpans table the timeline already reads, not a live round-trip to each camera's node:
+    /// NodeWorker checkpoints an open span into this table every ~15s (see
+    /// NodeWorker.EnqueueMotionCheckpoints), so a recent row already means "still going" without a
+    /// new proxy/auth path to the node. See TimelineService's implementation for the staleness
+    /// window this checks against.</summary>
+    Task<List<Guid>> GetCamerasWithActiveMotionAsync(CancellationToken ct = default);
 
     /// <summary>Every segment overlapping [fromUtc, toUtc), ordered by start — what a player
     /// resolves "which file covers this instant" against.</summary>

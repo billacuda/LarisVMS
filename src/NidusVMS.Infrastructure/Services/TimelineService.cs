@@ -49,7 +49,12 @@ public class TimelineService(ApplicationDbContext db) : ITimelineService
             .Select(s => new { s.StartUtc, s.EndUtc })
             .ToListAsync(ct);
 
-        return Bucket(segments.Select(s => (s.StartUtc, s.EndUtc)), fromUtc, toUtc, bucketCount);
+        var motionSpans = await db.MotionSpans
+            .Where(m => m.CameraId == cameraId && m.StartUtc < toUtc && m.EndUtc > fromUtc)
+            .Select(m => new { m.StartUtc, m.EndUtc })
+            .ToListAsync(ct);
+
+        return Bucket(segments.Select(s => (s.StartUtc, s.EndUtc)), motionSpans.Select(m => (m.StartUtc, m.EndUtc)), fromUtc, toUtc, bucketCount);
     }
 
     public async Task<List<TimelineBucketDto>> GetGlobalBucketsAsync(DateTime fromUtc, DateTime toUtc, int bucketCount, CancellationToken ct = default)
@@ -65,15 +70,24 @@ public class TimelineService(ApplicationDbContext db) : ITimelineService
             .Select(s => new { s.StartUtc, s.EndUtc })
             .ToListAsync(ct);
 
-        return Bucket(segments.Select(s => (s.StartUtc, s.EndUtc)), fromUtc, toUtc, bucketCount);
+        var motionSpans = await db.MotionSpans
+            .Where(m => m.StartUtc < toUtc && m.EndUtc > fromUtc)
+            .Select(m => new { m.StartUtc, m.EndUtc })
+            .ToListAsync(ct);
+
+        return Bucket(segments.Select(s => (s.StartUtc, s.EndUtc)), motionSpans.Select(m => (m.StartUtc, m.EndUtc)), fromUtc, toUtc, bucketCount);
     }
 
-    private static List<TimelineBucketDto> Bucket(IEnumerable<(DateTime StartUtc, DateTime EndUtc)> segments, DateTime fromUtc, DateTime toUtc, int bucketCount)
+    private static List<TimelineBucketDto> Bucket(
+        IEnumerable<(DateTime StartUtc, DateTime EndUtc)> segments,
+        IEnumerable<(DateTime StartUtc, DateTime EndUtc)> motionSpans,
+        DateTime fromUtc, DateTime toUtc, int bucketCount)
     {
         if (bucketCount < 1) bucketCount = 1;
         if (toUtc <= fromUtc) return [];
 
         var segmentList = segments as ICollection<(DateTime StartUtc, DateTime EndUtc)> ?? segments.ToList();
+        var motionList = motionSpans as ICollection<(DateTime StartUtc, DateTime EndUtc)> ?? motionSpans.ToList();
 
         var totalTicks = (toUtc - fromUtc).Ticks;
         var bucketTicks = totalTicks / bucketCount;
@@ -86,7 +100,8 @@ public class TimelineService(ApplicationDbContext db) : ITimelineService
             // always cover the full [fromUtc, toUtc) range with no gap at the end.
             var bucketEnd = i == bucketCount - 1 ? toUtc : fromUtc.AddTicks(bucketTicks * (i + 1));
             var hasRecording = segmentList.Any(s => s.StartUtc < bucketEnd && s.EndUtc > bucketStart);
-            buckets.Add(new TimelineBucketDto(bucketStart, bucketEnd, hasRecording));
+            var hasMotion = motionList.Any(m => m.StartUtc < bucketEnd && m.EndUtc > bucketStart);
+            buckets.Add(new TimelineBucketDto(bucketStart, bucketEnd, hasRecording, hasMotion));
         }
 
         return buckets;
@@ -118,5 +133,21 @@ public class TimelineService(ApplicationDbContext db) : ITimelineService
             .FirstOrDefaultAsync(ct);
 
         return new PlaybackSegmentInfo(segment.FilePath, node?.LastIpAddress, node?.LivePort, node?.MediaSigningKey);
+    }
+
+    // NodeWorker checkpoints an open span roughly every 15s (see EnqueueMotionCheckpoints) — 25s
+    // gives one checkpoint's worth of margin for the report round trip and Live's own poll interval
+    // without stretching so far that a genuinely-just-ended span still reads as "active" for long
+    // after it closed.
+    private static readonly TimeSpan ActiveMotionStaleness = TimeSpan.FromSeconds(25);
+
+    public async Task<List<Guid>> GetCamerasWithActiveMotionAsync(CancellationToken ct = default)
+    {
+        var threshold = DateTime.UtcNow - ActiveMotionStaleness;
+        return await db.MotionSpans
+            .Where(m => m.EndUtc >= threshold)
+            .Select(m => m.CameraId)
+            .Distinct()
+            .ToListAsync(ct);
     }
 }

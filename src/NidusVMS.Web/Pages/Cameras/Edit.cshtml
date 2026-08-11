@@ -3,7 +3,13 @@
 @{
     ViewData["Title"] = Model.IsNew ? "Add camera" : "Edit camera";
 }
-<h1>@(Model.IsNew ? "Add camera" : Model.Name)</h1>
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="mb-0">@(Model.IsNew ? "Add camera" : Model.Name)</h1>
+    @if (!Model.IsNew)
+    {
+        <a class="btn btn-outline-secondary" asp-page="Zones" asp-route-id="@Model.Id">Zones</a>
+    }
+</div>
 
 @if (!string.IsNullOrEmpty(Model.ErrorMessage))
 {
@@ -87,6 +93,49 @@
             <input asp-for="RetentionDaysOverride" type="number" min="0" class="form-control"
                    placeholder="(inherit — currently @Model.EffectiveRetentionDays days)" />
             <div class="form-text">0 = keep forever on this camera. Blank inherits the node's/global setting.</div>
+        </div>
+        <div class="col-6">
+            <label class="form-label">Recording mode override</label>
+            <select asp-for="RecordingModeOverride" class="form-select">
+                <option value="">(inherit — currently @Model.EffectiveRecordingMode)</option>
+                <option value="Continuous">Continuous</option>
+                <option value="Motion">Motion only</option>
+            </select>
+            @if (!Model.HasServerMotionZone)
+            {
+                <div class="form-text text-warning">
+                    No enabled Motion zone on this camera yet — Motion mode won't discard anything
+                    until one exists (<a asp-page="Zones" asp-route-id="@Model.Id">set one up</a>).
+                    Recording behaves like Continuous in the meantime, not "record nothing."
+                </div>
+            }
+            else
+            {
+                <div class="form-text">
+                    Segments with no activity in any Motion zone are deleted shortly after they're
+                    written, instead of waiting for a retention sweep.
+                    <strong>Unverified against a real camera</strong> — see CHANGELOG.
+                </div>
+            }
+        </div>
+        <div class="col-6">
+            <label class="form-label">Pre-roll override (seconds)</label>
+            <input asp-for="MotionPreRollSecondsOverride" type="number" min="0" class="form-control"
+                   placeholder="(inherit — currently @Model.EffectiveMotionPreRollSeconds s)" />
+            <div class="form-text">
+                Only matters in Motion mode. How far <strong>before</strong> activity starts a
+                segment still counts as worth keeping — this is how much lead-up you get on a
+                motion event, e.g. someone walking into frame before they trip the zone.
+            </div>
+        </div>
+        <div class="col-6">
+            <label class="form-label">Post-roll override (seconds)</label>
+            <input asp-for="MotionPostRollSecondsOverride" type="number" min="0" class="form-control"
+                   placeholder="(inherit — currently @Model.EffectiveMotionPostRollSeconds s)" />
+            <div class="form-text">
+                Only matters in Motion mode. How long <strong>after</strong> activity stops a
+                segment still counts as worth keeping.
+            </div>
         </div>
     }
     <div class="col-12">

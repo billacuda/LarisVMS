@@ -50,6 +50,8 @@ else
                         <div>
                             <video class="w-100 h-100" muted playsinline></video>
                             <div class="position-absolute top-50 start-50 translate-middle text-white small text-center live-status px-2"></div>
+                            <span class="badge bg-danger position-absolute top-0 start-0 m-1 live-motion-badge d-none"
+                                  title="Motion detected">● Motion</span>
                             @if (hasAudio)
                             {
                                 <button type="button"
@@ -100,5 +102,10 @@ else
             // there is currently no user action on this page that should end a session early.
             window.nidusvmsLiveView.start(tile.dataset.cameraTile, video, status, tile.dataset.codec, tile.dataset.hasAudio === 'true');
         });
+
+        // M8, unverified against a real camera: the motion-detection pipeline itself has never been
+        // watched trip against a real event, so treat this badge the same way for now — a visual
+        // aid to check, not yet a proven signal.
+        window.nidusvmsLiveView.startMotionIndicatorPolling(5000);
     </script>
 }

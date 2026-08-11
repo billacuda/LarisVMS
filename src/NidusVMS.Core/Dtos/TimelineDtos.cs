@@ -3,10 +3,11 @@ namespace NidusVMS.Core.Dtos;
 // Wire DTOs for M7 playback/timeline (GET /api/cameras/{id}/timeline|segments, the
 // /playback-segment proxy). Shared via Core the same way NodeDtos.cs is.
 
-/// <summary>One bucket of a camera's coverage timeline. No motion field yet — that's M8
-/// (MotionSpans doesn't exist until then); the client renders every bucket as recorded/gap only
-/// for this pass, not recorded/motion/gap.</summary>
-public record TimelineBucketDto(DateTime StartUtc, DateTime EndUtc, bool HasRecording);
+/// <summary>One bucket of a camera's coverage timeline. HasMotion is independent of HasRecording —
+/// a bucket can have motion without recorded video (a gap in Continuous recording during a burst of
+/// motion isn't possible today since Motion-mode gating hasn't landed yet, but the two flags are
+/// kept orthogonal rather than motion implying recording, so that remains true whenever it does).</summary>
+public record TimelineBucketDto(DateTime StartUtc, DateTime EndUtc, bool HasRecording, bool HasMotion);
 
 public record SegmentSummaryDto(long Id, DateTime StartUtc, DateTime EndUtc);
 

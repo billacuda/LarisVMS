@@ -47,6 +47,10 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<Node> Nodes => Set<Node>();
     public DbSet<Segment> Segments => Set<Segment>();
 
+    // ── Motion (M8) ──────────────────────────────────────────────────────────
+    public DbSet<Zone> Zones => Set<Zone>();
+    public DbSet<MotionSpan> MotionSpans => Set<MotionSpan>();
+
     // ── Views (M6) ───────────────────────────────────────────────────────────
     public DbSet<View> Views => Set<View>();
 
@@ -195,6 +199,36 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.OwnerId).HasMaxLength(450).IsRequired();
             e.Property(x => x.LayoutJson).IsRequired();
             e.HasIndex(x => x.OwnerId);
+        });
+
+        // ── Zone (M8) ────────────────────────────────────────────────────────
+        builder.Entity<Zone>(e =>
+        {
+            e.Property(x => x.Name).HasMaxLength(200).IsRequired();
+            e.Property(x => x.PolygonJson).IsRequired();
+            e.HasOne(x => x.Camera).WithMany()
+                .HasForeignKey(x => x.CameraId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => new { x.CameraId, x.Kind });
+        });
+
+        // ── MotionSpan (M8) ──────────────────────────────────────────────────
+        // Same clustering reasoning as Segment above — see MotionSpan's doc comment.
+        builder.Entity<MotionSpan>(e =>
+        {
+            e.HasOne(x => x.Camera).WithMany()
+                .HasForeignKey(x => x.CameraId).OnDelete(DeleteBehavior.Cascade);
+            // Restrict (NO ACTION), not SetNull: SQL Server refuses to create a SetNull FK here
+            // because it would be a second cascade path from Cameras down to MotionSpans (the first
+            // being the direct CameraId FK above; Zones.CameraId is itself CASCADE, so deleting a
+            // Camera would try to both delete these rows outright *and* null their ZoneId via Zones
+            // — "may cause cycles or multiple cascade paths", confirmed against a real deploy).
+            // ZoneService.DeleteAsync nulls ZoneId in application code before removing a Zone
+            // instead — same end state (motion history survives, attribution is cleared), just not
+            // expressed as a DB-level cascade.
+            e.HasOne(x => x.Zone).WithMany()
+                .HasForeignKey(x => x.ZoneId).OnDelete(DeleteBehavior.Restrict);
+            e.HasKey(x => x.Id).IsClustered(false);
+            e.HasIndex(x => new { x.CameraId, x.StartUtc }).IsClustered();
         });
     }
 }

@@ -73,6 +73,56 @@ public class TimelineServiceTests
     }
 
     [Fact]
+    public async Task BucketsCoveringAMotionSpanAreFlaggedMotionIndependentlyOfRecording()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var from = new DateTime(2026, 8, 9, 0, 0, 0, DateTimeKind.Utc);
+        var to = from.AddHours(1);
+        // No Segment at all — HasMotion must not be coupled to HasRecording.
+        db.MotionSpans.Add(new MotionSpan
+        {
+            CameraId = cameraId, Source = MotionSource.ServerMotion,
+            StartUtc = from.AddMinutes(20), EndUtc = from.AddMinutes(21), Score = 0.5
+        });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db);
+        var buckets = await service.GetBucketsAsync(cameraId, from, to, 60);
+
+        Assert.True(buckets[20].HasMotion);
+        Assert.False(buckets[20].HasRecording);
+        Assert.False(buckets[0].HasMotion);
+        Assert.False(buckets[59].HasMotion);
+    }
+
+    [Fact]
+    public async Task GlobalBucketsAggregateMotionAcrossCameras()
+    {
+        var (db, cameraId1, _) = await SeedCameraAsync();
+        var camera2 = new Camera
+        {
+            Id = Guid.NewGuid(), Name = "cam-2", Host = "10.0.0.2",
+            DeviceServiceUri = "http://10.0.0.2/onvif/device_service"
+        };
+        db.Cameras.Add(camera2);
+        var from = new DateTime(2026, 8, 9, 0, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.Add(new MotionSpan
+        {
+            CameraId = camera2.Id, Source = MotionSource.ServerMotion,
+            StartUtc = from.AddMinutes(5), EndUtc = from.AddMinutes(6), Score = 0.9
+        });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db);
+        var buckets = await service.GetGlobalBucketsAsync(from, from.AddHours(1), 60);
+
+        // Motion on cam-2 shows up in the merged timeline even though the query wasn't scoped to
+        // cam-1 (or any specific camera) — this is the "did anything happen anywhere" view.
+        Assert.True(buckets[5].HasMotion);
+        Assert.False(buckets[0].HasMotion);
+    }
+
+    [Fact]
     public async Task BucketsSpanTheFullRequestedRangeWithNoGapAtTheEnd()
     {
         // bucketTicks is computed via integer division, so the naive fromUtc + bucketTicks*bucketCount
@@ -252,5 +302,50 @@ public class TimelineServiceTests
         var info = await service.GetSegmentForPlaybackAsync(Guid.NewGuid(), segment.Id);
 
         Assert.Null(info);
+    }
+
+    [Fact]
+    public async Task CamerasWithARecentMotionSpanCheckpointAreActive()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+        db.MotionSpans.Add(new MotionSpan
+        {
+            CameraId = cameraId, Source = MotionSource.ServerMotion,
+            StartUtc = DateTime.UtcNow.AddMinutes(-5), EndUtc = DateTime.UtcNow.AddSeconds(-2), Score = 0.5
+        });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db);
+        var active = await service.GetCamerasWithActiveMotionAsync();
+
+        Assert.Contains(cameraId, active);
+    }
+
+    [Fact]
+    public async Task CamerasWithOnlyAStaleMotionSpanAreNotActive()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+        db.MotionSpans.Add(new MotionSpan
+        {
+            CameraId = cameraId, Source = MotionSource.ServerMotion,
+            StartUtc = DateTime.UtcNow.AddMinutes(-10), EndUtc = DateTime.UtcNow.AddMinutes(-5), Score = 0.5
+        });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db);
+        var active = await service.GetCamerasWithActiveMotionAsync();
+
+        Assert.DoesNotContain(cameraId, active);
+    }
+
+    [Fact]
+    public async Task CameraWithNoMotionSpansAtAllIsNotActive()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+
+        var service = new TimelineService(db);
+        var active = await service.GetCamerasWithActiveMotionAsync();
+
+        Assert.DoesNotContain(cameraId, active);
     }
 }

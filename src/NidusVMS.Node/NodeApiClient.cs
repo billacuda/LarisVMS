@@ -66,4 +66,11 @@ public class NodeApiClient
         var response = await _http.PostAsJsonAsync("api/nodes/streams/info", items, ct);
         response.EnsureSuccessStatusCode();
     }
+
+    public async Task ReportMotionSpansAsync(List<MotionSpanReportItem> spans, CancellationToken ct)
+    {
+        if (spans.Count == 0) return;
+        var response = await _http.PostAsJsonAsync("api/nodes/motion-spans", spans, ct);
+        response.EnsureSuccessStatusCode();
+    }
 }

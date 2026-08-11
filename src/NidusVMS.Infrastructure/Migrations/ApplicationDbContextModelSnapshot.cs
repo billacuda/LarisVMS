@@ -545,6 +545,45 @@ namespace NidusVMS.Infrastructure.Migrations
                     b.ToTable("CameraStreams");
                 });
 
+            modelBuilder.Entity("NidusVMS.Core.Entities.MotionSpan", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<Guid>("CameraId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("EndUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<double>("Score")
+                        .HasColumnType("float");
+
+                    b.Property<int>("Source")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("StartUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("ZoneId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    SqlServerKeyBuilderExtensions.IsClustered(b.HasKey("Id"), false);
+
+                    b.HasIndex("ZoneId");
+
+                    b.HasIndex("CameraId", "StartUtc");
+
+                    SqlServerIndexBuilderExtensions.IsClustered(b.HasIndex("CameraId", "StartUtc"));
+
+                    b.ToTable("MotionSpans");
+                });
+
             modelBuilder.Entity("NidusVMS.Core.Entities.Node", b =>
                 {
                     b.Property<Guid>("Id")
@@ -823,6 +862,43 @@ namespace NidusVMS.Infrastructure.Migrations
                     b.ToTable("Views");
                 });
 
+            modelBuilder.Entity("NidusVMS.Core.Entities.Zone", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("CameraId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("PolygonJson")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime?>("PushedToCameraAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<double>("Sensitivity")
+                        .HasColumnType("float");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CameraId", "Kind");
+
+                    b.ToTable("Zones");
+                });
+
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<string>", b =>
                 {
                     b.HasOne("Microsoft.AspNetCore.Identity.IdentityRole", null)
@@ -923,7 +999,36 @@ namespace NidusVMS.Infrastructure.Migrations
                     b.Navigation("Camera");
                 });
 
+            modelBuilder.Entity("NidusVMS.Core.Entities.MotionSpan", b =>
+                {
+                    b.HasOne("NidusVMS.Core.Entities.Camera", "Camera")
+                        .WithMany()
+                        .HasForeignKey("CameraId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("NidusVMS.Core.Entities.Zone", "Zone")
+                        .WithMany()
+                        .HasForeignKey("ZoneId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Camera");
+
+                    b.Navigation("Zone");
+                });
+
             modelBuilder.Entity("NidusVMS.Core.Entities.Segment", b =>
+                {
+                    b.HasOne("NidusVMS.Core.Entities.Camera", "Camera")
+                        .WithMany()
+                        .HasForeignKey("CameraId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Camera");
+                });
+
+            modelBuilder.Entity("NidusVMS.Core.Entities.Zone", b =>
                 {
                     b.HasOne("NidusVMS.Core.Entities.Camera", "Camera")
                         .WithMany()

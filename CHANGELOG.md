@@ -5,6 +5,354 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.29.0] - 2026-08-10
+
+Found while double-checking the v0.28.0 sensitivity investigation: three cameras explicitly set to
+Motion recording mode had 35+ hours of unbroken, gap-free segment retention in the database — which
+is impossible if motion gating were actually running against them, regardless of sensitivity. The
+sensitivity fix alone would not have fixed these cameras' behavior.
+
+### Fixed
+
+- **Motion-mode recording gate never re-read config after a camera's session started (stale closure
+  bug).** `RecordingSession.SegmentCompleted` was wired up once, at the moment a camera started
+  recording, capturing that moment's `NodeConfigCameraDto`/`NodeConfigStreamDto` by reference in the
+  event handler's closure. Because already-recording cameras never get this handler re-wired on
+  later reconciles, any settings change made to Recording.Mode, MotionPreRollSeconds, or
+  MotionPostRollSeconds on an already-running camera had **zero effect** until its session happened
+  to restart for an unrelated reason (e.g. a stream error or node restart). This is why the three
+  Motion-mode cameras never discarded a single segment — the code path that would have judged and
+  discarded them was never actually being reached with current config.
+  `NodeWorker` now keeps a `_latestCameraConfig` cache refreshed on every reconcile, the
+  `SegmentCompleted` closure captures only the camera's immutable `CameraId`, and
+  `HandleSegmentCompleted` looks up fresh config on every single invocation. This takes effect
+  immediately for already-running sessions — no node restart or session restart is required.
+
+## [0.28.0] - 2026-08-10
+
+Investigated why the timeline had shown zero motion since M8 shipped, with direct database and
+process-level access to the live deployment (not inference from code review). The motion pipeline
+turned out not to be broken — it was correctly configured with a threshold that real-world motion
+essentially never reaches.
+
+### Changed
+
+- **Default zone sensitivity lowered from 15% to 3%.** Verified against real captured frames from a
+  real outdoor camera (a zone covering ~73% of frame): the highest score observed across dozens of
+  real frame comparisons, including visible compression-artifact spikes, was 0.04% — nowhere close
+  to 15%. A zone covering most of the frame needs well over 10,000 pixels to change simultaneously in
+  one ~200ms interval to reach that bar, a much higher threshold than a person or vehicle crossing a
+  wide outdoor scene actually produces. This wasn't a detection bug: the running system's `ffmpeg`
+  motion pipeline was confirmed live and running correctly, connected to each camera's Sub stream
+  exactly as designed, and the `MotionDetector`/`ZoneRasterizer` math was confirmed correct by running
+  it directly against real captured camera bytes. The only thing wrong was the number.
+
+### Known limitations
+
+- **This does not retroactively update zones already saved with the old 15% default** — the value
+  was copied into each row at creation time, not resolved live from the compiled-in default.
+  Existing zones need their sensitivity lowered manually via `Pages/Cameras/Zones`; 3% is a
+  reasonable starting point given the measurement above, but hasn't been confirmed to correctly
+  catch real motion without excessive false positives — that still needs a few days of real-world
+  observation once applied.
+- `PixelDeltaThreshold` (currently a fixed 25 out of 255, not user-configurable) was not implicated
+  by this investigation and was left unchanged — the measured noise ceiling stayed comfortably under
+  it. Worth revisiting only if 3% sensitivity turns out to still be too strict.
+
+## [0.27.0] - 2026-08-10
+
+First real-browser test of 0.26.0's streaming/sync playback rework confirmed it worked (faster
+first frame, tiles within a couple seconds of each other instead of 10-30). It also surfaced a real
+bug of its own, and a genuine pre-existing gap unrelated to any of this session's motion work.
+
+### Fixed
+
+- **A missing segment (404) triggered a burst of repeated identical requests, not one.** The
+  tape-scrubber drag fires throttled scrub ticks roughly every 120ms, and a failed fetch never sets
+  `currentSegmentId` — so a slow drag through one bad segment's time range re-triggered the exact
+  same doomed fetch on every tick (confirmed live: one missing file produced 13+ repeated 404s for
+  the same segment id in a couple of seconds). A segment id that 404s is now remembered for the rest
+  of the page load; later seeks into its range go straight to an "unavailable" status without
+  re-hitting the network. Scoped to 404 specifically — a 5xx (a transient node/proxy hiccup) is still
+  retried on the next seek rather than permanently blacklisted.
+- **`StorageManager` could permanently orphan a `Segments` row.** Pre-existing, unrelated to any of
+  this session's Motion-mode work — found while investigating the 404 reports above. Every sweep
+  deletes evicted files from disk, then reports the deletions to the web tier in a single best-effort
+  call; every *other* node→web report in this codebase (segments, stream info, motion spans) already
+  re-queues on failure, but this one didn't. If that report call ever failed — a network blip, the
+  web tier restarting mid-sweep — the file was already gone from disk by the time the report was
+  attempted, and the next sweep's directory scan can never rediscover a file that no longer exists to
+  try reporting it again. The `Segments` row then lives forever pointing at nothing, and playback
+  404s on it whenever a client tries. Deletion reports are now retried on the next sweep until they
+  succeed; the file deletion itself is unchanged (still immediate, never delayed).
+
+### Known limitations
+
+- **This does not clean up rows already orphaned before this fix** — only prevents new ones. The
+  404s reported today are very likely pre-existing orphans; there's no DB access from this
+  environment to identify or clean them up directly. A future pass could add a one-time reconciliation
+  sweep (compare `Segments` rows against what's actually on disk) if this turns out to be widespread.
+- Two other reports from this same session — the timeline still not showing green, and the current-time
+  readout not advancing when the selected camera has no video — have no code changes in this release.
+  Both were reported before confirming this specific version was deployed, and 0.26.0's fixes for
+  exactly these symptoms shipped only one release earlier; re-verify against this version before
+  concluding either is still broken.
+
+## [0.26.0] - 2026-08-10
+
+M8 pass 5 — fixes why the timeline was *still* blue-only after 0.25.0's checkpoint reporting fix,
+plus two Playback fixes reported directly against real footage: the timeline not following
+playback, and cross-camera sync/startup latency.
+
+### Fixed
+
+- **0.25.0's checkpoint reporting fix wasn't enough.** It made a long-running *confirmed* span
+  visible before it closed, but confirmation itself (`startAfter`, default 1s) was still required
+  before anything reported at all — and segment retention never required confirmation, only that
+  `LastMotionAtUtc` (updated on every raw motion tick, confirmed or not) stay recent. A scene with
+  frequent short bursts, each too brief to individually hold for a full second, was already being
+  correctly retained (blue) while never producing a single confirmed span to report — the timeline
+  stayed blue-only even though Motion mode was visibly doing its job. `MotionHysteresis
+  .CurrentInProgressSpan` now reports on raw recent activity (using whichever run-start is
+  available, confirmed or not), matching what retention already treats as real. Still bounded to
+  one checkpoint per ~15s tick, not per frame — a flapping zone produces at most one new row per
+  tick it's still flapping, not one per burst.
+- **The timeline stopped following playback entirely when the ★ primary camera happened to stall**
+  (no segment found, still loading) even though every other tile in the view kept playing normally
+  — confirmed live. The shared clock now falls back to any other actively-playing tile rather than
+  freezing whenever the specific starred camera has trouble.
+
+### Changed
+
+- **Playback segments now stream into the decoder incrementally instead of waiting for the whole
+  file.** The player previously fetched an entire segment (several MB) before handing any of it to
+  MSE — confirmed live as a real, meaningful delay before the first frame appeared, worse on a
+  larger segment or slower link. Chunks are now appended to the SourceBuffer as they arrive off the
+  network, and playback starts (seek + play) as soon as the *first* chunk is buffered rather than
+  waiting for the last one; the browser's native "wait for more data, then resume" behavior handles
+  a seek target that hasn't streamed in yet, the same way any progressively-downloaded video works.
+- **Tiles ending up 10-30 seconds apart in wall-clock content position** was traced mainly to this
+  same whole-file wait varying per tile (a smaller/faster segment finished long before a
+  larger/slower one on a different camera or node). The streaming change above should tighten
+  startup timing on its own; on top of it, every actively-playing tile is now checked each 500ms
+  tick against the shared playhead clock and nudged back in line (a same-segment `currentTime`
+  correction, not a reload) if it's drifted more than 2 seconds.
+
+### Known limitations
+
+- All three fixes here are unverified against real footage — this is the deepest, riskiest change
+  to the MSE segment-loading path since the original decode-restart-at-boundaries design, and
+  streaming/incremental `appendBuffer` has its own set of real-world MSE quirks history in this
+  project (HEVC codec-string mismatches, buffered-range origin offsets) that a synthetic test can't
+  catch. Syntax-checked with `node --check`; no unit-test harness exists for this file.
+- The drift-correction nudge is a blunt instrument — a same-segment `currentTime` jump, not a
+  smoothed resync. A tile that drifts often (rather than once) will visibly jump periodically. If
+  that turns out to be more distracting than the drift itself, worth revisiting.
+
+## [0.25.0] - 2026-08-10
+
+M8 pass 4 — fixes why the timeline showed no motion at all on cameras the user had confirmed were
+working: a long-running span was invisible in `MotionSpans` until it eventually closed. Also adds
+the requested Live-view motion indicator.
+
+### Fixed
+
+- **A span that stays open for a long time (a genuinely active scene, or an oversensitive zone)
+  never appeared in `MotionSpans` until it eventually closed.** `MotionSpanCompleted` only fires on
+  close — a span that's been open for minutes reported nothing the whole time, so the timeline
+  looked exactly like "no motion ever happened" even though detection was working correctly. This
+  is also the most likely explanation for recording looking continuous under Motion mode: if a zone
+  is active often or continuously, the keep/discard window (which reads live in-progress state, not
+  the `MotionSpans` table) is satisfied almost all the time, so almost nothing gets discarded —
+  correct behavior for a genuinely active scene, but easy to mistake for the discard mechanism not
+  working when there was no visible confirmation motion was ever being detected at all.
+- Fixed by having `NodeWorker` checkpoint every currently-open span into `MotionSpans` roughly every
+  15s (`MotionSession.GetInProgressSpans`/`MotionHysteresis.CurrentInProgressSpan`, both pure
+  snapshot queries that don't close anything), and having `NodeService.RecordMotionSpansAsync`
+  upsert by `(CameraId, ZoneId, StartUtc)` — since that triple never changes for one span once
+  confirmed, repeated checkpoints extend one row's `EndUtc` instead of piling up a new row every
+  15s a span stays open.
+
+### Added
+
+- **Live-view motion indicator** — a red "● Motion" badge on a camera's tile in `Pages/Live` while
+  any of its zones has an open span, polled from `GET /api/cameras/motion-state` every 5s (not
+  pushed over the live WebSocket — motion state changes on the order of seconds, a lightweight poll
+  fits better). Deliberately derived from the same `MotionSpans` table the timeline reads (via the
+  checkpoint fix above), not a new proxy round-trip to each camera's node — no new node endpoint,
+  no new media-token family.
+
+### Known limitations
+
+- Still unverified against a real camera — this pass in particular has never been watched trip
+  against an actual motion event; the checkpoint timing (does the badge/timeline update promptly
+  and clear promptly once motion actually stops?) needs a camera to confirm.
+
+## [0.24.0] - 2026-08-10
+
+M8 pass 3 — corrects a real gap in 0.23.0: pre-roll never actually worked, and pre-roll/post-roll
+are now two separate settings instead of one, both configurable globally and per camera.
+
+### Fixed
+
+- **0.23.0's "pre-record falls out for free" claim was wrong.** The single `MotionPaddingSeconds`
+  window was checked *immediately* when a segment completed, using only motion observed *before*
+  that instant — it could never know about motion that hadn't happened yet. In practice this meant
+  a segment finishing just before motion started was already deleted by the time that motion
+  arrived, the opposite of pre-roll. Continuous recording writing the bytes to disk was never the
+  missing piece; *deciding to keep them before knowing the future* was, and 0.23.0's immediate
+  decision couldn't do that. Real pre-roll requires deferring the decision — see Changed below.
+
+### Changed
+
+- **`Recording.MotionPaddingSeconds` split into `Recording.MotionPreRollSeconds` (default 10) and
+  `Recording.MotionPostRollSeconds` (default 30)** — both resolved the same Camera → Node → Global
+  chain as every other recording setting, both editable on `Cameras/Edit` next to Recording Mode.
+  Pre-roll and post-roll answer genuinely different questions (how much lead-up before an event vs.
+  how much tail after it) and there's no reason an operator would want them equal.
+- **A Motion-mode segment's keep/discard decision is now deferred**, not made the instant the
+  segment completes: `NodeWorker` holds it until `PreRollSeconds` after the segment ends, then
+  checks whether any zone had activity anywhere from `PostRollSeconds` *before* the segment ended
+  through `PreRollSeconds` *after* it ended. Both cases — "this segment is the tail of an event that
+  already happened" and "this segment turned out to be the lead-up to an event that hadn't started
+  yet" — collapse into one timestamp comparison, since `MotionHysteresis.LastMotionAtUtc` only ever
+  moves forward: `MotionSession.HasMotionSince(threshold)`. This is what makes correct pre-roll
+  possible without literally buffering frames in memory — see `MotionSession.HasMotionSince`'s and
+  `PendingMotionSegmentDecision`'s doc comments for the full reasoning.
+- `NodeWorker.ShouldDiscardSegment` — the actual three-boolean keep/discard rule — is unchanged; only
+  how its `hadMotionInWindow` argument gets computed changed (deferred `HasMotionSince` check instead
+  of an immediate one). Its existing unit tests needed no changes.
+
+### Known limitations
+
+- Still unverified against a real camera — same standing caveat as pass 2. This fix specifically
+  needed a genuinely new test (`SegmentThatCompletesBeforeMotionStartsIsKeptOnceMotionArrivesWithin
+  PreRoll`) to prove the pre-roll math is sound in isolation; whether the deferral timing behaves
+  correctly against a real 5fps motion feed and real segment rotation still needs a camera to watch.
+
+## [0.23.0] - 2026-08-10
+
+M8 pass 2 — motion actually controls recording. 0.22.0 shipped motion *detection*; this closes the
+gap it explicitly left open ("motion is detected and shown on the timeline; it does not yet control
+recording").
+
+### Added
+
+- **`Recording.Mode` setting** (`Continuous` | `Motion`), resolved per camera through
+  `ISettingsResolver` (Camera → Node → Global → `Continuous` default) — set on `Cameras/Edit`
+  alongside the existing Retention override, same "own override + effective resolved value" pattern.
+  Only these two modes exist; `Schedule`/`Event` from the plan's original four-mode design remain
+  unbuilt (no `Schedules` table, no ONVIF event ingestion — same gap 0.22.0 already flagged).
+- **`Recording.MotionPaddingSeconds`** (default 30), same resolution chain — how long after a
+  camera's Motion zones go quiet a segment is still kept as context.
+- **Segment-level gating on the node.** A Motion-mode camera still records continuously to disk
+  (`-c copy`, unchanged, no new process-lifecycle risk to the already-verified M3 recording engine)
+  — what's new is what happens to a segment once it's finished: `NodeWorker` asks the camera's
+  already-running `MotionSession` whether any zone had activity within the padding window: kept and
+  reported as normal if so, deleted immediately (never reported, so no `Segments` row is ever
+  created) if not. This is a deliberate deviation from the plan's original design (an in-memory
+  pre-record ring buffer with process start/stop on trigger) — same spirit, much less new risk: it
+  reuses the entire continuous-recording pipeline instead of adding ffmpeg start/stop lifecycle
+  management. The cost is the (cheap, I/O-only) continuous write itself, which every camera already
+  pays today.
+  **Correction (0.24.0):** the line that stood here originally claimed the pre-record effect "falls
+  out for free since recording never actually stopped" — that's wrong. The decision above was made
+  *immediately* on completion, using only motion observed so far, so it could never credit a segment
+  for motion that hadn't happened yet; a segment finishing just before an event started was already
+  gone by the time that event arrived. Continuous writing was never the missing piece — deferring the
+  keep/discard decision was. See 0.24.0.
+- **Fails safe.** `Recording.Mode` defaults to `Continuous`, so no existing camera's behavior changes
+  without an explicit opt-in. A Motion-mode camera with no enabled Motion zone (or no Sub stream)
+  never discards anything — it behaves exactly like Continuous and logs one warning, rather than
+  silently deleting everything it records. `Cameras/Edit` surfaces this directly: selecting Motion
+  mode without a zone configured shows an explicit warning with a link to set one up.
+
+### Known limitations
+
+- **Unverified against a real camera.** This is the piece of M8 most worth distrusting until it's
+  been watched happen on real footage — it decides what gets *permanently deleted*. The core
+  decision rule (`NodeWorker.ShouldDiscardSegment`) is unit tested and biased hard toward
+  over-keeping on any doubt, but the padding-window timing itself (does a segment near a motion
+  boundary actually get kept the way it's supposed to?) has not been checked against a real motion
+  event. Recommend verifying on one low-stakes camera before trusting this broadly.
+- **No global admin page for `Recording.Mode`/`Recording.MotionPaddingSeconds` defaults** —
+  `Admin/Settings` (a generic key-value editor) doesn't exist yet, same as it didn't for any other
+  setting; the global default is whatever `Continuous`/30s the compiled-in fallback provides unless
+  a camera or node overrides it. Retention has its own dedicated `Admin/Retention` page for this
+  reason; Recording.Mode doesn't have an equivalent yet.
+- **Segment-boundary precision isn't frame-accurate.** The keep/discard decision happens once per
+  60s segment, checked shortly after that segment completes — motion starting right at a segment's
+  tail end is more likely to be caught by the *next* segment's own decision (motion still active
+  then) than to retroactively save the one already decided. In practice this means the segment where
+  motion visibly starts is very likely kept, but exact frame-level boundaries aren't guaranteed.
+
+
+
+M8 pass 1 (Motion, events, metadata) — same "ship a real, working pass, flag what's deferred"
+approach M6 and M7 both used. This pass covers server-side motion detection, zones, and timeline
+motion coloring. Camera-side motion push, ONVIF PullPoint event ingestion, and bounding-box metadata
+are explicitly **not** in this pass — see Known limitations below.
+
+**Fixed post-release, before this ever deployed successfully:** the initial migration failed —
+SQL Server rejected `MotionSpans.ZoneId`'s `SET NULL` foreign key with "may cause cycles or multiple
+cascade paths." `Zones.CameraId` and `MotionSpans.CameraId` both cascade from `Cameras`, so a
+`SET NULL` on `MotionSpans.ZoneId` (reachable via `Zones`) created a second path SQL Server won't
+allow alongside the direct `CameraId` cascade, regardless of the second path being `SET NULL` rather
+than `CASCADE`. Fixed by changing that FK to `Restrict` (`NO ACTION`) and moving the null-out into
+`ZoneService.DeleteAsync` — same end state (deleting a zone keeps its motion history, just clears the
+attribution), just not expressed as a DB-level cascade. Verified by generating the actual migration
+SQL and confirming `ON DELETE NO ACTION` in the DDL — no live SQL Server reachable from this
+environment to test the constraint directly.
+
+### Added
+
+- **Zones** (`Pages/Cameras/Zones`) — one polygon editor for all four zone kinds (Motion-server,
+  Ignore, Motion-camera, Privacy), drawn on a live snapshot from the camera. Click to place vertices,
+  click the first point again (or double-click) to close the shape. Editing an existing zone's
+  name/kind/sensitivity/enabled works in place; reshaping its polygon does not — delete and redraw
+  (a full vertex-drag editor is its own scope, not blocking the rest of this pass). `IZoneService`/
+  `Zone` entity, `Zones`/`MotionSpans` tables.
+- **Snapshot capture** — `GET /api/cameras/{id}/snapshot`, a one-shot still-frame grab from a
+  camera's Main stream, proxied through the web tier the same way `/live` and `/playback-segment`
+  are. Built as a Zones prerequisite but also closes an M5 backlog item ("snapshot/still capture")
+  that was never implemented.
+- **Server-side motion detection** — a node opens a second, independent RTSP session against a
+  camera's Sub stream (the first real consumer of Sub in this codebase; Main is recording-only and
+  Live's auto-switch-to-Sub was never implemented), reads it as fixed-size 320x240 grayscale frames
+  at 5fps, and diffs consecutive frames per enabled ServerMotion zone (`MotionDetector.Score`).
+  Per-pixel changes are masked to each zone's polygon, with any Ignore-zone polygons on the same
+  camera subtracted from every ServerMotion zone's mask first — a pixel inside an Ignore zone never
+  counts toward motion for any zone, not just the one it happens to overlap. `MotionHysteresis`
+  debounces per-zone (default: 1s to confirm a span has started, 3s of quiet to close it) so a single
+  noisy frame can't open and close a span on its own. Completed spans are batch-reported to the web
+  tier and land in the `MotionSpans` table, the same shape `Segments` reporting already uses — a
+  span is only written once it closes, so real write volume looks like Segments' (a handful of rows
+  per interesting event), not the per-frame volume the original plan flagged `SqlBulkCopy` for.
+- **Timeline motion coloring** — buckets with motion now render bright green, taking priority over
+  blue (recorded) for a bucket with both, matching the plan's original color spec. `HasMotion` is
+  independent of `HasRecording` in `TimelineBucketDto`; both the per-camera and merged-across-cameras
+  timelines pick it up automatically since they already share `TimelineService.Bucket`.
+
+### Known limitations
+
+- **Motion is detected and shown on the timeline; it does not yet control recording.** A camera set
+  to a future "Motion" recording mode still records continuously — wiring motion to actually
+  start/stop the Main recording is a separate, riskier change to `RecordingSession`'s lifecycle that
+  deserves its own real-camera verification pass, deliberately not bundled into this one.
+- **CameraMotion zones do nothing yet** — pushing a polygon to the camera itself over ONVIF
+  `SetVideoAnalyticsConfiguration` is real per-vendor work, not started. The editor lets you draw and
+  save one regardless (`PushedToCameraAt` stays null), so the one UI is ready for it later.
+- **Privacy zones do nothing yet** — no server-side burn-in on the transcode path. Stored only.
+- **No ONVIF PullPoint event ingestion** — `CameraEvents`/`Detections` tables don't exist yet;
+  bounding boxes and camera-triggered recording are still out of reach.
+- **Unverified against a real camera and browser.** Sub-stream RTSP is genuinely new ground in this
+  codebase (see "Added" above), and the zone editor's canvas drawing has had no hands-on testing —
+  same caveat M7 pass 1 shipped with, flagged the same way, for the same reason (no camera/browser
+  available in this environment). 25 new unit tests cover the parts that don't need one:
+  `MotionDetector`'s frame-diff arithmetic, `MotionHysteresis`'s debounce state machine (hand-traced
+  against the implementation, not just written alongside it), `ZoneRasterizer`'s polygon-to-mask
+  conversion, and the new motion-bucketing behavior in `TimelineService`.
+
 ## [0.21.2] - 2026-08-09
 
 ### Added

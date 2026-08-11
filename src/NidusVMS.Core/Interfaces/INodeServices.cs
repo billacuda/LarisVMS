@@ -23,6 +23,10 @@ public interface INodeService
 
     Task RecordSegmentsAsync(Guid nodeId, IReadOnlyList<SegmentReportItem> segments, CancellationToken ct = default);
 
+    /// <summary>M8: persists completed motion spans a node's substream pipeline reported. See
+    /// MotionSpanReportItem's doc comment for why plain inserts, not SqlBulkCopy, are enough here.</summary>
+    Task RecordMotionSpansAsync(Guid nodeId, IReadOnlyList<MotionSpanReportItem> spans, CancellationToken ct = default);
+
     /// <summary>Removes the Segment rows for files the node's StorageManager has already deleted
     /// from disk (retention/quota/watermark eviction), scoped to this node so one node can't claim
     /// to have deleted another's files.</summary>

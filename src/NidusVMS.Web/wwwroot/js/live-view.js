@@ -249,5 +249,37 @@
         };
     }
 
-    window.nidusvmsLiveView = { start: start };
+    // M8: polls GET /api/cameras/motion-state (a list of camera IDs with a recent motion-span
+    // checkpoint — see TimelineService.GetCamerasWithActiveMotionAsync) and toggles each matching
+    // tile's `.live-motion-badge`. A poll, not a push over the already-open live WebSocket — motion
+    // state changes on the order of seconds, not frame-by-frame, so a lightweight interval fits the
+    // "no build step, framework-free" house style better than threading a second message type
+    // through the live fMP4 socket for this. Every tile is looked up by data-camera-tile fresh each
+    // tick rather than cached once, so tiles added/removed from the DOM after this starts (there
+    // are none today, but Views/Play could reuse this later) are picked up correctly.
+    function startMotionIndicatorPolling(intervalMs) {
+        async function tick() {
+            var activeIds;
+            try {
+                var resp = await fetch('/api/cameras/motion-state');
+                if (!resp.ok) return;
+                activeIds = await resp.json();
+            } catch (e) {
+                return; // transient fetch failure — next tick tries again, no need to surface this
+            }
+            var activeSet = {};
+            activeIds.forEach(function (id) { activeSet[id] = true; });
+
+            document.querySelectorAll('[data-camera-tile]').forEach(function (tile) {
+                var badge = tile.querySelector('.live-motion-badge');
+                if (!badge) return;
+                badge.classList.toggle('d-none', !activeSet[tile.dataset.cameraTile]);
+            });
+        }
+
+        tick();
+        setInterval(tick, intervalMs);
+    }
+
+    window.nidusvmsLiveView = { start: start, startMotionIndicatorPolling: startMotionIndicatorPolling };
 })();

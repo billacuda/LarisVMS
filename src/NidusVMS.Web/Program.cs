@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using NidusVMS.Core.Dtos;
 using NidusVMS.Core.Entities;
+using NidusVMS.Core.Enums;
 using NidusVMS.Core.Interfaces;
 using NidusVMS.Core.Security;
 using NidusVMS.Infrastructure.Auth;
@@ -129,6 +130,7 @@ builder.Services.AddScoped<ICameraGroupService, CameraGroupService>();
 builder.Services.AddScoped<INodeService, NodeService>();
 builder.Services.AddScoped<IViewService, ViewService>();
 builder.Services.AddScoped<ITimelineService, TimelineService>();
+builder.Services.AddScoped<IZoneService, ZoneService>();
 
 // ── ONVIF HTTP client ────────────────────────────────────────────────────────
 // CameraService takes a Func<HttpClient> rather than IHttpClientFactory directly so
@@ -249,6 +251,13 @@ nodesApi.MapPost("/streams/info", async (HttpContext ctx, List<StreamInfoReportI
     return Results.Ok();
 });
 
+nodesApi.MapPost("/motion-spans", async (HttpContext ctx, List<MotionSpanReportItem> spans, INodeService nodeService, CancellationToken ct) =>
+{
+    var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
+    await nodeService.RecordMotionSpansAsync(node.Id, spans, ct);
+    return Results.Ok();
+});
+
 // ── Live view media proxy (M5) ───────────────────────────────────────────────
 // The browser only ever talks to this host, over the cert that already works — never directly to a
 // node (see the plan's "Media path" section for why: nodes never need their own TLS certificate this
@@ -292,6 +301,80 @@ app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICame
     await ProxyLiveViewAsync(nodeSocket, browserSocket, ct);
 }).RequireAuthorization("Cameras.View");
 
+// M8/M5: one-shot still frame — the zone editor's background image, same proxy shape as /live
+// above but a plain HTTP GET instead of a WebSocket (mirrors /playback-segment's shape more than
+// /live's, but reuses /live's token family since this authorizes a viewer for the camera's media
+// in general, not one specific file). Cameras.Edit, not .View — capturing a frame on demand opens
+// a real (if short) RTSP session against the camera, which is a configuration-adjacent action
+// (only the zone editor calls this in M8 pass 1), not a passive view.
+app.MapGet("/api/cameras/{cameraId:guid}/snapshot", async (Guid cameraId, ICameraService cameraService, IHttpClientFactory httpFactory, CancellationToken ct) =>
+{
+    var camera = await cameraService.GetAsync(cameraId, ct);
+    if (camera?.Node is not { LastIpAddress: { } ip, LivePort: { } port, MediaSigningKey: { } key })
+    {
+        return Results.Problem(
+            "This camera's node hasn't reported live-view readiness yet (needs at least one heartbeat since being upgraded to a build with live view).",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    var token = MediaToken.Issue(cameraId, key, TimeSpan.FromSeconds(60));
+    var nodeUri = $"http://{ip}:{port}/snapshot/{cameraId}?token={Uri.EscapeDataString(token)}";
+
+    var client = httpFactory.CreateClient();
+    client.Timeout = TimeSpan.FromSeconds(15); // the node's own grab already bounds itself at 10s
+    HttpResponseMessage nodeResponse;
+    try
+    {
+        nodeResponse = await client.GetAsync(nodeUri, HttpCompletionOption.ResponseHeadersRead, ct);
+    }
+    catch (TaskCanceledException) when (!ct.IsCancellationRequested)
+    {
+        return Results.Problem("Timed out waiting for the recorder node to capture a frame.",
+            statusCode: StatusCodes.Status504GatewayTimeout);
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException)
+    {
+        return Results.Problem($"Could not reach recorder node: {ex.Message}", statusCode: StatusCodes.Status502BadGateway);
+    }
+
+    if (!nodeResponse.IsSuccessStatusCode) return Results.StatusCode((int)nodeResponse.StatusCode);
+
+    return Results.Stream(await nodeResponse.Content.ReadAsStreamAsync(ct), "image/jpeg");
+}).RequireAuthorization("Cameras.Edit");
+
+// ── Zones (M8) ────────────────────────────────────────────────────────────────
+// Cameras.Edit throughout — drawing/editing zones is camera configuration, same gate as the
+// snapshot endpoint above that feeds the editor's background image.
+var zonesApi = app.MapGroup("/api/cameras/{cameraId:guid}/zones").RequireAuthorization("Cameras.Edit");
+
+zonesApi.MapGet("", async (Guid cameraId, IZoneService zones, CancellationToken ct) =>
+    Results.Json(await zones.ListAsync(cameraId, ct)));
+
+zonesApi.MapPost("", async (Guid cameraId, SaveZoneRequest request, IZoneService zones, CancellationToken ct) =>
+{
+    if (!Enum.TryParse<ZoneKind>(request.Kind, out var kind)) return Results.BadRequest("Invalid zone kind.");
+    var zone = await zones.CreateAsync(cameraId, request.Name, kind, request.PolygonJson, request.Sensitivity, ct);
+    return Results.Json(zone);
+});
+
+// Not nested under {cameraId} — an update/delete only needs the zone's own id, and nesting it would
+// just be one more value the client has to keep in sync with no actual authorization benefit (the
+// zone's real owning camera is read from the row itself, not trusted from the URL).
+var zoneApi = app.MapGroup("/api/zones/{id:guid}").RequireAuthorization("Cameras.Edit");
+
+zoneApi.MapPut("", async (Guid id, SaveZoneRequest request, IZoneService zones, CancellationToken ct) =>
+{
+    if (!Enum.TryParse<ZoneKind>(request.Kind, out var kind)) return Results.BadRequest("Invalid zone kind.");
+    await zones.UpdateAsync(id, request.Name, kind, request.PolygonJson, request.Sensitivity, request.IsEnabled, ct);
+    return Results.Ok();
+});
+
+zoneApi.MapDelete("", async (Guid id, IZoneService zones, CancellationToken ct) =>
+{
+    await zones.DeleteAsync(id, ct);
+    return Results.Ok();
+});
+
 // ── Playback & timeline (M7) ─────────────────────────────────────────────────
 // GetBucketsAsync/GetSegmentsAsync are plain DB reads (no node involved). /playback-segment
 // mirrors /live's proxy shape above — the browser never talks to a node directly, this process
@@ -310,6 +393,12 @@ playbackApi.MapGet("/segments", async (Guid cameraId, DateTime from, DateTime to
 app.MapGet("/api/timeline", async (DateTime from, DateTime to, int? buckets, ITimelineService timeline, CancellationToken ct) =>
     Results.Json(await timeline.GetGlobalBucketsAsync(from, to, buckets ?? 200, ct))
 ).RequireAuthorization("Playback.View");
+
+// M8: Live-view motion indicator's signal — polled periodically by live-view.js, not pushed. Gated
+// Cameras.View (not Playback.View) since it's a Live-page concern, matching /live's own gate.
+app.MapGet("/api/cameras/motion-state", async (ITimelineService timeline, CancellationToken ct) =>
+    Results.Json(await timeline.GetCamerasWithActiveMotionAsync(ct))
+).RequireAuthorization("Cameras.View");
 
 app.MapGet("/playback-segment/{cameraId:guid}/{segmentId:long}", async (
     Guid cameraId, long segmentId, ITimelineService timeline, IHttpClientFactory httpFactory, CancellationToken ct) =>

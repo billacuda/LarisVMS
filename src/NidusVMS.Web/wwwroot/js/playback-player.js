@@ -37,6 +37,17 @@
         var currentSegmentTimeOrigin = 0;
         var loadToken = 0; // bumped on every seek so a superseded in-flight fetch's *result* is a no-op on arrival
         var abortController = null; // actually cancels the superseded fetch itself, not just its result
+        // Segment ids whose fetch failed (404/500/etc.) this page load — confirmed live as a real
+        // amplifier of whatever caused the original failure: the tape-scrubber drag fires throttled
+        // scrub ticks roughly every 120ms, and since a failed fetch never sets currentSegmentId, a
+        // slow drag through a single bad segment's time range re-triggered the exact same doomed
+        // fetch on every tick — one missing file turning into a dozen-plus repeated 404s in a
+        // couple of seconds. Once a segment id fails, later seeks into its range go straight to the
+        // error status without hitting the network again. Cleared implicitly on page reload, not
+        // persisted — if the file really does reappear (a StorageManager/retention timing issue
+        // resolving itself, say), a fresh page load will try it again rather than remembering a
+        // failure forever.
+        var knownBadSegmentIds = {};
 
         function findSegment(targetMs) {
             for (var i = 0; i < segments.length; i++) {
@@ -106,22 +117,14 @@
             }
             if (myToken !== loadToken || resp === undefined) return;
             if (!resp.ok) {
+                // 404 specifically means "this file doesn't exist on the recorder" — a state that
+                // isn't going to resolve itself moments later, unlike a 5xx (a transient node/proxy
+                // hiccup, worth retrying on the next seek rather than blacklisting for the rest of
+                // this page load).
+                if (resp.status === 404) knownBadSegmentIds[segment.id] = true;
                 if (statusEl) statusEl.textContent = 'Playback error (' + resp.status + ').';
                 return;
             }
-
-            // Also inside try/catch, not just the fetch() call above: aborting mid-body-read
-            // rejects here rather than at fetch(), which surfaced as an "Uncaught (in promise)
-            // AbortError" on every drag-scrub once cancellation was added — harmless to playback
-            // but real console noise, and an unhandled rejection either way.
-            var bytes;
-            try {
-                bytes = new Uint8Array(await resp.arrayBuffer());
-            } catch (e) {
-                if (!signal.aborted && statusEl) statusEl.textContent = 'Playback error reading segment.';
-                return;
-            }
-            if (myToken !== loadToken) return;
 
             var mediaSource = new MediaSource();
             videoEl.src = URL.createObjectURL(mediaSource);
@@ -138,47 +141,144 @@
                     if (statusEl) statusEl.textContent = 'This browser cannot decode this stream.';
                     return;
                 }
-                sourceBuffer.addEventListener('updateend', function () {
-                    if (myToken !== loadToken) return;
 
-                    // The whole (self-contained) segment is now appended, so the stream is complete.
-                    // Without endOfStream the MediaSource stays 'open', meaning duration stays
-                    // unbounded and the element never fires 'ended' — which the auto-advance to the
-                    // next segment below depends on, so it silently never advanced.
-                    if (mediaSource.readyState === 'open') {
-                        try { mediaSource.endOfStream(); } catch (e) { /* already ended/detached */ }
-                    }
-
-                    // seekSeconds is an offset from the segment's *wall-clock* start, but a
-                    // recorded fMP4's internal timeline doesn't have to begin at zero — these carry
-                    // the baseMediaDecodeTime they were written with, so buffered can start at an
-                    // arbitrary large value. Seeking to a raw offset then lands outside the buffered
-                    // range entirely and the element renders nothing at all: no error, no event, and
-                    // the status text still clears normally, which is exactly how this presented
-                    // (tile shows "Loading…", then goes blank and stays blank).
-                    var buffered = sourceBuffer.buffered;
-                    if (buffered.length) {
-                        var bufStart = buffered.start(0);
-                        var bufEnd = buffered.end(buffered.length - 1);
-                        var target = bufStart + seekSeconds;
-                        if (!(target >= bufStart && target <= bufEnd)) target = bufStart;
-                        currentSegmentTimeOrigin = bufStart;
-                        videoEl.currentTime = target;
-                    } else {
-                        console.error('[playback] segment appended but nothing buffered for camera', cameraId);
-                        if (statusEl) statusEl.textContent = 'Segment could not be decoded.';
-                        return;
-                    }
-
-                    if (statusEl) statusEl.textContent = '';
-                    if (autoplay) videoEl.play().catch(function () { /* blocked by autoplay policy — stays paused with a visible control */ });
-                });
-                try {
-                    sourceBuffer.appendBuffer(bytes);
-                } catch (e) {
-                    if (statusEl) statusEl.textContent = 'Playback error: ' + e.message;
+                if (resp.body) {
+                    streamIntoSourceBuffer(resp.body.getReader(), sourceBuffer, mediaSource, myToken, signal, seekSeconds, autoplay);
+                } else {
+                    // No streaming response body support (older browser, or an intermediary that
+                    // buffers the whole thing) — fall back to the previous whole-file behavior
+                    // rather than failing outright. resp is still the same Response from the
+                    // enclosing loadSegment closure; arrayBuffer() works on it regardless of
+                    // whether .body (the streaming reader) is exposed.
+                    loadWholeBufferFallback(resp, sourceBuffer, mediaSource, myToken, signal, seekSeconds, autoplay);
                 }
             });
+        }
+
+        // Reads the segment's bytes off the network incrementally and appends each chunk to the
+        // SourceBuffer as it arrives, rather than waiting for the entire (potentially several-MB)
+        // file to download before any of it is even handed to the decoder — confirmed live as a
+        // real, meaningful delay before the first frame appeared, and the same wait was compounding
+        // across every tile in a multi-camera view with no shared start, which is most of why tiles
+        // could end up 10-30s apart in wall-clock content position: whichever camera's segment
+        // happened to be smallest/fastest to fetch would already be playing while a slower one was
+        // still downloading its entire file. Seeking as soon as the *first* chunk is buffered (not
+        // waiting for the whole segment) means every tile starts close to the same real time
+        // regardless of its total segment size.
+        //
+        // SourceBuffer only accepts one pending appendBuffer() at a time, so chunks are pumped one
+        // at a time, each read gated on the previous append's updateend.
+        function streamIntoSourceBuffer(reader, sourceBuffer, mediaSource, myToken, signal, seekSeconds, autoplay) {
+            var startedPlayback = false;
+
+            function tryStartPlaybackOnce() {
+                if (startedPlayback || myToken !== loadToken) return;
+                var buffered = sourceBuffer.buffered;
+                if (!buffered.length) return; // first chunk hasn't been processed into a range yet
+                startedPlayback = true;
+
+                // seekSeconds is an offset from the segment's *wall-clock* start, but a recorded
+                // fMP4's internal timeline doesn't have to begin at zero — these carry the
+                // baseMediaDecodeTime they were written with, so buffered can start at an arbitrary
+                // large value (confirmed live: seeking to the raw offset landed outside the
+                // buffered range entirely and rendered nothing, with no error). No upper-bound
+                // clamp is needed here the way the old whole-file version needed one: if the target
+                // is further into the segment than has streamed in yet, setting currentTime there
+                // anyway is exactly correct — HTMLMediaElement natively waits for the data to
+                // arrive and resumes on its own once it does, the same way any progressively
+                // downloaded video works.
+                var bufStart = buffered.start(0);
+                currentSegmentTimeOrigin = bufStart;
+                videoEl.currentTime = Math.max(bufStart, bufStart + seekSeconds);
+                if (statusEl) statusEl.textContent = '';
+                if (autoplay) videoEl.play().catch(function () { /* blocked by autoplay policy — stays paused with a visible control */ });
+            }
+
+            function finish() {
+                if (myToken !== loadToken) return;
+                // Without endOfStream the MediaSource stays 'open', meaning duration stays
+                // unbounded and the element never fires 'ended' — which the auto-advance to the
+                // next segment depends on, so it silently never advanced.
+                if (mediaSource.readyState === 'open') {
+                    try { mediaSource.endOfStream(); } catch (e) { /* already ended/detached */ }
+                }
+                // Covers the case where the entire (small) segment arrived in a single read, so
+                // updateend never got a chance to fire tryStartPlaybackOnce before this ran —
+                // idempotent either way via the startedPlayback guard.
+                tryStartPlaybackOnce();
+                if (!startedPlayback) {
+                    console.error('[playback] segment fully streamed but nothing buffered for camera', cameraId);
+                    if (statusEl) statusEl.textContent = 'Segment could not be decoded.';
+                }
+            }
+
+            function pumpNext() {
+                if (signal.aborted || myToken !== loadToken) return;
+                reader.read().then(function (result) {
+                    if (signal.aborted || myToken !== loadToken) return;
+                    if (result.done) {
+                        finish();
+                        return;
+                    }
+                    try {
+                        sourceBuffer.appendBuffer(result.value);
+                    } catch (e) {
+                        if (statusEl) statusEl.textContent = 'Playback error: ' + e.message;
+                    }
+                }).catch(function (e) {
+                    if (signal.aborted) return; // superseded — the reader was cancelled below, expected
+                    console.error('[playback] segment stream read failed for camera', cameraId, e);
+                    if (statusEl) statusEl.textContent = 'Playback error reading segment.';
+                });
+            }
+
+            sourceBuffer.addEventListener('updateend', function () {
+                if (myToken !== loadToken) return;
+                tryStartPlaybackOnce();
+                pumpNext();
+            });
+
+            // If a newer seek supersedes this one mid-stream, stop pulling bytes off the network
+            // for a tile that's already been abandoned rather than reading it to completion.
+            signal.addEventListener('abort', function () { try { reader.cancel(); } catch (e) { /* ignore */ } });
+
+            pumpNext();
+        }
+
+        // Same behavior the whole file used to have unconditionally — kept only as a fallback for
+        // a fetch() Response with no streaming body support.
+        async function loadWholeBufferFallback(resp, sourceBuffer, mediaSource, myToken, signal, seekSeconds, autoplay) {
+            var bytes;
+            try {
+                bytes = new Uint8Array(await resp.arrayBuffer());
+            } catch (e) {
+                if (!signal.aborted && statusEl) statusEl.textContent = 'Playback error reading segment.';
+                return;
+            }
+            if (myToken !== loadToken) return;
+
+            sourceBuffer.addEventListener('updateend', function () {
+                if (myToken !== loadToken) return;
+                if (mediaSource.readyState === 'open') {
+                    try { mediaSource.endOfStream(); } catch (e) { /* already ended/detached */ }
+                }
+                var buffered = sourceBuffer.buffered;
+                if (buffered.length) {
+                    var bufStart = buffered.start(0);
+                    currentSegmentTimeOrigin = bufStart;
+                    videoEl.currentTime = Math.max(bufStart, bufStart + seekSeconds);
+                } else {
+                    if (statusEl) statusEl.textContent = 'Segment could not be decoded.';
+                    return;
+                }
+                if (statusEl) statusEl.textContent = '';
+                if (autoplay) videoEl.play().catch(function () { /* blocked by autoplay policy */ });
+            });
+            try {
+                sourceBuffer.appendBuffer(bytes);
+            } catch (e) {
+                if (statusEl) statusEl.textContent = 'Playback error: ' + e.message;
+            }
         }
 
         async function seekTo(targetMs, autoplay) {
@@ -216,6 +316,14 @@
                 return;
             }
 
+            if (knownBadSegmentIds[segment.id]) {
+                // Already confirmed unreachable this page load — see knownBadSegmentIds' own
+                // comment for why re-fetching it here matters, not just cosmetically.
+                teardown();
+                if (statusEl) statusEl.textContent = 'This recording is unavailable (missing on the recorder).';
+                return;
+            }
+
             if (segment.id === currentSegmentId) {
                 videoEl.currentTime = currentSegmentTimeOrigin + (targetMs - segment.startUtc) / 1000;
                 if (autoplay) videoEl.play().catch(function () { /* see above */ });
@@ -245,6 +353,17 @@
             currentWallClockMs: function () {
                 var seg = segments.find(function (s) { return s.id === currentSegmentId; });
                 return seg ? seg.startUtc + (videoEl.currentTime - currentSegmentTimeOrigin) * 1000 : null;
+            },
+            // A same-segment nudge, not a full seek: no fetch, no segment lookup, just moving
+            // currentTime within whatever's already loaded — for correcting small drift between
+            // tiles during ongoing playback (see the page glue's resyncDriftingTiles), not for
+            // jumping to a different point in time. A no-op if targetMs has moved outside the
+            // currently loaded segment entirely; a real segment change belongs to seekTo/the
+            // 'ended' handler, not a drift correction.
+            resyncTo: function (targetMs) {
+                var seg = segments.find(function (s) { return s.id === currentSegmentId; });
+                if (!seg || targetMs < seg.startUtc || targetMs >= seg.endUtc) return;
+                videoEl.currentTime = currentSegmentTimeOrigin + (targetMs - seg.startUtc) / 1000;
             },
             teardown: teardown
         };
@@ -554,19 +673,66 @@
         });
     }
 
-    // Drives the timeline strip and the "current time" readout from the primary tile's own
-    // <video>.currentTime while it plays — under the tape-scrubber model (timeline.js) the marker
-    // is fixed at center, so "following playback" means recentering the strip on the advancing
-    // time, not moving a marker across it. Not a separate driving clock, so long-running playback
-    // can drift slightly between tiles started from the same synchronized seek. Acceptable for
-    // this pass; see the CHANGELOG's Known limitations.
+    // Prefers the primary (starred) tile, but falls back to any other tile that's actually
+    // playing — confirmed live as a real gap: the primary specifically stalled (no segment found
+    // for that camera at that moment) while every other tile in the view kept playing normally,
+    // and the timeline sat frozen the whole time even though most of the grid was moving. One
+    // camera's own playback trouble shouldn't be able to freeze the shared clock for every other
+    // camera in the view. Returns the id alongside the tile so the caller can exclude it from
+    // drift correction below — the driving tile is definitionally never "drifting" relative to
+    // itself.
+    function pickDrivingTile() {
+        if (primaryCameraId && tiles[primaryCameraId] && !tiles[primaryCameraId].videoEl.paused) {
+            return { id: primaryCameraId, tile: tiles[primaryCameraId] };
+        }
+        var ids = Object.keys(tiles);
+        for (var i = 0; i < ids.length; i++) {
+            if (!tiles[ids[i]].videoEl.paused) return { id: ids[i], tile: tiles[ids[i]] };
+        }
+        return null;
+    }
+
+    // How far a tile's own content-time is allowed to drift from the shared playheadMs before
+    // being nudged back in line — confirmed live as a real problem (tiles ending up 10-30s apart),
+    // traced mainly to each tile's segment-fetch time differing (now much smaller after the
+    // streaming-load change above, but decode-rate variance between separate <video> elements can
+    // still accumulate real drift over a long playback session even with an instant start). Loose
+    // enough that ordinary per-tile timing jitter (a frame or two) never triggers a visible jump,
+    // tight enough that "which camera did what, relative to another" stays trustworthy for review.
+    var DRIFT_THRESHOLD_MS = 2000;
+
+    // Nudges any other playing tile whose own content-time has drifted past DRIFT_THRESHOLD_MS
+    // from the driving tile's — a small in-place currentTime correction (player.resyncTo), not a
+    // re-seek/reload, so it doesn't interrupt playback or re-fetch anything. Only ever pulls a
+    // drifted tile toward the driving tile, never the other way around — the driving tile's own
+    // clock is playheadMs by definition.
+    function resyncDriftingTiles(drivingId) {
+        Object.keys(tiles).forEach(function (id) {
+            if (id === drivingId) return;
+            var tile = tiles[id];
+            if (tile.videoEl.paused) return;
+            var current = tile.player.currentWallClockMs();
+            if (current === null) return;
+            if (Math.abs(current - playheadMs) > DRIFT_THRESHOLD_MS) {
+                tile.player.resyncTo(playheadMs);
+            }
+        });
+    }
+
+    // Drives the timeline strip and the "current time" readout from whichever tile is actually
+    // playing (see pickDrivingTile) — under the tape-scrubber model (timeline.js) the marker is
+    // fixed at center, so "following playback" means recentering the strip on the advancing time,
+    // not moving a marker across it. Also the point where every other playing tile gets checked
+    // for drift against that shared clock (see resyncDriftingTiles) — same 500ms tick, so drift
+    // correction runs on the same cadence as the clock it corrects against, not a separate timer.
     function updatePlayhead() {
-        var primary = primaryCameraId && tiles[primaryCameraId];
-        if (!primary || primary.videoEl.paused) return;
-        var current = primary.player.currentWallClockMs();
+        var driving = pickDrivingTile();
+        if (!driving) return;
+        var current = driving.tile.player.currentWallClockMs();
         if (current === null) return;
         playheadMs = current;
         syncTimelineCenters();
+        resyncDriftingTiles(driving.id);
         schedulePositionSave();
         var el = opts.currentTimeId && document.getElementById(opts.currentTimeId);
         if (el) el.textContent = new Date(playheadMs).toLocaleString();

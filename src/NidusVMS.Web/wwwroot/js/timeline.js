@@ -5,10 +5,9 @@
 // Wheel zooms in/out around that same fixed center point (weeks down to seconds) rather than the
 // cursor, so zooming never jumps the marker off-center. The playhead can never be dragged past
 // "now"; the window may still extend past it, and that stretch is drawn as unreachable future.
-// Renders
-// recorded/gap buckets fetched from GET /api/cameras/{id}/timeline — no motion coloring yet, that's
-// M8 (MotionSpans doesn't exist). Framework-free canvas drawing, matching the rest of this app's
-// no-build-step JS.
+// Renders recorded/motion/gap buckets fetched from GET /api/cameras/{id}/timeline — green (motion)
+// wins over blue (recorded) for a bucket with both, not a blend. Framework-free canvas drawing,
+// matching the rest of this app's no-build-step JS.
 window.nidusvmsTimeline = (function () {
     'use strict';
 
@@ -95,7 +94,9 @@ window.nidusvmsTimeline = (function () {
                 if (bEnd <= bStart) return;
                 var x1 = ((bStart - r.from) / span) * w;
                 var x2 = ((bEnd - r.from) / span) * w;
-                ctx.fillStyle = b.hasRecording ? '#1e6fd9' : 'rgba(255,255,255,0.08)';
+                // Motion wins over plain recorded coverage — it's the more actionable signal, and a
+                // bucket with both is drawn identically to motion-only rather than some blend.
+                ctx.fillStyle = b.hasMotion ? '#28e070' : (b.hasRecording ? '#1e6fd9' : 'rgba(255,255,255,0.08)');
                 ctx.fillRect(x1, 4, Math.max(1, x2 - x1), h - 8);
             });
 

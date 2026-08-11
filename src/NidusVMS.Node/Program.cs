@@ -174,6 +174,38 @@ app.MapGet("/playback-segment/{cameraId:guid}", async (HttpContext ctx, Guid cam
     await ctx.Response.SendFileAsync(fullPath, ctx.RequestAborted);
 });
 
+// M8/M5: one-shot still frame, e.g. the zone editor's background image. Same token family as /live
+// (Issue/TryValidate) rather than /playback-segment's — this authorizes a viewer for this camera's
+// media in general, same as live view, not one specific file.
+app.MapGet("/snapshot/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWorker worker) =>
+{
+    var token = ctx.Request.Query["token"].ToString();
+    var currentKey = worker.MediaSigningKey;
+    if (currentKey is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
+        return;
+    }
+    if (!MediaToken.TryValidate(token, cameraId, currentKey, out var tokenError))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync(tokenError);
+        return;
+    }
+
+    var bytes = await worker.CaptureSnapshotAsync(cameraId, ctx.RequestAborted);
+    if (bytes is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
+        await ctx.Response.WriteAsync("Could not capture a frame from this camera (unreachable, not currently recording on this node, or timed out).");
+        return;
+    }
+
+    ctx.Response.ContentType = "image/jpeg";
+    await ctx.Response.Body.WriteAsync(bytes, ctx.RequestAborted);
+});
+
 await app.RunAsync();
 
 static string? GetArg(string[] args, string name)
