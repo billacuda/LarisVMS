@@ -11,14 +11,15 @@
     }));
     var viewsJson = JsonSerializer.Serialize(Model.Views.Select(v => new { id = v.Id, name = v.Name, layoutJson = v.LayoutJson }));
 }
-<h1>Playback</h1>
 
 @if (Model.Cameras.Count == 0)
 {
+    <h1>Playback</h1>
     <p class="text-muted">No cameras are both enabled and assigned to a node yet.</p>
 }
 else if (Model.Views.Count == 0)
 {
+    <h1>Playback</h1>
     <p class="text-muted">
         Playback plays back a saved view's layout, the same arrangement you'd watch live.
         <a asp-page="/Views/Index">Build a view</a> first, then come back here to play it back.
@@ -26,64 +27,78 @@ else if (Model.Views.Count == 0)
 }
 else
 {
-    <div class="row g-3 mb-3">
-        <div class="col-md-3">
-            <label class="form-label small">View</label>
-            <select id="playbackViewPicker" class="form-select">
+    @* id="pbLayout" fills whatever vertical space is left below the nav bar (measured/kept in sync
+       by JS — see layoutForViewport in the Scripts section — since the nav's actual height varies
+       with viewport width, e.g. the collapsed hamburger menu on narrow screens). The video grid
+       takes all the remaining room after the toolbar and timeline strip claim theirs; the timeline
+       stays pinned at the bottom of that space rather than wherever document flow would put it. *@
+    <div id="pbLayout" style="display:flex; flex-direction:column; min-height:0;">
+        <div class="d-flex flex-wrap align-items-center gap-2 py-2" id="pbToolbar">
+            <label class="form-label small mb-0">View</label>
+            <select id="playbackViewPicker" class="form-select form-select-sm" style="max-width: 16rem;">
                 <option value="">(choose a view)</option>
                 @foreach (var v in Model.Views)
                 {
                     <option value="@v.Id">@v.Name</option>
                 }
             </select>
-            <p class="text-muted small mt-2">
-                Every camera in the view plays back in lockstep, each resolving its own
-                recordings/gaps independently. The view's top-left-most camera drives the
-                per-camera timeline below.
-            </p>
-        </div>
-        <div class="col-md-9">
-            <div class="d-flex align-items-center gap-2 mb-2">
-                <button type="button" class="btn btn-sm btn-outline-secondary" id="pbPlayPause" disabled>▶ Play</button>
-                <span id="pbCurrentTime" class="text-muted small"></span>
-                <div class="form-check form-switch ms-auto mb-0">
-                    <input type="checkbox" class="form-check-input" id="pbHour24" />
-                    <label class="form-check-label small" for="pbHour24">24-hour clock</label>
-                </div>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="pbPlayPause" disabled>▶ Play</button>
+            <div class="form-check form-switch mb-0 ms-auto">
+                <input type="checkbox" class="form-check-input" id="pbHour24" />
+                <label class="form-check-label small" for="pbHour24">24-hour clock</label>
             </div>
+        </div>
 
+        <div id="playbackTiles" style="flex:1 1 auto; min-height:0;"></div>
+
+        <div id="pbTimelineArea" style="flex:0 0 auto;" class="pt-1">
             <label class="form-label small mb-0">Selected camera</label>
-            <canvas id="playbackTimeline" style="width: 100%; height: 60px; cursor: pointer;"></canvas>
+            <canvas id="playbackTimeline" style="width: 100%; height: 30px; cursor: pointer; touch-action: none; display: block;"></canvas>
+            <div id="pbCurrentTime" class="text-muted small mb-1"></div>
 
-            <label class="form-label small mb-0 mt-2">All cameras (recording on any camera)</label>
-            <canvas id="playbackGlobalTimeline" style="width: 100%; height: 60px; cursor: pointer;"></canvas>
+            <label class="form-label small mb-0">All cameras (recording on any camera)</label>
+            <canvas id="playbackGlobalTimeline" style="width: 100%; height: 30px; cursor: pointer; touch-action: none; display: block;"></canvas>
 
-            <p class="text-muted small mt-1">
+            <p class="text-muted small mt-1 mb-0">
                 Scroll either timeline to zoom (weeks down to seconds), drag to pan, click to jump
                 every tile to that instant — neither can scroll past right now. Your position and
-                zoom level are remembered between visits. No motion coloring yet on either timeline
-                (M8).
+                zoom level are remembered between visits.
             </p>
         </div>
     </div>
-
-    <div id="playbackTiles"></div>
 }
 
 @section Scripts {
     <script src="~/js/timeline.js" asp-append-version="true"></script>
     <script src="~/js/playback-player.js" asp-append-version="true"></script>
     <script>
-        window.nidusvmsPlaybackPage.init({
-            cameras: @Html.Raw(camerasJson),
-            views: @Html.Raw(viewsJson),
-            pickerId: 'playbackViewPicker',
-            tilesId: 'playbackTiles',
-            timelineCanvasId: 'playbackTimeline',
-            globalTimelineCanvasId: 'playbackGlobalTimeline',
-            playPauseBtnId: 'pbPlayPause',
-            currentTimeId: 'pbCurrentTime',
-            hour24ToggleId: 'pbHour24'
-        });
+        (function () {
+            var layoutEl = document.getElementById('pbLayout');
+            if (!layoutEl) return; // no cameras/views — nothing to size
+
+            // Keeps the whole layout filling exactly the space below the nav bar, so the timeline
+            // stays pinned at the bottom of the viewport and the video grid claims everything above
+            // it — recomputed on resize per the requirement that this adapt live, not just on load.
+            // Measures pbLayout's own current top (not the nav's) so this stays correct regardless
+            // of margins/padding between the nav and here — whatever's actually above this element.
+            function layoutForViewport() {
+                var top = layoutEl.getBoundingClientRect().top;
+                layoutEl.style.height = Math.max(200, window.innerHeight - top) + 'px';
+            }
+            layoutForViewport();
+            window.addEventListener('resize', layoutForViewport);
+
+            window.nidusvmsPlaybackPage.init({
+                cameras: @Html.Raw(camerasJson),
+                views: @Html.Raw(viewsJson),
+                pickerId: 'playbackViewPicker',
+                tilesId: 'playbackTiles',
+                timelineCanvasId: 'playbackTimeline',
+                globalTimelineCanvasId: 'playbackGlobalTimeline',
+                playPauseBtnId: 'pbPlayPause',
+                currentTimeId: 'pbCurrentTime',
+                hour24ToggleId: 'pbHour24'
+            });
+        })();
     </script>
 }

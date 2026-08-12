@@ -6,6 +6,8 @@ using Microsoft.Extensions.Logging;
 using NidusVMS.Core.Security;
 using NidusVMS.Media;
 using NidusVMS.Node;
+using NidusVMS.Onvif.Clients;
+using NidusVMS.Onvif.Soap;
 
 // ── First-run registration ──────────────────────────────────────────────────
 // If node.config doesn't exist yet, this run must be given --server-url and --registration-key
@@ -61,12 +63,25 @@ var fallbackStorageRoot = GetArg(args, "--storage-root") ?? Environment.GetEnvir
 var livePort = int.TryParse(GetArg(args, "--live-port") ?? Environment.GetEnvironmentVariable("NIDUSVMS_LIVE_PORT"), out var parsedPort)
     ? parsedPort : 8554;
 
+// M8 pass 6: a separate HttpClient from NodeApiClient's own (15s, for short REST control-plane
+// calls) — PullMessagesAsync is a deliberate long-poll that holds the connection open for up to
+// CameraEventSession's own 30s Timeout value while waiting for the camera to have something to
+// report, so this needs real headroom past that, not NodeApiClient's budget. Same cert-ignoring
+// rationale as NidusVMS.Web's "onvif" named client: LAN cameras almost universally present a
+// self-signed certificate with no CA behind it.
+var onvifHttpClient = new HttpClient(new HttpClientHandler
+{
+    ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+})
+{ Timeout = TimeSpan.FromSeconds(45) };
+var onvifEventsClient = new OnvifEventsClient(new OnvifSoapClient(onvifHttpClient));
+
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(o => o.ListenAnyIP(livePort));
 builder.Services.AddWindowsService(o => o.ServiceName = "NidusVMS Node");
 builder.Services.AddSingleton(apiClient);
 builder.Services.AddSingleton(sp => new NodeWorker(
-    apiClient, ffmpegPath, fallbackStorageRoot, livePort, config, sp.GetRequiredService<ILoggerFactory>()));
+    apiClient, ffmpegPath, fallbackStorageRoot, livePort, config, sp.GetRequiredService<ILoggerFactory>(), onvifEventsClient));
 builder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<NodeWorker>());
 builder.Services.AddSingleton<IHostedService>(sp => new StorageManager(
     apiClient, fallbackStorageRoot, sp.GetRequiredService<ILoggerFactory>().CreateLogger<StorageManager>()));

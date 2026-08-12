@@ -172,4 +172,32 @@ public class MotionSessionTests
         Assert.True(hadMotionInWindow);
         Assert.False(NodeWorker.ShouldDiscardSegment("Motion", hasMotionSession: true, hadMotionInWindow));
     }
+
+    [Fact]
+    public void SegmentWithMotionInItsOwnMiddleIsKeptEvenWithAShortPostRoll()
+    {
+        // The real bug this test locks in: NodeWorker used to anchor the lookback threshold to the
+        // segment's *end* (segmentEndUtc - postRoll), which only reliably caught motion that happened
+        // within postRoll seconds of the segment finishing. A 60s segment with real motion 40s before
+        // it ended, and nothing since, was silently discarded once postRoll was set below 40s —
+        // invisible with the original 30s default (close to half the segment) but a real, confirmed
+        // data-loss bug once an operator configured a smaller value (e.g. 3s). The fix anchors to
+        // segmentStartUtc instead, so anywhere in the segment counts, not just near its tail.
+        var zoneId = Guid.NewGuid();
+        var session = NewSession(zoneId);
+        var postRoll = TimeSpan.FromSeconds(3);
+        var segmentStartUtc = T0;
+        var segmentEndUtc = T0.AddSeconds(60);
+
+        // Motion 20s into a 60s segment — 40s before the segment ends, well outside a 3s post-roll
+        // window measured from the end, but still squarely inside the segment itself.
+        session.TryGetZoneHysteresis(zoneId)!.Observe(segmentStartUtc.AddSeconds(20), true, 0.9);
+
+        var wronglyAnchoredToEnd = session.HasMotionSince(segmentEndUtc - postRoll);
+        var correctlyAnchoredToStart = session.HasMotionSince(segmentStartUtc - postRoll);
+
+        Assert.False(wronglyAnchoredToEnd); // demonstrates the bug: the old anchor misses it
+        Assert.True(correctlyAnchoredToStart); // the fix: the new anchor catches it
+        Assert.False(NodeWorker.ShouldDiscardSegment("Motion", hasMotionSession: true, correctlyAnchoredToStart));
+    }
 }

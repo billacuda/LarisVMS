@@ -27,10 +27,23 @@ public interface INodeService
     /// MotionSpanReportItem's doc comment for why plain inserts, not SqlBulkCopy, are enough here.</summary>
     Task RecordMotionSpansAsync(Guid nodeId, IReadOnlyList<MotionSpanReportItem> spans, CancellationToken ct = default);
 
+    /// <summary>M8 pass 6: persists raw ONVIF PullPoint notifications a node's event polling
+    /// reported — every one, not just motion-classified ones (which separately also produced a
+    /// MotionSpan the node reported through RecordMotionSpansAsync).</summary>
+    Task RecordCameraEventsAsync(Guid nodeId, IReadOnlyList<CameraEventReportItem> events, CancellationToken ct = default);
+
     /// <summary>Removes the Segment rows for files the node's StorageManager has already deleted
     /// from disk (retention/quota/watermark eviction), scoped to this node so one node can't claim
     /// to have deleted another's files.</summary>
     Task DeleteSegmentsAsync(Guid nodeId, IReadOnlyList<string> filePaths, CancellationToken ct = default);
+
+    /// <summary>Every FilePath this node currently owns a Segment row for — used by the node's own
+    /// periodic reconciliation sweep (StorageManager) to find rows whose file no longer exists on
+    /// disk (most commonly a deletion that was made but never successfully reported, before the
+    /// report-retry fix existed) and clean them up the same way a normal eviction is reported. Not
+    /// paged: at the row counts one node's own footage produces this is a few MB at most, and this
+    /// only runs on an hours-long cadence, not every reconcile.</summary>
+    Task<List<string>> ListSegmentFilePathsAsync(Guid nodeId, CancellationToken ct = default);
 
     /// <summary>Applies real resolution/codec parsed from the node's own ffmpeg output to the
     /// matching CameraStream row(s) — only for cameras this node currently owns, so a stale report

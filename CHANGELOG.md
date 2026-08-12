@@ -5,6 +5,268 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.37.0] - 2026-08-12
+
+### Fixed
+
+- **Critical: every node process restart could silently delete real, already-recorded footage that
+  already had valid database rows.** Confirmed live: `Segments` rows dropped from ~16,600 to ~235
+  after this session's several version-bump deploys. Root cause: `RecordingSession.RunAsync` rescans
+  its camera's *entire* on-disk history from scratch every time it starts, with zero memory of what
+  the server already has rows for — this in-session tracking (`reportedPaths`) already correctly
+  survives an *ffmpeg* reconnect within one run, but a full *node process* restart creates a brand
+  new `RecordingSession` with an empty one. For a Motion-mode camera, that rescan re-fires
+  `SegmentCompleted` for every old file exactly as if it were brand new — and at that exact moment, a
+  freshly-restarted `MotionSession`/`CameraEventSession` has observed no motion yet, so nearly all of
+  that re-fired history looked like "no motion" to `NodeWorker.DecideMotionSegment` and was silently
+  discarded — deleting files that already had valid, previously-reported `Segments` rows, with no
+  error anywhere (a discard logs at Debug level and never touches the database, so there was nothing
+  to fail loudly). This happened on **every** node restart, which made it look like a single
+  catastrophic event but was really compounding damage across each of the day's several deploys.
+  Fixed: `NodeWorker` now fetches every path the server already knows about for this node
+  (`GET /api/nodes/segments/paths`, the same endpoint the v0.30.0 reconciliation sweep already uses)
+  once before any `RecordingSession` starts, and passes the relevant subset in as a pre-seed for that
+  camera's `reportedPaths` — a file the server already has a row for is now recognized as already
+  known and never re-evaluated, regardless of how many times the node process restarts. This is also
+  the fix for a separate, related concern raised directly: switching a camera between Motion and
+  Continuous no longer carries any risk of a later restart retroactively re-deciding footage recorded
+  under the old mode — a segment's keep/discard decision is now made exactly once, at the moment it
+  first completes, full stop. Three new tests exercise the actual rescan-skip behavior against a real
+  temp directory. **This is a NidusVMS.Node change — install-node.ps1 re-run needed on both WINSERV1
+  and NVR1 as soon as possible.**
+
+### Known limitations
+
+- This fixes the bug going forward — footage already lost to this bug earlier today cannot be
+  recovered; the files are gone. The `Segments` rows for that footage should already have been
+  cleaned up by the v0.30.0 reconciliation sweep (or will be on its next hourly pass), so the
+  timeline should stop showing playable-looking gaps for it once that catches up.
+- The known-paths fetch happens once, at node process startup — a camera reassigned to this node
+  *after* that point starts with whatever was fetched at startup, not a fresh lookup. Not a gap for
+  the bug this fixes (a genuinely new camera has no prior on-disk history to protect), just noted as
+  a boundary of this pass's scope.
+
+## [0.36.0] - 2026-08-11
+
+### Fixed
+
+- **A camera-pushed ONVIF motion event could stop keeping recorded segments partway through a long
+  motion event, before the camera ever reported motion had stopped.** The v0.35.0 gating check
+  (`HasMotionSince`) is keyed off how recently the camera's *last* notification arrived — fine for
+  server-side detection, which re-confirms motion every ~200ms while it's genuinely ongoing, but many
+  real ONVIF implementations send exactly one notification per edge (rising, then nothing again until
+  falling), not a periodic "still active" heartbeat. For an event like that, the gating window could
+  go stale relative to a segment decided well into the gap, even though the camera never said motion
+  had ended. `CameraEventSession` now also exposes `IsMotionActive` — true for as long as a span is
+  open, with no timeout of its own; it only goes false once an actual falling-edge notification
+  closes it (or the node shuts down) — and `NodeWorker.DecideMotionSegment` keeps a segment if
+  *either* the recency check or this passes. Recording now correctly keeps being retained
+  continuously from the rising event straight through to the falling event, regardless of how sparse
+  the camera's own notifications are in between. Same fix applied to the timeline checkpoint path
+  (`EnqueueMotionCheckpoints`), which had the identical staleness gap for showing a long-running
+  camera-event span before it closes. Two new tests lock in the exact scenario: `LastMotionAtUtc`
+  frozen at the rising timestamp across a 10-minute gap while `IsActive` stays true throughout, only
+  going false once a real falling-edge tick arrives. **This is a NidusVMS.Node change —
+  install-node.ps1 re-run needed on both WINSERV1 and NVR1.**
+
+## [0.35.0] - 2026-08-11
+
+**M8 pass 6: ONVIF PullPoint event ingestion — closes the "camera-side event starts a recording"
+half of M8's original verify checklist.** Previously deferred, confirmed genuinely greenfield before
+starting (no ONVIF Events client existed anywhere in the codebase). Zone-side push
+(`SetVideoAnalyticsConfiguration`) and privacy-mask burn-in remain deferred — the latter has a real
+architectural blocker: `RecordingSession`'s tee pipeline is pure `-c copy`, and ffmpeg cannot apply a
+video filter under stream copy, so burn-in needs its own design pass, not a drop-in addition.
+
+### Added
+
+- **A recorder node now subscribes to a camera's ONVIF PullPoint events and polls for notifications**,
+  for any camera whose capability probe found an Events service. This is the node's first ONVIF SOAP
+  conversation of its own (`NidusVMS.Onvif` was deliberately not referenced by `NidusVMS.Node` until
+  now) — event polling is a continuous, long-lived exchange the web tier can't pre-resolve into a
+  one-shot value the way `GetStreamUri` already is, so it has to happen from wherever the RTSP
+  connections already do: the node, on the camera's own LAN. The web tier still resolves and hands
+  over the Events service's own address (from the capability prober's raw XAddr map) — the node never
+  needs its own `GetCapabilities` round trip just to find where to subscribe.
+- **Motion-classified events now drive the exact same Motion-mode recording gate and MotionSpans
+  timeline coloring a ServerMotion zone already does** — reusing `MotionHysteresis` (the same
+  open/close-span primitive `MotionSession` uses per zone) rather than a new state machine, one
+  instance per camera since an ONVIF event has no concept of one of our own drawn zones. A camera
+  relying only on its onboard motion detection (no ServerMotion zone configured at all) now gates
+  Motion-mode recording correctly too, not just a zone-detected one — `NodeWorker`'s keep/discard
+  decision checks both signal sources and keeps a segment if either saw activity in the window.
+- **Every raw notification (motion or not) is logged to a new `CameraEvents` table** — tamper,
+  digital input, audio, and any other ONVIF event topic a camera's firmware reports, not just motion.
+  No dedicated viewer page yet; that and wiring `TriggeredRecording` for non-motion events (a
+  standalone "Event" recording mode) are a follow-up polish pass, not attempted here.
+- `Cameras/Edit`'s Motion-mode warning now accounts for ONVIF event capability, not just a
+  ServerMotion zone — a camera with only onboard detection no longer sees a misleading "won't discard
+  anything" warning.
+
+### Known limitations
+
+- **Unverified against a real camera** — same caveat every M8 pass has shipped with. ONVIF PullPoint
+  support and topic naming vary significantly by vendor/firmware; `CameraEventClassifier`'s topic
+  markers cover the common ONVIF-standard motion topics but may need adjusting once watched against
+  real notifications from this deployment's actual cameras.
+- No restart-on-config-change for an event session the way zone changes restart a motion session —
+  credentials/EventsServiceUri essentially never change for an existing camera in practice, and a
+  session that starts failing its subscribe attempt recovers on its own retry regardless.
+- **This is a NidusVMS.Node change — install-node.ps1 re-run needed on both WINSERV1 and NVR1.**
+
+## [0.34.0] - 2026-08-11
+
+User-directed Playback redesign, three explicit requests: move the timeline to the bottom of the
+page, fill the rest of the window with video sized to camera count, and make the timeline itself
+more compact and scale-aware. **Unverified in a real browser** — no browser tool available this
+pass; build, `dotnet test`, and `node --check` all pass, but the actual rendered layout, grid math,
+and tick-label spacing haven't been watched happen on screen. Flag for extra scrutiny next real
+browser session, same as any UI-only pass shipped that way in this project's history.
+
+### Changed
+
+- **Playback layout: timeline pinned to the bottom of the viewport, video grid auto-sized to camera
+  count and window size.** `Pages/Playback` now fills the space below the nav bar exactly (measured
+  via JS, recomputed on `resize`) with a flex column: toolbar, then a video grid that claims all
+  remaining room, then the timeline strip pinned at the bottom. The video grid no longer reproduces
+  the selected view's own saved x/y/w/h arrangement (that's still what Live and Views/Play do) —
+  Playback now auto-computes an N-camera grid sized purely by count (`ceil(sqrt(N))` columns, enough
+  rows for the rest): one camera fills the whole area, two sit side by side, six form a 3x2 grid, and
+  so on, growing/shrinking on window resize via plain CSS Grid `1fr` tracks. Deliberate divergence
+  from the live-viewing pages, since review is about maximizing each tile's video size, not
+  preserving a curated layout. Each tile's camera-name label moved from a below-video bar into a
+  corner overlay badge to avoid eating into that space.
+- **Timeline bar redesign.** Height halved (60px → 30px). Tick marks and scale-appropriate labels
+  (date-only at day+ zoom, hour:minute at hour+ zoom, full time with seconds below a minute) now run
+  along the bar at "nice" intervals (1s up to 90 days) chosen to fit the canvas width, replacing the
+  old two-corner-label footer — this is the "scale is obvious based on zoom level" piece. The exact
+  playhead time moved out of the canvas into its own line directly below the per-camera timeline,
+  separate from the interval tick labels (which mark scale, not the precise instant).
+
+## [0.33.0] - 2026-08-11
+
+### Changed
+
+- **Live tiles (`Pages/Live` and `Views/Play`) now show native browser video controls on hover,
+  hidden otherwise.** Replaces the always-visible custom mute button on `Pages/Live`, which only
+  duplicated what the browser's own control bar already provides (and `Views/Play` had no volume
+  control at all before this). Toggles the `controls` attribute itself on mouseenter/mouseleave
+  rather than hiding it with CSS, which is what actually shows/hides the native bar cross-browser.
+
+### Fixed
+
+- **A Live camera could intermittently go blank with no error, then resume on its own.** The live
+  MSE buffer is a sliding window — the browser evicts old data as new fragments arrive, and the
+  node's own slow-client handling drops the *oldest* buffered fragment when a viewer falls behind
+  (an intentional tradeoff so a slow client can't back-pressure the recording pipeline — see
+  `live-view.js`'s header comment). `currentTime` could drift into that now-evicted territory later
+  in a long-running session, not just at startup — MSE genuinely has nothing buffered there, so
+  playback stalls with no error and no frame until the browser's own gap-jump heuristics eventually
+  (or, on some browsers, never) recover it. The existing one-time "seek to the live edge on first
+  buffered data" logic is now also applied on every `waiting` event where `currentTime` has actually
+  fallen outside all buffered ranges — ordinary "caught up to live edge, waiting for the next
+  fragment" stalls are left alone so this doesn't turn normal buffering into a visible jump.
+
+### Investigated, not changed
+
+- **The intermittent "video decode error 3/4" / "SourceBuffer error" that self-recovers is expected
+  behavior, not a bug** — it's the visible side effect of the same slow-client fragment-drop
+  described above: a dropped fragment mid-stream corrupts everything after it for that
+  `SourceBuffer`, which is unrecoverable for the current session by design (MSE byte streams need
+  continuous data), so `live-view.js` tears the session down and opens a fresh one automatically.
+  The "briefly, then resumes" pattern already reported is exactly that retry succeeding. Worth
+  revisiting only if it turns out to happen often enough to be disruptive — the real fix would be a
+  larger server-side buffer with backpressure instead of dropping, a bigger design change than a
+  client-side tweak.
+- **"View menu disappears after selecting a view in Live mode"** — reviewed `Views/Play`'s kiosk-mode
+  code (`view-play.js`'s `wireKiosk`): the top nav only hides on an actual browser
+  `fullscreenchange` event, tied to the page's own Fullscreen button, and nothing in the flow from
+  Live's view picker touches that. Couldn't identify a concrete bug from code review alone — needs a
+  more specific description of what's actually disappearing (the site's top nav bar? the Live page's
+  own view-picker dropdown, which is expected to go away since picking a view navigates to a
+  different page entirely?) to chase further.
+
+## [0.32.0] - 2026-08-11
+
+### Fixed
+
+- **Motion-mode segments with real, detected motion in them were still being discarded.** Confirmed
+  live: a camera with motion clearly logged in `MotionSpans` was still losing nearly every segment.
+  Root cause: the deferred keep/discard decision checked for motion no earlier than
+  `segment.EndUtc - PostRollSeconds` — a window anchored to the segment's *end*, not the segment
+  itself. Motion happening more than `PostRollSeconds` before a segment finished (e.g. near its start
+  or middle) was invisible to that check. This was masked by the original 30s `PostRollSeconds`
+  default, which covers close to half of a 60s segment, but became a real, confirmed data-loss bug as
+  soon as a shorter post-roll was configured (e.g. via the new `Admin/Settings` page). The lookback
+  window is now anchored to the segment's *start* instead, so motion anywhere in the segment itself,
+  not just near its tail, correctly keeps it — one comparison still covers pre-roll, post-roll, and
+  "motion happened during the segment" together, same as before. New test proves both the bug (the
+  old anchor misses it) and the fix (the new one catches it) side by side. **This is a NidusVMS.Node
+  change — install-node.ps1 re-run needed on both WINSERV1 and NVR1.**
+
+## [0.31.0] - 2026-08-11
+
+### Added
+
+- **`Admin/Settings`: one page for every global setting that can be overridden per node or per
+  camera.** Retention (`Retention.Days`, `Storage.WatermarkPercent`) had its own dedicated page since
+  M4; M8's `Recording.Mode`, `MotionPreRollSeconds`, `MotionPostRollSeconds` never got the equivalent
+  — only reachable as a per-camera override on Cameras/Edit, with no way to see or change the base
+  default they were overriding. Also added: `Storage.RootPath` (previously set once by the Setup
+  wizard with no way to view or change it afterward) and `Node.RegistrationKey` (previously shown
+  exactly once during Setup, with no way to retrieve it again when onboarding a later node, or to
+  rotate it if it leaked — now viewable, editable, and has a "Generate new key" button). Replaces
+  `Admin/Retention` rather than duplicating it — the old URL redirects here so nothing bookmarked
+  breaks. Uses the existing `Settings` RBAC resource (already seeded for Viewer's read-only access)
+  rather than the old page's `Retention`-specific one.
+
+## [0.30.0] - 2026-08-10
+
+Three real reports from the same live-testing session, investigated with actual database and
+filesystem access rather than inference.
+
+### Fixed
+
+- **Timeline drag could get permanently stuck to the cursor.** The tape-scrubber drag handler used
+  plain `mousemove`/`mouseup` on `window`; releasing the mouse button after the cursor had left the
+  browser window (dragged past the edge of the screen, onto another monitor, over the taskbar) never
+  fired a `mouseup` the page could see, leaving the drag latched to the cursor with no way to release
+  it short of reloading. Switched to Pointer Events with `setPointerCapture`, which keeps delivering
+  `pointermove`/`pointerup` to the timeline canvas for the duration of the drag regardless of where
+  the pointer physically is, plus a `pointercancel` handler for the same class of "pointer taken away
+  mid-gesture" case. As a side effect this also makes the timeline draggable on touch devices for the
+  first time (added `touch-action: none` on both Playback canvases so a touch drag doesn't fight the
+  browser's own scroll gesture) — not the point of the fix, but free from switching event families.
+- **Cameras/Edit had no way to reach the Zones editor once a zone already existed.** The Recording
+  Mode section's inline link to Zones only appeared in the "no zone configured yet" warning; once a
+  zone existed, that branch had descriptive text but no link at all (the page-level "Zones" button up
+  top was still there, but this was still a real inconsistency worth closing). Added a matching
+  "manage zones" link to the has-a-zone case too.
+
+### Added
+
+- **StorageManager now reconciles its own Segments rows against disk, on an hourly cadence.**
+  Investigating a "recording is unavailable (missing on the recorder)" report on motion-timeline
+  playback led to a direct database + filesystem check: roughly a third of all `Segments` rows across
+  both nodes point at files that no longer exist on disk. This is the orphaned-row gap flagged as a
+  known limitation in 0.27.0 (a deletion succeeds, the report of it to the web tier fails, and before
+  0.27.0 that failure was never retried) — accumulated over the app's full history, not a new
+  regression; the current live rate since 0.27.0's fix actually reached these nodes is much lower.
+  Fixed properly instead of a one-off DB cleanup: the node now periodically fetches every FilePath the
+  web tier believes it still owns (`GET /api/nodes/segments/paths`, node-authenticated) and reports
+  any that are missing on its own disk through the exact same path a normal eviction already uses
+  (`POST /api/nodes/segments/delete`) — self-healing going forward, not just a one-time fix. Runs far
+  less often than the 5-minute eviction sweep since it's a full fetch-and-diff of potentially
+  thousands of rows against a check that only ever finds something in the wake of an actual reporting
+  failure.
+
+### Known limitations
+
+- The reconciliation sweep only clears rows going forward from whenever each node's binary is next
+  updated to this version — it runs on the node's own hourly cadence, so a large existing backlog
+  (like the ~1/3 figure found this session) clears out gradually over the following hour(s), not
+  instantly on deploy.
+
 ## [0.29.0] - 2026-08-10
 
 Found while double-checking the v0.28.0 sensitivity investigation: three cameras explicitly set to

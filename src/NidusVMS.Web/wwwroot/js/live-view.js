@@ -174,6 +174,22 @@
                 return;
             }
             sourceBuffer.addEventListener('updateend', appendNext);
+
+            function isTimeBuffered(t) {
+                var b = sourceBuffer.buffered;
+                for (var i = 0; i < b.length; i++) {
+                    if (t >= b.start(i) && t <= b.end(i)) return true;
+                }
+                return false;
+            }
+            function jumpToLiveEdge(reason) {
+                var lastRange = sourceBuffer.buffered.length - 1;
+                var target = sourceBuffer.buffered.start(lastRange);
+                console.log('[live-view] ' + reason + ', currentTime=', videoEl.currentTime, '-> ', target,
+                    'buffered=', target, '-', sourceBuffer.buffered.end(lastRange));
+                videoEl.currentTime = target;
+            }
+
             // A fresh <video> defaults to currentTime=0, but this live leg has been running (and its
             // fMP4 timestamps incrementing) since ffmpeg started — not since this viewer connected —
             // so a late joiner's first buffered range typically starts well past 0. MSE won't advance
@@ -185,9 +201,25 @@
             sourceBuffer.addEventListener('updateend', function () {
                 if (seekedToLiveEdge || sourceBuffer.buffered.length === 0) return;
                 seekedToLiveEdge = true;
-                var lastRange = sourceBuffer.buffered.length - 1;
-                videoEl.currentTime = sourceBuffer.buffered.start(lastRange);
-                console.log('[live-view] seeked to live edge, currentTime=', videoEl.currentTime, 'buffered=', sourceBuffer.buffered.start(lastRange), '-', sourceBuffer.buffered.end(lastRange));
+                jumpToLiveEdge('seeked to live edge');
+            });
+            // Ongoing counterpart to the one-time seek above: the buffered range is a sliding window
+            // (the browser evicts old data as new fragments arrive, and the node's own slow-client
+            // handling drops the *oldest* buffered fragment when a viewer falls behind — see this
+            // function's own header comment), so currentTime can drift into now-evicted territory
+            // later in a long-running session too, not just at startup. When that happens playback
+            // stalls with no error and no visible frame (MSE has genuinely nothing buffered at that
+            // position) until either the browser's own gap-jump heuristics kick in on their own
+            // schedule, or — on some browsers — never, leaving the tile blank indefinitely. `waiting`
+            // fires whenever playback can't continue at the current position; only treat it as a gap
+            // to jump across if currentTime is truly outside every buffered range — a `waiting` fired
+            // just from normally catching up to the live edge (currentTime inside the last buffered
+            // range, simply waiting for more to arrive) must NOT trigger a seek, or every ordinary
+            // pause-for-more-data would show as a needless jump.
+            videoEl.addEventListener('waiting', function () {
+                if (closed || sourceBuffer.buffered.length === 0) return;
+                if (isTimeBuffered(videoEl.currentTime)) return;
+                jumpToLiveEdge('resynced after falling out of the buffered range');
             });
             sourceBuffer.addEventListener('error', function (e) {
                 console.error('[live-view] sourceBuffer error', e, 'mimeType=', mimeType, 'fragments received=', fragmentCount);

@@ -17,11 +17,21 @@ namespace NidusVMS.Node;
 /// connection — see the control-plane design in the architecture plan), it deletes files under the
 /// storage root and reports the paths it removed back to the web via
 /// <c>POST /api/nodes/segments/delete</c>, which is the only side that deletes the matching
-/// <c>Segment</c> rows.
+/// <c>Segment</c> rows. On a slower cadence it also reconciles: fetches every path the web tier
+/// thinks this node still owns (<c>GET /api/nodes/segments/paths</c>) and reports any that are no
+/// longer on disk the same way, catching rows a past eviction's deletion report never confirmed.
 /// </summary>
 public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogger<StorageManager> logger) : BackgroundService
 {
     private static readonly TimeSpan SweepInterval = TimeSpan.FromMinutes(5);
+
+    // Deliberately much slower than SweepInterval: this asks the web tier for every FilePath it
+    // thinks this node still owns (thousands of rows on a busy install) and checks each one against
+    // disk, so it's real DB + network load for a check that only ever finds something in the wake of
+    // an actual reporting failure — no reason to pay that cost on the same 5-minute cadence eviction
+    // needs for freshly-completed segments.
+    private static readonly TimeSpan ReconcileInterval = TimeSpan.FromHours(1);
+    private DateTime? _lastReconciledAtUtc;
 
     // Files this deleted from disk but hasn't yet successfully told the web tier about — carried
     // over to the next sweep's report attempt on failure. Without this, a deletion report that
@@ -91,6 +101,13 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
 
         await ApplyWatermarkAsync(config, storageRoot, now, deletedPaths, ct);
 
+        if (_lastReconciledAtUtc is null || now - _lastReconciledAtUtc >= ReconcileInterval)
+        {
+            // Only stamped on success — a failed fetch (network blip, web tier restarting) should
+            // retry on the next 5-minute sweep, not wait a full extra hour for the next scheduled one.
+            if (await ReconcileAsync(deletedPaths, ct)) _lastReconciledAtUtc = now;
+        }
+
         // Anything left over from a prior sweep's failed report rides along with this sweep's own
         // batch — one retry attempt covers both, rather than needing its own separate call.
         deletedPaths.AddRange(_pendingDeletionReports);
@@ -140,6 +157,44 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
 
         await Task.CompletedTask;
     }
+
+    /// <summary>Finds and reports Segment rows whose file no longer exists on this node's disk —
+    /// most commonly one this StorageManager itself deleted at some point in the past whose deletion
+    /// report never landed (a gap that existed for every node→web report in this app until it was
+    /// fixed for this one specifically; the fix stops new orphans but can't retroactively clean up
+    /// rows stranded before it existed). Reported through the same path as a normal eviction: from
+    /// the web tier's side, "this file is gone" means the same thing regardless of which sweep
+    /// noticed it. Returns false (and reports nothing) on a fetch failure so the caller can retry
+    /// sooner than the next scheduled reconcile interval.</summary>
+    private async Task<bool> ReconcileAsync(List<string> deletedPaths, CancellationToken ct)
+    {
+        List<string> knownPaths;
+        try
+        {
+            knownPaths = await api.GetSegmentFilePathsAsync(ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Reconciliation sweep could not fetch this node's known segment paths — will retry next sweep.");
+            return false;
+        }
+
+        var missing = SelectMissingPaths(knownPaths);
+        if (missing.Count > 0)
+        {
+            logger.LogInformation(
+                "Reconciliation sweep found {Count} segment row(s) (of {Total} checked) pointing at files no longer on disk — reporting for cleanup.",
+                missing.Count, knownPaths.Count);
+            deletedPaths.AddRange(missing);
+        }
+
+        return true;
+    }
+
+    /// <summary>Pure selection extracted from ReconcileAsync so it's testable against a real temp
+    /// directory the same way EnumerateEvictable is, without a network round trip.</summary>
+    internal static List<string> SelectMissingPaths(IEnumerable<string> knownPaths)
+        => knownPaths.Where(p => !File.Exists(p)).ToList();
 
     internal static List<FileInfo> EnumerateEvictable(string cameraDir, DateTime now)
         => Directory.EnumerateFiles(cameraDir, "*.mp4", SearchOption.AllDirectories)

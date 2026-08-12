@@ -4,11 +4,13 @@ using Microsoft.Extensions.Logging;
 using NidusVMS.Core.Dtos;
 using NidusVMS.Core.Enums;
 using NidusVMS.Media;
+using NidusVMS.Onvif.Clients;
+using NidusVMS.Onvif.Soap;
 
 namespace NidusVMS.Node;
 
 public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackStorageRoot, int livePort,
-    NodeConfig registration, ILoggerFactory loggerFactory) : BackgroundService
+    NodeConfig registration, ILoggerFactory loggerFactory, OnvifEventsClient onvifEventsClient) : BackgroundService
 {
     private readonly ILogger<NodeWorker> _logger = loggerFactory.CreateLogger<NodeWorker>();
 
@@ -24,6 +26,13 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     // ExecuteAsync's shutdown path (ends both dictionaries the same way) doesn't need special-casing.
     private readonly ConcurrentDictionary<Guid, CameraMotionRecorder> _activeMotion = new();
     private readonly ConcurrentQueue<MotionSpanReportItem> _pendingMotionSpans = new();
+
+    // M8 pass 6: same shape as _activeMotion/_pendingMotionSpans above, for ONVIF PullPoint camera
+    // events instead of server-side substream frame-diffing — a camera can have either signal
+    // source, both, or neither, independently (see ReconcileEvents and DecideMotionSegment's use of
+    // both dictionaries together).
+    private readonly ConcurrentDictionary<Guid, CameraEventRecorder> _activeEvents = new();
+    private readonly ConcurrentQueue<CameraEventReportItem> _pendingCameraEvents = new();
 
     // M8 pass 2: each camera's SegmentCompleted handler (see HandleSegmentCompleted) fires from
     // that camera's own RecordingSession.RunAsync task, so multiple cameras can call in
@@ -57,6 +66,16 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     // TryStartFromCacheIfIdle.
     private NodeConfigResponse? _cachedConfig = registration.CachedConfig;
 
+    // Fetched once, before any RecordingSession can start (see ExecuteAsync) — a real, confirmed bug
+    // fix: without this, every node process restart made RecordingSession.RunAsync rescan a camera's
+    // *entire* on-disk history with zero memory of what the server already has rows for, re-firing
+    // SegmentCompleted for all of it. For a Motion-mode camera, a freshly-restarted MotionSession/
+    // CameraEventSession has observed no motion yet at that exact moment, so nearly all of that
+    // re-fired history looked like "no motion" and was wrongly discarded — deleting files that
+    // already had valid, previously-reported Segments rows, on every single restart. Confirmed live:
+    // Segments dropped from ~16,600 to ~235 rows after this session's several version-bump restarts.
+    private HashSet<string>? _knownSegmentPaths;
+
     /// <summary>The active RecordingSession for a camera this node is currently recording, or null
     /// if it isn't assigned here (or isn't recording yet). Used by the live-view WebSocket endpoint
     /// to attach a viewer to the right session's tee'd live fanout.</summary>
@@ -89,6 +108,21 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // Must happen before ReconcileLoopAsync can start any RecordingSession — see
+        // _knownSegmentPaths' own doc comment for why. Best-effort: if the server can't be reached
+        // yet at process startup, this falls back to an empty set, which is the exact behavior that
+        // existed before this fix (not worse than before, just not yet protected this one time).
+        try
+        {
+            _knownSegmentPaths = new HashSet<string>(await api.GetSegmentFilePathsAsync(stoppingToken), StringComparer.OrdinalIgnoreCase);
+            _logger.LogInformation("Fetched {Count} already-known segment path(s) before starting recording.", _knownSegmentPaths.Count);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Could not fetch this node's already-known segment paths at startup — a RecordingSession started this run will treat its own on-disk history as unreported, same as before this safeguard existed.");
+            _knownSegmentPaths = [];
+        }
+
         var reconcileLoop = ReconcileLoopAsync(stoppingToken);
         var segmentReportLoop = SegmentReportLoopAsync(stoppingToken);
         var motionDecisionLoop = MotionDecisionLoopAsync(stoppingToken);
@@ -102,7 +136,10 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         {
             foreach (var recorder in _active.Values) recorder.Cts.Cancel();
             foreach (var motion in _activeMotion.Values) motion.Cts.Cancel();
-            await Task.WhenAll(_active.Values.Select(r => r.RunTask).Concat(_activeMotion.Values.Select(m => m.RunTask)));
+            foreach (var events in _activeEvents.Values) events.Cts.Cancel();
+            await Task.WhenAll(_active.Values.Select(r => r.RunTask)
+                .Concat(_activeMotion.Values.Select(m => m.RunTask))
+                .Concat(_activeEvents.Values.Select(e => e.RunTask)));
 
             // Decide every still-pending segment now, with whatever motion state is left, rather
             // than lose track of it — the motion sessions above were just cancelled, but their
@@ -113,6 +150,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             await FlushSegmentsAsync(CancellationToken.None);
             await FlushStreamInfoAsync(CancellationToken.None);
             await FlushMotionSpansAsync(CancellationToken.None);
+            await FlushCameraEventsAsync(CancellationToken.None);
         }
     }
 
@@ -216,6 +254,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             await FlushStreamInfoAsync(ct);
             EnqueueMotionCheckpoints();
             await FlushMotionSpansAsync(ct);
+            await FlushCameraEventsAsync(ct);
         }
     }
 
@@ -242,6 +281,16 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             {
                 _pendingMotionSpans.Enqueue(new MotionSpanReportItem(cameraId, zoneId, span.StartUtc, span.EndUtc, span.PeakScore));
             }
+        }
+
+        // M8 pass 6: same reasoning as the ServerMotion loop above, but without a recency window —
+        // see CameraEventSession.CurrentInProgressSpan's doc comment for why a camera-pushed span
+        // needs no "has this gone stale" check the way continuous frame-diff ticks do.
+        foreach (var (cameraId, recorder) in _activeEvents)
+        {
+            var span = recorder.Session.CurrentInProgressSpan(now);
+            if (span is not null)
+                _pendingMotionSpans.Enqueue(new MotionSpanReportItem(cameraId, null, span.StartUtc, span.EndUtc, span.PeakScore));
         }
     }
 
@@ -305,6 +354,24 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         }
     }
 
+    private async Task FlushCameraEventsAsync(CancellationToken ct)
+    {
+        var batch = new List<CameraEventReportItem>();
+        while (_pendingCameraEvents.TryDequeue(out var item)) batch.Add(item);
+        if (batch.Count == 0) return;
+
+        try
+        {
+            await api.ReportCameraEventsAsync(batch, ct);
+            _logger.LogInformation("Reported {Count} camera event(s).", batch.Count);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            foreach (var item in batch) _pendingCameraEvents.Enqueue(item);
+            _logger.LogWarning(ex, "Failed to report {Count} camera event(s) — will retry next cycle.", batch.Count);
+        }
+    }
+
     private string Reconcile(NodeConfigResponse config, CancellationToken stoppingToken)
     {
         var storageRoot = string.IsNullOrWhiteSpace(config.StorageRootPath) ? fallbackStorageRoot : config.StorageRootPath;
@@ -321,6 +388,12 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         {
             _logger.LogInformation("Camera {CameraId} no longer assigned to this node — stopping motion session.", cameraId);
             if (_activeMotion.TryRemove(cameraId, out var motion)) motion.Cts.Cancel();
+        }
+
+        foreach (var cameraId in _activeEvents.Keys.Except(desired.Keys).ToList())
+        {
+            _logger.LogInformation("Camera {CameraId} no longer assigned to this node — stopping event session.", cameraId);
+            if (_activeEvents.TryRemove(cameraId, out var events)) events.Cts.Cancel();
         }
 
         foreach (var camera in config.Cameras)
@@ -354,16 +427,61 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                     session.StreamResolutionDetected += resolution => _pendingStreamInfo.Enqueue(new StreamInfoReportItem(
                         camera.CameraId, "Main", resolution.Width, resolution.Height, resolution.Codec));
 
-                    var runTask = session.RunAsync(cts.Token);
+                    // See _knownSegmentPaths' own doc comment — this is the fix for the confirmed
+                    // mass-discard bug. OrdinalIgnoreCase prefix match since outputDir itself is
+                    // built the identical way every time (same storageRoot resolution), but real
+                    // Windows/UNC paths can differ in case from run to run.
+                    var knownPathsForCamera = _knownSegmentPaths?
+                        .Where(p => p.StartsWith(outputDir, StringComparison.OrdinalIgnoreCase));
+
+                    var runTask = session.RunAsync(cts.Token, knownPathsForCamera);
                     _active[camera.CameraId] = new CameraRecorder(cts, runTask, session, rtspUri);
                     _logger.LogInformation("Started recording camera {CameraId} ({Name}) -> {OutputDir}", camera.CameraId, camera.Name, outputDir);
                 }
             }
 
             ReconcileMotion(camera, stoppingToken);
+            ReconcileEvents(camera, stoppingToken);
         }
 
         return storageRoot;
+    }
+
+    /// <summary>M8 pass 6: starts this camera's ONVIF event polling session if it advertises an
+    /// Events service and doesn't already have one running — independent of ReconcileMotion above
+    /// (a camera can have a ServerMotion zone session, an event session, both, or neither). No
+    /// restart-on-change logic the way ReconcileMotion has for zone config: EventsServiceUri and
+    /// credentials essentially never change for an existing camera in practice, and if they do, a
+    /// session that starts failing its next subscribe attempt naturally recovers on its own retry —
+    /// not worth a signature-comparison scheme for pass 1.</summary>
+    private void ReconcileEvents(NodeConfigCameraDto camera, CancellationToken stoppingToken)
+    {
+        if (string.IsNullOrEmpty(camera.EventsServiceUri) || !Uri.TryCreate(camera.EventsServiceUri, UriKind.Absolute, out var eventsUri))
+        {
+            if (_activeEvents.TryRemove(camera.CameraId, out var stopped))
+            {
+                _logger.LogInformation("Camera {CameraId} ({Name}) no longer advertises an Events service — stopping event session.", camera.CameraId, camera.Name);
+                stopped.Cts.Cancel();
+            }
+            return;
+        }
+
+        if (_activeEvents.ContainsKey(camera.CameraId)) return; // already running
+
+        var credentials = string.IsNullOrEmpty(camera.Username) ? null : new OnvifCredentials(camera.Username, camera.Password ?? "");
+        var eventsCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        var eventsLogger = loggerFactory.CreateLogger($"Events[{camera.Name}]");
+        var eventSession = new CameraEventSession(eventsUri, credentials, onvifEventsClient, eventsLogger);
+
+        var capturedCameraId = camera.CameraId; // same staleness reasoning as HandleSegmentCompleted's own capture
+        eventSession.EventObserved += observed => _pendingCameraEvents.Enqueue(
+            new CameraEventReportItem(capturedCameraId, observed.Topic, observed.UtcTime, observed.PayloadJson, observed.IsMotion));
+        eventSession.MotionSpanCompleted += result => _pendingMotionSpans.Enqueue(
+            new MotionSpanReportItem(capturedCameraId, null, result.StartUtc, result.EndUtc, result.PeakScore));
+
+        var eventsRunTask = eventSession.RunAsync(eventsCts.Token);
+        _activeEvents[camera.CameraId] = new CameraEventRecorder(eventsCts, eventsRunTask, eventSession);
+        _logger.LogInformation("Started ONVIF event polling for camera {CameraId} ({Name}).", camera.CameraId, camera.Name);
     }
 
     /// <summary>M8: starts/restarts/stops this camera's motion session independently of its Main
@@ -472,19 +590,25 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         }
 
         var mainStream = camera.Streams.FirstOrDefault(s => s.Role == "Main");
+        // M8 pass 6: either signal source counts — a camera relying only on its own onboard
+        // detection (no ServerMotion zone drawn at all) must still gate correctly, not just one
+        // with a server-side zone. See DecideMotionSegment for the matching hadMotionInWindow check.
         var hasMotionSession = _activeMotion.ContainsKey(cameraId);
+        var hasEventSession = _activeEvents.ContainsKey(cameraId);
+        var hasMotionSignalSource = hasMotionSession || hasEventSession;
 
-        if (camera.RecordingMode == "Motion" && !hasMotionSession
+        if (camera.RecordingMode == "Motion" && !hasMotionSignalSource
             && _warnedMotionModeMissingSession.TryAdd(cameraId, 0))
         {
             _logger.LogWarning(
                 "Camera {CameraId} ({Name}) is set to Motion recording mode but has no enabled ServerMotion " +
-                "zone with a Sub stream to detect it from — recording every segment as if it were Continuous " +
-                "until a zone is configured. Not treated as a discard-everything condition.",
+                "zone with a Sub stream, and no ONVIF event subscription, to detect motion from — recording " +
+                "every segment as if it were Continuous until one is available. Not treated as a " +
+                "discard-everything condition.",
                 cameraId, camera.Name);
         }
 
-        if (camera.RecordingMode != "Motion" || !hasMotionSession)
+        if (camera.RecordingMode != "Motion" || !hasMotionSignalSource)
         {
             ReportSegment(cameraId, mainStream, segment);
             return;
@@ -513,10 +637,27 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     private void DecideMotionSegment(PendingMotionSegmentDecision pending)
     {
         var hasMotionSession = _activeMotion.TryGetValue(pending.CameraId, out var motionRecorder);
-        var hadMotionInWindow = hasMotionSession
-            && motionRecorder!.Session.HasMotionSince(pending.Segment.EndUtc.AddSeconds(-pending.PostRollSeconds));
+        var hasEventSession = _activeEvents.TryGetValue(pending.CameraId, out var eventRecorder);
+        // Anchored to the segment's START, not its end — see HasMotionSince's doc comment for why
+        // anchoring to EndUtc silently discarded segments with real motion in them once PostRoll
+        // (an operator-configurable, potentially small value) was shorter than "how far before the
+        // segment's end the motion happened." Checked against BOTH signal sources (M8 pass 6) — a
+        // segment is kept if *either* the server-side zone or the camera's own pushed events saw
+        // activity in the window, not just whichever one happens to be configured.
+        // For the event session specifically, HasMotionSince alone isn't enough — see
+        // CameraEventSession.IsMotionActive's doc comment: many ONVIF implementations send exactly
+        // one notification per edge (rising, then nothing again until falling), so LastMotionAtUtc
+        // goes stale relative to windowStart for a segment decided well into a long, sparsely-
+        // reported event even though motion never actually stopped. IsMotionActive has no timeout of
+        // its own — it's only false once an actual falling-edge notification closes the span — so
+        // ORing it in here is what makes recording keep being retained for as long as the camera
+        // hasn't said motion stopped, not until some arbitrary staleness window expires.
+        var windowStart = pending.Segment.StartUtc.AddSeconds(-pending.PostRollSeconds);
+        var hadMotionInWindow =
+            (hasMotionSession && motionRecorder!.Session.HasMotionSince(windowStart)) ||
+            (hasEventSession && (eventRecorder!.Session.HasMotionSince(windowStart) || eventRecorder.Session.IsMotionActive));
 
-        if (ShouldDiscardSegment("Motion", hasMotionSession, hadMotionInWindow))
+        if (ShouldDiscardSegment("Motion", hasMotionSession || hasEventSession, hadMotionInWindow))
         {
             try
             {

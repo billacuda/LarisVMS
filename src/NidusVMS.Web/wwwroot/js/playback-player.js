@@ -432,35 +432,30 @@
         return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
-    // Bootstrap's ".ratio > *" rule forces every *direct* child of a .ratio container to
-    // position:absolute;width:100%;height:100% — needed for the <video> itself, but it would do
-    // the same to the zoom-button group if that were a direct child too, stretching each button to
-    // fill the whole tile (confirmed: exactly this happened before this wrapper was added). The
-    // video/status/buttons trio is wrapped in one plain inner div instead, so only that wrapper is
-    // a direct .ratio child; no positioning classes on it on purpose, since it already becomes
-    // position:absolute for free and is a valid containing block for its own absolutely-positioned
-    // children — same fix Pages/Live's mute button needed (see CHANGELOG 0.7.0).
+    // No .ratio-16x9 wrapper here on purpose (unlike Live's tiles) — the grid cell itself is
+    // whatever shape rebuildTilesFromView's auto NxM grid gives it (fills the whole window, one
+    // camera to a whole page down to many cameras in a dense grid), not locked to 16:9, so forcing
+    // a 16:9 box inside a differently-shaped cell would letterbox twice (once for the forced ratio,
+    // again for the video's own object-fit) and waste space. The video's own object-fit:contain is
+    // what preserves its real aspect ratio without distortion; the cell just gets filled 100%.
+    // Camera name moves to a corner overlay badge instead of a below-video bar, so it doesn't eat
+    // into the vertical space this whole redesign exists to maximize.
     function buildTileCardHtml(cam, isPrimary) {
         return (
-            '<div class="card h-100' + (isPrimary ? ' border-primary border-2' : '') + '">' +
-                // overflow-hidden here (safe on .ratio itself, unlike position-relative on a
-                // .ratio child) clips the zoomed/panned video to the tile instead of letting it
-                // spill over neighboring tiles once scaled past 1x.
-                '<div class="ratio ratio-16x9 bg-dark overflow-hidden">' +
-                    '<div>' +
-                        '<video class="pb-video" muted playsinline ' +
-                            'style="width:100%; height:100%; object-fit:contain; transform-origin:center center; cursor:default;"></video>' +
-                        '<div class="position-absolute top-50 start-50 translate-middle text-white small text-center px-2 pb-status"></div>' +
-                        '<div class="position-absolute top-0 end-0 m-1 btn-group btn-group-sm">' +
-                            '<button type="button" class="btn btn-outline-light pb-zoom-out" title="Zoom out" style="padding:.1rem .35rem;">−</button>' +
-                            '<button type="button" class="btn btn-outline-light pb-zoom-reset" title="Reset zoom" style="padding:.1rem .35rem;">⤢</button>' +
-                            '<button type="button" class="btn btn-outline-light pb-zoom-in" title="Zoom in" style="padding:.1rem .35rem;">+</button>' +
-                        '</div>' +
-                    '</div>' +
-                '</div>' +
-                '<div class="card-body py-2 pb-select-primary" style="cursor:pointer;" ' +
-                    'title="Click to make this camera drive the per-camera timeline">' +
+            '<div class="h-100 w-100 position-relative bg-black overflow-hidden pb-tile-frame" ' +
+                'style="outline:' + (isPrimary ? '3px solid var(--bs-primary)' : 'none') + '; outline-offset:-2px;">' +
+                '<video class="pb-video" muted playsinline ' +
+                    'style="width:100%; height:100%; object-fit:contain; transform-origin:center center; cursor:default;"></video>' +
+                '<div class="position-absolute top-50 start-50 translate-middle text-white small text-center px-2 pb-status"></div>' +
+                '<div class="position-absolute top-0 start-0 m-1 px-2 py-1 small text-white text-truncate pb-select-primary" ' +
+                    'style="background:rgba(0,0,0,.55); border-radius:.25rem; max-width:calc(100% - 96px); pointer-events:none;" ' +
+                    'title="Click this tile to make it drive the per-camera timeline">' +
                     (isPrimary ? '★ ' : '') + escHtml(cam.name) +
+                '</div>' +
+                '<div class="position-absolute top-0 end-0 m-1 btn-group btn-group-sm">' +
+                    '<button type="button" class="btn btn-outline-light pb-zoom-out" title="Zoom out" style="padding:.1rem .35rem;">−</button>' +
+                    '<button type="button" class="btn btn-outline-light pb-zoom-reset" title="Reset zoom" style="padding:.1rem .35rem;">⤢</button>' +
+                    '<button type="button" class="btn btn-outline-light pb-zoom-in" title="Zoom in" style="padding:.1rem .35rem;">+</button>' +
                 '</div>' +
             '</div>'
         );
@@ -545,13 +540,10 @@
         Object.keys(tiles).forEach(function (id) {
             var tileEl = document.querySelector('[data-playback-tile="' + id + '"]');
             if (!tileEl) return;
-            var cardEl = tileEl.querySelector('.card');
+            var frameEl = tileEl.querySelector('.pb-tile-frame');
             var nameEl = tileEl.querySelector('.pb-select-primary');
             var isPrimary = id === cameraId;
-            if (cardEl) {
-                cardEl.classList.toggle('border-primary', isPrimary);
-                cardEl.classList.toggle('border-2', isPrimary);
-            }
+            if (frameEl) frameEl.style.outline = isPrimary ? '3px solid var(--bs-primary)' : 'none';
             if (nameEl) nameEl.textContent = (isPrimary ? '★ ' : '') + cameraById[id].name;
         });
         if (timeline) timeline.reload();
@@ -606,13 +598,28 @@
         var tilesEl = document.getElementById(opts.tilesId);
         if (!tilesEl) return;
         tilesEl.innerHTML = '';
-        tilesEl.style.display = 'grid';
-        tilesEl.style.gridTemplateColumns = 'repeat(12, 1fr)';
-        tilesEl.style.gridAutoRows = '60px';
-        tilesEl.style.gap = '6px';
 
         var view = viewsById[viewId];
         var cells = view ? orderedCells(view) : [];
+
+        // Deliberate divergence from Pages/Live and Views/Play, which faithfully reproduce a saved
+        // view's own x/y/w/h arrangement and aspect ratios: Playback exists for review, where
+        // maximizing each tile's video area matters more than preserving a curated layout, so this
+        // ignores the view's stored geometry entirely and auto-fills an N-camera grid sized purely
+        // by count — 1 fills the whole area, 2 sit side by side, 6 form a 3x2 grid, and so on.
+        // Standard "smallest square-ish grid that fits N items" — ceil(sqrt(N)) columns, enough rows
+        // to hold the rest; CSS Grid's own 1fr tracks handle resizing on window resize for free, no
+        // resize listener needed for the grid itself (only for the flex area's own height — see
+        // layoutForViewport in Pages/Playback/Index.cshtml).
+        var n = cells.length;
+        var cols = Math.max(1, Math.ceil(Math.sqrt(n)));
+        var rows = Math.max(1, Math.ceil(n / cols));
+        tilesEl.style.display = 'grid';
+        tilesEl.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
+        tilesEl.style.gridTemplateRows = 'repeat(' + rows + ', 1fr)';
+        tilesEl.style.gap = '4px';
+        tilesEl.style.height = '100%';
+        tilesEl.style.width = '100%';
 
         // Set before the loop below (not after, as this used to be) so the first render already
         // highlights the right tile instead of only picking it up on the next click.
@@ -622,8 +629,10 @@
             var cam = cameraById[cell.cameraId];
             var el = document.createElement('div');
             el.setAttribute('data-playback-tile', cell.cameraId);
-            el.style.gridColumn = (cell.x + 1) + ' / span ' + cell.w;
-            el.style.gridRow = (cell.y + 1) + ' / span ' + cell.h;
+            // No explicit gridColumn/gridRow: grid auto-placement fills left-to-right, top-to-bottom
+            // in DOM order, which orderedCells() has already sorted the same way (top-to-bottom,
+            // left-to-right by the view's original y/x) — same reading order as before, just laid
+            // into the new NxM grid instead of the view's own cell positions.
             el.innerHTML = buildTileCardHtml(cam, cell.cameraId === primaryCameraId);
 
             var videoEl = el.querySelector('.pb-video');

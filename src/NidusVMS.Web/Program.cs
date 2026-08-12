@@ -237,6 +237,15 @@ nodesApi.MapPost("/segments", async (HttpContext ctx, List<SegmentReportItem> se
     return Results.Ok();
 });
 
+// Feeds StorageManager's reconciliation sweep (hourly, not every 5-minute eviction cycle) — the
+// node diffs this against what's actually on its own disk to find rows a past failed deletion
+// report orphaned, and reports them through the same /segments/delete path above.
+nodesApi.MapGet("/segments/paths", async (HttpContext ctx, INodeService nodeService, CancellationToken ct) =>
+{
+    var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
+    return Results.Json(await nodeService.ListSegmentFilePathsAsync(node.Id, ct));
+});
+
 nodesApi.MapPost("/segments/delete", async (HttpContext ctx, SegmentDeleteRequest request, INodeService nodeService, CancellationToken ct) =>
 {
     var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
@@ -255,6 +264,16 @@ nodesApi.MapPost("/motion-spans", async (HttpContext ctx, List<MotionSpanReportI
 {
     var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
     await nodeService.RecordMotionSpansAsync(node.Id, spans, ct);
+    return Results.Ok();
+});
+
+// M8 pass 6: raw ONVIF PullPoint notifications — separate from /motion-spans since a motion-
+// classified event lands in both (this table for the full log, MotionSpans via its own report call
+// for the timeline/gating pipeline), not one-or-the-other.
+nodesApi.MapPost("/events", async (HttpContext ctx, List<CameraEventReportItem> events, INodeService nodeService, CancellationToken ct) =>
+{
+    var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
+    await nodeService.RecordCameraEventsAsync(node.Id, events, ct);
     return Results.Ok();
 });
 

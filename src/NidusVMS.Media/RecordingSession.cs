@@ -83,7 +83,18 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
         return new StreamResolution(int.Parse(match.Groups[2].Value), int.Parse(match.Groups[3].Value), match.Groups[1].Value);
     }
 
-    public async Task RunAsync(CancellationToken ct)
+    /// <summary><paramref name="knownPaths"/> pre-seeds the reported-paths set with segment files
+    /// the server already has a Segments row for, from the caller's own record (NodeWorker fetches
+    /// this once via GET /api/nodes/segments/paths before any session starts) — without it, a
+    /// *process* restart (not just an ffmpeg reconnect, which reportedPaths already survives — see
+    /// its own comment below) rescans this camera's entire on-disk history with zero memory of
+    /// what's already been reported, and every one of those re-discovered files fires
+    /// SegmentCompleted again as if brand new. Confirmed as a real, serious bug, not theoretical:
+    /// for a Motion-mode camera, a freshly-restarted MotionSession/CameraEventSession has observed
+    /// no motion yet at the moment that rescan runs, so nearly all of that re-fired history looked
+    /// like "no motion" to NodeWorker.DecideMotionSegment and was wrongly discarded — deleting files
+    /// that already had valid, previously-reported Segments rows, on every single node restart.</summary>
+    public async Task RunAsync(CancellationToken ct, IEnumerable<string>? knownPaths = null)
     {
         Directory.CreateDirectory(options.OutputDirectory);
         EnsureUpcomingHourDirectories();
@@ -92,7 +103,10 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
         // on every ffmpeg restart, which meant every reconnect after a crash rescanned the output
         // directory with no memory of files already reported and re-reported all of them — confirmed
         // in practice as 5-10x duplicate rows for the same handful of files during a crash-loop.
-        var reportedPaths = new HashSet<string>();
+        // Case-insensitive: Windows paths (local or UNC) are case-insensitive/preserving, and
+        // knownPaths comes back from the server exactly as originally reported, which could differ
+        // in case from how this run's own Directory.GetFiles happens to return the same path.
+        var reportedPaths = new HashSet<string>(knownPaths ?? [], StringComparer.OrdinalIgnoreCase);
 
         while (!ct.IsCancellationRequested)
         {
@@ -287,7 +301,11 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
         return process;
     }
 
-    private void PollForCompletedSegments(HashSet<string> reportedPaths)
+    /// <summary>internal, not private: unit-tested directly against a real temp directory (see
+    /// NidusVMS.Tests) to prove a pre-seeded reportedPaths entry is skipped rather than re-firing
+    /// SegmentCompleted — the actual bug fix in RunAsync's knownPaths parameter, exercised here
+    /// without needing to spawn a real ffmpeg process.</summary>
+    internal void PollForCompletedSegments(HashSet<string> reportedPaths)
     {
         string[] files;
         try

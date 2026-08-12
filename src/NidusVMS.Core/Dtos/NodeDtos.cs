@@ -20,24 +20,44 @@ public record NodeConfigZoneDto(Guid ZoneId, string Kind, string PolygonJson, do
 
 /// <summary>RecordingMode is "Continuous" or "Motion" (see ISettingsResolver's Recording.Mode key) —
 /// only these two exist as of M8; Schedule/Event from the plan's original four-mode design remain
-/// unbuilt (no Schedules table, no ONVIF event ingestion). MotionPreRollSeconds/MotionPostRollSeconds
+/// unbuilt (no Schedules table). MotionPreRollSeconds/MotionPostRollSeconds
 /// (M8 pass 3) are how far before a motion event started, and after it ended, a segment still counts
 /// as worth keeping for a Motion-mode camera — both irrelevant, and unused by the node, for a
 /// Continuous camera. Kept as two separate values (not one shared "padding") because pre-roll and
 /// post-roll are answering genuinely different questions and an operator may reasonably want them
 /// different — a long pre-roll costs nothing extra (recording is already continuous either way) but
-/// a long post-roll means keeping more low-signal footage per event.</summary>
+/// a long post-roll means keeping more low-signal footage per event.
+///
+/// EventsServiceUri (M8 pass 6): the node's first reason to make its own ONVIF SOAP calls rather
+/// than only receiving ready-made RTSP URIs — ONVIF PullPoint event polling is a continuous,
+/// long-lived conversation the web tier can't pre-resolve into a one-shot value the way
+/// GetStreamUri's lookup already is. Still pre-*resolved*, though: this is the Events service's own
+/// XAddr (from the capability prober's raw category map, CameraCapabilities.RawProbeJson —
+/// deliberately NOT the same as Camera.DeviceServiceUri, ONVIF's device-management entry point),
+/// handed over directly so the node never needs its own GetCapabilities round trip just to find out
+/// where to send CreatePullPointSubscription. Null for a camera with no advertised Events service.</summary>
 public record NodeConfigCameraDto(Guid CameraId, string Name, string? Username, string? Password,
     List<NodeConfigStreamDto> Streams, int? RetentionDays, long? QuotaBytes, List<NodeConfigZoneDto> Zones,
-    string RecordingMode, int MotionPreRollSeconds, int MotionPostRollSeconds);
+    string RecordingMode, int MotionPreRollSeconds, int MotionPostRollSeconds,
+    string? EventsServiceUri);
 public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? StorageRootPath, int WatermarkPercent, string MediaSigningKey);
 
 /// <summary>One completed MotionSpan, batch-reported the same way SegmentReportItem is — see
 /// NodeService.RecordMotionSpansAsync for why plain REST + EF insert is enough here despite the
 /// plan flagging SqlBulkCopy for this table: a span is only written once it *closes* (debounced by
 /// MotionHysteresis), not per frame, so real write volume looks like Segments' (a handful of rows
-/// per camera per interesting event), not per-frame Detections-scale volume.</summary>
-public record MotionSpanReportItem(Guid CameraId, Guid ZoneId, DateTime StartUtc, DateTime EndUtc, double Score);
+/// per camera per interesting event), not per-frame Detections-scale volume.
+///
+/// ZoneId is null for a camera-pushed (M8 pass 6) span — an ONVIF PullPoint event has no concept of
+/// one of our own drawn ServerMotion zones — and non-null for a ServerMotion span; NodeService
+/// infers Source from that instead of carrying a separate field.</summary>
+public record MotionSpanReportItem(Guid CameraId, Guid? ZoneId, DateTime StartUtc, DateTime EndUtc, double Score);
+
+/// <summary>M8 pass 6: one raw ONVIF PullPoint notification, reported the same batched way a
+/// MotionSpan or Segment is. IsMotion (see CameraEventClassifier, run on the node as each
+/// notification arrives) tells the web tier whether this event also produced a MotionSpan — it
+/// doesn't re-derive that from OnvifTopic/PayloadJson itself.</summary>
+public record CameraEventReportItem(Guid CameraId, string OnvifTopic, DateTime ReceivedUtc, string? PayloadJson, bool IsMotion);
 
 public record SegmentReportItem(Guid CameraId, string StreamRole, DateTime StartUtc, DateTime EndUtc,
     string FilePath, long SizeBytes, string? Codec, int? Width, int? Height, bool HasAudio);

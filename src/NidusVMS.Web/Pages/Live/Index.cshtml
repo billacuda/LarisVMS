@@ -45,20 +45,13 @@ else
                            and 100% width/height — adding position-relative (a `!important` utility
                            class) fights that rule instead of complementing it and broke the ratio box
                            entirely (cells rendered square, video never appeared). It still works as a
-                           positioning context for the status/mute-button children below, since
-                           position:absolute (which it gets for free) is a valid containing block. *@
+                           positioning context for the status child below, since position:absolute
+                           (which it gets for free) is a valid containing block. *@
                         <div>
                             <video class="w-100 h-100" muted playsinline></video>
                             <div class="position-absolute top-50 start-50 translate-middle text-white small text-center live-status px-2"></div>
                             <span class="badge bg-danger position-absolute top-0 start-0 m-1 live-motion-badge d-none"
                                   title="Motion detected">● Motion</span>
-                            @if (hasAudio)
-                            {
-                                <button type="button"
-                                        class="btn btn-sm position-absolute bottom-0 end-0 m-1 live-mute-toggle d-none"
-                                        style="background-color: rgba(0,0,0,.5); color: #fff; line-height: 1; padding: .2rem .35rem; font-size: .75rem;"
-                                        title="Unmute">🔇</button>
-                            }
                         </div>
                     </div>
                     <div class="card-body py-2">
@@ -76,27 +69,19 @@ else
         document.querySelectorAll('[data-camera-tile]').forEach(function (tile) {
             var video = tile.querySelector('video');
             var status = tile.querySelector('.live-status');
-            var muteBtn = tile.querySelector('.live-mute-toggle');
 
-            function setMuteIcon() {
-                if (!muteBtn) return;
-                var muted = video.muted;
-                muteBtn.textContent = muted ? '🔇' : '🔊';
-                muteBtn.title = muted ? 'Unmute' : 'Mute';
-            }
-
-            if (muteBtn) {
-                muteBtn.addEventListener('click', function () {
-                    video.muted = !video.muted;
-                    setMuteIcon();
-                });
-            }
+            // Native browser controls (play/pause, volume/mute, fullscreen) only while hovering —
+            // replaces the old always-there custom mute button, which duplicated what the browser's
+            // own control bar already offers. Toggling the `controls` attribute itself (not just its
+            // visibility via CSS) is what actually shows/hides the native bar cross-browser.
+            tile.addEventListener('mouseenter', function () { video.controls = true; });
+            tile.addEventListener('mouseleave', function () { video.controls = false; });
 
             // Starts muted regardless of any previous session's state — autoplay-with-sound is
             // blocked by browser policy anyway, and starting muted keeps behavior consistent across
-            // tiles instead of depending on whichever camera happened to be unmuted last.
+            // tiles instead of depending on whichever camera happened to be unmuted last. The native
+            // control bar's own volume control is how a viewer unmutes from here.
             video.muted = true;
-            if (muteBtn) { setMuteIcon(); muteBtn.classList.remove('d-none'); }
             // No stop() is kept: every camera connects for as long as this page stays open, and
             // start()'s own auto-reconnect handles drops (network blips, wifi roaming) on its own —
             // there is currently no user action on this page that should end a session early.

@@ -124,9 +124,9 @@ else
         </table>
     </div>
     <p class="text-muted small">
-        Blank storage root uses the global default (Setup &rarr; Storage). A node's own value takes
+        Blank storage root uses the <a asp-page="/Admin/Settings">global default</a>. A node's own value takes
         priority — useful when a node records to its own local disk instead of the shared target.
-        Blank retention inherits the <a asp-page="/Admin/Retention">global default</a>; a value here
+        Blank retention inherits the <a asp-page="/Admin/Settings">global default</a>; a value here
         overrides it for every camera on this node unless that camera has its own override too. "Days
         left" is a rough estimate from this node's write rate over the last 24h, not disk health. The
         ⚠️ count next to a node's status is how many cameras have footage still sitting on this node

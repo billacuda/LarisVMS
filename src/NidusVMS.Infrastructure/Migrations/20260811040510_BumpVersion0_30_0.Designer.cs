@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NidusVMS.Infrastructure.Data;
 
@@ -11,9 +12,11 @@ using NidusVMS.Infrastructure.Data;
 namespace NidusVMS.Infrastructure.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260811040510_BumpVersion0_30_0")]
+    partial class BumpVersion0_30_0
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -458,42 +461,6 @@ namespace NidusVMS.Infrastructure.Migrations
                     b.HasKey("CameraId");
 
                     b.ToTable("CameraCapabilities");
-                });
-
-            modelBuilder.Entity("NidusVMS.Core.Entities.CameraEvent", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint");
-
-                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
-
-                    b.Property<Guid>("CameraId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("OnvifTopic")
-                        .IsRequired()
-                        .HasMaxLength(500)
-                        .HasColumnType("nvarchar(500)");
-
-                    b.Property<string>("PayloadJson")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<DateTime>("ReceivedUtc")
-                        .HasColumnType("datetime2");
-
-                    b.Property<bool>("TriggeredRecording")
-                        .HasColumnType("bit");
-
-                    b.HasKey("Id");
-
-                    SqlServerKeyBuilderExtensions.IsClustered(b.HasKey("Id"), false);
-
-                    b.HasIndex("CameraId", "ReceivedUtc");
-
-                    SqlServerIndexBuilderExtensions.IsClustered(b.HasIndex("CameraId", "ReceivedUtc"));
-
-                    b.ToTable("CameraEvents");
                 });
 
             modelBuilder.Entity("NidusVMS.Core.Entities.CameraGroup", b =>
@@ -1008,17 +975,6 @@ namespace NidusVMS.Infrastructure.Migrations
                     b.HasOne("NidusVMS.Core.Entities.Camera", "Camera")
                         .WithOne("Capabilities")
                         .HasForeignKey("NidusVMS.Core.Entities.CameraCapabilities", "CameraId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Camera");
-                });
-
-            modelBuilder.Entity("NidusVMS.Core.Entities.CameraEvent", b =>
-                {
-                    b.HasOne("NidusVMS.Core.Entities.Camera", "Camera")
-                        .WithMany()
-                        .HasForeignKey("CameraId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 

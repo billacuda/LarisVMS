@@ -50,6 +50,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     // ── Motion (M8) ──────────────────────────────────────────────────────────
     public DbSet<Zone> Zones => Set<Zone>();
     public DbSet<MotionSpan> MotionSpans => Set<MotionSpan>();
+    public DbSet<CameraEvent> CameraEvents => Set<CameraEvent>();
 
     // ── Views (M6) ───────────────────────────────────────────────────────────
     public DbSet<View> Views => Set<View>();
@@ -229,6 +230,16 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
                 .HasForeignKey(x => x.ZoneId).OnDelete(DeleteBehavior.Restrict);
             e.HasKey(x => x.Id).IsClustered(false);
             e.HasIndex(x => new { x.CameraId, x.StartUtc }).IsClustered();
+        });
+
+        // ── CameraEvent (M8 pass 6) ─────────────────────────────────────────────
+        builder.Entity<CameraEvent>(e =>
+        {
+            e.HasOne(x => x.Camera).WithMany()
+                .HasForeignKey(x => x.CameraId).OnDelete(DeleteBehavior.Cascade);
+            e.Property(x => x.OnvifTopic).HasMaxLength(500).IsRequired();
+            e.HasKey(x => x.Id).IsClustered(false);
+            e.HasIndex(x => new { x.CameraId, x.ReceivedUtc }).IsClustered();
         });
     }
 }

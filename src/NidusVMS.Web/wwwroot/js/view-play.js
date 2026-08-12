@@ -38,6 +38,16 @@ window.nidusvmsViewPlay = (function () {
         var video = el.querySelector('.view-cell-video');
         var status = el.querySelector('.view-cell-status');
         if (!video || !cam) return;
+
+        // Native browser controls (volume/mute, fullscreen) only while hovering — same treatment as
+        // Pages/Live's tiles, and the only way to unmute a cell here since there's no dedicated
+        // mute button on this page.
+        var hoverTarget = video.parentElement;
+        if (hoverTarget) {
+            hoverTarget.addEventListener('mouseenter', function () { video.controls = true; });
+            hoverTarget.addEventListener('mouseleave', function () { video.controls = false; });
+        }
+
         stopFns[cell.id] = window.nidusvmsLiveView.start(cell.cameraId, video, status, cam.codec, cam.hasAudio);
     }
 

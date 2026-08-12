@@ -74,6 +74,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         var cameras = await db.Cameras
             .Where(c => c.NodeId == nodeId && c.IsEnabled)
             .Include(c => c.Streams)
+            .Include(c => c.Capabilities)
             .ToListAsync(ct);
 
         // Per-node override (a node writing to its own local disk, say) takes priority over the
@@ -120,10 +121,29 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
                     s.Id, s.Role.ToString(), s.RtspUri, s.Codec, s.Width, s.Height, s.HasAudio)).ToList(),
                 retentionDays, c.QuotaBytes,
                 zonesLookup[c.Id].Select(z => new NodeConfigZoneDto(z.Id, z.Kind.ToString(), z.PolygonJson, z.Sensitivity)).ToList(),
-                recordingMode, motionPreRollSeconds, motionPostRollSeconds));
+                recordingMode, motionPreRollSeconds, motionPostRollSeconds,
+                ResolveEventsServiceUri(c.Capabilities)));
         }
 
         return new NodeConfigResponse(cameraDtos, storageRoot, watermarkPercent, mediaSigningKey);
+    }
+
+    /// <summary>Pulls the Events service's own XAddr out of the capability prober's raw category map
+    /// — same source/pattern CameraService.ReplaceStreamsAsync already uses for the Media XAddr.
+    /// Null whenever there's nothing to resolve: no probe yet, an old probe from before HasEvents
+    /// existed, or a device that genuinely doesn't advertise an Events service at all.</summary>
+    private static string? ResolveEventsServiceUri(CameraCapabilities? capabilities)
+    {
+        if (capabilities is not { HasEvents: true, RawProbeJson: { } json }) return null;
+        try
+        {
+            var rawXAddrs = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+            return rawXAddrs?.GetValueOrDefault("Events");
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null; // corrupted or pre-M8 RawProbeJson shape — treat as unresolvable, not fatal
+        }
     }
 
     public async Task DeleteSegmentsAsync(Guid nodeId, IReadOnlyList<string> filePaths, CancellationToken ct = default)
@@ -133,6 +153,9 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             .Where(s => s.NodeId == nodeId && filePaths.Contains(s.FilePath))
             .ExecuteDeleteAsync(ct);
     }
+
+    public async Task<List<string>> ListSegmentFilePathsAsync(Guid nodeId, CancellationToken ct = default)
+        => await db.Segments.AsNoTracking().Where(s => s.NodeId == nodeId).Select(s => s.FilePath).ToListAsync(ct);
 
     public async Task RecordHeartbeatAsync(Guid nodeId, long? freeBytes, long? totalBytes, string? version, int? livePort, CancellationToken ct = default)
     {
@@ -264,7 +287,10 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             {
                 CameraId = item.CameraId,
                 ZoneId = item.ZoneId,
-                Source = MotionSource.ServerMotion,
+                // M8 pass 6: a null ZoneId only ever comes from a camera-pushed ONVIF event — a
+                // ServerMotion span always names the zone that detected it — so Source is inferred
+                // from that rather than carried as a separate field on the report item.
+                Source = item.ZoneId is null ? MotionSource.CameraEvent : MotionSource.ServerMotion,
                 StartUtc = item.StartUtc,
                 EndUtc = item.EndUtc,
                 Score = item.Score
@@ -286,6 +312,41 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             }
             catch (DbUpdateException ex) when (ex.Entries.Count > 0)
             {
+                foreach (var entry in ex.Entries) entry.State = EntityState.Detached;
+            }
+        }
+    }
+
+    /// <summary>M8 pass 6: every raw ONVIF PullPoint notification a node reported, logged verbatim —
+    /// classification (IsMotion) already happened node-side (see CameraEventClassifier), this just
+    /// trusts that flag rather than re-deriving it. Plain inserts, no upsert: unlike a MotionSpan a
+    /// raw notification has no natural "same event, extend it" identity — each one is a discrete
+    /// point-in-time report, so real volume is exactly the notification count, not a running total
+    /// that would need collapsing.</summary>
+    public async Task RecordCameraEventsAsync(Guid nodeId, IReadOnlyList<CameraEventReportItem> events, CancellationToken ct = default)
+    {
+        if (events.Count == 0) return;
+
+        db.CameraEvents.AddRange(events.Select(item => new CameraEvent
+        {
+            CameraId = item.CameraId,
+            OnvifTopic = item.OnvifTopic,
+            ReceivedUtc = item.ReceivedUtc,
+            PayloadJson = item.PayloadJson
+        }));
+
+        while (true)
+        {
+            try
+            {
+                await db.SaveChangesAsync(ct);
+                break;
+            }
+            catch (DbUpdateException ex) when (ex.Entries.Count > 0)
+            {
+                // Same detach-and-retry shape as RecordMotionSpansAsync — a camera reassigned away
+                // from this node between the event firing and this report landing is the realistic
+                // cause (FK still enforced on insert), not worth losing the rest of the batch over.
                 foreach (var entry in ex.Entries) entry.State = EntityState.Detached;
             }
         }

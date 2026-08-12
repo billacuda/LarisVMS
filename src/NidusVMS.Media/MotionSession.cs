@@ -65,13 +65,19 @@ public sealed class MotionSession(MotionSessionOptions options, IReadOnlyList<Mo
     /// <paramref name="thresholdUtc"/>, as of right now. Any zone counts, not just one — a segment
     /// stays if *any* watched area had activity.
     ///
-    /// This is the query that makes both pre-roll and post-roll fall out of one comparison, exactly
-    /// because LastMotionAtUtc only ever moves forward (see its doc comment). NodeWorker defers a
-    /// segment's keep/discard decision until PreRoll seconds after that segment ends, then asks
-    /// HasMotionSince(segment.EndUtc - PostRoll) at that later moment: if motion happened anywhere
-    /// from PostRoll *before* the segment ended through PreRoll *after* it ended, this is true,
-    /// covering "we're in the post-roll tail of an earlier event" and "this segment turned out to be
-    /// the pre-roll for an event that hadn't started yet when it completed" with the same call.</summary>
+    /// This is the query that makes pre-roll, post-roll, *and* motion during the segment itself all
+    /// fall out of one comparison, exactly because LastMotionAtUtc only ever moves forward (see its
+    /// doc comment). NodeWorker defers a segment's keep/discard decision until PreRoll seconds after
+    /// that segment ends, then asks HasMotionSince(segment.StartUtc - PostRoll) at that later moment:
+    /// if motion happened anywhere from PostRoll *before the segment started* through PreRoll *after
+    /// it ended*, this is true — covering "we're in the post-roll tail of an earlier event," "this
+    /// segment turned out to be the pre-roll for an event that hadn't started yet when it completed,"
+    /// AND "the motion happened somewhere in the middle of the segment itself" with the same call.
+    /// Anchoring to StartUtc (not EndUtc, an earlier version of this) matters: anchoring to EndUtc
+    /// silently discarded segments with real, detected motion whenever that motion happened more than
+    /// PostRoll seconds before the segment's own end — invisible with the original 30s default (most
+    /// of a 60s segment falls within 30s of its end) but a real, confirmed bug once an operator set a
+    /// smaller PostRoll.</summary>
     public bool HasMotionSince(DateTime thresholdUtc)
         => _hysteresis.Values.Any(h => h.LastMotionAtUtc is { } t && t >= thresholdUtc);
 

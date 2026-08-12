@@ -87,6 +87,19 @@ public class StorageManagerTests : IDisposable
     }
 
     [Fact]
+    public void SelectMissingPathsReturnsOnlyPathsThatNoLongerExistOnDisk()
+    {
+        var present = WriteFile("present.mp4", 10, DateTime.UtcNow);
+        var neverExisted = Path.Combine(_root, "never-existed.mp4");
+        var wasDeleted = WriteFile("was-deleted.mp4", 10, DateTime.UtcNow);
+        File.Delete(wasDeleted);
+
+        var missing = StorageManager.SelectMissingPaths([present, neverExisted, wasDeleted]);
+
+        Assert.Equal([neverExisted, wasDeleted], missing);
+    }
+
+    [Fact]
     public void PruneEmptyDirectoriesRemovesEmptyLeavesButKeepsAncestorsOfNonEmptyOnes()
     {
         // Two hour folders share the same day/month/year ancestor — only the empty leaf should go;

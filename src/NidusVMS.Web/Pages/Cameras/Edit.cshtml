@@ -101,19 +101,22 @@
                 <option value="Continuous">Continuous</option>
                 <option value="Motion">Motion only</option>
             </select>
-            @if (!Model.HasServerMotionZone)
+            @{ var hasOnvifEvents = Model.Capabilities?.HasEvents ?? false; }
+            @if (!Model.HasServerMotionZone && !hasOnvifEvents)
             {
                 <div class="form-text text-warning">
-                    No enabled Motion zone on this camera yet — Motion mode won't discard anything
-                    until one exists (<a asp-page="Zones" asp-route-id="@Model.Id">set one up</a>).
-                    Recording behaves like Continuous in the meantime, not "record nothing."
+                    No enabled Motion zone on this camera yet, and it doesn't advertise ONVIF events
+                    either — Motion mode won't discard anything until one exists
+                    (<a asp-page="Zones" asp-route-id="@Model.Id">set one up</a>). Recording behaves
+                    like Continuous in the meantime, not "record nothing."
                 </div>
             }
             else
             {
                 <div class="form-text">
-                    Segments with no activity in any Motion zone are deleted shortly after they're
-                    written, instead of waiting for a retention sweep.
+                    Segments with no activity — from a Motion zone@(hasOnvifEvents ? " or this camera's own ONVIF motion events" : "") —
+                    are deleted shortly after they're written, instead of waiting for a retention sweep
+                    (<a asp-page="Zones" asp-route-id="@Model.Id">manage zones</a>).
                     <strong>Unverified against a real camera</strong> — see CHANGELOG.
                 </div>
             }

@@ -205,6 +205,58 @@ public class MotionHysteresisTests
     }
 
     [Fact]
+    public void CurrentInProgressSpanWithAnEffectivelyUnlimitedRecencyNeverGoesStale()
+    {
+        // What CameraEventSession.CurrentInProgressSpan (M8 pass 6) relies on: a camera-pushed
+        // motion span can legitimately go a long stretch between ONVIF notifications while still
+        // genuinely open — many real implementations send exactly one notification per edge, not a
+        // periodic "still active" heartbeat — so it passes TimeSpan.MaxValue as recency specifically
+        // to opt out of the staleness check CurrentInProgressSpanGoesStaleOutsideTheRecencyWindow...
+        // above proves exists for a bounded recency.
+        var h = new MotionHysteresis(startAfter: TimeSpan.Zero, endAfter: TimeSpan.FromSeconds(60));
+
+        h.Observe(T0, true, 0.5); // confirmed immediately, span open, no further ticks after this
+
+        Assert.True(h.IsActive);
+        var checkpoint = h.CurrentInProgressSpan(T0.AddHours(2), TimeSpan.MaxValue);
+
+        Assert.NotNull(checkpoint);
+        Assert.Equal(T0, checkpoint!.StartUtc);
+        Assert.Equal(T0.AddHours(2), checkpoint.EndUtc);
+    }
+
+    [Fact]
+    public void LastMotionAtUtcGoesStaleDuringALongGapEvenThoughIsActiveStaysTrue()
+    {
+        // The exact gap M8 pass 6's recording-gating fix addresses. A camera that sends one
+        // notification on the rising edge and nothing again until the falling edge leaves
+        // LastMotionAtUtc frozen at the rising timestamp for the entire gap, even though the span is
+        // still genuinely open — a recency-based check alone (LastMotionAtUtc >= some threshold)
+        // would treat a long gap like this as "gone stale" and start discarding segments in the
+        // middle of a still-ongoing event. IsActive has no timeout of its own — it only goes false
+        // once an actual falling-edge tick closes the span — so NodeWorker.DecideMotionSegment ORs
+        // it in alongside HasMotionSince/LastMotionAtUtc-based checks precisely so recording keeps
+        // being retained until the camera actually says motion stopped, not until some arbitrary
+        // staleness window expires.
+        var h = new MotionHysteresis(startAfter: TimeSpan.Zero, endAfter: TimeSpan.FromSeconds(2));
+
+        h.Observe(T0, true, 1.0); // rising edge — span opens immediately (startAfter is zero)
+        var muchLater = T0.AddMinutes(10); // no further notifications for the whole gap
+
+        Assert.Equal(T0, h.LastMotionAtUtc); // frozen — this is the stale signal on its own
+        Assert.True(h.IsActive); // but still genuinely open — no falling edge has arrived yet
+
+        // The falling edge finally arrives, closing the span for real (endAfter still applies to
+        // the falling edge itself, same as any other close).
+        Assert.Null(h.Observe(muchLater, false, 0.0));
+        var closed = h.Observe(muchLater.AddSeconds(3), false, 0.0);
+
+        Assert.NotNull(closed);
+        Assert.Equal(T0, closed!.StartUtc);
+        Assert.False(h.IsActive);
+    }
+
+    [Fact]
     public void PeakScoreTracksTheMaximumObservedDuringTheSpanNotTheLast()
     {
         var h = new MotionHysteresis(startAfter: TimeSpan.Zero, endAfter: TimeSpan.FromSeconds(3));

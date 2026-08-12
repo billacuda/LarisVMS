@@ -60,6 +60,13 @@ public class NodeApiClient
         response.EnsureSuccessStatusCode();
     }
 
+    public async Task<List<string>> GetSegmentFilePathsAsync(CancellationToken ct)
+    {
+        var response = await _http.GetAsync("api/nodes/segments/paths", ct);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<List<string>>(ct))!;
+    }
+
     public async Task ReportStreamInfoAsync(List<StreamInfoReportItem> items, CancellationToken ct)
     {
         if (items.Count == 0) return;
@@ -71,6 +78,13 @@ public class NodeApiClient
     {
         if (spans.Count == 0) return;
         var response = await _http.PostAsJsonAsync("api/nodes/motion-spans", spans, ct);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task ReportCameraEventsAsync(List<CameraEventReportItem> events, CancellationToken ct)
+    {
+        if (events.Count == 0) return;
+        var response = await _http.PostAsJsonAsync("api/nodes/events", events, ct);
         response.EnsureSuccessStatusCode();
     }
 }
