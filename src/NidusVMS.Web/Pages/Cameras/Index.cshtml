@@ -142,7 +142,9 @@ else
                                 <span class="text-muted">never</span>
                             }
                         </td>
-                        <td class="text-end">
+                        <td class="text-end text-nowrap">
+                            <a class="btn btn-sm btn-outline-secondary" asp-page="Zones" asp-route-id="@c.Id">Zones</a>
+                            <a class="btn btn-sm btn-outline-secondary" asp-page="EventTags" asp-route-id="@c.Id">Event tags</a>
                             <form method="post" asp-page-handler="Probe" asp-route-id="@c.Id" class="d-inline">
                                 <button type="submit" class="btn btn-sm btn-outline-secondary">Re-probe</button>
                             </form>

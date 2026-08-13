@@ -49,45 +49,66 @@ public class TimelineService(ApplicationDbContext db) : ITimelineService
             .Select(s => new { s.StartUtc, s.EndUtc })
             .ToListAsync(ct);
 
+        // M8 pass 8: ColorHex comes along via the (optional) EventTagRule navigation — null for a
+        // built-in or ServerMotion-zone span, same as MotionSpan.EventTagRuleId itself being null.
+        // EF translates the null-conditional into a left join, so a span with no rule still comes
+        // back (just with ColorHex null) rather than being excluded.
         var motionSpans = await db.MotionSpans
             .Where(m => m.CameraId == cameraId && m.StartUtc < toUtc && m.EndUtc > fromUtc)
-            .Select(m => new { m.StartUtc, m.EndUtc })
+            .Select(m => new { m.StartUtc, m.EndUtc, ColorHex = m.EventTagRule != null ? m.EventTagRule.ColorHex : null })
             .ToListAsync(ct);
 
-        return Bucket(segments.Select(s => (s.StartUtc, s.EndUtc)), motionSpans.Select(m => (m.StartUtc, m.EndUtc)), fromUtc, toUtc, bucketCount);
+        return Bucket(segments.Select(s => (s.StartUtc, s.EndUtc)),
+            motionSpans.Select(m => (m.StartUtc, m.EndUtc, m.ColorHex)), fromUtc, toUtc, bucketCount);
     }
 
-    public async Task<List<TimelineBucketDto>> GetGlobalBucketsAsync(DateTime fromUtc, DateTime toUtc, int bucketCount, CancellationToken ct = default)
+    public async Task<List<TimelineBucketDto>> GetGlobalBucketsAsync(DateTime fromUtc, DateTime toUtc, int bucketCount, IReadOnlyList<Guid>? cameraIds = null, CancellationToken ct = default)
     {
         fromUtc = NormalizeToUtc(fromUtc);
         toUtc = NormalizeToUtc(toUtc);
 
-        // Same shape as GetBucketsAsync, just without the CameraId filter — a bucket only needs
-        // "did *any* segment (any camera) overlap it", so which camera it belonged to is
-        // irrelevant past this point and isn't even selected.
-        var segments = await db.Segments
-            .Where(s => s.StartUtc < toUtc && s.EndUtc > fromUtc)
+        // Same shape as GetBucketsAsync, just merged across cameraIds instead of scoped to one —
+        // a bucket only needs "did *any* segment among these cameras overlap it", so which specific
+        // one it belonged to is irrelevant past this point and isn't even selected. A null/empty
+        // cameraIds is the original "every camera in the system" behavior — Pages/Playback no
+        // longer relies on that default (it always passes the current view's own set), but it's
+        // kept as the fallback rather than made a hard requirement, since "merged across
+        // everything" is still a reasonable answer for a caller that genuinely has no camera scope.
+        // Built as a conditionally-attached .Where rather than an inline "noFilter || cameraIds!
+        // .Contains(...)" — the latter still puts a Contains call over a possibly-null cameraIds
+        // into the expression tree EF has to translate even on the branch that's logically never
+        // taken, which risks exactly the null-reference EF query translation is prone to for that
+        // pattern. A plain if only ever builds the Contains call when cameraIds is actually there.
+        var segmentsQuery = db.Segments.Where(s => s.StartUtc < toUtc && s.EndUtc > fromUtc);
+        var motionQuery = db.MotionSpans.Where(m => m.StartUtc < toUtc && m.EndUtc > fromUtc);
+        if (cameraIds is { Count: > 0 })
+        {
+            segmentsQuery = segmentsQuery.Where(s => cameraIds.Contains(s.CameraId));
+            motionQuery = motionQuery.Where(m => cameraIds.Contains(m.CameraId));
+        }
+
+        var segments = await segmentsQuery
             .Select(s => new { s.StartUtc, s.EndUtc })
             .ToListAsync(ct);
 
-        var motionSpans = await db.MotionSpans
-            .Where(m => m.StartUtc < toUtc && m.EndUtc > fromUtc)
-            .Select(m => new { m.StartUtc, m.EndUtc })
+        var motionSpans = await motionQuery
+            .Select(m => new { m.StartUtc, m.EndUtc, ColorHex = m.EventTagRule != null ? m.EventTagRule.ColorHex : null })
             .ToListAsync(ct);
 
-        return Bucket(segments.Select(s => (s.StartUtc, s.EndUtc)), motionSpans.Select(m => (m.StartUtc, m.EndUtc)), fromUtc, toUtc, bucketCount);
+        return Bucket(segments.Select(s => (s.StartUtc, s.EndUtc)),
+            motionSpans.Select(m => (m.StartUtc, m.EndUtc, m.ColorHex)), fromUtc, toUtc, bucketCount);
     }
 
     private static List<TimelineBucketDto> Bucket(
         IEnumerable<(DateTime StartUtc, DateTime EndUtc)> segments,
-        IEnumerable<(DateTime StartUtc, DateTime EndUtc)> motionSpans,
+        IEnumerable<(DateTime StartUtc, DateTime EndUtc, string? ColorHex)> motionSpans,
         DateTime fromUtc, DateTime toUtc, int bucketCount)
     {
         if (bucketCount < 1) bucketCount = 1;
         if (toUtc <= fromUtc) return [];
 
         var segmentList = segments as ICollection<(DateTime StartUtc, DateTime EndUtc)> ?? segments.ToList();
-        var motionList = motionSpans as ICollection<(DateTime StartUtc, DateTime EndUtc)> ?? motionSpans.ToList();
+        var motionList = motionSpans as ICollection<(DateTime StartUtc, DateTime EndUtc, string? ColorHex)> ?? motionSpans.ToList();
 
         var totalTicks = (toUtc - fromUtc).Ticks;
         var bucketTicks = totalTicks / bucketCount;
@@ -101,7 +122,17 @@ public class TimelineService(ApplicationDbContext db) : ITimelineService
             var bucketEnd = i == bucketCount - 1 ? toUtc : fromUtc.AddTicks(bucketTicks * (i + 1));
             var hasRecording = segmentList.Any(s => s.StartUtc < bucketEnd && s.EndUtc > bucketStart);
             var hasMotion = motionList.Any(m => m.StartUtc < bucketEnd && m.EndUtc > bucketStart);
-            buckets.Add(new TimelineBucketDto(bucketStart, bucketEnd, hasRecording, hasMotion));
+            // M8 pass 8: the earliest-starting overlapping custom-tag span wins this bucket's color
+            // (ties broken by ColorHex text so the pick is at least deterministic, not "whichever the
+            // query happened to return first") — a bucket straddling two different tag types is rare
+            // (they'd need to genuinely overlap in time) and picking one over blending keeps every
+            // bucket a single solid color, same reasoning as the motion/recording stripe-merge fix.
+            var tagColorHex = motionList
+                .Where(m => m.ColorHex is not null && m.StartUtc < bucketEnd && m.EndUtc > bucketStart)
+                .OrderBy(m => m.StartUtc).ThenBy(m => m.ColorHex, StringComparer.Ordinal)
+                .Select(m => m.ColorHex)
+                .FirstOrDefault();
+            buckets.Add(new TimelineBucketDto(bucketStart, bucketEnd, hasRecording, hasMotion, tagColorHex));
         }
 
         return buckets;

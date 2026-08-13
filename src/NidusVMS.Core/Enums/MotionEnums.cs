@@ -24,11 +24,13 @@ public enum ZoneKind
     Ignore = 3
 }
 
-/// <summary>How a MotionSpan was produced. Only ServerMotion exists in M8 pass 1 — CameraEvent is
-/// defined now so a follow-up pass adding ONVIF PullPoint ingestion doesn't need a MotionSpans
-/// schema change, only a new writer.</summary>
+/// <summary>How a MotionSpan was produced. ServerMotion is a drawn zone's own frame-diff detection;
+/// CameraEvent is the built-in ONVIF motion classifier (CameraEventClassifier's hardcoded topic
+/// markers); CustomTag (M8 pass 8) is a user-configured EventTagRule — see MotionSpan.EventTagRuleId,
+/// set only for this source.</summary>
 public enum MotionSource
 {
     ServerMotion = 0,
-    CameraEvent = 1
+    CameraEvent = 1,
+    CustomTag = 2
 }

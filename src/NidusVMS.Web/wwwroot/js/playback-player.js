@@ -508,7 +508,11 @@
     }
 
     async function getGlobalBuckets(fromIso, toIso, bucketCount) {
+        // Scoped to the cameras actually in the current view (tiles' own keys) rather than every
+        // camera in the system — an "overview" timeline for a 2-camera view showing activity from
+        // four cameras nobody's looking at here was confusing, not useful.
         var url = '/api/timeline?from=' + encodeURIComponent(fromIso) + '&to=' + encodeURIComponent(toIso) + '&buckets=' + bucketCount;
+        Object.keys(tiles).forEach(function (id) { url += '&cameraIds=' + encodeURIComponent(id); });
         var resp = await fetch(url);
         return resp.ok ? await resp.json() : [];
     }
@@ -618,8 +622,15 @@
         tilesEl.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
         tilesEl.style.gridTemplateRows = 'repeat(' + rows + ', 1fr)';
         tilesEl.style.gap = '4px';
-        tilesEl.style.height = '100%';
-        tilesEl.style.width = '100%';
+        // No explicit height/width:100% here — tilesEl is already a flex item (flex:1 1 auto;
+        // min-height:0, set in Pages/Playback/Index.cshtml) inside the pbLayout column, and that's
+        // what makes it fill exactly the space left after the toolbar and timeline claim theirs.
+        // An explicit height:100% here used to fight that: a tall 9:16 camera's own intrinsic
+        // aspect ratio (see the min-width/min-height:0 on each cell below — CSS Grid items default
+        // to min-height:auto, i.e. "at least as tall as my content wants") could force this grid's
+        // rows taller than the space actually available, growing tilesEl itself right over the
+        // timeline below it. Confirmed live as a real bug: a vertical camera in the grid pushed
+        // other tiles off the bottom of the page, and separately, video tiles covered the timeline.
 
         // Set before the loop below (not after, as this used to be) so the first render already
         // highlights the right tile instead of only picking it up on the next click.
@@ -633,6 +644,15 @@
             // in DOM order, which orderedCells() has already sorted the same way (top-to-bottom,
             // left-to-right by the view's original y/x) — same reading order as before, just laid
             // into the new NxM grid instead of the view's own cell positions.
+            // minWidth/minHeight:0 override CSS Grid's default min-size:auto on grid items (which
+            // otherwise means "never shrink below my content's own intrinsic size") — without this,
+            // a portrait (9:16) camera's video wants real height to preserve its aspect ratio even
+            // when object-fit:contain is asked to shrink it, and that demand could grow this cell's
+            // whole grid row (and the grid container itself) past the space actually available.
+            // overflow:hidden is the backstop in case anything still tries to exceed the cell anyway.
+            el.style.minWidth = '0';
+            el.style.minHeight = '0';
+            el.style.overflow = 'hidden';
             el.innerHTML = buildTileCardHtml(cam, cell.cameraId === primaryCameraId);
 
             var videoEl = el.querySelector('.pb-video');

@@ -24,6 +24,12 @@ public class MotionSpan
     /// history it recorded, only stop attributing future spans to it.</summary>
     public Guid? ZoneId { get; set; }
 
+    /// <summary>Which EventTagRule produced this span — set only when Source is CustomTag (M8 pass 8),
+    /// null for ServerMotion/CameraEvent. Restrict on delete, same reasoning as ZoneId: deleting a
+    /// rule shouldn't delete the tag history it recorded — EventTagRuleService nulls this out
+    /// explicitly first, the same pattern ZoneService already uses for ZoneId.</summary>
+    public Guid? EventTagRuleId { get; set; }
+
     /// <summary>0.0-1.0, the peak per-frame score (see MotionDetector.Score) observed during this
     /// span — lets the timeline or a future alert rule distinguish "a leaf blew past the sensitivity
     /// threshold once" from "someone walked through for ten seconds," without storing every frame.</summary>
@@ -31,4 +37,5 @@ public class MotionSpan
 
     public Camera Camera { get; set; } = null!;
     public Zone? Zone { get; set; }
+    public EventTagRule? EventTagRule { get; set; }
 }

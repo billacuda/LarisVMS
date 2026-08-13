@@ -12,9 +12,13 @@ public interface ITimelineService
     /// in memory — simpler and fewer round trips than one query per bucket.</summary>
     Task<List<TimelineBucketDto>> GetBucketsAsync(Guid cameraId, DateTime fromUtc, DateTime toUtc, int bucketCount, CancellationToken ct = default);
 
-    /// <summary>Same bucketing as GetBucketsAsync but merged across every camera, not just one —
-    /// a bucket is recorded (recording and/or motion) if *any* camera has it there.</summary>
-    Task<List<TimelineBucketDto>> GetGlobalBucketsAsync(DateTime fromUtc, DateTime toUtc, int bucketCount, CancellationToken ct = default);
+    /// <summary>Same bucketing as GetBucketsAsync but merged across a set of cameras instead of
+    /// just one — a bucket is recorded (recording and/or motion) if *any* of them has it there.
+    /// cameraIds null or empty means every camera (the original M7 "was anything recording
+    /// anywhere" behavior) — Pages/Playback now always passes the current view's own camera set,
+    /// so the merged timeline only ever reflects what's actually on screen, not every camera in the
+    /// system.</summary>
+    Task<List<TimelineBucketDto>> GetGlobalBucketsAsync(DateTime fromUtc, DateTime toUtc, int bucketCount, IReadOnlyList<Guid>? cameraIds = null, CancellationToken ct = default);
 
     /// <summary>M8: camera IDs with a MotionSpan row recent enough to still count as "motion is
     /// active right now" — the Live-view indicator's signal. Deliberately derived from the same

@@ -131,6 +131,7 @@ builder.Services.AddScoped<INodeService, NodeService>();
 builder.Services.AddScoped<IViewService, ViewService>();
 builder.Services.AddScoped<ITimelineService, TimelineService>();
 builder.Services.AddScoped<IZoneService, ZoneService>();
+builder.Services.AddScoped<IEventTagRuleService, EventTagRuleService>();
 
 // ── ONVIF HTTP client ────────────────────────────────────────────────────────
 // CameraService takes a Func<HttpClient> rather than IHttpClientFactory directly so
@@ -394,6 +395,44 @@ zoneApi.MapDelete("", async (Guid id, IZoneService zones, CancellationToken ct) 
     return Results.Ok();
 });
 
+// ── Event tag rules (M8 pass 8) ──────────────────────────────────────────────
+// Same shape as Zones above: nested-under-camera for list/create (needs the camera to attach to and
+// to scope observed-topics), flat by-id for update/delete. Cameras.Edit throughout — configuring
+// which ONVIF topics drive recording/tagging is camera configuration, same as drawing a zone.
+var eventTagRulesApi = app.MapGroup("/api/cameras/{cameraId:guid}/event-tag-rules").RequireAuthorization("Cameras.Edit");
+
+eventTagRulesApi.MapGet("", async (Guid cameraId, IEventTagRuleService rules, CancellationToken ct) =>
+    Results.Json((await rules.ListAsync(cameraId, ct)).Select(r => new EventTagRuleDto(
+        r.Id, r.CameraId, r.Name, r.StartTopic, r.StopTopic, r.ColorHex, r.DrivesRecording, r.IsEnabled))));
+
+eventTagRulesApi.MapPost("", async (Guid cameraId, SaveEventTagRuleRequest request, IEventTagRuleService rules, CancellationToken ct) =>
+{
+    var rule = await rules.CreateAsync(cameraId, request.Name, request.StartTopic, request.StopTopic,
+        request.ColorHex, request.DrivesRecording, ct);
+    return Results.Json(new EventTagRuleDto(rule.Id, rule.CameraId, rule.Name, rule.StartTopic, rule.StopTopic,
+        rule.ColorHex, rule.DrivesRecording, rule.IsEnabled));
+});
+
+eventTagRulesApi.MapGet("/observed-topics", async (Guid cameraId, IEventTagRuleService rules, CancellationToken ct) =>
+    Results.Json(await rules.ListObservedTopicsAsync(cameraId, ct)));
+
+// Not nested under {cameraId} — same reasoning as the flat /api/zones/{id} group: an update/delete
+// only needs the rule's own id, its owning camera is read from the row itself.
+var eventTagRuleApi = app.MapGroup("/api/event-tag-rules/{id:guid}").RequireAuthorization("Cameras.Edit");
+
+eventTagRuleApi.MapPut("", async (Guid id, SaveEventTagRuleRequest request, IEventTagRuleService rules, CancellationToken ct) =>
+{
+    await rules.UpdateAsync(id, request.Name, request.StartTopic, request.StopTopic,
+        request.ColorHex, request.DrivesRecording, request.IsEnabled, ct);
+    return Results.Ok();
+});
+
+eventTagRuleApi.MapDelete("", async (Guid id, IEventTagRuleService rules, CancellationToken ct) =>
+{
+    await rules.DeleteAsync(id, ct);
+    return Results.Ok();
+});
+
 // ── Playback & timeline (M7) ─────────────────────────────────────────────────
 // GetBucketsAsync/GetSegmentsAsync are plain DB reads (no node involved). /playback-segment
 // mirrors /live's proxy shape above — the browser never talks to a node directly, this process
@@ -407,10 +446,13 @@ playbackApi.MapGet("/timeline", async (Guid cameraId, DateTime from, DateTime to
 playbackApi.MapGet("/segments", async (Guid cameraId, DateTime from, DateTime to, ITimelineService timeline, CancellationToken ct) =>
     Results.Json(await timeline.GetSegmentsAsync(cameraId, from, to, ct)));
 
-// Merged across every camera, not scoped to one — the "was anything recording anywhere" overview
-// timeline on Pages/Playback, separate from the per-camera one above.
-app.MapGet("/api/timeline", async (DateTime from, DateTime to, int? buckets, ITimelineService timeline, CancellationToken ct) =>
-    Results.Json(await timeline.GetGlobalBucketsAsync(from, to, buckets ?? 200, ct))
+// Merged across the given cameraIds (repeated query param) — the "was anything recording in this
+// view" overview timeline on Pages/Playback, separate from the per-camera one above. cameraIds
+// omitted falls back to every camera (see GetGlobalBucketsAsync's own doc comment) — playback-
+// player.js always passes the current view's own camera set, so in practice this stays scoped to
+// what's actually on screen rather than the whole system.
+app.MapGet("/api/timeline", async (DateTime from, DateTime to, int? buckets, Guid[]? cameraIds, ITimelineService timeline, CancellationToken ct) =>
+    Results.Json(await timeline.GetGlobalBucketsAsync(from, to, buckets ?? 200, cameraIds, ct))
 ).RequireAuthorization("Playback.View");
 
 // M8: Live-view motion indicator's signal — polled periodically by live-view.js, not pushed. Gated

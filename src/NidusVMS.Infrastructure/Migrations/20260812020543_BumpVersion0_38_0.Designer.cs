@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NidusVMS.Infrastructure.Data;
 
@@ -11,9 +12,11 @@ using NidusVMS.Infrastructure.Data;
 namespace NidusVMS.Infrastructure.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260812020543_BumpVersion0_38_0")]
+    partial class BumpVersion0_38_0
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -581,47 +584,6 @@ namespace NidusVMS.Infrastructure.Migrations
                     b.ToTable("CameraStreams");
                 });
 
-            modelBuilder.Entity("NidusVMS.Core.Entities.EventTagRule", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid>("CameraId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("ColorHex")
-                        .IsRequired()
-                        .HasMaxLength(9)
-                        .HasColumnType("nvarchar(9)");
-
-                    b.Property<bool>("DrivesRecording")
-                        .HasColumnType("bit");
-
-                    b.Property<bool>("IsEnabled")
-                        .HasColumnType("bit");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("nvarchar(100)");
-
-                    b.Property<string>("StartTopic")
-                        .IsRequired()
-                        .HasMaxLength(500)
-                        .HasColumnType("nvarchar(500)");
-
-                    b.Property<string>("StopTopic")
-                        .HasMaxLength(500)
-                        .HasColumnType("nvarchar(500)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CameraId", "Name");
-
-                    b.ToTable("EventTagRules");
-                });
-
             modelBuilder.Entity("NidusVMS.Core.Entities.MotionSpan", b =>
                 {
                     b.Property<long>("Id")
@@ -635,9 +597,6 @@ namespace NidusVMS.Infrastructure.Migrations
 
                     b.Property<DateTime>("EndUtc")
                         .HasColumnType("datetime2");
-
-                    b.Property<Guid?>("EventTagRuleId")
-                        .HasColumnType("uniqueidentifier");
 
                     b.Property<double>("Score")
                         .HasColumnType("float");
@@ -654,8 +613,6 @@ namespace NidusVMS.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     SqlServerKeyBuilderExtensions.IsClustered(b.HasKey("Id"), false);
-
-                    b.HasIndex("EventTagRuleId");
 
                     b.HasIndex("ZoneId");
 
@@ -1092,17 +1049,6 @@ namespace NidusVMS.Infrastructure.Migrations
                     b.Navigation("Camera");
                 });
 
-            modelBuilder.Entity("NidusVMS.Core.Entities.EventTagRule", b =>
-                {
-                    b.HasOne("NidusVMS.Core.Entities.Camera", "Camera")
-                        .WithMany()
-                        .HasForeignKey("CameraId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Camera");
-                });
-
             modelBuilder.Entity("NidusVMS.Core.Entities.MotionSpan", b =>
                 {
                     b.HasOne("NidusVMS.Core.Entities.Camera", "Camera")
@@ -1111,19 +1057,12 @@ namespace NidusVMS.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("NidusVMS.Core.Entities.EventTagRule", "EventTagRule")
-                        .WithMany()
-                        .HasForeignKey("EventTagRuleId")
-                        .OnDelete(DeleteBehavior.Restrict);
-
                     b.HasOne("NidusVMS.Core.Entities.Zone", "Zone")
                         .WithMany()
                         .HasForeignKey("ZoneId")
                         .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("Camera");
-
-                    b.Navigation("EventTagRule");
 
                     b.Navigation("Zone");
                 });

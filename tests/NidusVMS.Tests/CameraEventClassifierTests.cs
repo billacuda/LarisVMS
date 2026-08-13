@@ -61,4 +61,27 @@ public class CameraEventClassifierTests
     {
         Assert.False(CameraEventClassifier.IsMotionActive(topic, new Dictionary<string, string> { ["State"] = "true" }));
     }
+
+    // M8 pass 8: TryGetBooleanState is IsMotionActive's own state-item lookup, pulled out and made
+    // public so CameraEventSession can reuse it for a toggle-mode EventTagRule's arbitrary (not
+    // necessarily motion-family) single topic — these cover it directly rather than only indirectly
+    // through IsMotionActive's topic-gated tests above.
+    [Fact]
+    public void TryGetBooleanStateReadsStateItem()
+    {
+        Assert.True(CameraEventClassifier.TryGetBooleanState(new Dictionary<string, string> { ["State"] = "true" }));
+        Assert.False(CameraEventClassifier.TryGetBooleanState(new Dictionary<string, string> { ["State"] = "false" }));
+    }
+
+    [Fact]
+    public void TryGetBooleanStateReadsMotionItemWhenStateIsAbsent()
+    {
+        Assert.True(CameraEventClassifier.TryGetBooleanState(new Dictionary<string, string> { ["Motion"] = "true" }));
+    }
+
+    [Fact]
+    public void TryGetBooleanStateWithNoRecognizedItemIsFalse()
+    {
+        Assert.False(CameraEventClassifier.TryGetBooleanState(new Dictionary<string, string> { ["SomethingElse"] = "true" }));
+    }
 }

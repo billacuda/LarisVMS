@@ -5,6 +5,177 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.46.0] - 2026-08-12
+
+### Added
+
+- **Day boundaries and date labels on the timeline.** Below day-level zoom every tick label was
+  time-only, so scrolling across midnight gave no sign the day had changed, and a window sitting
+  inside a single day named no date at all — you could scroll a long way with no idea which day you
+  were looking at. Each local midnight in view now draws a full-height divider, and every visible day
+  carries a small date badge ("Wed, Aug 12") at the left edge of its own span, including the
+  partial day already in progress when the window opens. Suppressed at day-level zoom and wider,
+  where the tick labels are already dates and this would only duplicate them; a day with too little
+  width on screen to hold its badge is skipped rather than clipped. Day boundaries are local, not
+  UTC, matching every other timestamp the UI renders.
+
+## [0.45.0] - 2026-08-12
+
+### Fixed
+
+- **Corrected 0.44.0's stated cause: the cameras' clocks are fine — their ONVIF `UtcTime` field is
+  not.** 0.44.0 attributed the timestamp problem to drifting camera clocks, on the strength of a
+  per-camera measurement comparing each camera's newest event against its newest recorded segment.
+  That measurement was confounded: a camera with a recording gap has a stale newest-segment, which
+  inflates the apparent offset, so it read as "every camera is off by a different, drifting amount."
+  The camera's displayed time and NTP sync were both verified correct on the actual hardware, which
+  ruled that explanation out. Re-measured properly using a signal internal to the cameras themselves:
+  a `LastClockSynchronization` notification carries a timestamp in its payload *and* one in the
+  message's `UtcTime` attribute, so comparing those two isolates how the camera formats a timestamp
+  from what any other clock says. On four of six cameras they disagree by **exactly 60.00 minutes,
+  with zero variance across 35+ samples each**. Drift is never exactly an hour with no variance —
+  that signature is a daylight-saving conversion bug in the camera's ONVIF layer, converting correct
+  local time to "UTC" with the standard offset instead of the current DST one. It lands differently
+  per unit (firmware version, most likely): on two of the six the `UtcTime` attribute carries the
+  hour error and therefore got ingested, on the rest it doesn't. The 0.44.0 code fix was already the
+  right one and is unchanged; only its explanation, the logged warning, and the code comments were
+  wrong. The warning no longer tells operators to go fix NTP — it now names the one-hour DST
+  signature and states plainly that the camera's own clock can be correct while this field isn't.
+
+## [0.44.0] - 2026-08-12
+
+### Fixed
+
+- **Untrustworthy ONVIF notification timestamps corrupted the timeline and defeated Motion-mode
+  gating entirely.** MotionSpans were stamped with the `UtcTime` the camera put on its notification,
+  while Segments are stamped by ffmpeg on the node — two different time sources in one timeline, and
+  on some cameras they disagree by exactly one hour. (**The cause originally stated here — drifting
+  camera clocks — was wrong; see 0.45.0 for the corrected diagnosis.** The fix below is unaffected.)
+  Two consequences that looked like separate bugs: motion was drawn an hour to the right of the
+  footage that actually contained it (green with no recording under it in one place, recording with
+  no green on it an hour earlier), and Motion-mode recording never discarded anything, because
+  `DecideMotionSegment` compares motion timestamps against a window built from the segment's
+  node-clock time — a timestamp an hour in the future satisfies any such window, permanently.
+  Notification timestamps are now anchored to the node's own receive time whenever the reported time
+  is more than 60 seconds away from it (a camera whose `UtcTime` is actually correct still keeps its
+  own more precise instant), with a one-time warning logged per session naming the measured offset.
+- **The merged "all cameras" timeline on Playback now only covers the cameras in the selected view.**
+  It previously aggregated every camera in the system, so an overview strip under a two-camera view
+  showed activity from four cameras that weren't on screen.
+
+### Changed
+
+- `ITimelineService.GetGlobalBucketsAsync` takes an optional camera-id scope; omitting it keeps the
+  previous merge-across-everything behavior for any caller that genuinely has no camera scope.
+
+## [0.43.0] - 2026-08-12
+
+### Fixed
+
+- **ONVIF-event Motion-mode recording never stopped, confirmed via live production data.**
+  `CameraEventSession`'s built-in classifier used a 2-second `endAfter` debounce on its closing edge,
+  intended to "absorb a quick flicker" the same way continuously-polled frame-diff motion needs.
+  `MotionHysteresis.Observe`'s close check only evaluates elapsed time against a *later* call — the
+  falling notification that sets `quietSince` always computes zero elapsed against itself, so a second
+  qualifying call is required to actually close. A continuously-ticked source supplies that call
+  automatically within a few ticks; ONVIF PullPoint notifications don't, since `Observe` only runs when
+  a real notification arrives. A real camera's own true/false pairs recurred every 5-120 seconds with
+  nothing else landing in between, so the closing edge — present and correctly formatted in the event
+  log every single time — was silently lost, and `IsMotionActive` stayed true for hours. Every
+  `MotionHysteresis` `CameraEventSession` constructs (the built-in classifier, and every EventTagRule,
+  two-topic or toggle) now uses `endAfter: TimeSpan.Zero` — real ONVIF devices already debounce their
+  own state, so there's nothing left to absorb, and a falling edge now closes the span in the same
+  notification that reported it. Two new tests reproduce the exact starvation scenario against real
+  timing and prove the fix closes it.
+
+## [0.42.0] - 2026-08-12
+
+### Fixed
+
+- **The v0.41.0 "Event tags" page had no direct way to reach it — user reported not being able to
+  find it anywhere on the Cameras page.** The only entry point was a small button on `Cameras/Edit`'s
+  header, alongside "Zones" (which had the exact same gap since it shipped in M8 pass 1, just never
+  reported). `Cameras/Index`'s per-row action column now links directly to both Zones and Event tags
+  for every camera, not only reachable after first opening Edit.
+
+## [0.41.0] - 2026-08-12
+
+### Added
+
+- **User-configurable ONVIF event tag rules, with an admin editor.** Camera Edit now has an "Event
+  tags" link alongside Zones. A rule matches incoming ONVIF PullPoint notifications by topic — give it
+  a Start topic alone if the topic's own payload carries a true/false state, or a matching Stop topic
+  too if the camera fires two distinct topics for the rising/falling edge — and tags the timeline with
+  a color you pick, independent of the built-in green motion coloring. Covers anything a camera's
+  firmware pushes, not just motion: object/person detection, tamper, digital inputs, whatever topics
+  the camera actually advertises. The editor's Start/Stop topic fields are populated from this
+  camera's own observed ONVIF event history (a new `/observed-topics` endpoint), not typed blind.
+- **"Drives recording" per rule.** A rule can optionally gate a Motion-mode camera's segment
+  keep/discard decision the same way built-in motion and ServerMotion zones already do — rising edge
+  starts the keep window, falling edge ends it, no timeout, matching the existing no-timeout gating
+  guarantee. A rule with this off only ever affects the timeline's color, never recording.
+- New `MotionSource.CustomTag` and `MotionSpans.EventTagRuleId` — a custom-tag span is now
+  distinguishable from the built-in camera-pushed classifier's own span in the data, not just on
+  screen.
+
+### Changed
+
+- Node-side ONVIF event polling (`CameraEventSession`) now restarts a camera's event session when its
+  configured rule set changes, the same way a changed zone configuration already restarts the motion
+  session — a rule added, edited, or deleted through the admin UI takes effect on the next reconcile
+  rather than only after the camera is reassigned.
+
+## [0.40.0] - 2026-08-12
+
+### Fixed
+
+- **Dragging the per-camera Playback timeline could feel unresponsive while dragging the "all
+  cameras" one worked fine.** The page-level playhead-follows-playback loop calls each timeline's
+  `setCenter` every 500ms regardless of what the user is doing — mid-drag, that snapped the strip
+  back to the actual playback position on the very next tick, fighting the user's own drag since a
+  drag gesture rarely finishes inside one 500ms window. `setCenter` now ignores programmatic recenter
+  calls entirely while that timeline is being actively dragged — the drag's own pointer handling is
+  already the authority over its position until release.
+
+## [0.39.0] - 2026-08-12
+
+### Changed
+
+- **Live tiles (`Pages/Live` and `Views/Play`) no longer use native browser video controls.**
+  v0.33.0 switched to native `<video controls>` shown on hover to replace an always-visible custom
+  mute button — but native controls include a click-anywhere-on-the-video-to-pause behavior in most
+  browsers, confirmed live as unwanted: there's nothing to meaningfully "resume" from on a continuous
+  live MSE stream, so an accidental click just interrupted viewing for no reason. Replaced with a
+  minimal custom overlay of exactly two buttons — mute/unmute and fullscreen — shown on hover, same
+  as before, with no click-on-the-video-body behavior bound at all.
+
+## [0.38.0] - 2026-08-12
+
+### Fixed
+
+- **Playback video tiles could grow past their allocated space and cover the timeline below them,**
+  most visibly with a portrait (9:16) camera in the view. CSS Grid items default to
+  `min-height: auto` — "never shrink below my content's own intrinsic size" — so a tall portrait
+  video's own aspect ratio could force its whole grid row taller than the space actually available,
+  growing the grid container (and the timeline pinned below it) right along with it. Each tile now
+  gets `min-width: 0; min-height: 0; overflow: hidden`, and the grid container no longer sets an
+  explicit `height: 100%` that was fighting its own flex sizing — the flex layout (`flex: 1 1 auto`)
+  already correctly fills exactly the space left after the toolbar and timeline claim theirs.
+- **A non-16:9 camera's video was stretched/distorted on `Pages/Live`** — its `<video>` element had
+  no `object-fit`, so the browser's default (`fill`) squashed anything that wasn't already 16:9 to
+  match the tile's fixed aspect box. Now `object-fit: contain`, matching how every other video tile
+  in the app already handles this (`Views/Play`, `Pages/Playback`).
+- **Timeline coverage bars showed as thin alternating stripes instead of solid blocks, and visibly
+  pulsed while a shared position was advancing during playback.** Adjacent buckets sharing the same
+  color were drawn as separate `fillRect` calls; at a wide zoom (up to ~2000 buckets, close to one
+  per pixel) two same-colored neighbors could leave a hairline gap between them from sub-pixel
+  rounding, which read as thin flickering stripes through what should have been one solid run of
+  coverage — and during playback, since the whole strip's pixel positions shift slightly on every
+  redraw following the advancing position, those hairline gaps didn't just look striped, they visibly
+  jittered. Adjacent same-colored buckets are now merged into a single fill run with coordinates
+  rounded once per run instead of independently per bucket, which has no internal seams left to
+  flicker.
+
 ## [0.37.0] - 2026-08-12
 
 ### Fixed

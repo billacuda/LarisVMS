@@ -106,6 +106,13 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             .ToListAsync(ct);
         var zonesLookup = zonesByCamera.ToLookup(z => z.CameraId);
 
+        // M8 pass 8: only enabled rules, same as zones above — the node has no use for a disabled
+        // one and no reason to know it exists.
+        var eventTagRulesByCamera = await db.EventTagRules
+            .Where(r => cameraIds.Contains(r.CameraId) && r.IsEnabled)
+            .ToListAsync(ct);
+        var eventTagRulesLookup = eventTagRulesByCamera.ToLookup(r => r.CameraId);
+
         var cameraDtos = new List<NodeConfigCameraDto>();
         foreach (var c in cameras)
         {
@@ -122,7 +129,8 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
                 retentionDays, c.QuotaBytes,
                 zonesLookup[c.Id].Select(z => new NodeConfigZoneDto(z.Id, z.Kind.ToString(), z.PolygonJson, z.Sensitivity)).ToList(),
                 recordingMode, motionPreRollSeconds, motionPostRollSeconds,
-                ResolveEventsServiceUri(c.Capabilities)));
+                ResolveEventsServiceUri(c.Capabilities),
+                eventTagRulesLookup[c.Id].Select(r => new NodeConfigEventTagRuleDto(r.Id, r.StartTopic, r.StopTopic, r.DrivesRecording)).ToList()));
         }
 
         return new NodeConfigResponse(cameraDtos, storageRoot, watermarkPercent, mediaSigningKey);
@@ -271,8 +279,13 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         // for one span all carry the same triple.
         foreach (var item in spans)
         {
+            // M8 pass 8: EventTagRuleId joins the identity key alongside ZoneId — both the built-in
+            // camera-pushed classifier and a custom EventTagRule report with ZoneId=null, so without
+            // this a rule's span starting at the same instant as a built-in motion span (or another
+            // rule's) would collide with it here and silently steal its checkpoints/EndUtc extension.
             var existing = await db.MotionSpans.FirstOrDefaultAsync(m =>
-                m.CameraId == item.CameraId && m.ZoneId == item.ZoneId && m.StartUtc == item.StartUtc, ct);
+                m.CameraId == item.CameraId && m.ZoneId == item.ZoneId && m.EventTagRuleId == item.EventTagRuleId
+                && m.StartUtc == item.StartUtc, ct);
 
             if (existing is not null)
             {
@@ -287,10 +300,14 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             {
                 CameraId = item.CameraId,
                 ZoneId = item.ZoneId,
-                // M8 pass 6: a null ZoneId only ever comes from a camera-pushed ONVIF event — a
-                // ServerMotion span always names the zone that detected it — so Source is inferred
-                // from that rather than carried as a separate field on the report item.
-                Source = item.ZoneId is null ? MotionSource.CameraEvent : MotionSource.ServerMotion,
+                EventTagRuleId = item.EventTagRuleId,
+                // M8 pass 8: a non-null EventTagRuleId always means a custom-tag span regardless of
+                // ZoneId (which a custom-tag report never sets anyway) — checked first for that
+                // reason. A null EventTagRuleId falls back to pass 6's original two-way inference: a
+                // null ZoneId only ever comes from the built-in camera-pushed classifier, since a
+                // ServerMotion span always names the zone that detected it.
+                Source = item.EventTagRuleId is not null ? MotionSource.CustomTag
+                    : item.ZoneId is null ? MotionSource.CameraEvent : MotionSource.ServerMotion,
                 StartUtc = item.StartUtc,
                 EndUtc = item.EndUtc,
                 Score = item.Score

@@ -274,6 +274,53 @@ public class TimelineServiceTests
     }
 
     [Fact]
+    public async Task GlobalBucketsScopedToCameraIdsIgnoreActivityFromCamerasOutsideTheSet()
+    {
+        // The fix for "the overall timeline should only show events/recording for the cameras in
+        // the selected view" — cam-2's segment must not show up when the caller only asked about
+        // cam-1, even though the unscoped (cameraIds: null) behavior would have included it.
+        var db = NewDb();
+        var node = new NidusVMS.Core.Entities.Node { Id = Guid.NewGuid(), Name = "node-1", ApiKeyHash = "hash" };
+        var camera1 = new Camera { Id = Guid.NewGuid(), Name = "cam-1", Host = "10.0.0.1", DeviceServiceUri = "http://10.0.0.1/onvif/device_service", NodeId = node.Id };
+        var camera2 = new Camera { Id = Guid.NewGuid(), Name = "cam-2", Host = "10.0.0.2", DeviceServiceUri = "http://10.0.0.2/onvif/device_service", NodeId = node.Id };
+        var from = new DateTime(2026, 8, 9, 0, 0, 0, DateTimeKind.Utc);
+        db.AddRange(node, camera1, camera2);
+        db.Segments.AddRange(
+            new Segment { CameraId = camera1.Id, NodeId = node.Id, StreamRole = CameraStreamRole.Main, StartUtc = from.AddMinutes(10), EndUtc = from.AddMinutes(11), FilePath = "a.mp4" },
+            new Segment { CameraId = camera2.Id, NodeId = node.Id, StreamRole = CameraStreamRole.Main, StartUtc = from.AddMinutes(40), EndUtc = from.AddMinutes(41), FilePath = "b.mp4" });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db);
+        var scoped = await service.GetGlobalBucketsAsync(from, from.AddHours(1), 60, [camera1.Id]);
+        var unscoped = await service.GetGlobalBucketsAsync(from, from.AddHours(1), 60);
+
+        Assert.True(scoped[10].HasRecording);   // cam-1's own segment
+        Assert.False(scoped[40].HasRecording);  // cam-2's segment excluded — outside the requested set
+        Assert.True(unscoped[40].HasRecording); // sanity check: cam-2's segment IS there without scoping
+    }
+
+    [Fact]
+    public async Task GlobalBucketsWithAnEmptyCameraIdsListFallsBackToEveryCamera()
+    {
+        // Same fallback as null — a caller with a genuinely empty scope (e.g. a view with zero
+        // cameras) gets the original "merged across everything" behavior rather than an empty
+        // result, matching GetGlobalBucketsAsync's own doc comment.
+        var (db, cameraId, nodeId) = await SeedCameraAsync();
+        var from = new DateTime(2026, 8, 9, 0, 0, 0, DateTimeKind.Utc);
+        db.Segments.Add(new Segment
+        {
+            CameraId = cameraId, NodeId = nodeId, StreamRole = CameraStreamRole.Main,
+            StartUtc = from.AddMinutes(10), EndUtc = from.AddMinutes(11), FilePath = "a.mp4"
+        });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db);
+        var buckets = await service.GetGlobalBucketsAsync(from, from.AddHours(1), 60, []);
+
+        Assert.True(buckets[10].HasRecording);
+    }
+
+    [Fact]
     public async Task GlobalBucketsAreEmptyWithNoSegmentsAtAll()
     {
         var db = NewDb();
@@ -347,5 +394,51 @@ public class TimelineServiceTests
         var active = await service.GetCamerasWithActiveMotionAsync();
 
         Assert.DoesNotContain(cameraId, active);
+    }
+
+    // ── EventTagRule color (M8 pass 8) ─────────────────────────────────────
+
+    [Fact]
+    public async Task BucketCoveringACustomTagSpanCarriesTheRulesColor()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var from = new DateTime(2026, 8, 9, 0, 0, 0, DateTimeKind.Utc);
+        var rule = new EventTagRule
+        {
+            Id = Guid.NewGuid(), CameraId = cameraId, Name = "Package", StartTopic = "tns1:Custom/Start",
+            ColorHex = "#ff9800", DrivesRecording = false, IsEnabled = true
+        };
+        db.EventTagRules.Add(rule);
+        db.MotionSpans.Add(new MotionSpan
+        {
+            CameraId = cameraId, Source = MotionSource.CustomTag, EventTagRuleId = rule.Id,
+            StartUtc = from.AddMinutes(20), EndUtc = from.AddMinutes(21), Score = 1.0
+        });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db);
+        var buckets = await service.GetBucketsAsync(cameraId, from, from.AddHours(1), 60);
+
+        Assert.Equal("#ff9800", buckets[20].TagColorHex);
+        Assert.True(buckets[20].HasMotion); // still counts as motion for the built-in green/blue logic too
+        Assert.Null(buckets[0].TagColorHex);
+    }
+
+    [Fact]
+    public async Task BucketWithOnlyBuiltInMotionHasNoTagColor()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var from = new DateTime(2026, 8, 9, 0, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.Add(new MotionSpan
+        {
+            CameraId = cameraId, Source = MotionSource.ServerMotion,
+            StartUtc = from.AddMinutes(20), EndUtc = from.AddMinutes(21), Score = 0.5
+        });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db);
+        var buckets = await service.GetBucketsAsync(cameraId, from, from.AddHours(1), 60);
+
+        Assert.Null(buckets[20].TagColorHex);
     }
 }

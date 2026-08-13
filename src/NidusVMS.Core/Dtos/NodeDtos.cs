@@ -18,6 +18,12 @@ public record NodeConfigStreamDto(Guid StreamId, string Role, string RtspUri,
 /// recorder node polygon data it can't act on.</summary>
 public record NodeConfigZoneDto(Guid ZoneId, string Kind, string PolygonJson, double Sensitivity);
 
+/// <summary>M8 pass 8: one user-configured EventTagRule, handed to the node so CameraEventSession can
+/// match incoming ONVIF notifications against it independently of the built-in motion classifier.
+/// Only enabled rules for this camera are ever included. Color isn't needed here — that's purely a
+/// web-tier/timeline-rendering concern the node has no reason to know about.</summary>
+public record NodeConfigEventTagRuleDto(Guid Id, string StartTopic, string? StopTopic, bool DrivesRecording);
+
 /// <summary>RecordingMode is "Continuous" or "Motion" (see ISettingsResolver's Recording.Mode key) —
 /// only these two exist as of M8; Schedule/Event from the plan's original four-mode design remain
 /// unbuilt (no Schedules table). MotionPreRollSeconds/MotionPostRollSeconds
@@ -39,7 +45,7 @@ public record NodeConfigZoneDto(Guid ZoneId, string Kind, string PolygonJson, do
 public record NodeConfigCameraDto(Guid CameraId, string Name, string? Username, string? Password,
     List<NodeConfigStreamDto> Streams, int? RetentionDays, long? QuotaBytes, List<NodeConfigZoneDto> Zones,
     string RecordingMode, int MotionPreRollSeconds, int MotionPostRollSeconds,
-    string? EventsServiceUri);
+    string? EventsServiceUri, List<NodeConfigEventTagRuleDto> EventTagRules);
 public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? StorageRootPath, int WatermarkPercent, string MediaSigningKey);
 
 /// <summary>One completed MotionSpan, batch-reported the same way SegmentReportItem is — see
@@ -49,9 +55,10 @@ public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? Stor
 /// per camera per interesting event), not per-frame Detections-scale volume.
 ///
 /// ZoneId is null for a camera-pushed (M8 pass 6) span — an ONVIF PullPoint event has no concept of
-/// one of our own drawn ServerMotion zones — and non-null for a ServerMotion span; NodeService
-/// infers Source from that instead of carrying a separate field.</summary>
-public record MotionSpanReportItem(Guid CameraId, Guid? ZoneId, DateTime StartUtc, DateTime EndUtc, double Score);
+/// one of our own drawn ServerMotion zones — and non-null for a ServerMotion span. EventTagRuleId
+/// (M8 pass 8) is set only for a custom-tag-sourced span; NodeService infers Source from whichever
+/// of the two is set (both null = built-in CameraEvent motion) instead of carrying a separate field.</summary>
+public record MotionSpanReportItem(Guid CameraId, Guid? ZoneId, DateTime StartUtc, DateTime EndUtc, double Score, Guid? EventTagRuleId = null);
 
 /// <summary>M8 pass 6: one raw ONVIF PullPoint notification, reported the same batched way a
 /// MotionSpan or Segment is. IsMotion (see CameraEventClassifier, run on the node as each

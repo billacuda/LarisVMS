@@ -27,6 +27,13 @@ window.nidusvmsViewPlay = (function () {
                 '<div class="position-relative flex-grow-1 bg-black" style="min-height: 0;">' +
                     '<video class="view-cell-video" style="width:100%; height:100%; object-fit:contain;" muted playsinline></video>' +
                     '<div class="position-absolute top-50 start-50 translate-middle text-white small text-center px-2 view-cell-status"></div>' +
+                    // Exactly two buttons, shown on hover — not native <video controls>: that
+                    // includes click-anywhere-on-the-video-to-pause in most browsers, which makes no
+                    // sense for a continuous live feed and was confirmed live as unwanted.
+                    '<div class="position-absolute bottom-0 end-0 m-1 btn-group btn-group-sm view-cell-controls d-none">' +
+                        '<button type="button" class="btn btn-outline-light view-cell-mute" style="padding:.1rem .35rem;" title="Mute">🔊</button>' +
+                        '<button type="button" class="btn btn-outline-light view-cell-fullscreen" style="padding:.1rem .35rem;" title="Fullscreen">⛶</button>' +
+                    '</div>' +
                 '</div>' +
                 '<div class="px-1 small text-truncate bg-body-tertiary">' + escHtml(name) + '</div>' +
             '</div>'
@@ -39,14 +46,34 @@ window.nidusvmsViewPlay = (function () {
         var status = el.querySelector('.view-cell-status');
         if (!video || !cam) return;
 
-        // Native browser controls (volume/mute, fullscreen) only while hovering — same treatment as
-        // Pages/Live's tiles, and the only way to unmute a cell here since there's no dedicated
-        // mute button on this page.
         var hoverTarget = video.parentElement;
-        if (hoverTarget) {
-            hoverTarget.addEventListener('mouseenter', function () { video.controls = true; });
-            hoverTarget.addEventListener('mouseleave', function () { video.controls = false; });
+        var controls = el.querySelector('.view-cell-controls');
+        var muteBtn = el.querySelector('.view-cell-mute');
+        var fullscreenBtn = el.querySelector('.view-cell-fullscreen');
+
+        if (hoverTarget && controls) {
+            hoverTarget.addEventListener('mouseenter', function () { controls.classList.remove('d-none'); });
+            hoverTarget.addEventListener('mouseleave', function () { controls.classList.add('d-none'); });
         }
+        function setMuteIcon() {
+            if (!muteBtn) return;
+            muteBtn.textContent = video.muted ? '🔇' : '🔊';
+            muteBtn.title = video.muted ? 'Unmute' : 'Mute';
+        }
+        if (muteBtn) {
+            muteBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                video.muted = !video.muted;
+                setMuteIcon();
+            });
+        }
+        if (fullscreenBtn) {
+            fullscreenBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                if (video.requestFullscreen) video.requestFullscreen().catch(function () {});
+            });
+        }
+        setMuteIcon();
 
         stopFns[cell.id] = window.nidusvmsLiveView.start(cell.cameraId, video, status, cam.codec, cam.hasAudio);
     }

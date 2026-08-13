@@ -71,6 +71,74 @@ window.nidusvmsTimeline = (function () {
                 : { hour: 'numeric', minute: '2-digit', second: '2-digit' });
         }
 
+        // Local midnight at or before ms. Not `ms - (ms % 86400000)`, which would find UTC midnight
+        // and land hours off in any zone but UTC — every other timestamp a user reads on this
+        // timeline is rendered in their own local time (see the plan's storage-vs-display rule), so
+        // the day boundaries drawn on it have to be local days too.
+        function startOfLocalDay(ms) {
+            var d = new Date(ms);
+            d.setHours(0, 0, 0, 0);
+            return d;
+        }
+
+        // Day boundaries, each with a date badge. Below day-level zoom the tick labels are
+        // time-only, so a window that crosses midnight gives no indication the day changed, and one
+        // sitting entirely inside a single day names no date at all — in both cases you can scroll
+        // for a while with no idea which day you're looking at. Skipped at day+ zoom, where every
+        // tick label is already a date and this would only duplicate them.
+        function drawDayMarkers(r, span, w, h, barTop, tickInterval) {
+            if (tickInterval >= 86400000) return;
+
+            ctx.font = '9px sans-serif';
+            ctx.textBaseline = 'top';
+            ctx.textAlign = 'left';
+
+            for (var cursor = startOfLocalDay(r.from); cursor.getTime() <= r.to;) {
+                var dayStart = cursor.getTime();
+                // Advance by calendar day, not by a fixed 86400000ms: a DST transition day is 23 or
+                // 25 hours long, and fixed-millisecond stepping would walk every subsequent boundary
+                // an hour off midnight for the rest of the window.
+                var next = new Date(cursor);
+                next.setDate(next.getDate() + 1);
+
+                var startX = ((dayStart - r.from) / span) * w;
+                var endX = ((next.getTime() - r.from) / span) * w;
+
+                // Only draw the divider when the day actually begins inside the window — the
+                // left-most day is normally already in progress when the window opens, and a line at
+                // x<0 would just be clipped away anyway.
+                if (startX > 0) {
+                    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(Math.round(startX) + 0.5, 0);
+                    ctx.lineTo(Math.round(startX) + 0.5, h);
+                    ctx.stroke();
+                }
+
+                var label = new Date(dayStart).toLocaleDateString(undefined,
+                    { weekday: 'short', month: 'short', day: 'numeric' });
+                var labelWidth = ctx.measureText(label).width;
+                var badgeX = Math.max(0, startX) + 3;
+                var visibleWidth = Math.min(endX, w) - Math.max(startX, 0);
+
+                // A day with only a sliver on screen can't hold its own name — a clipped or
+                // overflowing badge reads as belonging to the neighbouring day, which is worse than
+                // no badge at all.
+                if (visibleWidth >= labelWidth + 10 && badgeX + labelWidth + 2 <= w) {
+                    // Drawn over the coverage bar (the canvas is only ~30px tall — there's no spare
+                    // row for this), so it needs its own backdrop to stay readable against green
+                    // motion, blue recording, or any custom tag color underneath.
+                    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+                    ctx.fillRect(badgeX - 2, barTop, labelWidth + 4, 11);
+                    ctx.fillStyle = '#e8e8e8';
+                    ctx.fillText(label, badgeX, barTop + 1);
+                }
+
+                cursor = next;
+            }
+        }
+
         // Smallest "nice" interval whose tick count still fits comfortably in the canvas width —
         // roughly one label per 90px, wide enough that adjacent labels never overlap even at the
         // longest ("Aug 10" + time) format.
@@ -135,17 +203,40 @@ window.nidusvmsTimeline = (function () {
             var nowMs = Date.now();
             var nowX = ((nowMs - r.from) / span) * w;
 
+            // Adjacent buckets sharing the same color are merged into one fillRect run instead of
+            // one call per bucket — at a wide zoom (up to ~2000 buckets, close to one per pixel) two
+            // same-colored neighbors drawn separately could leave a hairline gap between them from
+            // sub-pixel rounding (bucket N's x2 not landing on exactly the same float as bucket N+1's
+            // x1), which read as thin flickering stripes through a solid run of coverage — worse
+            // during playback, where the whole strip's pixel positions shift slightly on every
+            // redraw (following playback), so those hairline gaps didn't just look striped, they
+            // visibly pulsed as their positions jittered frame to frame. One rect per same-colored
+            // run has no seams to flicker, and coordinates are rounded once per run rather than
+            // independently per bucket.
+            var runStartX = null, runColor = null;
+            function flushRun(endX) {
+                if (runStartX === null) return;
+                var x1 = Math.round(runStartX), x2 = Math.round(endX);
+                ctx.fillStyle = runColor;
+                ctx.fillRect(x1, barTop, Math.max(1, x2 - x1), barBottom - barTop);
+                runStartX = null;
+            }
             buckets.forEach(function (b) {
                 var bStart = new Date(b.startUtc).getTime();
                 var bEnd = Math.min(new Date(b.endUtc).getTime(), nowMs);
                 if (bEnd <= bStart) return;
                 var x1 = ((bStart - r.from) / span) * w;
                 var x2 = ((bEnd - r.from) / span) * w;
-                // Motion wins over plain recorded coverage — it's the more actionable signal, and a
-                // bucket with both is drawn identically to motion-only rather than some blend.
-                ctx.fillStyle = b.hasMotion ? '#28e070' : (b.hasRecording ? '#1e6fd9' : 'rgba(255,255,255,0.08)');
-                ctx.fillRect(x1, barTop, Math.max(1, x2 - x1), barBottom - barTop);
+                // M8 pass 8: a custom EventTagRule's own color wins outright over the built-in
+                // green/blue/gray scheme, the same way motion already wins over plain recorded
+                // coverage below — see TimelineBucketDto.TagColorHex's doc comment. Null (the default,
+                // and every bucket on a camera with no EventTagRules configured at all) falls straight
+                // through to the unchanged built-in scheme.
+                var color = b.tagColorHex || (b.hasMotion ? '#28e070' : (b.hasRecording ? '#1e6fd9' : 'rgba(255,255,255,0.08)'));
+                if (runColor !== null && color !== runColor) flushRun(x1);
+                if (runStartX === null) { runStartX = x1; runColor = color; }
             });
+            flushRun(w);
 
             // Everything right of "now" is time that hasn't happened yet — flatly darker than the
             // empty-track color so it reads as "nothing can ever be here", not "nothing recorded
@@ -191,6 +282,10 @@ window.nidusvmsTimeline = (function () {
                 ctx.fillText(label, x, barBottom + 4);
             }
             ctx.textAlign = 'left';
+
+            // After the ticks so a day divider reads as the stronger boundary of the two, before the
+            // playhead so the marker still sits on top of everything.
+            drawDayMarkers(r, span, w, h, barTop, tickInterval);
 
             // The playhead never moves from dead center — the strip above moves under it instead.
             var centerPx = w / 2;
@@ -311,7 +406,17 @@ window.nidusvmsTimeline = (function () {
             // already knows the video moved there (or is the one that caused it), this just keeps
             // this strip's visuals in sync with it. Still clamped — playback itself can never
             // legitimately be "in the future" either.
-            setCenter: function (ms) { centerMs = clampCenter(ms); draw(); },
+            //
+            // Ignored entirely while this timeline is being actively dragged: the page-level
+            // playhead-follows-playback loop (setInterval, every 500ms) calls this on every tick
+            // regardless of what the user is doing, and calling it mid-drag snapped the strip back
+            // to the advancing playback position on every tick — fighting the user's own drag hard
+            // enough to feel like the timeline "wasn't responding" to it, since a drag rarely
+            // finishes inside one 500ms window. The drag's own pointermove handler is already the
+            // authority over centerMs while dragging=true; once it ends, onScrub's own report of the
+            // release position is what the caller acts on anyway, so nothing is lost by ignoring
+            // programmatic recenters in between.
+            setCenter: function (ms) { if (dragging) return; centerMs = clampCenter(ms); draw(); },
             getCenter: function () { return centerMs; },
             // Mirrors a zoom that happened on a sibling timeline — same no-callback-re-fire
             // reasoning as setCenter, so two synced timelines can't bounce a change back and forth.

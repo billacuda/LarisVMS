@@ -28,6 +28,17 @@ public static class CameraEventClassifier
         if (string.IsNullOrEmpty(topic)) return false;
         if (!MotionTopicMarkers.Any(m => topic.Contains(m, StringComparison.OrdinalIgnoreCase))) return false;
 
+        return TryGetBooleanState(simpleItems);
+    }
+
+    /// <summary>M8 pass 8: the same "find whichever boolean state item is present" lookup
+    /// IsMotionActive uses for the built-in motion-family topics, generalized for a user-configured
+    /// EventTagRule's single-topic toggle mode — a rule with no StopTopic re-derives open/closed from
+    /// this same item on every notification for its StartTopic, rather than requiring a distinct
+    /// topic for the falling edge. Same "missing/unparseable state means not active" reasoning as
+    /// IsMotionActive: never manufacture an edge from a payload that doesn't actually confirm one.</summary>
+    public static bool TryGetBooleanState(IReadOnlyDictionary<string, string> simpleItems)
+    {
         foreach (var name in new[] { "State", "IsMotion", "Motion" })
         {
             if (simpleItems.TryGetValue(name, out var raw) && bool.TryParse(raw, out var value))

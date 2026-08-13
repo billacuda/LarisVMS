@@ -48,10 +48,18 @@ else
                            positioning context for the status child below, since position:absolute
                            (which it gets for free) is a valid containing block. *@
                         <div>
-                            <video class="w-100 h-100" muted playsinline></video>
+                            <video class="w-100 h-100" style="object-fit: contain;" muted playsinline></video>
                             <div class="position-absolute top-50 start-50 translate-middle text-white small text-center live-status px-2"></div>
                             <span class="badge bg-danger position-absolute top-0 start-0 m-1 live-motion-badge d-none"
                                   title="Motion detected">● Motion</span>
+                            @* Exactly two buttons, shown on hover — deliberately not native <video controls>:
+                               that includes a click-anywhere-on-the-video-to-pause behavior in most browsers,
+                               which makes no sense for a continuous live feed (there's nothing to "resume" from
+                               a pause on a live MSE stream) and was confirmed live as unwanted. *@
+                            <div class="position-absolute bottom-0 end-0 m-1 btn-group btn-group-sm live-controls d-none">
+                                <button type="button" class="btn btn-outline-light live-mute-toggle" style="padding:.1rem .35rem;" title="Mute">🔊</button>
+                                <button type="button" class="btn btn-outline-light live-fullscreen-toggle" style="padding:.1rem .35rem;" title="Fullscreen">⛶</button>
+                            </div>
                         </div>
                     </div>
                     <div class="card-body py-2">
@@ -69,19 +77,37 @@ else
         document.querySelectorAll('[data-camera-tile]').forEach(function (tile) {
             var video = tile.querySelector('video');
             var status = tile.querySelector('.live-status');
+            var controls = tile.querySelector('.live-controls');
+            var muteBtn = tile.querySelector('.live-mute-toggle');
+            var fullscreenBtn = tile.querySelector('.live-fullscreen-toggle');
 
-            // Native browser controls (play/pause, volume/mute, fullscreen) only while hovering —
-            // replaces the old always-there custom mute button, which duplicated what the browser's
-            // own control bar already offers. Toggling the `controls` attribute itself (not just its
-            // visibility via CSS) is what actually shows/hides the native bar cross-browser.
-            tile.addEventListener('mouseenter', function () { video.controls = true; });
-            tile.addEventListener('mouseleave', function () { video.controls = false; });
+            tile.addEventListener('mouseenter', function () { if (controls) controls.classList.remove('d-none'); });
+            tile.addEventListener('mouseleave', function () { if (controls) controls.classList.add('d-none'); });
+
+            function setMuteIcon() {
+                if (!muteBtn) return;
+                muteBtn.textContent = video.muted ? '🔇' : '🔊';
+                muteBtn.title = video.muted ? 'Unmute' : 'Mute';
+            }
+            if (muteBtn) {
+                muteBtn.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    video.muted = !video.muted;
+                    setMuteIcon();
+                });
+            }
+            if (fullscreenBtn) {
+                fullscreenBtn.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    if (video.requestFullscreen) video.requestFullscreen().catch(function () {});
+                });
+            }
 
             // Starts muted regardless of any previous session's state — autoplay-with-sound is
             // blocked by browser policy anyway, and starting muted keeps behavior consistent across
-            // tiles instead of depending on whichever camera happened to be unmuted last. The native
-            // control bar's own volume control is how a viewer unmutes from here.
+            // tiles instead of depending on whichever camera happened to be unmuted last.
             video.muted = true;
+            setMuteIcon();
             // No stop() is kept: every camera connects for as long as this page stays open, and
             // start()'s own auto-reconnect handles drops (network blips, wifi roaming) on its own —
             // there is currently no user action on this page that should end a session early.

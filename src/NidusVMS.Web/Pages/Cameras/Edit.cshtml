@@ -7,7 +7,10 @@
     <h1 class="mb-0">@(Model.IsNew ? "Add camera" : Model.Name)</h1>
     @if (!Model.IsNew)
     {
-        <a class="btn btn-outline-secondary" asp-page="Zones" asp-route-id="@Model.Id">Zones</a>
+        <div class="btn-group">
+            <a class="btn btn-outline-secondary" asp-page="Zones" asp-route-id="@Model.Id">Zones</a>
+            <a class="btn btn-outline-secondary" asp-page="EventTags" asp-route-id="@Model.Id">Event tags</a>
+        </div>
     }
 </div>
 

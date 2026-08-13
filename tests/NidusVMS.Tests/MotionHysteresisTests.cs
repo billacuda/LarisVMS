@@ -257,6 +257,58 @@ public class MotionHysteresisTests
     }
 
     [Fact]
+    public void WithNonzeroEndAfterAFalseImmediatelyFollowedByATrueNeverClosesTheSpan()
+    {
+        // Documents the real bug found from live production CameraEvents data (M8 pass 9):
+        // CameraEventSession originally used endAfter: 2s for its built-in classifier, reasoning it
+        // would "absorb a quick flicker" the same way a continuously-polled frame-diff source needs.
+        // But Observe's close check only evaluates elapsed time against a *later* call — the false
+        // observation that sets quietSince always computes zero elapsed against itself. A
+        // continuously-ticked source (MotionSession's ~200ms frames) naturally supplies that later
+        // call within a few ticks; an event-driven ONVIF feed does not, since Observe is only invoked
+        // when an actual notification arrives. A real camera's true/false pairs recur every few tens
+        // of seconds with nothing else in between, so the "later" qualifying tick this mechanism
+        // depends on never came — motion stayed reported as active indefinitely, and Motion-mode
+        // recording never stopped despite a clean falling edge appearing in the event log every time.
+        var h = new MotionHysteresis(startAfter: TimeSpan.Zero, endAfter: TimeSpan.FromSeconds(2));
+
+        h.Observe(T0, true, 1.0); // rising edge
+        var falseResult = h.Observe(T0.AddSeconds(10), false, 0.0); // falling edge, 10s later
+        Assert.Null(falseResult); // does NOT close — elapsed against itself is always zero
+
+        // A new burst starts well after the false's own timestamp — well past what endAfter alone
+        // would require — but since no OTHER call happened in between to notice the elapsed time,
+        // the span never actually closed; it just silently stays open across the "gap."
+        var trueAgain = h.Observe(T0.AddSeconds(70), true, 1.0);
+        Assert.Null(trueAgain);
+        Assert.True(h.IsActive); // still "active" — the falling edge at T0+10s was effectively lost
+    }
+
+    [Fact]
+    public void WithZeroEndAfterAFalseClosesImmediatelyEvenWhenFollowedByANewTrue()
+    {
+        // The fix: CameraEventSession now constructs every one of its hysteresis instances (built-in
+        // classifier and every EventTagRule, two-topic or toggle) with endAfter: Zero — real ONVIF
+        // devices already debounce their own state internally, so there's nothing left to absorb, and
+        // Zero sidesteps the "needs a later call" mechanism entirely: elapsed-since-itself is always
+        // exactly zero, which is always >= TimeSpan.Zero.
+        var h = new MotionHysteresis(startAfter: TimeSpan.Zero, endAfter: TimeSpan.Zero);
+
+        h.Observe(T0, true, 1.0);
+        var falseResult = h.Observe(T0.AddSeconds(10), false, 0.0);
+
+        Assert.NotNull(falseResult); // closes in the same call that reported the falling edge
+        Assert.Equal(T0, falseResult!.StartUtc);
+        Assert.Equal(T0.AddSeconds(10), falseResult.EndUtc);
+        Assert.False(h.IsActive);
+
+        // A later true correctly opens a brand-new, separate span rather than extending a stale one.
+        var reopened = h.Observe(T0.AddSeconds(70), true, 1.0);
+        Assert.Null(reopened);
+        Assert.True(h.IsActive);
+    }
+
+    [Fact]
     public void PeakScoreTracksTheMaximumObservedDuringTheSpanNotTheLast()
     {
         var h = new MotionHysteresis(startAfter: TimeSpan.Zero, endAfter: TimeSpan.FromSeconds(3));

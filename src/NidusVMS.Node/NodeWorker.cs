@@ -291,6 +291,11 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             var span = recorder.Session.CurrentInProgressSpan(now);
             if (span is not null)
                 _pendingMotionSpans.Enqueue(new MotionSpanReportItem(cameraId, null, span.StartUtc, span.EndUtc, span.PeakScore));
+
+            // M8 pass 8: same checkpointing, per configured EventTagRule, so a long-running custom
+            // tag shows up on the timeline while it's still in progress instead of only once it closes.
+            foreach (var (ruleId, ruleSpan) in recorder.Session.CurrentInProgressRuleSpans(now))
+                _pendingMotionSpans.Enqueue(new MotionSpanReportItem(cameraId, null, ruleSpan.StartUtc, ruleSpan.EndUtc, ruleSpan.PeakScore, ruleId));
         }
     }
 
@@ -447,13 +452,15 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         return storageRoot;
     }
 
-    /// <summary>M8 pass 6: starts this camera's ONVIF event polling session if it advertises an
-    /// Events service and doesn't already have one running — independent of ReconcileMotion above
-    /// (a camera can have a ServerMotion zone session, an event session, both, or neither). No
-    /// restart-on-change logic the way ReconcileMotion has for zone config: EventsServiceUri and
-    /// credentials essentially never change for an existing camera in practice, and if they do, a
-    /// session that starts failing its next subscribe attempt naturally recovers on its own retry —
-    /// not worth a signature-comparison scheme for pass 1.</summary>
+    /// <summary>M8 pass 6/8: starts this camera's ONVIF event polling session if it advertises an
+    /// Events service — independent of ReconcileMotion above (a camera can have a ServerMotion zone
+    /// session, an event session, both, or neither). EventsServiceUri/credentials still get no
+    /// restart-on-change handling (see the pass 6 reasoning this comment used to carry: those
+    /// essentially never change for an existing camera, and a session that starts failing its next
+    /// subscribe attempt naturally recovers on its own retry) — but the EventTagRule set does, the
+    /// same way ReconcileMotion restarts on a changed zone signature: a rule added/edited/deleted
+    /// through the admin UI needs to take effect on this session's very next reconcile, not silently
+    /// wait for the camera to be reassigned.</summary>
     private void ReconcileEvents(NodeConfigCameraDto camera, CancellationToken stoppingToken)
     {
         if (string.IsNullOrEmpty(camera.EventsServiceUri) || !Uri.TryCreate(camera.EventsServiceUri, UriKind.Absolute, out var eventsUri))
@@ -466,23 +473,36 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             return;
         }
 
-        if (_activeEvents.ContainsKey(camera.CameraId)) return; // already running
+        var ruleSignature = BuildRuleConfigSignature(camera.EventTagRules);
+        if (_activeEvents.TryGetValue(camera.CameraId, out var existing))
+        {
+            if (existing.RuleConfigSignature == ruleSignature) return; // already running, rules unchanged
+            existing.Cts.Cancel();
+            _activeEvents.TryRemove(camera.CameraId, out _);
+            _logger.LogInformation("Event tag rule configuration changed for camera {CameraId} ({Name}) — restarting event session.", camera.CameraId, camera.Name);
+        }
 
         var credentials = string.IsNullOrEmpty(camera.Username) ? null : new OnvifCredentials(camera.Username, camera.Password ?? "");
         var eventsCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         var eventsLogger = loggerFactory.CreateLogger($"Events[{camera.Name}]");
-        var eventSession = new CameraEventSession(eventsUri, credentials, onvifEventsClient, eventsLogger);
+        var eventSession = new CameraEventSession(eventsUri, credentials, onvifEventsClient, eventsLogger, camera.EventTagRules);
 
         var capturedCameraId = camera.CameraId; // same staleness reasoning as HandleSegmentCompleted's own capture
         eventSession.EventObserved += observed => _pendingCameraEvents.Enqueue(
             new CameraEventReportItem(capturedCameraId, observed.Topic, observed.UtcTime, observed.PayloadJson, observed.IsMotion));
         eventSession.MotionSpanCompleted += result => _pendingMotionSpans.Enqueue(
             new MotionSpanReportItem(capturedCameraId, null, result.StartUtc, result.EndUtc, result.PeakScore));
+        eventSession.RuleSpanCompleted += (ruleId, result) => _pendingMotionSpans.Enqueue(
+            new MotionSpanReportItem(capturedCameraId, null, result.StartUtc, result.EndUtc, result.PeakScore, ruleId));
 
         var eventsRunTask = eventSession.RunAsync(eventsCts.Token);
-        _activeEvents[camera.CameraId] = new CameraEventRecorder(eventsCts, eventsRunTask, eventSession);
-        _logger.LogInformation("Started ONVIF event polling for camera {CameraId} ({Name}).", camera.CameraId, camera.Name);
+        _activeEvents[camera.CameraId] = new CameraEventRecorder(eventsCts, eventsRunTask, eventSession, ruleSignature);
+        _logger.LogInformation("Started ONVIF event polling for camera {CameraId} ({Name}), {RuleCount} tag rule(s).", camera.CameraId, camera.Name, camera.EventTagRules.Count);
     }
+
+    // Same content-equality-not-hash reasoning as BuildZoneConfigSignature.
+    private static string BuildRuleConfigSignature(List<NodeConfigEventTagRuleDto> rules) =>
+        string.Join('|', rules.OrderBy(r => r.Id).Select(r => $"{r.Id}:{r.StartTopic}:{r.StopTopic}:{r.DrivesRecording}"));
 
     /// <summary>M8: starts/restarts/stops this camera's motion session independently of its Main
     /// recording above — a camera can be recording fine with no motion session at all (no
@@ -652,10 +672,16 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         // its own — it's only false once an actual falling-edge notification closes the span — so
         // ORing it in here is what makes recording keep being retained for as long as the camera
         // hasn't said motion stopped, not until some arbitrary staleness window expires.
+        // M8 pass 8: a DrivesRecording=true EventTagRule is one more signal source alongside the
+        // built-in classifier and the server-side zone — a purely-tagging rule (DrivesRecording=false)
+        // deliberately never reaches here, see AnyDrivingRuleHasMotionSince/AnyDrivingRuleActive's own
+        // doc comments.
         var windowStart = pending.Segment.StartUtc.AddSeconds(-pending.PostRollSeconds);
         var hadMotionInWindow =
             (hasMotionSession && motionRecorder!.Session.HasMotionSince(windowStart)) ||
-            (hasEventSession && (eventRecorder!.Session.HasMotionSince(windowStart) || eventRecorder.Session.IsMotionActive));
+            (hasEventSession && (
+                eventRecorder!.Session.HasMotionSince(windowStart) || eventRecorder.Session.IsMotionActive ||
+                eventRecorder.Session.AnyDrivingRuleHasMotionSince(windowStart) || eventRecorder.Session.AnyDrivingRuleActive));
 
         if (ShouldDiscardSegment("Motion", hasMotionSession || hasEventSession, hadMotionInWindow))
         {

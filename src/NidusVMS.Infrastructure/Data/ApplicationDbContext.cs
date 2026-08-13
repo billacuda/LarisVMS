@@ -51,6 +51,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<Zone> Zones => Set<Zone>();
     public DbSet<MotionSpan> MotionSpans => Set<MotionSpan>();
     public DbSet<CameraEvent> CameraEvents => Set<CameraEvent>();
+    public DbSet<EventTagRule> EventTagRules => Set<EventTagRule>();
 
     // ── Views (M6) ───────────────────────────────────────────────────────────
     public DbSet<View> Views => Set<View>();
@@ -228,6 +229,10 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             // expressed as a DB-level cascade.
             e.HasOne(x => x.Zone).WithMany()
                 .HasForeignKey(x => x.ZoneId).OnDelete(DeleteBehavior.Restrict);
+            // Same multi-cascade-path reasoning as Zone above, and the same application-code
+            // null-out workaround — EventTagRuleService.DeleteAsync, not a DB cascade.
+            e.HasOne(x => x.EventTagRule).WithMany()
+                .HasForeignKey(x => x.EventTagRuleId).OnDelete(DeleteBehavior.Restrict);
             e.HasKey(x => x.Id).IsClustered(false);
             e.HasIndex(x => new { x.CameraId, x.StartUtc }).IsClustered();
         });
@@ -240,6 +245,18 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.OnvifTopic).HasMaxLength(500).IsRequired();
             e.HasKey(x => x.Id).IsClustered(false);
             e.HasIndex(x => new { x.CameraId, x.ReceivedUtc }).IsClustered();
+        });
+
+        // ── EventTagRule (M8 pass 8) ────────────────────────────────────────────
+        builder.Entity<EventTagRule>(e =>
+        {
+            e.HasOne(x => x.Camera).WithMany()
+                .HasForeignKey(x => x.CameraId).OnDelete(DeleteBehavior.Cascade);
+            e.Property(x => x.Name).HasMaxLength(100).IsRequired();
+            e.Property(x => x.StartTopic).HasMaxLength(500).IsRequired();
+            e.Property(x => x.StopTopic).HasMaxLength(500);
+            e.Property(x => x.ColorHex).HasMaxLength(9).IsRequired(); // "#rrggbbaa" worst case
+            e.HasIndex(x => new { x.CameraId, x.Name });
         });
     }
 }
