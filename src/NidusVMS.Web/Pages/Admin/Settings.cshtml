@@ -18,7 +18,7 @@
 
 <form method="post" class="row g-3" style="max-width: 560px;">
     <div class="col-12">
-        <h5>Storage &amp; retention</h5>
+        <h5 id="storage-retention">Storage &amp; retention</h5>
     </div>
     <div class="col-12">
         <label class="form-label">Global retention (days)</label>
@@ -46,7 +46,7 @@
     </div>
 
     <div class="col-12 mt-4">
-        <h5>Recording (M8 motion defaults)</h5>
+        <h5 id="recording">Recording (M8 motion defaults)</h5>
     </div>
     <div class="col-12">
         <label class="form-label">Global recording mode</label>
@@ -67,7 +67,7 @@
     </div>
 
     <div class="col-12 mt-4">
-        <h5>Node updates</h5>
+        <h5 id="node-updates">Node updates</h5>
     </div>
     <div class="col-12">
         <div class="form-check">
@@ -75,15 +75,17 @@
             <label asp-for="NodeAutoUpdateEnabled" class="form-check-label">Auto-update recorder nodes</label>
         </div>
         <div class="form-text">
-            When on, every recorder node whose reported version is older than the newest build for its
-            platform downloads and applies it automatically on its next heartbeat — see
-            <a asp-page="/Admin/NodeBuilds/Index">Admin &rarr; Node Builds</a> to upload one. Turning
-            this off freezes every node on whatever it's already running until it's turned back on.
+            When on, every recorder node whose reported version is older than the newest
+            <strong>approved</strong> build for its platform downloads and applies it automatically
+            on its next heartbeat — builds are registered by every <code>deploy.ps1</code> run and
+            wait for review on <a asp-page="/Admin/NodeBuilds/Index">Admin &rarr; Node Builds</a>.
+            Turning this off freezes every node on whatever it's already running until it's turned
+            back on.
         </div>
     </div>
 
     <div class="col-12 mt-4">
-        <h5>Node registration</h5>
+        <h5 id="node-registration">Node registration</h5>
     </div>
     <div class="col-12">
         <label class="form-label">Registration key</label>

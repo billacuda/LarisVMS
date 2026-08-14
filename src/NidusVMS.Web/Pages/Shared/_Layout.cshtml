@@ -60,8 +60,19 @@
                     <li class="nav-item"><a class="nav-link" href="/Exports">Exports</a></li>
                     <li class="nav-item"><a class="nav-link" href="/Views">Views</a></li>
                     <li class="nav-item"><a class="nav-link" href="/Cameras">Cameras</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/Admin/Nodes">Nodes</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/Admin/Settings">Settings</a></li>
+                    @* One dropdown for every admin-only page, not flat top-level links per page — Node
+                       Builds previously had no nav entry of its own at all (only reachable via a
+                       help-text link from Nodes/Settings), which is exactly the "can't find it"
+                       pattern this groups against for every admin page added after this one too. *@
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" id="adminNavDropdown" role="button"
+                           data-bs-toggle="dropdown" aria-expanded="false">Admin</a>
+                        <ul class="dropdown-menu dropdown-menu-dark" aria-labelledby="adminNavDropdown">
+                            <li><a class="dropdown-item" href="/Admin/Nodes">Nodes</a></li>
+                            <li><a class="dropdown-item" href="/Admin/NodeBuilds">Node Builds</a></li>
+                            <li><a class="dropdown-item" href="/Admin/Settings">Settings</a></li>
+                        </ul>
+                    </li>
                 </ul>
                 <ul class="navbar-nav me-2">
                     <li class="nav-item">

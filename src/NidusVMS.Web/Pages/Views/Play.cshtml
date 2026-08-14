@@ -12,7 +12,17 @@
 }
 <div class="d-flex justify-content-between align-items-center mb-2" id="viewPlayToolbar">
     <h1 class="mb-0 h4">@Model.Name</h1>
-    <div class="d-flex gap-2">
+    <div class="d-flex gap-2 align-items-center">
+        @if (Model.Views.Count > 1)
+        {
+            <select class="form-select form-select-sm" style="width:auto;" id="viewPlayPicker"
+                    onchange="if (this.value) location.href = '/Views/Play/' + this.value;" title="Switch view">
+                @foreach (var v in Model.Views)
+                {
+                    <option value="@v.Id" selected="@(v.Id == Model.CurrentViewId ? "selected" : null)">@v.Name</option>
+                }
+            </select>
+        }
         <button type="button" class="btn btn-sm btn-outline-secondary" id="kioskBtn" title="Toggle fullscreen kiosk mode">⛶ Fullscreen</button>
         <a class="btn btn-sm btn-outline-secondary" asp-page="Index">Back to views</a>
     </div>

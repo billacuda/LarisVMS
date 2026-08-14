@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Remuxes recorded segments written before the 0.21.1 recorder fix so they play back in a browser.
 

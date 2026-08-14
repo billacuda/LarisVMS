@@ -13,6 +13,13 @@ public class PlayModel(IViewService viewService, ICameraService cameraService) :
     public string Name { get; set; } = string.Empty;
     public string LayoutJson { get; set; } = "{\"cells\":[],\"mobileTwoColumn\":false}";
     public List<Camera> Cameras { get; set; } = [];
+    public Guid CurrentViewId { get; set; }
+
+    /// <summary>All other views the current user can switch to without leaving this page — the
+    /// picker itself lives only on Live/Index (M6), so once a user landed here that was the only
+    /// way to reach another view was "Back to views" + pick again; this mirrors that same picker
+    /// here so switching views doesn't require leaving live playback.</summary>
+    public List<View> Views { get; set; } = [];
 
     public bool IsTour { get; set; }
     public List<Guid> TourViewIds { get; set; } = [];
@@ -36,6 +43,8 @@ public class PlayModel(IViewService viewService, ICameraService cameraService) :
 
         Name = view.Name;
         LayoutJson = view.LayoutJson;
+        CurrentViewId = view.Id;
+        Views = await viewService.ListVisibleToAsync(userId);
 
         var all = await cameraService.ListAsync();
         Cameras = all.Where(c => c.IsEnabled && c.NodeId is not null).ToList();

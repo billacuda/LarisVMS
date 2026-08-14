@@ -5,6 +5,91 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.54.0] - 2026-08-13
+
+### Added
+
+- **Admin dropdown in the main nav** (Nodes, Node Builds, Settings), replacing the two flat
+  top-level "Nodes"/"Settings" links. Node Builds previously had no nav entry at all — only
+  reachable via a help-text link from Nodes or Settings — the exact "can't find it" pattern this
+  groups against for every admin page added from here on.
+
+## [0.53.0] - 2026-08-13
+
+### Fixed
+
+- **`install-node.ps1` had no UTF-8 BOM, breaking it under Windows PowerShell 5.1** — confirmed live
+  on nvr1 as "Missing closing ')'"/"Missing closing '}'" parse errors that made no sense against the
+  actual source. Root cause: PowerShell 7 (used to verify the file was fine) defaults to UTF-8 for a
+  BOM-less script; Windows PowerShell 5.1 (the Windows default `powershell.exe`) instead falls back
+  to the system ANSI codepage, which mangles the em dashes and curly apostrophes this codebase's
+  comments use throughout into byte sequences that break the tokenizer — reproduced exactly by
+  decoding the file as Windows-1252 and reparsing it. All four first-party scripts
+  (`install-node.ps1`, `build-node.ps1`, `deploy.ps1`, `fix-legacy-segments.ps1`) now carry a UTF-8
+  BOM, which both PowerShell versions honor correctly. The share copy at
+  `\\files1\install\NidusVMS\node\win\install-node.ps1` was updated directly so nvr1 doesn't need to
+  wait for a redeploy to retry.
+
+## [0.52.0] - 2026-08-13
+
+### Fixed
+
+- **Admin -> Nodes pointed at Setup -> Node for the recorder registration key**, a leftover from
+  before that control moved to Admin -> Settings — leaving two different pages able to show/rotate
+  the same key, with the stale help-text link being the one people actually got sent to. Now links
+  straight to Admin -> Settings' own Node registration section. Also refreshed the Node Builds copy
+  on both Admin -> Nodes and Admin -> Settings to describe the current `deploy.ps1`-registers /
+  admin-approves flow instead of the old "upload a build" wording it still had.
+
+## [0.51.0] - 2026-08-13
+
+### Fixed
+
+- **`deploy.ps1`'s new node-build-registration step (0.50.0) ran before EF migrations applied**, so
+  on the very first deploy after that same release added the `Status`/`ApprovedAt`/`ApprovedBy`
+  columns, the INSERT hit a database that didn't have them yet, failed, and was swallowed by the
+  step's own best-effort `catch` — leaving the just-built exe copied to disk with no matching queue
+  row and no visible error. Registration now runs after the migrations step instead of before the
+  app pool is even stopped. The 0.48.0 build stranded by this on the live deploy has been registered
+  by hand and is sitting on Admin -> Node Builds waiting on approval.
+
+## [0.50.0] - 2026-08-13
+
+### Changed
+
+- **Recorder-node build uploads on Admin -> Node Builds are gone, replaced by a `deploy.ps1`-driven
+  approval queue.** Uploading a several-hundred-MB self-contained `NidusVMS.Node.exe` through the
+  browser hit IIS's own `requestFiltering` `maxAllowedContentLength` as a 413 — enforced ahead of
+  Kestrel/ASP.NET Core, so the page's own `RequestSizeLimit`/`RequestFormLimits` attributes never
+  even got a chance to apply. `deploy.ps1` already runs locally on the server as Administrator, so
+  it now registers whatever `build-node.ps1` just built directly against the server's own
+  `%ProgramData%\NidusVMS\node-builds` folder and database — no HTTP upload, no IIS limit to hit,
+  and no-op on a redeploy that didn't bump `NidusVMS.Node`'s own version. Every registered build
+  lands as **Pending**; Admin -> Node Builds is now a Pending/Approved/Rejected review queue (with
+  an audit trail of who approved/rejected what) instead of an upload form, and only an Approved
+  build is ever offered to a node's heartbeat. Skippable with `-SkipNodeBuildRegistration`.
+
+### Fixed
+
+- **Dragging a zoomed Playback video tile could also kick off the browser's own native
+  drag-the-video-out gesture at the same time as the tile's own pan-drag**, since the mousedown
+  handler never called `preventDefault()`. Once that native drag started, the browser owned the
+  rest of the mouse gesture — showing the no-drop/circle-slash cursor over the page (including the
+  timelines below, not valid drop targets) and starving the tile's own `mousemove` handler of real
+  deltas. Reported as dragging feeling "random" between the per-camera and all-cameras timelines,
+  and unable to drag at all without the no-drop cursor appearing. Same fix applied to the
+  fullscreen-tile pan-drag (Live and Playback both use it).
+
+## [0.49.0] - 2026-08-13
+
+### Fixed
+
+- **Picking a saved view from Live's view picker left no way to switch to another view without
+  clicking "Back to views" and picking again.** The picker itself only ever existed on Live/Index;
+  Views/Play (where you land after picking) had no counterpart, just "Back to views" and Fullscreen.
+  Views/Play's toolbar now carries the same picker, pre-selected to the view you're on, so switching
+  views works from either page.
+
 ## [0.48.0] - 2026-08-13
 
 ### Added

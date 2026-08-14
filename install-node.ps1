@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Install a recorder node (NidusVMS.Node) as a Windows Service.
 

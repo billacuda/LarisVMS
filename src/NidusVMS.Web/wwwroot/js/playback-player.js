@@ -560,9 +560,22 @@
         });
         if (resetBtn) resetBtn.addEventListener('click', function () { zoom = 1; panX = 0; panY = 0; apply(); });
 
+        // <video> is a native drag source in Chrome/Edge (you can drag a frame out like an image) —
+        // with no preventDefault here, a mousedown-then-move over the video could kick off *that*
+        // native drag concurrently with this pan handler. Once it does, the browser owns the mouse
+        // gesture for the rest of that drag (showing the no-drop/circle-slash cursor over anything
+        // that isn't a valid drop target, which is everywhere on this page, including this same
+        // video and the timeline canvases below it) and our own mousemove/mouseup below stop getting
+        // sane deltas — confirmed live as exactly this: dragging felt "random", working on one
+        // timeline/tile but not another, because it depended on whether that particular mousedown
+        // happened to also trigger a native dragstart. preventDefault on mousedown is the documented
+        // way to suppress it. Returned early (no preventDefault) at zoom<=1 on purpose: that's a
+        // plain click with nothing to pan, so page defaults like text selection elsewhere are left
+        // alone.
         var dragging = false, startX = 0, startY = 0, startPanX = 0, startPanY = 0;
         videoEl.addEventListener('mousedown', function (e) {
             if (zoom <= 1) return;
+            e.preventDefault();
             dragging = true;
             startX = e.clientX; startY = e.clientY;
             startPanX = panX; startPanY = panY;

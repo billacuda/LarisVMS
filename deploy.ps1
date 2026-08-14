@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Deploy NidusVMS's web tier to IIS - applies EF migrations, publishes the web app.
 
@@ -15,13 +15,17 @@
          if -ExtraNodePublishPath is given, that second location too — stays current with every
          deploy instead of only when someone remembers to run build-node.ps1 by hand. Skippable
          with -SkipNodeBuild.
-      8. Stops the IIS app pool
-      9. Applies any pending EF Core migrations
-     10. Copies published files to the IIS site, preserving setup-generated.json,
+      8. Registers that build with NidusVMS.Web's node-build-approval queue (Admin -> Node Builds)
+         as Pending, writing straight to the server's own node-builds folder and database — no
+         browser upload, so no IIS request-size limit to hit. A no-op if this exact version/platform
+         is already registered. Skippable with -SkipNodeBuildRegistration (implied by -SkipNodeBuild).
+      9. Stops the IIS app pool
+     10. Applies any pending EF Core migrations
+     11. Copies published files to the IIS site, preserving setup-generated.json,
          appsettings.Production.json, data-protection-keys\, and every recording/spool/export
          directory
-     11. Starts the IIS app pool (always, even on failure)
-     12. Probes /health once the pool is back up
+     12. Starts the IIS app pool (always, even on failure)
+     13. Probes /health once the pool is back up
 
     This script deploys NidusVMS.Web to IIS and (by default) refreshes the node install package
     alongside it — recorder nodes are still separate Windows Services installed with
@@ -51,8 +55,10 @@ param(
     # by default since this is inherently environment-specific, not something to hardcode for
     # every clone of this repo.
     [string]$ExtraNodePublishPath = '',
+    [string]$NodeCsprojPath       = (Join-Path $PSScriptRoot 'src\NidusVMS.Node\NidusVMS.Node.csproj'),
     [switch]$SkipMigrations,
     [switch]$SkipNodeBuild,
+    [switch]$SkipNodeBuildRegistration,
     [switch]$SkipHealthCheck
 )
 
@@ -74,6 +80,19 @@ function Invoke-Cmd([string]$Exe, [string[]]$Arguments) {
     if ($LASTEXITCODE -ne 0) {
         throw "'$Exe $($Arguments -join ' ')' failed with exit code $LASTEXITCODE."
     }
+}
+
+function Get-SqlClientConnectionString([string]$ConnectionString) {
+    # System.Data.SqlClient (the legacy provider, used here rather than Microsoft.Data.SqlClient so
+    # this script has no extra assembly to load) rejects keywords Microsoft.Data.SqlClient writes
+    # into setup-generated.json — including "Trust Server Certificate" *with the spaces
+    # SqlConnectionStringBuilder itself emits*, which a whitespace-sensitive regex match misses.
+    # Comparing the whitespace-stripped key is what actually catches it.
+    $forbiddenKeys = @('encrypt', 'trustservercertificate', 'multipleactiveresultsets', 'applicationintent')
+    return ($ConnectionString -split ';' | Where-Object {
+        $key = ($_ -split '=', 2)[0] -replace '\s', ''
+        $forbiddenKeys -notcontains $key.ToLowerInvariant()
+    }) -join ';'
 }
 
 function Get-IISSiteByUrl([string]$SiteUrl) {
@@ -151,7 +170,10 @@ Write-Ok "Tools ready."
 $runMigrations = -not $SkipMigrations.IsPresent
 $deployedConfigFile = Join-Path $DestinationPath 'setup-generated.json'
 
-if ($runMigrations -and [string]::IsNullOrWhiteSpace($ConnectionString)) {
+# Resolved unconditionally (not just when running migrations): the node-build-registration step
+# below needs it too, independent of -SkipMigrations, since registering a build is a database write
+# of its own, unrelated to whether EF migrations happen to run this deploy.
+if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
     Write-Step "Reading connection string from deployed config"
     if (Test-Path $deployedConfigFile) {
         try {
@@ -163,7 +185,7 @@ if ($runMigrations -and [string]::IsNullOrWhiteSpace($ConnectionString)) {
 
     if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
         Write-Host "No connection string found at '$deployedConfigFile'."
-        Write-Host "Migrations will be skipped. Run the Setup wizard first, or pass -ConnectionString explicitly."
+        Write-Host "Migrations (and node-build registration) will be skipped. Run the Setup wizard first, or pass -ConnectionString explicitly."
         $runMigrations = $false
     } else {
         Write-Ok "Connection string loaded from setup-generated.json."
@@ -183,16 +205,7 @@ if ($runMigrations -and [string]::IsNullOrWhiteSpace($ConnectionString)) {
 if (-not [string]::IsNullOrWhiteSpace($ConnectionString)) {
     try {
         Add-Type -AssemblyName System.Data
-        # System.Data.SqlClient (the legacy provider, used here rather than Microsoft.Data.SqlClient
-        # so this script has no extra assembly to load) rejects keywords Microsoft.Data.SqlClient
-        # writes into setup-generated.json — including "Trust Server Certificate" *with the spaces
-        # SqlConnectionStringBuilder itself emits*, which a whitespace-sensitive regex match misses.
-        # Comparing the whitespace-stripped key is what actually catches it.
-        $forbiddenKeys = @('encrypt', 'trustservercertificate', 'multipleactiveresultsets', 'applicationintent')
-        $sqlCs = ($ConnectionString -split ';' | Where-Object {
-            $key = ($_ -split '=', 2)[0] -replace '\s', ''
-            $forbiddenKeys -notcontains $key.ToLowerInvariant()
-        }) -join ';'
+        $sqlCs = Get-SqlClientConnectionString $ConnectionString
 
         $conn = New-Object System.Data.SqlClient.SqlConnection($sqlCs)
         $conn.Open()
@@ -298,6 +311,93 @@ try {
         Write-Ok "Migrations applied."
     } else {
         Write-Host "`nMigrations skipped."
+    }
+
+    # ── register node build for approval ────────────────────────────────────
+    # Replaces the old browser-upload flow on Admin/NodeBuilds: uploading a several-hundred-MB
+    # self-contained exe through the browser hit IIS's own requestFiltering maxAllowedContentLength
+    # — a 413 raised before the request ever reached ASP.NET Core, since that limit is enforced
+    # ahead of Kestrel/the app itself, not something RequestSizeLimit/RequestFormLimits on the page
+    # could reach. This script already runs locally on the same server as NidusVMS.Web
+    # (Administrator, IIS management), so instead it writes the file straight into
+    # NodeBuildService's own storage folder and inserts the database row directly, the same way the
+    # storage-root guard above already reads Settings straight from the database rather than going
+    # through the app. The row lands as Pending — no node is ever offered it until an admin
+    # approves it on Admin/NodeBuilds.
+    #
+    # Deliberately placed *after* migrations, not right after the node package build above: the
+    # first deploy to ever add a new NodeBuildVersions column (as this feature's own migration did)
+    # needs that column to actually exist before this INSERT runs — confirmed live as exactly this
+    # failure the first time this shipped, when it ran before the migrations step and the INSERT
+    # silently failed against a database that hadn't been migrated yet, leaving an orphaned file on
+    # disk with no matching row and a warning that scrolled past unnoticed.
+    if ($SkipNodeBuild -or $SkipNodeBuildRegistration) {
+        Write-Host "`nNode-build registration skipped."
+    } elseif ([string]::IsNullOrWhiteSpace($ConnectionString)) {
+        Write-Host "`nNo connection string available - skipping node-build registration."
+    } else {
+        Write-Step "Registering node build for approval"
+        try {
+            $nodeVersionMatch = Select-String -Path $NodeCsprojPath -Pattern '<Version>([^<]+)</Version>' | Select-Object -First 1
+            if (-not $nodeVersionMatch) { throw "Could not find <Version> in '$NodeCsprojPath'." }
+            $nodeVersion = $nodeVersionMatch.Matches[0].Groups[1].Value
+            $platform = 'win-x64'
+            $nodeExePath = Join-Path $PSScriptRoot 'publish\NidusVMS.Node\win\NidusVMS.Node.exe'
+            if (-not (Test-Path $nodeExePath)) { throw "Built node exe not found: $nodeExePath" }
+
+            Add-Type -AssemblyName System.Data
+            $sqlCs = Get-SqlClientConnectionString $ConnectionString
+            $conn = New-Object System.Data.SqlClient.SqlConnection($sqlCs)
+            $conn.Open()
+            try {
+                $checkCmd = $conn.CreateCommand()
+                $checkCmd.CommandText = 'SELECT COUNT(*) FROM NodeBuildVersions WHERE Version = @Version AND Platform = @Platform'
+                $checkCmd.Parameters.AddWithValue('@Version', $nodeVersion) | Out-Null
+                $checkCmd.Parameters.AddWithValue('@Platform', $platform) | Out-Null
+                $existingCount = [int]$checkCmd.ExecuteScalar()
+
+                # Idempotent across repeated deploys that don't bump NidusVMS.Node's own <Version> —
+                # a redeploy of the web tier alone (the common case) would otherwise queue up an
+                # identical "new" Pending build to approve every single time.
+                if ($existingCount -gt 0) {
+                    Write-Host "Node build $nodeVersion ($platform) is already registered - skipping."
+                } else {
+                    # Mirrors NodeBuildService.DefaultRoot exactly — see that property's doc comment
+                    # for why this has to live outside the IIS site directory.
+                    $nodeBuildsRoot = Join-Path $env:ProgramData 'NidusVMS\node-builds'
+                    New-Item -ItemType Directory -Path $nodeBuildsRoot -Force | Out-Null
+                    $buildId = [guid]::NewGuid()
+                    $storedPath = Join-Path $nodeBuildsRoot "$buildId.exe"
+                    Copy-Item $nodeExePath $storedPath -Force
+
+                    $hash = (Get-FileHash -Path $storedPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                    $sizeBytes = (Get-Item $storedPath).Length
+
+                    $insertCmd = $conn.CreateCommand()
+                    $insertCmd.CommandText = @'
+INSERT INTO NodeBuildVersions (Id, Version, Platform, FilePath, SizeBytes, Sha256, UploadedAt, Notes, Status, ApprovedAt, ApprovedBy)
+VALUES (@Id, @Version, @Platform, @FilePath, @SizeBytes, @Sha256, GETUTCDATE(), @Notes, 0, NULL, NULL)
+'@
+                    $insertCmd.Parameters.AddWithValue('@Id', $buildId) | Out-Null
+                    $insertCmd.Parameters.AddWithValue('@Version', $nodeVersion) | Out-Null
+                    $insertCmd.Parameters.AddWithValue('@Platform', $platform) | Out-Null
+                    $insertCmd.Parameters.AddWithValue('@FilePath', $storedPath) | Out-Null
+                    $insertCmd.Parameters.AddWithValue('@SizeBytes', $sizeBytes) | Out-Null
+                    $insertCmd.Parameters.AddWithValue('@Sha256', $hash) | Out-Null
+                    $insertCmd.Parameters.AddWithValue('@Notes', "Registered by deploy.ps1 on $(Get-Date -Format 'yyyy-MM-dd HH:mm')") | Out-Null
+                    $insertCmd.ExecuteNonQuery() | Out-Null
+
+                    Write-Ok "Node build $nodeVersion ($platform) registered as Pending - approve it on Admin -> Node Builds."
+                }
+            } finally {
+                $conn.Close()
+            }
+        } catch {
+            # Best-effort, same as the storage-root guard above: a DB/hash hiccup here shouldn't
+            # abort an otherwise-good web-tier deploy. Worst case, register the build by hand later
+            # or re-run.
+            Write-Host "Could not register node build for approval: $_" -ForegroundColor Yellow
+        }
     }
 
     Write-Step "Copying files to IIS site"

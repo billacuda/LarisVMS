@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Build the NidusVMS recorder node as a self-contained, distributable package.
 
@@ -18,9 +18,12 @@
     NidusVMS.NodeUpdater.exe is what a node launches (as a detached process) to swap its own binary
     during a self-triggered auto-update — see NidusVMS.Node/Update/UpdateService.cs and
     NidusVMS.NodeUpdater/Program.cs. It's built and bundled here so it's always present alongside
-    NidusVMS.Node.exe, but there is still no -Upload step (unlike dploid's build-agent.ps1): uploading
-    a build to NidusVMS.Web for nodes to pick up is a separate, manual admin-page step
-    (Admin -> Node Builds), not automated by this script or by deploy.ps1.
+    NidusVMS.Node.exe. There is still no -Upload step in this script itself (unlike dploid's
+    build-agent.ps1) — registering the built NidusVMS.Node.exe with NidusVMS.Web's node-build-approval
+    queue (Admin -> Node Builds) is deploy.ps1's job, which calls this script and then registers
+    whatever it just built directly against the server's own database/storage. Run this script
+    standalone (as build-node.ps1 -ExtraPublishPath ...) and nothing gets registered — only
+    deploy.ps1's own run does that.
 
     -ExtraPublishPath optionally mirrors the same output to a second location (e.g. a network share
     a recorder machine can reach directly) so a node install/upgrade doesn't depend on manually

@@ -1,13 +1,18 @@
+using NidusVMS.Core.Enums;
+
 namespace NidusVMS.Core.Entities;
 
 /// <summary>
-/// One uploaded recorder-node build (NidusVMS.Node.exe), offered to nodes for self-update. Direct
-/// port of dploid's AgentVersion, deliberately trimmed: no IsPilotOnly/staged-rollout column —
-/// NidusVMS has no pilot-group concept for nodes the way dploid does for agents, so there's nothing
-/// for a flag like that to gate here. One row per uploaded build; NodeBuildService.GetLatestForPlatformAsync
-/// picks the newest row for a given platform by UploadedAt, and NidusVMS.Web's heartbeat handler
-/// compares that against the reporting node's own version (NodeVersionComparer.IsNewer) to decide
-/// whether to hand back update info.
+/// One registered recorder-node build (NidusVMS.Node.exe), offered to nodes for self-update once
+/// approved. Direct port of dploid's AgentVersion, deliberately trimmed: no IsPilotOnly/staged-rollout
+/// column — NidusVMS has no pilot-group concept for nodes the way dploid does for agents, so there's
+/// nothing for a flag like that to gate here. One row per registered build, normally created by
+/// deploy.ps1 directly against the database (see deploy.ps1's own "Registering node build" step) as
+/// Pending, and only offered to a heartbeating node once an admin flips it to Approved on
+/// Admin/NodeBuilds — NodeBuildService.GetLatestForPlatformAsync only ever considers Approved rows,
+/// picking the newest by UploadedAt, and NidusVMS.Web's heartbeat handler compares that against the
+/// reporting node's own version (NodeVersionComparer.IsNewer) to decide whether to hand back update
+/// info.
 /// </summary>
 public class NodeBuildVersion
 {
@@ -36,4 +41,13 @@ public class NodeBuildVersion
     public DateTime UploadedAt { get; set; } = DateTime.UtcNow;
 
     public string? Notes { get; set; }
+
+    public NodeBuildStatus Status { get; set; } = NodeBuildStatus.Pending;
+
+    public DateTime? ApprovedAt { get; set; }
+
+    /// <summary>The approving admin's display name/email, whichever ClaimTypes.Name resolves to —
+    /// same "who did this" convention as View.OwnerId elsewhere, just a display string instead of a
+    /// foreign key since this is purely an audit trail, never queried against.</summary>
+    public string? ApprovedBy { get; set; }
 }

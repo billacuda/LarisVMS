@@ -1,77 +1,30 @@
-using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using NidusVMS.Core.Entities;
+using NidusVMS.Core.Enums;
 using NidusVMS.Core.Interfaces;
 using NidusVMS.Infrastructure.Data;
 
 namespace NidusVMS.Infrastructure.Services;
 
-/// <summary>Admin-upload / node-download side of recorder-node auto-update — see INodeBuildService's
-/// own doc comment. Port of dploid's AgentVersionsController.Upload + AgentBinaryStore, collapsed into
-/// this codebase's service-per-feature-area convention (compare CameraService).</summary>
+/// <summary>Approval-queue / node-download side of recorder-node auto-update — see
+/// INodeBuildService's own doc comment for why registration itself (file placement + the initial
+/// Pending row) lives in deploy.ps1 instead of here.</summary>
 public class NodeBuildService(ApplicationDbContext db) : INodeBuildService
 {
     /// <summary>Deliberately outside the IIS site directory entirely — same %ProgramData%\NidusVMS
     /// root as node.config's DPAPI store (NodeConfigStore) and the data-protection key ring
     /// (Program.cs), just its own subfolder. deploy.ps1's robocopy /MIR only ever touches
     /// $DestinationPath, so a folder that never lives under it needs no /XD exclusion entry — see
-    /// deploy.ps1's own storage-root guard for why an uploaded build living *inside* the site
-    /// directory would be actively dangerous (the next deploy would silently delete it).</summary>
+    /// deploy.ps1's own storage-root guard for why a registered build living *inside* the site
+    /// directory would be actively dangerous (the next deploy would silently delete it). Mirrored in
+    /// deploy.ps1's own node-build-registration step, which writes directly into the same folder —
+    /// keep the two in sync if this ever changes.</summary>
     public static string DefaultRoot => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "NidusVMS", "node-builds");
 
-    public async Task<NodeBuildVersion> UploadAsync(Stream content, string fileName, string version, string platform,
-        string? notes, CancellationToken ct = default)
-    {
-        Directory.CreateDirectory(DefaultRoot);
-
-        var id = Guid.NewGuid();
-        // Stored under its own new Id, not the uploaded file name — two uploads (even of files that
-        // happen to share a name) can never collide, and nothing about the on-disk path needs to be
-        // guessable or stable across re-uploads of "the same" version.
-        var extension = Path.GetExtension(fileName);
-        var storedPath = Path.Combine(DefaultRoot, string.IsNullOrEmpty(extension) ? id.ToString() : $"{id}{extension}");
-
-        long sizeBytes;
-        string sha256;
-        await using (var fileStream = new FileStream(storedPath, FileMode.Create, FileAccess.Write, FileShare.None,
-                   bufferSize: 81920, useAsync: true))
-        {
-            using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            var buffer = new byte[81920];
-            long total = 0;
-            int read;
-            while ((read = await content.ReadAsync(buffer, ct)) > 0)
-            {
-                hasher.AppendData(buffer, 0, read);
-                await fileStream.WriteAsync(buffer.AsMemory(0, read), ct);
-                total += read;
-            }
-
-            sizeBytes = total;
-            sha256 = Convert.ToHexString(hasher.GetHashAndReset()).ToLowerInvariant();
-        }
-
-        var entity = new NodeBuildVersion
-        {
-            Id = id,
-            Version = version,
-            Platform = platform,
-            FilePath = storedPath,
-            SizeBytes = sizeBytes,
-            Sha256 = sha256,
-            UploadedAt = DateTime.UtcNow,
-            Notes = notes,
-        };
-
-        db.NodeBuildVersions.Add(entity);
-        await db.SaveChangesAsync(ct);
-        return entity;
-    }
-
     public async Task<NodeBuildVersion?> GetLatestForPlatformAsync(string platform, CancellationToken ct = default)
         => await db.NodeBuildVersions.AsNoTracking()
-            .Where(b => b.Platform == platform)
+            .Where(b => b.Platform == platform && b.Status == NodeBuildStatus.Approved)
             .OrderByDescending(b => b.UploadedAt)
             .FirstOrDefaultAsync(ct);
 
@@ -82,4 +35,21 @@ public class NodeBuildService(ApplicationDbContext db) : INodeBuildService
 
     public async Task<NodeBuildVersion?> GetDownloadInfoAsync(Guid buildId, CancellationToken ct = default)
         => await db.NodeBuildVersions.AsNoTracking().FirstOrDefaultAsync(b => b.Id == buildId, ct);
+
+    public Task<NodeBuildVersion> ApproveAsync(Guid buildId, string approvedBy, CancellationToken ct = default)
+        => SetStatusAsync(buildId, NodeBuildStatus.Approved, approvedBy, ct);
+
+    public Task<NodeBuildVersion> RejectAsync(Guid buildId, string approvedBy, CancellationToken ct = default)
+        => SetStatusAsync(buildId, NodeBuildStatus.Rejected, approvedBy, ct);
+
+    private async Task<NodeBuildVersion> SetStatusAsync(Guid buildId, NodeBuildStatus status, string approvedBy, CancellationToken ct)
+    {
+        var build = await db.NodeBuildVersions.FirstOrDefaultAsync(b => b.Id == buildId, ct)
+            ?? throw new InvalidOperationException($"Node build {buildId} not found.");
+        build.Status = status;
+        build.ApprovedAt = DateTime.UtcNow;
+        build.ApprovedBy = approvedBy;
+        await db.SaveChangesAsync(ct);
+        return build;
+    }
 }

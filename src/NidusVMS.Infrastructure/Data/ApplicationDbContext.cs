@@ -210,6 +210,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.FilePath).HasMaxLength(500).IsRequired();
             e.Property(x => x.Sha256).HasMaxLength(64).IsRequired();
             e.Property(x => x.Notes).HasMaxLength(1000);
+            e.Property(x => x.ApprovedBy).HasMaxLength(256);
             // What GetLatestForPlatformAsync queries on every heartbeat from every checked-in node —
             // small table, but this is the hot path.
             e.HasIndex(x => new { x.Platform, x.UploadedAt });

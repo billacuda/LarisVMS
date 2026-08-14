@@ -64,6 +64,11 @@ window.nidusvmsFullscreenTile = (function () {
         var dragging = false, startX = 0, startY = 0, startPanX = 0, startPanY = 0;
         containerEl.addEventListener('mousedown', function (e) {
             if (!isFs() || scale <= minScale) return;
+            // See playback-player.js's wireZoom for why this matters: without it, dragging the
+            // <video> can also kick off the browser's own native drag-out-the-frame gesture, which
+            // then owns the mouse for the rest of that gesture and shows the no-drop cursor instead
+            // of actually panning.
+            e.preventDefault();
             dragging = true;
             startX = e.clientX; startY = e.clientY;
             startPanX = panX; startPanY = panY;

@@ -8,9 +8,10 @@
     Recording runs in a separate Windows Service ("node") per the architecture plan, not inside this
     IIS-hosted app, so it survives app pool recycles and deploys. Install a node with
     <code>install-node.ps1</code> using the registration key from
-    <a asp-page="/Setup/Node">Setup &rarr; Node</a>. Once installed, a node updates itself — upload a
-    new build on <a asp-page="/Admin/NodeBuilds/Index">Admin &rarr; Node Builds</a> instead of
-    re-running the install script on every recorder machine.
+    <a asp-page="/Admin/Settings" asp-fragment="node-registration">Admin &rarr; Settings</a>. Once
+    installed, a node updates itself once a build registered by <code>deploy.ps1</code> is approved
+    on <a asp-page="/Admin/NodeBuilds/Index">Admin &rarr; Node Builds</a> — no re-running the install
+    script on every recorder machine.
 </p>
 
 @if (!string.IsNullOrEmpty(Model.ErrorMessage))
