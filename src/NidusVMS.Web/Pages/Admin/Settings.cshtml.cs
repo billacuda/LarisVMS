@@ -23,6 +23,14 @@ public class SettingsModel(ISettingsResolver settings) : PageModel
     [BindProperty] public int MotionPreRollSeconds { get; set; } = 10;
     [BindProperty] public int MotionPostRollSeconds { get; set; } = 30;
     [BindProperty] public string? RegistrationKey { get; set; }
+
+    /// <summary>Global-only gate (no per-node override, unlike Retention/Recording.Mode above) for
+    /// whether a checking-in node is ever offered an update at all — see Program.cs's heartbeat
+    /// handler. Defaults on: once a build is uploaded on
+    /// <a href="/Admin/NodeBuilds/Index">Admin -&gt; Node Builds</a>, nodes should pick it up without
+    /// an extra step here unless an admin deliberately wants to freeze fleet versions.</summary>
+    [BindProperty] public bool NodeAutoUpdateEnabled { get; set; } = true;
+
     public string? SavedMessage { get; set; }
 
     public async Task OnGetAsync()
@@ -34,6 +42,7 @@ public class SettingsModel(ISettingsResolver settings) : PageModel
         MotionPreRollSeconds = await settings.GetAsync("Recording.MotionPreRollSeconds", 10);
         MotionPostRollSeconds = await settings.GetAsync("Recording.MotionPostRollSeconds", 30);
         RegistrationKey = await settings.GetRawAsync("Node.RegistrationKey");
+        NodeAutoUpdateEnabled = await settings.GetAsync("NodeAutoUpdate.Enabled", true);
     }
 
     public async Task<IActionResult> OnPostAsync()
@@ -48,6 +57,7 @@ public class SettingsModel(ISettingsResolver settings) : PageModel
             await settings.SetGlobalAsync("Storage.RootPath", StorageRootPath, by);
         if (!string.IsNullOrWhiteSpace(RegistrationKey))
             await settings.SetGlobalAsync("Node.RegistrationKey", RegistrationKey, by);
+        await settings.SetGlobalAsync("NodeAutoUpdate.Enabled", NodeAutoUpdateEnabled.ToString(), by);
 
         SavedMessage = "Saved.";
         return Page();

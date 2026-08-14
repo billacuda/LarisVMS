@@ -101,6 +101,14 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
 
         await ApplyWatermarkAsync(config, storageRoot, now, deletedPaths, ct);
 
+        // Export output files (and any stray concat list file ExportRunner didn't get to clean up
+        // after a crash) — a sibling of the cam-{id}/ folders above, deliberately never walked by
+        // the per-camera loop, so it needs its own pass. Age-only, no quota/watermark interaction:
+        // exports are a small, occasional side product, not part of the retention/quota budget any
+        // camera's continuous recording competes for. Not reported to /segments/delete — these were
+        // never Segment rows, so there's nothing for the web tier to reconcile.
+        SweepExportsDirectory(storageRoot, now);
+
         if (_lastReconciledAtUtc is null || now - _lastReconciledAtUtc >= ReconcileInterval)
         {
             // Only stamped on success — a failed fetch (network blip, web tier restarting) should
@@ -227,6 +235,28 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
         }
 
         return result;
+    }
+
+    // Generous relative to how long a browser download realistically takes, but still bounded —
+    // this is finished export output sitting on local disk, not something with its own retention
+    // policy anywhere else, so it has to expire on its own eventually.
+    private static readonly TimeSpan ExportRetention = TimeSpan.FromDays(7);
+
+    private void SweepExportsDirectory(string storageRoot, DateTime now)
+    {
+        var exportsDir = Path.Combine(storageRoot, "exports");
+        if (!Directory.Exists(exportsDir)) return;
+
+        // Flat, not nested by camera/date the way cam-{id}/main is — output file names are already
+        // unique (camera name/id + from/to timestamps), so there's nothing to organize by.
+        foreach (var path in Directory.EnumerateFiles(exportsDir, "*", SearchOption.TopDirectoryOnly))
+        {
+            FileInfo info;
+            try { info = new FileInfo(path); }
+            catch (IOException) { continue; }
+
+            if (now - info.LastWriteTimeUtc > ExportRetention) TryDelete(path);
+        }
     }
 
     private bool TryDelete(string path)

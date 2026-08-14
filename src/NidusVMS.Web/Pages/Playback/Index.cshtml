@@ -43,9 +43,33 @@ else
                 }
             </select>
             <button type="button" class="btn btn-sm btn-outline-secondary" id="pbPlayPause" disabled>▶ Play</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="pbExportBtn">Export&hellip;</button>
             <div class="form-check form-switch mb-0 ms-auto">
                 <input type="checkbox" class="form-check-input" id="pbHour24" />
                 <label class="form-check-label small" for="pbHour24">24-hour clock</label>
+            </div>
+        </div>
+
+        @* Hidden until Export… is clicked — a plain inline form, not a modal, per the feature's own
+           "don't over-build this" guidance. Cameras are whichever are currently on screen in the
+           selected view (populated in JS from the same `tiles` the player itself renders), start/end
+           default to a 5-minute window centered on the current playhead. *@
+        <div id="pbExportPanel" class="d-none border rounded p-2 mb-2 bg-body-tertiary" style="flex:0 0 auto;">
+            <div class="d-flex flex-wrap align-items-end gap-3">
+                <div>
+                    <label class="form-label small mb-1 d-block">Cameras</label>
+                    <div id="pbExportCameras" class="d-flex flex-wrap gap-2"></div>
+                </div>
+                <div>
+                    <label class="form-label small mb-0" for="pbExportFrom">Start</label>
+                    <input type="datetime-local" id="pbExportFrom" class="form-control form-control-sm" step="1" />
+                </div>
+                <div>
+                    <label class="form-label small mb-0" for="pbExportTo">End</label>
+                    <input type="datetime-local" id="pbExportTo" class="form-control form-control-sm" step="1" />
+                </div>
+                <button type="button" class="btn btn-sm btn-primary" id="pbExportSubmit">Start export</button>
+                <span id="pbExportStatus" class="small"></span>
             </div>
         </div>
 
@@ -54,7 +78,7 @@ else
         <div id="pbTimelineArea" style="flex:0 0 auto;" class="pt-1">
             <label class="form-label small mb-0">Selected camera</label>
             <canvas id="playbackTimeline" style="width: 100%; height: 30px; cursor: pointer; touch-action: none; display: block;"></canvas>
-            <div id="pbCurrentTime" class="text-muted small mb-1"></div>
+            <div id="pbCurrentTime" class="text-muted small mb-1 text-center"></div>
 
             <label class="form-label small mb-0">All cameras (recording on any camera)</label>
             <canvas id="playbackGlobalTimeline" style="width: 100%; height: 30px; cursor: pointer; touch-action: none; display: block;"></canvas>
@@ -62,7 +86,9 @@ else
             <p class="text-muted small mt-1 mb-0">
                 Scroll either timeline to zoom (weeks down to seconds), drag to pan, click to jump
                 every tile to that instant — neither can scroll past right now. Your position and
-                zoom level are remembered between visits.
+                zoom level are remembered between visits. Click the time above the timeline to jump
+                to an exact second, or use the arrow keys to nudge by a second (Shift+arrow for ten)
+                while paused.
             </p>
         </div>
     </div>
@@ -70,6 +96,7 @@ else
 
 @section Scripts {
     <script src="~/js/timeline.js" asp-append-version="true"></script>
+    <script src="~/js/fullscreen-tile.js" asp-append-version="true"></script>
     <script src="~/js/playback-player.js" asp-append-version="true"></script>
     <script>
         (function () {
@@ -97,7 +124,14 @@ else
                 globalTimelineCanvasId: 'playbackGlobalTimeline',
                 playPauseBtnId: 'pbPlayPause',
                 currentTimeId: 'pbCurrentTime',
-                hour24ToggleId: 'pbHour24'
+                hour24ToggleId: 'pbHour24',
+                exportBtnId: 'pbExportBtn',
+                exportPanelId: 'pbExportPanel',
+                exportCamerasId: 'pbExportCameras',
+                exportFromId: 'pbExportFrom',
+                exportToId: 'pbExportTo',
+                exportSubmitId: 'pbExportSubmit',
+                exportStatusId: 'pbExportStatus'
             });
         })();
     </script>

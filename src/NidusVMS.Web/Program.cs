@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using NidusVMS.Core;
 using NidusVMS.Core.Dtos;
 using NidusVMS.Core.Entities;
 using NidusVMS.Core.Enums;
@@ -16,6 +17,7 @@ using NidusVMS.Infrastructure.Security;
 using NidusVMS.Infrastructure.Services;
 using NidusVMS.Web.Health;
 using NidusVMS.Web.Middleware;
+using NidusVMS.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -128,10 +130,16 @@ builder.Services.AddScoped<ICameraDiscoveryService, CameraDiscoveryService>();
 builder.Services.AddScoped<ICameraService, CameraService>();
 builder.Services.AddScoped<ICameraGroupService, CameraGroupService>();
 builder.Services.AddScoped<INodeService, NodeService>();
+builder.Services.AddScoped<INodeBuildService, NodeBuildService>();
 builder.Services.AddScoped<IViewService, ViewService>();
 builder.Services.AddScoped<ITimelineService, TimelineService>();
 builder.Services.AddScoped<IZoneService, ZoneService>();
 builder.Services.AddScoped<IEventTagRuleService, EventTagRuleService>();
+builder.Services.AddScoped<IExportService, ExportService>();
+
+// First Web-tier BackgroundService — see ExportJobDispatcher's own doc comment for why exports
+// needed one instead of a synchronous per-camera download.
+builder.Services.AddHostedService<ExportJobDispatcher>();
 
 // ── ONVIF HTTP client ────────────────────────────────────────────────────────
 // CameraService takes a Func<HttpClient> rather than IHttpClientFactory directly so
@@ -214,7 +222,8 @@ nodesApi.MapPost("/register", async (NodeRegisterRequest request, INodeService n
     }
 });
 
-nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest request, INodeService nodeService, CancellationToken ct) =>
+nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest request, INodeService nodeService,
+    INodeBuildService nodeBuildService, ISettingsResolver settings, CancellationToken ct) =>
 {
     // LastSeenAt/Status/LastIpAddress are already updated by NodeAuthMiddleware's AuthenticateAsync
     // call for every authenticated request. Version/LivePort can only be updated here, not in the
@@ -222,7 +231,41 @@ nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest requ
     // reported to stamp; this is the one place NodeHeartbeatRequest's fields are actually read.
     var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
     await nodeService.RecordHeartbeatAsync(node.Id, request.FreeBytes, request.TotalBytes, request.Version, request.LivePort, ct);
-    return Results.Json(new NodeHeartbeatResponse(IntervalSeconds: 30));
+
+    // ── Auto-update check ────────────────────────────────────────────────
+    // Global-only gate (Admin/Settings' NodeAutoUpdate.Enabled) — no per-node override for this
+    // first pass, unlike Retention/Recording.Mode which do walk Camera -> Node -> Global.
+    NodeUpdateInfoDto? updateAvailable = null;
+    var autoUpdateEnabled = await settings.GetAsync("NodeAutoUpdate.Enabled", true, ct: ct);
+    if (autoUpdateEnabled)
+    {
+        // node.Platform is set once at registration (NodeRegisterRequest.Platform) and never
+        // updated by a heartbeat — same as dploid's agent.OSPlatform. Falls back to "win-x64" for
+        // an already-registered node whose Platform is still unset/null (pre-dates this feature).
+        var platform = node.Platform ?? "win-x64";
+        var latestBuild = await nodeBuildService.GetLatestForPlatformAsync(platform, ct);
+        if (latestBuild is not null && NodeVersionComparer.IsNewer(latestBuild.Version, request.Version))
+        {
+            var baseUrl = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
+            updateAvailable = new NodeUpdateInfoDto(
+                latestBuild.Version, $"{baseUrl}/api/nodes/download/{latestBuild.Id}",
+                latestBuild.Sha256, latestBuild.SizeBytes);
+        }
+    }
+
+    return Results.Json(new NodeHeartbeatResponse(IntervalSeconds: 30, updateAvailable));
+});
+
+// Recorder-node auto-update download — same nodesApi group as everything else here, so it's
+// Bearer-authenticated by NodeAuthMiddleware exactly like the rest of /api/nodes/*. Any authenticated
+// node can download any build (not scoped to the requesting node's own platform the way dploid's
+// agent-download endpoint is) since the buildId a node was ever handed already came from the
+// heartbeat handler's own platform-matched lookup above — there's nothing to re-validate here.
+nodesApi.MapGet("/download/{buildId:guid}", async (Guid buildId, INodeBuildService nodeBuildService, CancellationToken ct) =>
+{
+    var build = await nodeBuildService.GetDownloadInfoAsync(buildId, ct);
+    if (build is null || !File.Exists(build.FilePath)) return Results.NotFound();
+    return Results.File(build.FilePath, "application/octet-stream", "NidusVMS.Node.exe");
 });
 
 nodesApi.MapGet("/config", async (HttpContext ctx, INodeService nodeService, CancellationToken ct) =>
@@ -275,6 +318,16 @@ nodesApi.MapPost("/events", async (HttpContext ctx, List<CameraEventReportItem> 
 {
     var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
     await nodeService.RecordCameraEventsAsync(node.Id, events, ct);
+    return Results.Ok();
+});
+
+// One export item finishing (success or failure) — ExportRunner reports here once its ffmpeg
+// concat exits. Scoped to the reporting node inside ApplyCompletionReportAsync itself, same as
+// DeleteSegmentsAsync/UpdateStreamInfoAsync above.
+nodesApi.MapPost("/exports/complete", async (HttpContext ctx, List<ExportCompleteReportItem> items, IExportService exportService, CancellationToken ct) =>
+{
+    var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
+    await exportService.ApplyCompletionReportAsync(node.Id, items, ct);
     return Results.Ok();
 });
 
@@ -504,6 +557,70 @@ app.MapGet("/playback-segment/{cameraId:guid}/{segmentId:long}", async (
 
     return Results.Stream(await nodeResponse.Content.ReadAsStreamAsync(ct), "video/mp4");
 }).RequireAuthorization("Playback.View");
+
+// ── Multi-camera export ──────────────────────────────────────────────────────
+// Trigger from Playback's toolbar. Async: creates the job/items and returns immediately —
+// ExportJobDispatcher (a BackgroundService) picks up Queued items on its own poll cycle and does
+// the actual dispatch/ffmpeg work against each camera's node. Gated the same Exports.View
+// permission as the Exports page itself, rather than a separate Exports.Edit — the whole feature is
+// meant to be usable by anyone who can see the results, with no distinct "can trigger but can't
+// view" or "can view but can't trigger" role split called for.
+app.MapPost("/api/exports", async (HttpContext ctx, CreateExportRequest request, IExportService exportService, CancellationToken ct) =>
+{
+    if (request.CameraIds.Count == 0) return Results.BadRequest("Select at least one camera.");
+    if (request.ToUtc <= request.FromUtc) return Results.BadRequest("End time must be after start time.");
+
+    var userId = ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
+    var userName = ctx.User.Identity?.Name;
+    var job = await exportService.CreateJobAsync(request.CameraIds, request.FromUtc, request.ToUtc, userId, userName, ct);
+    return Results.Json(new { jobId = job.Id });
+}).RequireAuthorization("Exports.View");
+
+// Download proxy — same "browser only ever talks to this host, IIS relays every byte" shape as
+// /playback-segment above, but with Content-Disposition: attachment (via Results.Stream's
+// fileDownloadName), since this is the first proxy route meant to be saved rather than played
+// inline through MSE.
+app.MapGet("/export-download/{exportItemId:guid}", async (
+    Guid exportItemId, IExportService exportService, IHttpClientFactory httpFactory, CancellationToken ct) =>
+{
+    var info = await exportService.GetDownloadInfoAsync(exportItemId, ct);
+    if (info is null) return Results.NotFound();
+    if (info.NodeIp is null || info.NodeLivePort is null || info.NodeMediaSigningKey is null)
+    {
+        return Results.Problem(
+            "This export's node hasn't reported live-view readiness yet (needs at least one heartbeat since being upgraded to a build with live view).",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    var token = MediaToken.IssueForExportDownload(exportItemId, info.FilePath, info.NodeMediaSigningKey, TimeSpan.FromSeconds(30));
+    var nodeUri = $"http://{info.NodeIp}:{info.NodeLivePort}/export-file/{exportItemId}" +
+        $"?path={Uri.EscapeDataString(info.FilePath)}&token={Uri.EscapeDataString(token)}";
+
+    var client = httpFactory.CreateClient();
+    client.Timeout = TimeSpan.FromSeconds(25);
+    HttpResponseMessage nodeResponse;
+    try
+    {
+        nodeResponse = await client.GetAsync(nodeUri, HttpCompletionOption.ResponseHeadersRead, ct);
+    }
+    catch (TaskCanceledException) when (!ct.IsCancellationRequested)
+    {
+        return Results.Problem("Timed out waiting for the recorder node to start responding (its storage may be slow or unreachable).",
+            statusCode: StatusCodes.Status504GatewayTimeout);
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException)
+    {
+        return Results.Problem($"Could not reach recorder node: {ex.Message}", statusCode: StatusCodes.Status502BadGateway);
+    }
+
+    if (!nodeResponse.IsSuccessStatusCode)
+    {
+        return Results.StatusCode((int)nodeResponse.StatusCode);
+    }
+
+    var fileName = Path.GetFileName(info.FilePath);
+    return Results.Stream(await nodeResponse.Content.ReadAsStreamAsync(ct), "video/mp4", fileDownloadName: fileName);
+}).RequireAuthorization("Exports.View");
 
 app.Run();
 

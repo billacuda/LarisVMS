@@ -31,6 +31,7 @@
     <ProjectReference Include="..\..\src\NidusVMS.Infrastructure\NidusVMS.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\NidusVMS.Onvif\NidusVMS.Onvif.csproj" />
     <ProjectReference Include="..\..\src\NidusVMS.Node\NidusVMS.Node.csproj" />
+    <ProjectReference Include="..\..\src\NidusVMS.NodeUpdater\NidusVMS.NodeUpdater.csproj" />
     <ProjectReference Include="..\..\src\NidusVMS.Media\NidusVMS.Media.csproj" />
   </ItemGroup>
 

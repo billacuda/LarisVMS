@@ -7,7 +7,16 @@ public record NodeRegisterRequest(string RegistrationKey, string Hostname, strin
 public record NodeRegisterResponse(Guid NodeId, string Secret, string MediaSigningKey);
 
 public record NodeHeartbeatRequest(string? Version, long? FreeBytes = null, long? TotalBytes = null, int? LivePort = null);
-public record NodeHeartbeatResponse(int IntervalSeconds);
+
+/// <summary>Recorder-node auto-update: a genuinely newer NodeBuildVersion exists for this node's
+/// reported Platform (NodeVersionComparer.IsNewer), and NodeAutoUpdate.Enabled is on. DownloadUrl is
+/// an absolute URL back to this same server's /api/nodes/download/{buildId} — reusing the node's own
+/// Bearer nodeId:secret credentials, same auth as every other /api/nodes/* route (NodeAuthMiddleware).
+/// Sha256 is what NidusVMS.Node.Update.UpdateService verifies the download against before applying
+/// it; a mismatch aborts without touching the running binary.</summary>
+public record NodeUpdateInfoDto(string Version, string DownloadUrl, string Sha256, long SizeBytes);
+
+public record NodeHeartbeatResponse(int IntervalSeconds, NodeUpdateInfoDto? UpdateAvailable = null);
 
 public record NodeConfigStreamDto(Guid StreamId, string Role, string RtspUri,
     string? Codec, int? Width, int? Height, bool HasAudio);

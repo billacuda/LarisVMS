@@ -23,6 +23,16 @@ else
             <input type="search" class="form-control" data-filter-table="camerasTable"
                    placeholder="Filter by name, host, group, node&hellip;" />
         </div>
+        <div class="col-sm-auto d-flex align-items-center gap-2">
+            <label class="form-label small mb-0" for="camerasPageSize">Rows per page</label>
+            <select id="camerasPageSize" class="form-select form-select-sm" style="width: auto;" data-paginate-size-for="camerasTable">
+                <option value="10">10</option>
+                <option value="25" selected>25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="all">All</option>
+            </select>
+        </div>
     </div>
 
     @* This form has no visible fields of its own — the node <select>, the Reassign button, and
@@ -47,7 +57,7 @@ else
     </div>
 
     <div class="table-responsive">
-        <table class="table table-hover align-middle" id="camerasTable" data-sortable>
+        <table class="table table-hover align-middle" id="camerasTable" data-sortable data-paginate>
             <thead>
                 <tr>
                     <th data-no-sort><input type="checkbox" class="form-check-input" id="selectAllCameras" /></th>
@@ -154,6 +164,7 @@ else
             </tbody>
         </table>
     </div>
+    <div data-paginate-controls-for="camerasTable" class="mt-2"></div>
 }
 
 @section Scripts {

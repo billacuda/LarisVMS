@@ -37,6 +37,11 @@ param(
     [Parameter(Mandatory)][string]$ServerUrl,
     [Parameter(Mandatory)][string]$RegistrationKey,
     [string]$BinaryPath        = (Join-Path $PSScriptRoot 'NidusVMS.Node.exe'),
+    # Recorder-node auto-update's binary-swap helper (see NidusVMS.Node/Update/UpdateService.cs) —
+    # published alongside NidusVMS.Node.exe by build-node.ps1, and must already be present in
+    # $InstallDir *before* an update is ever triggered, since UpdateService looks for it next to the
+    # currently-running exe and just logs a warning and skips the update if it's missing.
+    [string]$UpdaterBinaryPath = (Join-Path $PSScriptRoot 'NidusVMS.NodeUpdater.exe'),
     [string]$InstallDir        = 'C:\Program Files\NidusVMS\Node',
     [string]$ServiceName       = 'NidusVMSNode',
     [string]$ServiceDisplay    = 'NidusVMS Node',
@@ -157,6 +162,13 @@ if (-not (Test-Path $BinaryPath)) {
     throw "Binary not found: $BinaryPath`nBuild it first with: .\build-node.ps1 (run on a dev machine, then copy the publish\NidusVMS.Node\win\ folder here)."
 }
 
+# Not fatal on its own — auto-update just stays inert (UpdateService logs a warning and skips) until
+# it's present — but worth a loud heads-up here rather than a silent gap discovered only when the
+# first update is ever attempted.
+if (-not (Test-Path $UpdaterBinaryPath)) {
+    Write-Host "WARNING: Updater binary not found: $UpdaterBinaryPath — this node will not be able to auto-update until NidusVMS.NodeUpdater.exe is installed (re-run this script once it's available)." -ForegroundColor Yellow
+}
+
 # ── stop existing service ────────────────────────────────────────────────────
 # Must happen before anything below touches $InstallDir: a running node's ffmpeg.exe/DLLs and its
 # own NidusVMS.Node.exe can be locked by the currently-running process, so overwriting them while the
@@ -245,6 +257,9 @@ if ($reusingInstalledFfmpeg) {
 Write-Step "Installing node to $InstallDir"
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 Copy-ItemWithRetry $BinaryPath (Join-Path $InstallDir 'NidusVMS.Node.exe')
+if (Test-Path $UpdaterBinaryPath) {
+    Copy-ItemWithRetry $UpdaterBinaryPath (Join-Path $InstallDir 'NidusVMS.NodeUpdater.exe')
+}
 Write-Ok "Files installed"
 
 # ── register / update service ────────────────────────────────────────────────

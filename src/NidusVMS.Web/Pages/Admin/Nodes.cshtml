@@ -8,7 +8,9 @@
     Recording runs in a separate Windows Service ("node") per the architecture plan, not inside this
     IIS-hosted app, so it survives app pool recycles and deploys. Install a node with
     <code>install-node.ps1</code> using the registration key from
-    <a asp-page="/Setup/Node">Setup &rarr; Node</a>.
+    <a asp-page="/Setup/Node">Setup &rarr; Node</a>. Once installed, a node updates itself — upload a
+    new build on <a asp-page="/Admin/NodeBuilds/Index">Admin &rarr; Node Builds</a> instead of
+    re-running the install script on every recorder machine.
 </p>
 
 @if (!string.IsNullOrEmpty(Model.ErrorMessage))
@@ -27,10 +29,20 @@ else
             <input type="search" class="form-control" data-filter-table="nodesTable"
                    placeholder="Filter by name, IP, platform&hellip;" />
         </div>
+        <div class="col-sm-auto d-flex align-items-center gap-2">
+            <label class="form-label small mb-0" for="nodesPageSize">Rows per page</label>
+            <select id="nodesPageSize" class="form-select form-select-sm" style="width: auto;" data-paginate-size-for="nodesTable">
+                <option value="10">10</option>
+                <option value="25" selected>25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="all">All</option>
+            </select>
+        </div>
     </div>
 
     <div class="table-responsive">
-        <table class="table align-middle" id="nodesTable" data-sortable>
+        <table class="table align-middle" id="nodesTable" data-sortable data-paginate>
             <thead>
                 <tr>
                     <th>Name</th>
@@ -123,6 +135,7 @@ else
             </tbody>
         </table>
     </div>
+    <div data-paginate-controls-for="nodesTable" class="mt-2"></div>
     <p class="text-muted small">
         Blank storage root uses the <a asp-page="/Admin/Settings">global default</a>. A node's own value takes
         priority — useful when a node records to its own local disk instead of the shared target.

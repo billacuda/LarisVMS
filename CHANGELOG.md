@@ -5,6 +5,81 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.48.0] - 2026-08-13
+
+### Added
+
+- **Recorder node auto-update.** Upload a new `NidusVMS.Node.exe` build once on a new
+  Admin -> Node Builds page, and every recorder node whose reported version is older picks it up on
+  its own next heartbeat, downloads it, verifies its SHA-256, and swaps its own running binary — no
+  more manually re-running `build-node.ps1` / `install-node.ps1` on each recorder machine. Direct
+  port of the existing dploid.Agent/dploid.AgentUpdater pattern: NidusVMS.NodeUpdater.exe (previously
+  a stub) is a small detached helper that waits for the Windows Service to actually stop, backs up
+  and swaps the binary, restarts the service, and re-applies the same failure-recovery config
+  install-node.ps1 sets at install time. `build-node.ps1` now publishes and bundles
+  NidusVMS.NodeUpdater.exe alongside NidusVMS.Node.exe; `install-node.ps1` installs it into
+  `C:\Program Files\NidusVMS\Node` on both fresh installs and upgrades. Gated by a new global
+  "Auto-update recorder nodes" setting on Admin -> Settings (on by default) — no per-node override
+  in this first pass. Uploaded builds are stored under `%ProgramData%\NidusVMS\node-builds`,
+  deliberately outside the IIS site directory so `deploy.ps1`'s mirrored publish never touches them.
+
+## [0.47.0] - 2026-08-13
+
+### Added
+
+- **Multi-camera video export.** Select several cameras and a timeframe from the Playback page's
+  toolbar ("Export…") and get one MP4 per camera, delivered asynchronously through a new Exports
+  page rather than a synchronous per-camera download — a job can span far more footage than a
+  request should hold a browser connection open for. Creating an export writes an ExportJob plus one
+  Queued ExportJobItem per camera; a new Web-tier background service (ExportJobDispatcher, the first
+  BackgroundService/async job in NidusVMS.Web) polls for Queued items, resolves each camera's
+  recorded segments for the range, and dispatches to that camera's node over a new signed,
+  short-lived export token (mirroring the existing playback-segment token, just binding
+  cameraId+exportItemId instead of a specific file). The node writes an ffmpeg concat-demuxer list
+  file and runs a pure `-c copy` remux (no transcode — one camera's own segments already share
+  codec/resolution) into a new `exports/` folder alongside its `cam-*/` recording folders, then
+  reports success/failure back. Finished files are downloaded through the same signed-proxy shape
+  `/playback-segment` already uses, with `Content-Disposition: attachment` added for the first time
+  since this is the first proxied route meant to be saved rather than played inline. Export output is
+  swept from a node's disk after 7 days by the existing StorageManager sweep, on the same age-check
+  pattern as normal recording retention. Gated behind a new `Exports.View` permission, resolved
+  dynamically the same way every other permission string in this app already is — no catalog update
+  needed.
+- **Double-click focused/fullscreen view on Live and Playback camera tiles.** Double-click a tile to
+  fullscreen it via the real browser Fullscreen API on the tile's own container (not the bare
+  `<video>`), so its own overlay controls stay reachable while fullscreened instead of disappearing
+  along with every other sibling element; double-click again, or Esc, exits. Every other tile on the
+  page keeps streaming/playing untouched the whole time, since nothing outside the fullscreened
+  element is torn down — it's simply not painted. While a tile is fullscreened, scroll to zoom in
+  (down to the normal fill size, no lower) and drag to pan once zoomed — a separate zoom/pan
+  implementation from Playback's existing non-fullscreen digital zoom buttons, which are unchanged
+  and hidden while a tile is fullscreened (along with the primary-select badge and, on Live, the
+  playback-toggle button) so fullscreen shows only mute and exit.
+- **Live View: toggle a single camera into playback mode** without leaving the page — adds a mini
+  timeline and play/pause to just that one tile, reusing the same MSE/segment-fetch player Playback
+  already uses rather than a separate implementation. Every other tile keeps showing pure live video
+  with no timeline. Only one tile can be in playback mode at a time; toggling a different tile
+  reverts whichever one was previously toggled back to live first. To play back several cameras
+  together, use the Playback page.
+- **Pagination for the Cameras and Nodes tables**, with a rows-per-page selector (10/25/50/100/All,
+  remembered per table), composing with their existing client-side filter and sort — filtering or
+  re-sorting re-paginates the result instead of the two stepping on each other.
+- **Playback: exact-time seeking.** Click the current-time readout below the timeline to jump to a
+  specific second directly, or (while paused) use the arrow keys to nudge the playhead by a second —
+  Shift+arrow for ten. The timeline drag itself was already millisecond-precise; at the default
+  24-hour zoom a single pixel of drag covers 100+ seconds, which read as "can only seek to the
+  minute" even though nothing was actually snapping — these give an exact-seek path that doesn't
+  depend on zoom level.
+
+### Fixed
+
+- **Live View fullscreen now shows only mute and exit-fullscreen.** Previously fullscreening a tile's
+  bare `<video>` element dropped every sibling control (including the fullscreen button itself) out
+  of the render tree, leaving no way back out except Esc. Fullscreening the tile's container instead
+  keeps its controls reachable, and only mute + exit stay visible while fullscreened.
+- **Playback's current-time readout is now centered** under the timeline's yellow playhead line
+  instead of left-aligned block text.
+
 ## [0.46.0] - 2026-08-12
 
 ### Added

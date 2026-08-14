@@ -62,6 +62,9 @@
                 th.appendChild(indicator);
 
                 sortRows(table, columnIndex, th.hasAttribute('data-sort-numeric'), ascending);
+                // Same coupling as list-filter.js's own dispatch — lets table-pagination.js re-slice
+                // against the now-reordered rows instead of the pre-sort order.
+                document.dispatchEvent(new CustomEvent('nidusvms:table-changed', { detail: { tableId: table.id } }));
             });
         });
     }

@@ -3,9 +3,9 @@
     Build the NidusVMS recorder node as a self-contained, distributable package.
 
 .DESCRIPTION
-    Publishes NidusVMS.Node as a self-contained single-file executable for win-x64, then copies
-    install-node.ps1 into the output folder so it can be zipped up and copied to a recorder
-    machine as-is.
+    Publishes NidusVMS.Node and NidusVMS.NodeUpdater as self-contained single-file executables for
+    win-x64, then copies install-node.ps1 into the output folder so it can be zipped up and copied to
+    a recorder machine as-is.
 
     Windows only for now: NodeConfigStore's registration store is DPAPI-based
     (System.Security.Cryptography.ProtectedData), which throws PlatformNotSupportedException on
@@ -13,11 +13,14 @@
     yet, so there is no linux-x64 output here — publishing one would just fail at first run.
 
     Output:
-        publish\NidusVMS.Node\win\   - NidusVMS.Node.exe + install-node.ps1
+        publish\NidusVMS.Node\win\   - NidusVMS.Node.exe + NidusVMS.NodeUpdater.exe + install-node.ps1
 
-    There is no -Upload step (unlike dploid's build-agent.ps1): NidusVMS.NodeUpdater — the piece that
-    would receive and apply an uploaded build — is still a stub. Until it exists, updating a node
-    means re-running this script and install-node.ps1 on the recorder machine.
+    NidusVMS.NodeUpdater.exe is what a node launches (as a detached process) to swap its own binary
+    during a self-triggered auto-update — see NidusVMS.Node/Update/UpdateService.cs and
+    NidusVMS.NodeUpdater/Program.cs. It's built and bundled here so it's always present alongside
+    NidusVMS.Node.exe, but there is still no -Upload step (unlike dploid's build-agent.ps1): uploading
+    a build to NidusVMS.Web for nodes to pick up is a separate, manual admin-page step
+    (Admin -> Node Builds), not automated by this script or by deploy.ps1.
 
     -ExtraPublishPath optionally mirrors the same output to a second location (e.g. a network share
     a recorder machine can reach directly) so a node install/upgrade doesn't depend on manually
@@ -31,9 +34,10 @@
 #>
 
 param(
-    [string]$NodeProject     = (Join-Path $PSScriptRoot 'src\NidusVMS.Node\NidusVMS.Node.csproj'),
-    [string]$OutputRoot      = (Join-Path $PSScriptRoot 'publish\NidusVMS.Node'),
-    [string]$Configuration   = 'Release',
+    [string]$NodeProject        = (Join-Path $PSScriptRoot 'src\NidusVMS.Node\NidusVMS.Node.csproj'),
+    [string]$NodeUpdaterProject = (Join-Path $PSScriptRoot 'src\NidusVMS.NodeUpdater\NidusVMS.NodeUpdater.csproj'),
+    [string]$OutputRoot         = (Join-Path $PSScriptRoot 'publish\NidusVMS.Node'),
+    [string]$Configuration      = 'Release',
     [string]$ExtraPublishPath
 )
 
@@ -56,6 +60,27 @@ dotnet publish $NodeProject `
     -p:NoWarn=CA1416 `
     -o $winOut
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed (exit $LASTEXITCODE)." }
+Write-Ok "Published"
+
+Write-Step "Publishing NidusVMS.NodeUpdater (win-x64, self-contained, single-file)"
+# Published to its own temp folder, not straight into $winOut — a single-file self-contained publish
+# drops its own copy of every shared runtime file (hostfxr, etc.) into the output directory, and
+# publishing two different projects into the same folder back-to-back would have this pass's files
+# collide with (and potentially get partially overwritten by) the Node publish above. Only the one
+# binary this pass actually produces gets copied over.
+$updaterTmp = Join-Path $OutputRoot 'win-updater-tmp'
+if (Test-Path $updaterTmp) { Remove-Item $updaterTmp -Recurse -Force }
+dotnet publish $NodeUpdaterProject `
+    -c $Configuration `
+    -r win-x64 `
+    --self-contained `
+    -p:PublishSingleFile=true `
+    -p:EnableCompressionInSingleFile=true `
+    -p:NoWarn=CA1416 `
+    -o $updaterTmp
+if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed (exit $LASTEXITCODE)." }
+Copy-Item (Join-Path $updaterTmp 'NidusVMS.NodeUpdater.exe') $winOut -Force
+Remove-Item $updaterTmp -Recurse -Force
 Write-Ok "Published"
 
 Copy-Item (Join-Path $PSScriptRoot 'install-node.ps1') $winOut -Force

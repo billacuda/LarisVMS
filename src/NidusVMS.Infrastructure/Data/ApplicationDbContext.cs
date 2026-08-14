@@ -46,6 +46,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     // ── Nodes / recording ────────────────────────────────────────────────────
     public DbSet<Node> Nodes => Set<Node>();
     public DbSet<Segment> Segments => Set<Segment>();
+    public DbSet<NodeBuildVersion> NodeBuildVersions => Set<NodeBuildVersion>();
 
     // ── Motion (M8) ──────────────────────────────────────────────────────────
     public DbSet<Zone> Zones => Set<Zone>();
@@ -55,6 +56,13 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
 
     // ── Views (M6) ───────────────────────────────────────────────────────────
     public DbSet<View> Views => Set<View>();
+
+    // ── Export ───────────────────────────────────────────────────────────────
+    // Items exposed alongside the parent, same as Segment/CameraStream get their own DbSet despite
+    // being reachable via a Camera navigation too — ExportJobDispatcher and the completion-report
+    // endpoint both need to query ExportJobItems directly, not always by walking down from a job.
+    public DbSet<ExportJob> ExportJobs => Set<ExportJob>();
+    public DbSet<ExportJobItem> ExportJobItems => Set<ExportJobItem>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -194,6 +202,19 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.HasIndex(x => x.FilePath).IsUnique();
         });
 
+        // ── NodeBuildVersion ─────────────────────────────────────────────────
+        builder.Entity<NodeBuildVersion>(e =>
+        {
+            e.Property(x => x.Version).HasMaxLength(50).IsRequired();
+            e.Property(x => x.Platform).HasMaxLength(50).IsRequired();
+            e.Property(x => x.FilePath).HasMaxLength(500).IsRequired();
+            e.Property(x => x.Sha256).HasMaxLength(64).IsRequired();
+            e.Property(x => x.Notes).HasMaxLength(1000);
+            // What GetLatestForPlatformAsync queries on every heartbeat from every checked-in node —
+            // small table, but this is the hot path.
+            e.HasIndex(x => new { x.Platform, x.UploadedAt });
+        });
+
         // ── View ─────────────────────────────────────────────────────────────
         builder.Entity<View>(e =>
         {
@@ -257,6 +278,26 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.StopTopic).HasMaxLength(500);
             e.Property(x => x.ColorHex).HasMaxLength(9).IsRequired(); // "#rrggbbaa" worst case
             e.HasIndex(x => new { x.CameraId, x.Name });
+        });
+
+        // ── ExportJob / ExportJobItem ────────────────────────────────────────
+        builder.Entity<ExportJob>(e =>
+        {
+            e.Property(x => x.RequestedByUserId).HasMaxLength(450).IsRequired();
+            e.Property(x => x.RequestedByUserName).HasMaxLength(256);
+            e.HasIndex(x => x.CreatedUtc);
+        });
+        builder.Entity<ExportJobItem>(e =>
+        {
+            // Real relationship (cascade) — an ExportJobItem has no meaning outside its parent job,
+            // unlike CameraId/NodeId below which are deliberately left as plain columns.
+            e.HasOne(x => x.ExportJob).WithMany(j => j.Items)
+                .HasForeignKey(x => x.ExportJobId).OnDelete(DeleteBehavior.Cascade);
+            e.Property(x => x.OutputFilePath).HasMaxLength(450);
+            e.Property(x => x.ErrorMessage).HasMaxLength(2000);
+            e.HasIndex(x => new { x.ExportJobId, x.Status });
+            // What ExportJobDispatcher's poll scans every cycle.
+            e.HasIndex(x => x.Status);
         });
     }
 }

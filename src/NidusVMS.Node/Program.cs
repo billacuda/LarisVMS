@@ -3,9 +3,11 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using NidusVMS.Core.Dtos;
 using NidusVMS.Core.Security;
 using NidusVMS.Media;
 using NidusVMS.Node;
+using NidusVMS.Node.Update;
 using NidusVMS.Onvif.Clients;
 using NidusVMS.Onvif.Soap;
 
@@ -28,8 +30,13 @@ if (config is null)
 
     var insecure = HasFlag(args, "--insecure-tls") || Environment.GetEnvironmentVariable("NIDUSVMS_INSECURE_TLS") == "1";
     var registerClient = new NodeApiClient(serverUrl, insecure);
+    // "win-x64" (a RID, not Environment.OSVersion.Platform.ToString()'s "Win32NT") — this is what
+    // NidusVMS.Web's heartbeat handler matches against NodeBuildVersion.Platform to decide whether an
+    // uploaded build applies to this node (see NodeVersionComparer/Program.cs's auto-update check).
+    // NidusVMS.Node is Windows-only and single-RID for now (see NodeConfigStore's doc comment on why
+    // there's no Linux build), so this is a fixed literal rather than something resolved at runtime.
     var response = await registerClient.RegisterAsync(
-        new NidusVMS.Core.Dtos.NodeRegisterRequest(registrationKey, Environment.MachineName, NodeVersion.Current, Environment.OSVersion.Platform.ToString()),
+        new NidusVMS.Core.Dtos.NodeRegisterRequest(registrationKey, Environment.MachineName, NodeVersion.Current, "win-x64"),
         CancellationToken.None);
 
     config = new NodeConfig(serverUrl, response.NodeId, response.Secret, response.MediaSigningKey);
@@ -80,11 +87,17 @@ var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(o => o.ListenAnyIP(livePort));
 builder.Services.AddWindowsService(o => o.ServiceName = "NidusVMS Node");
 builder.Services.AddSingleton(apiClient);
+builder.Services.AddSingleton(sp => new UpdateService(
+    config, insecureTls, sp.GetRequiredService<ILoggerFactory>().CreateLogger<UpdateService>(),
+    sp.GetRequiredService<IHostApplicationLifetime>()));
 builder.Services.AddSingleton(sp => new NodeWorker(
-    apiClient, ffmpegPath, fallbackStorageRoot, livePort, config, sp.GetRequiredService<ILoggerFactory>(), onvifEventsClient));
+    apiClient, ffmpegPath, fallbackStorageRoot, livePort, config, sp.GetRequiredService<ILoggerFactory>(), onvifEventsClient,
+    sp.GetRequiredService<UpdateService>()));
 builder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<NodeWorker>());
 builder.Services.AddSingleton<IHostedService>(sp => new StorageManager(
     apiClient, fallbackStorageRoot, sp.GetRequiredService<ILoggerFactory>().CreateLogger<StorageManager>()));
+builder.Services.AddSingleton(sp => new ExportRunner(
+    apiClient, ffmpegPath, sp.GetRequiredService<ILoggerFactory>().CreateLogger<ExportRunner>()));
 
 var app = builder.Build();
 app.UseWebSockets();
@@ -180,6 +193,155 @@ app.MapGet("/playback-segment/{cameraId:guid}", async (HttpContext ctx, Guid cam
     }
 
     if (!fullPath.StartsWith(cameraDir, StringComparison.OrdinalIgnoreCase) || !File.Exists(fullPath))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+    }
+
+    ctx.Response.ContentType = "video/mp4";
+    await ctx.Response.SendFileAsync(fullPath, ctx.RequestAborted);
+});
+
+// Export trigger — POSTed by NidusVMS.Web's ExportJobDispatcher, never reached by a browser
+// directly. Token binds cameraId + exportItemId (MediaToken.IssueForExport/TryValidateExport)
+// rather than a specific file the way /playback-segment's does, since the whole point of this call
+// is *telling* the node which files to concat — there's nothing to bind ahead of time. The
+// path-prefix check below is applied to every entry in the request body, exactly as strict as
+// /playback-segment's own check, so a compromised/rogue Web tier can't point this at a path outside
+// this camera's own recording directory. Responds 202 immediately (after validating and staging
+// everything ffmpeg needs) and runs the actual concat on a background Task.Run.
+app.MapPost("/export/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ExportRequest request, NodeWorker worker, ExportRunner exportRunner) =>
+{
+    var token = ctx.Request.Query["token"].ToString();
+    var currentKey = worker.MediaSigningKey;
+    if (currentKey is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
+        return;
+    }
+    if (request.CameraId != cameraId)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await ctx.Response.WriteAsync("cameraId mismatch");
+        return;
+    }
+    if (!MediaToken.TryValidateExport(token, cameraId, request.ExportItemId, currentKey, out var tokenError))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync(tokenError);
+        return;
+    }
+
+    var storageRoot = worker.StorageRoot;
+    if (storageRoot is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
+        return;
+    }
+
+    // Validated defensively even though ExportJobDispatcher already sanitizes this before sending
+    // it — this value ends up in Path.Combine(exportsDir, outputFileName) below, and a compromised/
+    // rogue Web tier passing "../../whatever" must not be able to escape exportsDir.
+    var outputFileName = request.OutputFileName;
+    if (string.IsNullOrWhiteSpace(outputFileName)
+        || outputFileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
+        || outputFileName.Contains(".."))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await ctx.Response.WriteAsync("invalid output file name");
+        return;
+    }
+
+    string cameraDir;
+    var validatedPaths = new List<string>();
+    try
+    {
+        cameraDir = Path.GetFullPath(Path.Combine(storageRoot, $"cam-{cameraId}", "main")) + Path.DirectorySeparatorChar;
+        foreach (var p in request.SegmentFilePaths)
+        {
+            var fullPath = Path.GetFullPath(p);
+            if (!fullPath.StartsWith(cameraDir, StringComparison.OrdinalIgnoreCase))
+            {
+                ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await ctx.Response.WriteAsync("segment path outside this camera's recording directory");
+                return;
+            }
+            validatedPaths.Add(fullPath);
+        }
+    }
+    catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+
+    if (validatedPaths.Count == 0)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await ctx.Response.WriteAsync("no segment paths given");
+        return;
+    }
+
+    ctx.Response.StatusCode = StatusCodes.Status202Accepted;
+    await ctx.Response.CompleteAsync();
+
+    // Fire-and-forget: the request is already acknowledged above. CancellationToken.None, not
+    // ctx.RequestAborted — this must keep running (and eventually report back) even though the HTTP
+    // request that started it has already completed.
+    _ = Task.Run(() => exportRunner.RunAsync(request.ExportItemId, cameraId, validatedPaths, storageRoot, outputFileName, CancellationToken.None));
+});
+
+// Export download side — serves exactly one finished export item's file to NidusVMS.Web's
+// /export-download proxy, same "IIS/this proxy relays every byte, browser never reached directly"
+// shape as /playback-segment, using the export-download token family (binds exportItemId + this
+// exact path) rather than the export-trigger family above.
+app.MapGet("/export-file/{exportItemId:guid}", async (HttpContext ctx, Guid exportItemId, NodeWorker worker) =>
+{
+    var token = ctx.Request.Query["token"].ToString();
+    var path = ctx.Request.Query["path"].ToString();
+    var currentKey = worker.MediaSigningKey;
+    if (currentKey is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
+        return;
+    }
+    if (string.IsNullOrEmpty(path))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync("missing path");
+        return;
+    }
+    if (!MediaToken.TryValidateExportDownload(token, exportItemId, path, currentKey, out var tokenError))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync(tokenError);
+        return;
+    }
+
+    var storageRoot = worker.StorageRoot;
+    if (storageRoot is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
+        return;
+    }
+
+    string fullPath, exportsDir;
+    try
+    {
+        fullPath = Path.GetFullPath(path);
+        exportsDir = Path.GetFullPath(Path.Combine(storageRoot, "exports")) + Path.DirectorySeparatorChar;
+    }
+    catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+
+    if (!fullPath.StartsWith(exportsDir, StringComparison.OrdinalIgnoreCase) || !File.Exists(fullPath))
     {
         ctx.Response.StatusCode = StatusCodes.Status404NotFound;
         return;

@@ -36,4 +36,10 @@ public interface ITimelineService
     /// <summary>Null if segmentId doesn't exist or doesn't belong to cameraId — the /playback-segment
     /// proxy treats that as 404 rather than trusting the caller's cameraId/segmentId pairing.</summary>
     Task<PlaybackSegmentInfo?> GetSegmentForPlaybackAsync(Guid cameraId, long segmentId, CancellationToken ct = default);
+
+    /// <summary>Every segment's FilePath overlapping [fromUtc, toUtc) for one camera, ordered by
+    /// StartUtc — sibling to GetSegmentsAsync (which returns Id/StartUtc/EndUtc for the timeline
+    /// player) rather than an extension of it: ExportJobDispatcher needs an ordered list of raw
+    /// paths to write into its ffmpeg concat list file, not display metadata.</summary>
+    Task<List<string>> GetSegmentFilePathsAsync(Guid cameraId, DateTime fromUtc, DateTime toUtc, CancellationToken ct = default);
 }

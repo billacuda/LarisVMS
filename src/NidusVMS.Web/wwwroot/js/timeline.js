@@ -32,7 +32,6 @@ window.nidusvmsTimeline = (function () {
         var loading = false;
         var reloadTimer = null;
         var hour24 = !!options.hour24;
-        var currentTimeEl = options.currentTimeElId && document.getElementById(options.currentTimeElId);
 
         // It's the *playhead* that can't pass "now", not the visible window. An earlier version
         // clamped the window's right edge instead (centerMs <= now - range/2), which quietly pinned
@@ -42,13 +41,6 @@ window.nidusvmsTimeline = (function () {
         // drawn as unreachable-future instead (see draw()), so "now" stays where the marker is.
         function clampCenter(ms) {
             return Math.min(ms, Date.now());
-        }
-
-        function formatLabel(ms) {
-            return new Date(ms).toLocaleString(undefined, hour24 ? {
-                year: 'numeric', month: 'numeric', day: 'numeric',
-                hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
-            } : undefined);
         }
 
         // Axis tick granularity follows the chosen interval, not the total visible span — a 2-day
@@ -295,11 +287,6 @@ window.nidusvmsTimeline = (function () {
             ctx.moveTo(centerPx, 0);
             ctx.lineTo(centerPx, h);
             ctx.stroke();
-
-            // The exact playhead position — distinct from the interval ticks above, which mark scale,
-            // not the precise instant the yellow marker sits on — goes in its own element right below
-            // the bar rather than fighting for space inside the now much shorter canvas.
-            if (currentTimeEl) currentTimeEl.textContent = formatLabel(centerMs);
         }
 
         function xToTime(clientX) {

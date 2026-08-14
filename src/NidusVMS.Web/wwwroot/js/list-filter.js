@@ -13,6 +13,10 @@
             var matches = term === '' || (row.textContent || '').toLowerCase().indexOf(term) !== -1;
             row.style.display = matches ? '' : 'none';
         });
+        // The only coupling to table-pagination.js: lets pagination re-slice against the rows this
+        // filter just changed (paginating the post-filter set, not the full table) without either
+        // module reaching into the other's internals.
+        document.dispatchEvent(new CustomEvent('nidusvms:table-changed', { detail: { tableId: table.id } }));
     }
 
     document.addEventListener('DOMContentLoaded', function () {

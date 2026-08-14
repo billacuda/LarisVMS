@@ -8,4 +8,10 @@
     <Version>0.46.0</Version>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- UpdaterLogic's pure argument-parsing/file-swap helpers are unit tested directly against a
+         real temp directory, same reasoning as NidusVMS.Node's own InternalsVisibleTo. -->
+    <InternalsVisibleTo Include="NidusVMS.Tests" />
+  </ItemGroup>
+
 </Project>

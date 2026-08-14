@@ -130,4 +130,113 @@ public class MediaTokenTests
 
         Assert.False(MediaToken.TryValidateSegment(liveToken, cameraId, @"C:\a\segment1.mp4", Key, out _));
     }
+
+    // ── IssueForExport / TryValidateExport ──────────────────────────────────
+
+    [Fact]
+    public void ExportTokenRoundTripsForTheCameraAndItemItWasIssuedFor()
+    {
+        var cameraId = Guid.NewGuid();
+        var exportItemId = Guid.NewGuid();
+        var token = MediaToken.IssueForExport(cameraId, exportItemId, Key, TimeSpan.FromSeconds(30));
+
+        Assert.True(MediaToken.TryValidateExport(token, cameraId, exportItemId, Key, out var error));
+        Assert.Equal("", error);
+    }
+
+    [Fact]
+    public void ExportTokenRejectsAMismatchedExportItem()
+    {
+        var cameraId = Guid.NewGuid();
+        var token = MediaToken.IssueForExport(cameraId, Guid.NewGuid(), Key, TimeSpan.FromSeconds(30));
+
+        Assert.False(MediaToken.TryValidateExport(token, cameraId, Guid.NewGuid(), Key, out var error));
+        Assert.Equal("export item mismatch", error);
+    }
+
+    [Fact]
+    public void ExportTokenRejectsAMismatchedCamera()
+    {
+        var exportItemId = Guid.NewGuid();
+        var token = MediaToken.IssueForExport(Guid.NewGuid(), exportItemId, Key, TimeSpan.FromSeconds(30));
+
+        Assert.False(MediaToken.TryValidateExport(token, Guid.NewGuid(), exportItemId, Key, out var error));
+        Assert.Equal("camera mismatch", error);
+    }
+
+    [Fact]
+    public void ExportTokenRejectsAnExpiredToken()
+    {
+        var cameraId = Guid.NewGuid();
+        var exportItemId = Guid.NewGuid();
+        var token = MediaToken.IssueForExport(cameraId, exportItemId, Key, TimeSpan.FromSeconds(-1));
+
+        Assert.False(MediaToken.TryValidateExport(token, cameraId, exportItemId, Key, out var error));
+        Assert.Equal("expired", error);
+    }
+
+    [Fact]
+    public void ASegmentTokenDoesNotValidateAsAnExportToken()
+    {
+        // Separate token families, same reasoning as ALiveViewTokenDoesNotValidateAsASegmentToken —
+        // confirms a segment token can't be replayed against the export-trigger endpoint.
+        var cameraId = Guid.NewGuid();
+        var segmentToken = MediaToken.IssueForSegment(cameraId, @"C:\a\segment1.mp4", Key, TimeSpan.FromSeconds(30));
+
+        Assert.False(MediaToken.TryValidateExport(segmentToken, cameraId, Guid.NewGuid(), Key, out _));
+    }
+
+    // ── IssueForExportDownload / TryValidateExportDownload ──────────────────
+
+    [Fact]
+    public void ExportDownloadTokenRoundTripsForTheItemAndPathItWasIssuedFor()
+    {
+        var exportItemId = Guid.NewGuid();
+        const string path = @"E:\NidusVMS\recordings\exports\cam1_20260813T000000_20260813T010000.mp4";
+        var token = MediaToken.IssueForExportDownload(exportItemId, path, Key, TimeSpan.FromSeconds(30));
+
+        Assert.True(MediaToken.TryValidateExportDownload(token, exportItemId, path, Key, out var error));
+        Assert.Equal("", error);
+    }
+
+    [Fact]
+    public void ExportDownloadTokenSurvivesAWindowsDriveLetterColonInThePath()
+    {
+        var exportItemId = Guid.NewGuid();
+        const string path = @"C:\ProgramData\NidusVMS\recordings\exports\file.mp4";
+        var token = MediaToken.IssueForExportDownload(exportItemId, path, Key, TimeSpan.FromSeconds(30));
+
+        Assert.True(MediaToken.TryValidateExportDownload(token, exportItemId, path, Key, out var error));
+        Assert.Equal("", error);
+    }
+
+    [Fact]
+    public void ExportDownloadTokenRejectsAMismatchedPath()
+    {
+        var exportItemId = Guid.NewGuid();
+        var token = MediaToken.IssueForExportDownload(exportItemId, @"C:\a\export1.mp4", Key, TimeSpan.FromSeconds(30));
+
+        Assert.False(MediaToken.TryValidateExportDownload(token, exportItemId, @"C:\a\export2.mp4", Key, out var error));
+        Assert.Equal("path mismatch", error);
+    }
+
+    [Fact]
+    public void ExportDownloadTokenRejectsAMismatchedExportItem()
+    {
+        const string path = @"C:\a\export1.mp4";
+        var token = MediaToken.IssueForExportDownload(Guid.NewGuid(), path, Key, TimeSpan.FromSeconds(30));
+
+        Assert.False(MediaToken.TryValidateExportDownload(token, Guid.NewGuid(), path, Key, out var error));
+        Assert.Equal("export item mismatch", error);
+    }
+
+    [Fact]
+    public void AnExportTriggerTokenDoesNotValidateAsAnExportDownloadToken()
+    {
+        var cameraId = Guid.NewGuid();
+        var exportItemId = Guid.NewGuid();
+        var triggerToken = MediaToken.IssueForExport(cameraId, exportItemId, Key, TimeSpan.FromSeconds(30));
+
+        Assert.False(MediaToken.TryValidateExportDownload(triggerToken, exportItemId, @"C:\a\export1.mp4", Key, out _));
+    }
 }

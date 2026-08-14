@@ -166,6 +166,18 @@ public class TimelineService(ApplicationDbContext db) : ITimelineService
         return new PlaybackSegmentInfo(segment.FilePath, node?.LastIpAddress, node?.LivePort, node?.MediaSigningKey);
     }
 
+    public async Task<List<string>> GetSegmentFilePathsAsync(Guid cameraId, DateTime fromUtc, DateTime toUtc, CancellationToken ct = default)
+    {
+        fromUtc = NormalizeToUtc(fromUtc);
+        toUtc = NormalizeToUtc(toUtc);
+
+        return await db.Segments
+            .Where(s => s.CameraId == cameraId && s.StartUtc < toUtc && s.EndUtc > fromUtc)
+            .OrderBy(s => s.StartUtc)
+            .Select(s => s.FilePath)
+            .ToListAsync(ct);
+    }
+
     // NodeWorker checkpoints an open span roughly every 15s (see EnqueueMotionCheckpoints) — 25s
     // gives one checkpoint's worth of margin for the report round trip and Live's own poll interval
     // without stretching so far that a genuinely-just-ended span still reads as "active" for long

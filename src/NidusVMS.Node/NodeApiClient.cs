@@ -87,4 +87,11 @@ public class NodeApiClient
         var response = await _http.PostAsJsonAsync("api/nodes/events", events, ct);
         response.EnsureSuccessStatusCode();
     }
+
+    public async Task ReportExportCompleteAsync(List<ExportCompleteReportItem> items, CancellationToken ct)
+    {
+        if (items.Count == 0) return;
+        var response = await _http.PostAsJsonAsync("api/nodes/exports/complete", items, ct);
+        response.EnsureSuccessStatusCode();
+    }
 }

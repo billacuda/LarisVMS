@@ -67,6 +67,22 @@
     </div>
 
     <div class="col-12 mt-4">
+        <h5>Node updates</h5>
+    </div>
+    <div class="col-12">
+        <div class="form-check">
+            <input asp-for="NodeAutoUpdateEnabled" type="checkbox" class="form-check-input" />
+            <label asp-for="NodeAutoUpdateEnabled" class="form-check-label">Auto-update recorder nodes</label>
+        </div>
+        <div class="form-text">
+            When on, every recorder node whose reported version is older than the newest build for its
+            platform downloads and applies it automatically on its next heartbeat — see
+            <a asp-page="/Admin/NodeBuilds/Index">Admin &rarr; Node Builds</a> to upload one. Turning
+            this off freezes every node on whatever it's already running until it's turned back on.
+        </div>
+    </div>
+
+    <div class="col-12 mt-4">
         <h5>Node registration</h5>
     </div>
     <div class="col-12">

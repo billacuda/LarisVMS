@@ -622,6 +622,84 @@ namespace NidusVMS.Infrastructure.Migrations
                     b.ToTable("EventTagRules");
                 });
 
+            modelBuilder.Entity("NidusVMS.Core.Entities.ExportJob", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("FromUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("RequestedByUserId")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("nvarchar(450)");
+
+                    b.Property<string>("RequestedByUserName")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("ToUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedUtc");
+
+                    b.ToTable("ExportJobs");
+                });
+
+            modelBuilder.Entity("NidusVMS.Core.Entities.ExportJobItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("CameraId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("CompletedUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<Guid>("ExportJobId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("NodeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("OutputFilePath")
+                        .HasMaxLength(450)
+                        .HasColumnType("nvarchar(450)");
+
+                    b.Property<long?>("OutputSizeBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime?>("StartedUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Status");
+
+                    b.HasIndex("ExportJobId", "Status");
+
+                    b.ToTable("ExportJobItems");
+                });
+
             modelBuilder.Entity("NidusVMS.Core.Entities.MotionSpan", b =>
                 {
                     b.Property<long>("Id")
@@ -730,6 +808,49 @@ namespace NidusVMS.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("Nodes");
+                });
+
+            modelBuilder.Entity("NidusVMS.Core.Entities.NodeBuildVersion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("FilePath")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<string>("Platform")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<long>("SizeBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime>("UploadedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Version")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Platform", "UploadedAt");
+
+                    b.ToTable("NodeBuildVersions");
                 });
 
             modelBuilder.Entity("NidusVMS.Core.Entities.Permission", b =>
@@ -1103,6 +1224,17 @@ namespace NidusVMS.Infrastructure.Migrations
                     b.Navigation("Camera");
                 });
 
+            modelBuilder.Entity("NidusVMS.Core.Entities.ExportJobItem", b =>
+                {
+                    b.HasOne("NidusVMS.Core.Entities.ExportJob", "ExportJob")
+                        .WithMany("Items")
+                        .HasForeignKey("ExportJobId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ExportJob");
+                });
+
             modelBuilder.Entity("NidusVMS.Core.Entities.MotionSpan", b =>
                 {
                     b.HasOne("NidusVMS.Core.Entities.Camera", "Camera")
@@ -1162,6 +1294,11 @@ namespace NidusVMS.Infrastructure.Migrations
                     b.Navigation("Cameras");
 
                     b.Navigation("Children");
+                });
+
+            modelBuilder.Entity("NidusVMS.Core.Entities.ExportJob", b =>
+                {
+                    b.Navigation("Items");
                 });
 
             modelBuilder.Entity("NidusVMS.Core.Entities.Node", b =>

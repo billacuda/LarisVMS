@@ -4,13 +4,15 @@ using Microsoft.Extensions.Logging;
 using NidusVMS.Core.Dtos;
 using NidusVMS.Core.Enums;
 using NidusVMS.Media;
+using NidusVMS.Node.Update;
 using NidusVMS.Onvif.Clients;
 using NidusVMS.Onvif.Soap;
 
 namespace NidusVMS.Node;
 
 public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackStorageRoot, int livePort,
-    NodeConfig registration, ILoggerFactory loggerFactory, OnvifEventsClient onvifEventsClient) : BackgroundService
+    NodeConfig registration, ILoggerFactory loggerFactory, OnvifEventsClient onvifEventsClient,
+    UpdateService updateService) : BackgroundService
 {
     private readonly ILogger<NodeWorker> _logger = loggerFactory.CreateLogger<NodeWorker>();
 
@@ -195,7 +197,18 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 var storageRoot = Reconcile(config, ct);
                 PersistConfigCache(config);
                 var usage = DiskSpace.TryGetUsage(storageRoot);
-                await api.HeartbeatAsync(new NodeHeartbeatRequest(NodeVersion.Current, usage?.FreeBytes, usage?.TotalBytes, livePort), ct);
+                var heartbeat = await api.HeartbeatAsync(new NodeHeartbeatRequest(NodeVersion.Current, usage?.FreeBytes, usage?.TotalBytes, livePort), ct);
+
+                // Auto-update: server only ever hands this back when a genuinely newer build exists
+                // for this node's platform and NodeAutoUpdate.Enabled is on (see Program.cs's
+                // heartbeat handler) — nothing left to decide here except not double-triggering while
+                // one is already in flight (UpdateService.IsApplying). A successful apply calls
+                // IHostApplicationLifetime.StopApplication() itself, which unwinds this loop via ct.
+                if (heartbeat.UpdateAvailable is not null && !updateService.IsApplying)
+                {
+                    _logger.LogInformation("Recorder node update available: {Version} — downloading and applying.", heartbeat.UpdateAvailable.Version);
+                    await updateService.TryApplyAsync(heartbeat.UpdateAvailable, ct);
+                }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

@@ -432,6 +432,80 @@
         return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
+    // datetime-local inputs read/write local wall-clock time with no timezone suffix — `new
+    // Date(value)` already parses that string as local time on the way back in, so this only needs
+    // to handle the ms-to-string direction.
+    function msToLocalDatetimeInputValue(ms) {
+        var d = new Date(ms);
+        function pad(n) { return String(n).padStart(2, '0'); }
+        return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' +
+            pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    }
+
+    // The tape-scrubber timeline is already ms-precise once zoomed in (timeline.js's MIN_RANGE_MS
+    // is 5 seconds), but that's not discoverable — at the default 24h zoom a single pixel of drag
+    // covers 100+ seconds, which reads as "can only seek to the minute" even though nothing is
+    // actually snapping. Click-to-edit on the readout itself gives an exact-seek path that doesn't
+    // depend on zoom level at all.
+    function wireCurrentTimeEdit(elId) {
+        var displayEl = document.getElementById(elId);
+        if (!displayEl) return;
+        var editing = false;
+
+        function render() { displayEl.textContent = new Date(playheadMs).toLocaleString(); }
+
+        function commit(inputEl) {
+            if (!editing) return;
+            editing = false;
+            var ms = inputEl.value ? new Date(inputEl.value).getTime() : NaN;
+            if (!isNaN(ms)) seekAll(ms, playing); // also repopulates displayEl's text, replacing the input
+            else render();
+        }
+
+        function cancel() {
+            editing = false;
+            render();
+        }
+
+        displayEl.style.cursor = 'pointer';
+        displayEl.title = 'Click to jump to an exact time';
+        displayEl.addEventListener('click', function () {
+            if (editing) return;
+            editing = true;
+            var inputEl = document.createElement('input');
+            inputEl.type = 'datetime-local';
+            inputEl.step = '1';
+            inputEl.className = 'form-control form-control-sm d-inline-block w-auto';
+            inputEl.value = msToLocalDatetimeInputValue(playheadMs);
+            displayEl.textContent = '';
+            displayEl.appendChild(inputEl);
+            inputEl.focus();
+            inputEl.select();
+            // Stopped from bubbling so the paused-playback arrow-key nudge (see init()) never fires
+            // off the keystrokes used to type into this field.
+            inputEl.addEventListener('keydown', function (e) {
+                e.stopPropagation();
+                if (e.key === 'Enter') { e.preventDefault(); commit(inputEl); }
+                else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+            });
+            inputEl.addEventListener('blur', function () { commit(inputEl); });
+        });
+    }
+
+    // Arrow-key nudge is only active while paused — while playing, playheadMs is already advancing
+    // every tick (see updatePlayhead), and a ±1s jump on top of that would just be confusing.
+    function wireArrowKeyNudge() {
+        window.addEventListener('keydown', function (e) {
+            if (playing) return;
+            if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+            var tag = document.activeElement && document.activeElement.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+            e.preventDefault();
+            var deltaMs = (e.shiftKey ? 10000 : 1000) * (e.key === 'ArrowLeft' ? -1 : 1);
+            seekAll(playheadMs + deltaMs, false);
+        });
+    }
+
     // No .ratio-16x9 wrapper here on purpose (unlike Live's tiles) — the grid cell itself is
     // whatever shape rebuildTilesFromView's auto NxM grid gives it (fills the whole window, one
     // camera to a whole page down to many cameras in a dense grid), not locked to 16:9, so forcing
@@ -456,6 +530,14 @@
                     '<button type="button" class="btn btn-outline-light pb-zoom-out" title="Zoom out" style="padding:.1rem .35rem;">−</button>' +
                     '<button type="button" class="btn btn-outline-light pb-zoom-reset" title="Reset zoom" style="padding:.1rem .35rem;">⤢</button>' +
                     '<button type="button" class="btn btn-outline-light pb-zoom-in" title="Zoom in" style="padding:.1rem .35rem;">+</button>' +
+                '</div>' +
+                // Hidden until hover (matches Live's own .live-controls) or forced visible while this
+                // tile is the fullscreen element (see .tile-fullscreen in site.css) — the digital zoom
+                // buttons above are the normal-grid-view zoom; fullscreen has its own wheel-zoom/drag-pan
+                // (fullscreen-tile.js) and just needs mute + a way back out while active.
+                '<div class="position-absolute bottom-0 end-0 m-1 btn-group btn-group-sm pb-fullscreen-controls d-none">' +
+                    '<button type="button" class="btn btn-outline-light pb-mute-toggle" title="Unmute" style="padding:.1rem .35rem;">🔇</button>' +
+                    '<button type="button" class="btn btn-outline-light pb-fullscreen-toggle" title="Fullscreen" style="padding:.1rem .35rem;">⛶</button>' +
                 '</div>' +
             '</div>'
         );
@@ -497,6 +579,59 @@
             dragging = false;
             videoEl.style.cursor = 'default';
         });
+    }
+
+    // Double-click-to-fullscreen + wheel-zoom/drag-pan (fullscreen-tile.js), plus the mute/exit
+    // buttons that are the only controls left visible once this tile is the fullscreen element —
+    // see .tile-fullscreen in site.css, which hides the normal-grid-view zoom buttons and the
+    // primary-select badge while it's active. frameEl is .pb-tile-frame, not the outer grid-cell
+    // wrapper, so fullscreening it doesn't also fullscreen this tile's grid-sizing wrapper element.
+    function wireFullscreen(frameEl, videoEl) {
+        var controls = frameEl.querySelector('.pb-fullscreen-controls');
+        var muteBtn = frameEl.querySelector('.pb-mute-toggle');
+        var fsBtn = frameEl.querySelector('.pb-fullscreen-toggle');
+
+        frameEl.addEventListener('mouseenter', function () { if (controls) controls.classList.remove('d-none'); });
+        frameEl.addEventListener('mouseleave', function () { if (controls) controls.classList.add('d-none'); });
+
+        function setMuteIcon() {
+            if (!muteBtn) return;
+            muteBtn.textContent = videoEl.muted ? '🔇' : '🔊';
+            muteBtn.title = videoEl.muted ? 'Unmute' : 'Mute';
+        }
+        setMuteIcon();
+        // Every segment boundary re-runs the tile's own teardown()/videoEl.load() (see
+        // createTile/loadSegment above), which resets the element back to its `muted` HTML-attribute
+        // default (true) — reapplied here on each new resource load so an unmute survives a seek
+        // across segments instead of silently reverting.
+        var userMuted = videoEl.muted;
+        videoEl.addEventListener('loadstart', function () {
+            videoEl.muted = userMuted;
+            setMuteIcon();
+        });
+        if (muteBtn) {
+            muteBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                videoEl.muted = !videoEl.muted;
+                userMuted = videoEl.muted;
+                setMuteIcon();
+            });
+        }
+
+        var fsHandle = window.nidusvmsFullscreenTile.wire(frameEl, videoEl, {
+            onFullscreenChange: function (active) {
+                if (!fsBtn) return;
+                fsBtn.textContent = active ? '⤢' : '⛶';
+                fsBtn.title = active ? 'Exit fullscreen' : 'Fullscreen';
+            }
+        });
+        if (fsBtn) {
+            fsBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                if (fsHandle.isFullscreen()) fsHandle.exitFullscreen();
+                else frameEl.requestFullscreen().catch(function () { /* ignore */ });
+            });
+        }
     }
 
     async function getBucketsForPrimary(fromIso, toIso, bucketCount) {
@@ -594,6 +729,9 @@
             return Date.now();
         }
     }
+    // Exported so Live's per-tile playback toggle (Pages/Live/Index.cshtml) can default a
+    // newly-toggled tile to its most recent recording too, instead of duplicating this lookup.
+    window.nidusvmsPlaybackPlayer.resolveInitialPlayheadMs = resolveInitialPlayheadMs;
 
     async function rebuildTilesFromView(viewId) {
         Object.keys(tiles).forEach(function (id) { tiles[id].player.teardown(); });
@@ -657,7 +795,9 @@
 
             var videoEl = el.querySelector('.pb-video');
             var statusEl = el.querySelector('.pb-status');
+            var frameEl = el.querySelector('.pb-tile-frame');
             wireZoom(el, videoEl);
+            wireFullscreen(frameEl, videoEl);
             // Whole cell is clickable to select it as primary, not just the name label — the name
             // element (which bubbles up to this same listener) keeps its pointer cursor as a hint,
             // but clicking anywhere else on the tile (the video, its background) works too. Zoom
@@ -818,7 +958,109 @@
         var playBtn = document.getElementById(o.playPauseBtnId);
         if (playBtn) playBtn.addEventListener('click', togglePlay);
 
+        if (o.currentTimeId) wireCurrentTimeEdit(o.currentTimeId);
+        wireArrowKeyNudge();
+        wireExportPanel();
+
         setInterval(updatePlayhead, 500);
+    }
+
+    // ── Export (multi-camera video export trigger) ──────────────────────────
+    // Small inline form, not a modal — checkboxes for whatever cameras are currently on screen (the
+    // same `tiles` the player itself renders, so this always matches the selected view) plus a
+    // start/end range defaulted around the current playhead. Submits to POST /api/exports and hands
+    // off to ExportJobDispatcher server-side; the actual per-camera work and its results live on the
+    // Exports page, not here.
+    function wireExportPanel() {
+        var btn = o.exportBtnId && document.getElementById(o.exportBtnId);
+        var panel = o.exportPanelId && document.getElementById(o.exportPanelId);
+        if (!btn || !panel) return;
+
+        btn.addEventListener('click', function () {
+            var wasHidden = panel.classList.contains('d-none');
+            if (wasHidden) populateExportPanel();
+            panel.classList.toggle('d-none');
+        });
+
+        var submitBtn = o.exportSubmitId && document.getElementById(o.exportSubmitId);
+        if (submitBtn) submitBtn.addEventListener('click', submitExport);
+    }
+
+    function populateExportPanel() {
+        var camerasEl = o.exportCamerasId && document.getElementById(o.exportCamerasId);
+        if (camerasEl) {
+            camerasEl.innerHTML = '';
+            Object.keys(tiles).forEach(function (id) {
+                var cam = cameraById[id];
+                var label = document.createElement('label');
+                label.className = 'form-check form-check-inline mb-0';
+                var input = document.createElement('input');
+                input.type = 'checkbox';
+                input.className = 'form-check-input pbExportCameraCheck';
+                input.value = id;
+                input.checked = true;
+                var span = document.createElement('span');
+                span.className = 'form-check-label small';
+                span.textContent = cam ? cam.name : id;
+                label.appendChild(input);
+                label.appendChild(span);
+                camerasEl.appendChild(label);
+            });
+        }
+
+        // A 5-minute window centered on the current playhead — enough to be immediately useful for
+        // the common "export what I'm looking at right now" case, adjustable before submitting for
+        // anything longer.
+        var fromEl = o.exportFromId && document.getElementById(o.exportFromId);
+        var toEl = o.exportToId && document.getElementById(o.exportToId);
+        if (fromEl) fromEl.value = msToLocalDatetimeInputValue(playheadMs - 5 * 60 * 1000);
+        if (toEl) toEl.value = msToLocalDatetimeInputValue(playheadMs + 5 * 60 * 1000);
+
+        var statusEl = o.exportStatusId && document.getElementById(o.exportStatusId);
+        if (statusEl) { statusEl.textContent = ''; statusEl.className = 'small'; }
+    }
+
+    function submitExport() {
+        var statusEl = o.exportStatusId && document.getElementById(o.exportStatusId);
+        var camerasEl = o.exportCamerasId && document.getElementById(o.exportCamerasId);
+        var fromEl = o.exportFromId && document.getElementById(o.exportFromId);
+        var toEl = o.exportToId && document.getElementById(o.exportToId);
+        if (!camerasEl || !fromEl || !toEl) return;
+
+        var cameraIds = Array.prototype.slice.call(camerasEl.querySelectorAll('.pbExportCameraCheck:checked'))
+            .map(function (cb) { return cb.value; });
+        if (cameraIds.length === 0) {
+            if (statusEl) { statusEl.textContent = 'Select at least one camera.'; statusEl.className = 'small text-danger'; }
+            return;
+        }
+
+        // datetime-local values parse as local time via `new Date(value)`, same as
+        // msToLocalDatetimeInputValue's own round trip assumes.
+        var fromMs = new Date(fromEl.value).getTime();
+        var toMs = new Date(toEl.value).getTime();
+        if (!isFinite(fromMs) || !isFinite(toMs) || toMs <= fromMs) {
+            if (statusEl) { statusEl.textContent = 'End time must be after start time.'; statusEl.className = 'small text-danger'; }
+            return;
+        }
+
+        if (statusEl) { statusEl.textContent = 'Starting…'; statusEl.className = 'small text-muted'; }
+
+        fetch('/api/exports', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                cameraIds: cameraIds,
+                fromUtc: new Date(fromMs).toISOString(),
+                toUtc: new Date(toMs).toISOString()
+            })
+        }).then(function (resp) {
+            if (!resp.ok) return resp.text().then(function (t) { throw new Error(t || ('HTTP ' + resp.status)); });
+            return resp.json();
+        }).then(function () {
+            if (statusEl) { statusEl.textContent = 'Export started — see the Exports page.'; statusEl.className = 'small text-success'; }
+        }).catch(function (err) {
+            if (statusEl) { statusEl.textContent = 'Failed to start export: ' + (err && err.message ? err.message : err); statusEl.className = 'small text-danger'; }
+        });
     }
 
     window.nidusvmsPlaybackPage = { init: init };
