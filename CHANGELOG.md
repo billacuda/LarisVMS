@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.58.0] - 2026-08-14
+
+### Fixed
+
+- **Double-click-to-fullscreen didn't work on a saved view's own playback page** (`/Views/Play/{id}`,
+  reached by picking a view from either Live's or Playback's picker) — that page has its own
+  hand-rolled tile implementation (`view-play.js`) that was never wired up to the shared
+  `fullscreen-tile.js` module Live and Playback both use; it was missing the `<script>` include
+  entirely, so only the small hover-only fullscreen button worked, and even that fullscreened the
+  bare `<video>` instead of the tile's frame, dropping the mute/exit buttons out of the fullscreened
+  render subtree. Now wired the same way as the other two pages.
+
+## [0.57.0] - 2026-08-14
+
+### Fixed
+
+- **Playback timeline/current-time readout never advanced during playback.** `wireExportPanel` (and
+  its `populateExportPanel`/`submitExport` helpers) referenced a bare `o` instead of the module-level
+  `opts`, throwing an uncaught `ReferenceError` partway through `init()` — since that happened before
+  `setInterval(updatePlayhead, 500)` was ever reached, the timeline strip and time readout silently
+  never started updating, even though the video itself played normally. Pre-existing bug, not
+  introduced by the LarisVMS rename; the Export panel button/panel wiring was also broken by the same
+  typo and is fixed alongside it.
+
 ## [0.56.0] - 2026-08-13
 
 ### Changed

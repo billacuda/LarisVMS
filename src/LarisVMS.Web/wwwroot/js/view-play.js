@@ -24,7 +24,7 @@ window.larisvmsViewPlay = (function () {
         var name = cam ? cam.name : '';
         return (
             '<div class="h-100 d-flex flex-column border rounded overflow-hidden">' +
-                '<div class="position-relative flex-grow-1 bg-black" style="min-height: 0;">' +
+                '<div class="view-cell-frame position-relative flex-grow-1 bg-black" style="min-height: 0;">' +
                     '<video class="view-cell-video" style="width:100%; height:100%; object-fit:contain;" muted playsinline></video>' +
                     '<div class="position-absolute top-50 start-50 translate-middle text-white small text-center px-2 view-cell-status"></div>' +
                     // Exactly two buttons, shown on hover — not native <video controls>: that
@@ -47,6 +47,7 @@ window.larisvmsViewPlay = (function () {
         if (!video || !cam) return;
 
         var hoverTarget = video.parentElement;
+        var frameEl = el.querySelector('.view-cell-frame');
         var controls = el.querySelector('.view-cell-controls');
         var muteBtn = el.querySelector('.view-cell-mute');
         var fullscreenBtn = el.querySelector('.view-cell-fullscreen');
@@ -67,10 +68,29 @@ window.larisvmsViewPlay = (function () {
                 setMuteIcon();
             });
         }
+        // Shared with Live/Playback (fullscreen-tile.js) — fullscreens frameEl (video + controls),
+        // not the bare <video>, and wires the double-click gesture, same as those two pages. This
+        // page's own fullscreenBtn just drives the same handle rather than calling
+        // video.requestFullscreen() directly, which used to drop the mute/fullscreen buttons out of
+        // the fullscreened render subtree entirely.
+        var fsHandle = frameEl && window.larisvmsFullscreenTile
+            ? window.larisvmsFullscreenTile.wire(frameEl, video, {
+                onFullscreenChange: function (active) {
+                    if (!fullscreenBtn) return;
+                    fullscreenBtn.textContent = active ? '⤢' : '⛶';
+                    fullscreenBtn.title = active ? 'Exit fullscreen' : 'Fullscreen';
+                }
+            })
+            : null;
         if (fullscreenBtn) {
             fullscreenBtn.addEventListener('click', function (e) {
                 e.stopPropagation();
-                if (video.requestFullscreen) video.requestFullscreen().catch(function () {});
+                if (fsHandle) {
+                    if (fsHandle.isFullscreen()) fsHandle.exitFullscreen();
+                    else frameEl.requestFullscreen().catch(function () {});
+                } else if (video.requestFullscreen) {
+                    video.requestFullscreen().catch(function () {});
+                }
             });
         }
         setMuteIcon();

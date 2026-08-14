@@ -985,8 +985,8 @@
     // off to ExportJobDispatcher server-side; the actual per-camera work and its results live on the
     // Exports page, not here.
     function wireExportPanel() {
-        var btn = o.exportBtnId && document.getElementById(o.exportBtnId);
-        var panel = o.exportPanelId && document.getElementById(o.exportPanelId);
+        var btn = opts.exportBtnId && document.getElementById(opts.exportBtnId);
+        var panel = opts.exportPanelId && document.getElementById(opts.exportPanelId);
         if (!btn || !panel) return;
 
         btn.addEventListener('click', function () {
@@ -995,12 +995,12 @@
             panel.classList.toggle('d-none');
         });
 
-        var submitBtn = o.exportSubmitId && document.getElementById(o.exportSubmitId);
+        var submitBtn = opts.exportSubmitId && document.getElementById(opts.exportSubmitId);
         if (submitBtn) submitBtn.addEventListener('click', submitExport);
     }
 
     function populateExportPanel() {
-        var camerasEl = o.exportCamerasId && document.getElementById(o.exportCamerasId);
+        var camerasEl = opts.exportCamerasId && document.getElementById(opts.exportCamerasId);
         if (camerasEl) {
             camerasEl.innerHTML = '';
             Object.keys(tiles).forEach(function (id) {
@@ -1024,20 +1024,20 @@
         // A 5-minute window centered on the current playhead — enough to be immediately useful for
         // the common "export what I'm looking at right now" case, adjustable before submitting for
         // anything longer.
-        var fromEl = o.exportFromId && document.getElementById(o.exportFromId);
-        var toEl = o.exportToId && document.getElementById(o.exportToId);
+        var fromEl = opts.exportFromId && document.getElementById(opts.exportFromId);
+        var toEl = opts.exportToId && document.getElementById(opts.exportToId);
         if (fromEl) fromEl.value = msToLocalDatetimeInputValue(playheadMs - 5 * 60 * 1000);
         if (toEl) toEl.value = msToLocalDatetimeInputValue(playheadMs + 5 * 60 * 1000);
 
-        var statusEl = o.exportStatusId && document.getElementById(o.exportStatusId);
+        var statusEl = opts.exportStatusId && document.getElementById(opts.exportStatusId);
         if (statusEl) { statusEl.textContent = ''; statusEl.className = 'small'; }
     }
 
     function submitExport() {
-        var statusEl = o.exportStatusId && document.getElementById(o.exportStatusId);
-        var camerasEl = o.exportCamerasId && document.getElementById(o.exportCamerasId);
-        var fromEl = o.exportFromId && document.getElementById(o.exportFromId);
-        var toEl = o.exportToId && document.getElementById(o.exportToId);
+        var statusEl = opts.exportStatusId && document.getElementById(opts.exportStatusId);
+        var camerasEl = opts.exportCamerasId && document.getElementById(opts.exportCamerasId);
+        var fromEl = opts.exportFromId && document.getElementById(opts.exportFromId);
+        var toEl = opts.exportToId && document.getElementById(opts.exportToId);
         if (!camerasEl || !fromEl || !toEl) return;
 
         var cameraIds = Array.prototype.slice.call(camerasEl.querySelectorAll('.pbExportCameraCheck:checked'))

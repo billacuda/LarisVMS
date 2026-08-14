@@ -39,6 +39,7 @@ body {
    shown while this tile is the fullscreen element, since there's no hover state to rely on and
    the exit-fullscreen button must stay reachable. */
 .tile-fullscreen .live-controls,
-.tile-fullscreen .pb-fullscreen-controls {
+.tile-fullscreen .pb-fullscreen-controls,
+.tile-fullscreen .view-cell-controls {
     display: flex !important;
 }
