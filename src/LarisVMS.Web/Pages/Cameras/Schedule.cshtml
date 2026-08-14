@@ -1,0 +1,86 @@
+@page "{id:guid}"
+@model LarisVMS.Web.Pages.Cameras.ScheduleModel
+@{
+    ViewData["Title"] = "Schedule: " + Model.CameraName;
+}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="mb-0">Schedule: @Model.CameraName</h1>
+    <a class="btn btn-outline-secondary" asp-page="Edit" asp-route-id="@Model.CameraId">Back to camera</a>
+</div>
+
+<p class="text-muted small">
+    Only matters when this camera's <strong>Recording mode</strong> is set to <strong>Schedule</strong>
+    (<a asp-page="Edit" asp-route-id="@Model.CameraId">set that on the camera's edit page</a>). A
+    segment is kept if it starts inside any enabled window below, evaluated against this recorder
+    node's own local clock — not a stored timezone. No windows at all means every segment is kept,
+    the same "fail open, don't silently discard" rule Motion mode uses for a camera with no zone
+    configured.
+</p>
+
+<div class="row g-3">
+    <div class="col-lg-7">
+        <div id="scheduleListPanel">
+            <p class="text-muted small">Loading windows…</p>
+        </div>
+
+        <div id="scheduleFormPanel" class="border rounded p-3 mt-3" style="display: none;">
+            <h6 id="scheduleFormTitle">New window</h6>
+            <input type="hidden" id="scheduleFormId" />
+            <div class="mb-2">
+                <label class="form-label small d-block">Days</label>
+                <div class="d-flex flex-wrap gap-3">
+                    @foreach (var day in new[] { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" })
+                    {
+                        <div class="form-check form-check-inline">
+                            <input type="checkbox" class="form-check-input schedule-form-day" value="@day" id="scheduleFormDay@(day)" />
+                            <label class="form-check-label small" for="scheduleFormDay@(day)">@day[..3]</label>
+                        </div>
+                    }
+                </div>
+            </div>
+            <div class="row g-2">
+                <div class="col-6">
+                    <label class="form-label small">Start time</label>
+                    <input type="time" id="scheduleFormStartTime" class="form-control form-control-sm" required />
+                </div>
+                <div class="col-6">
+                    <label class="form-label small">End time</label>
+                    <input type="time" id="scheduleFormEndTime" class="form-control form-control-sm" required />
+                    <div class="form-text">Before the start time means the window crosses midnight.</div>
+                </div>
+            </div>
+            <div class="form-check mb-2 mt-2">
+                <input type="checkbox" id="scheduleFormEnabled" class="form-check-input" checked />
+                <label class="form-check-label small" for="scheduleFormEnabled">Enabled</label>
+            </div>
+            <div class="d-flex gap-2">
+                <button type="button" id="scheduleFormSaveBtn" class="btn btn-primary btn-sm">Save</button>
+                <button type="button" id="scheduleFormCancelBtn" class="btn btn-outline-secondary btn-sm">Cancel</button>
+                <button type="button" id="scheduleFormDeleteBtn" class="btn btn-outline-danger btn-sm ms-auto" style="display: none;">Delete</button>
+            </div>
+        </div>
+
+        <button type="button" id="scheduleNewBtn" class="btn btn-primary btn-sm mt-3">New window</button>
+    </div>
+</div>
+
+@section Scripts {
+    <script src="~/js/schedule-editor.js" asp-append-version="true"></script>
+    <script>
+        window.larisvmsScheduleEditor.init({
+            cameraId: '@Model.CameraId',
+            listPanelId: 'scheduleListPanel',
+            newBtnId: 'scheduleNewBtn',
+            formPanelId: 'scheduleFormPanel',
+            formTitleId: 'scheduleFormTitle',
+            formIdInputId: 'scheduleFormId',
+            formStartTimeId: 'scheduleFormStartTime',
+            formEndTimeId: 'scheduleFormEndTime',
+            formEnabledId: 'scheduleFormEnabled',
+            formSaveBtnId: 'scheduleFormSaveBtn',
+            formCancelBtnId: 'scheduleFormCancelBtn',
+            formDeleteBtnId: 'scheduleFormDeleteBtn',
+            dayCheckboxClass: 'schedule-form-day'
+        });
+    </script>
+}

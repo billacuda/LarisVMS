@@ -1,0 +1,149 @@
+@page
+@model LarisVMS.Web.Pages.Admin.NodesModel
+@{
+    ViewData["Title"] = "Nodes";
+}
+<h1>Recorder nodes</h1>
+<p class="text-muted">
+    Recording runs in a separate Windows Service ("node") per the architecture plan, not inside this
+    IIS-hosted app, so it survives app pool recycles and deploys. Install a node with
+    <code>install-node.ps1</code> using the registration key from
+    <a asp-page="/Admin/Settings" asp-fragment="node-registration">Admin &rarr; Settings</a>. Once
+    installed, a node updates itself once a build registered by <code>deploy.ps1</code> is approved
+    on <a asp-page="/Admin/NodeBuilds/Index">Admin &rarr; Node Builds</a> — no re-running the install
+    script on every recorder machine.
+</p>
+
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger">@Model.ErrorMessage</div>
+}
+
+@if (Model.Nodes.Count == 0)
+{
+    <p class="text-muted">No nodes have registered yet.</p>
+}
+else
+{
+    <div class="row g-2 align-items-center mb-2">
+        <div class="col-sm-4">
+            <input type="search" class="form-control" data-filter-table="nodesTable"
+                   placeholder="Filter by name, IP, platform&hellip;" />
+        </div>
+        <div class="col-sm-auto d-flex align-items-center gap-2">
+            <label class="form-label small mb-0" for="nodesPageSize">Rows per page</label>
+            <select id="nodesPageSize" class="form-select form-select-sm" style="width: auto;" data-paginate-size-for="nodesTable">
+                <option value="10">10</option>
+                <option value="25" selected>25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="all">All</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="table-responsive">
+        <table class="table align-middle" id="nodesTable" data-sortable data-paginate>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Status</th>
+                    <th>IP</th>
+                    <th>Version</th>
+                    <th>Platform</th>
+                    <th>Last seen</th>
+                    <th data-sort-numeric>Cameras</th>
+                    <th>Storage root</th>
+                    <th data-sort-numeric>Storage usage</th>
+                    <th data-sort-numeric>Retention (days)</th>
+                    <th data-no-sort></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var n in Model.Nodes)
+                {
+                    <tr>
+                        <form method="post" asp-page-handler="Update" asp-route-id="@n.Id">
+                            <td style="min-width: 12rem;" data-sort-value="@n.Name">
+                                <input name="Name" class="form-control form-control-sm" value="@n.Name" required />
+                            </td>
+                            <td>
+                                @{
+                                    var stale = n.LastSeenAt is null || n.LastSeenAt < DateTime.UtcNow.AddMinutes(-2);
+                                }
+                                <span class="badge @(stale ? "text-bg-secondary" : "text-bg-success")">@n.Status</span>
+                                @if (Model.StaleCameraCountByNode.GetValueOrDefault(n.Id) is > 0 and var staleCount)
+                                {
+                                    <span class="ms-1" title="@staleCount camera(s) have recordings still on this node after being reassigned elsewhere">⚠️ @staleCount</span>
+                                }
+                            </td>
+                            <td class="font-monospace">@(n.LastIpAddress ?? "—")</td>
+                            <td>@n.Version</td>
+                            <td>@n.Platform</td>
+                            <td data-sort-value="@(n.LastSeenAt?.Ticks ?? 0)">
+                                @if (n.LastSeenAt is { } seen)
+                                {
+                                    <span title="@seen.ToString("u")">@seen.ToString("g")</span>
+                                }
+                                else
+                                {
+                                    <span class="text-muted">never</span>
+                                }
+                            </td>
+                            <td>@Model.CameraCountByNode.GetValueOrDefault(n.Id, 0)</td>
+                            <td style="min-width: 16rem;" data-sort-value="@n.StorageRootPath">
+                                <input name="StorageRootPath" class="form-control form-control-sm font-monospace"
+                                       value="@n.StorageRootPath" placeholder="(use global default)" />
+                            </td>
+                            <td style="min-width: 12rem;" data-sort-value="@((n.StorageTotalBytes is { } t && n.StorageFreeBytes is { } f) ? t - f : -1)">
+                                @if (n.StorageTotalBytes is { } total && n.StorageFreeBytes is { } free)
+                                {
+                                    var usedPercent = total > 0 ? 100.0 * (total - free) / total : 0;
+                                    <div class="progress" style="height: 0.5rem;" title="@ByteFormat.Format(total - free) used of @ByteFormat.Format(total)">
+                                        <div class="progress-bar @(usedPercent > 90 ? "bg-danger" : usedPercent > 75 ? "bg-warning" : "")"
+                                             style="width: @usedPercent.ToString("0.#")%"></div>
+                                    </div>
+                                    <span class="small text-muted">
+                                        @ByteFormat.Format(free) free
+                                        @if (Model.DaysRemaining.GetValueOrDefault(n.Id) is { } days)
+                                        {
+                                            <text>&middot; ~@days.ToString("0") day(s) left</text>
+                                        }
+                                    </span>
+                                }
+                                else
+                                {
+                                    <span class="text-muted">no report yet</span>
+                                }
+                            </td>
+                            <td style="min-width: 8rem;" data-sort-value="@Model.EffectiveRetentionDays.GetValueOrDefault(n.Id, 30)">
+                                <input name="RetentionDaysOverride" type="number" min="0" class="form-control form-control-sm"
+                                       value="@Model.RetentionOverride.GetValueOrDefault(n.Id)"
+                                       placeholder="(global: @Model.EffectiveRetentionDays.GetValueOrDefault(n.Id, 30))" />
+                            </td>
+                            <td class="text-end text-nowrap">
+                                <button type="submit" class="btn btn-sm btn-outline-primary">Save</button>
+                            </td>
+                        </form>
+                        <td class="text-end">
+                            <form method="post" asp-page-handler="Delete" asp-route-id="@n.Id" class="d-inline"
+                                  onclick="return confirm('Delete node &quot;@n.Name&quot;? Cameras assigned to it will be unassigned, not deleted. Past recordings are unaffected.');">
+                                <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    <div data-paginate-controls-for="nodesTable" class="mt-2"></div>
+    <p class="text-muted small">
+        Blank storage root uses the <a asp-page="/Admin/Settings">global default</a>. A node's own value takes
+        priority — useful when a node records to its own local disk instead of the shared target.
+        Blank retention inherits the <a asp-page="/Admin/Settings">global default</a>; a value here
+        overrides it for every camera on this node unless that camera has its own override too. "Days
+        left" is a rough estimate from this node's write rate over the last 24h, not disk health. The
+        ⚠️ count next to a node's status is how many cameras have footage still sitting on this node
+        after being reassigned elsewhere — see <a asp-page="/Cameras/Index">Cameras</a> for which ones.
+    </p>
+}

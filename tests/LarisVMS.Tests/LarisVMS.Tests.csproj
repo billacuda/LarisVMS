@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="coverlet.collector">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\LarisVMS.Core\LarisVMS.Core.csproj" />
+    <ProjectReference Include="..\..\src\LarisVMS.Infrastructure\LarisVMS.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\LarisVMS.Onvif\LarisVMS.Onvif.csproj" />
+    <ProjectReference Include="..\..\src\LarisVMS.Node\LarisVMS.Node.csproj" />
+    <ProjectReference Include="..\..\src\LarisVMS.NodeUpdater\LarisVMS.NodeUpdater.csproj" />
+    <ProjectReference Include="..\..\src\LarisVMS.Media\LarisVMS.Media.csproj" />
+  </ItemGroup>
+
+</Project>

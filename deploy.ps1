@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    Deploy NidusVMS's web tier to IIS - applies EF migrations, publishes the web app.
+    Deploy LarisVMS's web tier to IIS - applies EF migrations, publishes the web app.
 
 .DESCRIPTION
     Steps performed:
@@ -11,11 +11,11 @@
          (or use -ConnectionString to override)
       5. Guards against a misconfigured storage root — see "Storage root guard" below
       6. Builds and publishes the web project
-      7. Builds the recorder node package (build-node.ps1) so publish\NidusVMS.Node\win — and,
+      7. Builds the recorder node package (build-node.ps1) so publish\LarisVMS.Node\win — and,
          if -ExtraNodePublishPath is given, that second location too — stays current with every
          deploy instead of only when someone remembers to run build-node.ps1 by hand. Skippable
          with -SkipNodeBuild.
-      8. Registers that build with NidusVMS.Web's node-build-approval queue (Admin -> Node Builds)
+      8. Registers that build with LarisVMS.Web's node-build-approval queue (Admin -> Node Builds)
          as Pending, writing straight to the server's own node-builds folder and database — no
          browser upload, so no IIS request-size limit to hit. A no-op if this exact version/platform
          is already registered. Skippable with -SkipNodeBuildRegistration (implied by -SkipNodeBuild).
@@ -27,27 +27,27 @@
      12. Starts the IIS app pool (always, even on failure)
      13. Probes /health once the pool is back up
 
-    This script deploys NidusVMS.Web to IIS and (by default) refreshes the node install package
+    This script deploys LarisVMS.Web to IIS and (by default) refreshes the node install package
     alongside it — recorder nodes are still separate Windows Services installed with
     install-node.ps1, never part of the IIS site, and must never be inside $DestinationPath.
 
     Must be run as Administrator (required for IIS management).
 
 .EXAMPLE
-    .\deploy.ps1 -IISSiteName "NidusVMS"
-    .\deploy.ps1 -IISSiteName "NidusVMS" -SkipMigrations
-    .\deploy.ps1 -IISSiteUrl "https://nidusvms.example.com"
-    .\deploy.ps1 -IISSiteName "NidusVMS" -ExtraNodePublishPath '\\files1\Install\NidusVMS\Node\win'
+    .\deploy.ps1 -IISSiteName "LarisVMS"
+    .\deploy.ps1 -IISSiteName "LarisVMS" -SkipMigrations
+    .\deploy.ps1 -IISSiteUrl "https://larisvms.example.com"
+    .\deploy.ps1 -IISSiteName "LarisVMS" -ExtraNodePublishPath '\\files1\Install\LarisVMS\Node\win'
 #>
 
 param(
-    [string]$WebProject           = (Join-Path $PSScriptRoot 'src\NidusVMS.Web\NidusVMS.Web.csproj'),
-    [string]$MigrationsProject    = (Join-Path $PSScriptRoot 'src\NidusVMS.Infrastructure\NidusVMS.Infrastructure.csproj'),
-    [string]$PublishDir           = (Join-Path $PSScriptRoot 'publish\NidusVMS.Web'),
+    [string]$WebProject           = (Join-Path $PSScriptRoot 'src\LarisVMS.Web\LarisVMS.Web.csproj'),
+    [string]$MigrationsProject    = (Join-Path $PSScriptRoot 'src\LarisVMS.Infrastructure\LarisVMS.Infrastructure.csproj'),
+    [string]$PublishDir           = (Join-Path $PSScriptRoot 'publish\LarisVMS.Web'),
     [string]$Configuration        = 'Release',
-    [string]$DestinationPath      = 'E:\Sites\NidusVMS', # will be overridden if IIS site or URL is specified
-    [string]$IISAppPoolName       = 'NidusVMS',
-    [string]$IISSiteName          = 'NidusVMS',
+    [string]$DestinationPath      = 'E:\Sites\LarisVMS', # will be overridden if IIS site or URL is specified
+    [string]$IISAppPoolName       = 'LarisVMS',
+    [string]$IISSiteName          = 'LarisVMS',
     [string]$IISSiteUrl           = '',
     [string]$ConnectionString     = '',
     # Mirrors the built node package here too (e.g. a network share a recorder machine reads
@@ -55,7 +55,7 @@ param(
     # by default since this is inherently environment-specific, not something to hardcode for
     # every clone of this repo.
     [string]$ExtraNodePublishPath = '',
-    [string]$NodeCsprojPath       = (Join-Path $PSScriptRoot 'src\NidusVMS.Node\NidusVMS.Node.csproj'),
+    [string]$NodeCsprojPath       = (Join-Path $PSScriptRoot 'src\LarisVMS.Node\LarisVMS.Node.csproj'),
     [switch]$SkipMigrations,
     [switch]$SkipNodeBuild,
     [switch]$SkipNodeBuildRegistration,
@@ -244,7 +244,7 @@ Invoke-Cmd 'dotnet' @('publish', $WebProject, '-c', $Configuration, '-o', $Publi
 Write-Ok "Published to: $PublishDir"
 
 # ── build recorder node package ───────────────────────────────────────────────
-# Keeps publish\NidusVMS.Node\win (and -ExtraNodePublishPath, if given) current with every web
+# Keeps publish\LarisVMS.Node\win (and -ExtraNodePublishPath, if given) current with every web
 # deploy rather than depending on someone remembering to run build-node.ps1 separately. Failing
 # here aborts before the app pool is touched, same as any other build failure above.
 
@@ -318,7 +318,7 @@ try {
     # self-contained exe through the browser hit IIS's own requestFiltering maxAllowedContentLength
     # — a 413 raised before the request ever reached ASP.NET Core, since that limit is enforced
     # ahead of Kestrel/the app itself, not something RequestSizeLimit/RequestFormLimits on the page
-    # could reach. This script already runs locally on the same server as NidusVMS.Web
+    # could reach. This script already runs locally on the same server as LarisVMS.Web
     # (Administrator, IIS management), so instead it writes the file straight into
     # NodeBuildService's own storage folder and inserts the database row directly, the same way the
     # storage-root guard above already reads Settings straight from the database rather than going
@@ -342,7 +342,7 @@ try {
             if (-not $nodeVersionMatch) { throw "Could not find <Version> in '$NodeCsprojPath'." }
             $nodeVersion = $nodeVersionMatch.Matches[0].Groups[1].Value
             $platform = 'win-x64'
-            $nodeExePath = Join-Path $PSScriptRoot 'publish\NidusVMS.Node\win\NidusVMS.Node.exe'
+            $nodeExePath = Join-Path $PSScriptRoot 'publish\LarisVMS.Node\win\LarisVMS.Node.exe'
             if (-not (Test-Path $nodeExePath)) { throw "Built node exe not found: $nodeExePath" }
 
             Add-Type -AssemblyName System.Data
@@ -356,7 +356,7 @@ try {
                 $checkCmd.Parameters.AddWithValue('@Platform', $platform) | Out-Null
                 $existingCount = [int]$checkCmd.ExecuteScalar()
 
-                # Idempotent across repeated deploys that don't bump NidusVMS.Node's own <Version> —
+                # Idempotent across repeated deploys that don't bump LarisVMS.Node's own <Version> —
                 # a redeploy of the web tier alone (the common case) would otherwise queue up an
                 # identical "new" Pending build to approve every single time.
                 if ($existingCount -gt 0) {
@@ -364,7 +364,7 @@ try {
                 } else {
                     # Mirrors NodeBuildService.DefaultRoot exactly — see that property's doc comment
                     # for why this has to live outside the IIS site directory.
-                    $nodeBuildsRoot = Join-Path $env:ProgramData 'NidusVMS\node-builds'
+                    $nodeBuildsRoot = Join-Path $env:ProgramData 'LarisVMS\node-builds'
                     New-Item -ItemType Directory -Path $nodeBuildsRoot -Force | Out-Null
                     $buildId = [guid]::NewGuid()
                     $storedPath = Join-Path $nodeBuildsRoot "$buildId.exe"

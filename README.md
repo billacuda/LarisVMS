@@ -1,4 +1,4 @@
-# NidusVMS
+# LarisVMS
 
 Open source security camera recording software (NVR) for ONVIF cameras. Records video, audio, and
 metadata to local disk or an SMB share; live view, playback, and management are all web-based and
@@ -58,7 +58,7 @@ see [CHANGELOG.md](CHANGELOG.md) for what's shipped and the architecture plan fo
 roadmap (motion/events → PTZ/audio → export/investigation → operations).
 
 Recorder nodes require **FFmpeg** on the machine they run on (LGPL "shared" build recommended — see
-the plan's licensing note). Point a node at it with `--ffmpeg-path` or `NIDUSVMS_FFMPEG_PATH`, or put
+the plan's licensing note). Point a node at it with `--ffmpeg-path` or `LARISVMS_FFMPEG_PATH`, or put
 `ffmpeg` on `PATH`. Bundling FFmpeg with node deploys is `build-node.ps1`'s job, not yet implemented.
 
 > **`web.config` currently runs `ASPNETCORE_ENVIRONMENT=Development`**, on purpose, for this
@@ -69,14 +69,14 @@ the plan's licensing note). Point a node at it with `--ffmpeg-path` or `NIDUSVMS
 
 ## Quick start
 
-1. Create an IIS site pointing at an empty folder (e.g. `E:\Sites\NidusVMS`)
+1. Create an IIS site pointing at an empty folder (e.g. `E:\Sites\LarisVMS`)
 2. Create an app pool set to **No Managed Code**
 3. Set the app pool identity to a service account with access to your SQL Server (permissions are
    granted automatically on database creation, via `db_owner`)
 4. Run the deploy script (must be Administrator):
 
    ```powershell
-   .\deploy.ps1 -IISSiteName "NidusVMS" -IISAppPoolName "NidusVMS"
+   .\deploy.ps1 -IISSiteName "LarisVMS" -IISAppPoolName "LarisVMS"
    ```
 
 5. Browse to the site — the setup wizard opens automatically and walks through database, admin
@@ -86,13 +86,13 @@ the plan's licensing note). Point a node at it with `--ffmpeg-path` or `NIDUSVMS
 
 ```powershell
 # By IIS site name (reads the connection string from setup-generated.json at the site root)
-.\deploy.ps1 -IISSiteName "NidusVMS"
+.\deploy.ps1 -IISSiteName "LarisVMS"
 
 # By full URL (also resolves virtual applications under a site)
-.\deploy.ps1 -IISSiteUrl "https://nidusvms.example.com"
+.\deploy.ps1 -IISSiteUrl "https://larisvms.example.com"
 
 # Skip migrations (e.g. before the wizard has run)
-.\deploy.ps1 -IISSiteName "NidusVMS" -SkipMigrations
+.\deploy.ps1 -IISSiteName "LarisVMS" -SkipMigrations
 ```
 
 `deploy.ps1` never deletes recordings: it refuses to run if the configured storage root resolves
@@ -102,8 +102,8 @@ under the IIS site directory, and excludes `recordings/`, `spool/`, `exports/`, 
 ## Data at rest
 
 - Camera credentials, SMB credentials, and node media signing keys are encrypted at rest
-  (`NidusVMS.Infrastructure.Security.SecretProtection`), keyed off a Data Protection key ring at
-  `%ProgramData%\NidusVMS\keys`. Losing this key ring makes every encrypted value unrecoverable —
+  (`LarisVMS.Infrastructure.Security.SecretProtection`), keyed off a Data Protection key ring at
+  `%ProgramData%\LarisVMS\keys`. Losing this key ring makes every encrypted value unrecoverable —
   include it in whatever backs up the server, and never delete it as part of a deploy.
 - `setup-generated.json` (site root) holds the plaintext database connection string and branding.
   It is machine-specific, gitignored, and must never be committed.
@@ -112,14 +112,14 @@ under the IIS site directory, and excludes `recordings/`, `spool/`, `exports/`, 
 
 ```
 src/
-  NidusVMS.Core            domain entities, enums, interfaces
-  NidusVMS.Onvif            ONVIF SOAP clients, WS-Discovery
-  NidusVMS.Media            FFmpeg process supervision, segment detection
-  NidusVMS.Infrastructure   EF Core, auth, setup, settings resolution, node control plane
-  NidusVMS.Web              Razor Pages host (IIS) + node control plane API
-  NidusVMS.Node              recorder Windows Service — 24/7 recording
-  NidusVMS.NodeUpdater       node binary-swap helper (not yet implemented)
-tests/NidusVMS.Tests        xUnit
+  LarisVMS.Core            domain entities, enums, interfaces
+  LarisVMS.Onvif            ONVIF SOAP clients, WS-Discovery
+  LarisVMS.Media            FFmpeg process supervision, segment detection
+  LarisVMS.Infrastructure   EF Core, auth, setup, settings resolution, node control plane
+  LarisVMS.Web              Razor Pages host (IIS) + node control plane API
+  LarisVMS.Node              recorder Windows Service — 24/7 recording
+  LarisVMS.NodeUpdater       node binary-swap helper (not yet implemented)
+tests/LarisVMS.Tests        xUnit
 ```
 
 ## Development
@@ -128,5 +128,5 @@ tests/NidusVMS.Tests        xUnit
 dotnet tool restore
 dotnet build
 dotnet test
-dotnet ef migrations add <Name> --project src\NidusVMS.Infrastructure --startup-project src\NidusVMS.Web
+dotnet ef migrations add <Name> --project src\LarisVMS.Infrastructure --startup-project src\LarisVMS.Web
 ```

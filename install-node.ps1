@@ -1,16 +1,16 @@
 ﻿<#
 .SYNOPSIS
-    Install a recorder node (NidusVMS.Node) as a Windows Service.
+    Install a recorder node (LarisVMS.Node) as a Windows Service.
 
 .DESCRIPTION
-    Installs the pre-built NidusVMS.Node.exe (expected in the same folder as this script — see
+    Installs the pre-built LarisVMS.Node.exe (expected in the same folder as this script — see
     build-node.ps1) to $InstallDir, registers it as a Windows Service with the registration
     arguments baked into the service's command line, configures automatic restart on failure, and
     starts it.
 
-    On first start the service registers itself with NidusVMS.Web using -RegistrationKey (from
+    On first start the service registers itself with LarisVMS.Web using -RegistrationKey (from
     Admin -> Nodes, or the Setup wizard's Node step) and persists the assigned NodeId/secret to
-    %ProgramData%\NidusVMS\node.config (DPAPI-protected, LocalMachine scope). Every subsequent start
+    %ProgramData%\LarisVMS\node.config (DPAPI-protected, LocalMachine scope). Every subsequent start
     — including a re-run of this script to change settings — loads that file and skips
     re-registration, so re-running this script is safe.
 
@@ -28,31 +28,31 @@
     or the share doesn't support computer-account auth (e.g. a workgroup/non-domain NAS).
 
 .EXAMPLE
-    .\install-node.ps1 -ServerUrl "https://nidusvms.example.com" -RegistrationKey "abc123"
-    .\install-node.ps1 -ServerUrl "https://nidusvms.example.com" -RegistrationKey "abc123" -InsecureTls
-    .\install-node.ps1 -ServerUrl "https://nidusvms.example.com" -RegistrationKey "abc123" -ServiceCredential (Get-Credential)
+    .\install-node.ps1 -ServerUrl "https://larisvms.example.com" -RegistrationKey "abc123"
+    .\install-node.ps1 -ServerUrl "https://larisvms.example.com" -RegistrationKey "abc123" -InsecureTls
+    .\install-node.ps1 -ServerUrl "https://larisvms.example.com" -RegistrationKey "abc123" -ServiceCredential (Get-Credential)
 #>
 
 param(
     [Parameter(Mandatory)][string]$ServerUrl,
     [Parameter(Mandatory)][string]$RegistrationKey,
-    [string]$BinaryPath        = (Join-Path $PSScriptRoot 'NidusVMS.Node.exe'),
-    # Recorder-node auto-update's binary-swap helper (see NidusVMS.Node/Update/UpdateService.cs) —
-    # published alongside NidusVMS.Node.exe by build-node.ps1, and must already be present in
+    [string]$BinaryPath        = (Join-Path $PSScriptRoot 'LarisVMS.Node.exe'),
+    # Recorder-node auto-update's binary-swap helper (see LarisVMS.Node/Update/UpdateService.cs) —
+    # published alongside LarisVMS.Node.exe by build-node.ps1, and must already be present in
     # $InstallDir *before* an update is ever triggered, since UpdateService looks for it next to the
     # currently-running exe and just logs a warning and skips the update if it's missing.
-    [string]$UpdaterBinaryPath = (Join-Path $PSScriptRoot 'NidusVMS.NodeUpdater.exe'),
-    [string]$InstallDir        = 'C:\Program Files\NidusVMS\Node',
-    [string]$ServiceName       = 'NidusVMSNode',
-    [string]$ServiceDisplay    = 'NidusVMS Node',
+    [string]$UpdaterBinaryPath = (Join-Path $PSScriptRoot 'LarisVMS.NodeUpdater.exe'),
+    [string]$InstallDir        = 'C:\Program Files\LarisVMS\Node',
+    [string]$ServiceName       = 'LarisVMSNode',
+    [string]$ServiceDisplay    = 'LarisVMS Node',
     [string]$FfmpegPath        = '',
     [switch]$InstallFfmpeg,
     [string]$StorageRoot       = '',
     [switch]$InsecureTls,
     [pscredential]$ServiceCredential,
-    # M5 live view: the node's own Kestrel port, reached only by NidusVMS.Web's server-side proxy over
+    # M5 live view: the node's own Kestrel port, reached only by LarisVMS.Web's server-side proxy over
     # the LAN (plain HTTP, never by a browser directly — see the plan's "Media path" section). Needs
-    # an inbound firewall allow rule, added below, or NidusVMS.Web can reach the port but every
+    # an inbound firewall allow rule, added below, or LarisVMS.Web can reach the port but every
     # connection attempt just hangs until it times out — confirmed on a real node.
     [int]$LivePort             = 8554
 )
@@ -68,7 +68,7 @@ function Format-ServiceArg([string]$value) {
     return $value
 }
 
-# Windows does not kill child processes when their parent dies or is stopped — NidusVMS.Node's own
+# Windows does not kill child processes when their parent dies or is stopped — LarisVMS.Node's own
 # graceful shutdown is supposed to kill each ffmpeg.exe it spawned, but if the SCM's stop timeout is
 # hit before that finishes (confirmed happening on a real node), ffmpeg.exe is left running,
 # orphaned, and still holding its DLLs open, which fails a same-path copy with "being used by
@@ -77,7 +77,7 @@ function Format-ServiceArg([string]$value) {
 # querying .Path on a process running as a different account (the service, and therefore its
 # ffmpeg.exe children, normally run as LocalSystem) can silently fail even from an elevated
 # Administrator session, which meant the filter matched nothing and killed nothing. ffmpeg is only
-# ever run by NidusVMS.Node on this machine, so unconditionally stopping every ffmpeg.exe still around
+# ever run by LarisVMS.Node on this machine, so unconditionally stopping every ffmpeg.exe still around
 # after the service reports Stopped is both safe and reliable.
 function Stop-OrphanedFfmpeg {
     $procs = Get-Process -Name ffmpeg -ErrorAction SilentlyContinue
@@ -159,19 +159,19 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 }
 
 if (-not (Test-Path $BinaryPath)) {
-    throw "Binary not found: $BinaryPath`nBuild it first with: .\build-node.ps1 (run on a dev machine, then copy the publish\NidusVMS.Node\win\ folder here)."
+    throw "Binary not found: $BinaryPath`nBuild it first with: .\build-node.ps1 (run on a dev machine, then copy the publish\LarisVMS.Node\win\ folder here)."
 }
 
 # Not fatal on its own — auto-update just stays inert (UpdateService logs a warning and skips) until
 # it's present — but worth a loud heads-up here rather than a silent gap discovered only when the
 # first update is ever attempted.
 if (-not (Test-Path $UpdaterBinaryPath)) {
-    Write-Host "WARNING: Updater binary not found: $UpdaterBinaryPath — this node will not be able to auto-update until NidusVMS.NodeUpdater.exe is installed (re-run this script once it's available)." -ForegroundColor Yellow
+    Write-Host "WARNING: Updater binary not found: $UpdaterBinaryPath — this node will not be able to auto-update until LarisVMS.NodeUpdater.exe is installed (re-run this script once it's available)." -ForegroundColor Yellow
 }
 
 # ── stop existing service ────────────────────────────────────────────────────
 # Must happen before anything below touches $InstallDir: a running node's ffmpeg.exe/DLLs and its
-# own NidusVMS.Node.exe can be locked by the currently-running process, so overwriting them while the
+# own LarisVMS.Node.exe can be locked by the currently-running process, so overwriting them while the
 # old service is still up (the normal case for an in-place upgrade of a live recorder) can fail
 # mid-copy. Stopping first — even on a fresh install where $existingSvc is null and this is a no-op —
 # guarantees every copy below lands on an unlocked target.
@@ -213,7 +213,7 @@ if (-not [string]::IsNullOrWhiteSpace($FfmpegPath)) {
 } elseif (Test-Path $alreadyInstalledFfmpeg) {
     # Upgrade path: a previous run of this script already copied ffmpeg into this node's own
     # install dir — reuse it rather than re-resolving from PATH/winget every time this script is
-    # re-run just to pick up a new NidusVMS.Node.exe build. Pass -FfmpegPath explicitly to replace it.
+    # re-run just to pick up a new LarisVMS.Node.exe build. Pass -FfmpegPath explicitly to replace it.
     $resolvedFfmpeg = $alreadyInstalledFfmpeg
     $reusingInstalledFfmpeg = $true
     Write-Ok "Reusing already-installed ffmpeg: $resolvedFfmpeg"
@@ -256,21 +256,21 @@ if ($reusingInstalledFfmpeg) {
 
 Write-Step "Installing node to $InstallDir"
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-Copy-ItemWithRetry $BinaryPath (Join-Path $InstallDir 'NidusVMS.Node.exe')
+Copy-ItemWithRetry $BinaryPath (Join-Path $InstallDir 'LarisVMS.Node.exe')
 if (Test-Path $UpdaterBinaryPath) {
-    Copy-ItemWithRetry $UpdaterBinaryPath (Join-Path $InstallDir 'NidusVMS.NodeUpdater.exe')
+    Copy-ItemWithRetry $UpdaterBinaryPath (Join-Path $InstallDir 'LarisVMS.NodeUpdater.exe')
 }
 Write-Ok "Files installed"
 
 # ── register / update service ────────────────────────────────────────────────
 # Registration/heartbeat arguments are baked into the service's own command line rather than a
-# config file: Program.cs already accepts them as CLI args (and NIDUSVMS_* environment variables) for
+# config file: Program.cs already accepts them as CLI args (and LARISVMS_* environment variables) for
 # interactive testing, so reusing that same surface here needs no extra code path. They're only
 # actually used on the very first start — once node.config exists, Program.cs skips registration
 # and just loads the persisted NodeId/secret, so re-running this script to rotate, say, the ffmpeg
 # path is safe and won't re-register a second node.
 
-$exePath = Join-Path $InstallDir 'NidusVMS.Node.exe'
+$exePath = Join-Path $InstallDir 'LarisVMS.Node.exe'
 $argParts = @('--server-url', $ServerUrl, '--registration-key', $RegistrationKey, '--ffmpeg-path', $FfmpegPath, '--live-port', $LivePort)
 if ($StorageRoot) { $argParts += @('--storage-root', $StorageRoot) }
 if ($InsecureTls) { $argParts += '--insecure-tls' }
@@ -316,7 +316,7 @@ if ($isUpgrade) {
     $serviceParams = @{
         Name            = $ServiceName
         DisplayName     = $ServiceDisplay
-        Description     = 'NidusVMS recorder node - supervises FFmpeg-based 24/7 camera recording.'
+        Description     = 'LarisVMS recorder node - supervises FFmpeg-based 24/7 camera recording.'
         BinaryPathName  = $binPath
         StartupType     = 'Automatic'
     }
@@ -333,12 +333,12 @@ sc.exe failureflag $ServiceName 1 | Out-Null
 Write-Ok "Recovery configured (restart on 1st/2nd/3rd failure; reset after 1 day)"
 
 # ── firewall ──────────────────────────────────────────────────────────────────
-# Without this, NidusVMS.Web's live-view proxy can open a TCP connection to $LivePort just fine (the
+# Without this, LarisVMS.Web's live-view proxy can open a TCP connection to $LivePort just fine (the
 # handshake reaches Windows) but every WebSocket request hangs until it times out rather than failing
 # fast — confirmed on a real node missing this rule. Named and re-created idempotently so re-running
 # this script to change -LivePort updates the rule instead of leaving a stale one alongside the new one.
 Write-Step "Configuring firewall for live view (TCP $LivePort)"
-$firewallRuleName = "NidusVMS Node Live View"
+$firewallRuleName = "LarisVMS Node Live View"
 Get-NetFirewallRule -DisplayName $firewallRuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
 New-NetFirewallRule -DisplayName $firewallRuleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort $LivePort | Out-Null
 Write-Ok "Allowed inbound TCP $LivePort"
@@ -352,4 +352,4 @@ Write-Ok "Started"
 Write-Host "`nNode $(if ($isUpgrade) { 'upgraded' } else { 'installed' }) successfully." -ForegroundColor Green
 Write-Host "Logs:        Event Viewer > Windows Logs > Application  (source: $ServiceName)"
 Write-Host "Install dir: $InstallDir"
-Write-Host "Assign cameras to this node from Admin -> Nodes / the camera edit page in NidusVMS.Web."
+Write-Host "Assign cameras to this node from Admin -> Nodes / the camera edit page in LarisVMS.Web."

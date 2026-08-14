@@ -1,0 +1,254 @@
+@page "{id:guid?}"
+@model LarisVMS.Web.Pages.Cameras.EditModel
+@{
+    ViewData["Title"] = Model.IsNew ? "Add camera" : "Edit camera";
+}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="mb-0">@(Model.IsNew ? "Add camera" : Model.Name)</h1>
+    @if (!Model.IsNew)
+    {
+        <div class="btn-group">
+            <a class="btn btn-outline-secondary" asp-page="Zones" asp-route-id="@Model.Id">Zones</a>
+            <a class="btn btn-outline-secondary" asp-page="EventTags" asp-route-id="@Model.Id">Event tags</a>
+        </div>
+    }
+</div>
+
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger">@Model.ErrorMessage</div>
+}
+@if (!string.IsNullOrEmpty(Model.ProbeMessage))
+{
+    <div class="alert alert-info">@Model.ProbeMessage</div>
+}
+
+<form method="post" class="row g-3" style="max-width: 640px;">
+    <input type="hidden" asp-for="Id" />
+    <div class="col-12">
+        <label class="form-label">Name</label>
+        <input asp-for="Name" class="form-control" required />
+    </div>
+    @if (Model.IsNew)
+    {
+        <div class="col-12">
+            <label class="form-label">Device service URL</label>
+            <input asp-for="DeviceServiceUri" class="form-control font-monospace" placeholder="http://192.168.1.50/onvif/device_service" required />
+        </div>
+    }
+    else
+    {
+        <div class="col-12">
+            <label class="form-label">Device service URL</label>
+            <input class="form-control font-monospace" value="@Model.DeviceServiceUri" disabled />
+        </div>
+    }
+    <div class="col-12">
+        <label class="form-label">Group</label>
+        <select asp-for="GroupId" class="form-select">
+            <option value="">(none)</option>
+            @foreach (var g in Model.Groups)
+            {
+                <option value="@g.Id">@g.Name</option>
+            }
+        </select>
+    </div>
+    <div class="col-12">
+        <label class="form-label">Recorder node</label>
+        <select asp-for="NodeId" class="form-select">
+            <option value="">(unassigned — won't record)</option>
+            @foreach (var n in Model.Nodes)
+            {
+                <option value="@n.Id">@n.Name</option>
+            }
+        </select>
+        @if (Model.Nodes.Count == 0)
+        {
+            <div class="form-text">No nodes have registered yet — see <a asp-page="/Admin/Nodes">Admin &rarr; Nodes</a>.</div>
+        }
+    </div>
+    <div class="col-6">
+        <label class="form-label">Username</label>
+        <input asp-for="Username" class="form-control" autocomplete="off" />
+    </div>
+    <div class="col-6">
+        <label class="form-label">Password @(Model.IsNew ? "" : "(leave blank to keep current)")</label>
+        <input asp-for="Password" type="password" class="form-control" autocomplete="new-password" />
+    </div>
+    @if (!Model.IsNew)
+    {
+        <div class="col-12">
+            <div class="form-check">
+                <input asp-for="IsEnabled" class="form-check-input" type="checkbox" />
+                <label class="form-check-label" asp-for="IsEnabled">Enabled</label>
+            </div>
+        </div>
+        <div class="col-6">
+            <label class="form-label">Storage quota (GB)</label>
+            <input asp-for="QuotaGb" type="number" step="0.1" min="0" class="form-control" placeholder="(no quota — shares the pool)" />
+            <div class="form-text">
+                Using @ByteFormat.Format(Model.StorageUsedBytes) now. Oldest footage is
+                evicted first once this camera goes over quota.
+            </div>
+        </div>
+        <div class="col-6">
+            <label class="form-label">Retention override (days)</label>
+            <input asp-for="RetentionDaysOverride" type="number" min="0" class="form-control"
+                   placeholder="(inherit — currently @Model.EffectiveRetentionDays days)" />
+            <div class="form-text">0 = keep forever on this camera. Blank inherits the node's/global setting.</div>
+        </div>
+        <div class="col-6">
+            <label class="form-label">Recording mode override</label>
+            <select asp-for="RecordingModeOverride" class="form-select">
+                <option value="">(inherit — currently @Model.EffectiveRecordingMode)</option>
+                <option value="Continuous">Continuous</option>
+                <option value="Motion">Motion only</option>
+                <option value="Schedule">Schedule</option>
+                <option value="Event">Event (a specific tagged trigger)</option>
+            </select>
+            @{ var hasOnvifEvents = Model.Capabilities?.HasEvents ?? false; }
+            @if (!Model.HasServerMotionZone && !hasOnvifEvents)
+            {
+                <div class="form-text text-warning">
+                    No enabled Motion zone on this camera yet, and it doesn't advertise ONVIF events
+                    either — Motion mode won't discard anything until one exists
+                    (<a asp-page="Zones" asp-route-id="@Model.Id">set one up</a>). Recording behaves
+                    like Continuous in the meantime, not "record nothing."
+                </div>
+            }
+            else
+            {
+                <div class="form-text">
+                    Segments with no activity — from a Motion zone@(hasOnvifEvents ? " or this camera's own ONVIF motion events" : "") —
+                    are deleted shortly after they're written, instead of waiting for a retention sweep
+                    (<a asp-page="Zones" asp-route-id="@Model.Id">manage zones</a>).
+                    <strong>Unverified against a real camera</strong> — see CHANGELOG.
+                </div>
+            }
+            @if (!Model.HasScheduleWindow)
+            {
+                <div class="form-text text-warning">
+                    No enabled schedule window yet — Schedule mode keeps everything until one exists
+                    (<a asp-page="Schedule" asp-route-id="@Model.Id">set one up</a>).
+                </div>
+            }
+            else
+            {
+                <div class="form-text">
+                    Schedule mode keeps a segment only if it starts inside an enabled window
+                    (<a asp-page="Schedule" asp-route-id="@Model.Id">manage schedule</a>), evaluated
+                    against the recorder node's own local clock.
+                </div>
+            }
+            @if (!Model.HasDrivingEventRule)
+            {
+                <div class="form-text text-warning">
+                    No enabled event tag rule has "Drives recording" checked yet — Event mode keeps
+                    everything until one exists
+                    (<a asp-page="EventTags" asp-route-id="@Model.Id">set one up</a>). Unlike Motion
+                    mode, Event mode ignores Motion zones and the built-in motion classifier entirely
+                    — only a driving rule's own trigger counts.
+                </div>
+            }
+            else
+            {
+                <div class="form-text">
+                    Event mode keeps a segment only if a driving
+                    (<a asp-page="EventTags" asp-route-id="@Model.Id">event tag rule</a>) fired within
+                    its pre/post-roll window — not any activity, unlike Motion mode.
+                    <strong>Unverified against a real camera</strong> — see CHANGELOG.
+                </div>
+            }
+        </div>
+        <div class="col-6">
+            <label class="form-label">Pre-roll override (seconds)</label>
+            <input asp-for="MotionPreRollSecondsOverride" type="number" min="0" class="form-control"
+                   placeholder="(inherit — currently @Model.EffectiveMotionPreRollSeconds s)" />
+            <div class="form-text">
+                Only matters in Motion mode. How far <strong>before</strong> activity starts a
+                segment still counts as worth keeping — this is how much lead-up you get on a
+                motion event, e.g. someone walking into frame before they trip the zone.
+            </div>
+        </div>
+        <div class="col-6">
+            <label class="form-label">Post-roll override (seconds)</label>
+            <input asp-for="MotionPostRollSecondsOverride" type="number" min="0" class="form-control"
+                   placeholder="(inherit — currently @Model.EffectiveMotionPostRollSeconds s)" />
+            <div class="form-text">
+                Only matters in Motion mode. How long <strong>after</strong> activity stops a
+                segment still counts as worth keeping.
+            </div>
+        </div>
+    }
+    <div class="col-12">
+        <button type="submit" class="btn btn-primary">@(Model.IsNew ? "Add & probe" : "Save")</button>
+        @if (!Model.IsNew)
+        {
+            <button type="submit" asp-page-handler="Probe" class="btn btn-outline-secondary">Re-probe</button>
+            <button type="submit" asp-page-handler="Delete" class="btn btn-outline-danger"
+                    onclick="return confirm('Delete this camera?');">Delete</button>
+        }
+        <a asp-page="Index" class="btn btn-link">Cancel</a>
+    </div>
+</form>
+
+@if (Model.Capabilities is { } cap)
+{
+    <h2 class="mt-5 h4">Capabilities</h2>
+    <p class="text-muted small">
+        Best-effort inference from advertised ONVIF services, not certified conformance. Probed
+        @cap.ProbedAt.ToString("u").
+    </p>
+    <table class="table" style="max-width: 480px;">
+        <tbody>
+            <tr><th>Profile S (streaming)</th><td>@(cap.ProfileS ? "Yes" : "No")</td></tr>
+            <tr><th>Profile T (advanced)</th><td>@(cap.ProfileT ? "Yes" : "No")</td></tr>
+            <tr><th>Profile G (recording)</th><td>@(cap.ProfileG ? "Yes" : "No")</td></tr>
+            <tr><th>Profile M (metadata)</th><td>@(cap.ProfileM ? "Yes" : "No")</td></tr>
+            <tr><th>PTZ</th><td>@(cap.HasPtz ? "Yes" : "No")</td></tr>
+            <tr><th>Imaging</th><td>@(cap.HasImaging ? "Yes" : "No")</td></tr>
+            <tr><th>Events</th><td>@(cap.HasEvents ? "Yes" : "No")</td></tr>
+            <tr><th>Analytics metadata</th><td>@(cap.HasAnalyticsMetadata ? "Yes" : "No")</td></tr>
+            <tr><th>Two-way audio</th><td>@(cap.HasAudioOut ? "Yes" : "No")</td></tr>
+            <tr><th>Relay outputs</th><td>@(cap.HasRelayOutputs ? "Yes" : "No")</td></tr>
+            <tr><th>Digital inputs</th><td>@(cap.HasDigitalInputs ? "Yes" : "No")</td></tr>
+        </tbody>
+    </table>
+
+    <h2 class="h4">Streams</h2>
+    @if (Model.Streams.Count == 0)
+    {
+        <p class="text-muted">No streams recorded.</p>
+    }
+    else
+    {
+        <table class="table align-middle">
+            <thead><tr><th>Enabled</th><th>Name</th><th>Role</th><th>Resolution</th><th>Codec</th><th>FPS</th><th>Bitrate</th><th>Audio</th><th>RTSP</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var s in Model.Streams.OrderBy(s => s.Role))
+                {
+                    <tr class="@(s.IsEnabled ? "" : "text-muted")">
+                        <form method="post" asp-page-handler="UpdateStream">
+                            <input type="hidden" name="Id" value="@Model.Id" />
+                            <input type="hidden" name="streamId" value="@s.Id" />
+                            <td>
+                                <input type="checkbox" class="form-check-input" name="streamIsEnabled" value="true" @(s.IsEnabled ? "checked" : "") />
+                            </td>
+                            <td style="min-width: 10rem;">
+                                <input name="customName" class="form-control form-control-sm" value="@s.CustomName" placeholder="@s.Role" />
+                            </td>
+                            <td>@s.Role</td>
+                            <td>@(s.Width is not null ? $"{s.Width}x{s.Height}" : "—")</td>
+                            <td>@(s.Codec ?? "—")</td>
+                            <td>@(s.Fps?.ToString() ?? "—")</td>
+                            <td>@(s.BitrateKbps is not null ? $"{s.BitrateKbps} kbps" : "—")</td>
+                            <td>@(s.HasAudio ? s.AudioCodec ?? "yes" : "no")</td>
+                            <td class="font-monospace small">@s.RtspUri</td>
+                            <td class="text-end"><button type="submit" class="btn btn-sm btn-outline-primary">Save</button></td>
+                        </form>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+}

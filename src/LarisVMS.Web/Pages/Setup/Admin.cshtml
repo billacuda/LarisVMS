@@ -1,0 +1,22 @@
+@page
+@model LarisVMS.Web.Pages.Setup.AdminModel
+@{
+    Layout = "_SetupLayout";
+    ViewData["Title"] = "Administrator";
+}
+<h5 class="mb-3">2. Administrator account</h5>
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger">@Model.ErrorMessage</div>
+}
+<form method="post">
+    <div class="mb-3">
+        <label class="form-label">Email</label>
+        <input asp-for="Email" type="email" class="form-control" required />
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Password (min. 8 characters)</label>
+        <input asp-for="Password" type="password" class="form-control" required minlength="8" />
+    </div>
+    <button type="submit" class="btn btn-primary">Create account &amp; continue</button>
+</form>

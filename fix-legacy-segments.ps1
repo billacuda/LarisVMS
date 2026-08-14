@@ -71,10 +71,10 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$StorageRoot = (Join-Path $env:ProgramData 'NidusVMS\recordings'),
+    [string]$StorageRoot = (Join-Path $env:ProgramData 'LarisVMS\recordings'),
     [string]$FfmpegPath = '',
     [switch]$InstallFfmpeg,
-    [string]$FfmpegInstallDir = (Join-Path $env:LOCALAPPDATA 'NidusVMS\ffmpeg'),
+    [string]$FfmpegInstallDir = (Join-Path $env:LOCALAPPDATA 'LarisVMS\ffmpeg'),
     [switch]$Apply,
     [int]$SkipRecentMinutes = 5
 )
@@ -198,7 +198,7 @@ function Resolve-Ffmpeg {
         return $FfmpegPath
     }
 
-    $bundled = 'C:\Program Files\NidusVMS\Node\ffmpeg\ffmpeg.exe'
+    $bundled = 'C:\Program Files\LarisVMS\Node\ffmpeg\ffmpeg.exe'
     if (Test-Path -LiteralPath $bundled) { return $bundled }
 
     $onPath = Get-Command ffmpeg -ErrorAction SilentlyContinue

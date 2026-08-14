@@ -1,0 +1,133 @@
+@page
+@model LarisVMS.Web.Pages.Admin.SettingsModel
+@{
+    ViewData["Title"] = "Settings";
+}
+<h1>Settings</h1>
+<p class="text-muted">
+    Global defaults for every setting that can also be overridden per node or per camera — the base
+    of the Camera &rarr; Node &rarr; Global chain. Override retention/recording per node on
+    <a asp-page="/Admin/Nodes">Admin &rarr; Nodes</a>, or per camera on that camera's edit page; a
+    camera-level override wins over its node's, which wins over the global defaults here.
+</p>
+
+@if (!string.IsNullOrEmpty(Model.SavedMessage))
+{
+    <div class="alert alert-success">@Model.SavedMessage</div>
+}
+
+<form method="post" class="row g-3" style="max-width: 560px;">
+    <div class="col-12">
+        <h5 id="storage-retention">Storage &amp; retention</h5>
+    </div>
+    <div class="col-12">
+        <label class="form-label">Global retention (days)</label>
+        <input asp-for="RetentionDays" type="number" min="0" class="form-control" required />
+        <div class="form-text">0 = keep forever unless a node/camera override says otherwise.</div>
+    </div>
+    <div class="col-12">
+        <label class="form-label">Watermark (% of volume used)</label>
+        <input asp-for="WatermarkPercent" type="number" min="1" max="99" class="form-control" required />
+        <div class="form-text">
+            When a node's storage root passes this usage, its oldest unlocked segments across every
+            camera on that node are deleted regardless of retention/quota — a hard backstop against a
+            full disk, not a preference.
+        </div>
+    </div>
+    <div class="col-12">
+        <label class="form-label">Default storage root</label>
+        <input asp-for="StorageRootPath" class="form-control font-monospace" placeholder="e.g. E:\LarisVMS\recordings or \\files1\nvr$\LarisVMS" />
+        <div class="form-text">
+            Local disk path or UNC share recorder nodes write to when they have no
+            <a asp-page="/Admin/Nodes">node-specific override</a>. Changing this only affects where a
+            node writes <strong>new</strong> recordings from its next reconcile cycle on — it does not
+            move footage already written under the old path.
+        </div>
+    </div>
+
+    <div class="col-12 mt-4">
+        <h5 id="recording">Recording (M8 motion defaults)</h5>
+    </div>
+    <div class="col-12">
+        <label class="form-label">Global recording mode</label>
+        <select asp-for="RecordingMode" class="form-select">
+            <option value="Continuous">Continuous</option>
+            <option value="Motion">Motion only</option>
+            <option value="Schedule">Schedule</option>
+            <option value="Event">Event (a specific tagged trigger)</option>
+        </select>
+        <div class="form-text">
+            Schedule and Event modes need per-camera setup (windows / a driving event tag rule) to
+            actually gate anything — see each camera's own Schedule / Event tags pages. With none
+            configured, both fail open (keep everything) the same way Motion mode does for a camera
+            with no zone.
+        </div>
+    </div>
+    <div class="col-6">
+        <label class="form-label">Pre-roll (seconds)</label>
+        <input asp-for="MotionPreRollSeconds" type="number" min="0" class="form-control" required />
+        <div class="form-text">Only matters in Motion/Event mode. Lead-up kept before activity starts.</div>
+    </div>
+    <div class="col-6">
+        <label class="form-label">Post-roll (seconds)</label>
+        <input asp-for="MotionPostRollSeconds" type="number" min="0" class="form-control" required />
+        <div class="form-text">Only matters in Motion/Event mode. How long kept after activity stops.</div>
+    </div>
+
+    <div class="col-12 mt-4">
+        <h5 id="node-updates">Node updates</h5>
+    </div>
+    <div class="col-12">
+        <div class="form-check">
+            <input asp-for="NodeAutoUpdateEnabled" type="checkbox" class="form-check-input" />
+            <label asp-for="NodeAutoUpdateEnabled" class="form-check-label">Auto-update recorder nodes</label>
+        </div>
+        <div class="form-text">
+            When on, every recorder node whose reported version is older than the newest
+            <strong>approved</strong> build for its platform downloads and applies it automatically
+            on its next heartbeat — builds are registered by every <code>deploy.ps1</code> run and
+            wait for review on <a asp-page="/Admin/NodeBuilds/Index">Admin &rarr; Node Builds</a>.
+            Turning this off freezes every node on whatever it's already running until it's turned
+            back on.
+        </div>
+    </div>
+
+    <div class="col-12 mt-4">
+        <h5 id="node-registration">Node registration</h5>
+    </div>
+    <div class="col-12">
+        <label class="form-label">Registration key</label>
+        <div class="input-group">
+            <input asp-for="RegistrationKey" class="form-control font-monospace" id="registrationKeyInput" />
+            <button type="button" class="btn btn-outline-secondary" id="regenerateKeyBtn">Generate new key</button>
+        </div>
+        <div class="form-text">
+            The bearer key <code>install-node.ps1</code> presents once when a recorder node first
+            registers — only shown during the Setup wizard until now, with nowhere to come back and
+            see it again when onboarding another node later. Rotating it here has no effect on nodes
+            already registered (only checked at first registration), but every
+            <code>install-node.ps1</code> command line printed before a rotation stops working.
+        </div>
+    </div>
+
+    <div class="col-12">
+        <button type="submit" class="btn btn-primary">Save</button>
+    </div>
+</form>
+
+@section Scripts {
+    <script>
+        (function () {
+            var btn = document.getElementById('regenerateKeyBtn');
+            var input = document.getElementById('registrationKeyInput');
+            if (!btn || !input) return;
+            btn.addEventListener('click', function () {
+                var bytes = new Uint8Array(24);
+                crypto.getRandomValues(bytes);
+                input.value = Array.prototype.map.call(bytes, function (b) {
+                    return b.toString(16).padStart(2, '0');
+                }).join('').toUpperCase();
+            });
+        })();
+    </script>
+}

@@ -1,9 +1,9 @@
 ﻿<#
 .SYNOPSIS
-    Build the NidusVMS recorder node as a self-contained, distributable package.
+    Build the LarisVMS recorder node as a self-contained, distributable package.
 
 .DESCRIPTION
-    Publishes NidusVMS.Node and NidusVMS.NodeUpdater as self-contained single-file executables for
+    Publishes LarisVMS.Node and LarisVMS.NodeUpdater as self-contained single-file executables for
     win-x64, then copies install-node.ps1 into the output folder so it can be zipped up and copied to
     a recorder machine as-is.
 
@@ -13,13 +13,13 @@
     yet, so there is no linux-x64 output here — publishing one would just fail at first run.
 
     Output:
-        publish\NidusVMS.Node\win\   - NidusVMS.Node.exe + NidusVMS.NodeUpdater.exe + install-node.ps1
+        publish\LarisVMS.Node\win\   - LarisVMS.Node.exe + LarisVMS.NodeUpdater.exe + install-node.ps1
 
-    NidusVMS.NodeUpdater.exe is what a node launches (as a detached process) to swap its own binary
-    during a self-triggered auto-update — see NidusVMS.Node/Update/UpdateService.cs and
-    NidusVMS.NodeUpdater/Program.cs. It's built and bundled here so it's always present alongside
-    NidusVMS.Node.exe. There is still no -Upload step in this script itself (unlike dploid's
-    build-agent.ps1) — registering the built NidusVMS.Node.exe with NidusVMS.Web's node-build-approval
+    LarisVMS.NodeUpdater.exe is what a node launches (as a detached process) to swap its own binary
+    during a self-triggered auto-update — see LarisVMS.Node/Update/UpdateService.cs and
+    LarisVMS.NodeUpdater/Program.cs. It's built and bundled here so it's always present alongside
+    LarisVMS.Node.exe. There is still no -Upload step in this script itself (unlike dploid's
+    build-agent.ps1) — registering the built LarisVMS.Node.exe with LarisVMS.Web's node-build-approval
     queue (Admin -> Node Builds) is deploy.ps1's job, which calls this script and then registers
     whatever it just built directly against the server's own database/storage. Run this script
     standalone (as build-node.ps1 -ExtraPublishPath ...) and nothing gets registered — only
@@ -33,13 +33,13 @@
     .\build-node.ps1
 
 .EXAMPLE
-    .\build-node.ps1 -ExtraPublishPath '\\files1\nvr$\NidusVMS-node'
+    .\build-node.ps1 -ExtraPublishPath '\\files1\nvr$\LarisVMS-node'
 #>
 
 param(
-    [string]$NodeProject        = (Join-Path $PSScriptRoot 'src\NidusVMS.Node\NidusVMS.Node.csproj'),
-    [string]$NodeUpdaterProject = (Join-Path $PSScriptRoot 'src\NidusVMS.NodeUpdater\NidusVMS.NodeUpdater.csproj'),
-    [string]$OutputRoot         = (Join-Path $PSScriptRoot 'publish\NidusVMS.Node'),
+    [string]$NodeProject        = (Join-Path $PSScriptRoot 'src\LarisVMS.Node\LarisVMS.Node.csproj'),
+    [string]$NodeUpdaterProject = (Join-Path $PSScriptRoot 'src\LarisVMS.NodeUpdater\LarisVMS.NodeUpdater.csproj'),
+    [string]$OutputRoot         = (Join-Path $PSScriptRoot 'publish\LarisVMS.Node'),
     [string]$Configuration      = 'Release',
     [string]$ExtraPublishPath
 )
@@ -52,7 +52,7 @@ function Write-Ok([string]$msg)   { Write-Host "    $msg"  -ForegroundColor Gree
 
 $winOut = Join-Path $OutputRoot 'win'
 
-Write-Step "Publishing NidusVMS.Node (win-x64, self-contained, single-file)"
+Write-Step "Publishing LarisVMS.Node (win-x64, self-contained, single-file)"
 if (Test-Path $winOut) { Remove-Item $winOut -Recurse -Force }
 dotnet publish $NodeProject `
     -c $Configuration `
@@ -65,7 +65,7 @@ dotnet publish $NodeProject `
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed (exit $LASTEXITCODE)." }
 Write-Ok "Published"
 
-Write-Step "Publishing NidusVMS.NodeUpdater (win-x64, self-contained, single-file)"
+Write-Step "Publishing LarisVMS.NodeUpdater (win-x64, self-contained, single-file)"
 # Published to its own temp folder, not straight into $winOut — a single-file self-contained publish
 # drops its own copy of every shared runtime file (hostfxr, etc.) into the output directory, and
 # publishing two different projects into the same folder back-to-back would have this pass's files
@@ -82,7 +82,7 @@ dotnet publish $NodeUpdaterProject `
     -p:NoWarn=CA1416 `
     -o $updaterTmp
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed (exit $LASTEXITCODE)." }
-Copy-Item (Join-Path $updaterTmp 'NidusVMS.NodeUpdater.exe') $winOut -Force
+Copy-Item (Join-Path $updaterTmp 'LarisVMS.NodeUpdater.exe') $winOut -Force
 Remove-Item $updaterTmp -Recurse -Force
 Write-Ok "Published"
 

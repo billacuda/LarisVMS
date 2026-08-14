@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.56.0] - 2026-08-13
+
+### Changed
+
+- **Renamed NidusVMS to LarisVMS project-wide**: solution/project names, namespaces, database name,
+  IIS site/pool, and docs/scripts all now say LarisVMS. The recorder node Windows service was also
+  renamed (`NidusVMSNode` -> `LarisVMSNode`), along with its `%ProgramData%` folder and the
+  `NIDUSVMS_*` environment variables it reads (`--server-url`/`--registration-key`/etc. CLI args are
+  unaffected). **LarisVMS.Node change — install-node.ps1 re-run needed on every recorder**, and this
+  one isn't a simple in-place update: because the service name itself changed, the auto-updater can't
+  rename the existing `NidusVMSNode` service in place, so the old service must be manually stopped and
+  removed (`sc.exe delete NidusVMSNode` after `Stop-Service`) before running `install-node.ps1` fresh.
+  Historical changelog entries and release notes below were also rewritten from NidusVMS to LarisVMS
+  to match. Two internal identifiers were deliberately left untouched — the Data Protection
+  `SetApplicationName` and the `SecretProtection` crypto purpose string both still say `"Rcordr"` (an
+  even earlier product name), since changing either would make every existing encrypted value
+  permanently undecryptable; see the comments at their definitions for the full rationale.
+
+## [0.55.0] - 2026-08-13
+
+### Added
+
+- **Schedule and Event recording modes**, completing M8's original four-mode design (only
+  Continuous/Motion existed before this). **Schedule mode** keeps a segment only if it starts
+  inside one of the camera's configured time windows (new `Cameras -> Schedule` page — days of the
+  week + a start/end time, windows can cross midnight), evaluated against the recorder node's own
+  local system clock rather than a stored timezone. **Event mode** keeps a segment only if a
+  specific "Drives recording" event tag rule fired nearby — unlike Motion mode, it ignores Motion
+  zones and the built-in ONVIF motion classifier entirely, so it's for "record only when this exact
+  tagged trigger fires," not "record on any activity." Both fail open (keep everything, warn once in
+  the logs) when nothing is configured yet, the same philosophy Motion mode already uses for a
+  camera with no zone. Internally, `Recording.Mode` gained a proper `RecordingMode` enum on the node
+  side (previously raw string comparisons scattered across the gating code) and the Motion-only
+  deferred-decision machinery was generalized to cover Event mode's narrower single-signal gating too.
+  **LarisVMS.Node change — install-node.ps1 re-run needed on every recorder.**
+- Also fixes a version-bookkeeping gap: `LarisVMS.Node`'s and `LarisVMS.NodeUpdater`'s own csproj
+  `Version` had drifted behind `LarisVMS.Web`'s (0.48.0 and 0.46.0 respectively, vs. Web's 0.54.0) —
+  both now match Web's version on every release going forward, not just ones that touch their code.
+
 ## [0.54.0] - 2026-08-13
 
 ### Added
@@ -27,7 +66,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decoding the file as Windows-1252 and reparsing it. All four first-party scripts
   (`install-node.ps1`, `build-node.ps1`, `deploy.ps1`, `fix-legacy-segments.ps1`) now carry a UTF-8
   BOM, which both PowerShell versions honor correctly. The share copy at
-  `\\files1\install\NidusVMS\node\win\install-node.ps1` was updated directly so nvr1 doesn't need to
+  `\\files1\install\LarisVMS\node\win\install-node.ps1` was updated directly so nvr1 doesn't need to
   wait for a redeploy to retry.
 
 ## [0.52.0] - 2026-08-13
@@ -58,13 +97,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Recorder-node build uploads on Admin -> Node Builds are gone, replaced by a `deploy.ps1`-driven
-  approval queue.** Uploading a several-hundred-MB self-contained `NidusVMS.Node.exe` through the
+  approval queue.** Uploading a several-hundred-MB self-contained `LarisVMS.Node.exe` through the
   browser hit IIS's own `requestFiltering` `maxAllowedContentLength` as a 413 — enforced ahead of
   Kestrel/ASP.NET Core, so the page's own `RequestSizeLimit`/`RequestFormLimits` attributes never
   even got a chance to apply. `deploy.ps1` already runs locally on the server as Administrator, so
   it now registers whatever `build-node.ps1` just built directly against the server's own
-  `%ProgramData%\NidusVMS\node-builds` folder and database — no HTTP upload, no IIS limit to hit,
-  and no-op on a redeploy that didn't bump `NidusVMS.Node`'s own version. Every registered build
+  `%ProgramData%\LarisVMS\node-builds` folder and database — no HTTP upload, no IIS limit to hit,
+  and no-op on a redeploy that didn't bump `LarisVMS.Node`'s own version. Every registered build
   lands as **Pending**; Admin -> Node Builds is now a Pending/Approved/Rejected review queue (with
   an audit trail of who approved/rejected what) instead of an upload form, and only an Approved
   build is ever offered to a node's heartbeat. Skippable with `-SkipNodeBuildRegistration`.
@@ -94,18 +133,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Recorder node auto-update.** Upload a new `NidusVMS.Node.exe` build once on a new
+- **Recorder node auto-update.** Upload a new `LarisVMS.Node.exe` build once on a new
   Admin -> Node Builds page, and every recorder node whose reported version is older picks it up on
   its own next heartbeat, downloads it, verifies its SHA-256, and swaps its own running binary — no
   more manually re-running `build-node.ps1` / `install-node.ps1` on each recorder machine. Direct
-  port of the existing dploid.Agent/dploid.AgentUpdater pattern: NidusVMS.NodeUpdater.exe (previously
+  port of the existing dploid.Agent/dploid.AgentUpdater pattern: LarisVMS.NodeUpdater.exe (previously
   a stub) is a small detached helper that waits for the Windows Service to actually stop, backs up
   and swaps the binary, restarts the service, and re-applies the same failure-recovery config
   install-node.ps1 sets at install time. `build-node.ps1` now publishes and bundles
-  NidusVMS.NodeUpdater.exe alongside NidusVMS.Node.exe; `install-node.ps1` installs it into
-  `C:\Program Files\NidusVMS\Node` on both fresh installs and upgrades. Gated by a new global
+  LarisVMS.NodeUpdater.exe alongside LarisVMS.Node.exe; `install-node.ps1` installs it into
+  `C:\Program Files\LarisVMS\Node` on both fresh installs and upgrades. Gated by a new global
   "Auto-update recorder nodes" setting on Admin -> Settings (on by default) — no per-node override
-  in this first pass. Uploaded builds are stored under `%ProgramData%\NidusVMS\node-builds`,
+  in this first pass. Uploaded builds are stored under `%ProgramData%\LarisVMS\node-builds`,
   deliberately outside the IIS site directory so `deploy.ps1`'s mirrored publish never touches them.
 
 ## [0.47.0] - 2026-08-13
@@ -117,7 +156,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   page rather than a synchronous per-camera download — a job can span far more footage than a
   request should hold a browser connection open for. Creating an export writes an ExportJob plus one
   Queued ExportJobItem per camera; a new Web-tier background service (ExportJobDispatcher, the first
-  BackgroundService/async job in NidusVMS.Web) polls for Queued items, resolves each camera's
+  BackgroundService/async job in LarisVMS.Web) polls for Queued items, resolves each camera's
   recorded segments for the range, and dispatches to that camera's node over a new signed,
   short-lived export token (mirroring the existing playback-segment token, just binding
   cameraId+exportItemId instead of a specific file). The node writes an ffmpeg concat-demuxer list
@@ -363,7 +402,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Continuous no longer carries any risk of a later restart retroactively re-deciding footage recorded
   under the old mode — a segment's keep/discard decision is now made exactly once, at the moment it
   first completes, full stop. Three new tests exercise the actual rescan-skip behavior against a real
-  temp directory. **This is a NidusVMS.Node change — install-node.ps1 re-run needed on both WINSERV1
+  temp directory. **This is a LarisVMS.Node change — install-node.ps1 re-run needed on both WINSERV1
   and NVR1 as soon as possible.**
 
 ### Known limitations
@@ -397,7 +436,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`EnqueueMotionCheckpoints`), which had the identical staleness gap for showing a long-running
   camera-event span before it closes. Two new tests lock in the exact scenario: `LastMotionAtUtc`
   frozen at the rising timestamp across a 10-minute gap while `IsActive` stays true throughout, only
-  going false once a real falling-edge tick arrives. **This is a NidusVMS.Node change —
+  going false once a real falling-edge tick arrives. **This is a LarisVMS.Node change —
   install-node.ps1 re-run needed on both WINSERV1 and NVR1.**
 
 ## [0.35.0] - 2026-08-11
@@ -413,7 +452,7 @@ video filter under stream copy, so burn-in needs its own design pass, not a drop
 
 - **A recorder node now subscribes to a camera's ONVIF PullPoint events and polls for notifications**,
   for any camera whose capability probe found an Events service. This is the node's first ONVIF SOAP
-  conversation of its own (`NidusVMS.Onvif` was deliberately not referenced by `NidusVMS.Node` until
+  conversation of its own (`LarisVMS.Onvif` was deliberately not referenced by `LarisVMS.Node` until
   now) — event polling is a continuous, long-lived exchange the web tier can't pre-resolve into a
   one-shot value the way `GetStreamUri` already is, so it has to happen from wherever the RTSP
   connections already do: the node, on the camera's own LAN. The web tier still resolves and hands
@@ -443,7 +482,7 @@ video filter under stream copy, so burn-in needs its own design pass, not a drop
 - No restart-on-config-change for an event session the way zone changes restart a motion session —
   credentials/EventsServiceUri essentially never change for an existing camera in practice, and a
   session that starts failing its subscribe attempt recovers on its own retry regardless.
-- **This is a NidusVMS.Node change — install-node.ps1 re-run needed on both WINSERV1 and NVR1.**
+- **This is a LarisVMS.Node change — install-node.ps1 re-run needed on both WINSERV1 and NVR1.**
 
 ## [0.34.0] - 2026-08-11
 
@@ -532,7 +571,7 @@ browser session, same as any UI-only pass shipped that way in this project's his
   window is now anchored to the segment's *start* instead, so motion anywhere in the segment itself,
   not just near its tail, correctly keeps it — one comparison still covers pre-roll, post-roll, and
   "motion happened during the segment" together, same as before. New test proves both the bug (the
-  old anchor misses it) and the fix (the new one catches it) side by side. **This is a NidusVMS.Node
+  old anchor misses it) and the fix (the new one catches it) side by side. **This is a LarisVMS.Node
   change — install-node.ps1 re-run needed on both WINSERV1 and NVR1.**
 
 ## [0.31.0] - 2026-08-11
@@ -972,7 +1011,7 @@ environment to test the constraint directly.
 ### Changed
 
 - `deploy.ps1` now builds the recorder node package (`build-node.ps1`) as part of every web
-  deploy, so `publish\NidusVMS.Node\win` stays current instead of depending on someone remembering
+  deploy, so `publish\LarisVMS.Node\win` stays current instead of depending on someone remembering
   to run `build-node.ps1` separately. New `-ExtraNodePublishPath` passes straight through to
   `build-node.ps1 -ExtraPublishPath` for mirroring the package to a second location (e.g. a network
   share a recorder machine reads directly); left blank by default since the path is inherently
@@ -1018,7 +1057,7 @@ environment to test the constraint directly.
   any normal player. Playback in the browser will work for anything recorded after the recorder
   nodes are updated.
 
-  **This is a `NidusVMS.Node` change** — `deploy.ps1` does not push it. Re-run `install-node.ps1`
+  **This is a `LarisVMS.Node` change** — `deploy.ps1` does not push it. Re-run `install-node.ps1`
   on every recorder node for it to take effect.
 
 ## [0.21.0] - 2026-08-09
@@ -1055,7 +1094,7 @@ environment to test the constraint directly.
 
 ## [0.20.0] - 2026-08-09
 
-**No `NidusVMS.Node` changes in this release — no recorder-node update needed.**
+**No `LarisVMS.Node` changes in this release — no recorder-node update needed.**
 
 ### Fixed
 
@@ -1070,7 +1109,7 @@ environment to test the constraint directly.
 
 ## [0.19.0] - 2026-08-09
 
-**No `NidusVMS.Node` changes in this release — no recorder-node update needed.**
+**No `LarisVMS.Node` changes in this release — no recorder-node update needed.**
 
 ### Fixed
 
@@ -1107,7 +1146,7 @@ environment to test the constraint directly.
 
 ## [0.17.0] - 2026-08-09
 
-**No `NidusVMS.Node` changes in this release — no recorder-node update needed.**
+**No `LarisVMS.Node` changes in this release — no recorder-node update needed.**
 
 ### Fixed
 
@@ -1135,7 +1174,7 @@ environment to test the constraint directly.
 
 ## [0.16.0] - 2026-08-09
 
-**No `NidusVMS.Node` changes in this release — no recorder-node update needed.**
+**No `LarisVMS.Node` changes in this release — no recorder-node update needed.**
 
 ### Fixed
 
@@ -1247,7 +1286,7 @@ environment to test the constraint directly.
     timeline (`timeline.js` — wheel to zoom weeks→seconds around the cursor, drag to pan, click to
     scrub), one MSE player per selected camera (`playback-player.js`), and per-tile digital zoom
     (CSS transform scale/pan on the `<video>` element, drag to pan once zoomed).
-  - `/playback-segment/{cameraId}/{segmentId}` on `NidusVMS.Web` proxies exactly one segment
+  - `/playback-segment/{cameraId}/{segmentId}` on `LarisVMS.Web` proxies exactly one segment
     file's bytes from its owning node — same "browser never talks to a node directly" shape as
     `/live`, over HTTP GET instead of a WebSocket. `MediaToken` gained `IssueForSegment`/
     `TryValidateSegment`, a separate token family from the live-view one (deliberately — the
@@ -1337,7 +1376,7 @@ environment to test the constraint directly.
   - `Pages/Views/Editor`: GridStack drag-to-arrange and resize, a camera palette to add tiles
     (click-to-add — see Known limitations), a per-cell aspect-ratio dropdown (the plan's full list:
     1:1, 4:3, 3:2, 16:10, 16:9, 1.85:1, 21:9, 2.39:1, and the vertical inverses), and a per-cell
-    "hide on phone" toggle. Every tile plays real live video via the same `nidusvmsLiveView` player
+    "hide on phone" toggle. Every tile plays real live video via the same `larisvmsLiveView` player
     `Pages/Live` uses, letterboxed to its aspect ratio with `object-fit: contain` regardless of the
     grid rectangle's actual shape, so dragging/resizing a tile never distorts the picture.
   - `Pages/Views/Play`: read-only display of a saved view. Desktop renders the exact saved
@@ -1427,12 +1466,12 @@ convention.
   of depending on whichever camera happened to be unmuted last.
 - `build-node.ps1 -ExtraPublishPath` mirrors the built node package to a second location (e.g. a
   network share a recorder machine can reach directly), so installing/upgrading a node no longer
-  depends on manually copying the `publish\NidusVMS.Node\win` folder there each time.
+  depends on manually copying the `publish\LarisVMS.Node\win` folder there each time.
 
 ### Changed
 
-- `NidusVMS.Node`'s HTTP client can now skip TLS certificate validation via the existing
-  `--insecure-tls` flag / `NIDUSVMS_INSECURE_TLS` env var without a code change — this was already
+- `LarisVMS.Node`'s HTTP client can now skip TLS certificate validation via the existing
+  `--insecure-tls` flag / `LARISVMS_INSECURE_TLS` env var without a code change — this was already
   wired end-to-end but undocumented as the recommended fix for a self-hosted server with no cert
   covering its hostname. Both production nodes run with it enabled for now; it should become a real
   settings-driven toggle once the M6+ settings system exists, rather than a service-install-time flag.
@@ -1518,7 +1557,7 @@ convention.
   polls every 30s, with a lazy server-side backfill if a node's stored key is still null. An existing
   node now self-heals within one reconcile cycle; no re-registration, no restart.
 - `install-node.ps1` never opened a firewall rule for the M5 live-view port — confirmed on a real
-  node (`NVR1`): `NidusVMS.Web`'s proxy could open a TCP connection to the port, but every WebSocket
+  node (`NVR1`): `LarisVMS.Web`'s proxy could open a TCP connection to the port, but every WebSocket
   request just hung until timeout rather than failing fast, because nothing was actually listening
   from the *firewall's* perspective. Now creates an inbound allow rule for `-LivePort` (default 8554)
   idempotently. Also added the missing `-LivePort` parameter itself — the node's own `--live-port`
@@ -1538,7 +1577,7 @@ convention.
     unit tested against synthetic box data), buffers it, and raises `LiveFragmentReceived` for
     everything after — a late-joining viewer gets the init segment once, then every fragment live.
   - Nodes now host a small Kestrel endpoint (`/live/{cameraId}`, WebSocket) — plain HTTP, LAN-only,
-    reachable only by NidusVMS.Web's proxy, never by a browser directly. This is a deliberate
+    reachable only by LarisVMS.Web's proxy, never by a browser directly. This is a deliberate
     architecture decision, not a shortcut: direct browser-to-node `wss://` would mean every node
     needs its own TLS certificate (self-signed and asking each viewer to trust it, or a real one via
     an internal CA) before video plays at all; proxying through IIS needs nothing installed on a
@@ -1547,7 +1586,7 @@ convention.
     registration (`Node.MediaSigningKey`, encrypted at rest), is what keeps a node's live port from
     being wide open to anything else on the LAN that knows the URL shape — validated locally by the
     node, no DB round trip.
-  - `NidusVMS.Web` gained `GET /live/{cameraId}` (`Cameras.View`-gated): accepts the browser's
+  - `LarisVMS.Web` gained `GET /live/{cameraId}` (`Cameras.View`-gated): accepts the browser's
     WebSocket, opens its own outbound one to the camera's node (address from `Node.LastIpAddress` +
     the newly self-reported `Node.LivePort`), and relays frames between them.
   - Browser side is a vanilla-JS MSE player (`live-view.js`) — click a camera tile on `Pages/Live` to
@@ -1632,8 +1671,8 @@ convention.
 
 ### Fixed
 
-- `install-node.ps1` stopping the Windows Service only waits for `NidusVMS.Node.exe` itself to exit —
-  Windows doesn't kill child processes when their parent dies, so if `NidusVMS.Node`'s own graceful
+- `install-node.ps1` stopping the Windows Service only waits for `LarisVMS.Node.exe` itself to exit —
+  Windows doesn't kill child processes when their parent dies, so if `LarisVMS.Node`'s own graceful
   shutdown doesn't finish killing each `ffmpeg.exe` it spawned before the SCM's stop timeout hits,
   those are left running, orphaned, and still holding their DLLs open. Confirmed on a real node: this
   made re-running the script to upgrade an already-running node fail with "the process cannot access
@@ -1643,7 +1682,7 @@ convention.
   version of this fix tried to filter to only ffmpeg processes under the node's own install
   directory by checking each process's `.Path` — that filter silently matched nothing, since
   querying `.Path` on a process running as a different account, LocalSystem by default here, can
-  fail even from an elevated session. Simpler and correct: ffmpeg is only ever run by NidusVMS.Node on
+  fail even from an elevated session. Simpler and correct: ffmpeg is only ever run by LarisVMS.Node on
   this machine, so there's nothing to filter for.)
 - Nodes kept reporting a stale version in `Admin → Nodes` no matter how many times they were
   upgraded. Two compounding bugs: `NodeHeartbeatRequest.Version` was sent on every heartbeat but the
@@ -1653,7 +1692,7 @@ convention.
   maintained string literal (`"0.4.0"`) rather than read from the build, which is exactly what let it
   drift two releases behind in the first place. Fixed both: the heartbeat handler now persists
   `Version` alongside the disk-usage stats it already recorded, and the node reads its version from
-  its own assembly metadata (`NidusVMS.Node.csproj`'s `<Version>`) via a new `NodeVersion.Current`
+  its own assembly metadata (`LarisVMS.Node.csproj`'s `<Version>`) via a new `NodeVersion.Current`
   instead of a literal anyone could forget to bump. Confirmed live: both real nodes corrected to
   `0.4.0` on their next heartbeat, with no redeploy needed for the server-side half of the fix.
 - The `AddCameraStreamEnabledAndCustomName` migration (added for the enable/disable/rename feature
@@ -1675,7 +1714,7 @@ convention.
   and a global watermark backstop (delete the oldest segments across every camera on the node,
   regardless of retention/quota settings, once the storage volume passes a configurable % used —
   the hard "the disk is nearly full" fallback the plan calls out as independent of retention days).
-  It's purely filesystem-driven — `NidusVMS.Node` has no DB connection by design — and reports back
+  It's purely filesystem-driven — `LarisVMS.Node` has no DB connection by design — and reports back
   which files it deleted via a new `POST /api/nodes/segments/delete` so the web deletes the matching
   `Segment` rows; the never-touch-a-file-younger-than-5-minutes guard keeps it from ever racing
   `RecordingSession`'s in-progress segment. Empty date/hour folders left behind by eviction are
@@ -1701,7 +1740,7 @@ convention.
 - `Cameras/Index` shows each camera's storage usage (sum of `Segments.SizeBytes`) against its quota.
 - `StorageManager`'s eviction-decision helpers (age cutoff, oldest-first quota selection, bottom-up
   empty-directory pruning) are unit tested against a real temp directory tree, not just built and
-  trusted — `NidusVMS.Node` now has `InternalsVisibleTo` for `NidusVMS.Tests` for exactly this.
+  trusted — `LarisVMS.Node` now has `InternalsVisibleTo` for `LarisVMS.Tests` for exactly this.
 
 ### Fixed
 
@@ -1741,11 +1780,11 @@ convention.
   `Admin → Nodes`, so an unassigned (non-recording) camera is visible at a glance.
 
 - `build-node.ps1` / `install-node.ps1`, replacing the M3 stub. `build-node.ps1` publishes
-  `NidusVMS.Node` as a self-contained single-file win-x64 executable (Windows only — the node's
+  `LarisVMS.Node` as a self-contained single-file win-x64 executable (Windows only — the node's
   registration store is DPAPI-based and throws on Linux; that support isn't implemented yet, so
   publishing a linux-x64 build would just fail at first run) and bundles `install-node.ps1`
   alongside it, mirroring `dploid`'s `build-agent.ps1`/`install-agent.ps1` shape. `install-node.ps1`
-  installs to `C:\Program Files\NidusVMS\Node`, registers a Windows Service with the registration
+  installs to `C:\Program Files\LarisVMS\Node`, registers a Windows Service with the registration
   arguments baked into its command line (only actually used on first start — after that,
   `node.config` exists and registration is skipped, so re-running the installer to change settings
   is safe), configures restart-on-failure recovery, and can fetch the LGPL "shared" FFmpeg build via
@@ -1771,7 +1810,7 @@ convention.
   as LocalSystem or a dedicated service account, never as whoever happened to run the installer —
   has no access to; the service would have started but failed to launch ffmpeg at all. The resolved
   ffmpeg (its `.exe` and the DLLs a shared build depends on) is now always copied into the node's own
-  `C:\Program Files\NidusVMS\Node\ffmpeg\` before the service is registered, regardless of where it was
+  `C:\Program Files\LarisVMS\Node\ffmpeg\` before the service is registered, regardless of where it was
   originally found, so the service account's access to it no longer depends on where installation
   happened to leave it.
 
@@ -1779,7 +1818,7 @@ convention.
 
 ### Added
 
-- 24/7 recording engine (`NidusVMS.Node`, `NidusVMS.Media`). A recorder node is a separate Windows
+- 24/7 recording engine (`LarisVMS.Node`, `LarisVMS.Media`). A recorder node is a separate Windows
   Service process — deliberately not part of the IIS-hosted web app, since app pool recycles would
   otherwise interrupt recording. `RecordingSession` supervises one `ffmpeg -c copy` process per
   camera's Main stream, writing 60-second fMP4 segments with a state machine
@@ -1790,7 +1829,7 @@ convention.
   recording, killing the ffmpeg process mid-recording (auto-restarted within ~4s and resumed
   cleanly), and killing/restarting the whole node process (resumed recording immediately from its
   persisted registration).
-- Node control plane (`NidusVMS.Web` `/api/nodes/*`). Register/heartbeat/config/segment-report
+- Node control plane (`LarisVMS.Web` `/api/nodes/*`). Register/heartbeat/config/segment-report
   endpoints and `NodeAuthMiddleware` mirror dploid's proven `AgentAuthMiddleware` shape — bearer
   `"{nodeId}:{secret}"`, SHA-256 hashed and compared with `CryptographicOperations.FixedTimeEquals`.
   Secret rotation (`PreviousApiKeyHash`) and dploid's nonce/replay hardening are deliberately not
@@ -1854,10 +1893,10 @@ convention.
 
 ### Added
 
-- Hand-rolled ONVIF SOAP client (`NidusVMS.Onvif`). The plan originally called for
+- Hand-rolled ONVIF SOAP client (`LarisVMS.Onvif`). The plan originally called for
   `dotnet-svcutil`-generated clients from vendored WSDLs, but ONVIF's WSDL/XSD tree is notorious for
   breaking that generator (circular schema imports), so instead this is plain XML request/response
-  templates over `HttpClient` for the ~10 operations NidusVMS actually needs today
+  templates over `HttpClient` for the ~10 operations LarisVMS actually needs today
   (`GetDeviceInformation`, `GetCapabilities`, `GetServices`, `GetProfiles`, `GetStreamUri`,
   `GetSnapshotUri`). Far less generated code, easy to extend per-operation.
 - WS-Security UsernameToken digest auth. `OnvifSoapEnvelope` builds the
@@ -1907,11 +1946,11 @@ convention.
 
 ### Added
 
-- Solution skeleton: `NidusVMS.slnx` with the seven-project layering from the plan (`Core`, `Onvif`,
-  `Media`, `Infrastructure`, `Web`, `Node`, `NodeUpdater`) plus `tests/NidusVMS.Tests`, all targeting
-  `net10.0` with `Directory.Packages.props` for central package management from day one. `NidusVMS.Onvif`
-  and `NidusVMS.Media` were placeholder projects until this release; `NidusVMS.Node` and
-  `NidusVMS.NodeUpdater` still print a not-yet-implemented message pending milestone M3.
+- Solution skeleton: `LarisVMS.slnx` with the seven-project layering from the plan (`Core`, `Onvif`,
+  `Media`, `Infrastructure`, `Web`, `Node`, `NodeUpdater`) plus `tests/LarisVMS.Tests`, all targeting
+  `net10.0` with `Directory.Packages.props` for central package management from day one. `LarisVMS.Onvif`
+  and `LarisVMS.Media` were placeholder projects until this release; `LarisVMS.Node` and
+  `LarisVMS.NodeUpdater` still print a not-yet-implemented message pending milestone M3.
 - ASP.NET Core Identity + Resource×Action RBAC: `ApplicationUser`, cookie auth with login/logout
   audit events, and `PermissionPolicyProvider` (lifted from rsolva) resolving any
   `"{Resource}.{Action}"` authorization policy on the fly so pages can write
@@ -1926,7 +1965,7 @@ convention.
   reads through, rather than a bespoke nullable column per feature.
 - Encryption at rest: `SecretProtection` (rsolva's static-protector, `enc:v1:`-marker,
   design-time-passthrough shape) with a fail-loud `Unprotect` on decryption failure. Key ring lives
-  under `%ProgramData%\NidusVMS\keys`, DPAPI-wrapped on Windows.
+  under `%ProgramData%\LarisVMS\keys`, DPAPI-wrapped on Windows.
 - UTC timestamp handling: `ApplicationDbContext.ConfigureConventions` stamps every
   `DateTime`/`DateTime?` column as UTC on read, copied from rsolva.
 - `AppVersions` table and footer: the version shown in the page footer is read from the highest
@@ -1944,7 +1983,7 @@ convention.
   configured yet (pre-setup).
 - `deploy.ps1`: frcastr's IIS deploy script (admin check, site/URL resolution, `dotnet tool
   restore`, connection-string read from the deployed `setup-generated.json`, publish, stop pool,
-  `try { migrate + robocopy /MIR } finally { start pool }`), with three NidusVMS-specific additions: a
+  `try { migrate + robocopy /MIR } finally { start pool }`), with three LarisVMS-specific additions: a
   storage-root guard that throws before deploying if the configured storage root resolves under the
   IIS site directory (a `/MIR` there would delete every recording), `/XD` exclusions for
   `recordings`, `spool`, and `exports` as a second line of defense, and a post-deploy `/health`

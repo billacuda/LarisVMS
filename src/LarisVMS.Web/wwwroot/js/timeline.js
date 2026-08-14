@@ -1,0 +1,424 @@
+// M7 canvas coverage timeline — tape-scrubber model: the yellow playhead marker is always drawn
+// at the horizontal center of the canvas and never moves; dragging slides the timeline strip
+// beneath it instead, so whatever time is under the marker after a drag *is* the play position,
+// continuously updated as you drag (not just a pan that leaves the play position wherever it was).
+// Wheel zooms in/out around that same fixed center point (weeks down to seconds) rather than the
+// cursor, so zooming never jumps the marker off-center. The playhead can never be dragged past
+// "now"; the window may still extend past it, and that stretch is drawn as unreachable future.
+// Renders recorded/motion/gap buckets fetched from GET /api/cameras/{id}/timeline — green (motion)
+// wins over blue (recorded) for a bucket with both, not a blend. Framework-free canvas drawing,
+// matching the rest of this app's no-build-step JS.
+window.larisvmsTimeline = (function () {
+    'use strict';
+
+    var MIN_RANGE_MS = 5 * 1000;
+    var MAX_RANGE_MS = 90 * 24 * 3600 * 1000;
+
+    // "Nice" tick spacings, ascending — pickTickInterval walks these until the resulting tick count
+    // for the current zoom fits the canvas width, so the axis always reads as a sensible scale
+    // (seconds/minutes/hours/days) instead of some arbitrary fraction of the visible span.
+    var NICE_INTERVALS_MS = [
+        1000, 2000, 5000, 10000, 15000, 30000,
+        60000, 2 * 60000, 5 * 60000, 10 * 60000, 15 * 60000, 30 * 60000,
+        3600000, 2 * 3600000, 3 * 3600000, 6 * 3600000, 12 * 3600000,
+        86400000, 2 * 86400000, 7 * 86400000, 14 * 86400000, 30 * 86400000, 90 * 86400000
+    ];
+
+    function create(canvas, options) {
+        var ctx = canvas.getContext('2d');
+        var rangeMs = options.initialRangeMs || (24 * 3600 * 1000);
+        var centerMs = clampCenter(options.initialCenterMs || Date.now());
+        var buckets = [];
+        var loading = false;
+        var reloadTimer = null;
+        var hour24 = !!options.hour24;
+
+        // It's the *playhead* that can't pass "now", not the visible window. An earlier version
+        // clamped the window's right edge instead (centerMs <= now - range/2), which quietly pinned
+        // the marker half a span into the past: at the 24h default the marker sat at now-12h with
+        // twelve hours of real, still-being-recorded footage to its right, which reads as "there's
+        // recorded video in the future". The window is allowed to extend past now; that region is
+        // drawn as unreachable-future instead (see draw()), so "now" stays where the marker is.
+        function clampCenter(ms) {
+            return Math.min(ms, Date.now());
+        }
+
+        // Axis tick granularity follows the chosen interval, not the total visible span — a 2-day
+        // view with 6-hour ticks shows "3 PM" per tick, not a full date repeated at every mark; a
+        // 90-day view with 1-week ticks shows just the date, since a time-of-day would be meaningless
+        // noise at that scale. This is the "date, hours, minutes, seconds depending on zoom level"
+        // scale cue, applied per tick rather than once for the whole bar.
+        function formatTick(ms, intervalMs) {
+            var d = new Date(ms);
+            if (intervalMs >= 86400000) {
+                return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+            }
+            if (intervalMs >= 60000) {
+                return d.toLocaleTimeString(undefined, hour24
+                    ? { hour: '2-digit', minute: '2-digit', hour12: false }
+                    : { hour: 'numeric', minute: '2-digit' });
+            }
+            return d.toLocaleTimeString(undefined, hour24
+                ? { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }
+                : { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+        }
+
+        // Local midnight at or before ms. Not `ms - (ms % 86400000)`, which would find UTC midnight
+        // and land hours off in any zone but UTC — every other timestamp a user reads on this
+        // timeline is rendered in their own local time (see the plan's storage-vs-display rule), so
+        // the day boundaries drawn on it have to be local days too.
+        function startOfLocalDay(ms) {
+            var d = new Date(ms);
+            d.setHours(0, 0, 0, 0);
+            return d;
+        }
+
+        // Day boundaries, each with a date badge. Below day-level zoom the tick labels are
+        // time-only, so a window that crosses midnight gives no indication the day changed, and one
+        // sitting entirely inside a single day names no date at all — in both cases you can scroll
+        // for a while with no idea which day you're looking at. Skipped at day+ zoom, where every
+        // tick label is already a date and this would only duplicate them.
+        function drawDayMarkers(r, span, w, h, barTop, tickInterval) {
+            if (tickInterval >= 86400000) return;
+
+            ctx.font = '9px sans-serif';
+            ctx.textBaseline = 'top';
+            ctx.textAlign = 'left';
+
+            for (var cursor = startOfLocalDay(r.from); cursor.getTime() <= r.to;) {
+                var dayStart = cursor.getTime();
+                // Advance by calendar day, not by a fixed 86400000ms: a DST transition day is 23 or
+                // 25 hours long, and fixed-millisecond stepping would walk every subsequent boundary
+                // an hour off midnight for the rest of the window.
+                var next = new Date(cursor);
+                next.setDate(next.getDate() + 1);
+
+                var startX = ((dayStart - r.from) / span) * w;
+                var endX = ((next.getTime() - r.from) / span) * w;
+
+                // Only draw the divider when the day actually begins inside the window — the
+                // left-most day is normally already in progress when the window opens, and a line at
+                // x<0 would just be clipped away anyway.
+                if (startX > 0) {
+                    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(Math.round(startX) + 0.5, 0);
+                    ctx.lineTo(Math.round(startX) + 0.5, h);
+                    ctx.stroke();
+                }
+
+                var label = new Date(dayStart).toLocaleDateString(undefined,
+                    { weekday: 'short', month: 'short', day: 'numeric' });
+                var labelWidth = ctx.measureText(label).width;
+                var badgeX = Math.max(0, startX) + 3;
+                var visibleWidth = Math.min(endX, w) - Math.max(startX, 0);
+
+                // A day with only a sliver on screen can't hold its own name — a clipped or
+                // overflowing badge reads as belonging to the neighbouring day, which is worse than
+                // no badge at all.
+                if (visibleWidth >= labelWidth + 10 && badgeX + labelWidth + 2 <= w) {
+                    // Drawn over the coverage bar (the canvas is only ~30px tall — there's no spare
+                    // row for this), so it needs its own backdrop to stay readable against green
+                    // motion, blue recording, or any custom tag color underneath.
+                    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+                    ctx.fillRect(badgeX - 2, barTop, labelWidth + 4, 11);
+                    ctx.fillStyle = '#e8e8e8';
+                    ctx.fillText(label, badgeX, barTop + 1);
+                }
+
+                cursor = next;
+            }
+        }
+
+        // Smallest "nice" interval whose tick count still fits comfortably in the canvas width —
+        // roughly one label per 90px, wide enough that adjacent labels never overlap even at the
+        // longest ("Aug 10" + time) format.
+        function pickTickInterval(spanMs, widthPx) {
+            var maxTicks = Math.max(2, Math.floor(widthPx / 90));
+            for (var i = 0; i < NICE_INTERVALS_MS.length; i++) {
+                if (spanMs / NICE_INTERVALS_MS[i] <= maxTicks) return NICE_INTERVALS_MS[i];
+            }
+            return NICE_INTERVALS_MS[NICE_INTERVALS_MS.length - 1];
+        }
+
+        function visibleRange() {
+            return { from: centerMs - rangeMs / 2, to: centerMs + rangeMs / 2 };
+        }
+
+        function resizeCanvas() {
+            var rect = canvas.getBoundingClientRect();
+            var dpr = window.devicePixelRatio || 1;
+            canvas.width = Math.max(1, Math.round(rect.width * dpr));
+            canvas.height = Math.max(1, Math.round(rect.height * dpr));
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+
+        function scheduleReload() {
+            clearTimeout(reloadTimer);
+            reloadTimer = setTimeout(reload, 150);
+        }
+
+        async function reload() {
+            if (loading || !options.getBuckets) return;
+            loading = true;
+            var r = visibleRange();
+            var bucketCount = Math.max(50, Math.min(2000, Math.round(canvas.clientWidth || 800)));
+            try {
+                buckets = await options.getBuckets(new Date(r.from).toISOString(), new Date(r.to).toISOString(), bucketCount);
+            } catch (e) {
+                buckets = [];
+            }
+            loading = false;
+            draw();
+        }
+
+        function draw() {
+            var w = canvas.clientWidth, h = canvas.clientHeight;
+            if (!w || !h) return;
+            ctx.clearRect(0, 0, w, h);
+            ctx.fillStyle = '#2b2b2b';
+            ctx.fillRect(0, 0, w, h);
+
+            var r = visibleRange();
+            var span = r.to - r.from;
+            if (span <= 0) return;
+
+            // Coverage bar occupies the top ~55% of a now-much-shorter canvas; tick marks and their
+            // labels live in the remainder below it, instead of the old two-corner-label footer that
+            // needed a much taller bar to have room for.
+            var barTop = 1, barBottom = Math.max(barTop + 4, Math.round(h * 0.55));
+
+            // A bucket that straddles "now" is truncated at it rather than drawn whole: an actively
+            // recording camera's newest bucket legitimately covers the current instant, and drawing
+            // its full width would paint coverage over time that hasn't happened yet.
+            var nowMs = Date.now();
+            var nowX = ((nowMs - r.from) / span) * w;
+
+            // Adjacent buckets sharing the same color are merged into one fillRect run instead of
+            // one call per bucket — at a wide zoom (up to ~2000 buckets, close to one per pixel) two
+            // same-colored neighbors drawn separately could leave a hairline gap between them from
+            // sub-pixel rounding (bucket N's x2 not landing on exactly the same float as bucket N+1's
+            // x1), which read as thin flickering stripes through a solid run of coverage — worse
+            // during playback, where the whole strip's pixel positions shift slightly on every
+            // redraw (following playback), so those hairline gaps didn't just look striped, they
+            // visibly pulsed as their positions jittered frame to frame. One rect per same-colored
+            // run has no seams to flicker, and coordinates are rounded once per run rather than
+            // independently per bucket.
+            var runStartX = null, runColor = null;
+            function flushRun(endX) {
+                if (runStartX === null) return;
+                var x1 = Math.round(runStartX), x2 = Math.round(endX);
+                ctx.fillStyle = runColor;
+                ctx.fillRect(x1, barTop, Math.max(1, x2 - x1), barBottom - barTop);
+                runStartX = null;
+            }
+            buckets.forEach(function (b) {
+                var bStart = new Date(b.startUtc).getTime();
+                var bEnd = Math.min(new Date(b.endUtc).getTime(), nowMs);
+                if (bEnd <= bStart) return;
+                var x1 = ((bStart - r.from) / span) * w;
+                var x2 = ((bEnd - r.from) / span) * w;
+                // M8 pass 8: a custom EventTagRule's own color wins outright over the built-in
+                // green/blue/gray scheme, the same way motion already wins over plain recorded
+                // coverage below — see TimelineBucketDto.TagColorHex's doc comment. Null (the default,
+                // and every bucket on a camera with no EventTagRules configured at all) falls straight
+                // through to the unchanged built-in scheme.
+                var color = b.tagColorHex || (b.hasMotion ? '#28e070' : (b.hasRecording ? '#1e6fd9' : 'rgba(255,255,255,0.08)'));
+                if (runColor !== null && color !== runColor) flushRun(x1);
+                if (runStartX === null) { runStartX = x1; runColor = color; }
+            });
+            flushRun(w);
+
+            // Everything right of "now" is time that hasn't happened yet — flatly darker than the
+            // empty-track color so it reads as "nothing can ever be here", not "nothing recorded
+            // here yet". Drawn over the buckets but under the playhead marker and tick labels.
+            if (nowX < w) {
+                ctx.fillStyle = '#141414';
+                ctx.fillRect(Math.max(0, nowX), barTop, w - Math.max(0, nowX), barBottom - barTop);
+                if (nowX > 0) {
+                    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(nowX + 0.5, 0);
+                    ctx.lineTo(nowX + 0.5, h);
+                    ctx.stroke();
+                }
+            }
+
+            // Tick marks + scale-appropriate labels (date/hours/minutes/seconds depending on zoom —
+            // see formatTick/pickTickInterval) aligned to "nice" boundaries of the chosen interval,
+            // not just evenly spaced across whatever the visible span happens to be, so the same
+            // interval a user zooms into always lands on the same wall-clock marks (e.g. always the
+            // top of the hour at hourly zoom) rather than drifting with the pan position.
+            var tickInterval = pickTickInterval(span, w);
+            var firstTick = Math.ceil(r.from / tickInterval) * tickInterval;
+            ctx.fillStyle = '#aaa';
+            ctx.font = '9px sans-serif';
+            ctx.textBaseline = 'top';
+            for (var t = firstTick; t <= r.to; t += tickInterval) {
+                var x = ((t - r.from) / span) * w;
+                ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(Math.round(x) + 0.5, barBottom);
+                ctx.lineTo(Math.round(x) + 0.5, barBottom + 3);
+                ctx.stroke();
+
+                var label = formatTick(t, tickInterval);
+                var labelWidth = ctx.measureText(label).width;
+                // Skip a label that would clip off either edge rather than clamp its position —
+                // a clamped label would visually detach from its own tick mark.
+                if (x - labelWidth / 2 < 0 || x + labelWidth / 2 > w) continue;
+                ctx.textAlign = 'center';
+                ctx.fillText(label, x, barBottom + 4);
+            }
+            ctx.textAlign = 'left';
+
+            // After the ticks so a day divider reads as the stronger boundary of the two, before the
+            // playhead so the marker still sits on top of everything.
+            drawDayMarkers(r, span, w, h, barTop, tickInterval);
+
+            // The playhead never moves from dead center — the strip above moves under it instead.
+            var centerPx = w / 2;
+            ctx.strokeStyle = '#ffc107';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(centerPx, 0);
+            ctx.lineTo(centerPx, h);
+            ctx.stroke();
+        }
+
+        function xToTime(clientX) {
+            var rect = canvas.getBoundingClientRect();
+            var frac = (clientX - rect.left) / rect.width;
+            var r = visibleRange();
+            return r.from + frac * (r.to - r.from);
+        }
+
+        // Zooms around centerMs (the playhead), never around the cursor — the marker's job is to
+        // never move, so the zoom anchor has to be the same fixed point it's drawn at.
+        canvas.addEventListener('wheel', function (e) {
+            e.preventDefault();
+            var zoomFactor = e.deltaY < 0 ? 0.8 : 1.25; // wheel up = zoom in
+            rangeMs = Math.min(MAX_RANGE_MS, Math.max(MIN_RANGE_MS, rangeMs * zoomFactor));
+            draw();
+            scheduleReload();
+            if (options.onRangeChange) options.onRangeChange(rangeMs);
+            // No onScrub here on purpose: the playhead's clamp doesn't depend on the zoom level, so
+            // zooming can't move the play position and must not trigger a seek per scroll notch.
+        }, { passive: false });
+
+        // Pointer Events (not mouse events) specifically so setPointerCapture can pin move/up
+        // delivery to this canvas for the duration of the drag — with plain mouse events, releasing
+        // the button after the cursor has left the browser window (dragged off-screen, over the
+        // taskbar, onto another monitor) never fires a mouseup the page can see at all, and the drag
+        // is left permanently "stuck" to the cursor with no way to release it short of reloading.
+        // Pointer capture keeps delivering pointermove/pointerup to `canvas` regardless of where the
+        // pointer physically is, as long as the button is still down.
+        var dragging = false, dragStartX = 0, dragStartCenter = 0, dragMoved = false, dragPointerId = null;
+        canvas.addEventListener('pointerdown', function (e) {
+            if (e.button !== 0) return;
+            dragging = true;
+            dragMoved = false;
+            dragStartX = e.clientX;
+            dragStartCenter = centerMs;
+            dragPointerId = e.pointerId;
+            canvas.setPointerCapture(e.pointerId);
+            canvas.style.cursor = 'grabbing';
+        });
+        // Live-scrub while dragging is throttled, not fired on every raw pointermove — a browser
+        // dispatches those at a much higher rate than any seek pipeline can usefully keep up with,
+        // and un-throttled it fired 50-100+ times over a single half-second drag. With several
+        // cameras in a view each seek fans out to one fetch per tile, so that flooded the browser's
+        // connection pool (confirmed live: net::ERR_INSUFFICIENT_RESOURCES) and made the recorder
+        // node's storage reads look "stuck" — they weren't hung, they were queued behind hundreds
+        // of already-abandoned requests. ~8/sec is frequent enough to feel live without flooding.
+        var SCRUB_THROTTLE_MS = 120;
+        var lastScrubFiredAt = 0;
+
+        function endDrag(e) {
+            if (!dragging) return;
+            dragging = false;
+            if (dragPointerId !== null && canvas.hasPointerCapture(dragPointerId)) {
+                canvas.releasePointerCapture(dragPointerId);
+            }
+            dragPointerId = null;
+            canvas.style.cursor = 'pointer';
+            if (!dragMoved) {
+                // A plain click: jump the playhead straight to the clicked point instead of
+                // requiring a drag for a big seek.
+                centerMs = clampCenter(xToTime(e.clientX));
+                draw();
+            }
+            // Always fires once more here, throttle bypassed — the exact release position must be
+            // committed even if it landed inside the last throttle window during a drag.
+            if (options.onScrub) options.onScrub(Math.round(centerMs));
+            scheduleReload();
+        }
+
+        canvas.addEventListener('pointermove', function (e) {
+            if (!dragging) return;
+            var rect = canvas.getBoundingClientRect();
+            var dxFrac = (e.clientX - dragStartX) / rect.width;
+            if (Math.abs(e.clientX - dragStartX) > 3) dragMoved = true;
+            // Dragging the strip right (positive dx) reveals earlier content at center — same
+            // motion as sliding a physical filmstrip right under a fixed viewing window — so
+            // centerMs (now == the playhead) moves backward in time, not forward.
+            centerMs = clampCenter(dragStartCenter - dxFrac * rangeMs);
+            draw();
+            var now = Date.now();
+            if (options.onScrub && now - lastScrubFiredAt >= SCRUB_THROTTLE_MS) {
+                lastScrubFiredAt = now;
+                options.onScrub(Math.round(centerMs));
+            }
+        });
+        canvas.addEventListener('pointerup', endDrag);
+        // Belt-and-suspenders: a pointer can also be taken away without a pointerup at all (browser
+        // decides mid-gesture it's a pan/zoom gesture instead, OS-level palm rejection, a context
+        // menu opening under the held button) — pointercancel is the platform's way of saying "this
+        // pointer is gone, stop tracking it," and dragging must end here too or it stays stuck the
+        // same way the original bug did.
+        canvas.addEventListener('pointercancel', endDrag);
+
+        window.addEventListener('resize', function () { resizeCanvas(); draw(); });
+
+        resizeCanvas();
+        reload();
+
+        return {
+            redraw: draw,
+            // Recenters the strip on ms (e.g. following normal playback progress, or mirroring a
+            // scrub that happened on a *sibling* timeline) without firing onScrub — the caller
+            // already knows the video moved there (or is the one that caused it), this just keeps
+            // this strip's visuals in sync with it. Still clamped — playback itself can never
+            // legitimately be "in the future" either.
+            //
+            // Ignored entirely while this timeline is being actively dragged: the page-level
+            // playhead-follows-playback loop (setInterval, every 500ms) calls this on every tick
+            // regardless of what the user is doing, and calling it mid-drag snapped the strip back
+            // to the advancing playback position on every tick — fighting the user's own drag hard
+            // enough to feel like the timeline "wasn't responding" to it, since a drag rarely
+            // finishes inside one 500ms window. The drag's own pointermove handler is already the
+            // authority over centerMs while dragging=true; once it ends, onScrub's own report of the
+            // release position is what the caller acts on anyway, so nothing is lost by ignoring
+            // programmatic recenters in between.
+            setCenter: function (ms) { if (dragging) return; centerMs = clampCenter(ms); draw(); },
+            getCenter: function () { return centerMs; },
+            // Mirrors a zoom that happened on a sibling timeline — same no-callback-re-fire
+            // reasoning as setCenter, so two synced timelines can't bounce a change back and forth.
+            setRange: function (ms) {
+                var clamped = Math.min(MAX_RANGE_MS, Math.max(MIN_RANGE_MS, ms));
+                if (clamped === rangeMs) return;
+                rangeMs = clamped;
+                draw();
+                scheduleReload();
+            },
+            getRange: function () { return rangeMs; },
+            setHour24: function (on) { hour24 = !!on; draw(); },
+            reload: reload
+        };
+    }
+
+    return { create: create };
+})();

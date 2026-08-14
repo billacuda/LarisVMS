@@ -1,0 +1,123 @@
+@page
+@using LarisVMS.Core.Enums
+@model LarisVMS.Web.Pages.Admin.NodeBuilds.IndexModel
+@{
+    ViewData["Title"] = "Node Builds";
+}
+<h1>Recorder node builds</h1>
+<p class="text-muted">
+    Every <code>deploy.ps1</code> run that builds a new recorder-node version registers it here as
+    <strong>Pending</strong>. Approve one to make it the version every recorder node whose reported
+    version is older downloads, verifies, and applies on its own next heartbeat — no more manually
+    re-running <code>build-node.ps1</code> / <code>install-node.ps1</code> on each recorder machine.
+    Controlled globally by the <a asp-page="/Admin/Settings">node auto-update setting</a>.
+</p>
+
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger">@Model.ErrorMessage</div>
+}
+
+@{
+    var pending = Model.Builds.Where(b => b.Status == NodeBuildStatus.Pending).ToList();
+    var decided = Model.Builds.Where(b => b.Status != NodeBuildStatus.Pending).ToList();
+}
+
+<h2 class="h5">Pending approval</h2>
+@if (pending.Count == 0)
+{
+    <p class="text-muted">Nothing waiting on approval. Run <code>deploy.ps1</code> to register a new build.</p>
+}
+else
+{
+    <div class="table-responsive mb-4">
+        <table class="table align-middle">
+            <thead>
+                <tr>
+                    <th>Version</th>
+                    <th>Platform</th>
+                    <th>Registered</th>
+                    <th data-sort-numeric>Size</th>
+                    <th>SHA-256</th>
+                    <th>Notes</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var b in pending)
+                {
+                    <tr>
+                        <td>@b.Version</td>
+                        <td>@b.Platform</td>
+                        <td><span title="@b.UploadedAt.ToString("u")">@b.UploadedAt.ToString("g")</span></td>
+                        <td>@ByteFormat.Format(b.SizeBytes)</td>
+                        <td class="font-monospace small">@b.Sha256[..12]&hellip;</td>
+                        <td>@b.Notes</td>
+                        <td class="text-end text-nowrap">
+                            <form method="post" asp-page-handler="Approve" asp-route-id="@b.Id" class="d-inline">
+                                <button type="submit" class="btn btn-sm btn-success">Approve</button>
+                            </form>
+                            <form method="post" asp-page-handler="Reject" asp-route-id="@b.Id" class="d-inline"
+                                  onclick="return confirm('Reject build @b.Version? It stays listed below for the record, but no node will ever be offered it.');">
+                                <button type="submit" class="btn btn-sm btn-outline-danger">Reject</button>
+                            </form>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+<h2 class="h5">History</h2>
+@if (decided.Count == 0)
+{
+    <p class="text-muted">No approved or rejected builds yet.</p>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table align-middle">
+            <thead>
+                <tr>
+                    <th>Version</th>
+                    <th>Platform</th>
+                    <th>Registered</th>
+                    <th data-sort-numeric>Size</th>
+                    <th>SHA-256</th>
+                    <th>Status</th>
+                    <th>By</th>
+                    <th>Notes</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var b in decided)
+                {
+                    <tr>
+                        <td>@b.Version</td>
+                        <td>@b.Platform</td>
+                        <td><span title="@b.UploadedAt.ToString("u")">@b.UploadedAt.ToString("g")</span></td>
+                        <td>@ByteFormat.Format(b.SizeBytes)</td>
+                        <td class="font-monospace small">@b.Sha256[..12]&hellip;</td>
+                        <td>
+                            @if (b.Status == NodeBuildStatus.Approved)
+                            {
+                                <span class="badge bg-success">Approved</span>
+                            }
+                            else
+                            {
+                                <span class="badge bg-secondary">Rejected</span>
+                            }
+                        </td>
+                        <td>@b.ApprovedBy</td>
+                        <td>@b.Notes</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    <p class="text-muted small">
+        The newest Approved build per platform (by registration time) is what a node's next heartbeat
+        compares against.
+    </p>
+}

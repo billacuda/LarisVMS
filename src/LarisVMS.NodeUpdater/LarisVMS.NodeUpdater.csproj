@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <OutputType>Exe</OutputType>
+    <Version>0.56.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- UpdaterLogic's pure argument-parsing/file-swap helpers are unit tested directly against a
+         real temp directory, same reasoning as LarisVMS.Node's own InternalsVisibleTo. -->
+    <InternalsVisibleTo Include="LarisVMS.Tests" />
+  </ItemGroup>
+
+</Project>
