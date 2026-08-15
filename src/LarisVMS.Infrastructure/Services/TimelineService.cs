@@ -198,7 +198,7 @@ public class TimelineService(ApplicationDbContext db) : ITimelineService
         return new ThumbnailInfo(segment.FilePath, offsetSeconds, node?.LastIpAddress, node?.LivePort, node?.MediaSigningKey);
     }
 
-    public async Task<List<string>> GetSegmentFilePathsAsync(Guid cameraId, DateTime fromUtc, DateTime toUtc, CancellationToken ct = default)
+    public async Task<List<SegmentFileInfo>> GetSegmentFilePathsAsync(Guid cameraId, DateTime fromUtc, DateTime toUtc, CancellationToken ct = default)
     {
         fromUtc = NormalizeToUtc(fromUtc);
         toUtc = NormalizeToUtc(toUtc);
@@ -206,7 +206,7 @@ public class TimelineService(ApplicationDbContext db) : ITimelineService
         return await db.Segments
             .Where(s => s.CameraId == cameraId && s.StartUtc < toUtc && s.EndUtc > fromUtc)
             .OrderBy(s => s.StartUtc)
-            .Select(s => s.FilePath)
+            .Select(s => new SegmentFileInfo(s.FilePath, s.NodeId))
             .ToListAsync(ct);
     }
 

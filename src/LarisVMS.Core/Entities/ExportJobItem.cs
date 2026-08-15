@@ -16,12 +16,18 @@ public class ExportJobItem
     public Guid ExportJobId { get; set; }
     public Guid CameraId { get; set; }
 
-    /// <summary>The camera's owning node, snapshotted by ExportJobDispatcher the moment it picks
-    /// this item up (not re-read later) — a camera could theoretically be reassigned to a different
-    /// node mid-export, and the node that actually has the segment files on local disk is the one
-    /// that must run the concat, regardless of where Camera.NodeId points by the time the export
-    /// finishes. Null while Queued; stays null if the camera had no assigned node at dispatch time,
-    /// in which case Status goes straight to Failed instead of Running.</summary>
+    /// <summary>The node whose local disk this item's segments actually live on, snapshotted by
+    /// ExportJobDispatcher the moment it picks this item up (not re-read later) — a camera could
+    /// theoretically be reassigned to a different node mid-export, and the node that actually has
+    /// the segment files on local disk is the one that must run the concat, regardless of where
+    /// Camera.NodeId points by the time the export finishes.
+    ///
+    /// Null while Queued for a normal item (stays null if the camera had no assigned node at
+    /// dispatch time, in which case Status goes straight to Failed instead of Running) — EXCEPT an
+    /// item SplitItemAcrossNodesAsync created, which is pre-pinned to a specific node the moment
+    /// it's created, before ever being dispatched. That's how ExportJobDispatcher tells a
+    /// newly-split item ("only ever fetch this one node's segments, don't re-derive from the
+    /// camera's current node") apart from a normal one — see ExportDispatchCandidate.IsPinnedToNode.</summary>
     public Guid? NodeId { get; set; }
 
     public ExportItemStatus Status { get; set; } = ExportItemStatus.Queued;

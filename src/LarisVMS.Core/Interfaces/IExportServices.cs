@@ -23,6 +23,14 @@ public interface IExportService
     /// plus the parent job's own range) in a single round trip.</summary>
     Task<List<ExportDispatchCandidate>> GetQueuedItemsAsync(CancellationToken ct = default);
 
+    /// <summary>A Queued item whose requested range turned out to span more than one node (a camera
+    /// reassignment mid-range) is replaced with one fresh Queued item per distinct node in
+    /// nodeIds, each pre-pinned to its own node (ExportJobItem.NodeId set immediately, not left
+    /// null) so its own future dispatch pass fetches only that node's slice instead of re-deriving
+    /// the camera's current node and re-discovering the same split. No-op if itemId doesn't
+    /// exist.</summary>
+    Task SplitItemAcrossNodesAsync(Guid itemId, IReadOnlyList<Guid> nodeIds, CancellationToken ct = default);
+
     /// <summary>Flips an item to Running and snapshots nodeId (see ExportJobItem.NodeId's own doc
     /// comment for why this is captured now, not re-read later), then rolls the parent job's Status
     /// up. Called before the dispatch POST is even made — see ExportJobDispatcher for why.</summary>
@@ -43,4 +51,21 @@ public interface IExportService
     /// unknown id) comes back null and the proxy treats that as 404, same shape as
     /// ITimelineService.GetSegmentForPlaybackAsync.</summary>
     Task<ExportDownloadInfo?> GetDownloadInfoAsync(Guid exportItemId, CancellationToken ct = default);
+
+    /// <summary>Pre-check + file locations for the delete endpoint: null if jobId doesn't exist.
+    /// CanDelete is false while any item is still Queued/Running — see
+    /// ExportJobDeletionInfo's own doc comment for the exact rule.</summary>
+    Task<ExportJobDeletionInfo?> GetDeletionInfoAsync(Guid jobId, CancellationToken ct = default);
+
+    /// <summary>Removes the job and its items (cascade, same as the ExportJobItem->ExportJob FK
+    /// everywhere else). Caller is expected to have already checked
+    /// GetDeletionInfoAsync().CanDelete and best-effort cleaned up each node-side file first — this
+    /// method itself doesn't re-check status, so it should never be called directly from a route.</summary>
+    Task DeleteJobAsync(Guid jobId, CancellationToken ct = default);
+
+    /// <summary>Resets a Failed item back to Queued so ExportJobDispatcher's next poll cycle picks
+    /// it up again — clears NodeId/OutputFilePath/OutputSizeBytes/ErrorMessage/StartedUtc/CompletedUtc,
+    /// the same blank state CreateJobAsync gives a brand new item. False (no-op) if itemId doesn't
+    /// exist or isn't currently Failed — a Queued/Running/Done item can't be retried.</summary>
+    Task<bool> RetryItemAsync(Guid itemId, CancellationToken ct = default);
 }

@@ -58,6 +58,59 @@
         return null;
     }
 
+    // Reconnects are routine self-healing (wifi roams, a slow-client fragment gap — see
+    // startSession's own header comment below) but used to blank the tile to a dark box with
+    // "Reconnecting…" text for however long the retry takes, which reads as broken even though
+    // nothing actually failed. Once at least one frame has ever been decoded on this tile, a
+    // reconnect instead freezes that last frame — captured onto a canvas overlay sized/letterboxed
+    // to match the video's own object-fit:contain rendering, since drawImage(videoEl,...) samples
+    // the video's *native* resolution, not its on-screen letterboxed box — with a small spinner on
+    // top, until the new session has a real frame to show again (start()'s onFrameVisible hides it).
+    // Before the very first frame there's nothing to freeze, so the existing Connecting…/codec-error
+    // text is left showing through unchanged.
+    function createFreezeOverlay(videoEl) {
+        var parent = videoEl.parentElement;
+        var canvas = document.createElement('canvas');
+        canvas.className = 'live-freeze-frame';
+        canvas.style.cssText = 'position:absolute; top:0; left:0; width:100%; height:100%; display:none; pointer-events:none;';
+        var spinner = document.createElement('div');
+        spinner.className = 'position-absolute top-50 start-50 translate-middle live-freeze-spinner';
+        spinner.style.cssText = 'display:none; pointer-events:none;';
+        spinner.innerHTML = '<div class="spinner-border text-light" role="status"><span class="visually-hidden">Reconnecting…</span></div>';
+        if (parent) {
+            parent.insertBefore(canvas, videoEl.nextSibling);
+            parent.insertBefore(spinner, canvas.nextSibling);
+        }
+
+        return {
+            show: function () {
+                try {
+                    var w = videoEl.clientWidth, h = videoEl.clientHeight;
+                    var nw = videoEl.videoWidth, nh = videoEl.videoHeight;
+                    if (w > 0 && h > 0 && nw > 0 && nh > 0) {
+                        canvas.width = w;
+                        canvas.height = h;
+                        var scale = Math.min(w / nw, h / nh);
+                        var dw = nw * scale, dh = nh * scale;
+                        var ctx = canvas.getContext('2d');
+                        ctx.clearRect(0, 0, w, h);
+                        ctx.drawImage(videoEl, (w - dw) / 2, (h - dh) / 2, dw, dh);
+                        canvas.style.display = 'block';
+                    }
+                } catch (e) { /* best-effort — worst case the spinner shows with no frozen frame behind it */ }
+                spinner.style.display = '';
+            },
+            hide: function () {
+                canvas.style.display = 'none';
+                spinner.style.display = 'none';
+            },
+            destroy: function () {
+                if (canvas.parentElement) canvas.parentElement.removeChild(canvas);
+                if (spinner.parentElement) spinner.parentElement.removeChild(spinner);
+            }
+        };
+    }
+
     // One watched camera's live byte stream is one continuous fMP4 fanout with no per-fragment
     // resync markers — the node's LiveViewerHandler deliberately drops the *oldest* buffered
     // fragment (not the newest) when a slow client can't keep up, so a stalled network connection
@@ -73,17 +126,34 @@
         var retryDelayMs = 2000;
         var sessionStartedAt = 0;
         var currentStop = null;
+        var hasEverShownFrame = false;
+        var overlay = createFreezeOverlay(videoEl);
+
+        // Proxies statusEl so startSession's existing `statusEl.textContent = '...'` call sites
+        // don't need to change at all — writes just stop taking effect once a frame has ever been
+        // shown, since the freeze+spinner overlay is doing that communicating instead from then on.
+        var statusProxy = {
+            set textContent(v) { if (!hasEverShownFrame) statusEl.textContent = v; },
+            get textContent() { return statusEl.textContent; }
+        };
+
+        function onFrameVisible() {
+            hasEverShownFrame = true;
+            statusEl.textContent = '';
+            overlay.hide();
+        }
 
         function launch() {
             sessionStartedAt = Date.now();
-            currentStop = startSession(cameraId, videoEl, statusEl, codecHint, hasAudio, function onEnded() {
+            currentStop = startSession(cameraId, videoEl, statusProxy, codecHint, hasAudio, onFrameVisible, function onEnded() {
                 if (stoppedByUser) return;
+                if (hasEverShownFrame) overlay.show();
                 // A session that ran a while before failing is a transient blip (wifi roam, brief
                 // network hiccup) — reset backoff so recovery stays fast. One that fails immediately,
                 // repeatedly, is more likely a real problem (node/camera actually down), where
                 // retrying every 2s forever would just hammer it for no benefit.
                 retryDelayMs = (Date.now() - sessionStartedAt > 15000) ? 2000 : Math.min(retryDelayMs * 2, 30000);
-                statusEl.textContent = 'Reconnecting…';
+                statusProxy.textContent = 'Reconnecting…';
                 retryTimer = setTimeout(function () { retryTimer = null; launch(); }, retryDelayMs);
             });
         }
@@ -93,13 +163,14 @@
             stoppedByUser = true;
             if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
             if (currentStop) currentStop();
+            overlay.destroy();
         };
     }
 
     // Runs exactly one session attempt and returns its stop() function. `onEnded` fires exactly
     // once, however the session stops — explicit stop() call, decode error, or WebSocket
     // close/error — so start()'s retry wrapper above has one place to decide whether to reconnect.
-    function startSession(cameraId, videoEl, statusEl, codecHint, hasAudio, onEnded) {
+    function startSession(cameraId, videoEl, statusEl, codecHint, hasAudio, onFrameVisible, onEnded) {
         var ended = false;
         function endSession() {
             if (ended) return;
@@ -153,6 +224,12 @@
         // console (byte counts included) rather than only statusEl, since diagnosing "which fragment"
         // needs more detail than a one-line status message has room for.
         var fragmentCount = 0;
+        // Fires once real playback resumes — the reliable signal that this session actually has a
+        // decodable frame on screen again, not just that appendBuffer stopped throwing. Can fire more
+        // than once per session (e.g. after a buffering pause); onFrameVisible is idempotent so that's
+        // harmless. Same "never removed" lifetime as the error/stalled listeners just below — an
+        // existing pattern in this function, not something newly introduced here.
+        videoEl.addEventListener('playing', onFrameVisible);
         videoEl.addEventListener('error', function () {
             var err = videoEl.error;
             var msg = 'Video decode error' + (err ? ' (code ' + err.code + ')' : '') + '.';

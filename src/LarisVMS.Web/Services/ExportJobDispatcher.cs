@@ -8,10 +8,13 @@ using LarisVMS.Infrastructure.Data;
 namespace LarisVMS.Web.Services;
 
 /// <summary>
-/// Polls for Queued ExportJobItems and dispatches each to its camera's current node — the Web
-/// tier's first BackgroundService and first async job (see the multi-camera export feature's design
-/// notes for why: a job can span far more footage than a synchronous request should hold a browser
-/// connection open for).
+/// Polls for Queued ExportJobItems and dispatches each to the node its segments actually live on —
+/// normally the camera's current node, except when the requested range spans a reassignment, in
+/// which case the item is first split into one node-pinned item per node involved (see
+/// SplitItemAcrossNodesAsync) so each produces its own downloadable file instead of the whole export
+/// failing outright. The Web tier's first BackgroundService and first async job (see the
+/// multi-camera export feature's design notes for why: a job can span far more footage than a
+/// synchronous request should hold a browser connection open for).
 ///
 /// Singleton (registered via AddHostedService), but every dependency it actually touches is scoped
 /// (IExportService, ApplicationDbContext) — IServiceScopeFactory creates a fresh scope each poll
@@ -68,13 +71,44 @@ public class ExportJobDispatcher(IServiceScopeFactory scopeFactory, IHttpClientF
             return;
         }
 
+        var segments = await timeline.GetSegmentFilePathsAsync(candidate.CameraId, candidate.FromUtc, candidate.ToUtc, ct);
+        if (segments.Count == 0)
+        {
+            await exportService.MarkItemFailedAsync(candidate.ExportItemId, "No recorded segments overlap the requested range.", ct);
+            return;
+        }
+
+        // A camera reassigned to a different node mid-range leaves its older footage sitting on the
+        // node it was recorded on, not the camera's current one (same split GetConfigAsync's
+        // OrphanedCameras handles for retention/warnings — see 0.62.0). A normal (non-pinned) item
+        // targets the camera's current node; if any segment lives elsewhere, this one item is
+        // replaced with one fresh, node-pinned item per node actually involved (0.68.0) rather than
+        // failing outright — each pinned item's own future dispatch pass hits the "distinctNodeIds
+        // is just its own pinned node" branch below and proceeds normally. A pinned item reaching
+        // this point with a foreign segment would mean SplitItemAcrossNodesAsync itself picked the
+        // wrong node, which shouldn't happen — treated as a hard failure rather than looping.
+        var distinctNodeIds = segments.Select(s => s.NodeId).Distinct().ToList();
+        if (distinctNodeIds.Count > 1 || distinctNodeIds[0] != nodeId)
+        {
+            if (candidate.IsPinnedToNode)
+            {
+                await exportService.MarkItemFailedAsync(candidate.ExportItemId,
+                    "Internal error: this export's segments no longer match the node it was pinned to.", ct);
+                return;
+            }
+
+            await exportService.SplitItemAcrossNodesAsync(candidate.ExportItemId, distinctNodeIds, ct);
+            return;
+        }
+
         // Same node-connection-info lookup /playback-segment's handler does via
         // GetSegmentForPlaybackAsync, just against a camera's *current* NodeId instead of a
         // specific segment's — there's no existing service method for "one node's connection info
         // by id alone", so this stays a small inline query against the scope's own DbContext rather
-        // than growing INodeService for a single caller.
+        // than growing INodeService for a single caller. Name is included so a split job's several
+        // per-node output files get distinct, self-describing filenames (see BuildOutputFileName).
         var node = await db.Nodes.AsNoTracking().Where(n => n.Id == nodeId)
-            .Select(n => new { n.LastIpAddress, n.LivePort, n.MediaSigningKey })
+            .Select(n => new { n.Name, n.LastIpAddress, n.LivePort, n.MediaSigningKey })
             .FirstOrDefaultAsync(ct);
         if (node is not { LastIpAddress: { } ip, LivePort: { } port, MediaSigningKey: { } key })
         {
@@ -83,14 +117,8 @@ public class ExportJobDispatcher(IServiceScopeFactory scopeFactory, IHttpClientF
             return;
         }
 
-        var segmentPaths = await timeline.GetSegmentFilePathsAsync(candidate.CameraId, candidate.FromUtc, candidate.ToUtc, ct);
-        if (segmentPaths.Count == 0)
-        {
-            await exportService.MarkItemFailedAsync(candidate.ExportItemId, "No recorded segments overlap the requested range.", ct);
-            return;
-        }
-
-        var outputFileName = BuildOutputFileName(candidate.CameraName, candidate.CameraId, candidate.FromUtc, candidate.ToUtc);
+        var segmentPaths = segments.Select(s => s.FilePath).ToList();
+        var outputFileName = BuildOutputFileName(candidate.CameraName, candidate.CameraId, node.Name, candidate.FromUtc, candidate.ToUtc);
         var request = new ExportRequest(candidate.ExportItemId, candidate.CameraId, segmentPaths, outputFileName);
 
         // Marked Running *before* the POST, not after — the node is expected to return 202 quickly
@@ -125,14 +153,22 @@ public class ExportJobDispatcher(IServiceScopeFactory scopeFactory, IHttpClientF
     }
 
     /// <summary>Sanitized for filesystem safety: keeps only alphanumerics/dash/underscore from the
-    /// camera name so one containing slashes, colons, or other filesystem-hostile characters can't
-    /// produce an invalid (or path-traversing) file name — the node independently re-validates this
-    /// too (defense in depth, not a substitute for it) since it's the side that actually does
-    /// Path.Combine with it.</summary>
-    internal static string BuildOutputFileName(string cameraName, Guid cameraId, DateTime fromUtc, DateTime toUtc)
+    /// camera/node names so either one containing slashes, colons, or other filesystem-hostile
+    /// characters can't produce an invalid (or path-traversing) file name — the node independently
+    /// re-validates this too (defense in depth, not a substitute for it) since it's the side that
+    /// actually does Path.Combine with it. nodeName is always included (not just for a
+    /// SplitItemAcrossNodesAsync item) so a job that later turns out to span a reassignment doesn't
+    /// produce two identically-named downloads — see 0.68.0's per-node export split.</summary>
+    internal static string BuildOutputFileName(string cameraName, Guid cameraId, string nodeName, DateTime fromUtc, DateTime toUtc)
     {
-        var safeName = new string(cameraName.Where(c => char.IsLetterOrDigit(c) || c is '-' or '_').ToArray());
+        static string Sanitize(string s) => new(s.Where(c => char.IsLetterOrDigit(c) || c is '-' or '_').ToArray());
+
+        var safeName = Sanitize(cameraName);
         if (safeName.Length == 0) safeName = cameraId.ToString("N");
-        return $"{safeName}_{fromUtc:yyyyMMddTHHmmss}_{toUtc:yyyyMMddTHHmmss}.mp4";
+        var safeNode = Sanitize(nodeName);
+
+        return safeNode.Length == 0
+            ? $"{safeName}_{fromUtc:yyyyMMddTHHmmss}_{toUtc:yyyyMMddTHHmmss}.mp4"
+            : $"{safeName}_{safeNode}_{fromUtc:yyyyMMddTHHmmss}_{toUtc:yyyyMMddTHHmmss}.mp4";
     }
 }

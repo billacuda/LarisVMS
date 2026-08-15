@@ -37,11 +37,14 @@ public interface ITimelineService
     /// proxy treats that as 404 rather than trusting the caller's cameraId/segmentId pairing.</summary>
     Task<PlaybackSegmentInfo?> GetSegmentForPlaybackAsync(Guid cameraId, long segmentId, CancellationToken ct = default);
 
-    /// <summary>Every segment's FilePath overlapping [fromUtc, toUtc) for one camera, ordered by
-    /// StartUtc — sibling to GetSegmentsAsync (which returns Id/StartUtc/EndUtc for the timeline
-    /// player) rather than an extension of it: ExportJobDispatcher needs an ordered list of raw
-    /// paths to write into its ffmpeg concat list file, not display metadata.</summary>
-    Task<List<string>> GetSegmentFilePathsAsync(Guid cameraId, DateTime fromUtc, DateTime toUtc, CancellationToken ct = default);
+    /// <summary>Every segment's FilePath (plus the node it actually lives on) overlapping [fromUtc,
+    /// toUtc) for one camera, ordered by StartUtc — sibling to GetSegmentsAsync (which returns
+    /// Id/StartUtc/EndUtc for the timeline player) rather than an extension of it: ExportJobDispatcher
+    /// needs an ordered list of raw paths to write into its ffmpeg concat list file, not display
+    /// metadata. NodeId is included (not just FilePath) so the dispatcher can detect a range that
+    /// crosses a camera's reassignment from one node to another — a segment recorded before the move
+    /// still lives on the old node's disk, not the camera's current one.</summary>
+    Task<List<SegmentFileInfo>> GetSegmentFilePathsAsync(Guid cameraId, DateTime fromUtc, DateTime toUtc, CancellationToken ct = default);
 
     /// <summary>M7 pass 2 (hover thumbnails): buckets atUtc down to the nearest 5 minutes, then
     /// resolves the one segment covering that bucketed instant (point containment, not

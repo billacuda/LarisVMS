@@ -702,6 +702,83 @@ app.MapGet("/export-download/{exportItemId:guid}", async (
     return Results.Stream(await nodeResponse.Content.ReadAsStreamAsync(ct), "video/mp4", fileDownloadName: fileName);
 }).RequireAuthorization("Exports.View");
 
+// Exports page's auto-refresh poll — same data ListJobsAsync already feeds the page's initial
+// server-render, just as JSON so the page can redraw its own table on an interval without a full
+// reload. Deliberately returns every job on every poll rather than a since/delta query: the list is
+// small (exports are an occasional, manually-triggered action, not a high-volume feed) and a full
+// snapshot means the client-side renderer never has to reconcile a partial update.
+app.MapGet("/api/exports", async (IExportService exportService, ICameraService cameraService, INodeService nodeService, CancellationToken ct) =>
+{
+    var jobs = await exportService.ListJobsAsync(ct);
+    var cameraNames = (await cameraService.ListAsync(ct)).ToDictionary(c => c.Id, c => c.Name);
+    var nodeNames = (await nodeService.ListAsync(ct)).ToDictionary(n => n.Id, n => n.Name);
+
+    return Results.Json(jobs.Select(j => new
+    {
+        id = j.Id,
+        createdUtc = j.CreatedUtc,
+        requestedByUserName = j.RequestedByUserName,
+        fromUtc = j.FromUtc,
+        toUtc = j.ToUtc,
+        status = j.Status.ToString(),
+        items = j.Items.Select(i => new
+        {
+            id = i.Id,
+            cameraId = i.CameraId,
+            cameraName = cameraNames.GetValueOrDefault(i.CameraId, "(deleted camera)"),
+            nodeName = i.NodeId is { } nid ? nodeNames.GetValueOrDefault(nid) : null,
+            status = i.Status.ToString(),
+            errorMessage = i.ErrorMessage,
+            outputSizeBytes = i.OutputSizeBytes
+        })
+    }));
+}).RequireAuthorization("Exports.View");
+
+// Trash button: best-effort tells each Done item's owning node to remove its output file (the
+// node's own StorageManager sweep is the 7-day backstop if this doesn't reach it — see
+// SweepExportsDirectory), then removes the job/items rows regardless of whether the node calls
+// succeeded. Refuses (400) while any item is still Queued/Running — see
+// ExportJobDeletionInfo's own doc comment for why.
+app.MapDelete("/api/exports/{jobId:guid}", async (
+    Guid jobId, IExportService exportService, IHttpClientFactory httpFactory, CancellationToken ct) =>
+{
+    var info = await exportService.GetDeletionInfoAsync(jobId, ct);
+    if (info is null) return Results.NotFound();
+    if (!info.CanDelete) return Results.BadRequest(info.Reason);
+
+    foreach (var file in info.Files)
+    {
+        if (file.NodeIp is null || file.NodeLivePort is null || file.NodeMediaSigningKey is null) continue;
+
+        try
+        {
+            var token = MediaToken.IssueForExportDelete(file.ExportItemId, file.FilePath, file.NodeMediaSigningKey, TimeSpan.FromSeconds(30));
+            var nodeUri = $"http://{file.NodeIp}:{file.NodeLivePort}/export-file/{file.ExportItemId}" +
+                $"?path={Uri.EscapeDataString(file.FilePath)}&token={Uri.EscapeDataString(token)}";
+            var client = httpFactory.CreateClient();
+            client.Timeout = TimeSpan.FromSeconds(10);
+            await client.DeleteAsync(nodeUri, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Best-effort — the node's own 7-day export-retention sweep cleans this up either way,
+            // so an unreachable node here shouldn't block removing the (already-finished) job.
+        }
+    }
+
+    await exportService.DeleteJobAsync(jobId, ct);
+    return Results.Ok();
+}).RequireAuthorization("Exports.View");
+
+// Retry button: re-queues one Failed item for ExportJobDispatcher's next poll cycle. Gated the same
+// Exports.View permission as everything else on this page — see the /api/exports POST route's own
+// comment for why there's no separate Exports.Edit.
+app.MapPost("/api/exports/{itemId:guid}/retry", async (Guid itemId, IExportService exportService, CancellationToken ct) =>
+{
+    var ok = await exportService.RetryItemAsync(itemId, ct);
+    return ok ? Results.Ok() : Results.BadRequest("Only a failed item can be retried.");
+}).RequireAuthorization("Exports.View");
+
 app.Run();
 
 // One-directional relay (node -> browser) frame by frame, not message by message — a fragment

@@ -271,6 +271,57 @@ public static class MediaToken
         return true;
     }
 
+    /// <summary>Export delete (Web -&gt; Node): authorizes removing exactly one finished export file by
+    /// its exact on-disk path. A separate token family from IssueForExportDownload, not a reuse of
+    /// it, even though the payload shape is identical — a download token leaking into a log or a
+    /// browser history entry must not also be a working delete token for the same file.</summary>
+    public static string IssueForExportDelete(Guid exportItemId, string filePath, string signingKeyHex, TimeSpan validFor)
+    {
+        var exp = DateTimeOffset.UtcNow.Add(validFor).ToUnixTimeSeconds();
+        var payload = $"exportdelete:{exportItemId:N}:{exp}:{filePath}";
+        return $"{payload}.{Sign(payload, signingKeyHex)}";
+    }
+
+    public static bool TryValidateExportDelete(string? token, Guid expectedExportItemId, string expectedFilePath, string signingKeyHex, out string error)
+    {
+        error = "";
+        if (string.IsNullOrEmpty(token)) { error = "missing token"; return false; }
+
+        var dot = token.LastIndexOf('.');
+        if (dot < 0) { error = "malformed token"; return false; }
+        var payload = token[..dot];
+        var providedSig = token[(dot + 1)..];
+
+        byte[] provided, expected;
+        try
+        {
+            provided = Convert.FromHexString(providedSig);
+            expected = Convert.FromHexString(Sign(payload, signingKeyHex));
+        }
+        catch (FormatException)
+        {
+            error = "malformed signature";
+            return false;
+        }
+
+        if (!CryptographicOperations.FixedTimeEquals(provided, expected)) { error = "signature mismatch"; return false; }
+
+        var parts = payload.Split(':', 4);
+        if (parts.Length != 4 || parts[0] != "exportdelete") { error = "malformed payload"; return false; }
+        if (!Guid.TryParse(parts[1], out var exportItemId) || !long.TryParse(parts[2], out var exp))
+        {
+            error = "malformed payload";
+            return false;
+        }
+        var filePath = parts[3];
+
+        if (exportItemId != expectedExportItemId) { error = "export item mismatch"; return false; }
+        if (!string.Equals(filePath, expectedFilePath, StringComparison.Ordinal)) { error = "path mismatch"; return false; }
+        if (DateTimeOffset.UtcNow.ToUnixTimeSeconds() > exp) { error = "expired"; return false; }
+
+        return true;
+    }
+
     private static string Sign(string payload, string signingKeyHex)
         => Convert.ToHexString(HMACSHA256.HashData(Convert.FromHexString(signingKeyHex), Encoding.UTF8.GetBytes(payload)));
 }

@@ -58,8 +58,28 @@ public class ExportService(ApplicationDbContext db) : IExportService
             from camera in cameraJoin.DefaultIfEmpty()
             select new ExportDispatchCandidate(
                 item.Id, item.CameraId, camera != null ? camera.Name : "(deleted camera)",
-                camera != null ? camera.NodeId : null, job.FromUtc, job.ToUtc)
+                item.NodeId ?? (camera != null ? camera.NodeId : null), item.NodeId != null,
+                job.FromUtc, job.ToUtc)
         ).ToListAsync(ct);
+
+    public async Task SplitItemAcrossNodesAsync(Guid itemId, IReadOnlyList<Guid> nodeIds, CancellationToken ct = default)
+    {
+        var item = await db.ExportJobItems.FirstOrDefaultAsync(i => i.Id == itemId, ct);
+        if (item is null) return;
+
+        foreach (var nodeId in nodeIds)
+        {
+            db.ExportJobItems.Add(new ExportJobItem
+            {
+                Id = Guid.NewGuid(), ExportJobId = item.ExportJobId, CameraId = item.CameraId,
+                NodeId = nodeId, Status = ExportItemStatus.Queued
+            });
+        }
+
+        db.ExportJobItems.Remove(item);
+        await db.SaveChangesAsync(ct);
+        await RecomputeJobStatusAsync(item.ExportJobId, ct);
+    }
 
     public async Task MarkItemRunningAsync(Guid itemId, Guid nodeId, DateTime startedUtc, CancellationToken ct = default)
     {
@@ -121,6 +141,57 @@ public class ExportService(ApplicationDbContext db) : IExportService
             .FirstOrDefaultAsync(ct);
 
         return new ExportDownloadInfo(item.OutputFilePath, node?.LastIpAddress, node?.LivePort, node?.MediaSigningKey);
+    }
+
+    public async Task<ExportJobDeletionInfo?> GetDeletionInfoAsync(Guid jobId, CancellationToken ct = default)
+    {
+        var job = await db.ExportJobs.AsNoTracking().Include(j => j.Items).FirstOrDefaultAsync(j => j.Id == jobId, ct);
+        if (job is null) return null;
+
+        if (job.Items.Any(i => i.Status is ExportItemStatus.Queued or ExportItemStatus.Running))
+            return new ExportJobDeletionInfo(false, "This export is still in progress.", []);
+
+        var doneItems = job.Items
+            .Where(i => i.Status == ExportItemStatus.Done && i.OutputFilePath is not null && i.NodeId is not null)
+            .ToList();
+
+        var nodeIds = doneItems.Select(i => i.NodeId!.Value).Distinct().ToList();
+        var nodes = await db.Nodes.AsNoTracking().Where(n => nodeIds.Contains(n.Id))
+            .ToDictionaryAsync(n => n.Id, n => new { n.LastIpAddress, n.LivePort, n.MediaSigningKey }, ct);
+
+        var files = doneItems.Select(i =>
+        {
+            nodes.TryGetValue(i.NodeId!.Value, out var node);
+            return new ExportJobDeletionFile(i.Id, i.OutputFilePath!, node?.LastIpAddress, node?.LivePort, node?.MediaSigningKey);
+        }).ToList();
+
+        return new ExportJobDeletionInfo(true, null, files);
+    }
+
+    public async Task DeleteJobAsync(Guid jobId, CancellationToken ct = default)
+    {
+        var job = await db.ExportJobs.FirstOrDefaultAsync(j => j.Id == jobId, ct);
+        if (job is null) return;
+
+        db.ExportJobs.Remove(job);
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task<bool> RetryItemAsync(Guid itemId, CancellationToken ct = default)
+    {
+        var item = await db.ExportJobItems.FirstOrDefaultAsync(i => i.Id == itemId, ct);
+        if (item is null || item.Status != ExportItemStatus.Failed) return false;
+
+        item.Status = ExportItemStatus.Queued;
+        item.NodeId = null;
+        item.OutputFilePath = null;
+        item.OutputSizeBytes = null;
+        item.ErrorMessage = null;
+        item.StartedUtc = null;
+        item.CompletedUtc = null;
+        await db.SaveChangesAsync(ct);
+        await RecomputeJobStatusAsync(item.ExportJobId, ct);
+        return true;
     }
 
     /// <summary>See ExportJobStatus's doc comment for the exact rollup rule this implements.</summary>

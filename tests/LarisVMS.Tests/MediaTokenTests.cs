@@ -317,4 +317,58 @@ public class MediaTokenTests
 
         Assert.False(MediaToken.TryValidateExportDownload(triggerToken, exportItemId, @"C:\a\export1.mp4", Key, out _));
     }
+
+    // ── IssueForExportDelete / TryValidateExportDelete ──────────────────────
+
+    [Fact]
+    public void ExportDeleteTokenRoundTripsForTheItemAndPathItWasIssuedFor()
+    {
+        var exportItemId = Guid.NewGuid();
+        const string path = @"E:\LarisVMS\recordings\exports\cam1_20260813T000000_20260813T010000.mp4";
+        var token = MediaToken.IssueForExportDelete(exportItemId, path, Key, TimeSpan.FromSeconds(30));
+
+        Assert.True(MediaToken.TryValidateExportDelete(token, exportItemId, path, Key, out var error));
+        Assert.Equal("", error);
+    }
+
+    [Fact]
+    public void ExportDeleteTokenSurvivesAWindowsDriveLetterColonInThePath()
+    {
+        var exportItemId = Guid.NewGuid();
+        const string path = @"C:\ProgramData\LarisVMS\recordings\exports\file.mp4";
+        var token = MediaToken.IssueForExportDelete(exportItemId, path, Key, TimeSpan.FromSeconds(30));
+
+        Assert.True(MediaToken.TryValidateExportDelete(token, exportItemId, path, Key, out var error));
+        Assert.Equal("", error);
+    }
+
+    [Fact]
+    public void ExportDeleteTokenRejectsAMismatchedPath()
+    {
+        var exportItemId = Guid.NewGuid();
+        var token = MediaToken.IssueForExportDelete(exportItemId, @"C:\a\export1.mp4", Key, TimeSpan.FromSeconds(30));
+
+        Assert.False(MediaToken.TryValidateExportDelete(token, exportItemId, @"C:\a\export2.mp4", Key, out var error));
+        Assert.Equal("path mismatch", error);
+    }
+
+    [Fact]
+    public void ExportDeleteTokenRejectsAMismatchedExportItem()
+    {
+        const string path = @"C:\a\export1.mp4";
+        var token = MediaToken.IssueForExportDelete(Guid.NewGuid(), path, Key, TimeSpan.FromSeconds(30));
+
+        Assert.False(MediaToken.TryValidateExportDelete(token, Guid.NewGuid(), path, Key, out var error));
+        Assert.Equal("export item mismatch", error);
+    }
+
+    [Fact]
+    public void AnExportDownloadTokenDoesNotValidateAsAnExportDeleteToken()
+    {
+        var exportItemId = Guid.NewGuid();
+        const string path = @"C:\a\export1.mp4";
+        var downloadToken = MediaToken.IssueForExportDownload(exportItemId, path, Key, TimeSpan.FromSeconds(30));
+
+        Assert.False(MediaToken.TryValidateExportDelete(downloadToken, exportItemId, path, Key, out _));
+    }
 }

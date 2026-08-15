@@ -440,6 +440,66 @@ app.MapGet("/export-file/{exportItemId:guid}", async (HttpContext ctx, Guid expo
     await ctx.Response.SendFileAsync(fullPath, ctx.RequestAborted);
 });
 
+// Exports page's trash button: lets the finished output be removed immediately instead of waiting
+// on StorageManager's own 7-day export-retention sweep. Same path-prefix validation as the GET
+// above, just with TryValidateExportDelete's own token family so a leaked download URL can't also
+// delete the file it points to.
+app.MapDelete("/export-file/{exportItemId:guid}", async (HttpContext ctx, Guid exportItemId, NodeWorker worker) =>
+{
+    var token = ctx.Request.Query["token"].ToString();
+    var path = ctx.Request.Query["path"].ToString();
+    var currentKey = worker.MediaSigningKey;
+    if (currentKey is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
+        return;
+    }
+    if (string.IsNullOrEmpty(path))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync("missing path");
+        return;
+    }
+    if (!MediaToken.TryValidateExportDelete(token, exportItemId, path, currentKey, out var tokenError))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync(tokenError);
+        return;
+    }
+
+    var storageRoot = worker.StorageRoot;
+    if (storageRoot is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
+        return;
+    }
+
+    string fullPath, exportsDir;
+    try
+    {
+        fullPath = Path.GetFullPath(path);
+        exportsDir = Path.GetFullPath(Path.Combine(storageRoot, "exports")) + Path.DirectorySeparatorChar;
+    }
+    catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+
+    if (!fullPath.StartsWith(exportsDir, StringComparison.OrdinalIgnoreCase))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+    }
+
+    try { File.Delete(fullPath); }
+    catch (IOException) { /* best-effort — StorageManager's own sweep is the backstop */ }
+
+    ctx.Response.StatusCode = StatusCodes.Status204NoContent;
+});
+
 // M8/M5: one-shot still frame, e.g. the zone editor's background image. Same token family as /live
 // (Issue/TryValidate) rather than /playback-segment's — this authorizes a viewer for this camera's
 // media in general, same as live view, not one specific file.

@@ -166,6 +166,36 @@ public class TimelineServiceTests
     }
 
     [Fact]
+    public async Task GetSegmentFilePathsCarriesEachSegmentsOwningNodeSoExportCanDetectAReassignmentSplit()
+    {
+        var (db, cameraId, nodeId) = await SeedCameraAsync();
+        var otherNodeId = Guid.NewGuid();
+        var baseTime = new DateTime(2026, 8, 9, 0, 0, 0, DateTimeKind.Utc);
+
+        db.Segments.AddRange(
+            new Segment
+            {
+                CameraId = cameraId, NodeId = otherNodeId, StreamRole = CameraStreamRole.Main,
+                StartUtc = baseTime, EndUtc = baseTime.AddMinutes(1), FilePath = "old-node.mp4"
+            },
+            new Segment
+            {
+                CameraId = cameraId, NodeId = nodeId, StreamRole = CameraStreamRole.Main,
+                StartUtc = baseTime.AddMinutes(5), EndUtc = baseTime.AddMinutes(6), FilePath = "current-node.mp4"
+            });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db);
+        var segments = await service.GetSegmentFilePathsAsync(cameraId, baseTime, baseTime.AddHours(1));
+
+        Assert.Equal(2, segments.Count);
+        Assert.Equal("old-node.mp4", segments[0].FilePath);
+        Assert.Equal(otherNodeId, segments[0].NodeId);
+        Assert.Equal("current-node.mp4", segments[1].FilePath);
+        Assert.Equal(nodeId, segments[1].NodeId);
+    }
+
+    [Fact]
     public async Task GetSegmentForPlaybackReturnsTheOwningNodesMediaInfo()
     {
         var (db, cameraId, nodeId) = await SeedCameraAsync();

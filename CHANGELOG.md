@@ -5,6 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.69.0] - 2026-08-14
+
+### Changed
+
+- **Live view no longer blanks a tile to "Reconnecting…" text on a decode-error reconnect.** These
+  reconnects are routine self-healing (a slow client — confirmed cause: WiFi roaming — hits a gap in
+  the node's live fragment stream and the MSE session becomes unrecoverable, per this file's own
+  `startSession` design notes) but used to read as broken since the tile went dark for however long
+  the retry took. Once a tile has ever shown a frame, a reconnect now instead freezes that last frame
+  (captured onto a canvas overlay, matching the video's own aspect-ratio letterboxing) with a small
+  spinner on top, until the new session has a real frame to show again. Not a fix for the underlying
+  fragment gap itself — that's a deliberate node-side tradeoff (protecting the recording pipeline from
+  a slow live-view client) that would need its own separate change to address. Web-only, no node
+  change.
+
+## [0.68.0] - 2026-08-14
+
+### Added
+
+- **Exporting a range that spans a camera reassignment now produces multiple downloadable files
+  instead of failing.** 0.66.0 gave this a clear error message but still refused the export outright;
+  now the item is split into one export per node actually involved (e.g. a "Front Door" export
+  covering a move from NVR1 to WINSERV1 becomes two items, each dispatched to the node that actually
+  holds its slice of footage) — each reuses the exact same node-side ffmpeg/concat path as a normal
+  export, just scoped to that node's own segments. Output filenames now always include the node name
+  (e.g. `FrontDoor_NVR1_...mp4`) so the two parts of a split never collide, and the Exports page shows
+  which node each item's footage came from. Retrying an item that failed under 0.66.0's old
+  all-or-nothing check will now go through this split path instead. Web-only, no node change.
+
+## [0.67.0] - 2026-08-14
+
+### Added
+
+- **Exports page now auto-refreshes.** While any export job is Queued or Running, the page polls its
+  status every 4 seconds and redraws the table in place — no more manually reloading to see whether
+  a running export finished.
+- **Trash button to delete a finished export.** Available once every item in a job is Done or
+  Failed. Best-effort tells each item's owning node to remove its output file immediately (falling
+  back to the node's own 7-day export-retention sweep if that node is unreachable), then removes the
+  job from the list.
+- **Retry button on a failed export item.** Re-queues just that camera's item for
+  ExportJobDispatcher's next poll cycle, without having to re-submit the whole export from Playback.
+
+**LarisVMS.Node change — install-node.ps1 re-run needed on every recorder** (new
+`DELETE /export-file/{exportItemId}` route for the trash button).
+
+## [0.66.0] - 2026-08-14
+
+### Fixed
+
+- **Exporting a camera whose footage range crossed a node reassignment failed with an opaque "Node
+  rejected the export request (HTTP 400)."** `ExportJobDispatcher` sent every segment path for the
+  requested range to the camera's *current* node, but a segment recorded before a reassignment still
+  lives on the old node's disk (same split `OrphanedCameras`/0.62.0 already accounts for on the
+  retention side) — the current node correctly refused any path outside its own recording directory.
+  `GetSegmentFilePathsAsync` now also returns each segment's owning `NodeId`, so a cross-node split is
+  caught before dispatch and the item fails with a specific, actionable message (which node(s) still
+  hold the older footage) instead of a bare HTTP status. Web-only, no node change.
+
 ## [0.65.0] - 2026-08-14
 
 ### Fixed

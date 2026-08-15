@@ -32,3 +32,10 @@ public record PlaybackSegmentInfo(string FilePath, string? NodeIp, int? NodeLive
 /// the signed token and the node's on-disk cache filename are built from one canonical value rather
 /// than each side re-deriving it.</summary>
 public record ThumbnailInfo(string FilePath, int OffsetSeconds, string? NodeIp, int? NodeLivePort, string? NodeMediaSigningKey);
+
+/// <summary>One segment's file path plus the node it actually lives on — GetSegmentFilePathsAsync's
+/// return shape for export dispatch, which (unlike playback's single-segment lookups) can span a
+/// range wide enough to cross a camera's reassignment from one node to another mid-range. NodeId
+/// lets ExportJobDispatcher detect that split before dispatching, rather than sending every path to
+/// the camera's current node and having the node reject whatever doesn't live on its own disk.</summary>
+public record SegmentFileInfo(string FilePath, Guid NodeId);
