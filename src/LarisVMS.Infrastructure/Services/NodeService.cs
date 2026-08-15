@@ -141,7 +141,29 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
                 scheduleWindowsLookup[c.Id].Select(w => new NodeConfigScheduleWindowDto(w.Id, w.Days.ToString(), w.StartTime, w.EndTime)).ToList()));
         }
 
-        return new NodeConfigResponse(cameraDtos, storageRoot, watermarkPercent, mediaSigningKey);
+        // Cameras this node has leftover Segments for but doesn't currently record — reassigned to a
+        // different node, or deleted outright. Without this, StorageManager's orphaned-folder sweep
+        // has no RetentionDays to honor for them at all (the camera simply isn't in `cameras` above),
+        // which is exactly the gap that let old footage accumulate on a node forever after a camera
+        // moved away — see StorageManager.SweepOrphanedCameraFolders' own doc comment.
+        var assignedCameraIds = cameras.Select(c => c.Id).ToList();
+        var orphanedCameraIds = await db.Segments
+            .Where(s => s.NodeId == nodeId && !assignedCameraIds.Contains(s.CameraId))
+            .Select(s => s.CameraId)
+            .Distinct()
+            .ToListAsync(ct);
+
+        var orphanedCameraDtos = new List<NodeConfigOrphanedCameraDto>();
+        foreach (var orphanedCameraId in orphanedCameraIds)
+        {
+            // Same resolution chain as every assigned camera's own RetentionDays above, scoped to
+            // *this* node — a per-node override this node had for that camera (set back when it was
+            // still assigned here) still applies to aging out its leftover copy.
+            var retentionDays = await settings.GetAsync<int?>("Retention.Days", 30, cameraId: orphanedCameraId, nodeId: nodeId, ct: ct);
+            orphanedCameraDtos.Add(new NodeConfigOrphanedCameraDto(orphanedCameraId, retentionDays));
+        }
+
+        return new NodeConfigResponse(cameraDtos, storageRoot, watermarkPercent, mediaSigningKey, orphanedCameraDtos);
     }
 
     /// <summary>Pulls the Events service's own XAddr out of the capability prober's raw category map

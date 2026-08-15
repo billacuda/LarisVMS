@@ -124,6 +124,52 @@ public class StorageManagerTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(_root, "cam-2")));
     }
 
+    // ── FindOrphanedCameraMainDirs (reassigned-away camera footage cleanup) ─
+
+    [Fact]
+    public void FindsACameraFolderThatIsNoLongerAssignedToThisNode()
+    {
+        var assignedId = Guid.NewGuid();
+        var orphanedId = Guid.NewGuid();
+        Directory.CreateDirectory(Path.Combine(_root, $"cam-{assignedId}", "main"));
+        var orphanedMain = Directory.CreateDirectory(Path.Combine(_root, $"cam-{orphanedId}", "main")).FullName;
+
+        var found = StorageManager.FindOrphanedCameraMainDirs(_root, [assignedId]);
+
+        Assert.Equal([(orphanedId, orphanedMain)], found);
+    }
+
+    [Fact]
+    public void ReturnsNothingWhenEveryCameraFolderIsStillAssigned()
+    {
+        var cameraId = Guid.NewGuid();
+        Directory.CreateDirectory(Path.Combine(_root, $"cam-{cameraId}", "main"));
+
+        var found = StorageManager.FindOrphanedCameraMainDirs(_root, [cameraId]);
+
+        Assert.Empty(found);
+    }
+
+    [Fact]
+    public void IgnoresAnOrphanedCameraFolderWithNoMainSubdirectory()
+    {
+        // A folder that's just "cam-{id}/thumbs" with no "main" (fully evicted already, or a
+        // partial/corrupt leftover) shouldn't be treated as something to sweep.
+        Directory.CreateDirectory(Path.Combine(_root, $"cam-{Guid.NewGuid()}", "thumbs"));
+
+        var found = StorageManager.FindOrphanedCameraMainDirs(_root, []);
+
+        Assert.Empty(found);
+    }
+
+    [Fact]
+    public void ReturnsEmptyWhenTheStorageRootDoesNotExist()
+    {
+        var found = StorageManager.FindOrphanedCameraMainDirs(Path.Combine(_root, "does-not-exist"), []);
+
+        Assert.Empty(found);
+    }
+
     // ── FindMatchingThumbnails (M7 pass 2) ──────────────────────────────────
 
     [Fact]

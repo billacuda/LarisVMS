@@ -115,6 +115,8 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             if (Directory.Exists(thumbsDir)) PruneEmptyDirectories(thumbsDir);
         }
 
+        SweepOrphanedCameraFolders(config, storageRoot, now, deletedPaths);
+
         await ApplyWatermarkAsync(config, storageRoot, now, deletedPaths, ct);
 
         // Export output files (and any stray concat list file ExportRunner didn't get to clean up
@@ -152,6 +154,71 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
                 logger.LogWarning(ex, "Failed to report {Count} deleted segment(s) to the server — will retry next sweep.", deletedPaths.Count);
             }
         }
+    }
+
+    // Confirmed live: once a camera is reassigned to a different node (or deleted entirely), its
+    // leftover cam-{id}/ folder here has no NodeConfigCameraDto to carry a RetentionDays/QuotaBytes
+    // value anymore — before this fix, the per-camera loop above (which only ever walks
+    // config.Cameras) simply never looked at it again, so the footage sat on disk forever, never
+    // evicted, and the admin "stale segment" warning (CameraService.GetStaleSegmentNodeIdsAsync,
+    // driven by the Segments rows this sweep is what would otherwise delete) could never clear on
+    // its own. Age-only, no quota — there's no camera-specific budget left to enforce. Retention
+    // comes from config.OrphanedCameras (the server resolves it the same global -> per-node ->
+    // per-camera way an assigned camera's RetentionDays is, just scoped to this node specifically —
+    // see NodeService.GetConfigAsync) rather than a generic guess, so leftover footage still ages
+    // out on the schedule it actually would have, not sooner or later. This flat fallback only
+    // fires if the server genuinely has no answer for a given camera (e.g. it doesn't even appear
+    // in OrphanedCameras — shouldn't normally happen for a folder that exists at all, but a fallback
+    // beats leaving it unmanaged the way this whole fix exists to avoid).
+    private static readonly TimeSpan OrphanedCameraFallbackRetention = TimeSpan.FromDays(30);
+
+    private void SweepOrphanedCameraFolders(NodeConfigResponse config, string storageRoot, DateTime now, List<string> deletedPaths)
+    {
+        var retentionByCamera = config.OrphanedCameras.ToDictionary(o => o.CameraId, o => o.RetentionDays);
+
+        foreach (var (cameraId, mainDir) in FindOrphanedCameraMainDirs(storageRoot, config.Cameras.Select(c => c.CameraId)))
+        {
+            var retentionDays = retentionByCamera.TryGetValue(cameraId, out var resolved) && resolved is { } d
+                ? d
+                : (int)OrphanedCameraFallbackRetention.TotalDays;
+
+            var thumbsDir = Path.Combine(Path.GetDirectoryName(mainDir)!, "thumbs");
+            var files = EnumerateEvictable(mainDir, now);
+
+            foreach (var f in SelectRetentionEvictions(files, now, retentionDays))
+            {
+                if (TryDelete(f.FullName))
+                {
+                    deletedPaths.Add(f.FullName);
+                    DeleteMatchingThumbnails(mainDir, thumbsDir, f.FullName);
+                }
+            }
+
+            PruneEmptyDirectories(mainDir);
+            if (Directory.Exists(thumbsDir)) PruneEmptyDirectories(thumbsDir);
+        }
+    }
+
+    /// <summary>Pure selection extracted so it's testable against a real temp directory the same way
+    /// EnumerateEvictable is — every "cam-{guid}/main" directory under storageRoot whose {guid}
+    /// doesn't match any id in assignedCameraIds, paired with the parsed CameraId so the caller can
+    /// look up its retention.</summary>
+    internal static List<(Guid CameraId, string MainDir)> FindOrphanedCameraMainDirs(string storageRoot, IEnumerable<Guid> assignedCameraIds)
+    {
+        if (!Directory.Exists(storageRoot)) return [];
+        var assigned = assignedCameraIds.ToHashSet();
+
+        var result = new List<(Guid, string)>();
+        foreach (var cameraDir in Directory.EnumerateDirectories(storageRoot, "cam-*", SearchOption.TopDirectoryOnly))
+        {
+            var dirName = Path.GetFileName(cameraDir);
+            var idPart = dirName.Length > 4 ? dirName[4..] : "";
+            if (!Guid.TryParse(idPart, out var cameraId) || assigned.Contains(cameraId)) continue;
+
+            var mainDir = Path.Combine(cameraDir, "main");
+            if (Directory.Exists(mainDir)) result.Add((cameraId, mainDir));
+        }
+        return result;
     }
 
     private async Task ApplyWatermarkAsync(NodeConfigResponse config, string storageRoot,

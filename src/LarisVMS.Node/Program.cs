@@ -96,6 +96,9 @@ builder.Services.AddSingleton(sp => new NodeWorker(
 builder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<NodeWorker>());
 builder.Services.AddSingleton<IHostedService>(sp => new StorageManager(
     apiClient, fallbackStorageRoot, sp.GetRequiredService<ILoggerFactory>().CreateLogger<StorageManager>()));
+builder.Services.AddSingleton<IHostedService>(sp => new ThumbnailBackfillService(
+    apiClient, sp.GetRequiredService<NodeWorker>(), fallbackStorageRoot,
+    sp.GetRequiredService<ILoggerFactory>().CreateLogger<ThumbnailBackfillService>()));
 builder.Services.AddSingleton(sp => new ExportRunner(
     apiClient, ffmpegPath, sp.GetRequiredService<ILoggerFactory>().CreateLogger<ExportRunner>()));
 
@@ -278,14 +281,11 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid c
         return;
     }
 
-    // Best-effort cache write — a failure (e.g. a concurrent hover request already wrote the same
-    // file first) never affects this response, which always serves the bytes just captured.
-    try
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(thumbPath)!);
-        await File.WriteAllBytesAsync(thumbPath, bytes, CancellationToken.None);
-    }
-    catch (IOException) { /* concurrent writer already has it, or storage hiccup — not fatal */ }
+    // Atomic cache write shared with ThumbnailBackfillService — see SaveToCacheAsync's own doc
+    // comment for why (a naive write straight to thumbPath let a concurrent reader see a
+    // still-being-written, truncated file — confirmed live as the browser's broken-image icon
+    // appearing right after "Loading…").
+    await LarisVMS.Media.ThumbnailCapture.SaveToCacheAsync(thumbPath, bytes, CancellationToken.None);
 
     ctx.Response.ContentType = "image/jpeg";
     await ctx.Response.Body.WriteAsync(bytes, ctx.RequestAborted);

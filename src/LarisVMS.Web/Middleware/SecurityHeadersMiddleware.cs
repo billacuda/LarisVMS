@@ -2,10 +2,15 @@ namespace LarisVMS.Web.Middleware;
 
 /// <summary>
 /// rsolva's SecurityHeadersMiddleware, with the CSP extended for LarisVMS's media path: `media-src
-/// blob:` for MSE-backed <video> playback. `connect-src 'self'` covers every API call this app
-/// makes — confirmed by the actual M5/M7 design (see the plan's "Media path" section): the browser
-/// never talks to a recorder node directly, IIS/LarisVMS.Web proxies every live and playback byte,
-/// so there's no cross-origin `wss://`/`https://` node connection to widen this for.
+/// blob:` for MSE-backed <video> playback, and `img-src blob:` for hover-thumbnail <img> previews
+/// (M7 pass 2) — fetched as a blob and shown via URL.createObjectURL, same mechanism as MSE's own
+/// blob-URL video src, just a different element/directive that needed the same widening. Confirmed
+/// live: media-src already allowed blob: for video, but img-src didn't for images, so every
+/// thumbnail load was silently blocked by the browser's own CSP enforcement. `connect-src 'self'`
+/// covers every API call this app makes — confirmed by the actual M5/M7 design (see the plan's
+/// "Media path" section): the browser never talks to a recorder node directly, IIS/LarisVMS.Web
+/// proxies every live and playback byte, so there's no cross-origin `wss://`/`https://` node
+/// connection to widen this for.
 ///
 /// Bootstrap and GridStack are vendored locally (`wwwroot/lib/`) rather than loaded from a CDN, so
 /// script-src/style-src/font-src don't need a CDN host allow-listed — one less origin to trust, and
@@ -28,7 +33,7 @@ public class SecurityHeadersMiddleware(RequestDelegate next)
                 "script-src 'self' 'unsafe-inline'; " +
                 "style-src 'self' 'unsafe-inline'; " +
                 "font-src 'self'; " +
-                "img-src 'self' data: https:; " +
+                "img-src 'self' data: https: blob:; " +
                 "media-src 'self' blob:; " +
                 "connect-src 'self'; " +
                 "frame-ancestors 'self';";

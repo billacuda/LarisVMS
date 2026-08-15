@@ -22,8 +22,11 @@ public static class ThumbnailCapture
 {
     /// <summary>Returns JPEG bytes, or null if ffmpeg produced nothing (corrupt/truncated segment,
     /// offset beyond the file's actual content, timeout) — callers turn that into a 502 rather than
-    /// this class deciding what an HTTP failure should look like.</summary>
-    public static async Task<byte[]?> CaptureAsync(string ffmpegPath, string filePath, int offsetSeconds, CancellationToken ct, TimeSpan? timeout = null)
+    /// this class deciding what an HTTP failure should look like. lowPriority runs the ffmpeg process
+    /// at BelowNormal OS priority — set by the background backfill loop (ThumbnailBackfillService) so
+    /// its catch-up work never meaningfully contends with live recording or an on-demand hover for
+    /// CPU; on-demand callers leave this false since a user is actively waiting on those.</summary>
+    public static async Task<byte[]?> CaptureAsync(string ffmpegPath, string filePath, int offsetSeconds, CancellationToken ct, TimeSpan? timeout = null, bool lowPriority = false)
     {
         var psi = new ProcessStartInfo
         {
@@ -49,6 +52,12 @@ public static class ThumbnailCapture
         foreach (var a in args) psi.ArgumentList.Add(a);
 
         using var process = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null.");
+        if (lowPriority)
+        {
+            // Best-effort — a process that exits before this runs (near-instant failure) just skips
+            // it, which is fine, there's no CPU contention to avoid for a process that's already gone.
+            try { process.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { /* already exited */ }
+        }
 
         // Tighter than SnapshotCapture's 10s default — a local (or SMB) file read has no RTSP
         // handshake to wait on, but StorageManager's own comments already acknowledge a slow SMB
@@ -85,5 +94,32 @@ public static class ThumbnailCapture
     {
         try { process.Kill(entireProcessTree: true); }
         catch { /* already exited */ }
+    }
+
+    /// <summary>Writes JPEG bytes to a hover-thumbnail cache file atomically — shared by the
+    /// on-demand /playback-thumbnail route and the background backfill loop so a concurrent reader
+    /// of thumbPath (another hover, another backfill pass, a second browser tab) never sees a
+    /// partially-written file: written to a per-call-unique temp file first, then moved into place
+    /// with File.Move, an atomic rename on the same volume. Best-effort — swallows IOException (a
+    /// storage hiccup, or another writer finishing first for the same bucket; the two results are
+    /// content-identical anyway, so losing the race here costs nothing).</summary>
+    public static async Task SaveToCacheAsync(string thumbPath, byte[] bytes, CancellationToken ct)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(thumbPath)!);
+            var tempPath = thumbPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                await File.WriteAllBytesAsync(tempPath, bytes, ct);
+                File.Move(tempPath, thumbPath, overwrite: true);
+            }
+            catch
+            {
+                try { File.Delete(tempPath); } catch { /* best effort */ }
+                throw;
+            }
+        }
+        catch (IOException) { /* concurrent writer already has it, or storage hiccup — not fatal */ }
     }
 }

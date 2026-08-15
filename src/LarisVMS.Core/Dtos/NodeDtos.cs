@@ -70,7 +70,17 @@ public record NodeConfigCameraDto(Guid CameraId, string Name, string? Username, 
     string RecordingMode, int MotionPreRollSeconds, int MotionPostRollSeconds,
     string? EventsServiceUri, List<NodeConfigEventTagRuleDto> EventTagRules,
     List<NodeConfigScheduleWindowDto> ScheduleWindows);
-public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? StorageRootPath, int WatermarkPercent, string MediaSigningKey);
+/// <summary>A camera this node has leftover Segments for but is no longer assigned to record
+/// (reassigned to a different node, or deleted) — StorageManager's orphaned-folder sweep uses
+/// RetentionDays here so leftover footage still ages out on the same schedule it always would have,
+/// instead of a generic fallback the camera's own settings never actually specified. Resolved the
+/// same global -&gt; per-node -&gt; per-camera way NodeConfigCameraDto.RetentionDays is (scoped to
+/// *this* node, since that's whose copy is being aged out) — null only when nothing resolves it at
+/// all, which StorageManager falls back to a flat default for.</summary>
+public record NodeConfigOrphanedCameraDto(Guid CameraId, int? RetentionDays);
+
+public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? StorageRootPath, int WatermarkPercent,
+    string MediaSigningKey, List<NodeConfigOrphanedCameraDto> OrphanedCameras);
 
 /// <summary>One completed MotionSpan, batch-reported the same way SegmentReportItem is — see
 /// NodeService.RecordMotionSpansAsync for why plain REST + EF insert is enough here despite the

@@ -407,6 +407,20 @@ window.larisvmsTimeline = (function () {
         // 150x150 preserving its camera's own aspect ratio (never distorted, never padded), so the
         // <img> just renders at its natural size, capped by the container's own max-width/height.
         previewImg.style.cssText = 'display:none; max-width:150px; max-height:150px;';
+        // Defensive backstop: whatever the root cause of a bad/undecodable blob turns out to be, the
+        // user should never see the browser's own broken-image icon — fail into the same "No preview
+        // available" state a network/server error already does. Gated on imgLoadToken (set by
+        // showImage below) rather than firing unconditionally: setting previewImg.src to a *newer*
+        // URL while a previous one is still loading aborts that previous load, which can itself fire
+        // a stale 'error' event asynchronously — sometimes arriving *after* the newer src was already
+        // set. An ungated handler was confirmed live as a real regression: it blanked out perfectly
+        // good, already-loading-successfully images almost every time, since interrupting a load this
+        // way during normal fast hovering is the common case, not the exception.
+        var imgLoadToken = 0;
+        previewImg.addEventListener('error', function () {
+            if (imgLoadToken !== hoverToken) return; // this failure belongs to an already-superseded load
+            showError('No preview available');
+        });
         var previewStatus = document.createElement('div');
         previewStatus.style.cssText = 'color:#aaa; font-size:11px; text-align:center; padding:8px 10px;';
         previewEl.appendChild(previewImg);
@@ -425,7 +439,11 @@ window.larisvmsTimeline = (function () {
         }
         function showLoading() { previewImg.style.display = 'none'; previewStatus.style.display = 'block'; previewStatus.textContent = 'Loading…'; }
         function showError(msg) { previewImg.style.display = 'none'; previewStatus.style.display = 'block'; previewStatus.textContent = msg; }
-        function showImage(url) { previewImg.src = url; previewImg.style.display = 'block'; previewStatus.style.display = 'none'; }
+        // Stamps imgLoadToken with hoverToken's value *at the moment this src is actually set* — the
+        // error listener above compares against hoverToken again whenever it fires, so a load that
+        // was superseded before it finished (imgLoadToken now stale relative to a newer hoverToken)
+        // is recognized as such even though the error event itself arrives later, asynchronously.
+        function showImage(url) { imgLoadToken = hoverToken; previewImg.src = url; previewImg.style.display = 'block'; previewStatus.style.display = 'none'; }
 
         function evictOldestIfNeeded() {
             if (thumbCache.size <= THUMB_CACHE_MAX) return;
@@ -435,13 +453,31 @@ window.larisvmsTimeline = (function () {
             if (typeof oldestVal === 'string') URL.revokeObjectURL(oldestVal);
         }
 
+        // The one fetch actually in flight for a *new* (not-yet-cached) bucket — tracked so a fresh
+        // hover into a different, also-uncached bucket can abort it instead of leaving it to run to
+        // completion for nothing. The abort propagates all the way through: the Web proxy's own
+        // client.GetAsync already passes the request's CancellationToken through to the node, and
+        // the node's route passes ctx.RequestAborted into ThumbnailCapture, which kills the ffmpeg
+        // process — cancelling the browser fetch stops real work on the node, not just locally.
+        var currentFetchController = null;
+
         // Same bucketed URL in flight or already resolved reuses the in-memory cache — repeated
         // hovers near the same instant never refetch, matching the node's own on-disk cache one
         // level up. myToken guards against a superseded fetch clobbering whatever a later hover
         // already put on screen.
         function fetchThumbnail(url, myToken) {
             var cached = thumbCache.get(url);
-            if (typeof cached === 'string') { showImage(cached); return; }
+            if (typeof cached === 'string') {
+                // Bump to most-recently-used: Map.set on an *existing* key does not reorder it, so
+                // without this, a bucket the user keeps hovering back to could still be sitting at
+                // the "oldest" position by insertion order and get evicted (its blob URL revoked)
+                // by evictOldestIfNeeded while it's the very image currently on screen — confirmed
+                // as a real cause of the broken-image-icon report, not just a theoretical one.
+                thumbCache.delete(url);
+                thumbCache.set(url, cached);
+                showImage(cached);
+                return;
+            }
             if (cached) {
                 cached.then(function (r) {
                     if (myToken !== hoverToken) return;
@@ -450,12 +486,17 @@ window.larisvmsTimeline = (function () {
                 return;
             }
 
+            if (currentFetchController) currentFetchController.abort();
+            var controller = new AbortController();
+            currentFetchController = controller;
+
             showLoading();
-            var promise = fetch(url)
+            var promise = fetch(url, { signal: controller.signal })
                 .then(function (resp) { return resp.ok ? resp.blob().then(function (b) { return URL.createObjectURL(b); }) : null; })
-                .catch(function () { return null; });
+                .catch(function () { return null; }); // covers both a real failure and our own abort() above
             thumbCache.set(url, promise);
             promise.then(function (result) {
+                if (currentFetchController === controller) currentFetchController = null;
                 if (result) { thumbCache.set(url, result); evictOldestIfNeeded(); } else { thumbCache.delete(url); }
                 if (myToken !== hoverToken) return;
                 if (result) showImage(result); else showError('No preview available');

@@ -98,12 +98,62 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             ? SnapshotCapture.CaptureAsync(ffmpegPath, recorder.RtspUri, ct)
             : Task.FromResult<byte[]?>(null);
 
+    // Concurrency caps for M7 pass 2 hover-thumbnail extraction — a real, confirmed risk without
+    // this: each cache-miss spawns its own ffmpeg process, and a fast sweep across an uncached
+    // stretch of timeline could otherwise fire off dozens of them at once, competing with this
+    // node's own live recording ffmpeg processes for CPU/disk. On-demand (hover) and background
+    // (catch-up) requests get separate, small gates rather than sharing one pool — background
+    // generation must never be able to starve a user actively waiting on a hover preview, and the
+    // reverse (a hover burst) shouldn't be able to fully starve backfill either.
+    private static readonly SemaphoreSlim OnDemandThumbnailGate = new(2, 2);
+    private static readonly SemaphoreSlim BackgroundThumbnailGate = new(1, 1);
+
     /// <summary>M7 pass 2: extracts one JPEG frame from an already-recorded segment file — unlike
     /// CaptureSnapshotAsync (live RTSP), there's no "is this camera currently assigned here" check:
     /// the /playback-thumbnail route's own directory-prefix validation already confirms filePath
-    /// belongs to this node's own storage before this is ever called.</summary>
-    public Task<byte[]?> CaptureThumbnailAsync(string filePath, int offsetSeconds, CancellationToken ct) =>
-        ThumbnailCapture.CaptureAsync(ffmpegPath, filePath, offsetSeconds, ct);
+    /// belongs to this node's own storage before this is ever called. Bounded by
+    /// OnDemandThumbnailGate — a hover request that can't get a slot within 3s gives up (the caller
+    /// renders "No preview available") rather than piling up behind an unbounded queue for a preview
+    /// that may already be stale by the time it'd be served.</summary>
+    public async Task<byte[]?> CaptureThumbnailAsync(string filePath, int offsetSeconds, CancellationToken ct)
+    {
+        using var gateCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        gateCts.CancelAfter(TimeSpan.FromSeconds(3));
+        try
+        {
+            await OnDemandThumbnailGate.WaitAsync(gateCts.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return null; // gate stayed full for 3s straight — treat like any other capture failure
+        }
+        try
+        {
+            return await ThumbnailCapture.CaptureAsync(ffmpegPath, filePath, offsetSeconds, ct);
+        }
+        finally
+        {
+            OnDemandThumbnailGate.Release();
+        }
+    }
+
+    /// <summary>Same extraction, for ThumbnailBackfillService's low-priority background catch-up
+    /// loop instead of a live hover request — its own smaller gate (one at a time) plus BelowNormal
+    /// OS process priority (see ThumbnailCapture.CaptureAsync's lowPriority parameter) so it never
+    /// meaningfully competes with live recording or an on-demand hover. Waits for a slot rather than
+    /// giving up on a timeout, since nothing is blocked synchronously waiting on this.</summary>
+    public async Task<byte[]?> CaptureThumbnailInBackgroundAsync(string filePath, int offsetSeconds, CancellationToken ct)
+    {
+        await BackgroundThumbnailGate.WaitAsync(ct);
+        try
+        {
+            return await ThumbnailCapture.CaptureAsync(ffmpegPath, filePath, offsetSeconds, ct, lowPriority: true);
+        }
+        finally
+        {
+            BackgroundThumbnailGate.Release();
+        }
+    }
 
     /// <summary>The key currently used to validate incoming live-view tokens. Seeded from the locally
     /// persisted registration (set for any node that registered after M5 shipped), then kept current

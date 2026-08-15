@@ -5,6 +5,99 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.65.0] - 2026-08-14
+
+### Fixed
+
+- **Hover thumbnails were blocked by the app's own Content-Security-Policy, regardless of the
+  0.60.0–0.64.0 fixes.** Thumbnails are fetched as a blob and shown via
+  `URL.createObjectURL()` on an `<img>`, but the CSP's `img-src` directive only allowed
+  `'self' data: https:` — no `blob:` — so the browser refused to load every thumbnail image
+  outright and fired the `<img>`'s `error` event, which is exactly what "No preview available"
+  looks like. `media-src` already allowed `blob:` for MSE video playback; `img-src` needed the
+  same widening for images. Confirmed via a live browser console CSP violation report. Web-only,
+  no node change.
+
+## [0.64.0] - 2026-08-14
+
+### Fixed
+
+- **0.63.0's broken-image backstop was itself a regression — every hover started showing "No
+  preview available" almost regardless of whether the fetch actually succeeded.** Setting
+  `previewImg.src` to a new URL while a previous load is still in flight aborts that previous load,
+  which can fire the `<img>`'s `error` event asynchronously — sometimes *after* a newer, successful
+  `showImage()` call had already moved on. The 0.63.0 handler had no way to tell a stale error
+  (belonging to an already-superseded load) from a real one, and during normal fast hovering across
+  the timeline, interrupting a load this way is the common case, not the exception — so it was
+  blanking out perfectly good images almost every time. Now gated on the same hoverToken pattern
+  already used elsewhere in this file: `showImage` stamps the token valid at the moment it sets
+  `src`, and the error handler ignores anything that doesn't still match. Web-only, no node change.
+
+## [0.63.0] - 2026-08-14
+
+### Fixed
+
+- **Hover thumbnails could still render as a broken image even on a node with every prior fix
+  installed.** `timeline.js`'s in-memory cache eviction (`evictOldestIfNeeded`) picked the
+  first-inserted key as "oldest," but `Map.set()` on an already-existing key doesn't move it —so a
+  bucket the user kept hovering back to could still sit at the oldest position by original insertion
+  order and get evicted (its blob URL revoked via `URL.revokeObjectURL`) while it was the very image
+  on screen. Cache hits now bump the entry to the most-recently-used position first. Also added an
+  `<img>` `error` handler as a backstop regardless of cause — a bad/undecodable image now falls back
+  to "No preview available" instead of ever showing the browser's own broken-image icon. Web-only,
+  no node change.
+
+## [0.62.0] - 2026-08-14
+
+### Fixed
+
+- **The "footage exists on another node" stale-segment warning could never clear on its own.**
+  `StorageManager.SweepAsync` only ever walked `config.Cameras` — the cameras currently assigned to
+  that node — so once a camera got reassigned to a different node (or deleted entirely), its leftover
+  `cam-{id}/main/` folder on the old node became permanently invisible to retention and quota: no
+  `RetentionDays`/`QuotaBytes` value exists for a camera that's no longer in the node's own config, so
+  nothing ever aged it out. Confirmed live: two cameras reassigned away from NVR1 left 1,158 real,
+  still-existing segment files each sitting untouched on its disk since 08-08, permanently driving
+  `Admin`'s stale-segment warning with no way to clear short of manual cleanup. Now swept using the
+  camera's own actual retention policy — a new `NodeConfigResponse.OrphanedCameras` list lets
+  `NodeService.GetConfigAsync` hand back `Retention.Days` for any camera this node has leftover
+  Segments for but no longer records, resolved the same global→per-node→per-camera way an assigned
+  camera's retention always was, just scoped to this node specifically. Falls back to a flat 30-day
+  default only if the server has no answer for a given camera at all. Footage still stays exactly as
+  long as its configured retention says — this only makes sure that clock keeps running once a camera
+  moves away, instead of stopping forever. **LarisVMS.Node change — install-node.ps1 re-run needed on
+  every recorder.**
+
+## [0.61.0] - 2026-08-14
+
+### Added
+
+- **Concurrency limits + low-priority background backfill for hover thumbnails.** Follow-up to
+  0.59.0/0.60.0: nothing previously capped how many `ffmpeg` extractions could run at once, so a
+  fast sweep across an uncached stretch of timeline could spawn dozens concurrently, competing with
+  the node's own live recording for CPU/disk. On-demand (hover) requests are now capped at 2
+  concurrent extractions (a request that can't get a slot within 3s gives up rather than piling up
+  behind an unbounded queue); a new `ThumbnailBackfillService` walks each camera's 5-minute-aligned
+  segments in the background, filling in whatever the cache is missing one at a time (its own
+  smaller cap, `BelowNormal` OS process priority, a pause between each) so a long-uncached camera
+  isn't permanently slow on its first hover. Also wired `AbortController` into the browser-side
+  hover fetch so a superseded request (cursor moved to a different, still-uncached bucket) actually
+  cancels — the abort propagates through the Web proxy to the node, stopping that `ffmpeg` process
+  too, not just the local `fetch()`. **LarisVMS.Node change — install-node.ps1 re-run needed on
+  every recorder.**
+
+## [0.60.0] - 2026-08-14
+
+### Fixed
+
+- **Hover thumbnails sometimes rendered as a broken image after "Loading…".** The node cached a
+  newly-extracted thumbnail by writing bytes straight to its final `thumbs/...jpg` path — a second
+  concurrent request for the same bucket (another hover, another browser tab, a page refresh) could
+  see the file via `File.Exists` and start streaming it back before the first write had finished,
+  serving a truncated JPEG the browser can't decode. Now writes to a per-request temp file and
+  atomically renames it into place, so a concurrent reader only ever sees the fully-written file or
+  nothing at all. **LarisVMS.Node change — install-node.ps1 re-run needed on every recorder.**
+
 ## [0.59.0] - 2026-08-14
 
 ### Added
