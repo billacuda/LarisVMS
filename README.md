@@ -15,7 +15,7 @@ work on phone, tablet, and desktop.
 
 ---
 
-## **Current version [0.48.0](CHANGELOG.md)**
+## **Current version [0.58.0](CHANGELOG.md)**
 
 ## Stack
 
@@ -30,32 +30,47 @@ work on phone, tablet, and desktop.
 
 Milestones **M1 (skeleton, setup, deploy)**, **M2 (ONVIF discovery & camera management)**,
 **M3 (recorder node & 24/7 recording)**, **M4 (storage & retention)**, **M5 pass 1 (live view)**,
-**M6 pass 1 (views & layout editor)**, and **M7 pass 1 (playback & timeline)** are in place: solution
-layout, Identity + RBAC, encryption at rest, the setup wizard, `deploy.ps1`, WS-Discovery LAN scan,
-ONVIF capability probing (Profile S/T/G/M), camera CRUD, a Windows Service recorder node that
-supervises `ffmpeg -c copy` per camera with crash/stall auto-recovery, a per-node storage manager
-that enforces retention (global → per-node → per-camera, `Admin → Retention`), per-camera quota, and
-a global watermark backstop, and browser live view (`Pages/Live`) proxied through IIS with no direct
-browser-to-node connection and no certificate needed on the node — all verified end-to-end against
-real Amcrest cameras, including killing the recording process and the node process mid-recording and
-confirming both recover cleanly. Live view connects automatically for every camera on page load,
-plays both H.264 and HEVC natively with audio, and auto-reconnects on its own after a dropped session
-— confirmed end-to-end in a real browser, including recovery from a mid-stream WiFi roam.
-`Pages/Views` saves a camera-wall layout (GridStack drag/resize, per-cell aspect ratio, live video
-per tile) and plays it back later, with a derived single/two-column layout on phones and a
-fullscreen kiosk mode. `Pages/Live` and `Pages/Playback` are both driven by saved Views now rather
-than ad-hoc camera pickers — pick a view and watch (or scrub) the same arrangement you'd see live.
-Playback scrubs on two canvas timelines (the selected camera's own coverage, and one merged across
-every camera) and plays back synchronized across multiple cameras, each resolving its own
-recordings/gaps independently — **built but not yet verified in a real browser** (no browser is
-available in this environment; only build + unit tests so far, unlike M5's live view which needed
-real hands-on debugging before it actually worked — see CHANGELOG's "Known limitations" under
-0.12.0). Hardware-transcode fallback for browsers that can't decode a camera's native codec, main/sub
-auto-switch, snapshots, and instant replay are not built yet (M5 pass-1 scope), hover thumbnails on
-the timeline aren't built (needs frame-extraction work M3 never added), and motion/events and object
-detection aren't started —
-see [CHANGELOG.md](CHANGELOG.md) for what's shipped and the architecture plan for the full milestone
-roadmap (motion/events → PTZ/audio → export/investigation → operations).
+**M6 pass 1 (views & layout editor)**, **M7 pass 1 (playback & timeline)**, and **M8
+(motion/events)** are in place: solution layout, Identity + RBAC, encryption at rest, the setup
+wizard, `deploy.ps1`, WS-Discovery LAN scan, ONVIF capability probing (Profile S/T/G/M), camera CRUD,
+a Windows Service recorder node that supervises `ffmpeg -c copy` per camera with crash/stall
+auto-recovery, a per-node storage manager that enforces retention (global → per-node → per-camera,
+`Admin → Retention`), per-camera quota, and a global watermark backstop, and browser live view
+(`Pages/Live`) proxied through IIS with no direct browser-to-node connection and no certificate
+needed on the node — all verified end-to-end against real Amcrest cameras, including killing the
+recording process and the node process mid-recording and confirming both recover cleanly. Live view
+connects automatically for every camera on page load, plays both H.264 and HEVC natively with audio,
+auto-reconnects on its own after a dropped session, and can be toggled per-tile into playback mode
+without leaving the page. `Pages/Views` saves a camera-wall layout (GridStack drag/resize, per-cell
+aspect ratio, live video per tile) and plays it back later (`Views/Play`), with a derived
+single/two-column layout on phones, a fullscreen kiosk mode, and optional rotation through a set of
+views on a timer. `Pages/Live` and `Pages/Playback` are both driven by saved Views rather than
+ad-hoc camera pickers — pick a view and watch (or scrub) the same arrangement you'd see live, with
+double-click-to-fullscreen (wheel-zoom/drag-pan while fullscreen) on every tile across all three
+pages. Playback scrubs on two canvas timelines (the selected camera's own coverage, and one merged
+across every camera, both showing motion coloring and per-rule tag colors), streams segments
+incrementally into the decoder, and plays back synchronized across multiple cameras with drift
+correction, each resolving its own recordings/gaps independently.
+
+**M8** adds per-camera Zones (motion/privacy/camera-motion polygons), server-side motion detection
+with pre/post-roll, ONVIF PullPoint event ingestion, user-configurable event tag rules (with an
+optional "drives recording" gate and a custom timeline color), and a live motion indicator badge —
+plus four recording modes per camera (`Continuous`, `Motion`, `Schedule`, `Event`), completing the
+milestone's original design. Recorder nodes **auto-update themselves**: `deploy.ps1` registers each
+build it produces as Pending on `Admin → Node Builds`, and once approved, every node whose reported
+version is older downloads, verifies (SHA-256), and swaps its own binary on its next heartbeat — no
+manual `install-node.ps1` re-run needed for an ordinary version bump (a service-identity change, like
+the LarisVMS rename, is the one case that still needs a manual reinstall). Multi-camera video export
+(Playback's toolbar, "Export…") queues one async job per selected camera — each camera's own node
+does a `-c copy` remux of its segments for the range — and delivers finished files through the same
+signed-proxy path as playback, tracked on a new Exports page.
+
+Hardware-transcode fallback for browsers that can't decode a camera's native codec, main/sub
+auto-switch, and instant replay are not built yet (M5 pass-1 scope), hover thumbnails on the timeline
+aren't built (needs frame-extraction work M3 never added), and PTZ/audio, further investigation
+tooling (bookmarks, evidence lock, smart search), and object detection haven't started — see
+[CHANGELOG.md](CHANGELOG.md) for what's shipped and the architecture plan for the full milestone
+roadmap (PTZ/audio → export/investigation → operations → object detection).
 
 Recorder nodes require **FFmpeg** on the machine they run on (LGPL "shared" build recommended — see
 the plan's licensing note). Point a node at it with `--ffmpeg-path` or `LARISVMS_FFMPEG_PATH`, or put
@@ -118,7 +133,7 @@ src/
   LarisVMS.Infrastructure   EF Core, auth, setup, settings resolution, node control plane
   LarisVMS.Web              Razor Pages host (IIS) + node control plane API
   LarisVMS.Node              recorder Windows Service — 24/7 recording
-  LarisVMS.NodeUpdater       node binary-swap helper (not yet implemented)
+  LarisVMS.NodeUpdater       detached helper that swaps the node's binary during an auto-update
 tests/LarisVMS.Tests        xUnit
 ```
 

@@ -942,6 +942,15 @@
             timeline = window.larisvmsTimeline.create(canvas, {
                 hour24: hour24,
                 getBuckets: getBucketsForPrimary,
+                // Per-camera timeline only — globalTimeline below omits this entirely, since the
+                // merged "all cameras" view has no single camera to preview. Reads primaryCameraId
+                // from this module's own scope at hover time (same pattern getBucketsForPrimary
+                // already uses), so it stays correct across selectPrimary() with no extra wiring.
+                getThumbnailUrl: function (atMs) {
+                    return primaryCameraId
+                        ? '/playback-thumbnail/' + primaryCameraId + '?atUtc=' + encodeURIComponent(new Date(atMs).toISOString())
+                        : null;
+                },
                 onScrub: function (ms) { seekAll(ms, playing); },
                 onRangeChange: function (ms) { if (globalTimeline) globalTimeline.setRange(ms); schedulePositionSave(); }
             });

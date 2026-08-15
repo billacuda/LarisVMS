@@ -166,6 +166,38 @@ public class TimelineService(ApplicationDbContext db) : ITimelineService
         return new PlaybackSegmentInfo(segment.FilePath, node?.LastIpAddress, node?.LivePort, node?.MediaSigningKey);
     }
 
+    // Coarse on purpose (user-specified): enough to notice something changed while hovering,
+    // without generating/caching/storing a thumbnail every few seconds. Segments are clock-aligned
+    // (segment_atclocktime=1, 60s each), so a 5-minute-boundary instant normally lands exactly on
+    // some segment's own start — offsetSeconds below is almost always 0 in practice.
+    private const int ThumbnailBucketSeconds = 300;
+
+    public async Task<ThumbnailInfo?> GetThumbnailInfoAsync(Guid cameraId, DateTime atUtc, CancellationToken ct = default)
+    {
+        atUtc = NormalizeToUtc(atUtc);
+        var bucketTicks = TimeSpan.FromSeconds(ThumbnailBucketSeconds).Ticks;
+        var bucketedUtc = new DateTime((atUtc.Ticks / bucketTicks) * bucketTicks, DateTimeKind.Utc);
+
+        var segment = await db.Segments
+            .Where(s => s.CameraId == cameraId && s.StartUtc <= bucketedUtc && s.EndUtc > bucketedUtc)
+            .Select(s => new { s.FilePath, s.NodeId, s.StartUtc, s.DurationMs })
+            .FirstOrDefaultAsync(ct);
+        if (segment is null) return null;
+
+        var node = await db.Nodes
+            .Where(n => n.Id == segment.NodeId)
+            .Select(n => new { n.LastIpAddress, n.LivePort, n.MediaSigningKey })
+            .FirstOrDefaultAsync(ct);
+
+        // Clamped short of the segment's own end — an offset landing exactly on/past EndUtc would
+        // ask ffmpeg to seek past the last frame this segment actually has.
+        var rawOffsetSeconds = (int)(bucketedUtc - segment.StartUtc).TotalSeconds;
+        var maxOffsetSeconds = Math.Max(0, segment.DurationMs / 1000 - 1);
+        var offsetSeconds = Math.Clamp(rawOffsetSeconds, 0, maxOffsetSeconds);
+
+        return new ThumbnailInfo(segment.FilePath, offsetSeconds, node?.LastIpAddress, node?.LivePort, node?.MediaSigningKey);
+    }
+
     public async Task<List<string>> GetSegmentFilePathsAsync(Guid cameraId, DateTime fromUtc, DateTime toUtc, CancellationToken ct = default)
     {
         fromUtc = NormalizeToUtc(fromUtc);

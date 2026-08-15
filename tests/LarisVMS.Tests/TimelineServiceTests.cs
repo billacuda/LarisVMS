@@ -333,6 +333,93 @@ public class TimelineServiceTests
         Assert.All(buckets, b => Assert.False(b.HasRecording));
     }
 
+    // ── GetThumbnailInfoAsync (M7 pass 2 — hover thumbnails) ────────────────
+
+    [Fact]
+    public async Task GetThumbnailInfoReturnsTheSegmentCoveringTheBucketedInstant()
+    {
+        var (db, cameraId, nodeId) = await SeedCameraAsync();
+        // 5-minute-aligned segment start — the common case (segment_atclocktime=1 in production).
+        var segmentStart = new DateTime(2026, 8, 9, 0, 5, 0, DateTimeKind.Utc);
+        db.Segments.Add(new Segment
+        {
+            CameraId = cameraId, NodeId = nodeId, StreamRole = CameraStreamRole.Main,
+            StartUtc = segmentStart, EndUtc = segmentStart.AddSeconds(60), DurationMs = 60000,
+            FilePath = @"C:\rec\a.mp4"
+        });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db);
+        // Any raw instant inside the [00:05:00, 00:10:00) bucket must resolve here.
+        var info = await service.GetThumbnailInfoAsync(cameraId, segmentStart.AddSeconds(42));
+
+        Assert.NotNull(info);
+        Assert.Equal(@"C:\rec\a.mp4", info!.FilePath);
+        Assert.Equal(0, info.OffsetSeconds); // bucket floor lands exactly on the segment's own start
+        Assert.Equal("10.0.0.5", info.NodeIp);
+        Assert.Equal(8554, info.NodeLivePort);
+        Assert.Equal("key", info.NodeMediaSigningKey);
+    }
+
+    [Fact]
+    public async Task GetThumbnailInfoReturnsNullWhenNoSegmentCoversTheBucketedInstant()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+
+        var service = new TimelineService(db);
+        var info = await service.GetThumbnailInfoAsync(cameraId, new DateTime(2026, 8, 9, 0, 5, 0, DateTimeKind.Utc));
+
+        Assert.Null(info);
+    }
+
+    [Fact]
+    public async Task GetThumbnailInfoBucketsDifferentInstantsInTheSameFiveMinuteWindowIdentically()
+    {
+        var (db, cameraId, nodeId) = await SeedCameraAsync();
+        var segmentStart = new DateTime(2026, 8, 9, 0, 5, 0, DateTimeKind.Utc);
+        db.Segments.Add(new Segment
+        {
+            CameraId = cameraId, NodeId = nodeId, StreamRole = CameraStreamRole.Main,
+            StartUtc = segmentStart, EndUtc = segmentStart.AddSeconds(60), DurationMs = 60000,
+            FilePath = "a.mp4"
+        });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db);
+        // 00:05:00 and 00:09:59 both floor to the same 00:05:00 bucket, even though only the first
+        // few seconds of that bucket actually have a segment.
+        var early = await service.GetThumbnailInfoAsync(cameraId, segmentStart);
+        var late = await service.GetThumbnailInfoAsync(cameraId, segmentStart.AddMinutes(4).AddSeconds(59));
+
+        Assert.NotNull(early);
+        Assert.NotNull(late);
+        Assert.Equal(early!.FilePath, late!.FilePath);
+        Assert.Equal(early.OffsetSeconds, late.OffsetSeconds);
+    }
+
+    [Fact]
+    public async Task GetThumbnailInfoClampsTheOffsetToStayInsideTheSegmentsActualDuration()
+    {
+        var (db, cameraId, nodeId) = await SeedCameraAsync();
+        // Straddles the 00:05:00 boundary (starts 10s before it) so the bucketed instant falls 10s
+        // into the segment, but DurationMs (5s) says there's only 5s of real content — models a
+        // segment whose reported duration is shorter than its StartUtc/EndUtc span would suggest.
+        var segmentStart = new DateTime(2026, 8, 9, 0, 4, 50, DateTimeKind.Utc);
+        db.Segments.Add(new Segment
+        {
+            CameraId = cameraId, NodeId = nodeId, StreamRole = CameraStreamRole.Main,
+            StartUtc = segmentStart, EndUtc = segmentStart.AddSeconds(60), DurationMs = 5000,
+            FilePath = "a.mp4"
+        });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db);
+        var info = await service.GetThumbnailInfoAsync(cameraId, segmentStart.AddSeconds(10));
+
+        Assert.NotNull(info);
+        Assert.Equal(4, info!.OffsetSeconds); // clamped to DurationMs/1000 - 1, not the raw 10s
+    }
+
     [Fact]
     public async Task GetSegmentForPlaybackReturnsNullForASegmentBelongingToAnotherCamera()
     {

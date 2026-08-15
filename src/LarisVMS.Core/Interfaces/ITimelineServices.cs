@@ -42,4 +42,13 @@ public interface ITimelineService
     /// player) rather than an extension of it: ExportJobDispatcher needs an ordered list of raw
     /// paths to write into its ffmpeg concat list file, not display metadata.</summary>
     Task<List<string>> GetSegmentFilePathsAsync(Guid cameraId, DateTime fromUtc, DateTime toUtc, CancellationToken ct = default);
+
+    /// <summary>M7 pass 2 (hover thumbnails): buckets atUtc down to the nearest 5 minutes, then
+    /// resolves the one segment covering that bucketed instant (point containment, not
+    /// GetSegmentsAsync's range-overlap predicate) and the owning node's connection info, the same
+    /// way GetSegmentForPlaybackAsync does for a segment id. Null if no segment covers the bucketed
+    /// instant (a gap — camera offline, motion-mode not recording then). OffsetSeconds on the
+    /// returned info is clamped short of the segment's own end; the /playback-thumbnail proxy issues
+    /// its token and the node names its cache file from this one canonical value.</summary>
+    Task<ThumbnailInfo?> GetThumbnailInfoAsync(Guid cameraId, DateTime atUtc, CancellationToken ct = default);
 }

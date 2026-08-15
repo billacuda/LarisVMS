@@ -23,3 +23,12 @@ public record SegmentSummaryDto(long Id, DateTime StartUtc, DateTime EndUtc);
 /// (registered before M5, or hasn't heartbeat-reported since), same condition /live already
 /// checks for.</summary>
 public record PlaybackSegmentInfo(string FilePath, string? NodeIp, int? NodeLivePort, string? NodeMediaSigningKey);
+
+/// <summary>What the Web layer needs to proxy one hover-thumbnail request (M7 pass 2) — same shape
+/// as PlaybackSegmentInfo plus OffsetSeconds, the offset into FilePath that
+/// GetThumbnailInfoAsync already resolved server-side (the requested instant is bucketed to the
+/// nearest 5 minutes before the segment lookup even happens, so this is almost always 0 — segments
+/// are clock-aligned, so a 5-minute mark normally lands exactly on a segment's own start), so both
+/// the signed token and the node's on-disk cache filename are built from one canonical value rather
+/// than each side re-deriving it.</summary>
+public record ThumbnailInfo(string FilePath, int OffsetSeconds, string? NodeIp, int? NodeLivePort, string? NodeMediaSigningKey);

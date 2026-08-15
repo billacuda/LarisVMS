@@ -80,6 +80,11 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             var cameraDir = Path.Combine(storageRoot, $"cam-{camera.CameraId}", "main");
             if (!Directory.Exists(cameraDir)) continue;
 
+            // M7 pass 2: a hover-thumbnail cache has no reason to outlive the segment it was
+            // extracted from — every eviction below deletes a segment's matching thumbnail(s)
+            // alongside it rather than relying on a separate age sweep.
+            var thumbsDir = Path.Combine(storageRoot, $"cam-{camera.CameraId}", "thumbs");
+
             var files = EnumerateEvictable(cameraDir, now);
 
             // Retention sweep: unconditional age cutoff. 0 or negative RetentionDays is an explicit
@@ -87,16 +92,27 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             // 30-day default before this DTO is ever built).
             foreach (var f in SelectRetentionEvictions(files, now, camera.RetentionDays))
             {
-                if (TryDelete(f.FullName)) { deletedPaths.Add(f.FullName); files.Remove(f); }
+                if (TryDelete(f.FullName))
+                {
+                    deletedPaths.Add(f.FullName);
+                    files.Remove(f);
+                    DeleteMatchingThumbnails(cameraDir, thumbsDir, f.FullName);
+                }
             }
 
             // Per-camera quota: oldest-first until back under the cap.
             foreach (var f in SelectQuotaEvictions(files, camera.QuotaBytes))
             {
-                if (TryDelete(f.FullName)) { deletedPaths.Add(f.FullName); files.Remove(f); }
+                if (TryDelete(f.FullName))
+                {
+                    deletedPaths.Add(f.FullName);
+                    files.Remove(f);
+                    DeleteMatchingThumbnails(cameraDir, thumbsDir, f.FullName);
+                }
             }
 
             PruneEmptyDirectories(cameraDir);
+            if (Directory.Exists(thumbsDir)) PruneEmptyDirectories(thumbsDir);
         }
 
         await ApplyWatermarkAsync(config, storageRoot, now, deletedPaths, ct);
@@ -147,20 +163,27 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
 
         // Global oldest-first across every camera on this node — retention/quota already ran, so
         // whatever's left here is "in policy" but the volume is full anyway; age is the only fair
-        // tiebreaker across cameras with different quotas/retention.
+        // tiebreaker across cameras with different quotas/retention. Carries CameraId/MainDir
+        // alongside each FileInfo (not just the file) so a deletion here can also clean up that
+        // segment's cached thumbnails, same as the retention/quota loops above.
         var candidates = config.Cameras
-            .Select(c => Path.Combine(storageRoot, $"cam-{c.CameraId}", "main"))
-            .Where(Directory.Exists)
-            .SelectMany(dir => EnumerateEvictable(dir, now))
-            .OrderBy(f => f.LastWriteTimeUtc);
+            .Select(c => (c.CameraId, MainDir: Path.Combine(storageRoot, $"cam-{c.CameraId}", "main")))
+            .Where(x => Directory.Exists(x.MainDir))
+            .SelectMany(x => EnumerateEvictable(x.MainDir, now).Select(f => (x.CameraId, x.MainDir, File: f)))
+            .OrderBy(x => x.File.LastWriteTimeUtc);
 
-        foreach (var f in candidates)
+        foreach (var c in candidates)
         {
             var current = DiskSpace.TryGetUsage(storageRoot);
             if (current is null) break;
             if (100.0 * (current.Value.TotalBytes - current.Value.FreeBytes) / current.Value.TotalBytes <= config.WatermarkPercent) break;
 
-            if (TryDelete(f.FullName)) deletedPaths.Add(f.FullName);
+            if (TryDelete(c.File.FullName))
+            {
+                deletedPaths.Add(c.File.FullName);
+                var thumbsDir = Path.Combine(storageRoot, $"cam-{c.CameraId}", "thumbs");
+                DeleteMatchingThumbnails(c.MainDir, thumbsDir, c.File.FullName);
+            }
         }
 
         await Task.CompletedTask;
@@ -203,6 +226,26 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
     /// directory the same way EnumerateEvictable is, without a network round trip.</summary>
     internal static List<string> SelectMissingPaths(IEnumerable<string> knownPaths)
         => knownPaths.Where(p => !File.Exists(p)).ToList();
+
+    /// <summary>Every cached thumbnail file belonging to mainFilePath (M7 pass 2) — derived purely
+    /// from the segment's own relative path/filename under mainDir (never client-supplied), globbing
+    /// every bucketed-offset variant ("_o00.jpg", "_o05.jpg", ...) a hover request may have generated
+    /// for it. Pure/testable against a real temp directory, same pattern as EnumerateEvictable.</summary>
+    internal static List<string> FindMatchingThumbnails(string mainDir, string thumbsDir, string mainFilePath)
+    {
+        if (!Directory.Exists(thumbsDir)) return [];
+        var relative = Path.GetRelativePath(mainDir, mainFilePath);
+        var relativeDir = Path.GetDirectoryName(relative) ?? "";
+        var stem = Path.GetFileNameWithoutExtension(relative);
+        var thumbDirForSegment = Path.Combine(thumbsDir, relativeDir);
+        if (!Directory.Exists(thumbDirForSegment)) return [];
+        return Directory.EnumerateFiles(thumbDirForSegment, stem + "_o*.jpg", SearchOption.TopDirectoryOnly).ToList();
+    }
+
+    private void DeleteMatchingThumbnails(string mainDir, string thumbsDir, string mainFilePath)
+    {
+        foreach (var thumb in FindMatchingThumbnails(mainDir, thumbsDir, mainFilePath)) TryDelete(thumb);
+    }
 
     internal static List<FileInfo> EnumerateEvictable(string cameraDir, DateTime now)
         => Directory.EnumerateFiles(cameraDir, "*.mp4", SearchOption.AllDirectories)

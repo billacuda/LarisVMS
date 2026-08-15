@@ -202,6 +202,95 @@ app.MapGet("/playback-segment/{cameraId:guid}", async (HttpContext ctx, Guid cam
     await ctx.Response.SendFileAsync(fullPath, ctx.RequestAborted);
 });
 
+// M7 pass 2: hover-thumbnail proxy target — same shape as /playback-segment above (token binds
+// cameraId + path + offsetSeconds; directory-prefix check is the second, independent line of
+// defense), but serves one extracted JPEG frame instead of a whole segment's bytes, with an
+// on-disk cache checked first. The cache path is derived only from the already-validated fullPath
+// (substituting the "main" segment of the path for "thumbs") and the token-bound offsetSeconds —
+// never from anything else the client sends, so it can't be spoofed into naming an arbitrary file.
+app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWorker worker) =>
+{
+    var token = ctx.Request.Query["token"].ToString();
+    var path = ctx.Request.Query["path"].ToString();
+    var currentKey = worker.MediaSigningKey;
+    if (currentKey is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
+        return;
+    }
+    if (string.IsNullOrEmpty(path) || !int.TryParse(ctx.Request.Query["offset"], out var offsetSeconds) || offsetSeconds < 0)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await ctx.Response.WriteAsync("missing or invalid path/offset");
+        return;
+    }
+    if (!MediaToken.TryValidateThumbnail(token, cameraId, path, offsetSeconds, currentKey, out var tokenError))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync(tokenError);
+        return;
+    }
+
+    var storageRoot = worker.StorageRoot;
+    if (storageRoot is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
+        return;
+    }
+
+    string fullPath, mainDir, thumbsDir;
+    try
+    {
+        fullPath = Path.GetFullPath(path);
+        mainDir = Path.GetFullPath(Path.Combine(storageRoot, $"cam-{cameraId}", "main")) + Path.DirectorySeparatorChar;
+        thumbsDir = Path.GetFullPath(Path.Combine(storageRoot, $"cam-{cameraId}", "thumbs"));
+    }
+    catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+
+    if (!fullPath.StartsWith(mainDir, StringComparison.OrdinalIgnoreCase) || !File.Exists(fullPath))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+    }
+
+    var relativeToMain = Path.GetRelativePath(mainDir, fullPath);
+    var thumbRelative = Path.ChangeExtension(relativeToMain, null) + $"_o{offsetSeconds:D2}.jpg";
+    var thumbPath = Path.Combine(thumbsDir, thumbRelative);
+
+    if (File.Exists(thumbPath))
+    {
+        ctx.Response.ContentType = "image/jpeg";
+        await ctx.Response.SendFileAsync(thumbPath, ctx.RequestAborted);
+        return;
+    }
+
+    var bytes = await worker.CaptureThumbnailAsync(fullPath, offsetSeconds, ctx.RequestAborted);
+    if (bytes is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
+        await ctx.Response.WriteAsync("Could not extract a frame from this segment.");
+        return;
+    }
+
+    // Best-effort cache write — a failure (e.g. a concurrent hover request already wrote the same
+    // file first) never affects this response, which always serves the bytes just captured.
+    try
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(thumbPath)!);
+        await File.WriteAllBytesAsync(thumbPath, bytes, CancellationToken.None);
+    }
+    catch (IOException) { /* concurrent writer already has it, or storage hiccup — not fatal */ }
+
+    ctx.Response.ContentType = "image/jpeg";
+    await ctx.Response.Body.WriteAsync(bytes, ctx.RequestAborted);
+});
+
 // Export trigger — POSTed by LarisVMS.Web's ExportJobDispatcher, never reached by a browser
 // directly. Token binds cameraId + exportItemId (MediaToken.IssueForExport/TryValidateExport)
 // rather than a specific file the way /playback-segment's does, since the whole point of this call

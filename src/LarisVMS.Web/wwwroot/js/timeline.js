@@ -381,6 +381,104 @@ window.larisvmsTimeline = (function () {
         // same way the original bug did.
         canvas.addEventListener('pointercancel', endDrag);
 
+        // ── Hover thumbnails (M7 pass 2) ────────────────────────────────────
+        // Independent of the drag-scrub pointermove handler above — this one bails while dragging
+        // instead of requiring it. options.getThumbnailUrl is only ever supplied for the per-camera
+        // timeline; the global (merged-cameras) instance simply never registers this behavior since
+        // the option is absent, per the guard on the very first line of the handler below.
+        //
+        // 5-minute buckets — coarser than the drag-scrub's own granularity, deliberately: enough to
+        // notice something changed while hovering, without generating/fetching/caching a new frame
+        // every few pixels of mouse movement (see TimelineService.GetThumbnailInfoAsync, which
+        // buckets identically server-side — this is a perf optimization, not the source of truth).
+        var HOVER_BUCKET_MS = 5 * 60 * 1000;
+        var HOVER_THROTTLE_MS = 150;
+        var lastHoverFetchAt = 0;
+        var hoverToken = 0;
+        var THUMB_CACHE_MAX = 200;
+        var thumbCache = new Map(); // url -> objectUrl string, or Promise<string|null> while in flight
+
+        var previewEl = document.createElement('div');
+        previewEl.style.cssText = 'position:fixed; display:none; max-width:150px; max-height:150px; ' +
+            'background:#111; border:1px solid rgba(255,255,255,0.3); border-radius:4px; ' +
+            'box-shadow:0 2px 8px rgba(0,0,0,0.5); z-index:2000; pointer-events:none; overflow:hidden;';
+        var previewImg = document.createElement('img');
+        // No fixed box/object-fit here — the node already scales each thumbnail to fit within
+        // 150x150 preserving its camera's own aspect ratio (never distorted, never padded), so the
+        // <img> just renders at its natural size, capped by the container's own max-width/height.
+        previewImg.style.cssText = 'display:none; max-width:150px; max-height:150px;';
+        var previewStatus = document.createElement('div');
+        previewStatus.style.cssText = 'color:#aaa; font-size:11px; text-align:center; padding:8px 10px;';
+        previewEl.appendChild(previewImg);
+        previewEl.appendChild(previewStatus);
+        document.body.appendChild(previewEl);
+
+        // Positioned above the cursor using the container's own max dimensions (150x150 + an 8px
+        // gap) for the clamp math rather than measuring the actual rendered size — simpler than
+        // re-positioning once an image/error message settles into its final size, and the box is
+        // never larger than this assumption anyway.
+        function positionPreview(clientX) {
+            var rect = canvas.getBoundingClientRect();
+            var left = Math.max(4, Math.min(clientX - 75, window.innerWidth - 154));
+            previewEl.style.left = left + 'px';
+            previewEl.style.top = (rect.top - 158) + 'px';
+        }
+        function showLoading() { previewImg.style.display = 'none'; previewStatus.style.display = 'block'; previewStatus.textContent = 'Loading…'; }
+        function showError(msg) { previewImg.style.display = 'none'; previewStatus.style.display = 'block'; previewStatus.textContent = msg; }
+        function showImage(url) { previewImg.src = url; previewImg.style.display = 'block'; previewStatus.style.display = 'none'; }
+
+        function evictOldestIfNeeded() {
+            if (thumbCache.size <= THUMB_CACHE_MAX) return;
+            var oldestKey = thumbCache.keys().next().value;
+            var oldestVal = thumbCache.get(oldestKey);
+            thumbCache.delete(oldestKey);
+            if (typeof oldestVal === 'string') URL.revokeObjectURL(oldestVal);
+        }
+
+        // Same bucketed URL in flight or already resolved reuses the in-memory cache — repeated
+        // hovers near the same instant never refetch, matching the node's own on-disk cache one
+        // level up. myToken guards against a superseded fetch clobbering whatever a later hover
+        // already put on screen.
+        function fetchThumbnail(url, myToken) {
+            var cached = thumbCache.get(url);
+            if (typeof cached === 'string') { showImage(cached); return; }
+            if (cached) {
+                cached.then(function (r) {
+                    if (myToken !== hoverToken) return;
+                    if (r) showImage(r); else showError('No preview available');
+                });
+                return;
+            }
+
+            showLoading();
+            var promise = fetch(url)
+                .then(function (resp) { return resp.ok ? resp.blob().then(function (b) { return URL.createObjectURL(b); }) : null; })
+                .catch(function () { return null; });
+            thumbCache.set(url, promise);
+            promise.then(function (result) {
+                if (result) { thumbCache.set(url, result); evictOldestIfNeeded(); } else { thumbCache.delete(url); }
+                if (myToken !== hoverToken) return;
+                if (result) showImage(result); else showError('No preview available');
+            });
+        }
+
+        canvas.addEventListener('pointermove', function (e) {
+            if (!options.getThumbnailUrl || dragging) { previewEl.style.display = 'none'; return; }
+            var now = Date.now();
+            if (now - lastHoverFetchAt < HOVER_THROTTLE_MS) return;
+            lastHoverFetchAt = now;
+
+            var bucketedMs = Math.floor(xToTime(e.clientX) / HOVER_BUCKET_MS) * HOVER_BUCKET_MS;
+            var url = options.getThumbnailUrl(bucketedMs);
+            if (!url) { previewEl.style.display = 'none'; return; }
+
+            previewEl.style.display = 'block';
+            positionPreview(e.clientX);
+            hoverToken++;
+            fetchThumbnail(url, hoverToken);
+        });
+        canvas.addEventListener('pointerleave', function () { previewEl.style.display = 'none'; hoverToken++; });
+
         window.addEventListener('resize', function () { resizeCanvas(); draw(); });
 
         resizeCanvas();

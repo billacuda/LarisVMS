@@ -123,4 +123,66 @@ public class StorageManagerTests : IDisposable
         Assert.True(File.Exists(Path.Combine(nonEmptyHour, "segment.mp4")));
         Assert.False(Directory.Exists(Path.Combine(_root, "cam-2")));
     }
+
+    // ── FindMatchingThumbnails (M7 pass 2) ──────────────────────────────────
+
+    [Fact]
+    public void FindMatchingThumbnailsFindsEveryBucketOffsetFileForAnEvictedSegmentsStem()
+    {
+        var mainDir = Path.Combine(_root, "cam-1", "main");
+        var thumbsDir = Path.Combine(_root, "cam-1", "thumbs");
+        var mainFile = Path.Combine(mainDir, "2026", "08", "09", "14", "20260809T140000Z.mp4");
+        Directory.CreateDirectory(Path.GetDirectoryName(mainFile)!);
+        File.WriteAllText(mainFile, "data");
+
+        var thumbDir = Path.Combine(thumbsDir, "2026", "08", "09", "14");
+        Directory.CreateDirectory(thumbDir);
+        var thumb1 = Path.Combine(thumbDir, "20260809T140000Z_o00.jpg");
+        var thumb2 = Path.Combine(thumbDir, "20260809T140000Z_o05.jpg");
+        File.WriteAllText(thumb1, "jpg");
+        File.WriteAllText(thumb2, "jpg");
+
+        var found = StorageManager.FindMatchingThumbnails(mainDir, thumbsDir, mainFile);
+
+        Assert.Equal(2, found.Count);
+        Assert.Contains(thumb1, found);
+        Assert.Contains(thumb2, found);
+    }
+
+    [Fact]
+    public void FindMatchingThumbnailsReturnsEmptyWhenNoThumbsDirectoryExists()
+    {
+        var mainDir = Path.Combine(_root, "cam-1", "main");
+        var thumbsDir = Path.Combine(_root, "cam-1", "thumbs"); // never created
+        var mainFile = Path.Combine(mainDir, "2026", "08", "09", "14", "20260809T140000Z.mp4");
+        Directory.CreateDirectory(Path.GetDirectoryName(mainFile)!);
+        File.WriteAllText(mainFile, "data");
+
+        var found = StorageManager.FindMatchingThumbnails(mainDir, thumbsDir, mainFile);
+
+        Assert.Empty(found);
+    }
+
+    [Fact]
+    public void FindMatchingThumbnailsDoesNotMatchADifferentlyNamedNeighboringSegment()
+    {
+        // Stem-prefix precision: "...T140000Z" must not also match a thumbnail belonging to
+        // "...T140000Z-extra" or a segment recorded one second later, "...T140001Z".
+        var mainDir = Path.Combine(_root, "cam-1", "main");
+        var thumbsDir = Path.Combine(_root, "cam-1", "thumbs");
+        var mainFile = Path.Combine(mainDir, "2026", "08", "09", "14", "20260809T140000Z.mp4");
+        Directory.CreateDirectory(Path.GetDirectoryName(mainFile)!);
+        File.WriteAllText(mainFile, "data");
+
+        var thumbDir = Path.Combine(thumbsDir, "2026", "08", "09", "14");
+        Directory.CreateDirectory(thumbDir);
+        var ownThumb = Path.Combine(thumbDir, "20260809T140000Z_o00.jpg");
+        var neighborThumb = Path.Combine(thumbDir, "20260809T140001Z_o00.jpg");
+        File.WriteAllText(ownThumb, "jpg");
+        File.WriteAllText(neighborThumb, "jpg");
+
+        var found = StorageManager.FindMatchingThumbnails(mainDir, thumbsDir, mainFile);
+
+        Assert.Equal([ownThumb], found);
+    }
 }

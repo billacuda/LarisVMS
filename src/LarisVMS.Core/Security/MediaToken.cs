@@ -111,6 +111,62 @@ public static class MediaToken
         return true;
     }
 
+    /// <summary>Hover thumbnail (Web -&gt; Node): authorizes exactly one JPEG frame extraction — one
+    /// camera, one exact segment file path, one bucketed offset-in-seconds into that file. Same
+    /// shape as IssueForSegment, with offsetSeconds inserted as a new scalar field between cameraId
+    /// and exp (filePath stays the *last* field for the same drive-letter-colon-safety reason).
+    /// Binding offsetSeconds isn't only a security measure — it forces every request for "this
+    /// bucket" to carry the exact same value the node names its cache file after, which is what
+    /// makes the on-disk cache actually get reused instead of being defeated by a client sending
+    /// slightly different timestamps for what's meant to be the same bucket.</summary>
+    public static string IssueForThumbnail(Guid cameraId, string filePath, int offsetSeconds, string signingKeyHex, TimeSpan validFor)
+    {
+        var exp = DateTimeOffset.UtcNow.Add(validFor).ToUnixTimeSeconds();
+        var payload = $"thumb:{cameraId:N}:{offsetSeconds}:{exp}:{filePath}";
+        return $"{payload}.{Sign(payload, signingKeyHex)}";
+    }
+
+    public static bool TryValidateThumbnail(string? token, Guid expectedCameraId, string expectedFilePath, int expectedOffsetSeconds, string signingKeyHex, out string error)
+    {
+        error = "";
+        if (string.IsNullOrEmpty(token)) { error = "missing token"; return false; }
+
+        var dot = token.LastIndexOf('.');
+        if (dot < 0) { error = "malformed token"; return false; }
+        var payload = token[..dot];
+        var providedSig = token[(dot + 1)..];
+
+        byte[] provided, expected;
+        try
+        {
+            provided = Convert.FromHexString(providedSig);
+            expected = Convert.FromHexString(Sign(payload, signingKeyHex));
+        }
+        catch (FormatException)
+        {
+            error = "malformed signature";
+            return false;
+        }
+
+        if (!CryptographicOperations.FixedTimeEquals(provided, expected)) { error = "signature mismatch"; return false; }
+
+        var parts = payload.Split(':', 5);
+        if (parts.Length != 5 || parts[0] != "thumb") { error = "malformed payload"; return false; }
+        if (!Guid.TryParse(parts[1], out var cameraId) || !int.TryParse(parts[2], out var offsetSeconds) || !long.TryParse(parts[3], out var exp))
+        {
+            error = "malformed payload";
+            return false;
+        }
+        var filePath = parts[4];
+
+        if (cameraId != expectedCameraId) { error = "camera mismatch"; return false; }
+        if (offsetSeconds != expectedOffsetSeconds) { error = "offset mismatch"; return false; }
+        if (!string.Equals(filePath, expectedFilePath, StringComparison.Ordinal)) { error = "path mismatch"; return false; }
+        if (DateTimeOffset.UtcNow.ToUnixTimeSeconds() > exp) { error = "expired"; return false; }
+
+        return true;
+    }
+
     /// <summary>Export trigger (Web -&gt; Node): authorizes exactly one export item request for one
     /// camera — same short-lived-HMAC shape as IssueForSegment but binds cameraId + exportItemId
     /// instead of cameraId + filePath, since the whole point of this call is *telling* the node

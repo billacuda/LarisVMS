@@ -5,7 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.58.0] - 2026-08-14
+## [0.59.0] - 2026-08-14
+
+### Added
+
+- **Timeline hover thumbnails (M7 pass 2).** Hovering the Playback page's per-camera timeline shows
+  a small preview frame from that point in the recording — enough to spot that something changed
+  without scrubbing to it. Thumbnails are generated one per 5-minute bucket (not continuously — the
+  goal is "did anything change," not frame-accurate scrubbing), capped at 150x150px with the
+  camera's own aspect ratio preserved, and compressed for minimal storage (`-q:v 8`). Follows this
+  codebase's existing signed-proxy pattern exactly: a new `MediaToken.IssueForThumbnail`/
+  `TryValidateThumbnail` pair (binding camera + segment path + offset) authorizes a new
+  `/playback-thumbnail` route on both Web (proxies to the owning node) and Node (extracts the frame
+  via a new `ThumbnailCapture` class, mirroring `SnapshotCapture`'s process-supervision shape but
+  reading an existing file with `-ss` seeking instead of a live RTSP grab). Generated thumbnails are
+  cached on the node's disk (`cam-{id}/thumbs/...`, mirroring the `main/` folder shape) and deleted
+  automatically whenever their source segment is — no separate retention setting, no independent age
+  sweep. The merged "all cameras" timeline has no hover behavior; there's no single camera to
+  preview there. **LarisVMS.Node change — install-node.ps1 re-run needed on every recorder.**
+
+## [0.58.0] - 2026-08-13
 
 ### Fixed
 
@@ -17,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bare `<video>` instead of the tile's frame, dropping the mute/exit buttons out of the fullscreened
   render subtree. Now wired the same way as the other two pages.
 
-## [0.57.0] - 2026-08-14
+## [0.57.0] - 2026-08-13
 
 ### Fixed
 
@@ -171,7 +190,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in this first pass. Uploaded builds are stored under `%ProgramData%\LarisVMS\node-builds`,
   deliberately outside the IIS site directory so `deploy.ps1`'s mirrored publish never touches them.
 
-## [0.47.0] - 2026-08-13
+## [0.47.0] - 2026-08-12
 
 ### Added
 
@@ -291,7 +310,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ITimelineService.GetGlobalBucketsAsync` takes an optional camera-id scope; omitting it keeps the
   previous merge-across-everything behavior for any caller that genuinely has no camera scope.
 
-## [0.43.0] - 2026-08-12
+## [0.43.0] - 2026-08-11
 
 ### Fixed
 
@@ -311,7 +330,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   notification that reported it. Two new tests reproduce the exact starvation scenario against real
   timing and prove the fix closes it.
 
-## [0.42.0] - 2026-08-12
+## [0.42.0] - 2026-08-11
 
 ### Fixed
 
@@ -321,7 +340,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported). `Cameras/Index`'s per-row action column now links directly to both Zones and Event tags
   for every camera, not only reachable after first opening Edit.
 
-## [0.41.0] - 2026-08-12
+## [0.41.0] - 2026-08-11
 
 ### Added
 
@@ -348,7 +367,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session — a rule added, edited, or deleted through the admin UI takes effect on the next reconcile
   rather than only after the camera is reassigned.
 
-## [0.40.0] - 2026-08-12
+## [0.40.0] - 2026-08-11
 
 ### Fixed
 
@@ -360,7 +379,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   calls entirely while that timeline is being actively dragged — the drag's own pointer handling is
   already the authority over its position until release.
 
-## [0.39.0] - 2026-08-12
+## [0.39.0] - 2026-08-11
 
 ### Changed
 
@@ -372,7 +391,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   minimal custom overlay of exactly two buttons — mute/unmute and fullscreen — shown on hover, same
   as before, with no click-on-the-video-body behavior bound at all.
 
-## [0.38.0] - 2026-08-12
+## [0.38.0] - 2026-08-11
 
 ### Fixed
 
@@ -399,7 +418,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rounded once per run instead of independently per bucket, which has no internal seams left to
   flicker.
 
-## [0.37.0] - 2026-08-12
+## [0.37.0] - 2026-08-11
 
 ### Fixed
 
@@ -508,7 +527,7 @@ video filter under stream copy, so burn-in needs its own design pass, not a drop
   session that starts failing its subscribe attempt recovers on its own retry regardless.
 - **This is a LarisVMS.Node change — install-node.ps1 re-run needed on both WINSERV1 and NVR1.**
 
-## [0.34.0] - 2026-08-11
+## [0.34.0] - 2026-08-10
 
 User-directed Playback redesign, three explicit requests: move the timeline to the bottom of the
 page, fill the rest of the window with video sized to camera count, and make the timeline itself
@@ -537,7 +556,7 @@ browser session, same as any UI-only pass shipped that way in this project's his
   playhead time moved out of the canvas into its own line directly below the per-camera timeline,
   separate from the interval tick labels (which mark scale, not the precise instant).
 
-## [0.33.0] - 2026-08-11
+## [0.33.0] - 2026-08-10
 
 ### Changed
 
@@ -580,7 +599,7 @@ browser session, same as any UI-only pass shipped that way in this project's his
   own view-picker dropdown, which is expected to go away since picking a view navigates to a
   different page entirely?) to chase further.
 
-## [0.32.0] - 2026-08-11
+## [0.32.0] - 2026-08-10
 
 ### Fixed
 
@@ -598,7 +617,7 @@ browser session, same as any UI-only pass shipped that way in this project's his
   old anchor misses it) and the fix (the new one catches it) side by side. **This is a LarisVMS.Node
   change — install-node.ps1 re-run needed on both WINSERV1 and NVR1.**
 
-## [0.31.0] - 2026-08-11
+## [0.31.0] - 2026-08-10
 
 ### Added
 
@@ -661,7 +680,7 @@ filesystem access rather than inference.
   (like the ~1/3 figure found this session) clears out gradually over the following hour(s), not
   instantly on deploy.
 
-## [0.29.0] - 2026-08-10
+## [0.29.0] - 2026-08-09
 
 Found while double-checking the v0.28.0 sensitivity investigation: three cameras explicitly set to
 Motion recording mode had 35+ hours of unbroken, gap-free segment retention in the database — which
@@ -684,7 +703,7 @@ sensitivity fix alone would not have fixed these cameras' behavior.
   `HandleSegmentCompleted` looks up fresh config on every single invocation. This takes effect
   immediately for already-running sessions — no node restart or session restart is required.
 
-## [0.28.0] - 2026-08-10
+## [0.28.0] - 2026-08-09
 
 Investigated why the timeline had shown zero motion since M8 shipped, with direct database and
 process-level access to the live deployment (not inference from code review). The motion pipeline
@@ -715,7 +734,7 @@ essentially never reaches.
   by this investigation and was left unchanged — the measured noise ceiling stayed comfortably under
   it. Worth revisiting only if 3% sensitivity turns out to still be too strict.
 
-## [0.27.0] - 2026-08-10
+## [0.27.0] - 2026-08-09
 
 First real-browser test of 0.26.0's streaming/sync playback rework confirmed it worked (faster
 first frame, tiles within a couple seconds of each other instead of 10-30). It also surfaced a real
@@ -754,7 +773,7 @@ bug of its own, and a genuine pre-existing gap unrelated to any of this session'
   exactly these symptoms shipped only one release earlier; re-verify against this version before
   concluding either is still broken.
 
-## [0.26.0] - 2026-08-10
+## [0.26.0] - 2026-08-09
 
 M8 pass 5 — fixes why the timeline was *still* blue-only after 0.25.0's checkpoint reporting fix,
 plus two Playback fixes reported directly against real footage: the timeline not following
@@ -805,7 +824,7 @@ playback, and cross-camera sync/startup latency.
   smoothed resync. A tile that drifts often (rather than once) will visibly jump periodically. If
   that turns out to be more distracting than the drift itself, worth revisiting.
 
-## [0.25.0] - 2026-08-10
+## [0.25.0] - 2026-08-09
 
 M8 pass 4 — fixes why the timeline showed no motion at all on cameras the user had confirmed were
 working: a long-running span was invisible in `MotionSpans` until it eventually closed. Also adds
@@ -844,7 +863,7 @@ the requested Live-view motion indicator.
   against an actual motion event; the checkpoint timing (does the badge/timeline update promptly
   and clear promptly once motion actually stops?) needs a camera to confirm.
 
-## [0.24.0] - 2026-08-10
+## [0.24.0] - 2026-08-09
 
 M8 pass 3 — corrects a real gap in 0.23.0: pre-roll never actually worked, and pre-roll/post-roll
 are now two separate settings instead of one, both configurable globally and per camera.
@@ -886,7 +905,7 @@ are now two separate settings instead of one, both configurable globally and per
   PreRoll`) to prove the pre-roll math is sound in isolation; whether the deferral timing behaves
   correctly against a real 5fps motion feed and real segment rotation still needs a camera to watch.
 
-## [0.23.0] - 2026-08-10
+## [0.23.0] - 2026-08-09
 
 M8 pass 2 — motion actually controls recording. 0.22.0 shipped motion *detection*; this closes the
 gap it explicitly left open ("motion is detected and shown on the timeline; it does not yet control
@@ -1168,7 +1187,7 @@ environment to test the constraint directly.
   All three are no-callback setters so mirroring a change from one timeline to the other can't
   bounce back and re-trigger itself.
 
-## [0.17.0] - 2026-08-09
+## [0.17.0] - 2026-08-08
 
 **No `LarisVMS.Node` changes in this release — no recorder-node update needed.**
 
@@ -1196,7 +1215,7 @@ environment to test the constraint directly.
   inside the guard, and the tile's public `seekTo` additionally swallows expected aborts so a
   rejection can never escape as an unhandled promise (no caller awaits it).
 
-## [0.16.0] - 2026-08-09
+## [0.16.0] - 2026-08-08
 
 **No `LarisVMS.Node` changes in this release — no recorder-node update needed.**
 
@@ -1223,7 +1242,7 @@ environment to test the constraint directly.
   a clear timeout error within half a minute instead of leaving the browser's "Loading…" up
   indefinitely with no feedback.
 
-## [0.15.0] - 2026-08-09
+## [0.15.0] - 2026-08-08
 
 ### Fixed
 
@@ -1257,7 +1276,7 @@ environment to test the constraint directly.
   tile's camera-name label (⭐ marks the current one, tile gets a highlighted border) instead of
   always being stuck with the view's top-left-most camera.
 
-## [0.13.0] - 2026-08-09
+## [0.13.0] - 2026-08-08
 
 ### Fixed
 
@@ -1294,7 +1313,7 @@ environment to test the constraint directly.
 - 2 new unit tests for the merged-timeline bucketing (a bucket recorded if any camera covers it;
   all-gap when nothing has ever recorded).
 
-## [0.12.0] - 2026-08-09
+## [0.12.0] - 2026-08-08
 
 ### Added
 
@@ -1353,14 +1372,14 @@ environment to test the constraint directly.
 - Digital zoom is CSS transform scale/pan on the video element, not a server-side crop/re-encode —
   zooms into whatever resolution the stream already is.
 
-## [0.11.0] - 2026-08-09
+## [0.11.0] - 2026-08-08
 
 ### Changed
 
 - `Pages/Live` no longer shows the "Every camera below connects automatically..." explainer
   paragraph — it was accurate but not something a user needs told every time the page loads.
 
-## [0.10.0] - 2026-08-09
+## [0.10.0] - 2026-08-08
 
 ### Added
 
@@ -1387,7 +1406,7 @@ environment to test the constraint directly.
   disconnected still get indexed once the node reconnects — this change is purely about *starting*
   recording sooner during an outage, not about recovering data that was already safe.
 
-## [0.9.0] - 2026-08-09
+## [0.9.0] - 2026-08-08
 
 ### Added
 

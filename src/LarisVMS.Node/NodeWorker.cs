@@ -98,6 +98,13 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             ? SnapshotCapture.CaptureAsync(ffmpegPath, recorder.RtspUri, ct)
             : Task.FromResult<byte[]?>(null);
 
+    /// <summary>M7 pass 2: extracts one JPEG frame from an already-recorded segment file — unlike
+    /// CaptureSnapshotAsync (live RTSP), there's no "is this camera currently assigned here" check:
+    /// the /playback-thumbnail route's own directory-prefix validation already confirms filePath
+    /// belongs to this node's own storage before this is ever called.</summary>
+    public Task<byte[]?> CaptureThumbnailAsync(string filePath, int offsetSeconds, CancellationToken ct) =>
+        ThumbnailCapture.CaptureAsync(ffmpegPath, filePath, offsetSeconds, ct);
+
     /// <summary>The key currently used to validate incoming live-view tokens. Seeded from the locally
     /// persisted registration (set for any node that registered after M5 shipped), then kept current
     /// by every reconcile cycle's GetConfigAsync response — the server hands this out through the

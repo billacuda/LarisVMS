@@ -131,6 +131,84 @@ public class MediaTokenTests
         Assert.False(MediaToken.TryValidateSegment(liveToken, cameraId, @"C:\a\segment1.mp4", Key, out _));
     }
 
+    // ── IssueForThumbnail / TryValidateThumbnail (M7 pass 2) ────────────────
+
+    [Fact]
+    public void ThumbnailTokenRoundTripsForTheCameraPathAndOffsetItWasIssuedFor()
+    {
+        var cameraId = Guid.NewGuid();
+        const string path = @"E:\LarisVMS\recordings\cam-1\main\2026\08\09\14\20260809T140000Z.mp4";
+        var token = MediaToken.IssueForThumbnail(cameraId, path, 0, Key, TimeSpan.FromSeconds(30));
+
+        Assert.True(MediaToken.TryValidateThumbnail(token, cameraId, path, 0, Key, out var error));
+        Assert.Equal("", error);
+    }
+
+    [Fact]
+    public void ThumbnailTokenSurvivesAWindowsDriveLetterColonInThePath()
+    {
+        var cameraId = Guid.NewGuid();
+        const string path = @"C:\ProgramData\LarisVMS\recordings\cam-1\main\file.mp4";
+        var token = MediaToken.IssueForThumbnail(cameraId, path, 0, Key, TimeSpan.FromSeconds(30));
+
+        Assert.True(MediaToken.TryValidateThumbnail(token, cameraId, path, 0, Key, out var error));
+        Assert.Equal("", error);
+    }
+
+    [Fact]
+    public void ThumbnailTokenRejectsAMismatchedPath()
+    {
+        var cameraId = Guid.NewGuid();
+        var token = MediaToken.IssueForThumbnail(cameraId, @"C:\a\segment1.mp4", 10, Key, TimeSpan.FromSeconds(30));
+
+        Assert.False(MediaToken.TryValidateThumbnail(token, cameraId, @"C:\a\segment2.mp4", 10, Key, out var error));
+        Assert.Equal("path mismatch", error);
+    }
+
+    [Fact]
+    public void ThumbnailTokenRejectsAMismatchedCamera()
+    {
+        const string path = @"C:\a\segment1.mp4";
+        var token = MediaToken.IssueForThumbnail(Guid.NewGuid(), path, 10, Key, TimeSpan.FromSeconds(30));
+
+        Assert.False(MediaToken.TryValidateThumbnail(token, Guid.NewGuid(), path, 10, Key, out var error));
+        Assert.Equal("camera mismatch", error);
+    }
+
+    [Fact]
+    public void ThumbnailTokenRejectsAMismatchedOffset()
+    {
+        var cameraId = Guid.NewGuid();
+        const string path = @"C:\a\segment1.mp4";
+        var token = MediaToken.IssueForThumbnail(cameraId, path, 10, Key, TimeSpan.FromSeconds(30));
+
+        Assert.False(MediaToken.TryValidateThumbnail(token, cameraId, path, 15, Key, out var error));
+        Assert.Equal("offset mismatch", error);
+    }
+
+    [Fact]
+    public void ThumbnailTokenRejectsAnExpiredToken()
+    {
+        var cameraId = Guid.NewGuid();
+        const string path = @"C:\a\segment1.mp4";
+        var token = MediaToken.IssueForThumbnail(cameraId, path, 10, Key, TimeSpan.FromSeconds(-1));
+
+        Assert.False(MediaToken.TryValidateThumbnail(token, cameraId, path, 10, Key, out var error));
+        Assert.Equal("expired", error);
+    }
+
+    [Fact]
+    public void ASegmentTokenDoesNotValidateAsAThumbnailToken()
+    {
+        // Separate token families — confirms a segment token can't be replayed against the
+        // thumbnail proxy just because they're signed with the same key.
+        var cameraId = Guid.NewGuid();
+        const string path = @"C:\a\segment1.mp4";
+        var segmentToken = MediaToken.IssueForSegment(cameraId, path, Key, TimeSpan.FromSeconds(30));
+
+        Assert.False(MediaToken.TryValidateThumbnail(segmentToken, cameraId, path, 10, Key, out _));
+    }
+
     // ── IssueForExport / TryValidateExport ──────────────────────────────────
 
     [Fact]

@@ -592,6 +592,52 @@ app.MapGet("/playback-segment/{cameraId:guid}/{segmentId:long}", async (
     return Results.Stream(await nodeResponse.Content.ReadAsStreamAsync(ct), "video/mp4");
 }).RequireAuthorization("Playback.View");
 
+// M7 pass 2: same "browser never talks to a node directly" proxy shape as /playback-segment above,
+// but for one extracted JPEG hover-preview frame instead of a whole segment's bytes, looked up by
+// instant (atUtc) rather than by segment id — GetThumbnailInfoAsync resolves which segment covers
+// atUtc and buckets/clamps the offset within it server-side.
+app.MapGet("/playback-thumbnail/{cameraId:guid}", async (
+    Guid cameraId, DateTime atUtc, ITimelineService timeline, IHttpClientFactory httpFactory, CancellationToken ct) =>
+{
+    var thumb = await timeline.GetThumbnailInfoAsync(cameraId, atUtc, ct);
+    if (thumb is null) return Results.NotFound();
+    if (thumb.NodeIp is null || thumb.NodeLivePort is null || thumb.NodeMediaSigningKey is null)
+    {
+        return Results.Problem(
+            "This segment's node hasn't reported live-view readiness yet (needs at least one heartbeat since being upgraded to a build with live view).",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    var token = MediaToken.IssueForThumbnail(cameraId, thumb.FilePath, thumb.OffsetSeconds, thumb.NodeMediaSigningKey, TimeSpan.FromSeconds(30));
+    var nodeUri = $"http://{thumb.NodeIp}:{thumb.NodeLivePort}/playback-thumbnail/{cameraId}" +
+        $"?path={Uri.EscapeDataString(thumb.FilePath)}&offset={thumb.OffsetSeconds}&token={Uri.EscapeDataString(token)}";
+
+    // Shorter than /playback-segment's 25s — this relays one small JPEG frame, not a video segment.
+    var client = httpFactory.CreateClient();
+    client.Timeout = TimeSpan.FromSeconds(15);
+    HttpResponseMessage nodeResponse;
+    try
+    {
+        nodeResponse = await client.GetAsync(nodeUri, HttpCompletionOption.ResponseHeadersRead, ct);
+    }
+    catch (TaskCanceledException) when (!ct.IsCancellationRequested)
+    {
+        return Results.Problem("Timed out waiting for the recorder node to start responding (its storage may be slow or unreachable).",
+            statusCode: StatusCodes.Status504GatewayTimeout);
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException)
+    {
+        return Results.Problem($"Could not reach recorder node: {ex.Message}", statusCode: StatusCodes.Status502BadGateway);
+    }
+
+    if (!nodeResponse.IsSuccessStatusCode)
+    {
+        return Results.StatusCode((int)nodeResponse.StatusCode);
+    }
+
+    return Results.Stream(await nodeResponse.Content.ReadAsStreamAsync(ct), "image/jpeg");
+}).RequireAuthorization("Playback.View");
+
 // ── Multi-camera export ──────────────────────────────────────────────────────
 // Trigger from Playback's toolbar. Async: creates the job/items and returns immediately —
 // ExportJobDispatcher (a BackgroundService) picks up Queued items on its own poll cycle and does
