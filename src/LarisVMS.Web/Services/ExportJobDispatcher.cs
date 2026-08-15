@@ -83,22 +83,31 @@ public class ExportJobDispatcher(IServiceScopeFactory scopeFactory, IHttpClientF
         // OrphanedCameras handles for retention/warnings — see 0.62.0). A normal (non-pinned) item
         // targets the camera's current node; if any segment lives elsewhere, this one item is
         // replaced with one fresh, node-pinned item per node actually involved (0.68.0) rather than
-        // failing outright — each pinned item's own future dispatch pass hits the "distinctNodeIds
-        // is just its own pinned node" branch below and proceeds normally. A pinned item reaching
-        // this point with a foreign segment would mean SplitItemAcrossNodesAsync itself picked the
-        // wrong node, which shouldn't happen — treated as a hard failure rather than looping.
-        var distinctNodeIds = segments.Select(s => s.NodeId).Distinct().ToList();
-        if (distinctNodeIds.Count > 1 || distinctNodeIds[0] != nodeId)
+        // failing outright.
+        //
+        // SplitItemAcrossNodesAsync doesn't narrow FromUtc/ToUtc per item — all its items still read
+        // the parent job's full range — so a pinned item's query above returns every node's segments
+        // for that range, not just its own slice. Filter down to nodeId here instead of re-running
+        // the multi-node check against the unfiltered set (which would just find >1 node again and
+        // hard-fail every split item on its very next dispatch).
+        if (candidate.IsPinnedToNode)
         {
-            if (candidate.IsPinnedToNode)
+            segments = segments.Where(s => s.NodeId == nodeId).ToList();
+            if (segments.Count == 0)
             {
                 await exportService.MarkItemFailedAsync(candidate.ExportItemId,
                     "Internal error: this export's segments no longer match the node it was pinned to.", ct);
                 return;
             }
-
-            await exportService.SplitItemAcrossNodesAsync(candidate.ExportItemId, distinctNodeIds, ct);
-            return;
+        }
+        else
+        {
+            var distinctNodeIds = segments.Select(s => s.NodeId).Distinct().ToList();
+            if (distinctNodeIds.Count > 1 || distinctNodeIds[0] != nodeId)
+            {
+                await exportService.SplitItemAcrossNodesAsync(candidate.ExportItemId, distinctNodeIds, ct);
+                return;
+            }
         }
 
         // Same node-connection-info lookup /playback-segment's handler does via
