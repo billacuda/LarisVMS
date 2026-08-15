@@ -49,7 +49,7 @@ else
                     <tr>
                         <td>@b.Version</td>
                         <td>@b.Platform</td>
-                        <td><span title="@b.UploadedAt.ToString("u")">@b.UploadedAt.ToString("g")</span></td>
+                        <td><span title="@b.UploadedAt.ToString("u")">@b.UploadedAt.ToLocalTime().ToString("g")</span></td>
                         <td>@ByteFormat.Format(b.SizeBytes)</td>
                         <td class="font-monospace small">@b.Sha256[..12]&hellip;</td>
                         <td>@b.Notes</td>
@@ -96,7 +96,7 @@ else
                     <tr>
                         <td>@b.Version</td>
                         <td>@b.Platform</td>
-                        <td><span title="@b.UploadedAt.ToString("u")">@b.UploadedAt.ToString("g")</span></td>
+                        <td><span title="@b.UploadedAt.ToString("u")">@b.UploadedAt.ToLocalTime().ToString("g")</span></td>
                         <td>@ByteFormat.Format(b.SizeBytes)</td>
                         <td class="font-monospace small">@b.Sha256[..12]&hellip;</td>
                         <td>

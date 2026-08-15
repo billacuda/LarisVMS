@@ -126,6 +126,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
         // camera's continuous recording competes for. Not reported to /segments/delete — these were
         // never Segment rows, so there's nothing for the web tier to reconcile.
         SweepExportsDirectory(storageRoot, now);
+        SweepLogsDirectory(now);
 
         if (_lastReconciledAtUtc is null || now - _lastReconciledAtUtc >= ReconcileInterval)
         {
@@ -366,6 +367,27 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             catch (IOException) { continue; }
 
             if (now - info.LastWriteTimeUtc > ExportRetention) TryDelete(path);
+        }
+    }
+
+    // M11: FileLoggerProvider's own daily-rolling files under %ProgramData%\LarisVMS\logs — a fixed,
+    // non-settings-driven window (unlike Backup's admin-configurable retention count) since this is a
+    // small text-file cleanup with none of a multi-GB backup's disk-space stakes, and a node must keep
+    // sweeping this on its own local schedule even when it can't reach the web tier to read a setting.
+    private static readonly TimeSpan LogRetention = TimeSpan.FromDays(14);
+
+    private void SweepLogsDirectory(DateTime now)
+    {
+        var logsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "logs");
+        if (!Directory.Exists(logsDir)) return;
+
+        foreach (var path in Directory.EnumerateFiles(logsDir, "node-*.log", SearchOption.TopDirectoryOnly))
+        {
+            FileInfo info;
+            try { info = new FileInfo(path); }
+            catch (IOException) { continue; }
+
+            if (now - info.LastWriteTimeUtc > LogRetention) TryDelete(path);
         }
     }
 

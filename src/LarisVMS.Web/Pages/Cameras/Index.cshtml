@@ -145,7 +145,7 @@ else
                         <td data-sort-value="@(c.LastProbedAt?.Ticks ?? 0)">
                             @if (c.LastProbedAt is { } probed)
                             {
-                                <span title="@probed.ToString("u")">@probed.ToString("g")</span>
+                                <span title="@probed.ToString("u")">@probed.ToLocalTime().ToString("g")</span>
                             }
                             else
                             {

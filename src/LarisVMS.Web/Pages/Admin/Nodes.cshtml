@@ -83,11 +83,15 @@ else
                             <td data-sort-value="@(n.LastSeenAt?.Ticks ?? 0)">
                                 @if (n.LastSeenAt is { } seen)
                                 {
-                                    <span title="@seen.ToString("u")">@seen.ToString("g")</span>
+                                    <span title="@seen.ToString("u")">@seen.ToLocalTime().ToString("g")</span>
                                 }
                                 else
                                 {
                                     <span class="text-muted">never</span>
+                                }
+                                @if (n.ClockSkewSeconds is { } skew && Math.Abs(skew) > 60)
+                                {
+                                    <span class="ms-1" title="This node's own clock disagrees with the server's by about @Math.Round(skew) second(s) (measured @n.ClockSkewMeasuredAt?.ToLocalTime().ToString("g")) — check NTP/time sync on that machine.">⚠️ clock</span>
                                 }
                             </td>
                             <td>@Model.CameraCountByNode.GetValueOrDefault(n.Id, 0)</td>

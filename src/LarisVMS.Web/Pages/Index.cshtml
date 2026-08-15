@@ -4,7 +4,111 @@
     ViewData["Title"] = "Dashboard";
 }
 <h1>Dashboard</h1>
-<p class="text-muted">
-    LarisVMS is set up. Camera management, live view, and playback land in later milestones — see
-    CHANGELOG.md.
-</p>
+
+<div class="row g-3 mb-4">
+    <div class="col-6 col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <div class="display-6">@Model.RecordingCount</div>
+                <div class="text-muted small">Recording</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <div class="display-6 @(Model.NotReportingCount > 0 ? "text-danger" : "")">@Model.NotReportingCount</div>
+                <div class="text-muted small">Not reporting</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <div class="display-6 text-muted">@Model.DisabledCount</div>
+                <div class="text-muted small">Disabled</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <div class="display-6 @(Model.NodesOnlineCount < Model.NodesTotalCount ? "text-danger" : "")">@Model.NodesOnlineCount / @Model.NodesTotalCount</div>
+                <div class="text-muted small">Nodes online</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (Model.Rows.Count == 0)
+{
+    <p class="text-muted">No cameras yet — add one from <a href="/Cameras">Cameras</a>.</p>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-hover align-middle">
+            <thead>
+                <tr>
+                    <th>Camera</th>
+                    <th>Node</th>
+                    <th>Status</th>
+                    <th class="text-end">FPS</th>
+                    <th class="text-end">Bitrate</th>
+                    <th class="text-end">Reconnects</th>
+                    <th>Last report</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in Model.Rows)
+                {
+                    <tr>
+                        <td><a asp-page="/Cameras/Edit" asp-route-id="@r.CameraId">@r.CameraName</a></td>
+                        <td>
+                            @if (!r.NodeAssigned)
+                            {
+                                <span class="text-muted">unassigned</span>
+                            }
+                            else
+                            {
+                                @r.NodeName
+                                <span class="badge @(r.NodeOnline ? "text-bg-success" : "text-bg-secondary") ms-1">@(r.NodeOnline ? "online" : "offline")</span>
+                            }
+                        </td>
+                        <td>
+                            @if (!r.CameraEnabled)
+                            {
+                                <span class="badge text-bg-secondary">Disabled</span>
+                            }
+                            else if (!r.NodeAssigned)
+                            {
+                                <span class="badge text-bg-warning">No node</span>
+                            }
+                            else if (r.HealthFresh)
+                            {
+                                <span class="badge text-bg-success">Recording</span>
+                            }
+                            else
+                            {
+                                <span class="badge text-bg-danger">Not reporting</span>
+                            }
+                        </td>
+                        <td class="text-end">@(r.HealthFresh ? r.Fps?.ToString() ?? "—" : "—")</td>
+                        <td class="text-end">@(r.HealthFresh && r.BitrateKbps is { } kbps ? $"{kbps:N0} kbps" : "—")</td>
+                        <td class="text-end">@(r.ReconnectCount?.ToString() ?? "—")</td>
+                        <td class="small text-muted">
+                            @if (r.HealthReportedAt is { } reported)
+                            {
+                                <span title="@reported.ToString("u")">@reported.ToLocalTime().ToString("g")</span>
+                            }
+                            else
+                            {
+                                <span>never</span>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}

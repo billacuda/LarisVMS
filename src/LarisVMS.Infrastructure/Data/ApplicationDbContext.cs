@@ -36,6 +36,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<CameraAccess> CameraAccesses => Set<CameraAccess>();
     public DbSet<AppVersion> AppVersions => Set<AppVersion>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<BackupHistoryEntry> BackupHistoryEntries => Set<BackupHistoryEntry>();
 
     // ── Cameras ──────────────────────────────────────────────────────────────
     public DbSet<Camera> Cameras => Set<Camera>();
@@ -112,6 +113,15 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.UserName).HasMaxLength(256);
             e.Property(x => x.IpAddress).HasMaxLength(45);
             e.HasIndex(x => x.OccurredAt);
+        });
+
+        // ── BackupHistoryEntry ───────────────────────────────────────────────
+        builder.Entity<BackupHistoryEntry>(e =>
+        {
+            e.Property(x => x.TriggeredBy).HasMaxLength(20).IsRequired();
+            e.Property(x => x.FilePath).HasMaxLength(500);
+            e.Property(x => x.Error).HasMaxLength(2000);
+            e.HasIndex(x => x.StartedAt);
         });
 
         // ── CameraGroup ──────────────────────────────────────────────────────

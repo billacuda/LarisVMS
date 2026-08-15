@@ -195,18 +195,37 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
     public async Task<List<string>> ListSegmentFilePathsAsync(Guid nodeId, CancellationToken ct = default)
         => await db.Segments.AsNoTracking().Where(s => s.NodeId == nodeId).Select(s => s.FilePath).ToListAsync(ct);
 
-    public async Task RecordHeartbeatAsync(Guid nodeId, long? freeBytes, long? totalBytes, string? version, int? livePort, CancellationToken ct = default)
+    /// <summary>Pure so it's unit-testable without a database — same "isolate the arithmetic from the
+    /// I/O" shape as TimelineService.NormalizeToUtc. Null input (an older node build not sending
+    /// SentAtUtc yet) means "no measurement this heartbeat," not "zero skew."</summary>
+    internal static double? ComputeClockSkewSeconds(DateTime? nodeSentAtUtc, DateTime serverReceivedUtc)
+        => nodeSentAtUtc is { } sentAt ? (serverReceivedUtc - sentAt).TotalSeconds : null;
+
+    public async Task RecordHeartbeatAsync(Guid nodeId, long? freeBytes, long? totalBytes, string? version, int? livePort,
+        DateTime? nodeSentAtUtc, DateTime serverReceivedUtc, CancellationToken ct = default)
     {
+        var skew = ComputeClockSkewSeconds(nodeSentAtUtc, serverReceivedUtc);
+
         await db.Nodes.Where(n => n.Id == nodeId).ExecuteUpdateAsync(s => s
             .SetProperty(n => n.StorageFreeBytes, freeBytes)
             .SetProperty(n => n.StorageTotalBytes, totalBytes)
             .SetProperty(n => n.StorageStatsUpdatedAt, DateTime.UtcNow)
             .SetProperty(n => n.Version, n => version ?? n.Version)
-            .SetProperty(n => n.LivePort, n => livePort ?? n.LivePort), ct);
+            .SetProperty(n => n.LivePort, n => livePort ?? n.LivePort)
+            .SetProperty(n => n.ClockSkewSeconds, n => skew ?? n.ClockSkewSeconds)
+            .SetProperty(n => n.ClockSkewMeasuredAt, n => skew != null ? serverReceivedUtc : n.ClockSkewMeasuredAt), ct);
     }
 
+    /// <summary>Every field is coalesce-preserve (`item.X ?? s.X`), not a blind overwrite — M11 added
+    /// a second, periodic report source (NodeWorker's health tick, Fps/BitrateKbps/ReconnectCount)
+    /// that shares this same DTO/pipeline with the original once-per-connection report
+    /// (Width/Height/Codec) but doesn't know the other's fields, and neither should be able to null
+    /// out what the other one knows. HealthReportedAt only advances when a report actually carries a
+    /// health measurement (Fps not null) — a resolution-only report shouldn't make stale health data
+    /// look fresh.</summary>
     public async Task UpdateStreamInfoAsync(Guid nodeId, IReadOnlyList<StreamInfoReportItem> items, CancellationToken ct = default)
     {
+        var now = DateTime.UtcNow;
         foreach (var item in items)
         {
             if (!Enum.TryParse<CameraStreamRole>(item.StreamRole, out var role)) continue;
@@ -217,9 +236,13 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             await db.CameraStreams
                 .Where(s => s.CameraId == item.CameraId && s.Role == role && s.Camera.NodeId == nodeId)
                 .ExecuteUpdateAsync(u => u
-                    .SetProperty(s => s.Width, item.Width)
-                    .SetProperty(s => s.Height, item.Height)
-                    .SetProperty(s => s.Codec, item.Codec), ct);
+                    .SetProperty(s => s.Width, s => item.Width ?? s.Width)
+                    .SetProperty(s => s.Height, s => item.Height ?? s.Height)
+                    .SetProperty(s => s.Codec, s => item.Codec ?? s.Codec)
+                    .SetProperty(s => s.Fps, s => item.Fps ?? s.Fps)
+                    .SetProperty(s => s.BitrateKbps, s => item.BitrateKbps ?? s.BitrateKbps)
+                    .SetProperty(s => s.ReconnectCount, s => item.ReconnectCount ?? s.ReconnectCount)
+                    .SetProperty(s => s.HealthReportedAt, s => item.Fps != null ? now : s.HealthReportedAt), ct);
         }
     }
 

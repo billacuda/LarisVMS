@@ -42,6 +42,18 @@ public class Node
     public long? StorageTotalBytes { get; set; }
     public DateTime? StorageStatsUpdatedAt { get; set; }
 
+    /// <summary>How far this node's own OS clock disagrees with the web server's, measured every
+    /// heartbeat: (web server's receive-time UtcNow) - (SentAtUtc the node stamped when building the
+    /// request). Positive means the node's clock is behind the server's, negative means ahead.
+    /// Includes whatever network latency the heartbeat round trip had — negligible next to a real
+    /// drift/DST bug (which reads in minutes or hours, not the sub-second latency a LAN heartbeat
+    /// actually has), so this is precise enough to catch "NTP isn't running on this machine" without
+    /// needing a real NTP client. Same diagnostic idea M8's ONVIF UtcTime/segment-time comparison
+    /// already used to catch the camera-side DST bug (0.44.0/0.45.0), applied to the node's own OS
+    /// clock instead of a camera's ONVIF layer.</summary>
+    public double? ClockSkewSeconds { get; set; }
+    public DateTime? ClockSkewMeasuredAt { get; set; }
+
     /// <summary>Port the node's own Kestrel host listens on for media (M5) — plain HTTP, LAN-only,
     /// reachable only from LarisVMS.Web (see "Media path" in the plan: every browser request is
     /// proxied through IIS, nothing ever connects to a node directly, so the node never needs its

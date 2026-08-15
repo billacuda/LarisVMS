@@ -14,7 +14,7 @@ namespace LarisVMS.Web.Pages.Admin;
 /// the base value they're overriding.
 /// </summary>
 [Authorize("Settings.Edit")]
-public class SettingsModel(ISettingsResolver settings) : PageModel
+public class SettingsModel(ISettingsResolver settings, IAuditService auditService) : PageModel
 {
     [BindProperty] public int RetentionDays { get; set; } = 30;
     [BindProperty] public int WatermarkPercent { get; set; } = 90;
@@ -58,6 +58,10 @@ public class SettingsModel(ISettingsResolver settings) : PageModel
         if (!string.IsNullOrWhiteSpace(RegistrationKey))
             await settings.SetGlobalAsync("Node.RegistrationKey", RegistrationKey, by);
         await settings.SetGlobalAsync("NodeAutoUpdate.Enabled", NodeAutoUpdateEnabled.ToString(), by);
+
+        await auditService.LogAsync("Settings.Update",
+            User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, by,
+            HttpContext.Connection.RemoteIpAddress?.ToString());
 
         SavedMessage = "Saved.";
         return Page();

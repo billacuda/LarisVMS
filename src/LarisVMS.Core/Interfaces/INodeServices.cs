@@ -52,8 +52,12 @@ public interface INodeService
 
     /// <summary>Persists the node's self-reported disk usage, version, and live-media port from its
     /// latest heartbeat. A null version/livePort leaves the stored value unchanged rather than
-    /// clearing it.</summary>
-    Task RecordHeartbeatAsync(Guid nodeId, long? freeBytes, long? totalBytes, string? version, int? livePort, CancellationToken ct = default);
+    /// clearing it. nodeSentAtUtc (from NodeHeartbeatRequest.SentAtUtc) is compared against
+    /// serverReceivedUtc to measure clock skew (see Node.ClockSkewSeconds); null (an older node
+    /// build that doesn't send it yet) leaves the previous skew measurement in place rather than
+    /// clearing it to unknown on every heartbeat.</summary>
+    Task RecordHeartbeatAsync(Guid nodeId, long? freeBytes, long? totalBytes, string? version, int? livePort,
+        DateTime? nodeSentAtUtc, DateTime serverReceivedUtc, CancellationToken ct = default);
 
     /// <summary>Rough "days of retention remaining" per node: free bytes divided by that node's
     /// measured write rate over the last 24h. Null for a node with no free-space report yet or no

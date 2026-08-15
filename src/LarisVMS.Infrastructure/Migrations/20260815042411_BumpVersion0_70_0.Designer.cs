@@ -4,6 +4,7 @@ using LarisVMS.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace LarisVMS.Infrastructure.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260815042411_BumpVersion0_70_0")]
+    partial class BumpVersion0_70_0
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -157,46 +160,6 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.HasIndex("OccurredAt");
 
                     b.ToTable("AuditLogs");
-                });
-
-            modelBuilder.Entity("LarisVMS.Core.Entities.BackupHistoryEntry", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<DateTime?>("CompletedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("Error")
-                        .HasMaxLength(2000)
-                        .HasColumnType("nvarchar(2000)");
-
-                    b.Property<string>("FilePath")
-                        .HasMaxLength(500)
-                        .HasColumnType("nvarchar(500)");
-
-                    b.Property<long?>("SizeBytes")
-                        .HasColumnType("bigint");
-
-                    b.Property<DateTime>("StartedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<int>("Status")
-                        .HasColumnType("int");
-
-                    b.Property<string>("TriggeredBy")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("nvarchar(20)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("StartedAt");
-
-                    b.ToTable("BackupHistoryEntries");
                 });
 
             modelBuilder.Entity("LarisVMS.Core.Entities.Camera", b =>
@@ -459,9 +422,6 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.Property<bool>("HasAudio")
                         .HasColumnType("bit");
 
-                    b.Property<DateTime?>("HealthReportedAt")
-                        .HasColumnType("datetime2");
-
                     b.Property<int?>("Height")
                         .HasColumnType("int");
 
@@ -472,9 +432,6 @@ namespace LarisVMS.Infrastructure.Migrations
                         .IsRequired()
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
-
-                    b.Property<int?>("ReconnectCount")
-                        .HasColumnType("int");
 
                     b.Property<int>("Role")
                         .HasColumnType("int");
@@ -667,12 +624,6 @@ namespace LarisVMS.Infrastructure.Migrations
                         .IsRequired()
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
-
-                    b.Property<DateTime?>("ClockSkewMeasuredAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<double?>("ClockSkewSeconds")
-                        .HasColumnType("float");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");

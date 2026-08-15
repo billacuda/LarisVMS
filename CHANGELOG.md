@@ -5,6 +5,90 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.74.0] - 2026-08-14
+
+### Added
+
+- **Health dashboard** (the Dashboard page, previously a bare stub) — per-camera real-time fps,
+  bitrate, and cumulative reconnect count, plus each owning node's own online/offline status, with
+  summary counts (recording / not reporting / disabled / nodes online) at the top.
+- **Real-time stream health reporting.** `RecordingSession` now parses ffmpeg's own periodic progress
+  line (the same "frame=... fps=... bitrate=..." stats line ffmpeg prints throughout any run) for
+  live fps/bitrate, and tracks a cumulative reconnect count separate from the existing backoff-timing
+  counter (which resets on success). Reported every ~15s per active camera, stored on the existing
+  (previously unused) `CameraStream.Fps`/`BitrateKbps` columns plus new `ReconnectCount`/
+  `HealthReportedAt`. No "dropped frames" metric — this pipeline is `-c copy` throughout (no decode
+  ever happens), so there's no meaningful signal for ffmpeg to report there.
+
+M7/M8/M11 finish-up plan, pass 7 — ordered before Alerting specifically so alerting has real signals
+to trigger on. **LarisVMS.Node change — install-node.ps1 re-run needed on every recorder.**
+
+## [0.73.0] - 2026-08-14
+
+### Added
+
+- **Application log capture on both tiers.** Generic Host's default console-only logging is invisible
+  once a process isn't attached to a terminal — true for IIS's in-process hosting and especially true
+  for `LarisVMS.Node`, a Windows Service with no console at all. A new minimal `FileLoggerProvider`
+  (shared via Core) writes daily-rolling files: Web to `.\logs\app-*.log` (alongside IIS's own
+  `stdout_*.log`, already proven writable by this app pool), Node to
+  `%ProgramData%\LarisVMS\logs\node-*.log` (sibling to `node.config`). Each tier sweeps its own files
+  past a fixed 14-day window on its own schedule.
+- **System Logs viewer** (`Admin > System Logs`) — tails the Web tier's own log file with a date
+  picker and text filter. Distinct from the existing Audit Log (who did what) and from a node's own
+  logs, which stay on that node's local disk for now (no remote viewer yet — see this pass's backlog
+  note in the M7/M8/M11 finish-up plan).
+
+**LarisVMS.Node change — install-node.ps1 re-run needed on every recorder.**
+
+## [0.72.0] - 2026-08-14
+
+### Added
+
+- **Database backups** (`Admin > Backups`) — scheduled daily (server-local time) or on-demand,
+  `BACKUP DATABASE ... WITH INIT`, with retention-by-count cleanup and a 20-row history. Built for
+  SQL Express installs, which have no SQL Agent to schedule their own. Ported near-verbatim from
+  rsolva's `BackupService`/`BackupHostedService`. Restoring is deliberately not part of this page —
+  restore a `.bak` by other means (SSMS, `sqlcmd`). M7/M8/M11 finish-up plan, pass 5. Web-only, no
+  node change.
+
+## [0.71.0] - 2026-08-14
+
+### Fixed
+
+- **Several admin pages displayed raw UTC timestamps formatted as if they were local time, with no
+  "UTC" indicator.** `DateTime.ToString("g")` never converts timezone regardless of the value's Kind
+  — since every DateTime read from the DB is UTC (see `ApplicationDbContext`'s converter), these
+  displayed the bare UTC clock reading. The playback timeline has always converted correctly via JS
+  (`toLocaleString()`), but these server-rendered pages did not: Exports (job requested time, from/to
+  range), Cameras (last probed), Admin > Nodes (last seen), Admin > Node Builds (uploaded), and the
+  new Admin > Audit Log page above. All seven now convert via `.ToLocalTime()` before formatting
+  (using the web server's own local timezone — consistent with Schedule mode's existing
+  node-local-clock design decision); the UTC tooltip on hover is unchanged.
+
+### Added
+
+- **Recorder nodes now report their own clock skew.** Each heartbeat carries the node's own
+  `DateTime.UtcNow`; the server compares that against its own receive time and stores the difference.
+  Admin > Nodes shows a ⚠️ badge when a node's clock disagrees with the server's by more than 60
+  seconds (same threshold precedent as 0.44.0's camera-side DST-bug anchor) — a lightweight way to
+  catch "NTP isn't running on this recorder" without a real NTP client. M7/M8/M11 finish-up plan,
+  pass 4. **LarisVMS.Node change — install-node.ps1 re-run needed on every recorder** (older nodes
+  keep working — the new heartbeat field is optional and just skips the skew measurement until
+  updated).
+
+## [0.70.0] - 2026-08-14
+
+### Added
+
+- **Audit log viewer** (`Admin > Audit Log`) — filter by action/details text, actor, and date range,
+  paginated 50 rows at a time. Ported from rsolva's `Pages/Admin/Logs.cshtml` filter/pagination
+  shape, adapted to this app's narrower `AuditLog` entity (`Action`/`Details`, not rsolva's
+  `EventType`/`EntityType` split).
+- **New audit log entries**: camera create/update/delete, node update/delete, global settings
+  changes, and export creation now write to the audit trail — previously only login/logout did.
+  M7/M8/M11 finish-up plan, pass 3.
+
 ## [0.69.0] - 2026-08-14
 
 ### Changed

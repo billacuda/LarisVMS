@@ -1,0 +1,50 @@
+@page
+@model LarisVMS.Web.Pages.Admin.SystemLogsModel
+@{
+    ViewData["Title"] = "System Logs";
+}
+<h1>System Logs</h1>
+<p class="text-muted">
+    This app's own application log (not the audit trail — see <a href="/Admin/Logs">Admin &gt;
+    Audit Log</a> for who did what). Recorder node logs live on each node's own machine under
+    <code>%ProgramData%\LarisVMS\logs</code> — not shown here.
+</p>
+
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-warning">@Model.ErrorMessage</div>
+}
+else
+{
+    <form method="get" class="row g-2 mb-3">
+        <div class="col-auto">
+            <select name="date" class="form-select form-select-sm" onchange="this.form.submit()">
+                @foreach (var d in Model.AvailableDates)
+                {
+                    <option value="@d" selected="@(d == Model.SelectedDate)">@d</option>
+                }
+            </select>
+        </div>
+        <div class="col-auto">
+            <input type="text" name="q" value="@Model.Query" class="form-control form-control-sm" placeholder="Filter lines..." style="width: 20rem;" />
+        </div>
+        <div class="col-auto">
+            <button type="submit" class="btn btn-sm btn-primary">Filter</button>
+        </div>
+        <div class="col-auto">
+            <a href="/Admin/SystemLogs?date=@Model.SelectedDate" class="btn btn-sm btn-outline-secondary">Clear filter</a>
+        </div>
+    </form>
+
+    @if (Model.Truncated)
+    {
+        <p class="text-muted small">Showing the last 1000 matching lines only.</p>
+    }
+
+    <pre class="bg-body-tertiary p-2 small" style="max-height: 70vh; overflow-y: auto; white-space: pre-wrap;">@string.Join("\n", Model.Lines)</pre>
+
+    @if (Model.Lines.Count == 0)
+    {
+        <p class="text-muted">No lines match.</p>
+    }
+}

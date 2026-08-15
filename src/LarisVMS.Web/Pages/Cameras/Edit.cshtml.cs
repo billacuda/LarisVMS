@@ -11,7 +11,7 @@ namespace LarisVMS.Web.Pages.Cameras;
 [Authorize("Cameras.Edit")]
 public class EditModel(ICameraService cameraService, ICameraGroupService groupService, INodeService nodeService,
     ISettingsResolver settings, IZoneService zoneService, IEventTagRuleService eventTagRuleService,
-    IScheduleWindowService scheduleWindowService) : PageModel
+    IScheduleWindowService scheduleWindowService, IAuditService auditService) : PageModel
 {
     [BindProperty] public Guid? Id { get; set; }
     [BindProperty] public string Name { get; set; } = string.Empty;
@@ -131,11 +131,13 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
                 var camera = await cameraService.AddAsync(new AddCameraRequest(Name, DeviceServiceUri, Username, Password, GroupId));
                 if (NodeId is not null)
                     await nodeService.AssignCameraAsync(camera.Id, NodeId);
+                await LogAsync("Camera.Create", $"{Name} ({camera.Id})");
                 return RedirectToPage("Edit", new { id = camera.Id });
             }
 
             var quotaBytes = QuotaGb is { } gb ? (long)(gb * 1024 * 1024 * 1024) : (long?)null;
             await cameraService.UpdateAsync(Id.Value, Name, GroupId, NodeId, Username, Password, IsEnabled, quotaBytes);
+            await LogAsync("Camera.Update", $"{Name} ({Id})");
             await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Retention.Days",
                 RetentionDaysOverride?.ToString(), User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Recording.Mode",
@@ -184,9 +186,19 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
 
     public async Task<IActionResult> OnPostDeleteAsync()
     {
-        if (Id is not null) await cameraService.DeleteAsync(Id.Value);
+        if (Id is not null)
+        {
+            var camera = await cameraService.GetAsync(Id.Value);
+            await cameraService.DeleteAsync(Id.Value);
+            await LogAsync("Camera.Delete", $"{camera?.Name ?? "?"} ({Id})");
+        }
         return RedirectToPage("Index");
     }
+
+    private Task LogAsync(string action, string details) =>
+        auditService.LogAsync(action, User.Identity is { IsAuthenticated: true }
+            ? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value : null,
+            User.Identity?.Name, HttpContext.Connection.RemoteIpAddress?.ToString(), details);
 
     public async Task<IActionResult> OnPostUpdateStreamAsync(Guid streamId, bool streamIsEnabled, string? customName)
     {

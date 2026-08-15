@@ -261,7 +261,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 var storageRoot = Reconcile(config, ct);
                 PersistConfigCache(config);
                 var usage = DiskSpace.TryGetUsage(storageRoot);
-                var heartbeat = await api.HeartbeatAsync(new NodeHeartbeatRequest(NodeVersion.Current, usage?.FreeBytes, usage?.TotalBytes, livePort), ct);
+                var heartbeat = await api.HeartbeatAsync(new NodeHeartbeatRequest(NodeVersion.Current, usage?.FreeBytes, usage?.TotalBytes, livePort, DateTime.UtcNow), ct);
 
                 // Auto-update: server only ever hands this back when a genuinely newer build exists
                 // for this node's platform and NodeAutoUpdate.Enabled is on (see Program.cs's
@@ -328,6 +328,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             catch (OperationCanceledException) { break; }
 
             await FlushSegmentsAsync(ct);
+            EnqueueHealthReports();
             await FlushStreamInfoAsync(ct);
             EnqueueMotionCheckpoints();
             await FlushMotionSpansAsync(ct);
@@ -349,6 +350,24 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// checkpoint snapshot of every zone with recent activity on every active camera, same queue and
     /// same report call as a closed span; NodeService.RecordMotionSpansAsync upserts by (CameraId,
     /// ZoneId, StartUtc) so repeated checkpoints extend one row instead of piling up a new one.</summary>
+    /// <summary>M11: refreshes every active camera's real-time fps/bitrate/reconnect-count on the
+    /// same 15s tick EnqueueMotionCheckpoints already uses for its own periodic snapshot — unlike
+    /// StreamResolutionDetected (fires once per connection), this runs every tick regardless of
+    /// whether anything changed, so the dashboard's numbers actually move. Width/Height/Codec are
+    /// left null here (this loop has no cheap way to know the current values outside the
+    /// StreamResolutionDetected closure) — UpdateStreamInfoAsync's coalesce-preserve update keeps
+    /// whatever was last reported for those instead of clobbering them with null.</summary>
+    private void EnqueueHealthReports()
+    {
+        foreach (var (cameraId, recorder) in _active)
+        {
+            var session = recorder.Session;
+            _pendingStreamInfo.Enqueue(new StreamInfoReportItem(
+                cameraId, "Main", Width: null, Height: null, Codec: null,
+                Fps: session.CurrentFps, BitrateKbps: session.CurrentBitrateKbps, ReconnectCount: session.TotalReconnectCount));
+        }
+    }
+
     private void EnqueueMotionCheckpoints()
     {
         var now = DateTime.UtcNow;

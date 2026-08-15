@@ -9,6 +9,7 @@ using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Logging;
 using LarisVMS.Core.Security;
 using LarisVMS.Infrastructure.Auth;
 using LarisVMS.Infrastructure.Data;
@@ -20,6 +21,16 @@ using LarisVMS.Web.Middleware;
 using LarisVMS.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// ── Log capture (M11) ────────────────────────────────────────────────────────
+// Generic Host's default provider is console-only — invisible once the process isn't attached to a
+// terminal (IIS's own AspNetCoreModule redirect (web.config's stdoutLogFile) only captures raw
+// Console output and ASP.NET Core Module's own diagnostics, not structured ILogger lines). Writes
+// into the same ".\logs" directory IIS already proves writable by running under this exact app pool
+// identity, with an "app-" prefix so its daily files never collide with IIS's own "stdout_*" ones.
+// LogsRetentionService (registered below) sweeps files older than its retention window.
+builder.Logging.AddProvider(new FileLoggerProvider(
+    Path.Combine(AppContext.BaseDirectory, "logs"), "app", LogLevel.Information));
 
 // ── Configuration ────────────────────────────────────────────────────────────
 // Holds only what the app needs before the database can be read: the connection string and
@@ -139,10 +150,13 @@ builder.Services.AddScoped<IZoneService, ZoneService>();
 builder.Services.AddScoped<IEventTagRuleService, EventTagRuleService>();
 builder.Services.AddScoped<IScheduleWindowService, ScheduleWindowService>();
 builder.Services.AddScoped<IExportService, ExportService>();
+builder.Services.AddScoped<IBackupService, BackupService>();
 
 // First Web-tier BackgroundService — see ExportJobDispatcher's own doc comment for why exports
 // needed one instead of a synchronous per-camera download.
 builder.Services.AddHostedService<ExportJobDispatcher>();
+builder.Services.AddHostedService<BackupHostedService>();
+builder.Services.AddHostedService<LogsRetentionService>();
 
 // ── ONVIF HTTP client ────────────────────────────────────────────────────────
 // CameraService takes a Func<HttpClient> rather than IHttpClientFactory directly so
@@ -233,7 +247,8 @@ nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest requ
     // middleware — middleware runs before this handler's request body is bound, so it has nothing
     // reported to stamp; this is the one place NodeHeartbeatRequest's fields are actually read.
     var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
-    await nodeService.RecordHeartbeatAsync(node.Id, request.FreeBytes, request.TotalBytes, request.Version, request.LivePort, ct);
+    await nodeService.RecordHeartbeatAsync(node.Id, request.FreeBytes, request.TotalBytes, request.Version, request.LivePort,
+        request.SentAtUtc, DateTime.UtcNow, ct);
 
     // ── Auto-update check ────────────────────────────────────────────────
     // Global-only gate (Admin/Settings' NodeAutoUpdate.Enabled) — no per-node override for this
@@ -645,7 +660,7 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (
 // permission as the Exports page itself, rather than a separate Exports.Edit — the whole feature is
 // meant to be usable by anyone who can see the results, with no distinct "can trigger but can't
 // view" or "can view but can't trigger" role split called for.
-app.MapPost("/api/exports", async (HttpContext ctx, CreateExportRequest request, IExportService exportService, CancellationToken ct) =>
+app.MapPost("/api/exports", async (HttpContext ctx, CreateExportRequest request, IExportService exportService, IAuditService auditService, CancellationToken ct) =>
 {
     if (request.CameraIds.Count == 0) return Results.BadRequest("Select at least one camera.");
     if (request.ToUtc <= request.FromUtc) return Results.BadRequest("End time must be after start time.");
@@ -653,6 +668,8 @@ app.MapPost("/api/exports", async (HttpContext ctx, CreateExportRequest request,
     var userId = ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
     var userName = ctx.User.Identity?.Name;
     var job = await exportService.CreateJobAsync(request.CameraIds, request.FromUtc, request.ToUtc, userId, userName, ct);
+    await auditService.LogAsync("Export.Create", userId, userName, ctx.Connection.RemoteIpAddress?.ToString(),
+        $"{request.CameraIds.Count} camera(s), {request.FromUtc:u} - {request.ToUtc:u}", ct);
     return Results.Json(new { jobId = job.Id });
 }).RequireAuthorization("Exports.View");
 

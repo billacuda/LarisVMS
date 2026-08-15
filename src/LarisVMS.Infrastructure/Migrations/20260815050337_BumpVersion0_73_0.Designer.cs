@@ -4,6 +4,7 @@ using LarisVMS.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace LarisVMS.Infrastructure.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260815050337_BumpVersion0_73_0")]
+    partial class BumpVersion0_73_0
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -459,9 +462,6 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.Property<bool>("HasAudio")
                         .HasColumnType("bit");
 
-                    b.Property<DateTime?>("HealthReportedAt")
-                        .HasColumnType("datetime2");
-
                     b.Property<int?>("Height")
                         .HasColumnType("int");
 
@@ -472,9 +472,6 @@ namespace LarisVMS.Infrastructure.Migrations
                         .IsRequired()
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
-
-                    b.Property<int?>("ReconnectCount")
-                        .HasColumnType("int");
 
                     b.Property<int>("Role")
                         .HasColumnType("int");

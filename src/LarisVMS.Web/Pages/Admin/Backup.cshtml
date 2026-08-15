@@ -1,0 +1,116 @@
+@page
+@model LarisVMS.Web.Pages.Admin.BackupModel
+@using LarisVMS.Core.Enums
+@{
+    ViewData["Title"] = "Backups";
+}
+<h1>Backups</h1>
+<p class="text-muted">
+    Scheduled and on-demand SQL Server backups of this app's own database — built for SQL Express
+    installs, which have no SQL Agent to schedule their own. Restoring isn't done from this page;
+    restore a <code>.bak</code> file by other means (SSMS, <code>sqlcmd</code>).
+</p>
+
+@if (!string.IsNullOrEmpty(Model.Message))
+{
+    <div class="alert alert-success alert-dismissible fade show">
+        @Model.Message <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger alert-dismissible fade show">
+        @Model.ErrorMessage <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+@if (Model.IsRemoteSql)
+{
+    <div class="alert alert-warning">
+        The SQL Server (<code>@Model.DataSource</code>) is not on this machine. Backup files are
+        written by the <strong>SQL Server service on that host</strong>, so the directory below must
+        be a path that exists there, and retention cleanup is skipped (this app can't see those files).
+    </div>
+}
+
+<div class="card mb-3">
+    <div class="card-header fw-semibold">Schedule</div>
+    <div class="card-body">
+        <form method="post" asp-page-handler="Save">
+            <div class="form-check form-switch mb-3">
+                <input class="form-check-input" type="checkbox" asp-for="BackupEnabled" />
+                <label class="form-check-label" asp-for="BackupEnabled">Run a daily backup automatically</label>
+            </div>
+            <div class="row g-3">
+                <div class="col-sm-2">
+                    <label class="form-label" asp-for="BackupTime">Time (server local)</label>
+                    <input asp-for="BackupTime" class="form-control" placeholder="03:00" />
+                </div>
+                <div class="col-sm-6">
+                    <label class="form-label" asp-for="BackupDirectory">Backup directory</label>
+                    <input asp-for="BackupDirectory" class="form-control" placeholder="D:\Backups\LarisVMS" />
+                    <div class="form-text">
+                        Absolute path the SQL Server service account can write to. Pick a location
+                        that won't be wiped by app redeployments.
+                    </div>
+                </div>
+                <div class="col-sm-2">
+                    <label class="form-label" asp-for="RetentionCount">Keep last</label>
+                    <input asp-for="RetentionCount" type="number" min="1" class="form-control" />
+                    <div class="form-text">backups (local SQL only)</div>
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary btn-sm mt-3">Save</button>
+        </form>
+        <form method="post" asp-page-handler="RunNow" class="mt-2">
+            <button type="submit" class="btn btn-outline-secondary btn-sm">Back up now</button>
+            <span class="text-muted small ms-2">Runs immediately; large databases can take a while.</span>
+        </form>
+        <p class="text-muted small mt-3 mb-0">
+            Backups are full database backups (<code>BACKUP DATABASE &hellip; WITH INIT</code>). On
+            SQL Express, consider the SIMPLE recovery model — this page does not take transaction log
+            backups.
+        </p>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header fw-semibold">History</div>
+    <div class="table-responsive">
+        <table class="table table-sm mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Started</th>
+                    <th>Status</th>
+                    <th>Trigger</th>
+                    <th>File</th>
+                    <th>Size</th>
+                    <th>Error</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var b in Model.History)
+                {
+                    var badgeClass = b.Status switch
+                    {
+                        BackupStatus.Success => "text-bg-success",
+                        BackupStatus.Failed => "text-bg-danger",
+                        _ => "text-bg-secondary"
+                    };
+                    <tr>
+                        <td class="small" title="@b.StartedAt.ToString("u")">@b.StartedAt.ToLocalTime().ToString("g")</td>
+                        <td><span class="badge @badgeClass">@b.Status</span></td>
+                        <td class="small">@b.TriggeredBy</td>
+                        <td class="small font-monospace">@b.FilePath</td>
+                        <td class="small">@(b.SizeBytes is { } s ? ByteFormat.Format(s) : "—")</td>
+                        <td class="small text-danger">@b.Error</td>
+                    </tr>
+                }
+                @if (Model.History.Count == 0)
+                {
+                    <tr><td colspan="6" class="text-center text-muted py-3">No backups yet.</td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>

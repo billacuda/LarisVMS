@@ -11,7 +11,7 @@ namespace LarisVMS.Web.Pages.Admin;
 // page mixes viewing and editing inline (unlike Cameras, which splits Index/Edit into separate
 // pages+policies), so the whole page requires edit access rather than only the POST handlers.
 [Authorize("Nodes.Edit")]
-public class NodesModel(INodeService nodeService, ICameraService cameraService, ISettingsResolver settings) : PageModel
+public class NodesModel(INodeService nodeService, ICameraService cameraService, ISettingsResolver settings, IAuditService auditService) : PageModel
 {
     public List<Node> Nodes { get; set; } = [];
     public Dictionary<Guid, int> CameraCountByNode { get; set; } = [];
@@ -55,6 +55,7 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
             await nodeService.UpdateAsync(id, name, storageRootPath);
             await settings.SetOverrideAsync(SettingScope.Node, id, "Retention.Days",
                 retentionDaysOverride?.ToString(), User.Identity?.Name);
+            await LogAsync("Node.Update", $"{name} ({id})");
         }
         catch (Exception ex)
         {
@@ -67,7 +68,13 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
 
     public async Task<IActionResult> OnPostDeleteAsync(Guid id)
     {
+        var node = (await nodeService.ListAsync()).FirstOrDefault(n => n.Id == id);
         await nodeService.DeleteAsync(id);
+        await LogAsync("Node.Delete", $"{node?.Name ?? "?"} ({id})");
         return RedirectToPage();
     }
+
+    private Task LogAsync(string action, string details) =>
+        auditService.LogAsync(action, User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
+            User.Identity?.Name, HttpContext.Connection.RemoteIpAddress?.ToString(), details);
 }

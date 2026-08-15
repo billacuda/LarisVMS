@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using LarisVMS.Core.Dtos;
+using LarisVMS.Core.Logging;
 using LarisVMS.Core.Security;
 using LarisVMS.Media;
 using LarisVMS.Node;
@@ -84,6 +85,13 @@ var onvifHttpClient = new HttpClient(new HttpClientHandler
 var onvifEventsClient = new OnvifEventsClient(new OnvifSoapClient(onvifHttpClient));
 
 var builder = WebApplication.CreateBuilder(args);
+// M11: a Windows Service has no console anyone will ever see — file capture is the only way to
+// diagnose a node after the fact. Sibling of node.config's own %ProgramData%\LarisVMS\ (NodeConfigStore),
+// already proven writable by this same service account. StorageManager.SweepLogsDirectory (fixed
+// 14-day window) is this tier's retention sweep, run alongside its other periodic disk cleanup.
+builder.Logging.AddProvider(new FileLoggerProvider(
+    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "logs"),
+    "node", LogLevel.Information));
 builder.WebHost.ConfigureKestrel(o => o.ListenAnyIP(livePort));
 builder.Services.AddWindowsService(o => o.ServiceName = "LarisVMS Node");
 builder.Services.AddSingleton(apiClient);

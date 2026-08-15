@@ -15,7 +15,7 @@ work on phone, tablet, and desktop.
 
 ---
 
-## **Current version [0.69.0](CHANGELOG.md)**
+## **Current version [0.74.0](CHANGELOG.md)**
 
 ## Stack
 
@@ -63,13 +63,23 @@ manual `install-node.ps1` re-run needed for an ordinary version bump (a service-
 the LarisVMS rename, is the one case that still needs a manual reinstall). Multi-camera video export
 (Playback's toolbar, "Export…") queues one async job per selected camera — each camera's own node
 does a `-c copy` remux of its segments for the range — and delivers finished files through the same
-signed-proxy path as playback, tracked on a new Exports page.
+signed-proxy path as playback, tracked on an Exports page (auto-refreshing while a job runs, with
+delete and retry actions). A range that crosses a camera's reassignment between nodes splits into one
+export per node instead of failing. Hovering the Playback timeline shows a small preview thumbnail
+(5-minute buckets, generated on demand with a low-priority backfill for gaps).
+
+**M11 (operations)** is under way: an audit log viewer (`Admin → Audit Log`) covering camera/node/
+settings/export actions plus logins; per-node clock-skew detection (`Admin → Nodes`) flagging when a
+recorder's own OS clock has drifted from the server's; scheduled or on-demand database backups
+(`Admin → Backups` — restore is deliberately left to other tools, e.g. SSMS); application log capture
+on both tiers with a viewer (`Admin → System Logs`); and a health dashboard (the Dashboard page)
+showing each camera's live fps/bitrate/reconnect count and every node's online status. Alerting,
+ONVIF-pushed motion zones, object-detection overlays, and a mobile-specific UI pass are not built yet.
 
 Hardware-transcode fallback for browsers that can't decode a camera's native codec, main/sub
-auto-switch, and instant replay are not built yet (M5 pass-1 scope), hover thumbnails on the timeline
-aren't built (needs frame-extraction work M3 never added), and PTZ/audio, further investigation
-tooling (bookmarks, evidence lock, smart search), and object detection haven't started — see
-[CHANGELOG.md](CHANGELOG.md) for what's shipped and the architecture plan for the full milestone
+auto-switch, and instant replay are not built yet (M5 pass-1 scope), and PTZ/audio, further
+investigation tooling (bookmarks, evidence lock, smart search), and object detection haven't started
+— see [CHANGELOG.md](CHANGELOG.md) for what's shipped and the architecture plan for the full milestone
 roadmap (PTZ/audio → export/investigation → operations → object detection).
 
 Recorder nodes require **FFmpeg** on the machine they run on (LGPL "shared" build recommended — see

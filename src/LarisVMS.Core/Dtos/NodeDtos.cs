@@ -6,7 +6,11 @@ namespace LarisVMS.Core.Dtos;
 public record NodeRegisterRequest(string RegistrationKey, string Hostname, string? Version, string? Platform);
 public record NodeRegisterResponse(Guid NodeId, string Secret, string MediaSigningKey);
 
-public record NodeHeartbeatRequest(string? Version, long? FreeBytes = null, long? TotalBytes = null, int? LivePort = null);
+/// <summary>SentAtUtc is the node's own DateTime.UtcNow at the moment it builds this request — the
+/// web server compares that against its own receive-time to measure this node's OS clock skew (see
+/// Node.ClockSkewSeconds). Defaulted rather than required so an older node build (pre-dating this
+/// field) still deserializes cleanly against a newer Web — it just never gets a skew measurement.</summary>
+public record NodeHeartbeatRequest(string? Version, long? FreeBytes = null, long? TotalBytes = null, int? LivePort = null, DateTime? SentAtUtc = null);
 
 /// <summary>Recorder-node auto-update: a genuinely newer NodeBuildVersion exists for this node's
 /// reported Platform (NodeVersionComparer.IsNewer), and NodeAutoUpdate.Enabled is on. DownloadUrl is
@@ -110,9 +114,18 @@ public record NodeStatusReportItem(Guid CameraId, string State, DateTime? LastSe
 /// index never claims a file that no longer exists.</summary>
 public record SegmentDeleteRequest(List<string> FilePaths);
 
-/// <summary>Real resolution/codec parsed from ffmpeg's own stderr when it opens a camera's stream —
-/// sent once per ffmpeg (re)start, more trustworthy than ONVIF's advertised
-/// VideoEncoderConfiguration, which some cameras omit entirely. Only ever reported for the Main
+/// <summary>Real resolution/codec parsed from ffmpeg's own stderr when it opens a camera's stream,
+/// plus (M11) periodic health signals — real-time fps/bitrate from ffmpeg's progress line and a
+/// cumulative reconnect count, both from the same RecordingSession. Only ever reported for the Main
 /// stream today, since that's the only one the node actually opens with ffmpeg (Sub/Third aren't
-/// consumed by anything until M5's live view).</summary>
-public record StreamInfoReportItem(Guid CameraId, string StreamRole, int Width, int Height, string? Codec);
+/// consumed by anything until M5's live view).
+///
+/// Width/Height/Codec are sent once per ffmpeg (re)start (more trustworthy than ONVIF's advertised
+/// VideoEncoderConfiguration, which some cameras omit entirely) and null on every other report;
+/// Fps/BitrateKbps/ReconnectCount are sent on NodeWorker's periodic health tick and refreshed there
+/// regardless of whether the connection just changed. Deliberately one merged DTO rather than two —
+/// both flow through the exact same pending-queue/flush/UpdateStreamInfoAsync pipeline, and
+/// NodeService.UpdateStreamInfoAsync preserves whichever fields a given report didn't include (see
+/// its own doc comment) rather than one report type clobbering the other's data.</summary>
+public record StreamInfoReportItem(Guid CameraId, string StreamRole, int? Width, int? Height, string? Codec,
+    int? Fps = null, int? BitrateKbps = null, int? ReconnectCount = null);

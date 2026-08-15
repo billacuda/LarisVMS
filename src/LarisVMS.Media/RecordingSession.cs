@@ -40,6 +40,25 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
     public DateTime? LastSegmentAt { get; private set; }
     public string? LastError { get; private set; }
 
+    /// <summary>M11: most recently observed values from ffmpeg's own periodic progress line (the
+    /// same "frame=... fps=... bitrate=..." stats line ffmpeg prints to stderr for any run, copy or
+    /// transcode) — real throughput, not a static capability like StreamResolutionDetected's
+    /// once-per-connection Width/Height/Codec. Null until the first progress line arrives after
+    /// connecting, and again after every reconnect (a fresh RecordingSession attempt starts these
+    /// back at null rather than carrying the previous attempt's now-stale numbers forward).</summary>
+    public int? CurrentFps { get; private set; }
+    public int? CurrentBitrateKbps { get; private set; }
+
+    /// <summary>M11: cumulative count of failed/backoff attempts since this RecordingSession was
+    /// created — unlike the local `consecutiveFailures` variable in RunAsync (which exists purely to
+    /// drive backoff timing and resets to 0 on every successful segment), this never resets, so a
+    /// camera that reconnects constantly through the day is visible as "many total reconnects" even
+    /// though each individual streak is short. A dropped-frames counter was considered too (the plan
+    /// doc's original health-signal sketch mentions one) but this pipeline is `-c copy` throughout —
+    /// no decode ever happens, so there is no meaningful "dropped frame" for ffmpeg to report; it was
+    /// left out rather than faked.</summary>
+    public int TotalReconnectCount { get; private set; }
+
     public event Action<RecordingSegment>? SegmentCompleted;
     public event Action<StreamResolution>? StreamResolutionDetected;
 
@@ -83,6 +102,27 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
         return new StreamResolution(int.Parse(match.Groups[2].Value), int.Parse(match.Groups[3].Value), match.Groups[1].Value);
     }
 
+    // ffmpeg's periodic progress line, printed to stderr throughout the run (copy or transcode
+    // alike), e.g. "frame= 1234 fps= 15 q=-1.0 size=   10240kB time=00:01:23.45 bitrate=1023.4kbits/s
+    // speed=1.00x". Terminated with '\r' (overwrites the same terminal line), not '\n' — .NET's
+    // ReadLineAsync already treats a bare '\r' as a line terminator too, so this arrives through
+    // DrainStderrAsync's normal per-line loop with no special handling needed. fps and bitrate can
+    // both be fractional ("fps= 14.9"); truncated to int for CameraStream's existing int? columns.
+    private static readonly Regex ProgressLine = new(
+        @"fps=\s*([\d.]+).*?bitrate=\s*([\d.]+)kbits/s", RegexOptions.Compiled);
+
+    /// <summary>Pure parsing, same reasoning as TryParseVideoStreamLine. Returns (fps, bitrateKbps),
+    /// truncated to whole numbers — null for a line that isn't a progress line, or (rare) one with
+    /// bitrate reported as "N/A" mid-startup before ffmpeg has enough data to compute it yet.</summary>
+    internal static (int Fps, int BitrateKbps)? TryParseProgressLine(string line)
+    {
+        var match = ProgressLine.Match(line);
+        if (!match.Success) return null;
+        if (!double.TryParse(match.Groups[1].Value, out var fps) || !double.TryParse(match.Groups[2].Value, out var bitrate))
+            return null;
+        return ((int)fps, (int)bitrate);
+    }
+
     /// <summary><paramref name="knownPaths"/> pre-seeds the reported-paths set with segment files
     /// the server already has a Segments row for, from the caller's own record (NodeWorker fetches
     /// this once via GET /api/nodes/segments/paths before any session starts) — without it, a
@@ -117,6 +157,11 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
             {
                 process = StartFfmpeg();
                 var stderrTask = DrainStderrAsync(process, ct);
+                // A new process means fresh throughput stats too — carrying the previous attempt's
+                // fps/bitrate forward would show a "live" number for a stream that's actually
+                // reconnecting.
+                CurrentFps = null;
+                CurrentBitrateKbps = null;
                 // A new process means a new moov — the old one (and anyone still waiting on it) is
                 // no longer valid.
                 LiveInitSegment = null;
@@ -178,11 +223,13 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
                     logger.LogWarning("ffmpeg exited cleanly (code 0) without being asked to — restarting.");
                 }
                 consecutiveFailures++;
+                TotalReconnectCount++;
                 LastError = $"ffmpeg exited with code {process.ExitCode}.";
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 consecutiveFailures++;
+                TotalReconnectCount++;
                 LastError = ex.Message;
                 logger.LogError(ex, "Recording session failed.");
                 if (process is { HasExited: false }) TryKill(process);
@@ -392,6 +439,12 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
                 {
                     resolutionReported = true;
                     StreamResolutionDetected?.Invoke(resolution);
+                }
+
+                if (TryParseProgressLine(line) is { } progress)
+                {
+                    CurrentFps = progress.Fps;
+                    CurrentBitrateKbps = progress.BitrateKbps;
                 }
 
                 if (line.Contains("error", StringComparison.OrdinalIgnoreCase)
