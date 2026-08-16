@@ -198,6 +198,38 @@ public class TimelineService(ApplicationDbContext db) : ITimelineService
         return new ThumbnailInfo(segment.FilePath, offsetSeconds, node?.LastIpAddress, node?.LivePort, node?.MediaSigningKey);
     }
 
+    /// <summary>Dashboard's "most recent thumbnail" column: the newest *completed* segment's own
+    /// last frame, not GetThumbnailInfoAsync's bucketed-to-5-minutes historical lookup (which could
+    /// read up to ~10 minutes stale here and, worse, land inside the still-open in-progress segment
+    /// that has no Segments row yet at all, returning null). Segments only gets a row once a segment
+    /// closes (RecordingSession.PollForCompletedSegments), so "newest row" already means "most recent
+    /// footage actually available to extract a frame from," typically within one segment length
+    /// (60s) of true "now" for an actively-recording camera. Deliberately not the live-RTSP
+    /// /api/cameras/{id}/snapshot endpoint instead: that grabs a fresh frame straight from the camera
+    /// every call (fine for the occasional zone-editor use it was built for, too heavy to fire once
+    /// per camera on every dashboard poll) and is gated Cameras.Edit, stricter than the plain
+    /// [Authorize] Pages/Index itself requires.</summary>
+    public async Task<ThumbnailInfo?> GetLatestThumbnailInfoAsync(Guid cameraId, CancellationToken ct = default)
+    {
+        var segment = await db.Segments
+            .Where(s => s.CameraId == cameraId)
+            .OrderByDescending(s => s.StartUtc)
+            .Select(s => new { s.FilePath, s.NodeId, s.DurationMs })
+            .FirstOrDefaultAsync(ct);
+        if (segment is null) return null;
+
+        var node = await db.Nodes
+            .Where(n => n.Id == segment.NodeId)
+            .Select(n => new { n.LastIpAddress, n.LivePort, n.MediaSigningKey })
+            .FirstOrDefaultAsync(ct);
+
+        // As close to this segment's own end as ThumbnailCapture will accept (see
+        // GetThumbnailInfoAsync's identical clamp) — the freshest frame this segment has.
+        var offsetSeconds = Math.Max(0, segment.DurationMs / 1000 - 1);
+
+        return new ThumbnailInfo(segment.FilePath, offsetSeconds, node?.LastIpAddress, node?.LivePort, node?.MediaSigningKey);
+    }
+
     public async Task<List<SegmentFileInfo>> GetSegmentFilePathsAsync(Guid cameraId, DateTime fromUtc, DateTime toUtc, CancellationToken ct = default)
     {
         fromUtc = NormalizeToUtc(fromUtc);

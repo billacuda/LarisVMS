@@ -14,13 +14,13 @@
 @if (!string.IsNullOrEmpty(Model.Message))
 {
     <div class="alert alert-success alert-dismissible fade show">
-        @Model.Message <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        @Model.Message <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
     </div>
 }
 @if (!string.IsNullOrEmpty(Model.ErrorMessage))
 {
     <div class="alert alert-danger alert-dismissible fade show">
-        @Model.ErrorMessage <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        @Model.ErrorMessage <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
     </div>
 }
 

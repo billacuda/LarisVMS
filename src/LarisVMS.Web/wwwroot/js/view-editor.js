@@ -29,13 +29,13 @@ window.larisvmsViewEditor = (function () {
             '<div class="view-cell h-100 d-flex flex-column" data-cell-id="' + cell.id + '" data-camera-id="' + cell.cameraId + '">' +
                 '<div class="view-cell-titlebar d-flex align-items-center gap-1 px-1 bg-dark text-white small" style="cursor: move;">' +
                     '<span class="flex-grow-1 text-truncate">' + escHtml(camName) + '</span>' +
-                    '<select class="form-select form-select-sm view-cell-aspect" title="Aspect ratio" ' +
+                    '<select class="form-select form-select-sm view-cell-aspect" title="Aspect ratio" aria-label="Aspect ratio" ' +
                         'style="width: auto; padding: 0 1.2rem 0 .3rem; font-size: .7rem;">' + options + '</select>' +
                     '<label class="mb-0" title="Hide on phone" style="cursor: pointer;">' +
                         '<input type="checkbox" class="view-cell-hide-mobile d-none"' + (cell.hideOnPhone ? ' checked' : '') + ' />' +
                         '<span class="view-cell-hide-mobile-icon">' + (cell.hideOnPhone ? '📵' : '📱') + '</span>' +
                     '</label>' +
-                    '<button type="button" class="btn-close btn-close-white view-cell-remove" style="font-size: .6rem;" title="Remove"></button>' +
+                    '<button type="button" class="btn-close btn-close-white view-cell-remove" style="font-size: .6rem;" title="Remove" aria-label="Remove camera from view"></button>' +
                 '</div>' +
                 '<div class="position-relative flex-grow-1 bg-black overflow-hidden" style="min-height: 0;">' +
                     '<video class="view-cell-video" style="width:100%; height:100%; object-fit:contain;" muted playsinline></video>' +
@@ -61,7 +61,20 @@ window.larisvmsViewEditor = (function () {
 
     function wireCellControls(itemEl) {
         var aspectSelect = itemEl.querySelector('.view-cell-aspect');
-        if (aspectSelect) aspectSelect.addEventListener('click', function (e) { e.stopPropagation(); });
+        if (aspectSelect) {
+            aspectSelect.addEventListener('click', function (e) { e.stopPropagation(); });
+            // Without this, a cell's stored GridStack height stays whatever it was before the aspect
+            // change (usually whatever computeInitialHeight() picked for the *previous* aspect at
+            // placement time), so the video area ends up taller than the cell actually reserves —
+            // clipping the titlebar/name below it. Resizing here keeps h in sync the same way
+            // placeCell() does for a newly-added cell.
+            aspectSelect.addEventListener('change', function () {
+                var gsItem = itemEl.closest('.grid-stack-item');
+                if (!gsItem || !gsItem.gridstackNode || !grid) return;
+                var w = gsItem.gridstackNode.w;
+                grid.update(gsItem, { h: computeInitialHeight(aspectSelect.value, w) });
+            });
+        }
 
         var hideCheck = itemEl.querySelector('.view-cell-hide-mobile');
         var hideLabel = hideCheck && hideCheck.closest('label');

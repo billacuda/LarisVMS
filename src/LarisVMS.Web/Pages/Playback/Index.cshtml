@@ -52,8 +52,8 @@ else
 
         @* Hidden until Export… is clicked — a plain inline form, not a modal, per the feature's own
            "don't over-build this" guidance. Cameras are whichever are currently on screen in the
-           selected view (populated in JS from the same `tiles` the player itself renders), start/end
-           default to a 5-minute window centered on the current playhead. *@
+           cameras (populated in JS from the full camera list, pre-checked for whatever's in the
+           selected view), start/end default to a 5-minute window centered on the current playhead. *@
         <div id="pbExportPanel" class="d-none border rounded p-2 mb-2 bg-body-tertiary" style="flex:0 0 auto;">
             <div class="d-flex flex-wrap align-items-end gap-3">
                 <div>
@@ -69,7 +69,7 @@ else
                     <input type="datetime-local" id="pbExportTo" class="form-control form-control-sm" step="1" />
                 </div>
                 <button type="button" class="btn btn-sm btn-primary" id="pbExportSubmit">Start export</button>
-                <span id="pbExportStatus" class="small"></span>
+                <span id="pbExportStatus" class="small" role="status" aria-live="polite"></span>
             </div>
         </div>
 

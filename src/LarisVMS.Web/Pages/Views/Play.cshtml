@@ -13,10 +13,11 @@
 <div class="d-flex justify-content-between align-items-center mb-2" id="viewPlayToolbar">
     <h1 class="mb-0 h4">@Model.Name</h1>
     <div class="d-flex gap-2 align-items-center">
-        @if (Model.Views.Count > 1)
+        @if (Model.Views.Count > 0)
         {
             <select class="form-select form-select-sm" style="width:auto;" id="viewPlayPicker"
-                    onchange="if (this.value) location.href = '/Views/Play/' + this.value;" title="Switch view">
+                    title="Switch view" aria-label="Switch view"
+                    onchange="if (this.value) location.href = '/Views/Play/' + this.value;">
                 @foreach (var v in Model.Views)
                 {
                     <option value="@v.Id" selected="@(v.Id == Model.CurrentViewId ? "selected" : null)">@v.Name</option>
@@ -34,11 +35,14 @@
     <script src="~/js/aspect-ratio.js" asp-append-version="true"></script>
     <script src="~/js/live-view.js" asp-append-version="true"></script>
     <script src="~/js/fullscreen-tile.js" asp-append-version="true"></script>
+    <script src="~/js/timeline.js" asp-append-version="true"></script>
+    <script src="~/js/playback-player.js" asp-append-version="true"></script>
     <script src="~/js/view-play.js" asp-append-version="true"></script>
     <script>
         window.larisvmsViewPlay.init({
             layoutJson: @Html.Raw(JsonSerializer.Serialize(Model.LayoutJson)),
             cameras: @Html.Raw(camerasJson),
+            currentViewId: @Html.Raw(JsonSerializer.Serialize(Model.CurrentViewId.ToString())),
             gridElId: 'viewPlayGrid',
             kioskBtnId: 'kioskBtn',
             navElId: 'mainNav',
@@ -48,5 +52,6 @@
             tourIndex: @Model.TourIndex,
             tourIntervalSeconds: @Model.TourIntervalSeconds
         });
+        window.larisvmsLiveView.startMotionIndicatorPolling(5000);
     </script>
 }

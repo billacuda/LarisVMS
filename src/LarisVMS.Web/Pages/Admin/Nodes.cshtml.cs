@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using LarisVMS.Core;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
@@ -52,10 +53,23 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
     {
         try
         {
+            // Pre-edit state first, so the entry reports what actually changed — including the
+            // per-node retention override, which previously rode along inside this same generic
+            // "Node.Update" entry with nothing to indicate it had been touched at all. No secret
+            // fields here: MediaSigningKey is generated internally and never edited through this form.
+            var before = (await nodeService.ListAsync()).FirstOrDefault(n => n.Id == id);
+            var oldRetentionOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Retention.Days");
+
             await nodeService.UpdateAsync(id, name, storageRootPath);
             await settings.SetOverrideAsync(SettingScope.Node, id, "Retention.Days",
                 retentionDaysOverride?.ToString(), User.Identity?.Name);
-            await LogAsync("Node.Update", $"{name} ({id})");
+
+            var details = AuditDiff.Build(
+                AuditDiff.Of("Name", before?.Name, name),
+                AuditDiff.Of("Storage root", before?.StorageRootPath, storageRootPath),
+                AuditDiff.Of("Retention override", oldRetentionOverride, retentionDaysOverride?.ToString()));
+
+            await LogAsync("Node.Update", details is null ? $"{name} ({id})" : $"{name} ({id}) — {details}");
         }
         catch (Exception ex)
         {

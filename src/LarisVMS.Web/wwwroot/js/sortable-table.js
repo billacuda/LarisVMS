@@ -72,4 +72,25 @@
     document.addEventListener('DOMContentLoaded', function () {
         Array.prototype.forEach.call(document.querySelectorAll('table[data-sortable]'), initTable);
     });
+
+    // For a table whose rows get replaced wholesale by something other than a user click here (e.g.
+    // dashboard.js's 60s AJAX refresh) — re-applies whichever column is currently marked
+    // data-sort-dir (set by the click handler above) against the table's current rows. A plain DOM
+    // attribute read, not a stored instance, so it works even for a table not present when this
+    // module's own DOMContentLoaded ran. No-op if the table has never been sorted (rows stay in
+    // whatever order the caller just put them in).
+    function reapply(tableId) {
+        var table = document.getElementById(tableId);
+        if (!table || !table.tHead || !table.tHead.rows.length) return;
+        var headers = Array.prototype.slice.call(table.tHead.rows[0].cells);
+        for (var i = 0; i < headers.length; i++) {
+            var dir = headers[i].getAttribute('data-sort-dir');
+            if (dir) {
+                sortRows(table, i, headers[i].hasAttribute('data-sort-numeric'), dir === 'asc');
+                return;
+            }
+        }
+    }
+
+    window.larisvmsSortableTable = { reapply: reapply };
 })();

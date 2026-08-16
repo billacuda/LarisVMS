@@ -49,24 +49,28 @@
     <nav class="navbar navbar-expand-sm navbar-dark bg-dark mb-3" id="mainNav">
         <div class="container-fluid">
             <a class="navbar-brand" href="/">@pageTitle</a>
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMenu">
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMenu"
+                    aria-controls="navMenu" aria-expanded="false" aria-label="Toggle navigation">
                 <span class="navbar-toggler-icon"></span>
             </button>
+            @* Emoji, not an icon font: this app has no icon library and already uses bare emoji as
+               its de facto icon system (🟢/🔴 camera state, ⚠️ warnings, 🌙/☀️ theme). aria-hidden on
+               each one so a screen reader announces "Live", not "satellite antenna Live". *@
             <div class="collapse navbar-collapse" id="navMenu">
                 <ul class="navbar-nav me-auto">
-                    <li class="nav-item"><a class="nav-link" href="/">Dashboard</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/Live">Live</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/Playback">Playback</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/Exports">Exports</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/Views">Views</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/Cameras">Cameras</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/"><span aria-hidden="true">📊</span> Dashboard</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/Live"><span aria-hidden="true">📡</span> Live</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/Playback"><span aria-hidden="true">⏪</span> Playback</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/Exports"><span aria-hidden="true">⬇️</span> Exports</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/Views"><span aria-hidden="true">🔲</span> Views</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/Cameras"><span aria-hidden="true">📷</span> Cameras</a></li>
                     @* One dropdown for every admin-only page, not flat top-level links per page — Node
                        Builds previously had no nav entry of its own at all (only reachable via a
                        help-text link from Nodes/Settings), which is exactly the "can't find it"
                        pattern this groups against for every admin page added after this one too. *@
                     <li class="nav-item dropdown">
                         <a class="nav-link dropdown-toggle" href="#" id="adminNavDropdown" role="button"
-                           data-bs-toggle="dropdown" aria-expanded="false">Admin</a>
+                           data-bs-toggle="dropdown" aria-expanded="false"><span aria-hidden="true">⚙️</span> Admin</a>
                         <ul class="dropdown-menu dropdown-menu-dark" aria-labelledby="adminNavDropdown">
                             <li><a class="dropdown-item" href="/Admin/Nodes">Nodes</a></li>
                             <li><a class="dropdown-item" href="/Admin/NodeBuilds">Node Builds</a></li>
@@ -80,7 +84,7 @@
                 <ul class="navbar-nav me-2">
                     <li class="nav-item">
                         <button class="btn btn-sm btn-outline-light" id="themeToggle" type="button"
-                                onclick="toggleTheme()" title="Toggle theme"><span id="themeIcon">🌙</span></button>
+                                onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme"><span id="themeIcon" aria-hidden="true">🌙</span></button>
                     </li>
                 </ul>
                 <partial name="_LoginPartial" />

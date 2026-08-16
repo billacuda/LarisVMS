@@ -33,6 +33,9 @@
     <ProjectReference Include="..\..\src\LarisVMS.Node\LarisVMS.Node.csproj" />
     <ProjectReference Include="..\..\src\LarisVMS.NodeUpdater\LarisVMS.NodeUpdater.csproj" />
     <ProjectReference Include="..\..\src\LarisVMS.Media\LarisVMS.Media.csproj" />
+    <!-- For the Web tier's own pure helpers (ViewLayout's LayoutJson parsing) — not for spinning up
+         the app; there are no integration/WebApplicationFactory tests here. -->
+    <ProjectReference Include="..\..\src\LarisVMS.Web\LarisVMS.Web.csproj" />
   </ItemGroup>
 
 </Project>

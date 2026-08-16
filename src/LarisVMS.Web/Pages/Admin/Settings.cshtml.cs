@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using LarisVMS.Core;
 using LarisVMS.Core.Interfaces;
 
 namespace LarisVMS.Web.Pages.Admin;
@@ -48,6 +49,20 @@ public class SettingsModel(ISettingsResolver settings, IAuditService auditServic
     public async Task<IActionResult> OnPostAsync()
     {
         var by = User.Identity?.Name;
+
+        // Read every current value *before* writing, so the audit entry can report what actually
+        // changed rather than just "a save happened" (which is all this logged before). Node.
+        // RegistrationKey is diffed as a secret — the entry records that it changed, never the key
+        // itself, since the audit log is readable by anyone with Logs.View.
+        var oldRetentionDays = await settings.GetAsync("Retention.Days", 30);
+        var oldWatermarkPercent = await settings.GetAsync("Storage.WatermarkPercent", 90);
+        var oldRecordingMode = await settings.GetAsync("Recording.Mode", "Continuous");
+        var oldPreRoll = await settings.GetAsync("Recording.MotionPreRollSeconds", 10);
+        var oldPostRoll = await settings.GetAsync("Recording.MotionPostRollSeconds", 30);
+        var oldStorageRootPath = await settings.GetRawAsync("Storage.RootPath");
+        var oldRegistrationKey = await settings.GetRawAsync("Node.RegistrationKey");
+        var oldAutoUpdate = await settings.GetAsync("NodeAutoUpdate.Enabled", true);
+
         await settings.SetGlobalAsync("Retention.Days", RetentionDays.ToString(), by);
         await settings.SetGlobalAsync("Storage.WatermarkPercent", WatermarkPercent.ToString(), by);
         await settings.SetGlobalAsync("Recording.Mode", RecordingMode, by);
@@ -59,9 +74,23 @@ public class SettingsModel(ISettingsResolver settings, IAuditService auditServic
             await settings.SetGlobalAsync("Node.RegistrationKey", RegistrationKey, by);
         await settings.SetGlobalAsync("NodeAutoUpdate.Enabled", NodeAutoUpdateEnabled.ToString(), by);
 
+        // Blank means "leave unchanged" for these two (see the guarded writes above), so they're
+        // diffed against themselves in that case rather than reported as cleared.
+        var details = AuditDiff.Build(
+            AuditDiff.Of("Retention.Days", oldRetentionDays.ToString(), RetentionDays.ToString()),
+            AuditDiff.Of("Storage.WatermarkPercent", oldWatermarkPercent.ToString(), WatermarkPercent.ToString()),
+            AuditDiff.Of("Recording.Mode", oldRecordingMode, RecordingMode),
+            AuditDiff.Of("Recording.MotionPreRollSeconds", oldPreRoll.ToString(), MotionPreRollSeconds.ToString()),
+            AuditDiff.Of("Recording.MotionPostRollSeconds", oldPostRoll.ToString(), MotionPostRollSeconds.ToString()),
+            AuditDiff.Of("Storage.RootPath", oldStorageRootPath,
+                string.IsNullOrWhiteSpace(StorageRootPath) ? oldStorageRootPath : StorageRootPath),
+            AuditDiff.Secret("Node.RegistrationKey", oldRegistrationKey,
+                string.IsNullOrWhiteSpace(RegistrationKey) ? oldRegistrationKey : RegistrationKey),
+            AuditDiff.Of("NodeAutoUpdate.Enabled", oldAutoUpdate.ToString(), NodeAutoUpdateEnabled.ToString()));
+
         await auditService.LogAsync("Settings.Update",
             User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, by,
-            HttpContext.Connection.RemoteIpAddress?.ToString());
+            HttpContext.Connection.RemoteIpAddress?.ToString(), details);
 
         SavedMessage = "Saved.";
         return Page();

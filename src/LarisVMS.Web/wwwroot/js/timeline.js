@@ -522,7 +522,28 @@ window.larisvmsTimeline = (function () {
 
         window.addEventListener('resize', function () { resizeCanvas(); draw(); });
 
+        // Self-heals the canvas bitmap whenever its rendered box changes size — including the
+        // 0 -> real transition that happens when a hidden timeline becomes visible again. Without
+        // this, a timeline that was display:none during any resize (confirmed live: a View cell's
+        // mini-timeline while its tile is fullscreened, since a fullscreen change fires a window
+        // resize) had resizeCanvas() measure it at 0x0 and clamp its bitmap to 1x1, while draw()
+        // bailed on the zero size. Nothing re-measured it once it was shown again, so it came back
+        // as a 1x1 bitmap stretched across its full width — blank, and only fixable by recreating
+        // the whole timeline. The window 'resize' listener above can't cover this: the element's own
+        // box changes without the window's doing so.
+        if (window.ResizeObserver) {
+            new ResizeObserver(function () { resizeCanvas(); draw(); }).observe(canvas);
+        }
+
         resizeCanvas();
+        // Always paint once immediately, not only via reload() below — reload() itself no-ops
+        // entirely when options.getBuckets isn't supplied (true for the mini-timeline used by a
+        // Live-tile/View-cell's playback toggle, which is deliberately just a scrubbable ruler with
+        // no coverage-bucket data), so an instance created without it never got its first paint at
+        // all: the canvas existed, correctly sized, just never had draw() called on it — completely
+        // invisible, confirmed live, not a CSS/positioning issue. draw() already no-ops safely on a
+        // zero-size canvas, so calling it unconditionally here is safe for every caller.
+        draw();
         reload();
 
         return {

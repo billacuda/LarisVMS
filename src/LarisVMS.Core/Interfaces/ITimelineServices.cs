@@ -54,4 +54,10 @@ public interface ITimelineService
     /// returned info is clamped short of the segment's own end; the /playback-thumbnail proxy issues
     /// its token and the node names its cache file from this one canonical value.</summary>
     Task<ThumbnailInfo?> GetThumbnailInfoAsync(Guid cameraId, DateTime atUtc, CancellationToken ct = default);
+
+    /// <summary>Dashboard's "most recent thumbnail" column: the newest completed segment's own
+    /// last frame — see the implementation's own doc comment for why this is deliberately not
+    /// GetThumbnailInfoAsync (bucketed/historical) or the live-RTSP snapshot endpoint (too heavy to
+    /// poll per-camera every dashboard refresh). Null if this camera has no segments yet.</summary>
+    Task<ThumbnailInfo?> GetLatestThumbnailInfoAsync(Guid cameraId, CancellationToken ct = default);
 }

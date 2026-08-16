@@ -17,28 +17,32 @@ body {
 }
 
 /* Shared focused/fullscreen camera tile (fullscreen-tile.js) — active only on whichever tile
-   element is currently document.fullscreenElement. Live's motion badge/status and Playback's
-   digital-zoom buttons + primary-select badge are hidden so fullscreen shows only mute + exit,
-   per each page's own control markup (see Pages/Live/Index.cshtml, playback-player.js). */
+   element is currently document.fullscreenElement. Views/Play's motion badge and Playback's
+   digital-zoom buttons + primary-select badge are hidden to keep fullscreen uncluttered, per each
+   page's own control markup (see view-play.js, playback-player.js).
+
+   The playback toggle and its mini-timeline are deliberately NOT hidden here (they were, ported from
+   the flat Live grid's "fullscreen shows only mute + exit" design): that reasoning doesn't apply to
+   a View cell, whose mini-timeline lives *inside* the element being fullscreened — so scrubbing
+   recorded footage on a single fullscreened camera works, which is arguably the single most useful
+   thing to do in fullscreen. (Contrast the Playback page's own timelines, which are page-level
+   elements outside the fullscreened tile and genuinely cannot render while it's active.) */
 .tile-fullscreen {
     background: #000;
 }
 
-.tile-fullscreen .live-status,
+.tile-fullscreen .view-cell-status,
 .tile-fullscreen .live-motion-badge,
 .tile-fullscreen .pb-zoom-in,
 .tile-fullscreen .pb-zoom-out,
 .tile-fullscreen .pb-zoom-reset,
-.tile-fullscreen .pb-select-primary,
-.tile-fullscreen .live-playback-toggle,
-.tile-fullscreen .pb-mini-timeline-area {
+.tile-fullscreen .pb-select-primary {
     display: none !important;
 }
 
-/* Live's mute/fullscreen buttons are otherwise hover-only (.d-none until mouseenter) — always
-   shown while this tile is the fullscreen element, since there's no hover state to rely on and
-   the exit-fullscreen button must stay reachable. */
-.tile-fullscreen .live-controls,
+/* Views/Play's mute/fullscreen buttons are otherwise hover-only (.d-none until mouseenter) —
+   always shown while this tile is the fullscreen element, since there's no hover state to rely on
+   and the exit-fullscreen button must stay reachable. */
 .tile-fullscreen .pb-fullscreen-controls,
 .tile-fullscreen .view-cell-controls {
     display: flex !important;

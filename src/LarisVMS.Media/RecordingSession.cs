@@ -106,22 +106,40 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
     // alike), e.g. "frame= 1234 fps= 15 q=-1.0 size=   10240kB time=00:01:23.45 bitrate=1023.4kbits/s
     // speed=1.00x". Terminated with '\r' (overwrites the same terminal line), not '\n' — .NET's
     // ReadLineAsync already treats a bare '\r' as a line terminator too, so this arrives through
-    // DrainStderrAsync's normal per-line loop with no special handling needed. fps and bitrate can
-    // both be fractional ("fps= 14.9"); truncated to int for CameraStream's existing int? columns.
+    // DrainStderrAsync's normal per-line loop with no special handling needed. fps can be fractional
+    // ("fps= 14.9"); truncated to int for CameraStream's existing int? column.
+    //
+    // bitrate is captured too but is *always* "N/A" for this app's own pipeline, confirmed against a
+    // real captured run of this exact tee spec (BuildTeeOutputs): the tee pseudo-muxer fans one input
+    // out to two diverging outputs and has no single meaningful "overall bitrate" to report, so it
+    // never prints a number here — not a startup-only transient the way an ordinary single-output mux
+    // briefly shows N/A before its first few frames land. Requiring bitrate to be a real number here
+    // (as this regex originally did) meant the *whole line* never matched under this pipeline, which
+    // silently starved CurrentFps too. bitrate is therefore Optional in the returned tuple — real
+    // bitrate is instead derived from completed segment size/duration, see PollForCompletedSegments.
     private static readonly Regex ProgressLine = new(
-        @"fps=\s*([\d.]+).*?bitrate=\s*([\d.]+)kbits/s", RegexOptions.Compiled);
+        @"frame=.*?fps=\s*([\d.]+).*?bitrate=\s*(?:([\d.]+)kbits/s|N/A)", RegexOptions.Compiled);
 
-    /// <summary>Pure parsing, same reasoning as TryParseVideoStreamLine. Returns (fps, bitrateKbps),
-    /// truncated to whole numbers — null for a line that isn't a progress line, or (rare) one with
-    /// bitrate reported as "N/A" mid-startup before ffmpeg has enough data to compute it yet.</summary>
-    internal static (int Fps, int BitrateKbps)? TryParseProgressLine(string line)
+    /// <summary>Pure parsing, same reasoning as TryParseVideoStreamLine. Fps is truncated to a whole
+    /// number; BitrateKbps is null whenever the line reports "bitrate=N/A" (see ProgressLine's own
+    /// comment for why that's the normal case for this app, not a rare one). Returns null for a line
+    /// that isn't a progress line at all.</summary>
+    internal static (int Fps, int? BitrateKbps)? TryParseProgressLine(string line)
     {
         var match = ProgressLine.Match(line);
         if (!match.Success) return null;
-        if (!double.TryParse(match.Groups[1].Value, out var fps) || !double.TryParse(match.Groups[2].Value, out var bitrate))
-            return null;
-        return ((int)fps, (int)bitrate);
+        if (!double.TryParse(match.Groups[1].Value, out var fps)) return null;
+        int? bitrateKbps = match.Groups[2].Success && double.TryParse(match.Groups[2].Value, out var bitrate) ? (int)bitrate : null;
+        return ((int)fps, bitrateKbps);
     }
+
+    /// <summary>Derives a real bitrate from a completed segment's actual byte count over its actual
+    /// duration — the source of truth for `-c copy` recording, where the written bytes bit-for-bit
+    /// *are* the camera's own encoder output. Used instead of ffmpeg's own progress-line bitrate
+    /// figure, which TryParseProgressLine's own comment explains is never available under this app's
+    /// tee pipeline. Null for a degenerate (zero/negative) duration rather than dividing by zero.</summary>
+    internal static int? EstimateBitrateKbps(long sizeBytes, TimeSpan duration)
+        => duration.TotalSeconds > 0 ? (int)(sizeBytes * 8.0 / 1000.0 / duration.TotalSeconds) : null;
 
     /// <summary><paramref name="knownPaths"/> pre-seeds the reported-paths set with segment files
     /// the server already has a Segments row for, from the caller's own record (NodeWorker fetches
@@ -393,6 +411,7 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
             var start = info.CreationTimeUtc;
             var end = new FileInfo(files[i + 1]).CreationTimeUtc;
             LastSegmentAt = DateTime.UtcNow;
+            if (EstimateBitrateKbps(info.Length, end - start) is { } bitrateKbps) CurrentBitrateKbps = bitrateKbps;
             SegmentCompleted?.Invoke(new RecordingSegment(path, start, end, info.Length));
         }
     }
@@ -416,7 +435,10 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
         catch (IOException) { return; }
         if (info.Length == 0) return; // never got any data — not a real segment
 
-        SegmentCompleted?.Invoke(new RecordingSegment(last, info.CreationTimeUtc, DateTime.UtcNow, info.Length));
+        var start = info.CreationTimeUtc;
+        var end = DateTime.UtcNow;
+        if (EstimateBitrateKbps(info.Length, end - start) is { } bitrateKbps) CurrentBitrateKbps = bitrateKbps;
+        SegmentCompleted?.Invoke(new RecordingSegment(last, start, end, info.Length));
     }
 
     private async Task DrainStderrAsync(Process process, CancellationToken ct)
@@ -444,7 +466,11 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
                 if (TryParseProgressLine(line) is { } progress)
                 {
                     CurrentFps = progress.Fps;
-                    CurrentBitrateKbps = progress.BitrateKbps;
+                    // Only overwrites when the line actually carried a number — under this app's own
+                    // tee pipeline it never does (see ProgressLine's comment), so this leaves whatever
+                    // PollForCompletedSegments most recently derived from real segment bytes alone
+                    // instead of stomping it back to null on every single progress tick.
+                    if (progress.BitrateKbps is { } bitrate) CurrentBitrateKbps = bitrate;
                 }
 
                 if (line.Contains("error", StringComparison.OrdinalIgnoreCase)

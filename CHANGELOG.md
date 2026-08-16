@@ -5,6 +5,251 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.82.0] - 2026-08-16
+
+### Added
+
+- **Comprehensive audit logging** — every entry captures the acting user's IP address (already
+  correct without proxy-header handling, since this app is deployed behind IIS in-process, which
+  passes the real client connection straight through). New entries:
+  - **`Camera.View`** — one per live stream actually opened, logged at the `/live/{cameraId}`
+    WebSocket handshake. Since the flat all-cameras grid was removed in 0.80.0, that endpoint is the
+    single chokepoint every live-viewing path goes through, so this covers all of them from one place.
+  - **`View.Watch`** and **`Playback.View`** — each names the view and every camera in it, resolved
+    server-side from the view's own saved layout rather than trusting anything the client sends.
+    Playback needed a small new endpoint (`POST /api/playback/view-opened`): that page resolves the
+    selected view entirely in the browser, so there was no existing server request that knew which
+    cameras were being reviewed. It's fire-and-forget — an audit write can never block playback from
+    starting.
+  - **`Export.Download`** — previously untracked despite being the most compliance-sensitive step in
+    the whole export flow (completed data leaving the system, not just viewing). Logged when the
+    download starts, not when it finishes, since an abandoned transfer still means footage moved.
+  - **`NodeBuild.Approve`** / **`NodeBuild.Reject`** — a fleet-wide action (every node picks the
+    build up on its next heartbeat) that had no audit coverage at all.
+
+### Changed
+
+- **Change entries now record what actually changed, as `old → new` values**, instead of only that a
+  save happened. Applies to global settings (which previously logged no detail whatsoever, so the
+  entry couldn't answer "which of these eight fields did they touch?"), camera edits, node edits, and
+  backup settings. Unchanged fields are omitted, so an entry lists only real edits.
+  - Two gaps closed along the way: a camera's and a node's per-scope **retention override** used to
+    ride along silently inside the generic `Camera.Update`/`Node.Update` entry with nothing to
+    indicate it had been changed at all.
+  - **Secrets are never written to the log.** Camera credentials and the node registration key report
+    only that they changed, never a value — the audit log is readable by anyone with `Logs.View`, so
+    an audit trail that leaked the credential it was recording would be worse than none. Camera
+    credentials specifically are reported as changed-or-not without any before/after comparison,
+    because the camera read path deliberately never loads them in the first place.
+
+## [0.81.2] - 2026-08-16
+
+### Fixed
+
+- **A View cell in playback mode lost its mini-timeline when fullscreened, and didn't get it back
+  after exiting** (only toggling back to live and into playback again restored it). Two separate
+  causes, both fixed:
+  - CSS explicitly hid the mini-timeline and playback toggle whenever a tile was fullscreened. That
+    rule was ported from the removed flat Live grid, where it made sense ("fullscreen shows only mute
+    + exit") — but it doesn't here: a View cell's mini-timeline lives *inside* the element being
+    fullscreened, so it can render there. Scrubbing recorded footage on a single fullscreened camera
+    now works, which is arguably the most useful thing to do in fullscreen. (This is unrelated to the
+    Playback page's own timelines, which are page-level elements genuinely outside the fullscreened
+    tile — still a separate, known limitation.)
+  - The canvas bitmap was being destroyed while hidden. Entering/exiting fullscreen fires a window
+    `resize`, which measured the then-hidden canvas at 0×0 and clamped its bitmap to 1×1 while the
+    draw call bailed on the zero size — and nothing re-measured it once it became visible again, so
+    it returned as a 1×1 bitmap stretched across its full width. Timelines now self-heal on any size
+    change (including hidden → visible) via a `ResizeObserver`, which the window `resize` listener
+    alone could never cover since the element's own box changes without the window's doing so.
+
+Web-only, no node change.
+
+## [0.81.1] - 2026-08-15
+
+### Fixed
+
+- **0.81.0's hard-resync fallback made the stutter/reconnect loop worse instead of fixing it, and
+  only a full page refresh cleared it.** The new "drift too large to catch up" branch corrected by
+  seeking to `buffered.start()` — which is *behind* `currentTime` whenever `currentTime` is already
+  inside the buffered range, exactly the situation it fires in. Confirmed from real logs: a tile
+  74.8s behind seeked from 2724.8 back to 2721.8, leaving it 77.7s behind, then re-fired every tick
+  forever. This is the third seek-based correction to regress here, so the fallback no longer seeks
+  at all: a session that far behind is unrecoverable, so it now ends and lets the existing retry
+  wrapper build a fresh MediaSource that starts cleanly at the live edge — the one recovery path
+  already proven correct.
+- **Leaked live-view drift timers could seek a `<video>` element that no longer belonged to them.**
+  Toggling a cell into playback mode attaches a *different* player's MediaSource to the same element,
+  but a surviving live-session timer kept seeking it — the actual trigger behind "the loop is back
+  after enabling playback on the one cell," visible in the logs as several different playback
+  positions interleaving from what should have been a single tile. Timers now bail immediately if the
+  element is no longer theirs, and can no longer be created at all after their own session has ended
+  (previously possible when `sourceopen` fired *after* an early teardown, orphaning an interval
+  nothing would ever clear).
+- **A View cell's playback mini-timeline was cut off at the bottom and showed no coverage colors.**
+  It was 18px tall, but `timeline.js` draws its coverage bar across the top ~55% and the tick marks
+  and labels *below* that — so the bottom half was clipped off the canvas (now 30px, matching the
+  Playback page's own timelines). It also had no bucket-coverage data wired up at all, so it drew an
+  empty gray track: no blue recorded coverage, no green motion. It now uses the same per-camera
+  coverage endpoint the Playback page's timeline already uses.
+
+Web-only, no node change.
+
+## [0.81.0] - 2026-08-15
+
+### Fixed
+
+- **Live tiles could repeatedly stutter and reconnect ("the loop is back"), confirmed via a real
+  decode error in the browser console.** 0.78.0's drift-correction fix corrected the *direction* of
+  the periodic catch-up but still corrected via a hard seek to a point near (not exactly at) the live
+  edge — not guaranteed to land on a keyframe boundary. When drift grew unusually large (confirmed
+  cause: browsers throttle `setInterval` on a backgrounded/unfocused tab, letting drift build up for
+  tens of seconds between checks with nothing actually wrong on the wire), that seek could land off a
+  keyframe and throw a real `MediaError` ("Failed to prepare video sample for decode"), tearing the
+  session down and reconnecting — the same visible symptom as before, from a different cause. Catch-up
+  now speeds up playback (1.5x) instead of seeking at all, so the decoder catches up through real,
+  already-decodable frames with zero discontinuity risk; only drift beyond 15 seconds (too large for a
+  speed-up to close in reasonable time) still falls back to a hard seek, reusing the same
+  already-proven-safe target the stall-recovery path has always used.
+- **A View cell's playback-mode mini-timeline (added this session) never actually painted anything** —
+  not a CSS/positioning issue, `timeline.js`'s `draw()` was only ever triggered from inside `reload()`,
+  which no-ops entirely when no `getBuckets` option is supplied. The mini-timeline is deliberately just
+  a scrubbable ruler with no coverage-bucket data, so it never had `getBuckets` — meaning its canvas
+  existed, was correctly sized, and simply never received its first paint. `create()` now always
+  paints once immediately regardless of whether bucket data is involved.
+
+Web-only, no node change.
+
+## [0.80.0] - 2026-08-15
+
+### Changed
+
+- **Saved Views are now the only live-viewing surface — the flat all-cameras Live grid is gone.**
+  `/Live` always redirects to the last-watched view (or the first one), or shows a "No views exist
+  yet, click here to create one!" prompt when there are none — there's no more `?all=1` escape hatch
+  to a separate grid. If you want to see every camera at once, create a View containing all of them;
+  that's the supported way to get the old "all cameras" layout now.
+- **The per-tile playback toggle moved to View cells, and now actually works there.** The ⏱ button
+  (scrub the last few minutes of a *live* tile without leaving the grid, via a small mini-timeline)
+  only ever existed on the flat grid being removed above — Views/Play never had it, single-camera or
+  multi-camera view alike. It's been ported over verbatim (same 30-seconds-back default, same
+  one-tile-in-playback-mode-at-a-time behavior across the view), so this is a net capability gain for
+  every saved view, not a loss from removing the grid.
+
+### Added
+
+- **Dashboard now auto-refreshes every 60 seconds** via a new `GET /api/dashboard` endpoint, instead
+  of needing a manual page reload to see updated fps/bitrate/reconnect/status data. Both the
+  server-rendered initial page and the AJAX refresh are backed by the same `IDashboardService`, so
+  they can never independently drift out of sync with each other.
+- **Optional per-camera thumbnail column** (toggle, off by default so it costs nothing until asked
+  for), placed left of the camera name. Shows the most recent *completed* segment's own last frame —
+  a new lightweight lookup (`GetLatestThumbnailInfoAsync`), deliberately not the existing live-RTSP
+  snapshot endpoint (a fresh grab straight from the camera every call — fine for its actual occasional
+  zone-editor use, too heavy to fire once per camera on every 60s dashboard poll) or the existing
+  hover-preview lookup (bucketed to 5 minutes for a different purpose, and can land inside the
+  still-recording segment that has no row yet, returning nothing).
+- **Every dashboard column is now sortable**, and pagination was added with a 10/20/50/100/all
+  rows-per-page choice, reusing the same click-to-sort/pagination widgets already used on Cameras and
+  Admin/Nodes. Your current sort and page stay put across each 60s refresh — only a real click on a
+  header or the page-size dropdown resets back to page 1, not the background refresh redrawing the
+  same data.
+
+Web-only, no node change.
+
+## [0.78.0] - 2026-08-15
+
+### Fixed
+
+- **Regression from 0.76.0's live-tile drift resync: a lagging Live tile would repeat a few seconds
+  of already-played video every couple of minutes before catching back up, and cameras in the same
+  grid could drift up to several minutes apart from each other.** The periodic check reused
+  `jumpToLiveEdge`, which targets the *start* of the newest buffered range — the right anchor for its
+  original job (recovering when `currentTime` has fallen completely outside every buffered range,
+  where a safe spot with decode cushion ahead of it matters more than exact position). For an
+  already-playing-but-merely-lagging tile, jumping to the range's start landed *further* from the live
+  edge than before, not closer, so the same drift check fired again on the next tick — a repeating
+  rewind rather than a one-time correction. The periodic check now nudges to just behind the true live
+  edge instead, converging without a hard rewind. Web-only, no node change.
+
+## [0.77.0] - 2026-08-15
+
+### Fixed
+
+- **Dashboard per-camera fps/bitrate/last-report/reconnect-count stayed blank forever, even for a
+  camera actively recording.** Root cause: this app's ffmpeg pipeline always uses `-f tee` (one RTSP
+  session feeds both recording and live view), and the tee muxer never reports a real bitrate on its
+  periodic progress line — confirmed against a real captured run of the app's own tee spec, and
+  permanent for the entire session, not a brief startup blip the way an ordinary single-output mux's
+  "bitrate=N/A" is. The parser required a numeric bitrate for the whole line to match at all, so it
+  silently rejected every progress line under this app's pipeline — starving fps (and, since
+  `HealthReportedAt` only advances when fps is present, the dashboard's freshness signal) along with
+  bitrate, even though `ReconnectCount` reported fine since it isn't derived from this regex. Fps now
+  parses independently of bitrate; bitrate is derived instead from each completed segment's actual
+  byte size over its actual duration — the real source of truth for `-c copy` recording, where the
+  bytes written to disk *are* the camera's own encoder output. Node change — `install-node.ps1`
+  re-run needed on every recorder.
+
+## [0.76.0] - 2026-08-15
+
+### Changed
+
+- **Live now opens the saved view you watched last, instead of always showing the flat all-cameras
+  grid.** Falls back to the first view when there's no remembered one (or it has since been deleted),
+  and to a "No views exist yet, click here to create one!" prompt when there are no views at all.
+  The remembered view is stored per-browser in `localStorage`, the same mechanism the theme toggle
+  and Playback's timeline position already use — no server-side per-user state was added for it. The
+  all-cameras grid is still one click away via the view picker's "All cameras" option (`/Live?all=1`),
+  which also now appears on Views/Play so the grid stays reachable from there too.
+- **Navbar links carry emoji icons** (📊 Dashboard, 📡 Live, ⏪ Playback, ⬇️ Exports, 🔲 Views,
+  📷 Cameras, ⚙️ Admin), matching the emoji-as-icons convention the app already uses elsewhere
+  (🟢/🔴 camera state, ⚠️ warnings, 🌙/☀️ theme). Each is `aria-hidden` so screen readers announce the
+  link text alone.
+- **Accessibility labels** on icon-only controls across the Live grid, view cells, and view editor:
+  `aria-label` mirroring each control's existing tooltip, the Bootstrap-standard
+  `aria-controls`/`aria-expanded`/`aria-label` on the navbar toggler, `aria-label="Close"` on
+  dismissible alerts, and `role="status"`/`aria-live="polite"` on the tile and export status text so
+  asynchronous updates are announced rather than silently replaced.
+- **Toggling a Live tile into playback now starts 30 seconds back**, rather than at the start of the
+  camera's most recent segment — on an actively-recording camera that could be minutes stale
+  depending on where the segment rotation happened to be. The Playback page's own initial-position
+  logic is unchanged.
+
+### Fixed
+
+- **Changing a view cell's aspect ratio never resized the cell**, so a portrait cell kept whatever
+  height it was first placed with and its video overflowed the space available — squeezing the camera
+  name underneath until it was clipped. The aspect dropdown was wired for `click` (to stop GridStack
+  treating it as a drag) but never for `change`, so the resize the placement path already does was
+  simply never triggered. The name label is also now `flex-shrink-0`, so any future height mismatch
+  crops the video slightly instead of hiding the camera's name.
+- **Motion badges never appeared on a saved view's cells**, only on the flat Live grid. Views/Play
+  built its cells without the badge element or the `data-camera-tile` attribute the poller looks for,
+  and never started the poll — all three are now in place, reusing the existing polling function
+  unchanged.
+- **The export camera picker only ever offered the cameras in the currently selected view**, so with
+  no view chosen it showed nothing and with a single-camera view it showed exactly one checkbox —
+  indistinguishable from "you can only export one camera at a time." It now lists every camera, with
+  the current view's cameras pre-checked. Failure and success messages render as a proper alert
+  rather than small inline text (a failed validation previously read as "the button does nothing"),
+  and the button disables itself while a request is in flight so a slow response can't produce
+  duplicate export jobs. The backend already accepted multiple cameras — this was UI-only.
+- **An intermittent stuck drag could hijack later mouse gestures**, most visibly making timeline
+  scrubbing stop responding after zooming or fullscreening a tile. Both video zoom/pan handlers
+  tracked their drag with window-level `mousemove`/`mouseup`, so a `mouseup` that never reached the
+  page — released outside the window, or swallowed by the fullscreen transition when Esc was pressed
+  mid-drag — left the drag permanently active, panning on every subsequent mouse move. Both now use
+  pointer capture with `pointercancel` handling, the same approach `timeline.js` already documents
+  and uses for exactly this failure mode, and exiting fullscreen or resetting zoom explicitly ends
+  any drag in progress.
+- **A Live tile that fell behind its own live edge was never pulled forward again.** The existing
+  resync only ran on a stall, which misses a tile that is playing fine but simply behind — the common
+  state right after a reconnect, since a fresh session starts at whatever it first buffers rather
+  than at the newest available frame. In a multi-camera grid one reconnected tile could sit seconds
+  behind its neighbors indefinitely. Each tile now checks every 3 seconds and re-seeks to its own live
+  edge when more than 3 seconds behind; because every tile chases its own edge, the grid converges
+  without any cross-tile clock.
+
 ## [0.75.0] - 2026-08-14
 
 ### Fixed

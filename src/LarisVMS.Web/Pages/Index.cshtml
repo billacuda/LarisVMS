@@ -3,13 +3,18 @@
 @{
     ViewData["Title"] = "Dashboard";
 }
-<h1>Dashboard</h1>
+<div class="d-flex align-items-center gap-2 mb-3">
+    <h1 class="mb-0">Dashboard</h1>
+    @* dashboard.js's poll() fills this in ("Updated h:mm:ss a") after every successful refresh —
+       server-rendered blank so a JS-disabled/failed-to-load page doesn't show a stale claim. *@
+    <span id="dashboardRefreshStatus" class="text-muted small"></span>
+</div>
 
-<div class="row g-3 mb-4">
+<div class="row g-3 mb-3" id="dashboardSummary">
     <div class="col-6 col-md-3">
         <div class="card text-center">
             <div class="card-body">
-                <div class="display-6">@Model.RecordingCount</div>
+                <div class="display-6" id="dashRecordingCount">@Model.RecordingCount</div>
                 <div class="text-muted small">Recording</div>
             </div>
         </div>
@@ -17,7 +22,7 @@
     <div class="col-6 col-md-3">
         <div class="card text-center">
             <div class="card-body">
-                <div class="display-6 @(Model.NotReportingCount > 0 ? "text-danger" : "")">@Model.NotReportingCount</div>
+                <div class="display-6 @(Model.NotReportingCount > 0 ? "text-danger" : "")" id="dashNotReportingCount">@Model.NotReportingCount</div>
                 <div class="text-muted small">Not reporting</div>
             </div>
         </div>
@@ -25,7 +30,7 @@
     <div class="col-6 col-md-3">
         <div class="card text-center">
             <div class="card-body">
-                <div class="display-6 text-muted">@Model.DisabledCount</div>
+                <div class="display-6 text-muted" id="dashDisabledCount">@Model.DisabledCount</div>
                 <div class="text-muted small">Disabled</div>
             </div>
         </div>
@@ -33,82 +38,116 @@
     <div class="col-6 col-md-3">
         <div class="card text-center">
             <div class="card-body">
-                <div class="display-6 @(Model.NodesOnlineCount < Model.NodesTotalCount ? "text-danger" : "")">@Model.NodesOnlineCount / @Model.NodesTotalCount</div>
+                <div class="display-6 @(Model.NodesOnlineCount < Model.NodesTotalCount ? "text-danger" : "")" id="dashNodesOnline">@Model.NodesOnlineCount / @Model.NodesTotalCount</div>
                 <div class="text-muted small">Nodes online</div>
             </div>
         </div>
     </div>
 </div>
 
-@if (Model.Rows.Count == 0)
-{
-    <p class="text-muted">No cameras yet — add one from <a href="/Cameras">Cameras</a>.</p>
-}
-else
-{
-    <div class="table-responsive">
-        <table class="table table-hover align-middle">
-            <thead>
-                <tr>
-                    <th>Camera</th>
-                    <th>Node</th>
-                    <th>Status</th>
-                    <th class="text-end">FPS</th>
-                    <th class="text-end">Bitrate</th>
-                    <th class="text-end">Reconnects</th>
-                    <th>Last report</th>
-                </tr>
-            </thead>
-            <tbody>
-                @foreach (var r in Model.Rows)
-                {
-                    <tr>
-                        <td><a asp-page="/Cameras/Edit" asp-route-id="@r.CameraId">@r.CameraName</a></td>
-                        <td>
-                            @if (!r.NodeAssigned)
-                            {
-                                <span class="text-muted">unassigned</span>
-                            }
-                            else
-                            {
-                                @r.NodeName
-                                <span class="badge @(r.NodeOnline ? "text-bg-success" : "text-bg-secondary") ms-1">@(r.NodeOnline ? "online" : "offline")</span>
-                            }
-                        </td>
-                        <td>
-                            @if (!r.CameraEnabled)
-                            {
-                                <span class="badge text-bg-secondary">Disabled</span>
-                            }
-                            else if (!r.NodeAssigned)
-                            {
-                                <span class="badge text-bg-warning">No node</span>
-                            }
-                            else if (r.HealthFresh)
-                            {
-                                <span class="badge text-bg-success">Recording</span>
-                            }
-                            else
-                            {
-                                <span class="badge text-bg-danger">Not reporting</span>
-                            }
-                        </td>
-                        <td class="text-end">@(r.HealthFresh ? r.Fps?.ToString() ?? "—" : "—")</td>
-                        <td class="text-end">@(r.HealthFresh && r.BitrateKbps is { } kbps ? $"{kbps:N0} kbps" : "—")</td>
-                        <td class="text-end">@(r.ReconnectCount?.ToString() ?? "—")</td>
-                        <td class="small text-muted">
-                            @if (r.HealthReportedAt is { } reported)
-                            {
-                                <span title="@reported.ToString("u")">@reported.ToLocalTime().ToString("g")</span>
-                            }
-                            else
-                            {
-                                <span>never</span>
-                            }
-                        </td>
-                    </tr>
-                }
-            </tbody>
-        </table>
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+    @* Persisted (larisvms.dashboardShowThumbnails) so the choice survives a reload — same
+       localStorage-preference convention as the theme toggle and Playback's own remembered
+       zoom/24h-clock settings. The thumbnail <th>/<td> always exist in the table regardless of this
+       (see dashboard.js) — toggling only ever shows/hides via CSS, never adds/removes the column
+       itself, so sortable-table.js's per-column-index click handlers (bound once, on load) never see
+       their column indices shift out from under them. *@
+    <div class="form-check form-switch mb-0">
+        <input class="form-check-input" type="checkbox" role="switch" id="dashboardThumbToggle">
+        <label class="form-check-label" for="dashboardThumbToggle">Show thumbnails</label>
     </div>
+    <div class="d-flex align-items-center gap-2">
+        <label class="form-label small mb-0" for="dashboardPageSize">Rows per page</label>
+        <select id="dashboardPageSize" class="form-select form-select-sm" style="width: auto;" data-paginate-size-for="dashboardTable">
+            <option value="10">10</option>
+            <option value="20" selected>20</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+            <option value="all">All</option>
+        </select>
+    </div>
+</div>
+
+<style>
+    /* Column stays structurally present at all times (see the toggle's own comment above) — hiding
+       it is purely visual. Both the header and every row's cell share this class. */
+    #dashboardTable.hide-thumb-col .thumb-col { display: none; }
+</style>
+
+<p class="text-muted" id="dashboardEmptyMessage" style="@(Model.Rows.Count == 0 ? "" : "display:none;")">
+    No cameras yet — add one from <a href="/Cameras">Cameras</a>.
+</p>
+
+<div class="table-responsive" id="dashboardTableWrap" style="@(Model.Rows.Count == 0 ? "display:none;" : "")">
+    <table class="table table-hover align-middle hide-thumb-col" id="dashboardTable" data-sortable data-paginate>
+        <thead>
+            <tr>
+                <th class="thumb-col" data-no-sort>Thumbnail</th>
+                <th>Camera</th>
+                <th>Node</th>
+                <th data-no-sort>Status</th>
+                <th class="text-end" data-sort-numeric>FPS</th>
+                <th class="text-end" data-sort-numeric>Bitrate</th>
+                <th class="text-end" data-sort-numeric>Reconnects</th>
+                <th data-sort-numeric>Last report</th>
+            </tr>
+        </thead>
+        <tbody id="dashboardTableBody">
+            @foreach (var r in Model.Rows)
+            {
+                <tr data-camera-id="@r.CameraId">
+                    <td class="thumb-col"></td>
+                    <td><a asp-page="/Cameras/Edit" asp-route-id="@r.CameraId">@r.CameraName</a></td>
+                    <td>
+                        @if (!r.NodeAssigned)
+                        {
+                            <span class="text-muted">unassigned</span>
+                        }
+                        else
+                        {
+                            @r.NodeName
+                            <span class="badge @(r.NodeOnline ? "text-bg-success" : "text-bg-secondary") ms-1">@(r.NodeOnline ? "online" : "offline")</span>
+                        }
+                    </td>
+                    <td>
+                        @if (!r.CameraEnabled)
+                        {
+                            <span class="badge text-bg-secondary">Disabled</span>
+                        }
+                        else if (!r.NodeAssigned)
+                        {
+                            <span class="badge text-bg-warning">No node</span>
+                        }
+                        else if (r.HealthFresh)
+                        {
+                            <span class="badge text-bg-success">Recording</span>
+                        }
+                        else
+                        {
+                            <span class="badge text-bg-danger">Not reporting</span>
+                        }
+                    </td>
+                    <td class="text-end" data-sort-value="@(r.HealthFresh ? r.Fps : null)">@(r.HealthFresh ? r.Fps?.ToString() ?? "—" : "—")</td>
+                    <td class="text-end" data-sort-value="@(r.HealthFresh ? r.BitrateKbps : null)">@(r.HealthFresh && r.BitrateKbps is { } kbps ? $"{kbps:N0} kbps" : "—")</td>
+                    <td class="text-end" data-sort-value="@r.ReconnectCount">@(r.ReconnectCount?.ToString() ?? "—")</td>
+                    @* ApplicationDbContext's UtcDateTimeConverter already guarantees Kind=Utc here — no SpecifyKind needed. *@
+                    <td class="small text-muted" data-sort-value="@(r.HealthReportedAt.HasValue ? new DateTimeOffset(r.HealthReportedAt.Value).ToUnixTimeMilliseconds() : 0)">
+                        @if (r.HealthReportedAt is { } reported)
+                        {
+                            <span title="@reported.ToString("u")">@reported.ToLocalTime().ToString("g")</span>
+                        }
+                        else
+                        {
+                            <span>never</span>
+                        }
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+    <div data-paginate-controls-for="dashboardTable" class="mt-2"></div>
+</div>
+
+@section Scripts {
+    <script src="~/js/dashboard.js" asp-append-version="true"></script>
 }

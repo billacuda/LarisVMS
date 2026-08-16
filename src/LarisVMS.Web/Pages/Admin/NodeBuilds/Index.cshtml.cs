@@ -13,7 +13,7 @@ namespace LarisVMS.Web.Pages.Admin.NodeBuilds;
 /// deploy.ps1's own node-build-registration step and INodeBuildService's doc comment); this page
 /// only approves/rejects what's already landed as Pending.</summary>
 [Authorize("Nodes.Edit")]
-public class IndexModel(INodeBuildService nodeBuildService) : PageModel
+public class IndexModel(INodeBuildService nodeBuildService, IAuditService auditService) : PageModel
 {
     public List<NodeBuildVersion> Builds { get; set; } = [];
     public string? ErrorMessage { get; set; }
@@ -26,14 +26,28 @@ public class IndexModel(INodeBuildService nodeBuildService) : PageModel
     public async Task<IActionResult> OnPostApproveAsync(Guid id, CancellationToken ct)
     {
         var by = User.FindFirst(ClaimTypes.Name)?.Value ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "unknown";
+        var build = (await nodeBuildService.ListAsync(ct)).FirstOrDefault(b => b.Id == id);
         await nodeBuildService.ApproveAsync(id, by, ct);
+        await LogAsync("NodeBuild.Approve", build, id, ct);
         return RedirectToPage();
     }
 
     public async Task<IActionResult> OnPostRejectAsync(Guid id, CancellationToken ct)
     {
         var by = User.FindFirst(ClaimTypes.Name)?.Value ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "unknown";
+        var build = (await nodeBuildService.ListAsync(ct)).FirstOrDefault(b => b.Id == id);
         await nodeBuildService.RejectAsync(id, by, ct);
+        await LogAsync("NodeBuild.Reject", build, id, ct);
         return RedirectToPage();
     }
+
+    /// <summary>Approving a build is a fleet-wide action — every node picks it up on its next
+    /// heartbeat — and had no audit coverage at all before this. The build is identified by
+    /// version/platform rather than only its id, since that's what an operator reading the log
+    /// months later actually recognizes.</summary>
+    private Task LogAsync(string action, NodeBuildVersion? build, Guid id, CancellationToken ct) =>
+        auditService.LogAsync(action,
+            User.FindFirst(ClaimTypes.NameIdentifier)?.Value, User.Identity?.Name,
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            build is null ? id.ToString() : $"{build.Version} ({build.Platform})", ct);
 }

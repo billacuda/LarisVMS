@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
@@ -136,8 +137,29 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
             }
 
             var quotaBytes = QuotaGb is { } gb ? (long)(gb * 1024 * 1024 * 1024) : (long?)null;
+
+            // Read the pre-edit state first so the audit entry can say what actually changed rather
+            // than only naming the camera. Credentials are reported via SecretChanged rather than a
+            // real before/after comparison: GetAsync deliberately never projects them (see
+            // ProjectWithoutCredentials), and a blank submission means "leave unchanged" — so a
+            // non-blank submission is the only signal available, and the value itself must never
+            // reach the log regardless.
+            var before = await cameraService.GetAsync(Id.Value);
+            var oldRetentionOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, Id.Value, "Retention.Days");
+
             await cameraService.UpdateAsync(Id.Value, Name, GroupId, NodeId, Username, Password, IsEnabled, quotaBytes);
-            await LogAsync("Camera.Update", $"{Name} ({Id})");
+
+            var details = AuditDiff.Build(
+                AuditDiff.Of("Name", before?.Name, Name),
+                AuditDiff.Of("Group", GroupName(before?.GroupId), GroupName(GroupId)),
+                AuditDiff.Of("Node", NodeName(before?.NodeId), NodeName(NodeId)),
+                AuditDiff.Of("Enabled", before?.IsEnabled.ToString(), IsEnabled.ToString()),
+                AuditDiff.Of("Quota", QuotaText(before?.QuotaBytes), QuotaText(quotaBytes)),
+                AuditDiff.Of("Retention override", oldRetentionOverride, RetentionDaysOverride?.ToString()),
+                AuditDiff.SecretChanged("Username", !string.IsNullOrWhiteSpace(Username)),
+                AuditDiff.SecretChanged("Password", !string.IsNullOrWhiteSpace(Password)));
+
+            await LogAsync("Camera.Update", details is null ? $"{Name} ({Id})" : $"{Name} ({Id}) — {details}");
             await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Retention.Days",
                 RetentionDaysOverride?.ToString(), User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Recording.Mode",
@@ -199,6 +221,22 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
         auditService.LogAsync(action, User.Identity is { IsAuthenticated: true }
             ? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value : null,
             User.Identity?.Name, HttpContext.Connection.RemoteIpAddress?.ToString(), details);
+
+    // Names rather than raw GUIDs in the audit trail — "Node: NVR1 → WINSERV1" is readable months
+    // later in a way two opaque ids never are. Both lists are already loaded by OnPostAsync, so this
+    // costs no extra queries. Falls back to the id if the referenced row is gone (deleted between
+    // the edit being loaded and submitted), which is still better than logging nothing.
+    private string GroupName(Guid? groupId) => groupId is null
+        ? string.Empty
+        : Groups.FirstOrDefault(g => g.Id == groupId)?.Name ?? groupId.ToString()!;
+
+    private string NodeName(Guid? nodeId) => nodeId is null
+        ? string.Empty
+        : Nodes.FirstOrDefault(n => n.Id == nodeId)?.Name ?? nodeId.ToString()!;
+
+    private static string QuotaText(long? quotaBytes) => quotaBytes is { } bytes
+        ? $"{Math.Round(bytes / 1024m / 1024 / 1024, 2)} GB"
+        : string.Empty;
 
     public async Task<IActionResult> OnPostUpdateStreamAsync(Guid streamId, bool streamIsEnabled, string? customName)
     {

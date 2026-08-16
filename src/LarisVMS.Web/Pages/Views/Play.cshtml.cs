@@ -4,11 +4,12 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Web.Helpers;
 
 namespace LarisVMS.Web.Pages.Views;
 
 [Authorize("Views.View")]
-public class PlayModel(IViewService viewService, ICameraService cameraService) : PageModel
+public class PlayModel(IViewService viewService, ICameraService cameraService, IAuditService auditService) : PageModel
 {
     public string Name { get; set; } = string.Empty;
     public string LayoutJson { get; set; } = "{\"cells\":[],\"mobileTwoColumn\":false}";
@@ -48,6 +49,18 @@ public class PlayModel(IViewService viewService, ICameraService cameraService) :
 
         var all = await cameraService.ListAsync();
         Cameras = all.Where(c => c.IsEnabled && c.NodeId is not null).ToList();
+
+        // Names resolved from the view's own layout, not from the Cameras list above — that list is
+        // every enabled camera on the system (it feeds the client-side player), not this view's own
+        // set, so using it would log every camera in the deployment on every view opened.
+        var viewCameraNames = ViewLayout.CameraIds(view.LayoutJson)
+            .Select(cameraId => all.FirstOrDefault(c => c.Id == cameraId)?.Name ?? cameraId.ToString())
+            .ToList();
+        await auditService.LogAsync("View.Watch", userId, User.Identity?.Name,
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            viewCameraNames.Count == 0
+                ? $"View '{view.Name}' (no cameras)"
+                : $"View '{view.Name}': {string.Join(", ", viewCameraNames)}");
 
         IsTour = tour;
         if (tour)

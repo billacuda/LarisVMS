@@ -558,7 +558,7 @@
             if (zoom === 1) { panX = 0; panY = 0; }
             apply();
         });
-        if (resetBtn) resetBtn.addEventListener('click', function () { zoom = 1; panX = 0; panY = 0; apply(); });
+        if (resetBtn) resetBtn.addEventListener('click', function () { zoom = 1; panX = 0; panY = 0; endDrag(); apply(); });
 
         // <video> is a native drag source in Chrome/Edge (you can drag a frame out like an image) —
         // with no preventDefault here, a mousedown-then-move over the video could kick off *that*
@@ -572,26 +572,40 @@
         // way to suppress it. Returned early (no preventDefault) at zoom<=1 on purpose: that's a
         // plain click with nothing to pan, so page defaults like text selection elsewhere are left
         // alone.
-        var dragging = false, startX = 0, startY = 0, startPanX = 0, startPanY = 0;
-        videoEl.addEventListener('mousedown', function (e) {
-            if (zoom <= 1) return;
+        // Pointer events + setPointerCapture, not mouse events on window — see fullscreen-tile.js's
+        // matching handler (and timeline.js's original write-up) for why: a lost mouseup left
+        // `dragging` stuck true forever, and from then on every mousemove anywhere on the page kept
+        // panning this video, intermittently stealing gestures aimed at other controls.
+        var dragging = false, startX = 0, startY = 0, startPanX = 0, startPanY = 0, dragPointerId = null;
+
+        function endDrag() {
+            if (!dragging) return;
+            dragging = false;
+            if (dragPointerId !== null && videoEl.hasPointerCapture(dragPointerId)) {
+                videoEl.releasePointerCapture(dragPointerId);
+            }
+            dragPointerId = null;
+            videoEl.style.cursor = 'default';
+        }
+
+        videoEl.addEventListener('pointerdown', function (e) {
+            if (e.button !== 0 || zoom <= 1) return;
             e.preventDefault();
             dragging = true;
             startX = e.clientX; startY = e.clientY;
             startPanX = panX; startPanY = panY;
+            dragPointerId = e.pointerId;
+            videoEl.setPointerCapture(e.pointerId);
             videoEl.style.cursor = 'grabbing';
         });
-        window.addEventListener('mousemove', function (e) {
+        videoEl.addEventListener('pointermove', function (e) {
             if (!dragging) return;
             panX = startPanX + (e.clientX - startX) / zoom;
             panY = startPanY + (e.clientY - startY) / zoom;
             apply();
         });
-        window.addEventListener('mouseup', function () {
-            if (!dragging) return;
-            dragging = false;
-            videoEl.style.cursor = 'default';
-        });
+        videoEl.addEventListener('pointerup', endDrag);
+        videoEl.addEventListener('pointercancel', endDrag);
     }
 
     // Double-click-to-fullscreen + wheel-zoom/drag-pan (fullscreen-tile.js), plus the mute/exit
@@ -746,6 +760,23 @@
     // newly-toggled tile to its most recent recording too, instead of duplicating this lookup.
     window.larisvmsPlaybackPlayer.resolveInitialPlayheadMs = resolveInitialPlayheadMs;
 
+    // Audit-only ping: which cameras a user actually reviewed is resolved entirely client-side on
+    // this page (the view picker never round-trips to the server), so without this there is no
+    // server-side record of it at all. Fire-and-forget by design — the response is ignored and any
+    // failure is swallowed, since an audit record must never be able to stop playback from starting.
+    // Server-side, the camera list comes from the view's own stored layout, not from anything sent
+    // here; this only names which view was opened.
+    function reportViewOpened(viewId) {
+        if (!viewId) return;
+        try {
+            fetch('/api/playback/view-opened', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ viewId: viewId })
+            }).catch(function () { /* audit-only — never surface this to the user */ });
+        } catch (e) { /* ditto */ }
+    }
+
     async function rebuildTilesFromView(viewId) {
         Object.keys(tiles).forEach(function (id) { tiles[id].player.teardown(); });
         tiles = {};
@@ -753,6 +784,8 @@
         var tilesEl = document.getElementById(opts.tilesId);
         if (!tilesEl) return;
         tilesEl.innerHTML = '';
+
+        reportViewOpened(viewId);
 
         var view = viewsById[viewId];
         var cells = view ? orderedCells(view) : [];
@@ -988,11 +1021,12 @@
     }
 
     // ── Export (multi-camera video export trigger) ──────────────────────────
-    // Small inline form, not a modal — checkboxes for whatever cameras are currently on screen (the
-    // same `tiles` the player itself renders, so this always matches the selected view) plus a
-    // start/end range defaulted around the current playhead. Submits to POST /api/exports and hands
-    // off to ExportJobDispatcher server-side; the actual per-camera work and its results live on the
-    // Exports page, not here.
+    // Small inline form, not a modal — checkboxes for every camera on this account (not just
+    // whatever the currently selected view happens to render — with no view picked, or a
+    // one-camera view, scoping to `tiles` used to leave 0 or 1 checkboxes, reading as "can't select
+    // multiple cameras") plus a start/end range defaulted around the current playhead. Submits to
+    // POST /api/exports and hands off to ExportJobDispatcher server-side; the actual per-camera work
+    // and its results live on the Exports page, not here.
     function wireExportPanel() {
         var btn = opts.exportBtnId && document.getElementById(opts.exportBtnId);
         var panel = opts.exportPanelId && document.getElementById(opts.exportPanelId);
@@ -1012,7 +1046,10 @@
         var camerasEl = opts.exportCamerasId && document.getElementById(opts.exportCamerasId);
         if (camerasEl) {
             camerasEl.innerHTML = '';
-            Object.keys(tiles).forEach(function (id) {
+            // Checked by default only for cameras in the currently selected view (the "export what
+            // I'm looking at" common case) — every other camera is still listed, just unchecked,
+            // rather than omitted, so picking additional/different cameras is one click away.
+            Object.keys(cameraById).forEach(function (id) {
                 var cam = cameraById[id];
                 var label = document.createElement('label');
                 label.className = 'form-check form-check-inline mb-0';
@@ -1020,7 +1057,7 @@
                 input.type = 'checkbox';
                 input.className = 'form-check-input pbExportCameraCheck';
                 input.value = id;
-                input.checked = true;
+                input.checked = !!tiles[id];
                 var span = document.createElement('span');
                 span.className = 'form-check-label small';
                 span.textContent = cam ? cam.name : id;
@@ -1047,12 +1084,23 @@
         var camerasEl = opts.exportCamerasId && document.getElementById(opts.exportCamerasId);
         var fromEl = opts.exportFromId && document.getElementById(opts.exportFromId);
         var toEl = opts.exportToId && document.getElementById(opts.exportToId);
+        var submitBtn = opts.exportSubmitId && document.getElementById(opts.exportSubmitId);
         if (!camerasEl || !fromEl || !toEl) return;
+
+        // alert-* (not just a text color) so a validation/fetch failure reads as an unmissable
+        // message next to the button rather than easy-to-miss small print — "the button doesn't seem
+        // to do anything" was the actual symptom reported for what was really a silent validation
+        // failure here.
+        function setStatus(text, kind) {
+            if (!statusEl) return;
+            statusEl.textContent = text;
+            statusEl.className = 'small' + (kind ? ' alert alert-' + kind + ' py-1 px-2 mb-0' : '');
+        }
 
         var cameraIds = Array.prototype.slice.call(camerasEl.querySelectorAll('.pbExportCameraCheck:checked'))
             .map(function (cb) { return cb.value; });
         if (cameraIds.length === 0) {
-            if (statusEl) { statusEl.textContent = 'Select at least one camera.'; statusEl.className = 'small text-danger'; }
+            setStatus('Select at least one camera.', 'danger');
             return;
         }
 
@@ -1061,11 +1109,12 @@
         var fromMs = new Date(fromEl.value).getTime();
         var toMs = new Date(toEl.value).getTime();
         if (!isFinite(fromMs) || !isFinite(toMs) || toMs <= fromMs) {
-            if (statusEl) { statusEl.textContent = 'End time must be after start time.'; statusEl.className = 'small text-danger'; }
+            setStatus('End time must be after start time.', 'danger');
             return;
         }
 
-        if (statusEl) { statusEl.textContent = 'Starting…'; statusEl.className = 'small text-muted'; }
+        setStatus('Starting…', null);
+        if (submitBtn) submitBtn.disabled = true;
 
         fetch('/api/exports', {
             method: 'POST',
@@ -1079,9 +1128,11 @@
             if (!resp.ok) return resp.text().then(function (t) { throw new Error(t || ('HTTP ' + resp.status)); });
             return resp.json();
         }).then(function () {
-            if (statusEl) { statusEl.textContent = 'Export started — see the Exports page.'; statusEl.className = 'small text-success'; }
+            setStatus('Export started — see the Exports page.', 'success');
         }).catch(function (err) {
-            if (statusEl) { statusEl.textContent = 'Failed to start export: ' + (err && err.message ? err.message : err); statusEl.className = 'small text-danger'; }
+            setStatus('Failed to start export: ' + (err && err.message ? err.message : err), 'danger');
+        }).finally(function () {
+            if (submitBtn) submitBtn.disabled = false;
         });
     }
 

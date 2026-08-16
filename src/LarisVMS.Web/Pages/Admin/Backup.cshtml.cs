@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using LarisVMS.Core;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
@@ -67,15 +68,31 @@ public class BackupModel(ApplicationDbContext db, IBackupService backupService, 
         }
 
         var by = User.Identity?.Name;
+
+        // Pre-save values, so the entry reports what changed rather than restating every field on
+        // every save (which is what the old flat "enabled=…, time=…, …" string did — it could never
+        // answer "what did they actually change?"). No secret fields here: a backup directory path
+        // is not a credential.
+        var oldEnabled = await settings.GetAsync("Backup.Enabled", false);
+        var oldTime = await settings.GetRawAsync("Backup.Time") ?? "03:00";
+        var oldDirectory = await settings.GetRawAsync("Backup.Directory");
+        var oldRetention = await settings.GetAsync("Backup.RetentionCount", 14);
+
+        var newRetention = Math.Max(1, RetentionCount);
         await settings.SetGlobalAsync("Backup.Enabled", BackupEnabled.ToString(), by);
         await settings.SetGlobalAsync("Backup.Time", BackupTime.Trim(), by);
         await settings.SetGlobalAsync("Backup.Directory", BackupDirectory?.Trim() ?? string.Empty, by);
-        await settings.SetGlobalAsync("Backup.RetentionCount", Math.Max(1, RetentionCount).ToString(), by);
+        await settings.SetGlobalAsync("Backup.RetentionCount", newRetention.ToString(), by);
+
+        var details = AuditDiff.Build(
+            AuditDiff.Of("Enabled", oldEnabled.ToString(), BackupEnabled.ToString()),
+            AuditDiff.Of("Time", oldTime, BackupTime.Trim()),
+            AuditDiff.Of("Directory", oldDirectory, BackupDirectory?.Trim()),
+            AuditDiff.Of("Retention", oldRetention.ToString(), newRetention.ToString()));
 
         await auditService.LogAsync("Backup.SettingsUpdate",
             User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, by,
-            HttpContext.Connection.RemoteIpAddress?.ToString(),
-            $"enabled={BackupEnabled}, time={BackupTime}, directory={BackupDirectory}, retention={RetentionCount}");
+            HttpContext.Connection.RemoteIpAddress?.ToString(), details);
 
         Message = "Backup settings saved.";
         return RedirectToPage();

@@ -8,18 +8,42 @@
 (function () {
     'use strict';
 
-    var PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
-    var DEFAULT_PAGE_SIZE = 25;
+    var FALLBACK_PAGE_SIZE = 25; // only used if a table somehow has no size <select> of its own
     var STORAGE_PREFIX = 'larisvms.tablePageSize.';
 
-    function loadPageSize(tableId) {
+    // instances[tableId] -> that table's own render(), so a caller whose data changed for a reason
+    // other than a user sort/filter/page-size action (dashboard.js's 60s AJAX refresh) can re-slice
+    // against the fresh rows via refresh() below without resetting currentPage back to 1 the way the
+    // 'larisvms:table-changed' listener below deliberately does for real user actions.
+    var instances = {};
+
+    // Each page's own markup — via <option selected> — decides its own default, not a single
+    // hardcoded value shared across every paginated table site-wide: Cameras/Index defaults to 25,
+    // Dashboard to 20, simply by which <option> each page marks selected.
+    function defaultPageSize(sizeSelect) {
+        if (!sizeSelect) return FALLBACK_PAGE_SIZE;
+        if (sizeSelect.value === 'all') return 'all';
+        var n = parseInt(sizeSelect.value, 10);
+        return isNaN(n) ? FALLBACK_PAGE_SIZE : n;
+    }
+
+    // Validated against sizeSelect's own <option> values rather than a hardcoded list — different
+    // pages offer different size sets (e.g. Cameras/Index's 10/25/50/100 vs. Dashboard's
+    // 10/20/50/100), and a persisted value valid for one page but not this one should fall back to
+    // this page's own default rather than silently accepting a size this page never offered.
+    function loadPageSize(tableId, sizeSelect) {
+        var fallback = defaultPageSize(sizeSelect);
         try {
             var raw = localStorage.getItem(STORAGE_PREFIX + tableId);
+            if (raw === null) return fallback;
             if (raw === 'all') return 'all';
             var n = parseInt(raw, 10);
-            if (PAGE_SIZE_OPTIONS.indexOf(n) !== -1) return n;
+            var validSizes = sizeSelect
+                ? Array.prototype.map.call(sizeSelect.options, function (o) { return o.value; })
+                : [];
+            if (validSizes.indexOf(String(n)) !== -1) return n;
         } catch (e) { /* private browsing/storage full — fall back to the default */ }
-        return DEFAULT_PAGE_SIZE;
+        return fallback;
     }
 
     function savePageSize(tableId, size) {
@@ -32,7 +56,7 @@
 
         var sizeSelect = document.querySelector('[data-paginate-size-for="' + tableId + '"]');
         var controlsEl = document.querySelector('[data-paginate-controls-for="' + tableId + '"]');
-        var pageSize = loadPageSize(tableId);
+        var pageSize = loadPageSize(tableId, sizeSelect);
         var currentPage = 1;
 
         if (sizeSelect) sizeSelect.value = String(pageSize);
@@ -129,10 +153,22 @@
             }
         });
 
+        instances[tableId] = { render: render };
         render();
     }
 
     document.addEventListener('DOMContentLoaded', function () {
         Array.prototype.forEach.call(document.querySelectorAll('table[data-paginate]'), initTable);
     });
+
+    // Re-slices against the table's current rows using whatever page/page-size it's already on — see
+    // the `instances` doc comment above for when to use this instead of the 'larisvms:table-changed'
+    // event. No-op for a table this module never initialized (data-paginate missing, or not yet
+    // DOMContentLoaded).
+    function refresh(tableId) {
+        var inst = instances[tableId];
+        if (inst) inst.render();
+    }
+
+    window.larisvmsTablePagination = { refresh: refresh };
 })();

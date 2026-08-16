@@ -26,6 +26,7 @@ window.larisvmsFullscreenTile = (function () {
             scale = 1; panX = 0; panY = 0;
             videoEl.style.transform = '';
             videoEl.style.cursor = '';
+            endDrag();
         }
 
         function isFs() { return document.fullscreenElement === containerEl; }
@@ -61,9 +62,28 @@ window.larisvmsFullscreenTile = (function () {
             videoEl.style.cursor = scale > minScale ? 'grab' : '';
         }, { passive: false });
 
-        var dragging = false, startX = 0, startY = 0, startPanX = 0, startPanY = 0;
-        containerEl.addEventListener('mousedown', function (e) {
-            if (!isFs() || scale <= minScale) return;
+        // Pointer events + setPointerCapture rather than plain mouse events on window, for exactly
+        // the reason timeline.js's own drag handler documents: a mouseup that never reaches the page
+        // (released outside the window, or swallowed by the fullscreen transition when Esc is hit
+        // mid-drag) used to leave `dragging` stuck true forever, after which every later mousemove
+        // anywhere on the page kept panning this video and stole gestures meant for other controls —
+        // an intermittent "some other control just stops responding" bug that only ever showed up
+        // after a zoom/fullscreen pan. Capture guarantees the matching pointerup/pointercancel comes
+        // back to this element, and endDrag is idempotent so resetZoom can also call it directly.
+        var dragging = false, startX = 0, startY = 0, startPanX = 0, startPanY = 0, dragPointerId = null;
+
+        function endDrag() {
+            if (!dragging) return;
+            dragging = false;
+            if (dragPointerId !== null && containerEl.hasPointerCapture(dragPointerId)) {
+                containerEl.releasePointerCapture(dragPointerId);
+            }
+            dragPointerId = null;
+            videoEl.style.cursor = isFs() && scale > minScale ? 'grab' : '';
+        }
+
+        containerEl.addEventListener('pointerdown', function (e) {
+            if (e.button !== 0 || !isFs() || scale <= minScale) return;
             // See playback-player.js's wireZoom for why this matters: without it, dragging the
             // <video> can also kick off the browser's own native drag-out-the-frame gesture, which
             // then owns the mouse for the rest of that gesture and shows the no-drop cursor instead
@@ -72,19 +92,18 @@ window.larisvmsFullscreenTile = (function () {
             dragging = true;
             startX = e.clientX; startY = e.clientY;
             startPanX = panX; startPanY = panY;
+            dragPointerId = e.pointerId;
+            containerEl.setPointerCapture(e.pointerId);
             videoEl.style.cursor = 'grabbing';
         });
-        window.addEventListener('mousemove', function (e) {
+        containerEl.addEventListener('pointermove', function (e) {
             if (!dragging) return;
             panX = startPanX + (e.clientX - startX) / scale;
             panY = startPanY + (e.clientY - startY) / scale;
             apply();
         });
-        window.addEventListener('mouseup', function () {
-            if (!dragging) return;
-            dragging = false;
-            videoEl.style.cursor = isFs() && scale > minScale ? 'grab' : '';
-        });
+        containerEl.addEventListener('pointerup', endDrag);
+        containerEl.addEventListener('pointercancel', endDrag);
 
         return {
             isFullscreen: isFs,

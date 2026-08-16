@@ -167,6 +167,23 @@
         };
     }
 
+    // How far behind its own live edge a tile is allowed to fall before being pulled forward. Well
+    // clear of the normal sub-second lag between "bytes appended" and "frame decoded" (so ordinary
+    // healthy playback never triggers a correction), but tight enough that a reconnected tile visibly
+    // rejoins its neighbors rather than staying a beat behind.
+    var DRIFT_THRESHOLD_SECONDS = 3;
+    var DRIFT_CHECK_INTERVAL_MS = 3000;
+    // Below this, catch-up stops and playbackRate returns to normal — deliberately smaller than
+    // DRIFT_THRESHOLD_SECONDS so a tile settles just inside the "acceptable" band rather than
+    // oscillating in and out of catch-up right at the threshold.
+    var CATCHUP_STOP_THRESHOLD_SECONDS = 0.75;
+    var CATCHUP_PLAYBACK_RATE = 1.5;
+    // Beyond this, a playbackRate catch-up would take too long to be worth it (confirmed cause:
+    // browsers throttle setInterval on a backgrounded/unfocused tab, so a real gap of a minute or
+    // more can go undetected until the tab regains focus) — falls back to a hard seek instead, same
+    // as the stall-recovery path below.
+    var HARD_RESYNC_THRESHOLD_SECONDS = 15;
+
     // Runs exactly one session attempt and returns its stop() function. `onEnded` fires exactly
     // once, however the session stops — explicit stop() call, decode error, or WebSocket
     // close/error — so start()'s retry wrapper above has one place to decide whether to reconnect.
@@ -175,6 +192,14 @@
         function endSession() {
             if (ended) return;
             ended = true;
+            // Cleared here rather than only in stop(): a session can end without stop() ever being
+            // called (decode error, socket close), and a leaked interval would keep adjusting a video
+            // element belonging to a torn-down session. playbackRate is reset too — the <video>
+            // element itself persists across reconnects (a fresh MediaSource is attached to the same
+            // element), so a session that ended mid-catch-up would otherwise leave the *next*
+            // session's playback silently sped up from the very first frame.
+            if (driftTimer) { clearInterval(driftTimer); driftTimer = null; }
+            videoEl.playbackRate = 1;
             onEnded();
         }
 
@@ -199,6 +224,7 @@
         var pending = [];
         var closed = false;
         var seekedToLiveEdge = false;
+        var driftTimer = null;
 
         // An appendBuffer failure is never recoverable for this session (a torn-down/replaced
         // MediaSource throws "removed from parent media source" on the very next call, and retrying
@@ -244,6 +270,12 @@
         });
 
         mediaSource.addEventListener('sourceopen', function () {
+            // A session can already be over by the time this fires (early decode error, immediate
+            // socket close, or the caller swapping this element into playback mode). Bailing here is
+            // what keeps endSession()'s clearInterval authoritative — otherwise the driftTimer below
+            // gets created *after* the cleanup that was supposed to cancel it, leaving an orphaned
+            // interval nothing will ever clear for the life of the page.
+            if (closed || ended) return;
             try {
                 sourceBuffer = mediaSource.addSourceBuffer(mimeType);
             } catch (e) {
@@ -298,6 +330,73 @@
                 if (isTimeBuffered(videoEl.currentTime)) return;
                 jumpToLiveEdge('resynced after falling out of the buffered range');
             });
+
+            // The `waiting` handler above only fires when playback actually stalls, which misses the
+            // case where a tile is playing perfectly well but simply *behind* — most commonly right
+            // after a reconnect, since a fresh session starts at whatever its first buffered range
+            // happens to be rather than at the newest frame available. Nothing ever pulled such a
+            // tile forward again, so in a multi-camera grid one reconnected tile could sit seconds
+            // behind its neighbors indefinitely. Each tile independently chasing its own live edge is
+            // enough to keep the whole grid visually together — no cross-tile clock or driving/
+            // following relationship needed (unlike Playback, which genuinely needs one because it
+            // seeks to an arbitrary shared instant).
+            //
+            // Two prior regressions of this exact shape are already on record, both from correcting
+            // drift with a *seek* (videoEl.currentTime = ...):
+            //   1. Reusing jumpToLiveEdge() (targets buffered.start()) moved *further* from the live
+            //      edge, not closer, when currentTime was already validly playing mid-range — a
+            //      repeating rewind that only cleared once a reconnect/eviction narrowed the range.
+            //   2. Seeking to a point just short of buffered.end() instead "fixed" the direction but
+            //      is not guaranteed to land on a keyframe/fragment boundary — confirmed live as
+            //      MediaError code 3 ("Failed to prepare video sample for decode") immediately after
+            //      a large correction, which tore the session down and reconnected: the exact same
+            //      "loop" symptom, from a different cause (decode failure, not a bad rewind target).
+            //      Root cause of the *large* corrections that triggered it: a backgrounded/unfocused
+            //      browser tab throttles setInterval, so drift can grow to tens of seconds between
+            //      ticks with nothing wrong on the wire.
+            // Fix: never seek to correct ordinary drift. Speed up playback instead, so the decoder
+            // catches up frame-by-frame through real, already-decodable data — zero discontinuity,
+            // so zero risk of landing off a keyframe. Only beyond HARD_RESYNC_THRESHOLD_SECONDS
+            // (drift too large for a catch-up to close in reasonable time) does this fall back to a
+            // hard seek — reusing jumpToLiveEdge()'s buffered.start() target, the same anchor the
+            // stall-recovery path below already relies on being safe.
+            driftTimer = setInterval(function () {
+                // Ownership guard, first thing: this same <video> element gets handed to a completely
+                // different player when a tile/cell is toggled into playback mode (playback-player.js
+                // attaches its own MediaSource to it). A timer belonging to this now-superseded live
+                // session must never touch the element again — confirmed live as a real failure, not
+                // theoretical: leaked timers kept seeking the element while the playback player owned
+                // it, producing exactly the interleaved multi-position "loop" this guard prevents.
+                if (closed || ended || videoEl.src !== objectUrl) return;
+                if (videoEl.paused || sourceBuffer.buffered.length === 0) return;
+                var lastRange = sourceBuffer.buffered.length - 1;
+                var liveEdge = sourceBuffer.buffered.end(lastRange);
+                var drift = liveEdge - videoEl.currentTime;
+                if (drift > HARD_RESYNC_THRESHOLD_SECONDS) {
+                    // Deliberately NOT a seek. Every seek-based correction tried here has been a
+                    // regression: jumpToLiveEdge() targets buffered.start(), which is *behind*
+                    // currentTime whenever currentTime is already inside the buffered range (the case
+                    // here) — that made drift worse and re-fired forever, needing a page refresh to
+                    // clear. Seeking near buffered.end() instead isn't keyframe-safe and threw real
+                    // decode errors. Drift this large means this session is unrecoverably behind
+                    // (typically a long-backgrounded tab whose throttled timer let a huge gap build);
+                    // ending it hands off to start()'s existing retry wrapper, which builds a fresh
+                    // MediaSource that begins cleanly at the live edge — the one path already proven
+                    // to recover correctly.
+                    console.log('[live-view] ' + drift.toFixed(1) + 's behind live edge — too far to catch up, restarting session');
+                    videoEl.playbackRate = 1;
+                    closed = true;
+                    if (socket) { try { socket.close(); } catch (e2) {} }
+                    endSession();
+                } else if (drift > DRIFT_THRESHOLD_SECONDS) {
+                    if (videoEl.playbackRate !== CATCHUP_PLAYBACK_RATE) {
+                        console.log('[live-view] catching up to live edge (' + drift.toFixed(1) + 's behind)');
+                        videoEl.playbackRate = CATCHUP_PLAYBACK_RATE;
+                    }
+                } else if (drift < CATCHUP_STOP_THRESHOLD_SECONDS && videoEl.playbackRate !== 1) {
+                    videoEl.playbackRate = 1;
+                }
+            }, DRIFT_CHECK_INTERVAL_MS);
             sourceBuffer.addEventListener('error', function (e) {
                 console.error('[live-view] sourceBuffer error', e, 'mimeType=', mimeType, 'fragments received=', fragmentCount);
                 statusEl.textContent = 'SourceBuffer error — see browser console.';

@@ -39,3 +39,9 @@ public record ThumbnailInfo(string FilePath, int OffsetSeconds, string? NodeIp, 
 /// lets ExportJobDispatcher detect that split before dispatching, rather than sending every path to
 /// the camera's current node and having the node reject whatever doesn't live on its own disk.</summary>
 public record SegmentFileInfo(string FilePath, Guid NodeId);
+
+/// <summary>Body of POST /api/playback/view-opened — the audit-only ping playback-player.js fires
+/// when a view is selected for review. Just the view id: the server resolves the camera set from the
+/// view's own layout rather than trusting a client-supplied camera list, since this is an audit
+/// record of what was actually opened.</summary>
+public record ViewOpenedRequest(Guid ViewId);

@@ -17,6 +17,7 @@ using LarisVMS.Infrastructure.Repositories;
 using LarisVMS.Infrastructure.Security;
 using LarisVMS.Infrastructure.Services;
 using LarisVMS.Web.Health;
+using LarisVMS.Web.Helpers;
 using LarisVMS.Web.Middleware;
 using LarisVMS.Web.Services;
 
@@ -151,6 +152,7 @@ builder.Services.AddScoped<IEventTagRuleService, EventTagRuleService>();
 builder.Services.AddScoped<IScheduleWindowService, ScheduleWindowService>();
 builder.Services.AddScoped<IExportService, ExportService>();
 builder.Services.AddScoped<IBackupService, BackupService>();
+builder.Services.AddScoped<IDashboardService, DashboardService>();
 
 // First Web-tier BackgroundService — see ExportJobDispatcher's own doc comment for why exports
 // needed one instead of a synchronous per-camera download.
@@ -356,7 +358,8 @@ nodesApi.MapPost("/exports/complete", async (HttpContext ctx, List<ExportComplet
 // process opens outbound to the node's own Kestrel port on the LAN (plain HTTP — the short-lived
 // signed token below is what keeps that port from being wide open to anything else on the LAN that
 // knows the URL shape).
-app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICameraService cameraService, CancellationToken ct) =>
+app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICameraService cameraService,
+    IAuditService auditService, CancellationToken ct) =>
 {
     if (!ctx.WebSockets.IsWebSocketRequest)
     {
@@ -372,6 +375,16 @@ app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICame
             "(needs at least one heartbeat since being upgraded to a build with live view).");
         return;
     }
+
+    // Logged here — after the camera resolves, before the socket is accepted — rather than per page
+    // load: this endpoint is opened once per camera actually watched, and (since the flat all-cameras
+    // grid was removed in 0.80.0) it is the single chokepoint every live-viewing path in the app goes
+    // through. A reconnect after a network blip does log a second entry; that's deliberate, an audit
+    // trail should show each time the stream was actually opened rather than hide it behind session
+    // bookkeeping.
+    await auditService.LogAsync("Camera.View",
+        ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
+        ctx.User.Identity?.Name, ctx.Connection.RemoteIpAddress?.ToString(), camera.Name, ct);
 
     var token = MediaToken.Issue(cameraId, key, TimeSpan.FromSeconds(60));
     var nodeUri = new Uri($"ws://{ip}:{port}/live/{cameraId}?token={Uri.EscapeDataString(token)}");
@@ -557,11 +570,46 @@ app.MapGet("/api/timeline", async (DateTime from, DateTime to, int? buckets, Gui
     Results.Json(await timeline.GetGlobalBucketsAsync(from, to, buckets ?? 200, cameraIds, ct))
 ).RequireAuthorization("Playback.View");
 
+// Audit-only: Pages/Playback resolves which view (and therefore which cameras) is being reviewed
+// entirely client-side, so there is no existing server hit that knows "this user just started
+// reviewing these cameras" — /playback-segment fires continuously per segment loaded, far too
+// granular to be a meaningful audit record. playback-player.js posts here once per view selection;
+// the response is ignored client-side, so a failure here can never block playback from starting.
+app.MapPost("/api/playback/view-opened", async (HttpContext ctx, ViewOpenedRequest request,
+    IViewService viewService, ICameraService cameraService, IAuditService auditService, CancellationToken ct) =>
+{
+    var userId = ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
+    var view = await viewService.GetVisibleToAsync(request.ViewId, userId, ct);
+    if (view is null) return Results.NotFound();
+
+    var cameraIds = ViewLayout.CameraIds(view.LayoutJson);
+    var cameras = await cameraService.ListAsync(ct);
+    var names = cameraIds
+        .Select(id => cameras.FirstOrDefault(c => c.Id == id)?.Name ?? id.ToString())
+        .ToList();
+
+    await auditService.LogAsync("Playback.View", userId, ctx.User.Identity?.Name,
+        ctx.Connection.RemoteIpAddress?.ToString(),
+        names.Count == 0
+            ? $"View '{view.Name}' (no cameras)"
+            : $"View '{view.Name}': {string.Join(", ", names)}",
+        ct);
+    return Results.NoContent();
+}).RequireAuthorization("Playback.View");
+
 // M8: Live-view motion indicator's signal — polled periodically by live-view.js, not pushed. Gated
 // Cameras.View (not Playback.View) since it's a Live-page concern, matching /live's own gate.
 app.MapGet("/api/cameras/motion-state", async (ITimelineService timeline, CancellationToken ct) =>
     Results.Json(await timeline.GetCamerasWithActiveMotionAsync(ct))
 ).RequireAuthorization("Cameras.View");
+
+// M11: Pages/Index's own 60s AJAX refresh (dashboard.js) — same IDashboardService.GetHealthAsync
+// Pages/Index.cshtml.cs's OnGetAsync itself calls, so the polled data and the server-rendered
+// initial page can never independently drift out of sync. Plain [Authorize] (no specific resource
+// policy), matching IndexModel's own gate — the dashboard shows a summary, not a resource to scope.
+app.MapGet("/api/dashboard", async (IDashboardService dashboardService, CancellationToken ct) =>
+    Results.Json(await dashboardService.GetHealthAsync(ct))
+).RequireAuthorization();
 
 app.MapGet("/playback-segment/{cameraId:guid}/{segmentId:long}", async (
     Guid cameraId, long segmentId, ITimelineService timeline, IHttpClientFactory httpFactory, CancellationToken ct) =>
@@ -608,13 +656,11 @@ app.MapGet("/playback-segment/{cameraId:guid}/{segmentId:long}", async (
 }).RequireAuthorization("Playback.View");
 
 // M7 pass 2: same "browser never talks to a node directly" proxy shape as /playback-segment above,
-// but for one extracted JPEG hover-preview frame instead of a whole segment's bytes, looked up by
-// instant (atUtc) rather than by segment id — GetThumbnailInfoAsync resolves which segment covers
-// atUtc and buckets/clamps the offset within it server-side.
-app.MapGet("/playback-thumbnail/{cameraId:guid}", async (
-    Guid cameraId, DateTime atUtc, ITimelineService timeline, IHttpClientFactory httpFactory, CancellationToken ct) =>
+// but for one extracted JPEG hover-preview frame instead of a whole segment's bytes. Shared by both
+// the bucketed/historical lookup (atUtc-based) below and the Dashboard's "most recent" lookup —
+// everything past resolving a ThumbnailInfo is identical proxy plumbing (token, node URI, relay).
+async Task<IResult> ProxyThumbnailAsync(Guid cameraId, ThumbnailInfo? thumb, IHttpClientFactory httpFactory, CancellationToken ct)
 {
-    var thumb = await timeline.GetThumbnailInfoAsync(cameraId, atUtc, ct);
     if (thumb is null) return Results.NotFound();
     if (thumb.NodeIp is null || thumb.NodeLivePort is null || thumb.NodeMediaSigningKey is null)
     {
@@ -651,7 +697,22 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (
     }
 
     return Results.Stream(await nodeResponse.Content.ReadAsStreamAsync(ct), "image/jpeg");
-}).RequireAuthorization("Playback.View");
+}
+
+// GetThumbnailInfoAsync resolves which segment covers atUtc and buckets/clamps the offset within it
+// server-side.
+app.MapGet("/playback-thumbnail/{cameraId:guid}", async (
+    Guid cameraId, DateTime atUtc, ITimelineService timeline, IHttpClientFactory httpFactory, CancellationToken ct) =>
+    await ProxyThumbnailAsync(cameraId, await timeline.GetThumbnailInfoAsync(cameraId, atUtc, ct), httpFactory, ct)
+).RequireAuthorization("Playback.View");
+
+// Dashboard's "most recent thumbnail" column (Pages/Index, dashboard.js) — plain [Authorize], not
+// Playback.View, matching Pages/Index's own gate (IndexModel has no specific resource policy) rather
+// than the stricter one the historical/scrub lookup above uses.
+app.MapGet("/playback-thumbnail/{cameraId:guid}/latest", async (
+    Guid cameraId, ITimelineService timeline, IHttpClientFactory httpFactory, CancellationToken ct) =>
+    await ProxyThumbnailAsync(cameraId, await timeline.GetLatestThumbnailInfoAsync(cameraId, ct), httpFactory, ct)
+).RequireAuthorization();
 
 // ── Multi-camera export ──────────────────────────────────────────────────────
 // Trigger from Playback's toolbar. Async: creates the job/items and returns immediately —
@@ -678,7 +739,8 @@ app.MapPost("/api/exports", async (HttpContext ctx, CreateExportRequest request,
 // fileDownloadName), since this is the first proxy route meant to be saved rather than played
 // inline through MSE.
 app.MapGet("/export-download/{exportItemId:guid}", async (
-    Guid exportItemId, IExportService exportService, IHttpClientFactory httpFactory, CancellationToken ct) =>
+    HttpContext ctx, Guid exportItemId, IExportService exportService, IAuditService auditService,
+    IHttpClientFactory httpFactory, CancellationToken ct) =>
 {
     var info = await exportService.GetDownloadInfoAsync(exportItemId, ct);
     if (info is null) return Results.NotFound();
@@ -688,6 +750,16 @@ app.MapGet("/export-download/{exportItemId:guid}", async (
             "This export's node hasn't reported live-view readiness yet (needs at least one heartbeat since being upgraded to a build with live view).",
             statusCode: StatusCodes.Status503ServiceUnavailable);
     }
+
+    // Logged once the item resolves and before any bytes move, not after the transfer completes — a
+    // download that was started and then abandoned mid-transfer still means footage left the system,
+    // which is exactly what this entry exists to record. Of the whole export flow this is the most
+    // compliance-sensitive step (completed data exfiltration, not just viewing) and it had no audit
+    // coverage at all before.
+    await auditService.LogAsync("Export.Download",
+        ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
+        ctx.User.Identity?.Name, ctx.Connection.RemoteIpAddress?.ToString(),
+        Path.GetFileName(info.FilePath), ct);
 
     var token = MediaToken.IssueForExportDownload(exportItemId, info.FilePath, info.NodeMediaSigningKey, TimeSpan.FromSeconds(30));
     var nodeUri = $"http://{info.NodeIp}:{info.NodeLivePort}/export-file/{exportItemId}" +
