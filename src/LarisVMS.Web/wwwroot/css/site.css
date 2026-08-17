@@ -47,3 +47,29 @@ body {
 .tile-fullscreen .view-cell-controls {
     display: flex !important;
 }
+
+/* The Playback timelines while they're living inside a fullscreened tile (playback-player.js moves
+   the real element in and back out, rather than rendering a second copy). Overlaid across the bottom
+   of the video on a translucent backdrop so scrubbing is possible without leaving fullscreen —
+   which is the whole point, since the page-level original is not rendered at all in that state. */
+.pb-timeline-fullscreen {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 10;
+    padding: 0.25rem 0.75rem 0.5rem;
+    background: rgba(0, 0, 0, 0.65);
+    color: #fff;
+}
+
+.pb-timeline-fullscreen label,
+.pb-timeline-fullscreen .text-muted {
+    color: rgba(255, 255, 255, 0.75) !important;
+}
+
+/* The multi-line usage hint under the timelines is orientation for a first-time visitor, not
+   something worth spending fullscreen video real estate on. */
+.pb-timeline-fullscreen p {
+    display: none;
+}

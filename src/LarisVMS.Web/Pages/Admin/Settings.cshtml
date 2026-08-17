@@ -9,6 +9,7 @@
     of the Camera &rarr; Node &rarr; Global chain. Override retention/recording per node on
     <a asp-page="/Admin/Nodes">Admin &rarr; Nodes</a>, or per camera on that camera's edit page; a
     camera-level override wins over its node's, which wins over the global defaults here.
+    Site name, colors and logo live on <a asp-page="/Admin/Branding">Admin &rarr; Branding</a>.
 </p>
 
 @if (!string.IsNullOrEmpty(Model.SavedMessage))
@@ -111,7 +112,7 @@
     </div>
 
     <div class="col-12">
-        <button type="submit" class="btn btn-primary">Save</button>
+        <button type="submit" class="btn btn-primary"><span aria-hidden="true">💾</span> Save</button>
     </div>
 </form>
 

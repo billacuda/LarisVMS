@@ -92,6 +92,14 @@ else
                         </td>
                         <td>
                             <a asp-page="Edit" asp-route-id="@c.Id">@c.Name</a>
+                            @if (c.VideoSourceToken is { } channelToken)
+                            {
+                                <span class="ms-1" title="One lens of a multi-sensor device (video source @channelToken) — its other channels are separate cameras in this list">🔀</span>
+                            }
+                            @if (LarisVMS.Core.CameraIntegrations.ByKey(c.IntegrationKey) is { } integration)
+                            {
+                                <span class="ms-1" title="@integration.DisplayName — this camera uses a vendor integration alongside ONVIF">🧩</span>
+                            }
                             @if (staleNodeIds is { Count: > 0 })
                             {
                                 var staleNames = string.Join(", ", staleNodeIds.Select(id => Model.Nodes.FirstOrDefault(n => n.Id == id)?.Name ?? "a deleted node"));
@@ -157,7 +165,7 @@ else
                             <a class="btn btn-sm btn-outline-secondary" asp-page="EventTags" asp-route-id="@c.Id">Event tags</a>
                             <a class="btn btn-sm btn-outline-secondary" asp-page="Schedule" asp-route-id="@c.Id">Schedule</a>
                             <form method="post" asp-page-handler="Probe" asp-route-id="@c.Id" class="d-inline">
-                                <button type="submit" class="btn btn-sm btn-outline-secondary">Re-probe</button>
+                                <button type="submit" class="btn btn-sm btn-outline-secondary"><span aria-hidden="true">🔍</span> Re-probe</button>
                             </form>
                         </td>
                     </tr>

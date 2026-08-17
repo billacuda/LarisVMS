@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
+using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
@@ -138,7 +139,12 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
                 recordingMode, motionPreRollSeconds, motionPostRollSeconds,
                 ResolveEventsServiceUri(c.Capabilities),
                 eventTagRulesLookup[c.Id].Select(r => new NodeConfigEventTagRuleDto(r.Id, r.StartTopic, r.StopTopic, r.DrivesRecording)).ToList(),
-                scheduleWindowsLookup[c.Id].Select(w => new NodeConfigScheduleWindowDto(w.Id, w.Days.ToString(), w.StartTime, w.EndTime)).ToList()));
+                scheduleWindowsLookup[c.Id].Select(w => new NodeConfigScheduleWindowDto(w.Id, w.Days.ToString(), w.StartTime, w.EndTime)).ToList(),
+                // Only sent when a provider is actually registered for the stored key, so a key left
+                // behind by a removed/newer provider quietly means "no integration" rather than
+                // asking the node to start something it can't resolve.
+                CameraIntegrations.ByKey(c.IntegrationKey)?.Key,
+                ResolveIntegrationBaseUri(c)));
         }
 
         // Cameras this node has leftover Segments for but doesn't currently record — reassigned to a
@@ -170,6 +176,18 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
     /// — same source/pattern CameraService.ReplaceStreamsAsync already uses for the Media XAddr.
     /// Null whenever there's nothing to resolve: no probe yet, an old probe from before HasEvents
     /// existed, or a device that genuinely doesn't advertise an Events service at all.</summary>
+    /// <summary>The camera's own scheme+host+port for a vendor plugin to build its API calls against.
+    /// Derived from DeviceServiceUri (the one address a camera is guaranteed to have — it's how it
+    /// was added) rather than Host/OnvifPort, so a camera reached over https, or on a non-default
+    /// port, keeps working. Null when there's no integration to serve or the stored URI isn't
+    /// parseable.</summary>
+    private static string? ResolveIntegrationBaseUri(Camera camera)
+    {
+        if (CameraIntegrations.ByKey(camera.IntegrationKey) is null) return null;
+        if (!Uri.TryCreate(camera.DeviceServiceUri, UriKind.Absolute, out var deviceUri)) return null;
+        return $"{deviceUri.Scheme}://{deviceUri.Authority}";
+    }
+
     private static string? ResolveEventsServiceUri(CameraCapabilities? capabilities)
     {
         if (capabilities is not { HasEvents: true, RawProbeJson: { } json }) return null;
@@ -336,9 +354,14 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             // camera-pushed classifier and a custom EventTagRule report with ZoneId=null, so without
             // this a rule's span starting at the same instant as a built-in motion span (or another
             // rule's) would collide with it here and silently steal its checkpoints/EndUtc extension.
+            // DetectionKind joins the identity for the same reason EventTagRuleId did: an
+            // object-detection span reports with ZoneId and EventTagRuleId both null, exactly like a
+            // built-in motion span, so without it a person detected at the same instant as plain
+            // motion (the normal case — a camera fires both families for one real event) would
+            // collide with it and silently steal its checkpoints.
             var existing = await db.MotionSpans.FirstOrDefaultAsync(m =>
                 m.CameraId == item.CameraId && m.ZoneId == item.ZoneId && m.EventTagRuleId == item.EventTagRuleId
-                && m.StartUtc == item.StartUtc, ct);
+                && m.DetectionKind == item.DetectionKind && m.StartUtc == item.StartUtc, ct);
 
             if (existing is not null)
             {
@@ -361,6 +384,10 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
                 // ServerMotion span always names the zone that detected it.
                 Source = item.EventTagRuleId is not null ? MotionSource.CustomTag
                     : item.ZoneId is null ? MotionSource.CameraEvent : MotionSource.ServerMotion,
+                // Object detections stay Source=CameraEvent (they arrive over the same PullPoint
+                // channel from the same classifier) and are distinguished by this instead — see
+                // DetectionKind's own doc comment for why the two are separate questions.
+                DetectionKind = item.DetectionKind,
                 StartUtc = item.StartUtc,
                 EndUtc = item.EndUtc,
                 Score = item.Score

@@ -184,13 +184,60 @@
         <button type="submit" class="btn btn-primary">@(Model.IsNew ? "Add & probe" : "Save")</button>
         @if (!Model.IsNew)
         {
-            <button type="submit" asp-page-handler="Probe" class="btn btn-outline-secondary">Re-probe</button>
+            <button type="submit" asp-page-handler="Probe" class="btn btn-outline-secondary"><span aria-hidden="true">🔍</span> Re-probe</button>
             <button type="submit" asp-page-handler="Delete" class="btn btn-outline-danger"
                     onclick="return confirm('Delete this camera?');">Delete</button>
         }
         <a asp-page="Index" class="btn btn-link">Cancel</a>
     </div>
 </form>
+
+@* Only ever offered right after a probe, which is the one thing that reports the device's channel
+   list. A camera already pinned to a channel shows what it covers instead of re-offering the split. *@
+@if (!Model.IsNew && Model.DetectedChannelCount > 1 && Model.VideoSourceToken is null)
+{
+    <div class="alert alert-warning d-flex flex-wrap align-items-center gap-2">
+        <div class="flex-grow-1">
+            <strong>This device has @Model.DetectedChannelCount channels.</strong>
+            It looks like a multi-sensor camera (several lenses in one housing). Right now this single
+            camera picks its streams from across all of them, which can mean it records the wrong lens.
+            Splitting creates one camera per channel — each records independently and can be placed in
+            a view on its own. Your existing camera becomes channel 1 and keeps its recordings.
+        </div>
+        <form method="post">
+            <input type="hidden" asp-for="Id" />
+            <button type="submit" asp-page-handler="SplitChannels" class="btn btn-warning"
+                    onclick="return confirm('Add one camera per channel on this device?');">
+                <span aria-hidden="true">🔀</span> Split into @Model.DetectedChannelCount cameras
+            </button>
+        </form>
+    </div>
+}
+else if (Model.VideoSourceToken is { } channelToken)
+{
+    <p class="text-muted small">
+        <span aria-hidden="true">🔀</span>
+        One channel of a multi-sensor device — this camera records only video source
+        <code>@channelToken</code>. Its sibling channels are separate cameras on the
+        <a asp-page="Index">Cameras</a> list.
+    </p>
+}
+
+@if (Model.Integration is { } integration)
+{
+    <div class="alert alert-info d-flex align-items-start gap-2">
+        <span aria-hidden="true">🧩</span>
+        <div>
+            <strong>@integration.DisplayName</strong> is active for this camera.
+            <div class="small">@integration.Summary</div>
+            <div class="form-text">
+                Detected automatically from the make and model this camera reports
+                (@(Model.Capabilities is null ? "re-probe to refresh" : "re-probe to re-check")). The
+                recorder node connects to the camera's own API alongside ONVIF — no setup needed here.
+            </div>
+        </div>
+    </div>
+}
 
 @if (Model.Capabilities is { } cap)
 {
@@ -244,7 +291,7 @@
                             <td>@(s.BitrateKbps is not null ? $"{s.BitrateKbps} kbps" : "—")</td>
                             <td>@(s.HasAudio ? s.AudioCodec ?? "yes" : "no")</td>
                             <td class="font-monospace small">@s.RtspUri</td>
-                            <td class="text-end"><button type="submit" class="btn btn-sm btn-outline-primary">Save</button></td>
+                            <td class="text-end"><button type="submit" class="btn btn-sm btn-outline-primary"><span aria-hidden="true">💾</span> Save</button></td>
                         </form>
                     </tr>
                 }

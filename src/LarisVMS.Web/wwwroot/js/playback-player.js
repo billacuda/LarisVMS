@@ -645,8 +645,40 @@
             });
         }
 
+        // Fullscreening a tile promotes only that element's own subtree into the browser's
+        // fullscreen layer, so the timelines — page-level elements below the grid — simply stop
+        // being rendered, leaving no way to scrub the very footage being watched full-screen. Rather
+        // than duplicating them inside the tile (two canvases to keep in sync, two sets of buckets to
+        // fetch), the existing element is *moved* into the fullscreened tile and moved back on exit:
+        // same canvas, same timeline instance, no state to reconcile. Its canvases re-measure
+        // themselves on arrival via timeline.js's ResizeObserver, which is what makes a plain
+        // appendChild sufficient here.
+        var timelineArea = opts.timelineAreaId ? document.getElementById(opts.timelineAreaId) : null;
+        var timelineHome = null;
+
+        function moveTimelineIntoFullscreen() {
+            if (!timelineArea || timelineArea.parentElement === frameEl) return;
+            // Remembered as (parent, nextSibling) rather than an index so the element goes back
+            // exactly where it was even if siblings changed while it was away.
+            timelineHome = { parent: timelineArea.parentElement, before: timelineArea.nextSibling };
+            timelineArea.classList.add('pb-timeline-fullscreen');
+            frameEl.appendChild(timelineArea);
+        }
+
+        function restoreTimeline() {
+            if (!timelineArea || !timelineHome) return;
+            // fullscreen-tile.js's fullscreenchange handler fires for *every* wired tile, not just
+            // the one whose state changed, so a tile that doesn't currently hold the timeline must
+            // not yank it out of whichever tile does.
+            if (timelineArea.parentElement !== frameEl) { timelineHome = null; return; }
+            timelineArea.classList.remove('pb-timeline-fullscreen');
+            timelineHome.parent.insertBefore(timelineArea, timelineHome.before);
+            timelineHome = null;
+        }
+
         var fsHandle = window.larisvmsFullscreenTile.wire(frameEl, videoEl, {
             onFullscreenChange: function (active) {
+                if (active) moveTimelineIntoFullscreen(); else restoreTimeline();
                 if (!fsBtn) return;
                 fsBtn.textContent = active ? '⤢' : '⛶';
                 fsBtn.title = active ? 'Exit fullscreen' : 'Fullscreen';

@@ -91,4 +91,59 @@ public class NodeServiceCameraEventTests
         Assert.Single(rows);
         Assert.Equal(start.AddSeconds(10), rows[0].EndUtc);
     }
+
+    [Fact]
+    public async Task ADetectionSpanDoesNotCollideWithPlainMotionStartingAtTheSameInstant()
+    {
+        // The normal case for an object-capable camera: it fires both a motion topic and a
+        // PeopleDetector topic for one real event, and both report with ZoneId and EventTagRuleId
+        // null. Without DetectionKind in the upsert identity the second would be treated as a
+        // checkpoint of the first and silently vanish.
+        var (db, service, cameraId, nodeId) = await SeedAsync();
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+
+        await service.RecordMotionSpansAsync(nodeId, [
+            new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(5), 1.0),
+            new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(5), 1.0, null, DetectionKind.Person)
+        ]);
+
+        var rows = await db.MotionSpans.Where(m => m.CameraId == cameraId).ToListAsync();
+        Assert.Equal(2, rows.Count);
+        Assert.Single(rows, r => r.DetectionKind is null);
+        Assert.Single(rows, r => r.DetectionKind == DetectionKind.Person);
+        // A detection still arrives over the camera-event channel — the class is the extra axis,
+        // not a replacement for Source.
+        Assert.All(rows, r => Assert.Equal(MotionSource.CameraEvent, r.Source));
+    }
+
+    [Fact]
+    public async Task TwoDifferentDetectedClassesAtTheSameInstantStaySeparateSpans()
+    {
+        var (db, service, cameraId, nodeId) = await SeedAsync();
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+
+        await service.RecordMotionSpansAsync(nodeId, [
+            new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(5), 1.0, null, DetectionKind.Person),
+            new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(5), 1.0, null, DetectionKind.Vehicle)
+        ]);
+
+        var rows = await db.MotionSpans.Where(m => m.CameraId == cameraId).ToListAsync();
+        Assert.Equal(2, rows.Count);
+    }
+
+    [Fact]
+    public async Task RepeatedDetectionCheckpointsExtendTheSameRow()
+    {
+        var (db, service, cameraId, nodeId) = await SeedAsync();
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+
+        await service.RecordMotionSpansAsync(nodeId,
+            [new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(5), 1.0, null, DetectionKind.Person)]);
+        await service.RecordMotionSpansAsync(nodeId,
+            [new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(30), 1.0, null, DetectionKind.Person)]);
+
+        var row = await db.MotionSpans.SingleAsync(m => m.CameraId == cameraId);
+        Assert.Equal(start.AddSeconds(30), row.EndUtc);
+        Assert.Equal(DetectionKind.Person, row.DetectionKind);
+    }
 }

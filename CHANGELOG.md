@@ -5,6 +5,336 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.88.1] - 2026-08-16
+
+### Changed
+
+- **The recorder's live fan-out no longer allocates when nobody is watching.** ffmpeg's stdout is now
+  read through `System.IO.Pipelines` instead of `Stream.ReadAsync` into an array of our own. The pipe
+  owns pooled buffers and its `AdvanceTo(consumed, examined)` contract expresses precisely the problem
+  here — "I examined all of this but could only consume through the last whole fragment" — which is
+  the buffering and compaction the drain loop had been doing by hand, and doing by hand meant copying
+  every byte ffmpeg produced into a second buffer first. Fragment boundaries are now found in the
+  pipe's own buffers, and nothing is copied unless a fragment is actually being handed to a viewer.
+  Measured over one camera-hour (108,000 fragments, 4.1 GB): with a viewer, 18% less CPU and unchanged
+  allocation (handing a viewer an array has to allocate one); with no viewer, **83% less CPU and
+  allocation down from 4.1 GB to zero**. A 24/7 recorder has no viewer on most cameras most of the
+  time, so that is the case that dominates.
+- **Box-type parsing no longer allocates a string per box.** The scanner decoded each four-byte box
+  type to a `string` to compare it, on a path that sees every byte ffmpeg emits, for every camera,
+  forever. Types are now compared as big-endian `uint32`. A test asserts the scan allocates exactly
+  zero bytes.
+- The scanner also gained `ReadOnlySequence<byte>` overloads, since pooled pipe buffers can split a
+  box header across two segments. Covered by tests that split at every offset through a header,
+  including the 64-bit `largesize` form, and assert the sequence and span paths agree exactly — a
+  disagreement would move a fragment boundary depending on how the pipe happened to segment.
+
+**Node change — `install-node.ps1` re-run needed on every recorder.**
+
+## [0.88.0] - 2026-08-16
+
+### Added
+
+- **Event colors are now admin-configurable (`Admin → Event Colors`).** Every color the timelines and
+  live badges draw with — plain motion, recorded coverage, and each detected object class — can be
+  set from one page, with a swatch picker and a hex field per entry. Leaving a field blank stores
+  nothing rather than storing today's default, so an untouched deployment keeps tracking the built-in
+  palette including any later change to it. A user-configured event tag rule's own color still
+  outranks everything, unchanged.
+- **Three more object classes, wired through both detection sources** so they work on any camera that
+  reports them: **Animal** 🐾, **Object appeared** 🧳 (something left behind — the abandoned-baggage
+  case), and **Object missing** ❓ (something that was there and is gone). Recognized over ONVIF
+  (`AnimalDetector`, `PetDetector`, `AbandonedObject`, `ObjectAppearance`, `MissingObject`,
+  `ObjectRemoval`) and over the Dahua/Amcrest integration (`AnimalDetection`, `SmartMotionAnimal`,
+  `PetDetection`, `LeftDetection`, `AbandonedObjectDetection`, `TakenAwayDetection`,
+  `MissingObjectDetection`). None of this deployment's cameras are known to emit them — they cost
+  nothing until one does.
+
+- **Several object classes seen at once are all shown, on both surfaces.** A camera watching a person
+  walk a dog past a parked car is reporting three classes on one stream. The live tile already
+  rendered a badge per class, but the badge strip couldn't wrap — on a small cell in a dense grid the
+  third and later badges ran off the edge. It now wraps within the cell. On the timeline, a bucket
+  overlapping several classes previously painted only the earliest-starting one and silently dropped
+  the rest; it now splits into equal horizontal bands, one per class. A bucket with a single color
+  draws exactly as before.
+- **Detection badge text now picks black or white by the badge's own luminance.** Badge colors became
+  admin-configurable in this release, so the previously hardcoded black text could no longer be
+  assumed legible — a dark custom color would have produced an unreadable badge.
+
+### Changed
+
+- **Dahua's `LeftDetection` and `TakenAwayDetection` now map to Object appeared / Object missing
+  rather than both collapsing into the generic Object class**, which had been throwing away the
+  distinction between something being left behind and something being taken.
+- Plain motion — movement the camera could not classify — is now marked 🌀 on live tiles, rather than
+  a bare dot. The swirl is deliberately not an object glyph, since the whole point of that badge is
+  that no object class was attached.
+
+## [0.87.5] - 2026-08-16
+
+### Fixed
+
+- **Live tiles failed to decode with `CHUNK_DEMUXER_ERROR_APPEND_FAILED` ("Failed to prepare video
+  sample for decode"), most often right after a reconnect.** The node fanned raw 64 KB reads of
+  ffmpeg's pipe out to live viewers rather than complete fMP4 fragments, so a viewer joining
+  mid-stream got the cached init segment followed by bytes starting partway through a `moof` or
+  `mdat`. The decoder rejects a truncated box outright, which is why a fresh session died on its
+  first media chunk. Whether it happened at all depended on where the next read boundary landed,
+  making it look intermittent. The same flaw made back-pressure destructive: the per-viewer queue
+  drops its oldest entry when a slow client falls behind, punching a hole through the middle of a box
+  instead of skipping cleanly. Viewers are now fed whole moof+mdat fragments, so both a late join and
+  a dropped fragment land on a boundary MSE accepts. **Node change — `install-node.ps1` re-run needed
+  on every recorder.**
+- **Live-view sessions leaked their `<video>` event listeners.** The element outlives every session
+  attached to it (each reconnect builds a fresh `MediaSource` on the same element), so every
+  reconnect added another full set of `error`/`playing`/`stalled`/`waiting` handlers, none removed.
+  All of them kept firing, each holding its dead session's closure alive — one decode error printed
+  once per leaked listener, each reporting its own stale fragment count, which read like several
+  concurrent sessions and buried the real fault. This got steadily worse the longer a page stayed
+  open, since the count grows with every reconnect.
+
+### Changed
+
+- Cameras using a vendor integration are now marked 🧩 rather than 🔌.
+- Navbar icons: Playback is ▶️ (was ⏪) and Exports is 🎬 (was ⬇️). Playback's toolbar "Export…"
+  button picked up 🎬 to match, and the Exports page's Download button now carries ⬇️ — freed up by
+  the navbar change, and now meaning specifically "download" rather than "exports". The per-cell
+  playback toggle keeps ⏱ — ▶ is already the play/pause control inside those same cells, so reusing
+  it would sit two near-identical buttons side by side.
+
+## [0.87.4] - 2026-08-16
+
+### Changed
+
+- The **Other** detection class now shows 📦 instead of 🔎 on live-tile badges. The badge names what
+  the camera saw, and a magnifying glass reads as an action (search) rather than a thing. Display
+  only — no node re-run needed, since nodes report the detection class and never the emoji.
+
+## [0.87.3] - 2026-08-16
+
+### Fixed
+
+- **A dropped smart-event connection could leave a detection span open forever.** Dahua's `attach`
+  endpoint only delivers events from the moment it subscribes, so a `Stop` sent while the feed was
+  down is gone for good — and the 15-second checkpoint loop kept extending the still-open span's end
+  time indefinitely. A camera reboot or network blip while someone was in frame would read on the
+  timeline as a person standing there for hours. Open spans are now closed at the point the feed died,
+  the same contract shutdown already had; a fresh `Start` after reconnect opens a new span, leaving an
+  honest gap where the feed was down. **Node change — `install-node.ps1` re-run needed on every
+  recorder.**
+
+## [0.87.2] - 2026-08-16
+
+### Added
+
+- **`probe-dahua-events.ps1 -UsePluginCodes`**, which subscribes with the exact filtered code list the
+  plugin sends instead of `[All]`. Probing with `[All]` proves which codes a camera *can* emit, but the
+  plugin asks for a narrow `codes=[...]` list — firmware that mishandles a long filter would go silent
+  in production while an `[All]` probe still looked perfect. Verified against an Amcrest
+  `IP8M-DLB2998EW-AI`: `SmartMotionHuman` arrives as clean Start/Stop pairs and maps to Person.
+
+## [0.87.1] - 2026-08-16
+
+### Fixed
+
+- **`probe-dahua-events.ps1` couldn't run at all.** Its camera-address parameter was named `-Host`,
+  but `$Host` is a reserved PowerShell automatic variable (the console host object), so parameter
+  binding failed immediately with *"Cannot overwrite variable Host because it is read-only or
+  constant."* Renamed to `-CameraHost`, with `-Address`/`-IP` aliases. Script only — no application
+  change.
+
+## [0.87.0] - 2026-08-16
+
+### Added
+
+- **Camera integration plugins** — an extensibility point for everything ONVIF can't express. A
+  provider declares which makes and models it handles; probing matches each camera automatically
+  from the make/model it already reports, stores the result, and the recorder node starts that
+  vendor's session alongside its ONVIF one. Cameras using one are marked 🧩 on the Cameras list and
+  explain themselves on their Edit page. Nothing to configure.
+  - **Providers are compiled in and listed in one registry, not loaded from external assemblies.**
+    Recorder nodes ship as a single self-contained executable that auto-updates by file swap, so a
+    drop-in plugin folder would need a second distribution and version-matching channel, and would
+    mean loading arbitrary code onto recorder machines. Adding a vendor is one descriptor plus one
+    session, each registered in exactly one place.
+  - Detection re-runs on every probe, so a camera picks up (or loses) an integration when its
+    reported identity changes — including hardware already in the fleet that a later release starts
+    recognizing. An unknown key (config from a newer server, or a provider since removed) degrades to
+    "no integration" rather than failing config generation or stopping a camera recording.
+- **First provider: Dahua / Amcrest smart events.** Reads person and vehicle detections from the
+  camera's own Smart Motion Detection over Dahua's CGI event API, feeding the exact same detection
+  spans, badges, timeline colors and Motion-mode retention that 0.85.0 built for ONVIF.
+  - **This is what makes 0.85.0 actually work on this fleet.** Those cameras classify objects onboard
+    with SMD enabled, but publish nothing object-shaped over ONVIF — confirmed against 21,747
+    recorded events containing only motion/tamper/monitoring topics, and a metadata track carrying a
+    motion-cell grid rather than object geometry. The classification was always happening; it just
+    had no route into the app until now.
+  - Subscribes only to codes the app can act on, not `[All]` — which would also stream every
+    heartbeat, storage and config-change event the camera produces. Plain motion is deliberately
+    excluded, since ONVIF already delivers it and taking both would double-report one event.
+
+### Known limitations
+
+- **The vendor event codes are unverified against real hardware.** The code table comes from Dahua's
+  documentation and covers several firmware generations' spellings, but this deployment's exact
+  firmware hasn't been observed emitting them. An unrecognized code is ignored safely (no misbehavior,
+  just no badge), and adding a spelling is a one-line change. `probe-dahua-events.ps1` prints exactly
+  what a camera really sends.
+
+**LarisVMS.Node change — `install-node.ps1` re-run needed on every recorder.**
+
+## [0.86.1] - 2026-08-16
+
+### Fixed
+
+- **`probe-metadata-track.ps1` reported a false positive.** Its check accepted a match on
+  `MetadataStream|VideoAnalytics` — elements present in *any* ONVIF metadata stream — and on that
+  basis declared bounding boxes feasible. Run against a real camera it did exactly that, while the
+  captured payload contained no object geometry at all. It now looks for the elements that actually
+  carry geometry (`tt:Object` / `BoundingBox`) across the whole capture rather than the printed
+  preview, distinguishes "has geometry but no class labels" from "has both", calls out a
+  motion-cell-only stream for what it is, and prints an element census of what the camera really
+  sent.
+
+### Research
+
+- **Bounding-box spike result: not achievable on the current camera fleet.** Probing a Driveway
+  camera (Dahua/Amcrest family, the same RTSP path all six units use) established:
+  - A metadata track **does** exist (stream index 2) and ffmpeg **can** demux it cleanly with
+    `-map 0:d` — 6963 bytes of valid ONVIF XML in 15 seconds, no repeat of the muxer failure that
+    made the recording pipeline stop mapping data streams in the first place.
+  - But it carries a **22×18 `MotionInCells` grid** plus the same `CellMotionDetector`/`MotionAlarm`
+    events already ingested over PullPoint — **zero** `tt:Object`, `BoundingBox`, or `ClassCandidate`
+    elements. The `Transformation` confirms it (`Scale x=0.090909` = 2/22, `y=-0.111111` = 2/18):
+    the coordinate system maps to that cell grid, not to object rectangles.
+  - So the blocker is the hardware, not the plumbing: these cameras do cell-motion analytics, not
+    onboard object detection. The object-detection *events* shipped in 0.85.0 remain the available
+    object signal, and per-object boxes would need a camera model with real onboard object analytics.
+
+## [0.86.0] - 2026-08-16
+
+### Fixed
+
+- **The Playback page's timelines disappeared while a tile was fullscreened**, leaving no way to
+  scrub the very footage being watched full-screen. This wasn't a CSS bug: the timelines are
+  page-level elements outside the fullscreened tile, and the browser's Fullscreen API genuinely
+  renders only the fullscreened element's own subtree. The real timeline element is now moved into
+  the tile while fullscreen is active and moved back on exit — one canvas, one timeline instance, no
+  second copy to keep in sync — overlaid across the bottom of the video on a translucent backdrop.
+  (This is what the earlier View-cell fullscreen fix in 0.81.2 explicitly did *not* cover, since a
+  View cell's mini-timeline already lives inside the element being fullscreened.)
+
+### Added
+
+- **`probe-metadata-track.ps1`** — a read-only research script that answers the one open question
+  gating bounding-box overlays: does a camera actually expose an ONVIF metadata track over RTSP, and
+  can ffmpeg demux it? It opens its own short-lived connection, entirely separate from the recording
+  pipeline, and redacts credentials from everything it prints. Run it against a real camera before
+  any bounding-box work is designed — the recording pipeline has a confirmed production failure on
+  record from mapping a data stream, which is why it maps only video and audio today.
+
+## [0.85.0] - 2026-08-16
+
+### Added
+
+- **Object-detection events.** Cameras whose own onboard analytics classify what they see
+  (person / vehicle / face) now surface that instead of only generic motion: a labelled badge on the
+  live tile (🚶 Person, 🚗 Vehicle, 🙂 Face), and a distinctly coloured span on the Playback timeline,
+  clearly separate from motion green and recorded blue.
+  - Runs entirely on the ONVIF PullPoint channel, `MotionSpan` storage and reporting path already in
+    place — no new wire format, no new polling loop on the node, and unrecognized topics keep flowing
+    to the raw event log exactly as before.
+  - Vendor topic names vary a lot (Hikvision, Dahua, Amcrest and Axis all differ, and firmware
+    revisions differ within a vendor), so matching is by substring across a table of the known
+    spellings. Anything unmatched is simply not classified.
+  - Each detected class tracks its own span independently, so a person leaving doesn't close a
+    vehicle's span, and neither disturbs plain motion detection.
+
+### Changed
+
+- **A detection now counts toward Motion-mode recording**, as one more term in the existing OR chain
+  alongside motion zones, camera motion events and driving event-tag rules. Because it's an OR term
+  it can only ever *keep* a segment that would otherwise have been discarded — never discard one that
+  would have been kept. That direction also fixes a real pre-existing gap: a camera whose firmware
+  emits object-detection topics but no motion ones had nothing to satisfy Motion mode's keep
+  condition, and so discarded everything it recorded.
+
+### Known limitations
+
+- **These are not bounding boxes.** ONVIF's rule-engine topics report *that* an object class was
+  seen, not where it was in frame. Per-frame coordinates travel on a separate metadata RTP track this
+  app doesn't consume — see the earlier note on why that needs verifying against real hardware before
+  it can be designed, since the recording pipeline's own attempt to map that track has previously
+  failed outright on a real camera.
+- **Unverified against a camera that actually emits these topics.** The topic table is built from
+  vendor documentation and this codebase's existing ONVIF findings; a real device may well use a
+  spelling not listed yet, in which case it simply won't classify (no misbehavior, just no badge).
+
+**LarisVMS.Node change — `install-node.ps1` re-run needed on every recorder.**
+
+## [0.84.0] - 2026-08-16
+
+### Added
+
+- **Branding page (`Admin → Branding`)** — set the application name, a primary color (buttons and
+  links), a navbar color, a logo, and a font, applied across every page.
+  - **The sign-in page is branded too.** It previously rendered in the Identity package's own
+    standalone layout; it now uses this app's layout, so the logo, name and colors appear there
+    without scaffolding a local copy of every Identity page.
+  - **The logo is stored as a data URI in the setting row**, not as an uploaded file — no upload
+    plumbing, no filesystem write permissions, and nothing that can be orphaned by a redeploy. The
+    image is converted client-side and size-capped both there and on save.
+  - Anything left blank falls back to the built-in default, so a fresh install looks exactly as it
+    did before this existed, and you can brand only the parts you care about.
+- **Emoji on the main action buttons** (💾 Save, 🗑️ Delete, 🔍 Re-probe, ➕ Add), continuing the
+  convention the navbar foralready uses. Each is `aria-hidden` so screen readers announce the label
+  alone.
+
+### Changed
+
+- **Branding moved from the one-time Setup wizard into ordinary editable settings.** It used to be
+  written once to `setup-generated.json` and never editable again from the UI. It now lives in the
+  same `Setting` store every other admin-editable value uses — no schema change needed. The wizard's
+  original value still applies as the fallback until something is saved on the new page, so existing
+  installs keep their current branding with nothing to migrate.
+
+### Security
+
+- **Branding values are allowlist-validated before they can be stored**, because they're interpolated
+  into a `<style>` block and an `<img src>` on every page: colors must be hex literals (no
+  `rgb()`/`var()`/named colors, which would let arbitrary CSS ride along), fonts are chosen by key
+  from a fixed table so the stylesheet only ever receives this codebase's own strings, and a logo must
+  be a base64 image data URI that actually decodes. SVG is rejected specifically because an SVG file
+  can carry script.
+
+## [0.83.0] - 2026-08-16
+
+### Added
+
+- **Multi-sensor camera support** — a quad-lens (or any multi-sensor) device can now be split into
+  one camera per lens, each recording independently and placeable in a view on its own.
+  - ONVIF probing now reads each profile's `VideoSourceToken` — which sensor it draws from. It's the
+    only thing in a `GetProfiles` response that tells one lens apart from another, and it wasn't
+    being captured at all before.
+  - When a probe finds more than one sensor, the camera's Edit page offers to split it. The existing
+    camera becomes channel 1 and keeps its recordings; a sibling camera is created for each remaining
+    channel, sharing the device's address and credentials. From there they're ordinary independent
+    cameras — which is why recording, views, live, playback and export needed no changes at all to
+    support this.
+  - Per-channel cameras are marked with 🔀 on the Cameras list and on their own Edit page, so a
+    channel camera is recognizable among its siblings.
+  - Splitting is safe to run again: it matches existing rows by channel rather than creating
+    duplicates, and it won't re-suffix a name that's already been split.
+
+### Fixed
+
+- **On a multi-lens device, a camera could end up recording the wrong lens.** The profile ranker
+  picks Main/Sub/Third by name and resolution and knows nothing about channels, so given a device
+  reporting every lens's profiles at once it could hand a camera another lens's stream as its "Main".
+  A camera pinned to a channel now only ever considers that channel's own profiles. Cameras with no
+  channel pinned — every single-sensor camera, and everything that existed before this release —
+  behave exactly as they did before.
+
 ## [0.82.0] - 2026-08-16
 
 ### Added

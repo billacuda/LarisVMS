@@ -43,7 +43,7 @@ else
                 }
             </select>
             <button type="button" class="btn btn-sm btn-outline-secondary" id="pbPlayPause" disabled>▶ Play</button>
-            <button type="button" class="btn btn-sm btn-outline-secondary" id="pbExportBtn">Export&hellip;</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="pbExportBtn"><span aria-hidden="true">🎬</span> Export&hellip;</button>
             <div class="form-check form-switch mb-0 ms-auto">
                 <input type="checkbox" class="form-check-input" id="pbHour24" />
                 <label class="form-check-label small" for="pbHour24">24-hour clock</label>
@@ -122,6 +122,7 @@ else
                 tilesId: 'playbackTiles',
                 timelineCanvasId: 'playbackTimeline',
                 globalTimelineCanvasId: 'playbackGlobalTimeline',
+                timelineAreaId: 'pbTimelineArea',
                 playPauseBtnId: 'pbPlayPause',
                 currentTimeId: 'pbCurrentTime',
                 hour24ToggleId: 'pbHour24',

@@ -1,6 +1,6 @@
 # LarisVMS
 
-Open source security camera recording software (NVR) for ONVIF cameras. Records video, audio, and
+Open source security camera recording software (VMS/NVR) for ONVIF cameras. Records video, audio, and
 metadata to local disk or an SMB share; live view, playback, and management are all web-based and
 work on phone, tablet, and desktop.
 
@@ -9,13 +9,13 @@ work on phone, tablet, and desktop.
 > **A note on AI-assisted development**
 >
 > This project is being built with the assistance of AI tooling (Claude Code). Features are planned
-> in detail before implementation, generated code is reviewed as it's written, and changes are
+> in detail before implementation, any generated code is reviewed as it's written, and changes are
 > tested as they land. AI-generated code can still introduce subtle inconsistencies that aren't
 > always caught immediately — if you notice something odd, please open an issue.
 
 ---
 
-## **Current version [0.82.0](CHANGELOG.md)**
+## **Current version [0.88.1](CHANGELOG.md)**
 
 ## Stack
 
@@ -68,18 +68,51 @@ delete and retry actions). A range that crosses a camera's reassignment between 
 export per node instead of failing. Hovering the Playback timeline shows a small preview thumbnail
 (5-minute buckets, generated on demand with a low-priority backfill for gaps).
 
-**M11 (operations)** is under way: an audit log viewer (`Admin → Audit Log`) covering camera/node/
-settings/export actions plus logins; per-node clock-skew detection (`Admin → Nodes`) flagging when a
-recorder's own OS clock has drifted from the server's; scheduled or on-demand database backups
-(`Admin → Backups` — restore is deliberately left to other tools, e.g. SSMS); application log capture
-on both tiers with a viewer (`Admin → System Logs`); and a health dashboard (the Dashboard page)
-showing each camera's live fps/bitrate/reconnect count and every node's online status. Alerting,
-ONVIF-pushed motion zones, object-detection overlays, and a mobile-specific UI pass are not built yet.
+**Object detection** reports *what* a camera saw, not just that something moved: cameras whose onboard
+analytics classify objects surface as Person / Vehicle / Face / Object, each with its own timeline
+color and an emoji badge on the live tile (🚶 🚗 🙂 📦). A detection also counts toward Motion-mode
+recording, so footage of a person is retained even when pixel-motion detection wouldn't have fired.
+These are **discrete events, not bounding boxes** — "a person was here around this time", with no
+on-screen box. Per-frame boxes need the ONVIF metadata RTP track, and probing this deployment's own
+Amcrest fleet found it carries only a motion-cell grid with no object geometry at all, so boxes are
+not achievable on this hardware regardless of how they're implemented (`probe-metadata-track.ps1`).
+
+**Camera integration plugins** cover what ONVIF can't express. A provider declares which makes/models
+it handles, camera probing matches it automatically from the reported make and model, and the node
+runs that vendor session alongside its ONVIF one. Providers are compiled in and listed in one registry
+rather than loaded from external assemblies — nodes ship as a single self-contained auto-updating
+executable, so a drop-in plugin folder would need its own distribution and version-matching channel.
+The first provider reads **Dahua / Amcrest smart events** over the vendor CGI event API; these cameras
+classify objects onboard but never publish that over ONVIF, so on this fleet the plugin is the *only*
+source of object classes. Verified against real hardware (Amcrest `IP8M-DLB2998EW-AI`): person
+detections arrive as clean start/stop pairs, and the camera honors the narrow code subscription the
+plugin uses (`probe-dahua-events.ps1`).
+
+**Multi-sensor cameras** (quad-lens and similar) split into one camera per lens, grouped by ONVIF
+`VideoSourceToken`, each with its own recorder and retention. Single-lens cameras are unaffected and
+still add automatically with no extra step. This also fixed a real bug on multi-lens hardware, where
+the profile ranker could mix profiles from different lenses into one camera's Main/Sub streams.
+
+**Branding** (`Admin → Branding`) sets the application name, primary and accent colors, a font from a
+closed list, and a logo shown on the navbar and login page. Values are allowlist-validated before
+storage, since they're interpolated into CSS.
+
+**M11 (operations)** is under way: an audit log viewer (`Admin → Audit Log`) recording what each user
+did, from which IP — including viewing a camera or a view, starting playback, and starting or
+downloading an export — where change entries capture the actual `old → new` values, except for
+secrets and keys, which record only *that* they changed and never the value; per-node clock-skew
+detection (`Admin → Nodes`) flagging when a recorder's own OS clock has drifted from the server's;
+scheduled or on-demand database backups (`Admin → Backups` — restore is deliberately left to other
+tools, e.g. SSMS); application log capture on both tiers with a viewer (`Admin → System Logs`); and a
+health dashboard (the Dashboard page, auto-refreshing, sortable and paginated, with an optional
+thumbnail column) showing each camera's live fps/bitrate/reconnect count and every node's online
+status. Alerting, ONVIF-pushed motion zones, on-screen bounding-box overlays, and a mobile-specific UI
+pass are not built yet.
 
 Hardware-transcode fallback for browsers that can't decode a camera's native codec, main/sub
-auto-switch, and instant replay are not built yet (M5 pass-1 scope), and PTZ/audio, further
-investigation tooling (bookmarks, evidence lock, smart search), and object detection haven't started
-— see [CHANGELOG.md](CHANGELOG.md) for what's shipped and the architecture plan for the full milestone
+auto-switch, and instant replay are not built yet (M5 pass-1 scope), and PTZ/audio and further
+investigation tooling (bookmarks, evidence lock, smart search) haven't started — see
+[CHANGELOG.md](CHANGELOG.md) for what's shipped and the architecture plan for the full milestone
 roadmap (PTZ/audio → export/investigation → operations → object detection).
 
 Recorder nodes require **FFmpeg** on the machine they run on (LGPL "shared" build recommended — see
@@ -105,7 +138,8 @@ the plan's licensing note). Point a node at it with `--ffmpeg-path` or `LARISVMS
    ```
 
 5. Browse to the site — the setup wizard opens automatically and walks through database, admin
-   account, storage location, recorder node registration, and branding
+   account, storage location, recorder node registration, and branding (the wizard sets an initial
+   name and color; everything else, including the logo, is editable later at `Admin → Branding`)
 
 ## Deploy script
 
@@ -123,6 +157,28 @@ the plan's licensing note). Point a node at it with `--ffmpeg-path` or `LARISVMS
 `deploy.ps1` never deletes recordings: it refuses to run if the configured storage root resolves
 under the IIS site directory, and excludes `recordings/`, `spool/`, `exports/`, and
 `data-protection-keys/` from its mirror regardless.
+
+## Diagnostic scripts
+
+Read-only research tools. Both open their own connection to a camera and touch nothing the recorders
+are doing — safe to run against a live system.
+
+```powershell
+# Which smart-event codes does this Dahua/Amcrest camera really emit? Walk through frame while it runs.
+.\probe-dahua-events.ps1 -CameraHost 192.168.1.50 -Seconds 60
+
+# Same, but subscribing with the exact filtered code list the plugin sends rather than [All] —
+# confirms the firmware honors a narrow subscription instead of going silent.
+.\probe-dahua-events.ps1 -CameraHost 192.168.1.50 -Seconds 60 -UsePluginCodes
+
+# Does this camera's ONVIF metadata track carry object geometry (bounding boxes) or only motion cells?
+.\probe-metadata-track.ps1 -RtspUri "rtsp://192.168.1.50:554/cam/realmonitor?channel=1&subtype=0"
+```
+
+`probe-dahua-events.ps1` is the one to reach for when adding a Dahua/Amcrest camera whose detections
+don't appear: it prints which codes the plugin already understands and which it's ignoring, so an
+unrecognized firmware spelling is a one-line addition to `DahuaCgiEventParser`'s code table rather
+than a guess.
 
 ## Data at rest
 

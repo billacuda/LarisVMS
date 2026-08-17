@@ -1,0 +1,9 @@
+@{
+    // Makes the default Identity UI pages (sign-in, and anything else served from the
+    // Microsoft.AspNetCore.Identity.UI package) render inside this app's own layout instead of the
+    // package's standalone one — which is what puts the site's branding (name, logo, colors, font)
+    // on the sign-in page. This is the documented way to do it: the Identity UI is a Razor Class
+    // Library with no local .cshtml files here to edit, and scaffolding the pages into the project
+    // just to change their layout would mean owning a copy of every one of them forever.
+    Layout = "/Pages/Shared/_Layout.cshtml";
+}

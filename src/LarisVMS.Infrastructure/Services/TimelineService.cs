@@ -1,11 +1,13 @@
 using Microsoft.EntityFrameworkCore;
+using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
+using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
 using LarisVMS.Infrastructure.Data;
 
 namespace LarisVMS.Infrastructure.Services;
 
-public class TimelineService(ApplicationDbContext db) : ITimelineService
+public class TimelineService(ApplicationDbContext db, IEventColorService eventColors) : ITimelineService
 {
     /// <summary>
     /// Normalizes an incoming range bound to a true UTC value before it's compared against the
@@ -55,11 +57,20 @@ public class TimelineService(ApplicationDbContext db) : ITimelineService
         // back (just with ColorHex null) rather than being excluded.
         var motionSpans = await db.MotionSpans
             .Where(m => m.CameraId == cameraId && m.StartUtc < toUtc && m.EndUtc > fromUtc)
-            .Select(m => new { m.StartUtc, m.EndUtc, ColorHex = m.EventTagRule != null ? m.EventTagRule.ColorHex : null })
+            .Select(m => new
+            {
+                m.StartUtc,
+                m.EndUtc,
+                ColorHex = m.EventTagRule != null ? m.EventTagRule.ColorHex : null,
+                m.DetectionKind
+            })
             .ToListAsync(ct);
 
+        var palette = await eventColors.GetAsync(ct);
+
         return Bucket(segments.Select(s => (s.StartUtc, s.EndUtc)),
-            motionSpans.Select(m => (m.StartUtc, m.EndUtc, m.ColorHex)), fromUtc, toUtc, bucketCount);
+            motionSpans.Select(m => (m.StartUtc, m.EndUtc, ResolveColor(palette, m.ColorHex, m.DetectionKind))),
+            fromUtc, toUtc, bucketCount);
     }
 
     public async Task<List<TimelineBucketDto>> GetGlobalBucketsAsync(DateTime fromUtc, DateTime toUtc, int bucketCount, IReadOnlyList<Guid>? cameraIds = null, CancellationToken ct = default)
@@ -92,12 +103,30 @@ public class TimelineService(ApplicationDbContext db) : ITimelineService
             .ToListAsync(ct);
 
         var motionSpans = await motionQuery
-            .Select(m => new { m.StartUtc, m.EndUtc, ColorHex = m.EventTagRule != null ? m.EventTagRule.ColorHex : null })
+            .Select(m => new
+            {
+                m.StartUtc,
+                m.EndUtc,
+                ColorHex = m.EventTagRule != null ? m.EventTagRule.ColorHex : null,
+                m.DetectionKind
+            })
             .ToListAsync(ct);
 
+        var palette = await eventColors.GetAsync(ct);
+
         return Bucket(segments.Select(s => (s.StartUtc, s.EndUtc)),
-            motionSpans.Select(m => (m.StartUtc, m.EndUtc, m.ColorHex)), fromUtc, toUtc, bucketCount);
+            motionSpans.Select(m => (m.StartUtc, m.EndUtc, ResolveColor(palette, m.ColorHex, m.DetectionKind))),
+            fromUtc, toUtc, bucketCount);
     }
+
+    /// <summary>A span's timeline color. A user-configured EventTagRule's own color still wins
+    /// outright (it's an explicit choice, unlike an inferred object class); an object detection
+    /// supplies its class color next — whatever an admin picked on Admin/Event Colors, or the
+    /// built-in default for that class; anything else falls through to the plain motion/recording
+    /// scheme by returning null. Reusing the existing TagColorHex channel rather than adding a second
+    /// color field means the canvas renderer needs no new concept.</summary>
+    private static string? ResolveColor(EventPalette palette, string? tagColorHex, DetectionKind? detectionKind)
+        => tagColorHex ?? (detectionKind is { } kind ? palette.ColorFor(kind) : null);
 
     private static List<TimelineBucketDto> Bucket(
         IEnumerable<(DateTime StartUtc, DateTime EndUtc)> segments,
@@ -122,17 +151,20 @@ public class TimelineService(ApplicationDbContext db) : ITimelineService
             var bucketEnd = i == bucketCount - 1 ? toUtc : fromUtc.AddTicks(bucketTicks * (i + 1));
             var hasRecording = segmentList.Any(s => s.StartUtc < bucketEnd && s.EndUtc > bucketStart);
             var hasMotion = motionList.Any(m => m.StartUtc < bucketEnd && m.EndUtc > bucketStart);
-            // M8 pass 8: the earliest-starting overlapping custom-tag span wins this bucket's color
-            // (ties broken by ColorHex text so the pick is at least deterministic, not "whichever the
-            // query happened to return first") — a bucket straddling two different tag types is rare
-            // (they'd need to genuinely overlap in time) and picking one over blending keeps every
-            // bucket a single solid color, same reasoning as the motion/recording stripe-merge fix.
-            var tagColorHex = motionList
+            // Every distinct colour overlapping this bucket, not just one: object classes genuinely
+            // co-occur (a person and a vehicle in the same instant), and picking a winner would hide
+            // the rest. Ordered by start time, ties broken by the colour text so the banding is
+            // stable frame to frame rather than reshuffling on each reload. The renderer draws one
+            // horizontal band per colour; a single colour draws exactly as it always did.
+            var tagColorHexes = motionList
                 .Where(m => m.ColorHex is not null && m.StartUtc < bucketEnd && m.EndUtc > bucketStart)
                 .OrderBy(m => m.StartUtc).ThenBy(m => m.ColorHex, StringComparer.Ordinal)
-                .Select(m => m.ColorHex)
-                .FirstOrDefault();
-            buckets.Add(new TimelineBucketDto(bucketStart, bucketEnd, hasRecording, hasMotion, tagColorHex));
+                .Select(m => m.ColorHex!)
+                .Distinct()
+                .ToList();
+            buckets.Add(new TimelineBucketDto(bucketStart, bucketEnd, hasRecording, hasMotion,
+                tagColorHexes.FirstOrDefault(),
+                tagColorHexes.Count > 0 ? tagColorHexes : null));
         }
 
         return buckets;
@@ -256,5 +288,33 @@ public class TimelineService(ApplicationDbContext db) : ITimelineService
             .Select(m => m.CameraId)
             .Distinct()
             .ToListAsync(ct);
+    }
+
+    public async Task<List<CameraDetectionStateDto>> GetActiveDetectionsAsync(CancellationToken ct = default)
+    {
+        // Same recency window and same "a checkpoint every ~15s means a recent row is still
+        // happening" reasoning as GetCamerasWithActiveMotionAsync — this is that query narrowed to
+        // spans that carry a detected class, so a tile can say *what* it sees rather than only that
+        // something moved.
+        var threshold = DateTime.UtcNow - ActiveMotionStaleness;
+        var rows = await db.MotionSpans
+            .Where(m => m.EndUtc >= threshold && m.DetectionKind != null)
+            .Select(m => new { m.CameraId, Kind = m.DetectionKind!.Value })
+            .Distinct()
+            .ToListAsync(ct);
+
+        var palette = await eventColors.GetAsync(ct);
+
+        return rows
+            .GroupBy(r => r.CameraId)
+            .Select(g => new CameraDetectionStateDto(
+                g.Key,
+                g.Select(r => r.Kind)
+                    .Distinct()
+                    .OrderBy(k => k)
+                    .Select(k => new DetectionBadgeDto(k.ToString(), DetectionDisplay.Label(k),
+                        DetectionDisplay.Emoji(k), palette.ColorFor(k)))
+                    .ToList()))
+            .ToList();
     }
 }

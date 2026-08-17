@@ -1,11 +1,13 @@
 @using Microsoft.EntityFrameworkCore
+@using LarisVMS.Core.Interfaces
 @using LarisVMS.Infrastructure.Data
 @inject ApplicationDbContext LayoutDb
-@inject IConfiguration Configuration
+@inject IBrandingService BrandingService
 @{
-    var appName = Configuration["Branding:AppName"];
-    var primaryColor = Configuration["Branding:PrimaryColor"];
-    var pageTitle = string.IsNullOrWhiteSpace(appName) ? "LarisVMS" : appName;
+    // Every field is already validated by the service (see Branding.Normalize*), which is what makes
+    // interpolating the colors/font into the style block below safe.
+    var branding = await BrandingService.GetAsync();
+    var pageTitle = branding.AppName;
     string? _version = null;
     try
     {
@@ -24,11 +26,24 @@
     <title>@ViewData["Title"] - @pageTitle</title>
     <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
-    @if (!string.IsNullOrWhiteSpace(primaryColor))
+    @if (branding.PrimaryColor is not null || branding.AccentColor is not null || branding.FontStack is not null)
     {
         <style>
-            :root { --bs-primary: @primaryColor; }
-            .btn-primary { --bs-btn-bg: @primaryColor; --bs-btn-border-color: @primaryColor; }
+            @if (branding.PrimaryColor is { } primary)
+            {
+                @Html.Raw($":root {{ --bs-primary: {primary}; --bs-link-color: {primary}; }}")
+                @Html.Raw($".btn-primary {{ --bs-btn-bg: {primary}; --bs-btn-border-color: {primary}; }}")
+            }
+            @* Accent drives the one place a second brand color reads as deliberate rather than
+               decorative: the navbar. Left alone when unset, so the default dark navbar stands. *@
+            @if (branding.AccentColor is { } accent)
+            {
+                @Html.Raw($"#mainNav {{ background-color: {accent} !important; }}")
+            }
+            @if (branding.FontStack is { } fontStack)
+            {
+                @Html.Raw($"body {{ font-family: {fontStack}; }}")
+            }
         </style>
     }
     <script>
@@ -48,7 +63,16 @@
 <body>
     <nav class="navbar navbar-expand-sm navbar-dark bg-dark mb-3" id="mainNav">
         <div class="container-fluid">
-            <a class="navbar-brand" href="/">@pageTitle</a>
+            <a class="navbar-brand d-flex align-items-center gap-2" href="/">
+                @if (branding.LogoDataUri is { } logo)
+                {
+                    @* Height-capped so any uploaded aspect ratio fits the navbar without resizing it;
+                       alt is empty because the brand name sits right beside it — announcing both
+                       would just repeat the same thing to a screen reader. *@
+                    <img src="@logo" alt="" style="max-height: 28px; width: auto;" />
+                }
+                <span>@pageTitle</span>
+            </a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMenu"
                     aria-controls="navMenu" aria-expanded="false" aria-label="Toggle navigation">
                 <span class="navbar-toggler-icon"></span>
@@ -60,8 +84,8 @@
                 <ul class="navbar-nav me-auto">
                     <li class="nav-item"><a class="nav-link" href="/"><span aria-hidden="true">📊</span> Dashboard</a></li>
                     <li class="nav-item"><a class="nav-link" href="/Live"><span aria-hidden="true">📡</span> Live</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/Playback"><span aria-hidden="true">⏪</span> Playback</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/Exports"><span aria-hidden="true">⬇️</span> Exports</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/Playback"><span aria-hidden="true">▶️</span> Playback</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/Exports"><span aria-hidden="true">🎬</span> Exports</a></li>
                     <li class="nav-item"><a class="nav-link" href="/Views"><span aria-hidden="true">🔲</span> Views</a></li>
                     <li class="nav-item"><a class="nav-link" href="/Cameras"><span aria-hidden="true">📷</span> Cameras</a></li>
                     @* One dropdown for every admin-only page, not flat top-level links per page — Node
@@ -75,6 +99,8 @@
                             <li><a class="dropdown-item" href="/Admin/Nodes">Nodes</a></li>
                             <li><a class="dropdown-item" href="/Admin/NodeBuilds">Node Builds</a></li>
                             <li><a class="dropdown-item" href="/Admin/Settings">Settings</a></li>
+                            <li><a class="dropdown-item" href="/Admin/Branding">Branding</a></li>
+                            <li><a class="dropdown-item" href="/Admin/EventColors">Event Colors</a></li>
                             <li><a class="dropdown-item" href="/Admin/Logs">Audit Log</a></li>
                             <li><a class="dropdown-item" href="/Admin/Backup">Backups</a></li>
                             <li><a class="dropdown-item" href="/Admin/SystemLogs">System Logs</a></li>
@@ -98,7 +124,7 @@
 
     <footer class="border-top footer text-muted mt-4">
         <div class="container-fluid px-4 py-2">
-            &copy; @DateTime.UtcNow.Year LarisVMS @(_version is not null ? $"v{_version}" : "")
+            &copy; @DateTime.UtcNow.Year @pageTitle @(_version is not null ? $"v{_version}" : "")
         </div>
     </footer>
 

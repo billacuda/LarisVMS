@@ -38,9 +38,17 @@ public class OnvifMediaClient(OnvifSoapClient soap)
             var audioEncoding = aec?.Elements().FirstOrDefault(e => e.Name.LocalName == "Encoding")?.Value;
             var hasAudioOutputConfig = p.Elements().Any(e => e.Name.LocalName == "AudioOutputConfiguration");
 
+            // Which physical sensor this profile draws from — see OnvifMediaProfile's own comment.
+            // The SourceToken *inside* VideoSourceConfiguration, not the configuration element's own
+            // token attribute: the latter identifies the configuration, and a device can point several
+            // differently-tokened configurations at the same physical source.
+            var vsc = p.Elements().FirstOrDefault(e => e.Name.LocalName == "VideoSourceConfiguration");
+            var videoSourceToken = vsc?.Elements().FirstOrDefault(e => e.Name.LocalName == "SourceToken")?.Value;
+
             if (string.IsNullOrEmpty(token)) continue;
             profiles.Add(new OnvifMediaProfile(token, name, encoding, width, height, fps, bitrate,
-                audioEncoding, aec is not null, hasAudioOutputConfig));
+                audioEncoding, aec is not null, hasAudioOutputConfig,
+                string.IsNullOrWhiteSpace(videoSourceToken) ? null : videoSourceToken));
         }
         return profiles;
     }

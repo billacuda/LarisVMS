@@ -13,10 +13,30 @@ namespace LarisVMS.Core.Dtos;
 /// precedence over plain recording — a bucket's rendered color is HasMotion ? green : HasRecording ?
 /// blue : gray, UNLESS TagColorHex is set, in which case that wins outright. Null for every bucket
 /// on a camera with no EventTagRules configured, so nothing about a camera's rendering changes
-/// unless it opts in.</summary>
-public record TimelineBucketDto(DateTime StartUtc, DateTime EndUtc, bool HasRecording, bool HasMotion, string? TagColorHex = null);
+/// unless it opts in.
+///
+/// TagColorHexes carries *every* distinct colour active in the bucket, not just the winning one — a
+/// camera can see a person and a vehicle in the same instant, and collapsing that to one colour hides
+/// half of what happened. The renderer splits the bucket into horizontal bands, one per colour.
+/// TagColorHex stays as the first of them so any consumer reading a single colour still works.</summary>
+public record TimelineBucketDto(
+    DateTime StartUtc,
+    DateTime EndUtc,
+    bool HasRecording,
+    bool HasMotion,
+    string? TagColorHex = null,
+    IReadOnlyList<string>? TagColorHexes = null);
 
 public record SegmentSummaryDto(long Id, DateTime StartUtc, DateTime EndUtc);
+
+/// <summary>One object class currently being detected on a camera, already resolved to its display
+/// form (label/emoji/color) server-side from DetectionDisplay — so the live tile's badge and the
+/// timeline's coloring can't drift apart, and the client needs no copy of the class table.</summary>
+public record DetectionBadgeDto(string Kind, string Label, string Emoji, string ColorHex);
+
+/// <summary>What one camera's onboard analytics is reporting right now, for the live-view badge —
+/// a camera can legitimately be seeing more than one class at once (a person next to a car).</summary>
+public record CameraDetectionStateDto(Guid CameraId, IReadOnlyList<DetectionBadgeDto> Detections);
 
 /// <summary>What the Web layer needs to proxy one segment's bytes from its owning node — the
 /// node's address/port/key are null when that node has never reported live-view readiness

@@ -189,6 +189,19 @@
     // close/error — so start()'s retry wrapper above has one place to decide whether to reconnect.
     function startSession(cameraId, videoEl, statusEl, codecHint, hasAudio, onFrameVisible, onEnded) {
         var ended = false;
+        // The <video> element outlives every session attached to it (each reconnect builds a fresh
+        // MediaSource but reuses the same element), so listeners bound to it must be removed when
+        // their session ends or they accumulate one full set per reconnect — every one of them still
+        // firing, still holding its dead session's closure alive. Confirmed live: a single decode
+        // error printed once per leaked listener, each reporting its own stale fragment count
+        // ("fragments received= 489 / 483 / 2"), which reads exactly like several concurrent sessions
+        // and made the console useless for diagnosing the real fault underneath.
+        var elementListeners = [];
+        function onVideo(type, handler) {
+            elementListeners.push([type, handler]);
+            videoEl.addEventListener(type, handler);
+        }
+
         function endSession() {
             if (ended) return;
             ended = true;
@@ -199,6 +212,10 @@
             // element), so a session that ended mid-catch-up would otherwise leave the *next*
             // session's playback silently sped up from the very first frame.
             if (driftTimer) { clearInterval(driftTimer); driftTimer = null; }
+            for (var i = 0; i < elementListeners.length; i++) {
+                videoEl.removeEventListener(elementListeners[i][0], elementListeners[i][1]);
+            }
+            elementListeners = [];
             videoEl.playbackRate = 1;
             onEnded();
         }
@@ -253,10 +270,9 @@
         // Fires once real playback resumes — the reliable signal that this session actually has a
         // decodable frame on screen again, not just that appendBuffer stopped throwing. Can fire more
         // than once per session (e.g. after a buffering pause); onFrameVisible is idempotent so that's
-        // harmless. Same "never removed" lifetime as the error/stalled listeners just below — an
-        // existing pattern in this function, not something newly introduced here.
-        videoEl.addEventListener('playing', onFrameVisible);
-        videoEl.addEventListener('error', function () {
+        // harmless. Registered through onVideo so it's detached with the rest when the session ends.
+        onVideo('playing', onFrameVisible);
+        onVideo('error', function () {
             var err = videoEl.error;
             var msg = 'Video decode error' + (err ? ' (code ' + err.code + ')' : '') + '.';
             statusEl.textContent = msg;
@@ -265,7 +281,7 @@
             if (socket) { try { socket.close(); } catch (e2) {} }
             endSession();
         });
-        videoEl.addEventListener('stalled', function () {
+        onVideo('stalled', function () {
             console.warn('[live-view] video element stalled; fragments received=', fragmentCount, 'readyState=', videoEl.readyState);
         });
 
@@ -325,8 +341,8 @@
             // just from normally catching up to the live edge (currentTime inside the last buffered
             // range, simply waiting for more to arrive) must NOT trigger a seek, or every ordinary
             // pause-for-more-data would show as a needless jump.
-            videoEl.addEventListener('waiting', function () {
-                if (closed || sourceBuffer.buffered.length === 0) return;
+            onVideo('waiting', function () {
+                if (closed || ended || sourceBuffer.buffered.length === 0) return;
                 if (isTimeBuffered(videoEl.currentTime)) return;
                 jumpToLiveEdge('resynced after falling out of the buffered range');
             });
@@ -467,22 +483,81 @@
     // are none today, but Views/Play could reuse this later) are picked up correctly.
     function startMotionIndicatorPolling(intervalMs) {
         async function tick() {
-            var activeIds;
+            // Both signals on the same tick, in parallel — they're read together to decide one
+            // tile's badges, and a detection is strictly more informative than the plain motion it
+            // usually accompanies (see renderDetections, which suppresses the generic badge when a
+            // classified one is showing).
+            var activeIds = [];
+            var detectionStates = [];
             try {
-                var resp = await fetch('/api/cameras/motion-state');
-                if (!resp.ok) return;
-                activeIds = await resp.json();
+                var results = await Promise.all([
+                    fetch('/api/cameras/motion-state'),
+                    fetch('/api/cameras/detection-state')
+                ]);
+                if (results[0].ok) activeIds = await results[0].json();
+                // A deployment whose cameras report no object classes just gets an empty list here;
+                // an outright failure leaves detections alone rather than clearing existing badges.
+                if (results[1].ok) detectionStates = await results[1].json();
             } catch (e) {
                 return; // transient fetch failure — next tick tries again, no need to surface this
             }
             var activeSet = {};
             activeIds.forEach(function (id) { activeSet[id] = true; });
+            var detectionsByCamera = {};
+            detectionStates.forEach(function (state) { detectionsByCamera[state.cameraId] = state.detections; });
 
             document.querySelectorAll('[data-camera-tile]').forEach(function (tile) {
+                var cameraId = tile.dataset.cameraTile;
+                var detections = detectionsByCamera[cameraId] || [];
+                renderDetections(tile, detections);
+
                 var badge = tile.querySelector('.live-motion-badge');
                 if (!badge) return;
-                badge.classList.toggle('d-none', !activeSet[tile.dataset.cameraTile]);
+                // A classified detection replaces the generic badge rather than stacking with it —
+                // "🚶 Person" already implies motion, and showing both just crowds a small tile.
+                badge.classList.toggle('d-none', !activeSet[cameraId] || detections.length > 0);
             });
+        }
+
+        // Badges are rebuilt from the server's own display fields (label/emoji/color resolved by
+        // DetectionDisplay) rather than mapped client-side, so the classes this app knows about live
+        // in exactly one place. Rebuilt only when the set actually changes, since this runs on a
+        // timer and blindly replacing innerHTML every tick would restart CSS transitions and fight
+        // any text selection inside the tile.
+        function renderDetections(tile, detections) {
+            var container = tile.querySelector('.live-detection-badges');
+            if (!container) return;
+
+            var signature = detections.map(function (d) { return d.kind; }).join(',');
+            if (container.dataset.signature === signature) return;
+            container.dataset.signature = signature;
+
+            container.innerHTML = '';
+            // One badge per class, never a summary — a camera seeing a person and a vehicle at the
+            // same time has to show both. Spacing comes from the container's own flex gap.
+            detections.forEach(function (detection) {
+                var badge = document.createElement('span');
+                badge.className = 'badge';
+                badge.style.backgroundColor = detection.colorHex;
+                badge.style.color = readableTextColor(detection.colorHex);
+                badge.title = detection.label + ' detected by the camera';
+                badge.textContent = detection.emoji + ' ' + detection.label;
+                container.appendChild(badge);
+            });
+        }
+
+        // Badge colors are admin-configurable (Admin → Event Colors), so black text can't be assumed
+        // legible any more — someone picking a dark class color would get an unreadable badge.
+        // Standard sRGB relative luminance against the usual 0.5 midpoint; the fallback keeps the
+        // previous behavior for anything that isn't a plain 6-digit hex.
+        function readableTextColor(hex) {
+            if (typeof hex !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(hex)) return '#000';
+            var r = parseInt(hex.substr(1, 2), 16) / 255;
+            var g = parseInt(hex.substr(3, 2), 16) / 255;
+            var b = parseInt(hex.substr(5, 2), 16) / 255;
+            function channel(c) { return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
+            var luminance = 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+            return luminance > 0.5 ? '#000' : '#fff';
         }
 
         tick();

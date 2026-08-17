@@ -29,6 +29,12 @@ public interface ITimelineService
     /// window this checks against.</summary>
     Task<List<Guid>> GetCamerasWithActiveMotionAsync(CancellationToken ct = default);
 
+    /// <summary>The same recent-activity query narrowed to spans carrying a detected object class,
+    /// grouped per camera and already resolved to display form — what lets a live tile show
+    /// "🚶 Person" instead of only the generic motion badge. A camera with recent motion but no
+    /// classified detection simply doesn't appear.</summary>
+    Task<List<CameraDetectionStateDto>> GetActiveDetectionsAsync(CancellationToken ct = default);
+
     /// <summary>Every segment overlapping [fromUtc, toUtc), ordered by start — what a player
     /// resolves "which file covers this instant" against.</summary>
     Task<List<SegmentSummaryDto>> GetSegmentsAsync(Guid cameraId, DateTime fromUtc, DateTime toUtc, CancellationToken ct = default);

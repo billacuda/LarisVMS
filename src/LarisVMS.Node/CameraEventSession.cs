@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
+using LarisVMS.Core.Enums;
 using LarisVMS.Media;
 using LarisVMS.Onvif.Clients;
 using LarisVMS.Onvif.Soap;
@@ -62,6 +63,13 @@ public sealed class CameraEventSession(
 
     private readonly IReadOnlyList<NodeConfigEventTagRuleDto> _rules = rules ?? [];
 
+    // One hysteresis per detected object class, created on first sighting — same independence
+    // reasoning as _ruleHysteresis: a person leaving must not close a vehicle's span, and neither
+    // should touch the built-in motion hysteresis above. Created lazily rather than pre-seeded for
+    // every DetectionKind because most cameras only ever report one or two classes, and an
+    // untouched hysteresis would still be walked by the checkpoint loop every 15s for nothing.
+    private readonly Dictionary<DetectionKind, MotionHysteresis> _detectionHysteresis = [];
+
     // Logged at most once per session — a skewed camera clock produces a notification every few
     // seconds, and this is a standing configuration problem, not a per-event incident.
     private bool _warnedClockSkew;
@@ -116,6 +124,10 @@ public sealed class CameraEventSession(
     /// (identifier, result) shape as MotionSession.MotionSpanCompleted's (zoneId, result), just keyed
     /// by EventTagRuleId instead of ZoneId.</summary>
     public event Action<Guid, MotionSpanResult>? RuleSpanCompleted;
+
+    /// <summary>Fires when an object-detection span closes — same (identifier, result) shape as
+    /// RuleSpanCompleted, keyed by the detected class.</summary>
+    public event Action<DetectionKind, MotionSpanResult>? DetectionSpanCompleted;
 
     /// <summary>Whether this camera has reported motion at or after <paramref name="thresholdUtc"/>
     /// — the same query MotionSession.HasMotionSince answers for server-side detection, checked
@@ -188,6 +200,33 @@ public sealed class CameraEventSession(
     /// keeps a long sparsely-reported custom-tag event's recording retained with no timeout.</summary>
     public bool AnyDrivingRuleActive =>
         _rules.Any(r => r.DrivesRecording && IsRuleActive(r.Id));
+
+    /// <summary>Per-detection-class equivalents of HasMotionSince/IsMotionActive, ORed into
+    /// NodeWorker's Motion-mode keep decision alongside them. A camera detecting a person is
+    /// reporting activity by any reasonable reading, so a Motion-mode segment covering it is kept.
+    ///
+    /// This can only ever *keep* footage that would otherwise have been discarded, never discard
+    /// footage that would have been kept — the decision is an OR chain. That direction matters: it
+    /// also fixes a camera whose firmware emits only object-detection topics and no motion ones,
+    /// which under Motion mode previously had nothing to satisfy the keep condition and so discarded
+    /// everything it recorded.</summary>
+    public bool AnyDetectionSince(DateTime thresholdUtc) =>
+        _detectionHysteresis.Values.Any(h => h.LastMotionAtUtc is { } t && t >= thresholdUtc);
+
+    /// <summary>See AnyDetectionSince — this is the "still open, however sparsely reported" half,
+    /// for the same reason IsMotionActive exists alongside HasMotionSince.</summary>
+    public bool AnyDetectionActive => _detectionHysteresis.Values.Any(h => h.IsActive);
+
+    /// <summary>Per-class equivalent of CurrentInProgressRuleSpans, for checkpointing a
+    /// still-open detection onto the timeline while it's happening.</summary>
+    public IEnumerable<(DetectionKind Kind, MotionSpanResult Span)> CurrentInProgressDetectionSpans(DateTime nowUtc)
+    {
+        foreach (var (kind, h) in _detectionHysteresis)
+        {
+            var span = h.CurrentInProgressSpan(nowUtc, TimeSpan.MaxValue);
+            if (span is not null) yield return (kind, span);
+        }
+    }
 
     /// <summary>Pure classification of one notification against one rule — true/false/null for
     /// rising/falling/irrelevant, pulled out of the RunAsync loop so it's directly unit-testable the
@@ -294,6 +333,26 @@ public sealed class CameraEventSession(
                         var ruleCompleted = _ruleHysteresis[rule.Id].Observe(eventTime, edge.Value, score: 1.0);
                         if (ruleCompleted is not null) RuleSpanCompleted?.Invoke(rule.Id, ruleCompleted);
                     }
+
+                    // Object detections (person/vehicle/face). Only a notification whose topic is
+                    // actually about that class ever reaches that class's hysteresis, same isolation
+                    // as the per-rule loop above — a person's falling edge must never close a
+                    // vehicle's span. Independent of the built-in motion hysteresis too: a camera
+                    // typically fires both families for one real event, and they close at their own
+                    // edges rather than one cutting the other short.
+                    if (CameraEventClassifier.DetectionTopicKind(msg.Topic) is { } detectionKind)
+                    {
+                        if (!_detectionHysteresis.TryGetValue(detectionKind, out var detectionHysteresis))
+                        {
+                            detectionHysteresis = new MotionHysteresis(startAfter: TimeSpan.Zero, endAfter: TimeSpan.Zero);
+                            _detectionHysteresis[detectionKind] = detectionHysteresis;
+                        }
+
+                        var detectionCompleted = detectionHysteresis.Observe(
+                            eventTime, CameraEventClassifier.IsDetectionActive(msg.SimpleItems), score: 1.0);
+                        if (detectionCompleted is not null)
+                            DetectionSpanCompleted?.Invoke(detectionKind, detectionCompleted);
+                    }
                 }
             }
         }
@@ -310,6 +369,12 @@ public sealed class CameraEventSession(
         {
             var ruleFlushed = h.Flush(flushNow);
             if (ruleFlushed is not null) RuleSpanCompleted?.Invoke(ruleId, ruleFlushed);
+        }
+
+        foreach (var (kind, h) in _detectionHysteresis)
+        {
+            var detectionFlushed = h.Flush(flushNow);
+            if (detectionFlushed is not null) DetectionSpanCompleted?.Invoke(kind, detectionFlushed);
         }
     }
 }

@@ -228,6 +228,10 @@ namespace LarisVMS.Infrastructure.Migrations
                         .HasMaxLength(255)
                         .HasColumnType("nvarchar(255)");
 
+                    b.Property<string>("IntegrationKey")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
                     b.Property<bool>("IsEnabled")
                         .HasColumnType("bit");
 
@@ -273,6 +277,10 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.Property<string>("Username")
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("VideoSourceToken")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
 
                     b.HasKey("Id");
 
@@ -623,6 +631,9 @@ namespace LarisVMS.Infrastructure.Migrations
 
                     b.Property<Guid>("CameraId")
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<int?>("DetectionKind")
+                        .HasColumnType("int");
 
                     b.Property<DateTime>("EndUtc")
                         .HasColumnType("datetime2");

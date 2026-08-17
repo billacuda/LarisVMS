@@ -126,13 +126,13 @@ else
                                        placeholder="(global: @Model.EffectiveRetentionDays.GetValueOrDefault(n.Id, 30))" />
                             </td>
                             <td class="text-end text-nowrap">
-                                <button type="submit" class="btn btn-sm btn-outline-primary">Save</button>
+                                <button type="submit" class="btn btn-sm btn-outline-primary"><span aria-hidden="true">💾</span> Save</button>
                             </td>
                         </form>
                         <td class="text-end">
                             <form method="post" asp-page-handler="Delete" asp-route-id="@n.Id" class="d-inline"
                                   onclick="return confirm('Delete node &quot;@n.Name&quot;? Cameras assigned to it will be unassigned, not deleted. Past recordings are unaffected.');">
-                                <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+                                <button type="submit" class="btn btn-sm btn-outline-danger"><span aria-hidden="true">🗑️</span> Delete</button>
                             </form>
                         </td>
                     </tr>

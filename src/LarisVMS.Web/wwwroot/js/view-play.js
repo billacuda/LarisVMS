@@ -39,7 +39,17 @@ window.larisvmsViewPlay = (function () {
                     '<video class="view-cell-video" style="width:100%; height:100%; object-fit:contain;" muted playsinline></video>' +
                     '<div class="position-absolute top-50 start-50 translate-middle text-white small text-center px-2 view-cell-status" role="status" aria-live="polite"></div>' +
                     '<span class="badge bg-danger position-absolute top-0 start-0 m-1 live-motion-badge d-none"' +
-                        ' title="Motion detected">● Motion</span>' +
+                        ' title="Motion detected — movement with no object class attached">🌀 Motion</span>' +
+                    // Filled in by live-view.js's poller from the camera's own object analytics.
+                    // Sits under the motion badge's corner rather than beside it, since the two are
+                    // mutually exclusive — a classified badge replaces the generic one.
+                    //
+                    // Wraps, and is width-capped to the cell: a camera can legitimately see several
+                    // classes at once (a person walking a dog past a car is three), and every one of
+                    // them gets its own badge. Without the cap they'd run off the edge of a small
+                    // cell in a dense grid rather than stacking onto a second line.
+                    '<div class="position-absolute top-0 start-0 m-1 d-flex flex-wrap gap-1 live-detection-badges"' +
+                        ' style="max-width: calc(100% - .5rem);"></div>' +
                     // Only shown once this one cell has been toggled into playback mode (see the
                     // view-cell-playback button below) — every other cell keeps showing pure live
                     // video with no timeline at all. Right clearance (96px) keeps it clear of the

@@ -14,6 +14,26 @@ window.larisvmsTimeline = (function () {
     var MIN_RANGE_MS = 5 * 1000;
     var MAX_RANGE_MS = 90 * 24 * 3600 * 1000;
 
+    // Admin-configurable via Admin → Event Colors. Seeded with the built-in defaults so the very
+    // first paint (which happens before the fetch resolves) and any failure of that fetch both still
+    // draw something sensible — these two values must stay in step with EventColors.Default* on the
+    // server. Detected-object colors are NOT here: those arrive per-bucket as tagColorHex, already
+    // resolved server-side, so the palette only covers what the canvas would otherwise hardcode.
+    var palette = { motion: '#28e070', recording: '#1e6fd9' };
+    var instances = [];
+
+    fetch('/api/timeline/colors')
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (p) {
+            if (!p) return;
+            palette.motion = p.motion || palette.motion;
+            palette.recording = p.recording || palette.recording;
+            // Anything already on screen was painted with the defaults — repaint it now rather than
+            // leaving the page inconsistent until the next reload or interaction.
+            instances.forEach(function (redraw) { try { redraw(); } catch (e) {} });
+        })
+        .catch(function () { /* default palette stands */ });
+
     // "Nice" tick spacings, ascending — pickTickInterval walks these until the resulting tick count
     // for the current zoom fits the canvas width, so the axis always reads as a sensible scale
     // (seconds/minutes/hours/days) instead of some arbitrary fraction of the visible span.
@@ -205,12 +225,27 @@ window.larisvmsTimeline = (function () {
             // visibly pulsed as their positions jittered frame to frame. One rect per same-colored
             // run has no seams to flicker, and coordinates are rounded once per run rather than
             // independently per bucket.
-            var runStartX = null, runColor = null;
+            // runColors is always an array. A run of one color paints exactly as it always did; a run
+            // carrying several (a camera seeing a person and a vehicle in the same instant) splits
+            // the bar into equal horizontal bands so every class is visible rather than one winning
+            // and the rest disappearing. Runs merge on the whole color list, not just the first
+            // color, or two differently-banded neighbors would merge into whichever came first.
+            var runStartX = null, runColors = null, runKey = null;
             function flushRun(endX) {
                 if (runStartX === null) return;
                 var x1 = Math.round(runStartX), x2 = Math.round(endX);
-                ctx.fillStyle = runColor;
-                ctx.fillRect(x1, barTop, Math.max(1, x2 - x1), barBottom - barTop);
+                var width = Math.max(1, x2 - x1);
+                var top = barTop, total = barBottom - barTop;
+                for (var i = 0; i < runColors.length; i++) {
+                    // Last band absorbs the rounding remainder so the bands always fill the bar
+                    // exactly, with no background hairline showing through at the bottom.
+                    var bandTop = top + Math.round((total * i) / runColors.length);
+                    var bandBottom = i === runColors.length - 1
+                        ? top + total
+                        : top + Math.round((total * (i + 1)) / runColors.length);
+                    ctx.fillStyle = runColors[i];
+                    ctx.fillRect(x1, bandTop, width, Math.max(1, bandBottom - bandTop));
+                }
                 runStartX = null;
             }
             buckets.forEach(function (b) {
@@ -219,14 +254,17 @@ window.larisvmsTimeline = (function () {
                 if (bEnd <= bStart) return;
                 var x1 = ((bStart - r.from) / span) * w;
                 var x2 = ((bEnd - r.from) / span) * w;
-                // M8 pass 8: a custom EventTagRule's own color wins outright over the built-in
-                // green/blue/gray scheme, the same way motion already wins over plain recorded
-                // coverage below — see TimelineBucketDto.TagColorHex's doc comment. Null (the default,
-                // and every bucket on a camera with no EventTagRules configured at all) falls straight
-                // through to the unchanged built-in scheme.
-                var color = b.tagColorHex || (b.hasMotion ? '#28e070' : (b.hasRecording ? '#1e6fd9' : 'rgba(255,255,255,0.08)'));
-                if (runColor !== null && color !== runColor) flushRun(x1);
-                if (runStartX === null) { runStartX = x1; runColor = color; }
+                // M8 pass 8: a custom EventTagRule's own color, and an object class's color, both win
+                // outright over the built-in motion/recorded/gray scheme — see TimelineBucketDto's
+                // doc comment. Empty (the default, and every bucket on a camera with no tag rules and
+                // no object analytics) falls straight through to the unchanged built-in scheme.
+                var colors = (b.tagColorHexes && b.tagColorHexes.length)
+                    ? b.tagColorHexes
+                    : (b.tagColorHex ? [b.tagColorHex]
+                        : [b.hasMotion ? palette.motion : (b.hasRecording ? palette.recording : 'rgba(255,255,255,0.08)')]);
+                var key = colors.join('|');
+                if (runKey !== null && key !== runKey) flushRun(x1);
+                if (runStartX === null) { runStartX = x1; runColors = colors; runKey = key; }
             });
             flushRun(w);
 
@@ -545,6 +583,11 @@ window.larisvmsTimeline = (function () {
         // zero-size canvas, so calling it unconditionally here is safe for every caller.
         draw();
         reload();
+
+        // Registered so a palette that arrives after this timeline's first paint repaints it. Not
+        // unregistered on teardown: the fetch resolves once, early in the page's life, and the guard
+        // in its handler swallows a redraw on a canvas that's since been detached.
+        instances.push(draw);
 
         return {
             redraw: draw,

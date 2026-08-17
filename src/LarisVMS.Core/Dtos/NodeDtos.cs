@@ -1,3 +1,5 @@
+using LarisVMS.Core.Enums;
+
 namespace LarisVMS.Core.Dtos;
 
 // Wire DTOs for the node control plane (POST /api/nodes/*). Shared via Core so LarisVMS.Node can
@@ -69,11 +71,18 @@ public record NodeConfigScheduleWindowDto(Guid Id, string Days, TimeOnly StartTi
 /// ScheduleWindows: only meaningful for Recording.Mode=Schedule — evaluated against the node's own
 /// local system clock, not a stored timezone (see NodeWorker.IsWithinSchedule's doc comment for
 /// why).</summary>
+/// <summary>IntegrationKey/IntegrationBaseUri drive the vendor-plugin session a node starts
+/// alongside its ONVIF one (see ICameraIntegrationProvider). Both null for the majority of cameras,
+/// which need nothing beyond ONVIF. BaseUri is the camera's own scheme+host+port — the plugin
+/// appends whatever path its vendor API uses — sent explicitly rather than parsed out of
+/// EventsServiceUri on the node, since a camera can need an integration while having no ONVIF events
+/// service at all.</summary>
 public record NodeConfigCameraDto(Guid CameraId, string Name, string? Username, string? Password,
     List<NodeConfigStreamDto> Streams, int? RetentionDays, long? QuotaBytes, List<NodeConfigZoneDto> Zones,
     string RecordingMode, int MotionPreRollSeconds, int MotionPostRollSeconds,
     string? EventsServiceUri, List<NodeConfigEventTagRuleDto> EventTagRules,
-    List<NodeConfigScheduleWindowDto> ScheduleWindows);
+    List<NodeConfigScheduleWindowDto> ScheduleWindows,
+    string? IntegrationKey = null, string? IntegrationBaseUri = null);
 /// <summary>A camera this node has leftover Segments for but is no longer assigned to record
 /// (reassigned to a different node, or deleted) — StorageManager's orphaned-folder sweep uses
 /// RetentionDays here so leftover footage still ages out on the same schedule it always would have,
@@ -96,7 +105,13 @@ public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? Stor
 /// one of our own drawn ServerMotion zones — and non-null for a ServerMotion span. EventTagRuleId
 /// (M8 pass 8) is set only for a custom-tag-sourced span; NodeService infers Source from whichever
 /// of the two is set (both null = built-in CameraEvent motion) instead of carrying a separate field.</summary>
-public record MotionSpanReportItem(Guid CameraId, Guid? ZoneId, DateTime StartUtc, DateTime EndUtc, double Score, Guid? EventTagRuleId = null);
+///
+/// DetectionKind is set only for a span produced by an object-detection topic (person/vehicle/face —
+/// see CameraEventClassifier.ClassifyDetection); it joins the upsert identity alongside ZoneId and
+/// EventTagRuleId so two object classes detected at the same instant stay separate spans rather than
+/// colliding on the same row.</summary>
+public record MotionSpanReportItem(Guid CameraId, Guid? ZoneId, DateTime StartUtc, DateTime EndUtc, double Score,
+    Guid? EventTagRuleId = null, DetectionKind? DetectionKind = null);
 
 /// <summary>M8 pass 6: one raw ONVIF PullPoint notification, reported the same batched way a
 /// MotionSpan or Segment is. IsMotion (see CameraEventClassifier, run on the node as each

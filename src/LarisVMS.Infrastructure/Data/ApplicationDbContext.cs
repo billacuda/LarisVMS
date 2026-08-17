@@ -146,6 +146,11 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.Model).HasMaxLength(200);
             e.Property(x => x.FirmwareVersion).HasMaxLength(100);
             e.Property(x => x.SerialNumber).HasMaxLength(100);
+            // Same 200 as CameraStream.ProfileToken — both are ONVIF device-assigned identifier
+            // strings, not free text.
+            e.Property(x => x.VideoSourceToken).HasMaxLength(200);
+            // ICameraIntegrationProvider.Key — a short stable slug like "dahua-cgi", not free text.
+            e.Property(x => x.IntegrationKey).HasMaxLength(100);
             e.HasOne(x => x.Group).WithMany(g => g.Cameras)
                 .HasForeignKey(x => x.GroupId).OnDelete(DeleteBehavior.SetNull);
             e.HasOne(x => x.Node).WithMany(n => n.Cameras)

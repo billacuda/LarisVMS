@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Diagnostics;
+using System.IO.Pipelines;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using LarisVMS.Core.Enums;
@@ -68,9 +70,13 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
     /// current attempt's ffmpeg process has produced one.</summary>
     public byte[]? LiveInitSegment { get; private set; }
 
-    /// <summary>Raised for each chunk of live fragment (moof+mdat) bytes after LiveInitSegment is
+    /// <summary>Raised once per <em>complete</em> fMP4 fragment (moof+mdat) after LiveInitSegment is
     /// available — never raised for the init segment's own bytes, callers read LiveInitSegment
-    /// directly for that. Each array is a fresh copy safe to hold onto past the event call.</summary>
+    /// directly for that. Each array is a fresh copy safe to hold onto past the event call.
+    ///
+    /// Whole fragments, not raw pipe reads: a subscriber may join at any moment and may drop under
+    /// back-pressure, and both are only safe on a fragment boundary. Handing out arbitrary slices
+    /// made a late joiner's first append start mid-box, which the decoder rejects outright.</summary>
     public event Action<byte[]>? LiveFragmentReceived;
 
     // A late-joining live viewer needs to wait for the *current* attempt's init segment rather than
@@ -505,56 +511,99 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
         // bytes something is wrong with the stream, and waiting forever would leak memory silently.
         const int MaxInitSegmentBytes = 4 * 1024 * 1024;
 
-        var stream = process.StandardOutput.BaseStream;
-        var readBuffer = new byte[64 * 1024];
-        using var initBuffer = new MemoryStream();
+        // A fragment that never completes means the stream is malformed (or isn't fMP4 at all).
+        // Bounded so that can't grow without limit; generously above any real fragment, which is at
+        // most one GOP of video under this pipeline's -frag_keyframe muxing.
+        const int MaxFragmentBytes = 32 * 1024 * 1024;
+
+        // Read through a PipeReader rather than Stream.ReadAsync into an array of our own. The pipe
+        // owns pooled buffers and hands them over as a ReadOnlySequence, and AdvanceTo(consumed,
+        // examined) expresses exactly the problem here: "I have looked at all of this, but could only
+        // consume up to the end of the last whole fragment — keep the rest and call me when there's
+        // more." That is the buffering, growth and compaction this used to do by hand, and doing it
+        // by hand meant copying every byte ffmpeg produced into a second buffer first. Now nothing is
+        // copied at all unless a fragment is actually being handed to a viewer.
+        var reader = PipeReader.Create(process.StandardOutput.BaseStream,
+            // Leave the underlying stream alone on completion — the process teardown path owns it.
+            new StreamPipeReaderOptions(leaveOpen: true, bufferSize: 64 * 1024));
         var initSegmentResolved = false;
 
         try
         {
-            int read;
-            while ((read = await stream.ReadAsync(readBuffer, ct)) > 0)
+            while (true)
             {
+                var result = await reader.ReadAsync(ct);
+                var buffer = result.Buffer;
+                var consumed = buffer.Start;
+
                 if (!initSegmentResolved)
                 {
-                    initBuffer.Write(readBuffer, 0, read);
-
-                    if (initBuffer.Length > MaxInitSegmentBytes)
+                    var initEnd = Mp4BoxScanner.TryFindInitSegmentEnd(buffer);
+                    if (initEnd is null)
                     {
-                        logger.LogWarning("Live init segment exceeded {MaxBytes} bytes without a complete moov box — giving up on live view for this attempt.", MaxInitSegmentBytes);
-                        initSegmentResolved = true; // stop trying; recording itself is unaffected
+                        if (buffer.Length > MaxInitSegmentBytes)
+                        {
+                            logger.LogWarning("Live init segment exceeded {MaxBytes} bytes without a complete moov box — giving up on live view for this attempt.", MaxInitSegmentBytes);
+                            initSegmentResolved = true; // stop trying; recording itself is unaffected
+                            reader.AdvanceTo(buffer.End);
+                            continue;
+                        }
+                        // Nothing consumable yet, but everything has been examined — this is what
+                        // tells the pipe to hold what it has and wait for more rather than spin.
+                        reader.AdvanceTo(buffer.Start, buffer.End);
+                        if (result.IsCompleted) break;
                         continue;
                     }
 
-                    var end = Mp4BoxScanner.TryFindInitSegmentEnd(initBuffer.GetBuffer().AsSpan(0, (int)initBuffer.Length));
-                    if (end is null) continue;
-
                     initSegmentResolved = true;
-                    LiveInitSegment = initBuffer.GetBuffer()[..end.Value];
+                    // The one unavoidable copy on this path: the init segment is cached for the whole
+                    // life of the session and handed to every future viewer, so it has to outlive the
+                    // pipe's buffer.
+                    LiveInitSegment = buffer.Slice(0, initEnd.Value).ToArray();
                     _initSegmentTcs.TrySetResult(LiveInitSegment);
-
-                    // Anything captured past the init segment boundary in this same read is already
-                    // the start of the first fragment — forward it now rather than waiting for the
-                    // next stream.ReadAsync, or that fragment's leading bytes would be silently lost.
-                    var trailing = (int)initBuffer.Length - end.Value;
-                    if (trailing > 0)
-                    {
-                        var chunk = new byte[trailing];
-                        Array.Copy(initBuffer.GetBuffer(), end.Value, chunk, 0, trailing);
-                        LiveFragmentReceived?.Invoke(chunk);
-                    }
-                    continue;
+                    consumed = buffer.GetPosition(initEnd.Value);
                 }
 
-                var fragment = new byte[read];
-                Array.Copy(readBuffer, fragment, read);
-                LiveFragmentReceived?.Invoke(fragment);
+                // Everything from here is fragments. Anything past the init segment in this same read
+                // is already the start of the first one, so it falls straight through.
+                while (true)
+                {
+                    var remaining = buffer.Slice(consumed);
+                    var length = Mp4BoxScanner.TryFindFragmentEnd(remaining);
+                    if (length is null)
+                    {
+                        if (remaining.Length > MaxFragmentBytes)
+                        {
+                            logger.LogWarning("Live fragment exceeded {MaxBytes} bytes without a complete moof+mdat — " +
+                                "dropping the buffer; live view will resync on the next clean fragment.", MaxFragmentBytes);
+                            consumed = buffer.End;
+                        }
+                        break;
+                    }
+
+                    // Read once into a local: a viewer disconnecting between the null check and the
+                    // invoke would otherwise throw, and re-reading the field could also skip a
+                    // fragment (non-null here, null by the time it's used). This is also what makes
+                    // the no-viewer path free — with nobody subscribed the fragment is stepped over
+                    // without ever being copied, which on a 24/7 recorder is the common case by far.
+                    var subscribers = LiveFragmentReceived;
+                    subscribers?.Invoke(remaining.Slice(0, length.Value).ToArray());
+
+                    consumed = buffer.GetPosition(length.Value, consumed);
+                }
+
+                reader.AdvanceTo(consumed, buffer.End);
+                if (result.IsCompleted) break;
             }
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             logger.LogDebug(ex, "stdout (live) drain ended.");
+        }
+        finally
+        {
+            await reader.CompleteAsync();
         }
     }
 

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Enums;
 using LarisVMS.Media;
@@ -34,6 +35,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     // source, both, or neither, independently (see ReconcileEvents and DecideMotionSegment's use of
     // both dictionaries together).
     private readonly ConcurrentDictionary<Guid, CameraEventRecorder> _activeEvents = new();
+    private readonly ConcurrentDictionary<Guid, CameraIntegrationRecorder> _activeIntegrations = new();
     private readonly ConcurrentQueue<CameraEventReportItem> _pendingCameraEvents = new();
 
     // M8 pass 2: each camera's SegmentCompleted handler (see HandleSegmentCompleted) fires from
@@ -203,9 +205,11 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             foreach (var recorder in _active.Values) recorder.Cts.Cancel();
             foreach (var motion in _activeMotion.Values) motion.Cts.Cancel();
             foreach (var events in _activeEvents.Values) events.Cts.Cancel();
+            foreach (var integration in _activeIntegrations.Values) integration.Cts.Cancel();
             await Task.WhenAll(_active.Values.Select(r => r.RunTask)
                 .Concat(_activeMotion.Values.Select(m => m.RunTask))
-                .Concat(_activeEvents.Values.Select(e => e.RunTask)));
+                .Concat(_activeEvents.Values.Select(e => e.RunTask))
+                .Concat(_activeIntegrations.Values.Select(i => i.RunTask)));
 
             // Decide every still-pending segment now, with whatever motion state is left, rather
             // than lose track of it — the motion sessions above were just cancelled, but their
@@ -392,6 +396,21 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             // tag shows up on the timeline while it's still in progress instead of only once it closes.
             foreach (var (ruleId, ruleSpan) in recorder.Session.CurrentInProgressRuleSpans(now))
                 _pendingMotionSpans.Enqueue(new MotionSpanReportItem(cameraId, null, ruleSpan.StartUtc, ruleSpan.EndUtc, ruleSpan.PeakScore, ruleId));
+
+            // Same again per detected object class — a person standing in frame for two minutes
+            // should appear on the timeline as it happens, not only once they leave.
+            foreach (var (kind, detectionSpan) in recorder.Session.CurrentInProgressDetectionSpans(now))
+                _pendingMotionSpans.Enqueue(new MotionSpanReportItem(cameraId, null, detectionSpan.StartUtc,
+                    detectionSpan.EndUtc, detectionSpan.PeakScore, EventTagRuleId: null, DetectionKind: kind));
+        }
+
+        // Vendor-plugin detections checkpoint identically — on this fleet they're the *only* source
+        // of object classes, since these cameras never publish them over ONVIF at all.
+        foreach (var (cameraId, recorder) in _activeIntegrations)
+        {
+            foreach (var (kind, detectionSpan) in recorder.Session.CurrentInProgressDetectionSpans(now))
+                _pendingMotionSpans.Enqueue(new MotionSpanReportItem(cameraId, null, detectionSpan.StartUtc,
+                    detectionSpan.EndUtc, detectionSpan.PeakScore, EventTagRuleId: null, DetectionKind: kind));
         }
     }
 
@@ -497,6 +516,12 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             if (_activeEvents.TryRemove(cameraId, out var events)) events.Cts.Cancel();
         }
 
+        foreach (var cameraId in _activeIntegrations.Keys.Except(desired.Keys).ToList())
+        {
+            _logger.LogInformation("Camera {CameraId} no longer assigned to this node — stopping its integration.", cameraId);
+            if (_activeIntegrations.TryRemove(cameraId, out var integration)) integration.Cts.Cancel();
+        }
+
         foreach (var camera in config.Cameras)
         {
             // Refreshed every reconcile for every camera, new or already recording — the whole
@@ -543,6 +568,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
 
             ReconcileMotion(camera, stoppingToken);
             ReconcileEvents(camera, stoppingToken);
+            ReconcileIntegration(camera, stoppingToken);
         }
 
         return storageRoot;
@@ -590,10 +616,78 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             new MotionSpanReportItem(capturedCameraId, null, result.StartUtc, result.EndUtc, result.PeakScore));
         eventSession.RuleSpanCompleted += (ruleId, result) => _pendingMotionSpans.Enqueue(
             new MotionSpanReportItem(capturedCameraId, null, result.StartUtc, result.EndUtc, result.PeakScore, ruleId));
+        eventSession.DetectionSpanCompleted += (kind, result) => _pendingMotionSpans.Enqueue(
+            new MotionSpanReportItem(capturedCameraId, null, result.StartUtc, result.EndUtc, result.PeakScore,
+                EventTagRuleId: null, DetectionKind: kind));
 
         var eventsRunTask = eventSession.RunAsync(eventsCts.Token);
         _activeEvents[camera.CameraId] = new CameraEventRecorder(eventsCts, eventsRunTask, eventSession, ruleSignature);
         _logger.LogInformation("Started ONVIF event polling for camera {CameraId} ({Name}), {RuleCount} tag rule(s).", camera.CameraId, camera.Name, camera.EventTagRules.Count);
+    }
+
+    /// <summary>Starts (or stops, or replaces) this camera's vendor-plugin session — the node-side
+    /// half of ICameraIntegrationProvider. Independent of ReconcileEvents above in exactly the way
+    /// that reconcile is independent of ReconcileMotion: a camera can have an ONVIF event session, a
+    /// plugin session, both, or neither, and the two feed the same detection pipeline without
+    /// knowing about each other.
+    ///
+    /// Only Dahua/Amcrest exists today, so the dispatch below is a single case. It's written as a
+    /// switch on the key rather than an if, because the whole point of the registry is that the next
+    /// provider is a new arm here plus a new descriptor in Core — not a new concept.</summary>
+    private void ReconcileIntegration(NodeConfigCameraDto camera, CancellationToken stoppingToken)
+    {
+        var key = camera.IntegrationKey;
+        var hasIntegration = !string.IsNullOrEmpty(key)
+            && !string.IsNullOrEmpty(camera.IntegrationBaseUri)
+            && Uri.TryCreate(camera.IntegrationBaseUri, UriKind.Absolute, out _);
+
+        if (!hasIntegration)
+        {
+            if (_activeIntegrations.TryRemove(camera.CameraId, out var stopped))
+            {
+                _logger.LogInformation("Camera {CameraId} ({Name}) no longer needs a vendor integration — stopping it.",
+                    camera.CameraId, camera.Name);
+                stopped.Cts.Cancel();
+            }
+            return;
+        }
+
+        if (_activeIntegrations.TryGetValue(camera.CameraId, out var existing))
+        {
+            if (existing.IntegrationKey == key) return; // already running the right one
+            existing.Cts.Cancel();
+            _activeIntegrations.TryRemove(camera.CameraId, out _);
+            _logger.LogInformation("Vendor integration changed for camera {CameraId} ({Name}) — restarting it.",
+                camera.CameraId, camera.Name);
+        }
+
+        var baseUri = new Uri(camera.IntegrationBaseUri!);
+        var integrationCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        var integrationLogger = loggerFactory.CreateLogger($"Integration[{camera.Name}]");
+
+        DahuaCgiEventSession session;
+        switch (key)
+        {
+            case DahuaCgiIntegrationProvider.ProviderKey:
+                session = new DahuaCgiEventSession(baseUri, camera.Username, camera.Password, integrationLogger);
+                break;
+            default:
+                // A key this node's build doesn't know (config from a newer server). Logged once per
+                // reconcile rather than throwing — an unknown plugin must not stop a camera recording.
+                _logger.LogWarning("Camera {CameraId} ({Name}) asks for unknown integration '{Key}' — ignoring. " +
+                    "This node may be older than the server.", camera.CameraId, camera.Name, key);
+                integrationCts.Dispose();
+                return;
+        }
+
+        var capturedCameraId = camera.CameraId; // same staleness reasoning as ReconcileEvents' own capture
+        session.DetectionSpanCompleted += (kind, result) => _pendingMotionSpans.Enqueue(
+            new MotionSpanReportItem(capturedCameraId, null, result.StartUtc, result.EndUtc, result.PeakScore,
+                EventTagRuleId: null, DetectionKind: kind));
+
+        var runTask = session.RunAsync(integrationCts.Token);
+        _activeIntegrations[camera.CameraId] = new CameraIntegrationRecorder(integrationCts, runTask, session, key!);
+        _logger.LogInformation("Started '{Key}' integration for camera {CameraId} ({Name}).", key, camera.CameraId, camera.Name);
     }
 
     // Same content-equality-not-hash reasoning as BuildZoneConfigSignature.
@@ -842,6 +936,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     {
         var hasMotionSession = _activeMotion.TryGetValue(pending.CameraId, out var motionRecorder);
         var hasEventSession = _activeEvents.TryGetValue(pending.CameraId, out var eventRecorder);
+        var hasIntegration = _activeIntegrations.TryGetValue(pending.CameraId, out var integrationRecorder);
         // Anchored to the segment's START, not its end — see HasMotionSince's doc comment for why
         // anchoring to EndUtc silently discarded segments with real motion in them once PostRoll
         // (an operator-configurable, potentially small value) was shorter than "how far before the
@@ -876,12 +971,23 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             // classifier and the server-side zone for Motion mode specifically — a purely-tagging
             // rule (DrivesRecording=false) deliberately never reaches here, see
             // AnyDrivingRuleHasMotionSince/AnyDrivingRuleActive's own doc comments.
-            hasSignalSession = hasMotionSession || hasEventSession;
+            // An object detection (person/vehicle/face) is one more signal in the same OR-chain: a
+            // camera reporting it can see a person is reporting activity by any reasonable reading.
+            // Being an OR term, this can only ever keep a segment that would otherwise have been
+            // discarded — never the reverse — which also fixes a camera whose firmware emits object
+            // topics but no motion ones, and which therefore discarded everything under Motion mode.
+            // A vendor plugin is one more source in the same OR chain — and on hardware that only
+            // reports objects through its own API (this fleet), it's the only one that ever sees a
+            // person at all. Still an OR term, so it can only keep footage, never discard it.
+            hasSignalSession = hasMotionSession || hasEventSession || hasIntegration;
             hadSignalInWindow =
                 (hasMotionSession && motionRecorder!.Session.HasMotionSince(windowStart)) ||
                 (hasEventSession && (
                     eventRecorder!.Session.HasMotionSince(windowStart) || eventRecorder.Session.IsMotionActive ||
-                    eventRecorder.Session.AnyDrivingRuleHasMotionSince(windowStart) || eventRecorder.Session.AnyDrivingRuleActive));
+                    eventRecorder.Session.AnyDrivingRuleHasMotionSince(windowStart) || eventRecorder.Session.AnyDrivingRuleActive ||
+                    eventRecorder.Session.AnyDetectionSince(windowStart) || eventRecorder.Session.AnyDetectionActive)) ||
+                (hasIntegration && (
+                    integrationRecorder!.Session.AnyDetectionSince(windowStart) || integrationRecorder.Session.AnyDetectionActive));
         }
 
         if (ShouldDiscardSegment(hasSignalSession, hadSignalInWindow))

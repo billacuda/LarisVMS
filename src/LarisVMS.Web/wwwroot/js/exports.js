@@ -44,7 +44,7 @@
             if (item.status === 'Done') {
                 var sizeSuffix = (item.outputSizeBytes !== null && item.outputSizeBytes !== undefined)
                     ? ' (' + formatBytes(item.outputSizeBytes) + ')' : '';
-                extra = '<a class="btn btn-sm btn-outline-primary ms-1" href="/export-download/' + item.id + '">Download' + sizeSuffix + '</a>';
+                extra = '<a class="btn btn-sm btn-outline-primary ms-1" href="/export-download/' + item.id + '"><span aria-hidden="true">⬇️</span> Download' + sizeSuffix + '</a>';
             } else if (item.status === 'Failed' && item.errorMessage) {
                 extra = '<span class="text-danger ms-1" title="' + escapeHtml(item.errorMessage) + '">&#9888; ' + escapeHtml(item.errorMessage) + '</span>' +
                     '<button type="button" class="btn btn-sm btn-outline-secondary ms-1 js-retry-export" data-item-id="' + item.id + '">Retry</button>';

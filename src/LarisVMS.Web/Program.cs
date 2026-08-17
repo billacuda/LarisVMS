@@ -153,6 +153,8 @@ builder.Services.AddScoped<IScheduleWindowService, ScheduleWindowService>();
 builder.Services.AddScoped<IExportService, ExportService>();
 builder.Services.AddScoped<IBackupService, BackupService>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
+builder.Services.AddScoped<IBrandingService, BrandingService>();
+builder.Services.AddScoped<IEventColorService, EventColorService>();
 
 // First Web-tier BackgroundService — see ExportJobDispatcher's own doc comment for why exports
 // needed one instead of a synchronous per-camera download.
@@ -602,6 +604,25 @@ app.MapPost("/api/playback/view-opened", async (HttpContext ctx, ViewOpenedReque
 app.MapGet("/api/cameras/motion-state", async (ITimelineService timeline, CancellationToken ct) =>
     Results.Json(await timeline.GetCamerasWithActiveMotionAsync(ct))
 ).RequireAuthorization("Cameras.View");
+
+// Companion to motion-state: which cameras are seeing a *classified* object right now
+// (person/vehicle/face) rather than just movement. Separate endpoint rather than a wider
+// motion-state payload so the existing badge keeps working untouched on any client that hasn't been
+// updated, and so a deployment with no object-capable cameras pays nothing for it.
+app.MapGet("/api/cameras/detection-state", async (ITimelineService timeline, CancellationToken ct) =>
+    Results.Json(await timeline.GetActiveDetectionsAsync(ct))
+).RequireAuthorization("Cameras.View");
+
+// The admin-configured palette, for the parts of the UI that draw event colors client-side. Only
+// motion and recording are needed here: a detected object's color already rides along on each
+// timeline bucket (TimelineService resolves it server-side into TagColorHex), so this covers exactly
+// the two the canvas would otherwise have to hardcode. Fetched once per page rather than per
+// timeline, and timeline.js keeps its built-in fallback so a failure here just means default colors.
+app.MapGet("/api/timeline/colors", async (IEventColorService eventColors, CancellationToken ct) =>
+{
+    var palette = await eventColors.GetAsync(ct);
+    return Results.Json(new { motion = palette.MotionColor, recording = palette.RecordingColor });
+}).RequireAuthorization("Cameras.View");
 
 // M11: Pages/Index's own 60s AJAX refresh (dashboard.js) — same IDashboardService.GetHealthAsync
 // Pages/Index.cshtml.cs's OnGetAsync itself calls, so the polled data and the server-rendered

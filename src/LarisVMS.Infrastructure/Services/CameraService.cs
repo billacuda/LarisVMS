@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
+using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
@@ -63,6 +64,8 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
         Model = c.Model,
         FirmwareVersion = c.FirmwareVersion,
         SerialNumber = c.SerialNumber,
+        IntegrationKey = c.IntegrationKey,
+        VideoSourceToken = c.VideoSourceToken,
         TimeZoneId = c.TimeZoneId,
         QuotaBytes = c.QuotaBytes,
         LensType = c.LensType,
@@ -169,6 +172,85 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
         await db.Cameras.Where(c => c.Id == id).ExecuteDeleteAsync(ct);
     }
 
+    public async Task<int> SplitChannelsAsync(Guid cameraId, CancellationToken ct = default)
+    {
+        var camera = await db.Cameras.FirstOrDefaultAsync(c => c.Id == cameraId, ct)
+            ?? throw new InvalidOperationException("Camera not found.");
+
+        var summary = await ProbeAsync(cameraId, ct);
+        var channels = summary.VideoSourceTokens ?? [];
+        if (channels.Count < 2) return 0;
+
+        // Every camera already covering one of this device's sensors — including this one. Keyed by
+        // token so a re-split (or a split run after some channels were added and others deleted) adds
+        // only what's genuinely missing instead of duplicating rows, which is the same identity-
+        // matching principle ReplaceStreamsAsync already applies to profiles within one camera.
+        var siblings = await db.Cameras
+            .Where(c => c.DeviceServiceUri == camera.DeviceServiceUri && c.VideoSourceToken != null)
+            .ToListAsync(ct);
+        var taken = siblings.Select(c => c.VideoSourceToken!).ToHashSet(StringComparer.Ordinal);
+
+        // The camera being split claims the first channel rather than staying unpinned: leaving it
+        // null would mean it keeps ranking across *every* lens's profiles (see ReplaceStreamsAsync),
+        // so it could hand itself the same stream a sibling is already recording.
+        if (camera.VideoSourceToken is null)
+        {
+            camera.VideoSourceToken = channels[0];
+            taken.Add(channels[0]);
+            camera.Name = ChannelName(camera.Name, 1);
+        }
+
+        var createdIds = new List<Guid>();
+        for (var i = 0; i < channels.Count; i++)
+        {
+            if (taken.Contains(channels[i])) continue;
+
+            // Shares Host/DeviceServiceUri/credentials with its siblings — one physical device, but
+            // as far as recording/Views/Live/Playback are concerned these are N ordinary independent
+            // cameras, which is exactly why none of those subsystems needed changes for this.
+            var channelCamera = new Camera
+            {
+                Id = Guid.NewGuid(),
+                Name = ChannelName(BaseName(camera.Name), i + 1),
+                Host = camera.Host,
+                OnvifPort = camera.OnvifPort,
+                DeviceServiceUri = camera.DeviceServiceUri,
+                Username = camera.Username,
+                Password = camera.Password,
+                GroupId = camera.GroupId,
+                NodeId = camera.NodeId,
+                VideoSourceToken = channels[i],
+                IsEnabled = true,
+                CreatedAt = DateTime.UtcNow
+            };
+            db.Cameras.Add(channelCamera);
+            createdIds.Add(channelCamera.Id);
+            taken.Add(channels[i]);
+        }
+
+        await db.SaveChangesAsync(ct);
+
+        // Probed after the save, so every row exists (and already carries its VideoSourceToken)
+        // before any probe runs against it and resolves that lens's own streams.
+        foreach (var createdId in createdIds) await ProbeAsync(createdId, ct);
+
+        // The split camera itself is re-probed last: the probe at the top of this method ran while it
+        // was still unpinned, so its streams were ranked across every lens rather than just its own.
+        await ProbeAsync(cameraId, ct);
+
+        return createdIds.Count;
+    }
+
+    /// <summary>"Front Door" -> "Front Door — Ch1". Idempotent against an already-suffixed name so a
+    /// re-split doesn't produce "Front Door — Ch1 — Ch1".</summary>
+    private static string ChannelName(string name, int channelNumber) => $"{BaseName(name)} — Ch{channelNumber}";
+
+    private static string BaseName(string name)
+    {
+        var marker = name.LastIndexOf(" — Ch", StringComparison.Ordinal);
+        return marker < 0 ? name : name[..marker];
+    }
+
     public async Task<CameraProbeSummary> ProbeAsync(Guid cameraId, CancellationToken ct = default)
     {
         Camera camera;
@@ -217,16 +299,33 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
             camera.FirmwareVersion = result.DeviceInfo.FirmwareVersion;
             camera.SerialNumber = result.DeviceInfo.SerialNumber;
 
+            // Re-evaluated on every probe rather than only at first add, so a camera picks up (or
+            // loses) an integration automatically when its reported identity changes — a firmware
+            // update that starts reporting a different model, or a provider added in a later release
+            // that now recognizes hardware already in the system.
+            camera.IntegrationKey = CameraIntegrations.Detect(camera.Manufacturer, camera.Model)?.Key;
+
             await UpsertCapabilitiesAsync(cameraId, result, ct);
-            var streamCount = await ReplaceStreamsAsync(cameraId, result, mediaClient, credentials, ct);
+            var streamCount = await ReplaceStreamsAsync(cameraId, result, mediaClient, credentials,
+                camera.VideoSourceToken, ct);
 
             await db.SaveChangesAsync(ct);
+
+            // Every distinct physical sensor this device exposes, in the order GetProfiles listed
+            // them. One entry (or none, for firmware that omits VideoSourceConfiguration) is the
+            // ordinary single-sensor camera; more than one means the device has multiple lenses that
+            // can each be split into their own Camera row — see SplitChannelsAsync.
+            var channels = result.Profiles
+                .Select(p => p.VideoSourceToken)
+                .Where(t => t is not null)
+                .Distinct()
+                .ToList();
 
             return new CameraProbeSummary(
                 result.ProfileS, result.ProfileT, result.ProfileG, result.ProfileM,
                 result.HasPtz, result.HasImaging, result.HasEvents, result.HasAnalyticsMetadata,
                 result.HasMedia2, result.HasAudioOut, result.HasRelayOutputs, result.HasDigitalInputs,
-                streamCount, Error: null);
+                streamCount, Error: null, VideoSourceTokens: channels!);
         }
         catch (Exception ex) when (ex is OnvifFaultException or HttpRequestException or TaskCanceledException)
         {
@@ -275,11 +374,21 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
     /// else refreshed in place; unmatched old rows (a profile that's gone) are removed; unmatched new
     /// profiles are inserted fresh with IsEnabled defaulting true.</summary>
     private async Task<int> ReplaceStreamsAsync(Guid cameraId, CameraProbeResult result,
-        OnvifMediaClient mediaClient, OnvifCredentials? credentials, CancellationToken ct)
+        OnvifMediaClient mediaClient, OnvifCredentials? credentials, string? videoSourceToken,
+        CancellationToken ct)
     {
         var existing = await db.CameraStreams.Where(s => s.CameraId == cameraId).ToListAsync(ct);
 
-        if (result.Profiles.Count == 0)
+        // A camera pinned to one sensor of a multi-sensor device only ever considers that sensor's
+        // own profiles — otherwise CameraProfileRanker, which ranks purely on name/resolution and
+        // knows nothing about channels, would happily hand this camera another lens's stream as its
+        // "Main". Null (the ordinary single-sensor camera, and everything added before multi-channel
+        // support) keeps the original behavior of ranking across every profile the device reports.
+        var candidateProfiles = videoSourceToken is null
+            ? result.Profiles
+            : result.Profiles.Where(p => p.VideoSourceToken == videoSourceToken).ToList();
+
+        if (candidateProfiles.Count == 0)
         {
             db.CameraStreams.RemoveRange(existing);
             return 0;
@@ -292,7 +401,7 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
             return 0;
         }
 
-        var ranked = CameraProfileRanker.Rank(result.Profiles);
+        var ranked = CameraProfileRanker.Rank(candidateProfiles);
         var roles = new[] { CameraStreamRole.Main, CameraStreamRole.Sub, CameraStreamRole.Third };
         var byToken = existing.ToDictionary(s => s.ProfileToken);
         var byRole = existing.ToDictionary(s => s.Role);

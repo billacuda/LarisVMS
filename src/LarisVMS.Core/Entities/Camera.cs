@@ -31,6 +31,24 @@ public class Camera
     public string? FirmwareVersion { get; set; }
     public string? SerialNumber { get; set; }
 
+    /// <summary>Which vendor integration this camera needs beyond plain ONVIF, as
+    /// ICameraIntegrationProvider.Key — set automatically from the make/model reported during
+    /// probing (see CameraIntegrations.Detect), null for the majority of cameras that need nothing.
+    /// Stored rather than re-derived on demand so a node's config generation doesn't depend on
+    /// re-running detection, and so an unrecognized key from a newer/older version degrades to "no
+    /// integration" instead of failing.</summary>
+    public string? IntegrationKey { get; set; }
+
+    /// <summary>Which physical sensor of a multi-sensor device (e.g. an Axis quad-lens) this camera
+    /// row represents — the ONVIF VideoSourceToken its profiles draw from. Null for the ordinary
+    /// single-sensor case, and for every camera added before multi-channel support existed: null
+    /// means "use every profile this device reports", exactly the pre-existing behavior. When set,
+    /// probing considers only the profiles belonging to this sensor, so several Camera rows can share
+    /// one device (same Host/DeviceServiceUri/credentials) while each records its own lens
+    /// independently — which is what lets the whole recording/View/Live/Playback pipeline treat a
+    /// multi-sensor device as N ordinary cameras with no changes of its own.</summary>
+    public string? VideoSourceToken { get; set; }
+
     public string? TimeZoneId { get; set; }
 
     /// <summary>Per-camera storage cap; null shares the pool with cameras that have no quota. See

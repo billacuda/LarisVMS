@@ -53,6 +53,23 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
     public bool HasScheduleWindow { get; set; }
     public long StorageUsedBytes { get; set; }
 
+    /// <summary>How many distinct physical sensors the last probe found on this device. Only set by
+    /// OnPostProbeAsync (a probe is the only thing that reports it); >1 is what offers the
+    /// split-into-per-lens-cameras action. Zero on a normal page load, which simply hides the offer
+    /// rather than claiming the device has no channels.</summary>
+    public int DetectedChannelCount { get; set; }
+
+    /// <summary>Set when this camera is already pinned to one lens of a multi-sensor device — the
+    /// page shows which channel it covers instead of re-offering the split.</summary>
+    public string? VideoSourceToken { get; set; }
+
+    /// <summary>The vendor plugin auto-detected for this camera's make/model, if any — resolved from
+    /// the stored key so the page shows the provider's own name and summary rather than a raw slug.
+    /// Null both for cameras that need nothing and for a key no registered provider claims.</summary>
+    public ICameraIntegrationProvider? Integration => CameraIntegrations.ByKey(IntegrationKey);
+
+    public string? IntegrationKey { get; set; }
+
     public async Task<IActionResult> OnGetAsync(Guid? id, string? deviceServiceUri, string? suggestedName)
     {
         Groups = await groupService.GetTreeAsync();
@@ -72,6 +89,8 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
             Capabilities = camera.Capabilities;
             Streams = camera.Streams.ToList();
             QuotaGb = camera.QuotaBytes is { } q ? Math.Round(q / 1024m / 1024 / 1024, 2) : null;
+            VideoSourceToken = camera.VideoSourceToken;
+            IntegrationKey = camera.IntegrationKey;
 
             await LoadEffectiveSettingsAsync(id.Value, camera.NodeId);
             StorageUsedBytes = (await cameraService.GetStorageUsageAsync()).GetValueOrDefault(id.Value);
@@ -177,6 +196,25 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
         }
     }
 
+    public async Task<IActionResult> OnPostSplitChannelsAsync()
+    {
+        if (Id is null) return RedirectToPage("Index");
+
+        try
+        {
+            var created = await cameraService.SplitChannelsAsync(Id.Value);
+            await LogAsync("Camera.SplitChannels", $"{Name} ({Id}) — {created} channel camera(s) added");
+            ProbeMessage = created == 0
+                ? "No additional channels to add — every channel on this device already has a camera."
+                : $"Added {created} camera(s), one per additional channel on this device.";
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = ex.Message;
+        }
+        return RedirectToPage("Edit", new { id = Id });
+    }
+
     public async Task<IActionResult> OnPostProbeAsync()
     {
         if (Id is null) return RedirectToPage("Index");
@@ -185,6 +223,10 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
         ProbeMessage = summary.Error is null
             ? $"Probed successfully — {summary.StreamCount} stream(s) found."
             : $"Probe failed: {summary.Error}";
+
+        // Only meaningful right after a probe, which is the only thing that reports the device's
+        // channel list — the page's normal GET has no probe result to read it from.
+        DetectedChannelCount = summary.VideoSourceTokens?.Count ?? 0;
 
         var camera = await cameraService.GetAsync(Id.Value);
         if (camera is not null)
@@ -197,6 +239,8 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
             Capabilities = camera.Capabilities;
             Streams = camera.Streams.ToList();
             QuotaGb = camera.QuotaBytes is { } q ? Math.Round(q / 1024m / 1024 / 1024, 2) : null;
+            VideoSourceToken = camera.VideoSourceToken;
+            IntegrationKey = camera.IntegrationKey;
 
             await LoadEffectiveSettingsAsync(Id.Value, camera.NodeId);
             StorageUsedBytes = (await cameraService.GetStorageUsageAsync()).GetValueOrDefault(Id.Value);

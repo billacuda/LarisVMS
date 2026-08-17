@@ -27,6 +27,15 @@ public interface ICameraService
     /// saved camera and persists the refreshed CameraCapabilities + CameraStream rows.</summary>
     Task<CameraProbeSummary> ProbeAsync(Guid cameraId, CancellationToken ct = default);
 
+    /// <summary>Splits a multi-sensor device (an Axis quad-lens and similar) into one Camera row per
+    /// physical lens, so each records independently and can be placed in a view on its own. The
+    /// camera passed in claims the first channel; a sibling row sharing its
+    /// Host/DeviceServiceUri/credentials/node is created for each remaining one, and every row is
+    /// re-probed so it resolves only its own lens's streams. Returns how many new cameras were
+    /// created — 0 when the device reports fewer than two sensors, or when every channel already has
+    /// a Camera row (so running it twice is safe rather than duplicating).</summary>
+    Task<int> SplitChannelsAsync(Guid cameraId, CancellationToken ct = default);
+
     /// <summary>Sum of Segments.SizeBytes per camera — what M4's per-camera quota is checked
     /// against, and what Cameras/Index shows as "in use".</summary>
     Task<Dictionary<Guid, long>> GetStorageUsageAsync(CancellationToken ct = default);

@@ -30,6 +30,13 @@ public class MotionSpan
     /// explicitly first, the same pattern ZoneService already uses for ZoneId.</summary>
     public Guid? EventTagRuleId { get; set; }
 
+    /// <summary>What the camera's own analytics classified, for a span produced by an
+    /// object-detection topic (person/vehicle/face) rather than a plain motion one. Null for every
+    /// other span — including every span that existed before this column did — so nothing about
+    /// ServerMotion/CustomTag/plain-motion behavior changes. See DetectionKind's own doc comment for
+    /// why this is a separate column rather than another MotionSource value.</summary>
+    public DetectionKind? DetectionKind { get; set; }
+
     /// <summary>0.0-1.0, the peak per-frame score (see MotionDetector.Score) observed during this
     /// span — lets the timeline or a future alert rule distinguish "a leaf blew past the sensitivity
     /// threshold once" from "someone walked through for ten seconds," without storing every frame.</summary>
