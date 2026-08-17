@@ -32,7 +32,16 @@ public class CameraStream
     public DateTime? HealthReportedAt { get; set; }
 
     public bool HasAudio { get; set; }
+
+    /// <summary>Codec name and sample rate of the audio track as ffmpeg reported it when it last
+    /// opened this stream (StreamAudioInfo → StreamInfoReportItem), not an ONVIF-advertised
+    /// capability. Both stay null for a camera with no audio track, since nothing ever reports them.
+    /// Like Width/Height/Codec these are preserved rather than cleared by later reports, so they read
+    /// as "last known": a camera whose audio track is switched off keeps showing the codec it last
+    /// carried, since "no audio line on this connection" arrives as no report at all rather than as
+    /// an explicit clear. Re-probing the camera is what refreshes HasAudio alongside it.</summary>
     public string? AudioCodec { get; set; }
+    public int? AudioSampleRateHz { get; set; }
 
     /// <summary>Disables this stream without touching Camera.IsEnabled — e.g. turning off a Sub
     /// stream nobody's using yet, or turning off Main to stop recording while keeping the camera and

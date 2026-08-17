@@ -1,7 +1,22 @@
 @page
+@using System.Globalization
 @model LarisVMS.Web.Pages.IndexModel
 @{
     ViewData["Title"] = "Dashboard";
+}
+@functions {
+    // Kept trivially simple deliberately: dashboard.js has to render the identical string for the
+    // same row (this markup is only the pre-JS fallback — see dashboard.js's own header), so the two
+    // must agree exactly, and anything more elaborate than "codec, rate in kHz" invites drift.
+    static string AudioSummary(string? codec, int? sampleRateHz)
+    {
+        if (string.IsNullOrWhiteSpace(codec)) return "—";
+        if (sampleRateHz is not { } hz) return codec;
+        // Invariant, not the server's culture: dashboard.js formats the same number with JS's own
+        // always-a-dot toFixed, and a comma-decimal server culture would otherwise make the row
+        // change appearance the moment the first poll replaced this markup.
+        return $"{codec} {(hz / 1000.0).ToString("0.#", CultureInfo.InvariantCulture)} kHz";
+    }
 }
 <div class="d-flex align-items-center gap-2 mb-3">
     <h1 class="mb-0">Dashboard</h1>
@@ -88,6 +103,10 @@
                 <th data-no-sort>Status</th>
                 <th class="text-end" data-sort-numeric>FPS</th>
                 <th class="text-end" data-sort-numeric>Bitrate</th>
+                @* Sorted by sample rate, which is the only numeric part of the cell — sorting a
+                   mixed "codec + rate" string alphabetically would order by codec name instead,
+                   which the header gives no hint of. *@
+                <th data-sort-numeric>Audio</th>
                 <th class="text-end" data-sort-numeric>Reconnects</th>
                 <th data-sort-numeric>Last report</th>
             </tr>
@@ -129,6 +148,7 @@
                     </td>
                     <td class="text-end" data-sort-value="@(r.HealthFresh ? r.Fps : null)">@(r.HealthFresh ? r.Fps?.ToString() ?? "—" : "—")</td>
                     <td class="text-end" data-sort-value="@(r.HealthFresh ? r.BitrateKbps : null)">@(r.HealthFresh && r.BitrateKbps is { } kbps ? $"{kbps:N0} kbps" : "—")</td>
+                    <td data-sort-value="@r.AudioSampleRateHz">@AudioSummary(r.AudioCodec, r.AudioSampleRateHz)</td>
                     <td class="text-end" data-sort-value="@r.ReconnectCount">@(r.ReconnectCount?.ToString() ?? "—")</td>
                     @* ApplicationDbContext's UtcDateTimeConverter already guarantees Kind=Utc here — no SpecifyKind needed. *@
                     <td class="small text-muted" data-sort-value="@(r.HealthReportedAt.HasValue ? new DateTimeOffset(r.HealthReportedAt.Value).ToUnixTimeMilliseconds() : 0)">

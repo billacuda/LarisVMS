@@ -52,9 +52,14 @@ window.larisvmsViewPlay = (function () {
                         ' style="max-width: calc(100% - .5rem);"></div>' +
                     // Only shown once this one cell has been toggled into playback mode (see the
                     // view-cell-playback button below) — every other cell keeps showing pure live
-                    // video with no timeline at all. Right clearance (96px) keeps it clear of the
-                    // controls group's own corner, matching the flat grid this was ported from.
-                    '<div class="position-absolute bottom-0 start-0 d-none d-flex align-items-end gap-1 p-1 view-cell-mini-timeline-area" style="right:96px;">' +
+                    // video with no timeline at all. The right clearance keeps it clear of the
+                    // controls in the opposite corner, which share this bottom edge and are drawn
+                    // over the timeline whenever the cell is hovered. It depends on whether this
+                    // camera has audio: with a volume slider the controls are roughly twice as wide,
+                    // and a fixed clearance would either overlap them or waste timeline width on
+                    // every silent camera.
+                    '<div class="position-absolute bottom-0 start-0 d-none d-flex align-items-end gap-1 p-1 view-cell-mini-timeline-area"' +
+                        ' style="right:' + (cam && cam.hasAudio ? 176 : 70) + 'px;">' +
                         '<button type="button" class="btn btn-outline-light btn-sm view-cell-mini-playpause" style="padding:.1rem .35rem;" title="Play/Pause" aria-label="Play/Pause">▶</button>' +
                         // 30px, matching the Playback page's own timeline canvases — not smaller:
                         // timeline.js draws its coverage bar across the top ~55% and the tick marks
@@ -62,13 +67,19 @@ window.larisvmsViewPlay = (function () {
                         // labels (and part of the bar) off the bottom of the canvas entirely.
                         '<canvas class="view-cell-mini-timeline flex-grow-1" style="height:30px; touch-action:none; cursor:pointer; display:block;"></canvas>' +
                     '</div>' +
-                    // Exactly three buttons, shown on hover — not native <video controls>: that
-                    // includes click-anywhere-on-the-video-to-pause in most browsers, which makes no
-                    // sense for a continuous live feed and was confirmed live as unwanted.
-                    '<div class="position-absolute bottom-0 end-0 m-1 btn-group btn-group-sm view-cell-controls d-none">' +
-                        '<button type="button" class="btn btn-outline-light view-cell-mute" style="padding:.1rem .35rem;" title="Mute" aria-label="Mute">🔊</button>' +
-                        '<button type="button" class="btn btn-outline-light view-cell-playback" style="padding:.1rem .35rem;" title="Playback" aria-label="Playback">⏱</button>' +
-                        '<button type="button" class="btn btn-outline-light view-cell-fullscreen" style="padding:.1rem .35rem;" title="Fullscreen" aria-label="Fullscreen">⛶</button>' +
+                    // Shown on hover — not native <video controls>: that includes
+                    // click-anywhere-on-the-video-to-pause in most browsers, which makes no sense for
+                    // a continuous live feed and was confirmed live as unwanted.
+                    //
+                    // A flex row rather than one btn-group, since the audio group leads with a volume
+                    // slider (audio-controls.js) that isn't a button and shouldn't inherit
+                    // btn-group's own joined-corners styling. The remaining buttons keep their group.
+                    '<div class="position-absolute bottom-0 end-0 m-1 d-flex align-items-center gap-1 view-cell-controls d-none">' +
+                        window.larisvmsAudioControls.html(cam && cam.hasAudio) +
+                        '<div class="btn-group btn-group-sm">' +
+                            '<button type="button" class="btn btn-outline-light view-cell-playback" style="padding:.1rem .35rem;" title="Playback" aria-label="Playback">⏱</button>' +
+                            '<button type="button" class="btn btn-outline-light view-cell-fullscreen" style="padding:.1rem .35rem;" title="Fullscreen" aria-label="Fullscreen">⛶</button>' +
+                        '</div>' +
                     '</div>' +
                 '</div>' +
                 // flex-shrink-0: without it, a cell whose stored height is too short for its video
@@ -94,7 +105,6 @@ window.larisvmsViewPlay = (function () {
         var hoverTarget = video.parentElement;
         var frameEl = el.querySelector('.view-cell-frame');
         var controls = el.querySelector('.view-cell-controls');
-        var muteBtn = el.querySelector('.view-cell-mute');
         var fullscreenBtn = el.querySelector('.view-cell-fullscreen');
         var playbackToggleBtn = el.querySelector('.view-cell-playback');
         var miniTimelineArea = el.querySelector('.view-cell-mini-timeline-area');
@@ -115,18 +125,11 @@ window.larisvmsViewPlay = (function () {
             hoverTarget.addEventListener('mouseenter', function () { controls.classList.remove('d-none'); });
             hoverTarget.addEventListener('mouseleave', function () { controls.classList.add('d-none'); });
         }
-        function setMuteIcon() {
-            if (!muteBtn) return;
-            muteBtn.textContent = video.muted ? '🔇' : '🔊';
-            muteBtn.title = video.muted ? 'Unmute' : 'Mute';
-        }
-        if (muteBtn) {
-            muteBtn.addEventListener('click', function (e) {
-                e.stopPropagation();
-                video.muted = !video.muted;
-                setMuteIcon();
-            });
-        }
+        // Mute toggle + volume slider, and the reapply-on-load handling that keeps an unmuted cell
+        // unmuted across a live reconnect or a switch into playback mode — both of which reload this
+        // same <video> element, which otherwise resets it to the `muted` attribute's default. Wired
+        // once here, not per mode, so it spans every live/playback transition this cell makes.
+        window.larisvmsAudioControls.wire(controls, video);
         // Shared with Live/Playback (fullscreen-tile.js) — fullscreens frameEl (video + controls),
         // not the bare <video>, and wires the double-click gesture, same as those two pages. This
         // page's own fullscreenBtn just drives the same handle rather than calling
@@ -228,7 +231,6 @@ window.larisvmsViewPlay = (function () {
 
         cellControllers[cell.id] = { exitPlaybackModeIfActive: exitPlaybackModeIfActive };
 
-        setMuteIcon();
         stopFns[cell.id] = function () {
             if (liveStop) liveStop();
             if (pbPlayer) pbPlayer.teardown();

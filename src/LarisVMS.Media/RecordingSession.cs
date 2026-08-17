@@ -12,6 +12,14 @@ namespace LarisVMS.Media;
 /// Amcrest, on H.265 profiles) omit from GetProfiles/GetVideoEncoderConfiguration entirely.</summary>
 public record StreamResolution(int Width, int Height, string? Codec);
 
+/// <summary>The input's audio track as ffmpeg itself describes it when it opens the stream — codec
+/// name plus sample rate. Same reasoning as <see cref="StreamResolution"/>: this is what is actually
+/// arriving on the wire, whereas ONVIF's AudioEncoderConfiguration is an advertised capability that
+/// cameras are inconsistent about (and which this app never read in the first place — CameraStream's
+/// AudioCodec column existed unpopulated until this became the thing that fills it). SampleRateHz is
+/// null when ffmpeg's own line doesn't carry a rate, rather than guessing a default.</summary>
+public record StreamAudioInfo(string? Codec, int? SampleRateHz);
+
 public record RecordingSessionOptions(
     string FfmpegPath,
     string RtspUri,
@@ -64,6 +72,11 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
     public event Action<RecordingSegment>? SegmentCompleted;
     public event Action<StreamResolution>? StreamResolutionDetected;
 
+    /// <summary>Fires once per ffmpeg connection for an input that has an audio track, right after
+    /// ffmpeg prints its stream summary — never fires at all for a video-only camera, which is what
+    /// leaves the audio columns null for those.</summary>
+    public event Action<StreamAudioInfo>? StreamAudioDetected;
+
     /// <summary>The most recent complete fMP4 init segment (ftyp+moov) from the live tee leg — a
     /// late-joining live viewer needs exactly these bytes before any fragment. Replaced (not
     /// appended to) each time ffmpeg (re)starts, since a new process means a new moov. Null until the
@@ -106,6 +119,34 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
         var match = VideoStreamLine.Match(line);
         if (!match.Success) return null;
         return new StreamResolution(int.Parse(match.Groups[2].Value), int.Parse(match.Groups[3].Value), match.Groups[1].Value);
+    }
+
+    // The audio counterpart of VideoStreamLine, from the same stream-summary block, e.g.
+    // "Stream #0:1: Audio: pcm_alaw, 8000 Hz, mono, s16, 64 kb/s" or
+    // "Stream #0:1(und): Audio: aac (LC), 16000 Hz, mono, fltp, 32 kb/s".
+    //
+    // Codec and sample rate are matched by two separate patterns rather than one combined one on
+    // purpose: not every ffmpeg build/codec prints a rate on this line (some report only the codec
+    // and channel layout), and a single regex requiring both would then match nothing at all and
+    // report no audio whatsoever — the same failure mode ProgressLine's own comment above documents
+    // having hit for real when it required a bitrate figure that this pipeline never prints.
+    private static readonly Regex AudioStreamLine = new(
+        @"Stream #\d+:\d+.*?Audio:\s*([A-Za-z0-9_]+)", RegexOptions.Compiled);
+
+    // Anchored to "Hz" so it can't pick up the bit rate ("64 kb/s") or a channel count.
+    private static readonly Regex AudioSampleRate = new(
+        @"(\d{3,6})\s*Hz", RegexOptions.Compiled);
+
+    /// <summary>Pure parsing, same reasoning as TryParseVideoStreamLine. Returns null for a line that
+    /// isn't an audio stream summary at all; SampleRateHz is null when the line carries no "N Hz"
+    /// figure.</summary>
+    internal static StreamAudioInfo? TryParseAudioStreamLine(string line)
+    {
+        var match = AudioStreamLine.Match(line);
+        if (!match.Success) return null;
+        var rateMatch = AudioSampleRate.Match(line);
+        int? sampleRateHz = rateMatch.Success && int.TryParse(rateMatch.Groups[1].Value, out var hz) ? hz : null;
+        return new StreamAudioInfo(match.Groups[1].Value, sampleRateHz);
     }
 
     // ffmpeg's periodic progress line, printed to stderr throughout the run (copy or transcode
@@ -450,6 +491,7 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
     private async Task DrainStderrAsync(Process process, CancellationToken ct)
     {
         var resolutionReported = false;
+        var audioReported = false;
         try
         {
             string? line;
@@ -467,6 +509,12 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
                 {
                     resolutionReported = true;
                     StreamResolutionDetected?.Invoke(resolution);
+                }
+
+                if (!audioReported && TryParseAudioStreamLine(line) is { } audio)
+                {
+                    audioReported = true;
+                    StreamAudioDetected?.Invoke(audio);
                 }
 
                 if (TryParseProgressLine(line) is { } progress)

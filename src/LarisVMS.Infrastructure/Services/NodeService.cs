@@ -260,6 +260,8 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
                     .SetProperty(s => s.Fps, s => item.Fps ?? s.Fps)
                     .SetProperty(s => s.BitrateKbps, s => item.BitrateKbps ?? s.BitrateKbps)
                     .SetProperty(s => s.ReconnectCount, s => item.ReconnectCount ?? s.ReconnectCount)
+                    .SetProperty(s => s.AudioCodec, s => item.AudioCodec ?? s.AudioCodec)
+                    .SetProperty(s => s.AudioSampleRateHz, s => item.AudioSampleRateHz ?? s.AudioSampleRateHz)
                     .SetProperty(s => s.HealthReportedAt, s => item.Fps != null ? now : s.HealthReportedAt), ct);
         }
     }

@@ -73,3 +73,22 @@ body {
 .pb-timeline-fullscreen p {
     display: none;
 }
+
+/* Per-tile volume slider (audio-controls.js), overlaid on black video alongside the tile's own
+   buttons on both Views/Play and Playback. Deliberately a bare <input type="range"> styled with
+   accent-color rather than Bootstrap's .form-range: .form-range paints its own thumb in
+   --bs-primary and reserves vertical space for a focus ring, both of which fight a 24px-tall
+   control sitting in a btn-group-sm row over video. The dark pill behind the track is what keeps
+   it visible against a bright scene as well as a dark one. */
+.audio-volume {
+    width: 72px;
+    height: 1.5rem;
+    margin: 0;
+    padding: 0 0.3rem;
+    vertical-align: middle;
+    cursor: pointer;
+    accent-color: #fff;
+    background: rgba(33, 37, 41, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    border-radius: 0.25rem;
+}

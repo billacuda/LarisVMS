@@ -137,10 +137,15 @@ public record SegmentDeleteRequest(List<string> FilePaths);
 ///
 /// Width/Height/Codec are sent once per ffmpeg (re)start (more trustworthy than ONVIF's advertised
 /// VideoEncoderConfiguration, which some cameras omit entirely) and null on every other report;
-/// Fps/BitrateKbps/ReconnectCount are sent on NodeWorker's periodic health tick and refreshed there
-/// regardless of whether the connection just changed. Deliberately one merged DTO rather than two —
-/// both flow through the exact same pending-queue/flush/UpdateStreamInfoAsync pipeline, and
-/// NodeService.UpdateStreamInfoAsync preserves whichever fields a given report didn't include (see
-/// its own doc comment) rather than one report type clobbering the other's data.</summary>
+/// AudioCodec/AudioSampleRateHz likewise, from the audio line of the same stream summary (and never
+/// sent at all for a camera with no audio track); Fps/BitrateKbps/ReconnectCount are sent on
+/// NodeWorker's periodic health tick and refreshed there regardless of whether the connection just
+/// changed. Deliberately one merged DTO rather than several — they all flow through the exact same
+/// pending-queue/flush/UpdateStreamInfoAsync pipeline, and NodeService.UpdateStreamInfoAsync
+/// preserves whichever fields a given report didn't include (see its own doc comment) rather than
+/// one report type clobbering another's data. New optional fields also mean a node still running an
+/// older binary keeps reporting successfully — its JSON simply omits them, which binds as null and
+/// preserves whatever is already stored.</summary>
 public record StreamInfoReportItem(Guid CameraId, string StreamRole, int? Width, int? Height, string? Codec,
-    int? Fps = null, int? BitrateKbps = null, int? ReconnectCount = null);
+    int? Fps = null, int? BitrateKbps = null, int? ReconnectCount = null,
+    string? AudioCodec = null, int? AudioSampleRateHz = null);

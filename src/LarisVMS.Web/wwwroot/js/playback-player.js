@@ -534,10 +534,16 @@
                 // Hidden until hover (matches Live's own .live-controls) or forced visible while this
                 // tile is the fullscreen element (see .tile-fullscreen in site.css) — the digital zoom
                 // buttons above are the normal-grid-view zoom; fullscreen has its own wheel-zoom/drag-pan
-                // (fullscreen-tile.js) and just needs mute + a way back out while active.
-                '<div class="position-absolute bottom-0 end-0 m-1 btn-group btn-group-sm pb-fullscreen-controls d-none">' +
-                    '<button type="button" class="btn btn-outline-light pb-mute-toggle" title="Unmute" style="padding:.1rem .35rem;">🔇</button>' +
-                    '<button type="button" class="btn btn-outline-light pb-fullscreen-toggle" title="Fullscreen" style="padding:.1rem .35rem;">⛶</button>' +
+                // (fullscreen-tile.js) and just needs audio + a way back out while active.
+                //
+                // A flex row rather than one btn-group: the audio group leads with a volume slider
+                // (audio-controls.js), which isn't a button and shouldn't pick up btn-group's own
+                // joined-corners styling. Same structure as a Views/Play cell's controls.
+                '<div class="position-absolute bottom-0 end-0 m-1 d-flex align-items-center gap-1 pb-fullscreen-controls d-none">' +
+                    window.larisvmsAudioControls.html(cam && cam.hasAudio) +
+                    '<div class="btn-group btn-group-sm">' +
+                        '<button type="button" class="btn btn-outline-light pb-fullscreen-toggle" title="Fullscreen" style="padding:.1rem .35rem;">⛶</button>' +
+                    '</div>' +
                 '</div>' +
             '</div>'
         );
@@ -608,42 +614,24 @@
         videoEl.addEventListener('pointercancel', endDrag);
     }
 
-    // Double-click-to-fullscreen + wheel-zoom/drag-pan (fullscreen-tile.js), plus the mute/exit
-    // buttons that are the only controls left visible once this tile is the fullscreen element —
+    // Double-click-to-fullscreen + wheel-zoom/drag-pan (fullscreen-tile.js), plus the audio/exit
+    // controls that are the only ones left visible once this tile is the fullscreen element —
     // see .tile-fullscreen in site.css, which hides the normal-grid-view zoom buttons and the
     // primary-select badge while it's active. frameEl is .pb-tile-frame, not the outer grid-cell
     // wrapper, so fullscreening it doesn't also fullscreen this tile's grid-sizing wrapper element.
     function wireFullscreen(frameEl, videoEl) {
         var controls = frameEl.querySelector('.pb-fullscreen-controls');
-        var muteBtn = frameEl.querySelector('.pb-mute-toggle');
         var fsBtn = frameEl.querySelector('.pb-fullscreen-toggle');
 
         frameEl.addEventListener('mouseenter', function () { if (controls) controls.classList.remove('d-none'); });
         frameEl.addEventListener('mouseleave', function () { if (controls) controls.classList.add('d-none'); });
 
-        function setMuteIcon() {
-            if (!muteBtn) return;
-            muteBtn.textContent = videoEl.muted ? '🔇' : '🔊';
-            muteBtn.title = videoEl.muted ? 'Unmute' : 'Mute';
-        }
-        setMuteIcon();
-        // Every segment boundary re-runs the tile's own teardown()/videoEl.load() (see
-        // createTile/loadSegment above), which resets the element back to its `muted` HTML-attribute
-        // default (true) — reapplied here on each new resource load so an unmute survives a seek
-        // across segments instead of silently reverting.
-        var userMuted = videoEl.muted;
-        videoEl.addEventListener('loadstart', function () {
-            videoEl.muted = userMuted;
-            setMuteIcon();
-        });
-        if (muteBtn) {
-            muteBtn.addEventListener('click', function (e) {
-                e.stopPropagation();
-                videoEl.muted = !videoEl.muted;
-                userMuted = videoEl.muted;
-                setMuteIcon();
-            });
-        }
+        // Mute toggle + volume slider. Every segment boundary re-runs the tile's own
+        // teardown()/videoEl.load() (see createTile/loadSegment above), which resets the element back
+        // to its `muted` HTML-attribute default (true) — audio-controls.js reapplies both mute state
+        // and volume on each new resource load, so a tile's audio survives a seek across segments
+        // instead of silently reverting mid-scrub.
+        window.larisvmsAudioControls.wire(controls, videoEl);
 
         // Fullscreening a tile promotes only that element's own subtree into the browser's
         // fullscreen layer, so the timelines — page-level elements below the grid — simply stop

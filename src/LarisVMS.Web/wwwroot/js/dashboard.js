@@ -58,6 +58,18 @@
         return escapeHtml(r.nodeName) + ' <span class="badge ' + badgeClass + ' ms-1">' + (r.nodeOnline ? 'online' : 'offline') + '</span>';
     }
 
+    // Must produce the identical string Pages/Index.cshtml's own AudioSummary does for the same row
+    // — the server-rendered table is this table's pre-JS fallback, and the first poll replaces it
+    // in place, so a formatting difference would show up as the row visibly changing on load.
+    // Unlike fps/bitrate this isn't gated on healthFresh: the codec a camera sends is a property of
+    // the stream, not a live measurement, so the last known value stays true while a node is down.
+    function audioCell(r) {
+        if (!r.audioCodec) return '—';
+        if (r.audioSampleRateHz === null || r.audioSampleRateHz === undefined) return escapeHtml(r.audioCodec);
+        var khz = (r.audioSampleRateHz / 1000).toFixed(1).replace(/\.0$/, '');
+        return escapeHtml(r.audioCodec) + ' ' + khz + ' kHz';
+    }
+
     function renderRow(r, showThumbnails) {
         var thumbHtml = showThumbnails
             ? '<img src="/playback-thumbnail/' + r.cameraId + '/latest" loading="lazy" ' +
@@ -76,6 +88,7 @@
             '<td>' + statusBadge(r) + '</td>' +
             '<td class="text-end" data-sort-value="' + (fps !== null ? fps : '') + '">' + (fps !== null ? fps : '—') + '</td>' +
             '<td class="text-end" data-sort-value="' + (bitrate !== null ? bitrate : '') + '">' + (bitrate !== null ? bitrate.toLocaleString() + ' kbps' : '—') + '</td>' +
+            '<td data-sort-value="' + (r.audioSampleRateHz !== null && r.audioSampleRateHz !== undefined ? r.audioSampleRateHz : '') + '">' + audioCell(r) + '</td>' +
             '<td class="text-end" data-sort-value="' + (r.reconnectCount !== null && r.reconnectCount !== undefined ? r.reconnectCount : '') + '">' +
                 (r.reconnectCount !== null && r.reconnectCount !== undefined ? r.reconnectCount : '—') + '</td>' +
             '<td class="small text-muted" data-sort-value="' + (reported ? reported.getTime() : 0) + '">' +

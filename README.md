@@ -15,7 +15,7 @@ work on phone, tablet, and desktop.
 
 ---
 
-## **Current version [0.88.1](CHANGELOG.md)**
+## **Current version [0.89.0 ](CHANGELOG.md)**
 
 ## Stack
 
@@ -41,7 +41,9 @@ needed on the node — all verified end-to-end against real Amcrest cameras, inc
 recording process and the node process mid-recording and confirming both recover cleanly. Live view
 connects automatically for every camera on page load, plays both H.264 and HEVC natively with audio,
 auto-reconnects on its own after a dropped session, and can be toggled per-tile into playback mode
-without leaving the page. `Pages/Views` saves a camera-wall layout (GridStack drag/resize, per-cell
+without leaving the page. Every tile with an audio track carries its own mute toggle and volume
+slider, on live and playback alike; tiles always start muted, and unmuting one is deliberate, per
+tile, and never remembered across a page load. `Pages/Views` saves a camera-wall layout (GridStack drag/resize, per-cell
 aspect ratio, live video per tile) and plays it back later (`Views/Play`), with a derived
 single/two-column layout on phones, a fullscreen kiosk mode, and optional rotation through a set of
 views on a timer. `Pages/Live` and `Pages/Playback` are both driven by saved Views rather than
@@ -105,8 +107,8 @@ detection (`Admin → Nodes`) flagging when a recorder's own OS clock has drifte
 scheduled or on-demand database backups (`Admin → Backups` — restore is deliberately left to other
 tools, e.g. SSMS); application log capture on both tiers with a viewer (`Admin → System Logs`); and a
 health dashboard (the Dashboard page, auto-refreshing, sortable and paginated, with an optional
-thumbnail column) showing each camera's live fps/bitrate/reconnect count and every node's online
-status. Alerting, ONVIF-pushed motion zones, on-screen bounding-box overlays, and a mobile-specific UI
+thumbnail column) showing each camera's live fps/bitrate/reconnect count, the audio codec and sample
+rate it is actually sending, and every node's online status. Alerting, ONVIF-pushed motion zones, on-screen bounding-box overlays, and a mobile-specific UI
 pass are not built yet.
 
 Hardware-transcode fallback for browsers that can't decode a camera's native codec, main/sub

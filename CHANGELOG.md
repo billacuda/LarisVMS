@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.89.0] - 2026-08-16
+
+### Added
+
+- **A volume slider on every tile that has audio, live and playback alike.** Both surfaces had only a
+  mute button — all-or-nothing at whatever level the camera happens to send, which on a wall of tiles
+  means the loudest camera wins. Each tile now carries its own slider beside that button, independent
+  of every other tile. The slider shows *effective* volume: dragging it above zero unmutes, dragging
+  it to zero mutes, and the mute button restores the last level that was set, which is how every
+  video player on the web behaves and so needs no explanation. Tiles still **always start muted** and
+  an unmute is never persisted across a page load — reopening Live or Playback starts silent. A
+  camera with no audio track gets neither control rather than a slider that can do nothing.
+- **Audio codec and sample rate on the health dashboard** (new `Audio` column, e.g. `aac 16 kHz`),
+  alongside the fps and bitrate already there. Read from ffmpeg's own stream summary when the
+  recorder opens the stream — the same source, and for the same reason, as the video resolution and
+  codec already reported there: it is what actually arrives on the wire, rather than ONVIF's
+  advertised `AudioEncoderConfiguration`. (`CameraStream.AudioCodec` had existed as a column since
+  the first migration and was never populated by anything; this is what fills it, plus a new
+  `AudioSampleRateHz`.) Unlike fps/bitrate the column is not blanked when a node stops reporting:
+  the codec a camera sends is a property of the stream, not a live measurement, so the last known
+  value stays true while a node is down. Sortable by sample rate.
+
+### Fixed
+
+- **Unmuting a live View cell was silently undone moments later.** A live tile reloads the same
+  `<video>` element on every reconnect — and again when toggled into playback mode — and the HTML
+  load algorithm resets `muted` back to the element's `muted` attribute, which is set. Playback's
+  tiles had reapplied the user's choice since 0.59.0, but the View cells never did: the tile went
+  quiet again on the next reconnect while its own button kept showing 🔊, claiming otherwise. Both
+  surfaces now share one implementation (`audio-controls.js`), which reapplies mute state and volume
+  on every source load.
+
+**LarisVMS.Node change — `install-node.ps1` re-run needed on every recorder** (the audio stream
+summary is parsed on the node). Older nodes keep reporting normally; their reports simply carry no
+audio fields, so the dashboard's Audio column stays blank for their cameras until they update.
+
 ## [0.88.1] - 2026-08-16
 
 ### Changed

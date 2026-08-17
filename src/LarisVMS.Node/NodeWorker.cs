@@ -552,6 +552,14 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                     session.SegmentCompleted += segment => HandleSegmentCompleted(capturedCameraId, segment);
                     session.StreamResolutionDetected += resolution => _pendingStreamInfo.Enqueue(new StreamInfoReportItem(
                         camera.CameraId, "Main", resolution.Width, resolution.Height, resolution.Codec));
+                    // Its own report rather than fields on the resolution one: ffmpeg prints the
+                    // video and audio stream lines separately (and a video-only camera never prints
+                    // the audio one at all), so there's no single moment where both are known.
+                    // UpdateStreamInfoAsync's coalesce-preserve update is what lets two partial
+                    // reports build up one complete row.
+                    session.StreamAudioDetected += audio => _pendingStreamInfo.Enqueue(new StreamInfoReportItem(
+                        camera.CameraId, "Main", Width: null, Height: null, Codec: null,
+                        AudioCodec: audio.Codec, AudioSampleRateHz: audio.SampleRateHz));
 
                     // See _knownSegmentPaths' own doc comment — this is the fix for the confirmed
                     // mass-discard bug. OrdinalIgnoreCase prefix match since outputDir itself is
