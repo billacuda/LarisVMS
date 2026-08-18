@@ -414,11 +414,16 @@ VALUES (@Id, @Version, @Platform, @FilePath, @SizeBytes, @Sha256, GETUTCDATE(), 
     #   - recordings / spool / exports: the storage-root guard above only catches the configured
     #     default root; these names are excluded unconditionally as a second line of defense for
     #     anyone who still points a storage target inside the site directory.
+    #   - logs: FileLoggerProvider writes daily-rolling app-*.log files here, and they live inside
+    #     the site directory because that's the one place the app pool identity is already known to
+    #     be able to write (alongside IIS's own stdout_*.log). Without this exclusion every deploy
+    #     mirrored them away, so Admin > System Logs only ever showed the current day no matter what
+    #     the retention sweep was set to — the deploy, not retention, was deleting the history.
     $rcArgs = @(
         $PublishDir, $DestinationPath,
         '/MIR',
         '/XF', 'setup-generated.json', 'appsettings.Production.json',
-        '/XD', 'data-protection-keys', 'recordings', 'spool', 'exports',
+        '/XD', 'data-protection-keys', 'recordings', 'spool', 'exports', 'logs',
         '/NFL', '/NDL', '/NJH', '/NJS', '/NC', '/NS'
     )
     robocopy @rcArgs

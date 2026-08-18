@@ -9,7 +9,7 @@
     'use strict';
 
     var FALLBACK_PAGE_SIZE = 25; // only used if a table somehow has no size <select> of its own
-    var STORAGE_PREFIX = 'larisvms.tablePageSize.';
+    var PREF_PREFIX = 'tablePageSize.';
 
     // instances[tableId] -> that table's own render(), so a caller whose data changed for a reason
     // other than a user sort/filter/page-size action (dashboard.js's 60s AJAX refresh) can re-slice
@@ -31,23 +31,25 @@
     // pages offer different size sets (e.g. Cameras/Index's 10/25/50/100 vs. Dashboard's
     // 10/20/50/100), and a persisted value valid for one page but not this one should fall back to
     // this page's own default rather than silently accepting a size this page never offered.
+    //
+    // Server-backed (see user-preferences.js) — initTable() itself waits for the preferences fetch
+    // to resolve before its first render, so this read (called from inside that wait) already sees
+    // real data rather than needing its own fallback-then-flash handling the way dashboard.js's
+    // thumbnail toggle does.
     function loadPageSize(tableId, sizeSelect) {
         var fallback = defaultPageSize(sizeSelect);
-        try {
-            var raw = localStorage.getItem(STORAGE_PREFIX + tableId);
-            if (raw === null) return fallback;
-            if (raw === 'all') return 'all';
-            var n = parseInt(raw, 10);
-            var validSizes = sizeSelect
-                ? Array.prototype.map.call(sizeSelect.options, function (o) { return o.value; })
-                : [];
-            if (validSizes.indexOf(String(n)) !== -1) return n;
-        } catch (e) { /* private browsing/storage full — fall back to the default */ }
-        return fallback;
+        var raw = window.larisvmsPreferences.get(PREF_PREFIX + tableId, null);
+        if (raw === null) return fallback;
+        if (raw === 'all') return 'all';
+        var n = parseInt(raw, 10);
+        var validSizes = sizeSelect
+            ? Array.prototype.map.call(sizeSelect.options, function (o) { return o.value; })
+            : [];
+        return validSizes.indexOf(String(n)) !== -1 ? n : fallback;
     }
 
     function savePageSize(tableId, size) {
-        try { localStorage.setItem(STORAGE_PREFIX + tableId, String(size)); } catch (e) { /* ignore */ }
+        window.larisvmsPreferences.set(PREF_PREFIX + tableId, size);
     }
 
     function initTable(table) {
@@ -158,7 +160,14 @@
     }
 
     document.addEventListener('DOMContentLoaded', function () {
-        Array.prototype.forEach.call(document.querySelectorAll('table[data-paginate]'), initTable);
+        // Waits for the preferences fetch so each table's first render already uses the right page
+        // size rather than the default-then-correct flash a synchronous localStorage read used to
+        // avoid entirely on its own — user-preferences.js's GET already started well before
+        // DOMContentLoaded fires (its script tag loads earlier in _Layout.cshtml, before full-page
+        // parsing even finishes), so this adds negligible delay in practice.
+        window.larisvmsPreferences.whenReady().then(function () {
+            Array.prototype.forEach.call(document.querySelectorAll('table[data-paginate]'), initTable);
+        });
     });
 
     // Re-slices against the table's current rows using whatever page/page-size it's already on — see

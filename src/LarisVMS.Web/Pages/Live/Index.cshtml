@@ -4,28 +4,10 @@
     ViewData["Title"] = "Live";
 }
 
-@if (Model.Views.Count > 0)
-{
-    @* Runs during parse, before anything else on the page, so the redirect costs nothing — landing
-       on Live goes straight to whichever view was watched last (view-play.js records it), falling
-       back to the first view. Views are the only live-viewing surface now; there is no flat
-       all-cameras grid to opt out to. *@
-    <script>
-        (function () {
-            var ids = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Views.Select(v => v.Id.ToString())));
-            var last = null;
-            try { last = localStorage.getItem('larisvms.lastViewId'); } catch (e) { /* private mode */ }
-            var target = (last && ids.indexOf(last) !== -1) ? last : ids[0];
-            if (target) location.replace('/Views/Play/' + target);
-        })();
-    </script>
-}
-
+@* OnGetAsync already redirects to the last-watched (or first) view whenever one exists — this markup
+   only ever renders for the Views.Count == 0 case, server-side, with no client script involved. *@
 <h1>Live</h1>
 
-@if (Model.Views.Count == 0)
-{
-    <p class="text-muted">
-        No views exist yet, <a asp-page="/Views/Index">click here to create one!</a>
-    </p>
-}
+<p class="text-muted">
+    No views exist yet, <a asp-page="/Views/Index">click here to create one!</a>
+</p>

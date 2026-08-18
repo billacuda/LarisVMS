@@ -13,6 +13,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Same reason Infrastructure and Media expose theirs: pure decision functions
+         (LogsRetentionService.ShouldDelete and friends) are unit-tested directly rather than being
+         made public purely to satisfy a test. -->
+    <InternalsVisibleTo Include="LarisVMS.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Identity.UI" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>

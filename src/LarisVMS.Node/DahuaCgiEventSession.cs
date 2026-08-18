@@ -65,11 +65,18 @@ public sealed class DahuaCgiEventSession(
     private HttpClient CreateClient()
     {
         // Digest is what these cameras require; HttpClientHandler negotiates it from Credentials.
-        // PreAuthenticate spares a 401 round trip on every reconnect.
+        // PreAuthenticate spares a 401 round trip on every reconnect. Certificate validation is
+        // disabled for the same reason every other camera-facing client in this app disables it
+        // (see Program.cs's "onvif" named HttpClient on both tiers) — a LAN camera reached over
+        // HTTPS almost always presents a self-signed certificate with no CA behind it, so standard
+        // chain validation would reject every one of them, not just misconfigured ones. This was the
+        // one camera-facing client that still validated, which meant an HTTPS camera's ONVIF traffic
+        // worked while its CGI event stream silently never connected.
         var handler = handlerFactory?.Invoke() ?? new HttpClientHandler
         {
             Credentials = new NetworkCredential(username ?? string.Empty, password ?? string.Empty),
-            PreAuthenticate = true
+            PreAuthenticate = true,
+            ServerCertificateCustomValidationCallback = (_, _, _, _) => true
         };
         // No overall client Timeout: the response body never completes by design, and HttpClient's
         // Timeout applies to the whole operation including body reads, so any finite value would

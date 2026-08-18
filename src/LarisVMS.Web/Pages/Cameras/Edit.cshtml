@@ -29,20 +29,19 @@
         <label class="form-label">Name</label>
         <input asp-for="Name" class="form-control" required />
     </div>
-    @if (Model.IsNew)
-    {
-        <div class="col-12">
-            <label class="form-label">Device service URL</label>
-            <input asp-for="DeviceServiceUri" class="form-control font-monospace" placeholder="http://192.168.1.50/onvif/device_service" required />
-        </div>
-    }
-    else
-    {
-        <div class="col-12">
-            <label class="form-label">Device service URL</label>
-            <input class="form-control font-monospace" value="@Model.DeviceServiceUri" disabled />
-        </div>
-    }
+    <div class="col-12">
+        <label class="form-label">Device service URL</label>
+        <input asp-for="DeviceServiceUri" class="form-control font-monospace" placeholder="http://192.168.1.50/onvif/device_service" required />
+        @if (!Model.IsNew)
+        {
+            <div class="form-text">
+                Change the scheme here (<code>http://</code> &harr; <code>https://</code>) if the
+                camera's own web server switches, or update the address if its IP changes. Saving a
+                change re-probes the camera automatically, since its capability report can otherwise
+                go stale against the new address.
+            </div>
+        }
+    </div>
     <div class="col-12">
         <label class="form-label">Group</label>
         <select asp-for="GroupId" class="form-select">

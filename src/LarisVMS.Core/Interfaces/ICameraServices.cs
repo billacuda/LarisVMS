@@ -18,8 +18,14 @@ public interface ICameraService
     /// silently un-probed in the list.</summary>
     Task<Camera> AddAsync(AddCameraRequest request, CancellationToken ct = default);
 
+    /// <summary><paramref name="deviceServiceUri"/> null or blank means unchanged, the same
+    /// convention <paramref name="username"/>/<paramref name="password"/> already use — the edit
+    /// form always submits the camera's current address, so this only matters to a caller that
+    /// deliberately omits it. A real change (most commonly http &lt;-&gt; https) re-derives
+    /// Host/OnvifPort from the new URI, exactly as AddAsync does, and triggers a re-probe since the
+    /// device's own capability report can otherwise go stale against the new address.</summary>
     Task UpdateAsync(Guid id, string name, Guid? groupId, Guid? nodeId, string? username, string? password,
-        bool isEnabled, long? quotaBytes, CancellationToken ct = default);
+        bool isEnabled, long? quotaBytes, string? deviceServiceUri = null, CancellationToken ct = default);
 
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 

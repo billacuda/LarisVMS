@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
@@ -31,7 +32,7 @@ var builder = WebApplication.CreateBuilder(args);
 // identity, with an "app-" prefix so its daily files never collide with IIS's own "stdout_*" ones.
 // LogsRetentionService (registered below) sweeps files older than its retention window.
 builder.Logging.AddProvider(new FileLoggerProvider(
-    Path.Combine(AppContext.BaseDirectory, "logs"), "app", LogLevel.Information));
+    LogPaths.AppLogsDirectory(builder.Configuration), "app", LogLevel.Information));
 
 // ── Configuration ────────────────────────────────────────────────────────────
 // Holds only what the app needs before the database can be read: the connection string and
@@ -98,7 +99,12 @@ builder.Services.ConfigureApplicationCookie(options =>
 {
     options.LoginPath = "/Identity/Account/Login";
     options.AccessDeniedPath = "/Identity/Account/AccessDenied";
-    options.ExpireTimeSpan = TimeSpan.FromMinutes(60);
+    // The real per-user session cutoff is now the per-role setting enforced in OnValidatePrincipal
+    // below, not this value — this is only the outer ceiling the cookie itself will never exceed
+    // regardless of what any role is configured for, generous enough that "0 = never expire" on
+    // every one of a user's roles behaves as advertised rather than silently capping out here.
+    // SlidingExpiration still renews it on activity, same as before.
+    options.ExpireTimeSpan = TimeSpan.FromDays(397); // just past a year — IIS/browser cookie norms
     options.SlidingExpiration = true;
     options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
 
@@ -121,6 +127,42 @@ builder.Services.ConfigureApplicationCookie(options =>
         var ip = ctx.HttpContext.Connection.RemoteIpAddress?.ToString();
         await audit.LogAsync("Logout", userId, userName, ip);
     };
+
+    // ── Per-role session lifetime (M14) ─────────────────────────────────────
+    // AddIdentity() already registered its own OnValidatePrincipal (SecurityStampValidator —
+    // re-validates the ticket periodically and signs a user out everywhere their password/security
+    // stamp changes). Configure<CookieAuthenticationOptions> delegates apply in registration order
+    // against the *same* Events instance, so naively assigning options.Events.OnValidatePrincipal
+    // here would silently replace Identity's own handler rather than add to it — captured first and
+    // chained instead, so both run. RejectPrincipal() sets ctx.Principal back to null, which is what
+    // lets this check for "did the security-stamp check already reject this ticket" after calling it.
+    var previousValidatePrincipal = options.Events.OnValidatePrincipal;
+    options.Events.OnValidatePrincipal = async ctx =>
+    {
+        if (previousValidatePrincipal is not null) await previousValidatePrincipal(ctx);
+        if (ctx.Principal is null) return; // already rejected by the security-stamp check above
+
+        var issuedUtc = ctx.Properties.IssuedUtc;
+        if (issuedUtc is null) return; // no issued time to measure age against — fail open, not closed
+
+        var roleNames = ctx.Principal.FindAll(System.Security.Claims.ClaimTypes.Role)
+            .Select(c => c.Value).ToList();
+        if (roleNames.Count == 0) return;
+
+        var db = ctx.HttpContext.RequestServices.GetRequiredService<ApplicationDbContext>();
+        var settings = ctx.HttpContext.RequestServices.GetRequiredService<ISettingsResolver>();
+
+        var roleIds = await db.Roles.Where(r => roleNames.Contains(r.Name!)).Select(r => r.Id).ToListAsync();
+        var hoursPerRole = new List<int>();
+        foreach (var roleId in roleIds)
+            hoursPerRole.Add(await settings.GetAsync(SessionLifetimePolicy.SettingKey(roleId), SessionLifetimePolicy.DefaultHours));
+
+        var window = SessionLifetimePolicy.EffectiveWindow(hoursPerRole);
+        if (!SessionLifetimePolicy.HasExpired(issuedUtc.Value, DateTimeOffset.UtcNow, window)) return;
+
+        ctx.RejectPrincipal();
+        await ctx.HttpContext.SignOutAsync(IdentityConstants.ApplicationScheme);
+    };
 });
 
 // ── Authorization / RBAC ──────────────────────────────────────────────────────
@@ -140,6 +182,8 @@ builder.Services.AddScoped<ISetupService, SetupService>();
 builder.Services.AddScoped<IPermissionService, PermissionService>();
 builder.Services.AddScoped<IAuditService, AuditService>();
 builder.Services.AddScoped<ISettingsResolver, SettingsResolver>();
+builder.Services.AddScoped<IUserPreferenceService, UserPreferenceService>();
+builder.Services.AddScoped<ICameraAccessService, CameraAccessService>();
 builder.Services.AddScoped<ICameraDiscoveryService, CameraDiscoveryService>();
 builder.Services.AddScoped<ICameraService, CameraService>();
 builder.Services.AddScoped<ICameraGroupService, CameraGroupService>();
@@ -161,6 +205,8 @@ builder.Services.AddScoped<IEventColorService, EventColorService>();
 builder.Services.AddHostedService<ExportJobDispatcher>();
 builder.Services.AddHostedService<BackupHostedService>();
 builder.Services.AddHostedService<LogsRetentionService>();
+builder.Services.AddHostedService<AuditLogRetentionService>();
+builder.Services.AddHostedService<CameraReprobeService>();
 
 // ── ONVIF HTTP client ────────────────────────────────────────────────────────
 // CameraService takes a Func<HttpClient> rather than IHttpClientFactory directly so
@@ -210,6 +256,9 @@ app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseSecurityHeaders();
 app.UseSetupRedirect();
+// After the setup gate, not before: pre-setup there may be no Settings table to read yet, and every
+// request pre-setup is already confined to the wizard's own exempt paths anyway.
+app.UsePortSegmentation();
 
 app.UseRouting();
 // Needed before UseAuthorization so the /live WS upgrade request survives the pipeline as a
@@ -255,7 +304,7 @@ nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest requ
         request.SentAtUtc, DateTime.UtcNow, ct);
 
     // ── Auto-update check ────────────────────────────────────────────────
-    // Global-only gate (Admin/Settings' NodeAutoUpdate.Enabled) — no per-node override for this
+    // Global-only gate (Admin/Settings/Nodes' NodeAutoUpdate.Enabled) — no per-node override for this
     // first pass, unlike Retention/Recording.Mode which do walk Camera -> Node -> Global.
     NodeUpdateInfoDto? updateAvailable = null;
     var autoUpdateEnabled = await settings.GetAsync("NodeAutoUpdate.Enabled", true, ct: ct);
@@ -632,6 +681,27 @@ app.MapGet("/api/dashboard", async (IDashboardService dashboardService, Cancella
     Results.Json(await dashboardService.GetHealthAsync(ct))
 ).RequireAuthorization();
 
+// ── User preferences (M14) ───────────────────────────────────────────────────
+// The server-backed replacement for what used to live only in localStorage — theme, last-watched
+// view, table page size, playback clock format. Plain [Authorize] (no specific resource policy):
+// every signed-in user reads and writes only their own preferences, identified from their own
+// claims, never someone else's — there's nothing here for a permission to scope.
+app.MapGet("/api/preferences", async (HttpContext ctx, IUserPreferenceService preferences, CancellationToken ct) =>
+{
+    var userId = ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+    if (userId is null) return Results.Unauthorized();
+    return Results.Json(await preferences.GetAllAsync(userId, ct));
+}).RequireAuthorization();
+
+app.MapPut("/api/preferences/{key}", async (string key, HttpContext ctx, SetPreferenceRequest request,
+    IUserPreferenceService preferences, CancellationToken ct) =>
+{
+    var userId = ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+    if (userId is null) return Results.Unauthorized();
+    await preferences.SetAsync(userId, key, request.Value, ct);
+    return Results.NoContent();
+}).RequireAuthorization();
+
 app.MapGet("/playback-segment/{cameraId:guid}/{segmentId:long}", async (
     Guid cameraId, long segmentId, ITimelineService timeline, IHttpClientFactory httpFactory, CancellationToken ct) =>
 {
@@ -742,10 +812,26 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}/latest", async (
 // permission as the Exports page itself, rather than a separate Exports.Edit — the whole feature is
 // meant to be usable by anyone who can see the results, with no distinct "can trigger but can't
 // view" or "can view but can't trigger" role split called for.
-app.MapPost("/api/exports", async (HttpContext ctx, CreateExportRequest request, IExportService exportService, IAuditService auditService, CancellationToken ct) =>
+app.MapPost("/api/exports", async (HttpContext ctx, CreateExportRequest request, IExportService exportService,
+    IAuditService auditService, ICameraAccessService cameraAccess, CancellationToken ct) =>
 {
     if (request.CameraIds.Count == 0) return Results.BadRequest("Select at least one camera.");
     if (request.ToUtc <= request.FromUtc) return Results.BadRequest("End time must be after start time.");
+
+    // Checked here, not only by hiding cameras from the picker that built this request: unlike the
+    // playback surfaces above, this creates a real, downloadable file — the most compliance-sensitive
+    // step in the whole export flow per this route's own Export.Download audit comment below — so
+    // it's worth the one extra check even though a client that only ever sees LarisVMS's own picker
+    // could never construct a disallowed request in the first place.
+    //
+    // Results.Problem with an explicit status rather than Results.Forbid(): under cookie
+    // authentication, Forbid()'s default handling can redirect to AccessDeniedPath instead of
+    // returning a clean 403 to a fetch() caller, which every other domain-specific rejection on this
+    // route already avoids the same way (see the 503/504 Results.Problem calls below).
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Export, ct);
+    if (accessible is not null && request.CameraIds.Any(id => !accessible.Contains(id)))
+        return Results.Problem("You don't have export access to one or more of the selected cameras.",
+            statusCode: StatusCodes.Status403Forbidden);
 
     var userId = ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
     var userName = ctx.User.Identity?.Name;

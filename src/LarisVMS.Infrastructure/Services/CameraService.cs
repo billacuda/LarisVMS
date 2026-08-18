@@ -110,7 +110,7 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
     }
 
     public async Task UpdateAsync(Guid id, string name, Guid? groupId, Guid? nodeId, string? username, string? password,
-        bool isEnabled, long? quotaBytes, CancellationToken ct = default)
+        bool isEnabled, long? quotaBytes, string? deviceServiceUri = null, CancellationToken ct = default)
     {
         var camera = await db.Cameras.FirstOrDefaultAsync(c => c.Id == id, ct)
             ?? throw new InvalidOperationException("Camera not found.");
@@ -125,6 +125,30 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
         // not "clear it".
         if (!string.IsNullOrWhiteSpace(username)) camera.Username = username;
         if (!string.IsNullOrWhiteSpace(password)) camera.Password = password;
+
+        // Blank also means "unchanged" here, same convention as credentials above — the form always
+        // submits the current value, so blank only happens if a caller deliberately omits it.
+        // Changing the scheme (http <-> https) is the main reason this exists, but any change to
+        // host/port/path is accepted the same way: whatever a re-probe or WS-Discovery would have
+        // written on initial add is exactly what's recomputed here, so this can't drift from AddAsync.
+        if (!string.IsNullOrWhiteSpace(deviceServiceUri) && deviceServiceUri != camera.DeviceServiceUri)
+        {
+            if (!Uri.TryCreate(deviceServiceUri, UriKind.Absolute, out var deviceUri))
+                throw new ArgumentException("Device service URI is not a valid absolute URI.", nameof(deviceServiceUri));
+
+            camera.DeviceServiceUri = deviceServiceUri;
+            camera.Host = deviceUri.Host;
+            camera.OnvifPort = deviceUri.Port;
+            // A changed address (especially a changed scheme) can mean the device's own capability
+            // report is now stale — a probe that never ran against https, for instance. Not fatal if
+            // it fails: the address change itself is still saved, and the existing "Probe failed" UI
+            // on Cameras/Edit already tells the operator what's wrong. IntegrationBaseUri needs no
+            // separate update — NodeService.ResolveIntegrationBaseUri derives it from
+            // DeviceServiceUri fresh on every config generation, never stored.
+            await db.SaveChangesAsync(ct);
+            try { await ProbeAsync(id, ct); } catch { /* surfaced to the operator via LastError, not thrown here */ }
+            return;
+        }
 
         await db.SaveChangesAsync(ct);
     }

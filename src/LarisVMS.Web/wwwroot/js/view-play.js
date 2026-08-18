@@ -8,6 +8,17 @@ window.larisvmsViewPlay = (function () {
 
     var CELL_HEIGHT = 60; // matches the editor's GridStack cellHeight, for a consistent look
     var phoneQuery = window.matchMedia('(max-width: 767.98px)');
+    // A phone held sideways is wider than the phone breakpoint but only ~400px tall, so it used to
+    // fall through to the desktop grid — 12 columns squeezed into ~840px (≈70px each) while rows
+    // stayed pinned at CELL_HEIGHT. Column width tracks the viewport; row height didn't, so every
+    // cell came out far taller and narrower than the box the layout was designed in, and
+    // object-fit:contain letterboxed the video into a thin band with black above and below. That's
+    // the "squished vertically to almost nothing" report. Anything this short instead scales its
+    // rows to fit the whole view on screen at once (see fittedRowHeight), which is what you want on
+    // a phone in landscape regardless of how the layout was built.
+    var shortQuery = window.matchMedia('(max-height: 600px)');
+    var GRID_GAP = 6;
+    var MIN_ROW_HEIGHT = 12; // a floor, so a pathological layout can't collapse cells to zero
 
     var opts = null;
     var cells = [];
@@ -30,15 +41,33 @@ window.larisvmsViewPlay = (function () {
         return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
+    // Positioning classes for the motion/detection badges, from the admin's chosen corner
+    // (Events.BadgeCorner — allowlisted server-side, so an unknown value here can only mean an older
+    // page and falls back to top-left rather than emitting nothing).
+    //
+    // The bottom corners are already occupied: bottom-right holds every tile's hover controls, and
+    // bottom-left holds a playback-mode cell's mini timeline. Badges placed there get lifted clear
+    // of that row instead of landing on top of it — mb-5 (3rem) clears both the ~1.75rem control
+    // buttons and the 30px timeline canvas with room to spare. Top corners need no such offset.
+    function badgePositionClasses() {
+        switch (opts && opts.badgeCorner) {
+            case 'TopRight': return 'top-0 end-0 m-1';
+            case 'BottomRight': return 'bottom-0 end-0 ms-1 me-1 mb-5';
+            case 'BottomLeft': return 'bottom-0 start-0 ms-1 me-1 mb-5';
+            default: return 'top-0 start-0 m-1';
+        }
+    }
+
     function buildCellHtml(cell) {
         var cam = cameraById[cell.cameraId];
         var name = cam ? cam.name : '';
+        var badgePos = badgePositionClasses();
         return (
             '<div class="h-100 d-flex flex-column border rounded overflow-hidden" data-camera-tile="' + cell.cameraId + '">' +
                 '<div class="view-cell-frame position-relative flex-grow-1 bg-black" style="min-height: 0;">' +
                     '<video class="view-cell-video" style="width:100%; height:100%; object-fit:contain;" muted playsinline></video>' +
                     '<div class="position-absolute top-50 start-50 translate-middle text-white small text-center px-2 view-cell-status" role="status" aria-live="polite"></div>' +
-                    '<span class="badge bg-danger position-absolute top-0 start-0 m-1 live-motion-badge d-none"' +
+                    '<span class="badge bg-danger position-absolute ' + badgePos + ' live-motion-badge d-none"' +
                         ' title="Motion detected — movement with no object class attached">🌀 Motion</span>' +
                     // Filled in by live-view.js's poller from the camera's own object analytics.
                     // Sits under the motion badge's corner rather than beside it, since the two are
@@ -48,7 +77,7 @@ window.larisvmsViewPlay = (function () {
                     // classes at once (a person walking a dog past a car is three), and every one of
                     // them gets its own badge. Without the cap they'd run off the edge of a small
                     // cell in a dense grid rather than stacking onto a second line.
-                    '<div class="position-absolute top-0 start-0 m-1 d-flex flex-wrap gap-1 live-detection-badges"' +
+                    '<div class="position-absolute ' + badgePos + ' d-flex flex-wrap gap-1 live-detection-badges"' +
                         ' style="max-width: calc(100% - .5rem);"></div>' +
                     // Only shown once this one cell has been toggled into playback mode (see the
                     // view-cell-playback button below) — every other cell keeps showing pure live
@@ -197,6 +226,14 @@ window.larisvmsViewPlay = (function () {
                             return [];
                         }
                     },
+                    // Same hover-preview behavior as the Playback page's per-camera timeline —
+                    // timeline.js only registers it when this option is present, which is why the
+                    // mini timeline had none. Simpler than Playback's version: a View cell's
+                    // timeline is bound to one camera for its whole life, so there's no primary
+                    // selection to read at hover time.
+                    getThumbnailUrl: function (atMs) {
+                        return '/playback-thumbnail/' + cameraId + '?atUtc=' + encodeURIComponent(new Date(atMs).toISOString());
+                    },
                     onScrub: function (ms) { if (pbPlayer) pbPlayer.seekTo(ms, pbPlaying); }
                 });
             }
@@ -262,18 +299,47 @@ window.larisvmsViewPlay = (function () {
         return rows;
     }
 
-    function renderDesktop(container) {
+    // Row height that makes the tallest row-span in the layout end exactly at the bottom of the
+    // window. Measured from the grid's own live position rather than a guessed toolbar height, so it
+    // stays correct in kiosk mode (nav + toolbar hidden) and on any device chrome. Returns null when
+    // there's nothing to fit, leaving the caller on the fixed CELL_HEIGHT path.
+    function fittedRowHeight(container, visible) {
+        if (!visible.length) return null;
+        var totalRows = visible.reduce(function (max, c) { return Math.max(max, c.y + c.h); }, 0);
+        if (totalRows <= 0) return null;
+
+        var available = window.innerHeight - container.getBoundingClientRect().top - GRID_GAP;
+        var forGaps = GRID_GAP * (totalRows - 1);
+        return Math.max(MIN_ROW_HEIGHT, (available - forGaps) / totalRows);
+    }
+
+    // Re-fits without re-rendering. A full render() tears down and restarts every camera's MSE
+    // session, which is far too heavy for a resize or a fullscreen toggle — only the container's
+    // row height actually needs to change.
+    function applyFittedRowHeight() {
+        if (!shortQuery.matches) return;
+        var container = document.getElementById(opts.gridElId);
+        if (!container) return;
+        var visible = cells.filter(function (c) { return cameraById[c.cameraId]; });
+        var rowHeight = fittedRowHeight(container, visible);
+        if (rowHeight !== null) container.style.gridAutoRows = rowHeight + 'px';
+    }
+
+    function renderDesktop(container, fitToHeight) {
         var visible = cells.filter(function (c) { return cameraById[c.cameraId]; });
         container.style.display = 'grid';
         container.style.gridTemplateColumns = 'repeat(12, 1fr)';
-        container.style.gridAutoRows = CELL_HEIGHT + 'px';
-        container.style.gap = '6px';
+        container.style.gap = GRID_GAP + 'px';
         container.innerHTML = '';
 
         if (!visible.length) {
+            container.style.gridAutoRows = CELL_HEIGHT + 'px';
             container.innerHTML = '<p class="text-muted">This view has no cameras yet.</p>';
             return;
         }
+
+        var rowHeight = fitToHeight ? fittedRowHeight(container, visible) : null;
+        container.style.gridAutoRows = (rowHeight === null ? CELL_HEIGHT : rowHeight) + 'px';
 
         visible.forEach(function (cell) {
             var el = document.createElement('div');
@@ -318,11 +384,20 @@ window.larisvmsViewPlay = (function () {
         });
     }
 
+    // Three layouts, checked in this order:
+    //   short viewport  → the saved layout with rows scaled to fit the window (phone in landscape,
+    //                     and any short window). Uses the real layout, so `hideOnPhone` does not
+    //                     apply — that flag belongs to the derived stack below, which is the only
+    //                     layout this app invents rather than replays.
+    //   narrow viewport → the derived single/two-column phone stack (phone in portrait).
+    //   otherwise       → the saved layout at the editor's own fixed row height.
     function render() {
         stopAll();
         var container = document.getElementById(opts.gridElId);
         if (!container) return;
-        if (phoneQuery.matches) renderMobile(container); else renderDesktop(container);
+        if (shortQuery.matches) renderDesktop(container, true);
+        else if (phoneQuery.matches) renderMobile(container);
+        else renderDesktop(container, false);
     }
 
     function wireKiosk(kioskBtnId, navElId, toolbarElId) {
@@ -340,6 +415,10 @@ window.larisvmsViewPlay = (function () {
             // shortcut is what exits fullscreen while it's gone, same as any other fullscreen page.
             if (nav) nav.style.display = isFullscreen ? 'none' : '';
             if (toolbar) toolbar.style.display = isFullscreen ? 'none' : '';
+            // Hiding the nav and toolbar just handed the grid ~100px of height it didn't have a
+            // moment ago (and takes it back on exit) — re-fit rather than leave the view sized for
+            // the wrong window. Not a re-render: nothing about the tiles themselves changed.
+            applyFittedRowHeight();
         });
     }
 
@@ -366,18 +445,34 @@ window.larisvmsViewPlay = (function () {
         cameraById = {};
         (o.cameras || []).forEach(function (c) { cameraById[c.id] = c; });
 
-        // What Pages/Live redirects to on its next visit. Not recorded for a tour hop — a tour
-        // rotates through views on its own timer, so whichever one it happened to be sitting on when
-        // the tab closed isn't a deliberate choice worth restoring later.
+        // What Pages/Live redirects to on its next visit — read server-side now (Live/Index.cshtml.cs
+        // OnGetAsync), not client-side, so the choice follows the user to another browser/device
+        // instead of resetting there. Not recorded for a tour hop — a tour rotates through views on
+        // its own timer, so whichever one it happened to be sitting on when the tab closed isn't a
+        // deliberate choice worth restoring later.
         if (o.currentViewId && !o.isTour) {
-            try { localStorage.setItem('larisvms.lastViewId', o.currentViewId); } catch (e) { /* private mode */ }
+            window.larisvmsPreferences.set('lastViewId', o.currentViewId);
         }
 
         render();
 
+        // A full re-render only when the layout *mode* actually changes — crossing either breakpoint
+        // means a different layout, which does need the tiles rebuilt.
         var onModeChange = function () { render(); };
-        if (phoneQuery.addEventListener) phoneQuery.addEventListener('change', onModeChange);
-        else if (phoneQuery.addListener) phoneQuery.addListener(onModeChange); // Safari < 14
+        [phoneQuery, shortQuery].forEach(function (query) {
+            if (query.addEventListener) query.addEventListener('change', onModeChange);
+            else if (query.addListener) query.addListener(onModeChange); // Safari < 14
+        });
+
+        // Ordinary resizes inside the same mode only need the row height recomputed. Debounced and
+        // deliberately not a re-render: rebuilding tiles would drop and restart every camera's MSE
+        // session, and iOS fires resize repeatedly through an orientation change and again as the
+        // URL bar collapses.
+        var resizeTimer = null;
+        window.addEventListener('resize', function () {
+            if (resizeTimer) clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(applyFittedRowHeight, 150);
+        });
 
         wireKiosk(o.kioskBtnId, o.navElId, o.toolbarElId);
         if (o.isTour) wireTour(o.tourViewIds, o.tourIndex, o.tourIntervalSeconds);

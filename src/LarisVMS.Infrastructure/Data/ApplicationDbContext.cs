@@ -32,6 +32,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     // ── Config / identity ────────────────────────────────────────────────────
     public DbSet<Setting> Settings => Set<Setting>();
     public DbSet<SettingOverride> SettingOverrides => Set<SettingOverride>();
+    public DbSet<UserPreference> UserPreferences => Set<UserPreference>();
     public DbSet<Permission> Permissions => Set<Permission>();
     public DbSet<CameraAccess> CameraAccesses => Set<CameraAccess>();
     public DbSet<AppVersion> AppVersions => Set<AppVersion>();
@@ -83,6 +84,14 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
         {
             e.Property(x => x.Key).HasMaxLength(250).IsRequired();
             e.HasIndex(x => new { x.Scope, x.ScopeId, x.Key }).IsUnique();
+        });
+
+        // ── UserPreference ───────────────────────────────────────────────────
+        builder.Entity<UserPreference>(e =>
+        {
+            e.Property(x => x.UserId).HasMaxLength(450).IsRequired();
+            e.Property(x => x.Key).HasMaxLength(250).IsRequired();
+            e.HasIndex(x => new { x.UserId, x.Key }).IsUnique();
         });
 
         // ── Permission ───────────────────────────────────────────────────────

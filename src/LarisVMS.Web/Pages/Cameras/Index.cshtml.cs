@@ -2,12 +2,14 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using LarisVMS.Core.Entities;
+using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
 
 namespace LarisVMS.Web.Pages.Cameras;
 
 [Authorize("Cameras.View")]
-public class IndexModel(ICameraService cameraService, INodeService nodeService, ISettingsResolver settings) : PageModel
+public class IndexModel(ICameraService cameraService, INodeService nodeService, ISettingsResolver settings,
+    ICameraAccessService cameraAccess) : PageModel
 {
     public List<Camera> Cameras { get; set; } = [];
     public List<Node> Nodes { get; set; } = [];
@@ -18,6 +20,13 @@ public class IndexModel(ICameraService cameraService, INodeService nodeService, 
     public async Task OnGetAsync()
     {
         Cameras = await cameraService.ListAsync();
+
+        // Narrows to whatever CameraAccess grants this principal for View — null means unrestricted
+        // (Administrator, an All-scope grant, or — the common case for every deployment that has
+        // never touched this feature — zero CameraAccess rows at all for this user/their roles).
+        var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(User, CameraAccessActions.View);
+        if (accessible is not null) Cameras = Cameras.Where(c => accessible.Contains(c.Id)).ToList();
+
         Nodes = await nodeService.ListAsync();
         StorageUsedBytes = await cameraService.GetStorageUsageAsync();
         StaleSegmentNodeIds = await cameraService.GetStaleSegmentNodeIdsAsync();

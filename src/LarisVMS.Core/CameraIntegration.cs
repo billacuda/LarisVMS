@@ -32,6 +32,14 @@ public interface ICameraIntegrationProvider
     /// <summary>One line an admin can read to understand what turning this on actually gets them.</summary>
     string Summary { get; }
 
+    /// <summary>This provider's own version, independent of the application's — a provider changes
+    /// when its vendor's API or event-code table does, which has nothing to do with the release
+    /// cadence of everything around it. Starts at 1.0.0 and is bumped whenever the provider's own
+    /// behavior changes, so `Admin → Plugins` can answer "which version of the Dahua integration is
+    /// this deployment actually running" without reading the changelog. Shown as-is, so keep it
+    /// parseable as a normal three-part version.</summary>
+    string Version { get; }
+
     /// <summary>Whether this provider handles a camera reporting this make/model over ONVIF
     /// (Camera.Manufacturer/Model, populated by GetDeviceInformation on every probe).</summary>
     bool Supports(string? manufacturer, string? model);
@@ -68,6 +76,12 @@ public sealed class DahuaCgiIntegrationProvider : ICameraIntegrationProvider
 
     public string Key => ProviderKey;
     public string DisplayName => "Dahua / Amcrest smart events";
+
+    /// <summary>1.0.0 — the provider as first shipped, plus the object-class expansion that mapped
+    /// LeftDetection/TakenAwayDetection to Object appeared/missing and added animal and pet codes.
+    /// Bump this whenever the code table or the session's behavior changes.</summary>
+    public string Version => "1.0.0";
+
     public string Summary =>
         "Reads person and vehicle detections from the camera's own Smart Motion Detection over " +
         "Dahua's CGI event API. These cameras classify objects onboard but don't publish that over " +

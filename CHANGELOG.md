@@ -5,6 +5,389 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.102.0] - 2026-08-18
+
+### Added
+
+- **Live view and playback can now run on a port of their own**, separate from the management
+  interface (`Admin → Settings → Security`). Once set, `/live`, `/playback-segment`,
+  `/playback-thumbnail`, `/export-download`, and camera snapshots stop responding on the management
+  port, and every other route stops responding on the new one — useful for firewalling the two
+  differently, or exposing only one beyond the LAN. The setting alone doesn't open a socket: IIS's
+  own site bindings do that, so this only takes effect once a matching `New-WebBinding` exists for
+  the same site (documented in the README, alongside the setting's own help text). Left blank (the
+  default), nothing changes — every route keeps sharing whatever port(s) IIS already binds, exactly
+  as before this feature existed.
+
+**This closes out M14** (identity, preferences, access control) — the last of five passes shipped
+across this session: per-role session lifetime, server-backed user preferences, a per-user column
+picker, per-camera access control enforcement, and now this.
+
+Web-only, no node change.
+
+## [0.101.0] - 2026-08-18
+
+### Added
+
+- **Per-camera access control is now enforced.** `CameraAccess` — the per-camera/group ACL layered
+  on top of the global Cameras/Playback/Exports permissions — has existed in the schema since M1 but
+  was never written to or read by anything. It now gates the camera list, live viewing, Playback, and
+  export creation, and gets its first admin surface: `Admin → Settings → Camera Access`, granting a
+  role View/Playback/Export/PTZ/Talk/Configure access to every camera, one camera group (cascading to
+  its sub-groups), or a single camera.
+
+  **A role with no grants is unrestricted and sees every camera** — this table narrows access, it
+  doesn't default-deny the moment it exists unpopulated. Every existing deployment's every existing
+  role has zero grants today, so this changes nothing until an admin deliberately adds one.
+
+  Enforcement is at the page level: a camera outside a viewer's grants is removed from the list they
+  see, and from the data feed a View or Playback page hands to the browser, so a restricted camera's
+  stream metadata never reaches the client in the first place. Export additionally checks
+  server-side on job creation, since it produces a persistent downloadable file rather than a
+  read-only view. Role-only for now — an individual-user grant is schema-ready and enforced
+  identically by the same service, it just has no admin picker yet, since this app has no
+  user-management page to choose a user from.
+
+  **Known scoping boundary, not silently left out:** the underlying playback data-proxy endpoints
+  (segment/thumbnail streaming, the timeline API) don't yet independently re-check CameraAccess —
+  once a camera is filtered out of a viewer's UI they have no path to its id through this app, but a
+  client that already knew another camera's id out-of-band could still request it directly. Closing
+  that fully is a larger, separate hardening pass across several endpoints, tracked on the roadmap
+  alongside the REST API's own permission model rather than folded in here.
+
+Web-only, no node change.
+
+## [0.100.0] - 2026-08-18
+
+### Added
+
+- **A per-user column picker** — a "Columns" toggle on Cameras and the Dashboard lets you hide
+  columns you don't care about (Cameras: Host, HTTPS, Group, Node, Manufacturer/Model, Profiles,
+  Capabilities, Streams, Storage used, Retention, Last probed; Dashboard: Node, FPS, Bitrate, Audio,
+  Reconnects, Last report). The choice is saved through the same per-user preference store as theme
+  and table page size, so it follows you across devices.
+
+  Built as a reusable module (`column-picker.js`), not a one-off for these two pages: any table opts
+  in with `data-column-picker` on the `<table>` and `data-col="<key>"` on whichever `<th>` elements
+  should be toggleable — a checkbox column, the primary name/link column, and an actions column are
+  simply left without the attribute and always show. Adding it to another table needs no further
+  script work, only those markup attributes.
+
+  Hiding is done with injected CSS scoped to that table's id, not by touching individual `<td>`
+  elements — the same reasoning the Dashboard's existing thumbnail toggle already used: it composes
+  for free with sorting, pagination, and a page's own AJAX re-render (the Dashboard rebuilds its
+  entire `<tbody>` every 60 seconds) without any of them needing to know a column picker exists.
+
+Web-only, no node change.
+
+## [0.99.0] - 2026-08-18
+
+### Added
+
+- **User preferences now persist in the database, not just `localStorage`.** Theme, the
+  last-watched Live view, the dashboard thumbnail-column toggle, every table's remembered page
+  size, and Playback's remembered scrub position and 24-hour-clock toggle all used to live only in
+  the browser — a preference set on one device simply didn't exist on another, and reset outright on
+  a fresh sign-in from a new machine. All six now follow the signed-in user everywhere, through a new
+  `UserPreference` table and a small `GET/PUT /api/preferences` API.
+
+  Theme is the one exception worth calling out: the anti-flash script that applies it before first
+  paint can't wait on a network round trip, so it still reads `localStorage` first for that instant
+  apply, and only adopts the server's value on a browser/device that has never stored a theme choice
+  of its own — a normal reload on a device you've used before never flashes.
+
+  The last-watched Live view's redirect moved fully server-side (`Live/Index.cshtml.cs`) rather than
+  a client script reading the preference after page load — one fewer round trip, and it now also
+  degrades correctly if the saved view was since deleted or unshared, falling back to the first
+  visible view instead of a client script's own `indexOf` check just returning nothing.
+
+Web-only, no node change.
+
+## [0.98.0] - 2026-08-18
+
+### Added
+
+- **Session lifetime is now configurable per role** (`Admin → Settings → Security`), replacing the
+  previous fixed 60-minute cookie timeout that was expiring sessions too fast. Defaults to 24 hours;
+  **0 means that role never expires.** A user holding more than one role is bound by whichever role's
+  own limit is shortest — a role set to "never expire" does not let a user escape a stricter role's
+  own limit just by also holding it, so the setting can't be quietly bypassed by role combination.
+
+  Enforced in the cookie authentication pipeline's `OnValidatePrincipal` handler, chained after (not
+  replacing) ASP.NET Core Identity's own security-stamp revalidation — a password change still signs
+  a user out everywhere immediately, unaffected by this. The cookie's own outer expiry moved from 60
+  minutes to just over a year, since the real per-role cutoff is now enforced here instead; a role
+  actually configured for 0 now behaves as truly unlimited rather than silently capped by the cookie
+  itself.
+
+Web-only, no node change.
+
+## [0.97.0] - 2026-08-18
+
+### Fixed
+
+- **The Viewer role has never had a single working permission, for any resource, since it was first
+  seeded.** Every `Permission` row `SetupService.SeedViewerPermissionsAsync` writes stored the
+  literal string `"Viewer"` as `RoleId` — but every place this app actually checks permissions
+  (`PermissionService.HasPermissionAsync`, and `GetGrantedAsync` added in 0.95.0 for the nav) resolves
+  a role *name* to its real database Id first, then compares `Permission.RoleId` against that Id, not
+  against the name. `IdentityRole.Id` is always a freshly generated GUID, never equal to the role's
+  own name, so a seeded row reading `RoleId = "Viewer"` could never match anything, for any resource,
+  from the day this method was first written. Invisible in practice because the only role this
+  deployment (or most single-operator deployments) ever really exercises is Administrator, which
+  bypasses the `Permission` table entirely via its own implicit-everything short-circuit — and this
+  app has no role-management UI yet to even assign a second user to Viewer and notice.
+
+  A previous pass (0.94.0) fixed a resource-naming mismatch in the same method and reported it as
+  resolved; that fix was real but sat directly on top of this deeper bug, so it made no observable
+  difference — corrected in place in 0.94.0's own entry above rather than left standing. Fixed by
+  seeding the role's real `Id` instead of its name. A migration repairs any rows a completed setup
+  already seeded with the broken value, rather than leaving them dead in place.
+
+  Caught while building 0.95.0's permission-aware nav, by re-deriving this from the exact lookup code
+  the nav now reads through rather than trusting this method's own prior doc comment — the same
+  discipline that found the 0.94.0 issue in the first place. Two new tests exercise the real
+  seed-then-resolve pipeline end to end (not just "is the stored value the right type"), and were
+  confirmed to fail against the pre-fix code before confirming they pass against the fix.
+
+Web-only — no node change.
+
+## [0.96.0] - 2026-08-18
+
+### Added
+
+- **A new HTTPS column on the Cameras list** — 🔒 when a camera's device service URL uses
+  `https://`, blank otherwise. Read directly from the stored URL rather than a separate flag: the
+  scheme is already the single source of truth for whether a camera is reached over HTTPS (both
+  `AddAsync` and `UpdateAsync` validate `DeviceServiceUri` as an absolute URI before saving), so a
+  second, independently-settable indicator could only ever drift from what the URL actually says.
+
+Web-only, no node change.
+
+## [0.95.0] - 2026-08-18
+
+### Changed
+
+- **Nodes moved out of the Admin dropdown into its own top-level nav button**, next to Cameras —
+  fleet monitoring is something an operator checks routinely, not an occasional administrative task,
+  matching why Logs got the same promotion a release ago. Still gated by `Nodes.Edit`, unchanged.
+- **The navbar is now permission-aware: every button is hidden unless the signed-in user actually
+  holds the permission the page behind it requires**, rather than always showing the full menu and
+  relying on the destination page to redirect or 403. Each button's check mirrors its target page's
+  own `[Authorize]` policy exactly (Live/Cameras → `Cameras.View`, Playback → `Playback.View`, and so
+  on), so the nav can never promise access a click would then refuse. The Logs and Settings buttons
+  each check an OR of their tabs' two distinct policies (`Logs.View`/`SystemLogs.View`,
+  `Settings.Edit`/`Backups.Edit`), so a user holding only one still sees the button rather than losing
+  it because they lack the other tab's permission; the Admin dropdown itself now only appears when at
+  least one item inside it would.
+
+### Added
+
+- **`IPermissionService.GetGrantedAsync`** — every `(Resource, Action)` pair a signed-in user's roles
+  grant, resolved in at most one database round trip regardless of how many of them get checked
+  afterward. This is what makes the permission-aware navbar affordable: it renders on every single
+  page in the app, including the anonymous Login page, and a naive per-button
+  `IAuthorizationService.AuthorizeAsync` call would have meant several extra database round trips
+  *per button* on every request (`HasPermissionAsync` alone does up to four). Role names are read
+  straight off the signed-in user's own claims — already on the authentication cookie via
+  `AddRoles<IdentityRole>()` — rather than re-queried, so an Administrator (the common case) costs
+  nothing at all beyond that claims read.
+
+### Known limitations
+
+- **The Viewer role's seeded permissions cover only a handful of resources** — most nav buttons
+  (Live, Cameras, Playback, Exports, Views, Nodes) have no seeded Viewer permission at all yet, a gap
+  this pass surfaced rather than caused (nothing here changes what Viewer is seeded with). A Viewer
+  will see a much shorter navbar than an Administrator until RBAC's remaining gap (per-camera
+  `CameraAccess` enforcement and a real permission-management UI, both already on the roadmap) closes.
+
+Web-only, no node change.
+
+## [0.94.0] - 2026-08-18
+
+### Changed
+
+- **Logs moved out of the Admin dropdown into their own top-level nav button**, with Audit Logs and
+  System Logs as two tabs of one `Logs` page rather than two separate, easy-to-lose entries. Each tab
+  is still a real page with its own route and its own permission gate (`Logs.View` /
+  `SystemLogs.View`) — the tab strip is plain navigation between them, not a client-side panel swap,
+  so neither page's existing filters or pagination needed to change.
+- **Settings is now one page with tabs, sorted alphabetically: Backups, Branding, Cameras, Events,
+  Logs, Nodes, Recording, Storage and Retention.** This replaces five separate Admin dropdown entries
+  (Settings, Branding, Event Colors, Backups, plus the settings half of Node Builds' own page) with
+  one place, and reorganizes every existing global setting into the category it actually belongs to
+  rather than the order it happened to be added in. Each tab is still its own page with its own
+  `[Authorize]` — Backups keeps its own `Backups.Edit` gate rather than being folded into
+  `Settings.Edit`, and Node Builds' approve/reject queue stays at its own `Admin/NodeBuilds` route
+  (gated by `Nodes.Edit`) rather than being merged in; the Nodes tab shows a live pending-count
+  summary and a link to it instead. The Admin dropdown itself shrinks from nine items to three
+  (Nodes, Settings, Plugins).
+- Old routes (`Admin/Branding`, `Admin/EventColors`, `Admin/Backup`, `Admin/Logs`,
+  `Admin/SystemLogs`) now redirect to their new home, same pattern this app already used for
+  `Admin/Retention`'s own stub — an old bookmark still lands somewhere real.
+
+### Added
+
+- **Audit log retention** (`Admin → Settings → Logs`), new — the audit trail had no sweep at all
+  before this; every row was kept forever. The default stays **0 (forever)**, not the application
+  log's 14-day default: an upgrade must never start silently deleting a compliance record, so a
+  bounded window is opt-in only.
+- **System log path is now shown** on the same tab (read-only) alongside its retention. It can't be
+  a normal editable field: the application log is written before this app's settings database is
+  reachable, specifically so a startup failure still gets recorded to disk. Change it via the new
+  `Logs:Path` configuration key (or the `LarisVMS__Logs__Path` environment variable) and restart.
+
+### Fixed
+
+- **The Viewer role's seeded audit-log permission never actually granted audit-log access.** Initial
+  setup seeded `AuditLog.View`, but the audit log page has always required the policy
+  `Logs.View` — a resource-name mismatch that predates this pass.
+
+  **Correction (see 0.97.0): this fix was real but incomplete** — a deeper bug directly underneath it
+  meant the resource-name fix alone still didn't grant Viewer anything. Every seeded row's `RoleId`
+  held the literal string `"Viewer"` rather than the role's actual database Id, so no seeded
+  permission — for *any* resource, not just this one — has ever matched what
+  `PermissionService.HasPermissionAsync`/`GetGrantedAsync` actually check it against. The real fix
+  landed two releases later; see 0.97.0 for the full explanation and the migration that repairs
+  already-seeded rows.
+
+Web-only — no node change.
+
+## [0.93.0] - 2026-08-17
+
+### Added
+
+- **A camera's device service URL is now editable after it's added** (`Cameras → Edit`), not just at
+  creation. There was previously no path to it at all — the field rendered disabled with no
+  corresponding parameter on the update call — so switching a camera between `http://` and
+  `https://`, or following an IP change, meant deleting and re-adding the camera and losing its
+  history association. Saving a real change re-derives `Host`/port from the new URL exactly as adding
+  a camera already does, and triggers an automatic re-probe, since the device's own capability report
+  can otherwise go stale against the new address; a probe failure is reported the same way an
+  ordinary failed probe already is, without blocking the address change itself from saving. Leaving
+  the field as submitted (the normal case) touches nothing, matching how credential fields already
+  behave on this form.
+
+### Fixed
+
+- **The Dahua/Amcrest plugin's CGI event connection still validated the camera's TLS certificate**,
+  the one camera-facing HTTP client in this app that did. Both ONVIF clients (web and node) and the
+  node's own reporting connection already disable validation deliberately, since a LAN camera reached
+  over HTTPS almost universally presents a self-signed certificate with no CA behind it — so an
+  HTTPS camera's ONVIF traffic worked while its event stream silently never connected. Brought in
+  line with every other camera-facing client in the app.
+
+**LarisVMS.Node change — `install-node.ps1` re-run needed on every recorder.**
+
+## [0.92.0] - 2026-08-17
+
+### Added
+
+- **Cameras are re-probed automatically once a day** at a time you choose
+  (`Admin → Settings → Cameras`, default 03:00 server local time, and switchable off). This picks up
+  a camera that has gained, lost, or re-encoded a stream without anyone remembering to press
+  Re-probe. Per-stream enable/disable and custom names are already carried across a probe and streams
+  are matched by profile token, so re-probing an unchanged camera changes nothing.
+
+  Cameras are probed **one at a time, not in parallel** — probing opens real ONVIF conversations with
+  a device, and a fleet-wide burst of them is exactly what makes inexpensive cameras drop their other
+  connections, including the RTSP session being recorded. One unreachable camera doesn't end the pass
+  for the cameras after it; every run writes a single audit entry with the successes and any
+  failures, attributed to the system rather than a user.
+
+  The schedule is evaluated on a one-minute tick rather than by sleeping until the next occurrence,
+  so changing the time takes effect immediately instead of after a restart. A run missed because the
+  application was down is skipped rather than queued — the next day's run does the same work.
+
+## [0.91.0] - 2026-08-17
+
+### Added
+
+- **Plugins page** (`Admin → Plugins`) listing every camera integration this build ships, each with
+  its own version, and — more usefully — which cameras are actually using it. Providers are compiled
+  in and matched automatically from the make and model a camera reports while probing, so there is
+  nothing to install or enable; the page exists because answering "what's running, at what version,
+  on which cameras" previously meant reading the source. It also surfaces a case that was silent
+  until now: a camera whose stored integration key matches no provider in this build (a downgrade, or
+  a provider removed later) keeps recording but gets no vendor events, which the registry tolerates
+  deliberately rather than failing node config generation over.
+- **Each integration provider now carries its own version**, starting at 1.0.0, bumped when that
+  provider's own behavior changes. Deliberately independent of the application version: a provider
+  changes when its vendor's API or event-code table does, on nobody else's schedule.
+- **Event tag position is configurable** (`Admin → Settings → Live view`). The motion badge and
+  object-detection badges can sit in any corner of a live tile, defaulting to top left as before.
+  The bottom corners already hold other controls — hover controls bottom right, and a playback-mode
+  cell's mini timeline bottom left — so badges placed there are lifted clear of that row rather than
+  overlapping it. The stored value is allowlisted on the way in and out, since it drives positioning
+  classes in the browser.
+
+## [0.90.0] - 2026-08-17
+
+### Fixed
+
+- **Every deploy deleted the entire application log history**, which is the actual reason
+  `Admin → System Logs` only ever offered the current day. Retention was never the problem: the
+  sweep has always kept 14 days and the viewer has always listed every file it finds. `deploy.ps1`
+  mirrors the publish output onto the site with `robocopy /MIR`, which deletes anything at the
+  destination that isn't in the source, and while `data-protection-keys`, `recordings`, `spool`, and
+  `exports` were excluded, `logs` was not — so every deploy mirrored the log directory away, and on a
+  day with several deploys nothing older than the last one could survive. `logs` is now excluded too.
+  Making retention configurable (below) would not have fixed this on its own.
+
+### Added
+
+- **Application log retention is now configurable** (`Admin → Settings → Logs`), replacing the
+  hardcoded 14 days. **0 keeps logs forever.** The value is re-read on every sweep rather than
+  captured at startup, so a change takes effect on the next cycle without an app pool recycle. A
+  recorder node still sweeps its own logs on its own fixed schedule — reaching those needs a
+  `NodeConfig` field and a node release, so it is deliberately not part of this change.
+- **View pickers now show each view's camera count** — `House (6)` rather than `House` — on both
+  Live (`Views/Play`) and Playback. Counts cells, matching the existing Cameras column on
+  `Views/Index` so the two can't disagree for a view that places one camera in several cells.
+
+## [0.89.2] - 2026-08-17
+
+### Fixed
+
+- **Playback squeezed its video grid to a sliver on a phone in landscape** — the same symptom
+  0.89.1 fixed on Views/Play, but a different cause, which is why that fix didn't reach here.
+  `#pbLayout` is a fixed-height flex column: the toolbar and the timeline strip take their natural
+  height and the video grid takes whatever remains. At desktop height that leaves plenty; at roughly
+  390px it does not, because the strip's own chrome — two labels, the current-time readout, two 30px
+  canvases, and a usage hint that wraps to four lines on a narrow screen — plus a toolbar that wraps
+  claimed nearly the whole column. On a short viewport the hint and the two labels are now hidden and
+  the vertical padding tightened, which hands the grid back roughly 100px without touching the grid
+  itself. Both timeline canvases and the clickable current-time readout stay, since those are
+  controls rather than orientation text; the hint was already hidden by the same reasoning when a
+  timeline is moved into a fullscreened tile.
+
+The Views editor is deliberately unchanged: GridStack's fixed 60px `cellHeight` there defines what a
+saved layout's row units mean, so scaling rows on a short viewport would make the authoring surface
+disagree with what it produces.
+
+## [0.89.1] - 2026-08-17
+
+### Fixed
+
+- **A phone held sideways squeezed every camera into a thin horizontal band.** Landscape makes a
+  phone wider than the 768px phone breakpoint, so the saved view rendered through the desktop grid —
+  12 columns compressed into roughly 840px (about 70px each) while row height stayed pinned at the
+  editor's fixed 60px. Column width tracks the viewport; row height did not, so every cell came out
+  far taller and narrower than the box its layout was designed in, and `object-fit: contain`
+  letterboxed the video into a strip with black above and below it. A short viewport now scales row
+  height so the entire view fits the window at once — measured from the grid's own live position, so
+  it stays correct in kiosk mode where the nav and toolbar are hidden. Resizing and rotating re-fit
+  without rebuilding the tiles, since a rebuild would drop and restart every camera's stream.
+  `hideOnPhone` deliberately still applies only to the derived portrait stack: landscape replays the
+  real saved layout rather than inventing one, so there is nothing for a phone-specific flag to mean
+  there.
+- **Hovering a View cell's mini-timeline showed no preview thumbnail**, though the Playback page's
+  timeline had shown them since 0.60.0. Both draw from the same `timeline.js`, which only registers
+  the hover-preview behavior when a `getThumbnailUrl` option is supplied — the mini-timeline passed
+  bucket and scrub callbacks but never that one, so the feature was simply never switched on. A View
+  cell is bound to a single camera for its whole life, so it needs none of the primary-selection
+  indirection the Playback page's version carries.
+
 ## [0.89.0] - 2026-08-16
 
 ### Added

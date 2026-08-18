@@ -61,12 +61,15 @@
 </div>
 
 <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
-    @* Persisted (larisvms.dashboardShowThumbnails) so the choice survives a reload — same
-       localStorage-preference convention as the theme toggle and Playback's own remembered
-       zoom/24h-clock settings. The thumbnail <th>/<td> always exist in the table regardless of this
-       (see dashboard.js) — toggling only ever shows/hides via CSS, never adds/removes the column
-       itself, so sortable-table.js's per-column-index click handlers (bound once, on load) never see
-       their column indices shift out from under them. *@
+    @* Persisted server-side (see user-preferences.js) so the choice survives a reload and follows
+       the signed-in user across devices — same preference-service convention as the theme toggle and
+       Playback's own remembered zoom/24h-clock settings. The thumbnail <th>/<td> always exist in the
+       table regardless of this (see dashboard.js) — toggling only ever shows/hides via CSS, never
+       adds/removes the column itself, so sortable-table.js's per-column-index click handlers (bound
+       once, on load) never see their column indices shift out from under them. Kept as its own
+       switch rather than folded into the generic column picker below: showing a thumbnail is a
+       heavier, per-row network fetch, not just a display toggle on data already present, so it
+       deserves to read as a deliberate choice rather than living next to "hide the Bitrate column". *@
     <div class="form-check form-switch mb-0">
         <input class="form-check-input" type="checkbox" role="switch" id="dashboardThumbToggle">
         <label class="form-check-label" for="dashboardThumbToggle">Show thumbnails</label>
@@ -80,6 +83,7 @@
             <option value="100">100</option>
             <option value="all">All</option>
         </select>
+        <partial name="_ColumnPicker" model="@("dashboardTable")" />
     </div>
 </div>
 
@@ -94,21 +98,21 @@
 </p>
 
 <div class="table-responsive" id="dashboardTableWrap" style="@(Model.Rows.Count == 0 ? "display:none;" : "")">
-    <table class="table table-hover align-middle hide-thumb-col" id="dashboardTable" data-sortable data-paginate>
+    <table class="table table-hover align-middle hide-thumb-col" id="dashboardTable" data-sortable data-paginate data-column-picker>
         <thead>
             <tr>
                 <th class="thumb-col" data-no-sort>Thumbnail</th>
                 <th>Camera</th>
-                <th>Node</th>
+                <th data-col="node">Node</th>
                 <th data-no-sort>Status</th>
-                <th class="text-end" data-sort-numeric>FPS</th>
-                <th class="text-end" data-sort-numeric>Bitrate</th>
+                <th class="text-end" data-sort-numeric data-col="fps">FPS</th>
+                <th class="text-end" data-sort-numeric data-col="bitrate">Bitrate</th>
                 @* Sorted by sample rate, which is the only numeric part of the cell — sorting a
                    mixed "codec + rate" string alphabetically would order by codec name instead,
                    which the header gives no hint of. *@
-                <th data-sort-numeric>Audio</th>
-                <th class="text-end" data-sort-numeric>Reconnects</th>
-                <th data-sort-numeric>Last report</th>
+                <th data-sort-numeric data-col="audio">Audio</th>
+                <th class="text-end" data-sort-numeric data-col="reconnects">Reconnects</th>
+                <th data-sort-numeric data-col="lastreport">Last report</th>
             </tr>
         </thead>
         <tbody id="dashboardTableBody">

@@ -8,7 +8,7 @@
     'use strict';
 
     var POLL_INTERVAL_MS = 60000;
-    var THUMB_TOGGLE_KEY = 'larisvms.dashboardShowThumbnails';
+    var THUMB_TOGGLE_KEY = 'dashboardShowThumbnails';
 
     var table = document.getElementById('dashboardTable');
     var tbody = document.getElementById('dashboardTableBody');
@@ -27,11 +27,14 @@
         });
     }
 
+    // Server-backed (see user-preferences.js) — start() below waits for the preferences fetch to
+    // resolve before the very first render, specifically so the table's first paint already reflects
+    // the right thumbnail-column state instead of flashing it on once the value loads.
     function loadShowThumbnails() {
-        try { return localStorage.getItem(THUMB_TOGGLE_KEY) === '1'; } catch (e) { return false; }
+        return window.larisvmsPreferences.get(THUMB_TOGGLE_KEY, 'false') === 'true';
     }
     function saveShowThumbnails(show) {
-        try { localStorage.setItem(THUMB_TOGGLE_KEY, show ? '1' : '0'); } catch (e) { /* ignore */ }
+        window.larisvmsPreferences.set(THUMB_TOGGLE_KEY, show);
     }
 
     function renderSummary(data) {
@@ -142,7 +145,8 @@
             });
     }
 
-    if (thumbToggle) {
+    function initThumbToggle() {
+        if (!thumbToggle) return;
         thumbToggle.checked = loadShowThumbnails();
         table.classList.toggle('hide-thumb-col', !thumbToggle.checked);
         thumbToggle.addEventListener('change', function () {
@@ -154,6 +158,13 @@
         });
     }
 
-    poll();
-    setInterval(poll, POLL_INTERVAL_MS);
+    // Waits for the preferences fetch before the very first poll/render, so the table's first paint
+    // already reflects the right thumbnail-column state — user-preferences.js's own GET request
+    // already started as soon as its script tag ran (earlier in _Layout.cshtml, before this file),
+    // so by the time this resolves it has usually added little to no visible delay.
+    window.larisvmsPreferences.whenReady().then(function () {
+        initThumbToggle();
+        poll();
+        setInterval(poll, POLL_INTERVAL_MS);
+    });
 })();

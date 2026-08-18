@@ -1,0 +1,31 @@
+@* Shared tab strip for Settings. Each tab is a real page with its own route, matching the same
+   "tabs are just navigation between real pages, not client-side panels" reasoning as
+   Pages/Logs/_LogsTabs — several of these (Backups, Branding, Nodes) already carry real forms, file
+   upload, and table actions with their own OnPost handlers, which would be awkward and risky to
+   merge into one giant page/handler. Sorted alphabetically by label, not by any notion of importance
+   or how often a given tab is used.
+   Model: the active tab's key. *@
+@model string
+@{
+    (string Key, string Href, string Label)[] tabs =
+    [
+        ("Backups", "/Admin/Settings/Backups", "💾 Backups"),
+        ("Branding", "/Admin/Settings/Branding", "🎨 Branding"),
+        ("CameraAccess", "/Admin/Settings/CameraAccess", "🗝️ Camera Access"),
+        ("Cameras", "/Admin/Settings/Cameras", "📷 Cameras"),
+        ("Events", "/Admin/Settings/Events", "🏷️ Events"),
+        ("Logs", "/Admin/Settings/Logs", "📝 Logs"),
+        ("Nodes", "/Admin/Settings/Nodes", "🔌 Nodes"),
+        ("Recording", "/Admin/Settings/Recording", "🎥 Recording"),
+        ("Security", "/Admin/Settings/Security", "🔐 Security"),
+        ("StorageAndRetention", "/Admin/Settings/StorageAndRetention", "🗄️ Storage and Retention")
+    ];
+}
+<ul class="nav nav-tabs mb-3 flex-wrap">
+    @foreach (var (key, href, label) in tabs)
+    {
+        <li class="nav-item">
+            <a class="nav-link @(key == Model ? "active" : "")" href="@href">@label</a>
+        </li>
+    }
+</ul>

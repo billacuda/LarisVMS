@@ -1,0 +1,161 @@
+@page
+@model LarisVMS.Web.Pages.Admin.Settings.CameraAccessModel
+@using LarisVMS.Core.Enums
+@{
+    ViewData["Title"] = "Camera access";
+}
+<h1>Settings</h1>
+<partial name="_SettingsTabs" model="@("CameraAccess")" />
+
+<p class="text-muted">
+    Narrows which cameras a role can see, beyond the broad Cameras/Playback/Exports permissions —
+    an NVR needs "which cameras", not just "can view cameras at all". A role with <strong>no grants
+    below is unrestricted</strong> and sees every camera; adding a grant switches that role to seeing
+    only what its grants cover. User-specific grants (rather than role-wide) need a user-management
+    page this app doesn't have yet, so this only offers roles for now.
+</p>
+
+@if (!string.IsNullOrEmpty(Model.SavedMessage))
+{
+    <div class="alert alert-success">@Model.SavedMessage</div>
+}
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger">@Model.ErrorMessage</div>
+}
+
+<div class="card mb-3">
+    <div class="card-header fw-semibold">Grants</div>
+    <div class="table-responsive">
+        <table class="table table-sm mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Role</th>
+                    <th>Scope</th>
+                    <th>Actions granted</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var g in Model.Grants)
+                {
+                    <tr>
+                        <td>@g.RoleName</td>
+                        <td>@g.ScopeDescription</td>
+                        <td class="small font-monospace">@g.ActionsDescription</td>
+                        <td class="text-end">
+                            <form method="post" asp-page-handler="Remove" asp-route-id="@g.Id" class="d-inline"
+                                  onclick="return confirm('Remove this grant?');">
+                                <button type="submit" class="btn btn-sm btn-outline-danger">Remove</button>
+                            </form>
+                        </td>
+                    </tr>
+                }
+                @if (Model.Grants.Count == 0)
+                {
+                    <tr><td colspan="4" class="text-center text-muted py-3">No grants yet — every role sees every camera.</td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header fw-semibold">Add a grant</div>
+    <div class="card-body">
+        <form method="post" asp-page-handler="Add" class="row g-3">
+            <div class="col-sm-4">
+                <label class="form-label">Role</label>
+                <select asp-for="RoleId" class="form-select">
+                    <option value="">(choose a role)</option>
+                    @foreach (var r in Model.Roles)
+                    {
+                        <option value="@r.Id">@r.Name</option>
+                    }
+                </select>
+            </div>
+            <div class="col-sm-4">
+                <label class="form-label">Scope</label>
+                <select asp-for="ScopeType" id="scopeType" class="form-select">
+                    <option value="@CameraAccessScopeType.All">Every camera</option>
+                    <option value="@CameraAccessScopeType.Group">A camera group (and its sub-groups)</option>
+                    <option value="@CameraAccessScopeType.Camera">A single camera</option>
+                </select>
+            </div>
+            <div class="col-sm-4" id="scopeIdField" style="display:none;">
+                <label class="form-label">&nbsp;</label>
+                <select asp-for="ScopeId" id="scopeIdGroup" class="form-select" style="display:none;">
+                    <option value="">(choose a group)</option>
+                    @foreach (var grp in Model.Groups)
+                    {
+                        <option value="@grp.Id">@grp.MaterializedPath @grp.Name</option>
+                    }
+                </select>
+                <select id="scopeIdCamera" class="form-select" style="display:none;">
+                    <option value="">(choose a camera)</option>
+                    @foreach (var cam in Model.Cameras)
+                    {
+                        <option value="@cam.Id">@cam.Name</option>
+                    }
+                </select>
+            </div>
+
+            <div class="col-12">
+                <label class="form-label d-block">Actions to grant</label>
+                @foreach (var action in new[] { CameraAccessActions.View, CameraAccessActions.Playback, CameraAccessActions.Export, CameraAccessActions.Ptz, CameraAccessActions.Talk, CameraAccessActions.Configure })
+                {
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="checkbox" name="Actions" value="@action" id="action-@action">
+                        <label class="form-check-label" for="action-@action">@action</label>
+                    </div>
+                }
+                <div class="form-text">
+                    View = appears in live views. Playback = appears on the Playback page. Export,
+                    Ptz, Talk, and Configure are schema-ready for later milestones and not yet
+                    checked anywhere else in the app — granting them today has no additional effect
+                    until those features enforce them too.
+                </div>
+            </div>
+
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary">Add grant</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+@section Scripts {
+    <script>
+        (function () {
+            var scopeType = document.getElementById('scopeType');
+            var scopeIdField = document.getElementById('scopeIdField');
+            var scopeIdGroup = document.getElementById('scopeIdGroup');
+            var scopeIdCamera = document.getElementById('scopeIdCamera');
+            if (!scopeType) return;
+
+            // Two separate <select> elements sharing one visible slot rather than one dynamically
+            // repopulated <select> — whichever one is visible is also the one actually named
+            // "ScopeId" for model binding (scopeIdCamera has no name of its own; its value is copied
+            // onto the real ScopeId field on submit), so there's never a stale option value from the
+            // other list left bound.
+            function update() {
+                var isGroup = scopeType.value === '@((int)CameraAccessScopeType.Group)';
+                var isCamera = scopeType.value === '@((int)CameraAccessScopeType.Camera)';
+                scopeIdField.style.display = (isGroup || isCamera) ? '' : 'none';
+                scopeIdGroup.style.display = isGroup ? '' : 'none';
+                scopeIdCamera.style.display = isCamera ? '' : 'none';
+                scopeIdGroup.disabled = !isGroup;
+            }
+            scopeType.addEventListener('change', update);
+            update();
+
+            scopeIdCamera.addEventListener('change', function () {
+                scopeIdGroup.value = scopeIdCamera.value;
+            });
+            // Camera selection posts through the same ScopeId field as the group one — enabling the
+            // hidden group <select> and mirroring the chosen value into it (above) is simpler than a
+            // second server-side parameter, since Razor Pages model-binds ScopeId from whichever
+            // <select name="ScopeId"> value made it into the form regardless of which one was visible.
+        })();
+    </script>
+}

@@ -3,6 +3,7 @@
 @using LarisVMS.Infrastructure.Data
 @inject ApplicationDbContext LayoutDb
 @inject IBrandingService BrandingService
+@inject IPermissionService PermissionService
 @{
     // Every field is already validated by the service (see Branding.Normalize*), which is what makes
     // interpolating the colors/font into the style block below safe.
@@ -17,6 +18,34 @@
         _version = latest?.ToVersionString();
     }
     catch { /* pre-setup: no schema yet */ }
+
+    // Which nav buttons this user can actually use — one call, at most one DB round trip regardless
+    // of how many buttons below check it (see PermissionService.GetGrantedAsync's own doc comment).
+    // This renders on every single page in the app, including the anonymous Login page, so a naive
+    // per-button IAuthorizationService.AuthorizeAsync call (itself several DB round trips each, see
+    // PermissionService.HasPermissionAsync) would have meant dozens of extra queries on every request.
+    var nav = await PermissionService.GetGrantedAsync(User);
+    var isAuthenticated = User.Identity?.IsAuthenticated == true;
+    // Each button's check matches the [Authorize] on the page it links to exactly — see the comment
+    // beside each <li> below for which page's policy it mirrors. A button is only ever hidden, never
+    // disabled: a user who can't act on a page shouldn't see a dead link inviting them to try.
+    var showLive = nav.Has("Cameras", "View");
+    var showPlayback = nav.Has("Playback", "View");
+    var showExports = nav.Has("Exports", "View");
+    var showViews = nav.Has("Views", "View");
+    var showCameras = nav.Has("Cameras", "View");
+    var showNodes = nav.Has("Nodes", "Edit");
+    // Either tab's own gate — Pages/Logs/Index always redirects to Audit Logs first, but a user
+    // holding only SystemLogs.View can still reach System Logs directly, so the button must not
+    // disappear just because they lack the *other* tab's permission.
+    var showLogs = nav.Has("Logs", "View") || nav.Has("SystemLogs", "View");
+    // Same reasoning for Settings: seven of its eight tabs are gated by Settings.Edit and only
+    // Backups by its own Backups.Edit, so "can reach something behind this button" is the OR of both,
+    // not just whichever tab happens to be first (Backups, alphabetically).
+    var showSettings = nav.Has("Settings", "Edit") || nav.Has("Backups", "Edit");
+    var showPlugins = nav.Has("Plugins", "View");
+    // An empty dropdown toggle with nothing inside it is worse than no dropdown at all.
+    var showAdminDropdown = showSettings || showPlugins;
 }
 <!DOCTYPE html>
 <html lang="en" data-bs-theme="light">
@@ -79,33 +108,74 @@
             </button>
             @* Emoji, not an icon font: this app has no icon library and already uses bare emoji as
                its de facto icon system (🟢/🔴 camera state, ⚠️ warnings, 🌙/☀️ theme). aria-hidden on
-               each one so a screen reader announces "Live", not "satellite antenna Live". *@
+               each one so a screen reader announces "Live", not "satellite antenna Live".
+               Every item below is permission-gated — see the `show*` booleans computed above — so an
+               anonymous visitor (the Login page uses this same layout) or a Viewer-role user sees
+               only what they can actually do something with, not a wall of dead links. *@
             <div class="collapse navbar-collapse" id="navMenu">
                 <ul class="navbar-nav me-auto">
-                    <li class="nav-item"><a class="nav-link" href="/"><span aria-hidden="true">📊</span> Dashboard</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/Live"><span aria-hidden="true">📡</span> Live</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/Playback"><span aria-hidden="true">▶️</span> Playback</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/Exports"><span aria-hidden="true">🎬</span> Exports</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/Views"><span aria-hidden="true">🔲</span> Views</a></li>
-                    <li class="nav-item"><a class="nav-link" href="/Cameras"><span aria-hidden="true">📷</span> Cameras</a></li>
-                    @* One dropdown for every admin-only page, not flat top-level links per page — Node
-                       Builds previously had no nav entry of its own at all (only reachable via a
-                       help-text link from Nodes/Settings), which is exactly the "can't find it"
-                       pattern this groups against for every admin page added after this one too. *@
-                    <li class="nav-item dropdown">
-                        <a class="nav-link dropdown-toggle" href="#" id="adminNavDropdown" role="button"
-                           data-bs-toggle="dropdown" aria-expanded="false"><span aria-hidden="true">⚙️</span> Admin</a>
-                        <ul class="dropdown-menu dropdown-menu-dark" aria-labelledby="adminNavDropdown">
-                            <li><a class="dropdown-item" href="/Admin/Nodes">Nodes</a></li>
-                            <li><a class="dropdown-item" href="/Admin/NodeBuilds">Node Builds</a></li>
-                            <li><a class="dropdown-item" href="/Admin/Settings">Settings</a></li>
-                            <li><a class="dropdown-item" href="/Admin/Branding">Branding</a></li>
-                            <li><a class="dropdown-item" href="/Admin/EventColors">Event Colors</a></li>
-                            <li><a class="dropdown-item" href="/Admin/Logs">Audit Log</a></li>
-                            <li><a class="dropdown-item" href="/Admin/Backup">Backups</a></li>
-                            <li><a class="dropdown-item" href="/Admin/SystemLogs">System Logs</a></li>
-                        </ul>
-                    </li>
+                    @* Bare [Authorize] — any authenticated user, no specific resource/action. *@
+                    @if (isAuthenticated)
+                    {
+                        <li class="nav-item"><a class="nav-link" href="/"><span aria-hidden="true">🏠︎</span> Dashboard</a></li>
+                    }
+                    @* Live/Index requires Cameras.View, same as the Cameras list below. *@
+                    @if (showLive)
+                    {
+                        <li class="nav-item"><a class="nav-link" href="/Live"><span aria-hidden="true">📡</span> Live</a></li>
+                    }
+                    @if (showPlayback)
+                    {
+                        <li class="nav-item"><a class="nav-link" href="/Playback"><span aria-hidden="true">▶️</span> Playback</a></li>
+                    }
+                    @if (showExports)
+                    {
+                        <li class="nav-item"><a class="nav-link" href="/Exports"><span aria-hidden="true">🎬</span> Exports</a></li>
+                    }
+                    @if (showViews)
+                    {
+                        <li class="nav-item"><a class="nav-link" href="/Views"><span aria-hidden="true">🖼️</span> Views</a></li>
+                    }
+                    @if (showCameras)
+                    {
+                        <li class="nav-item"><a class="nav-link" href="/Cameras"><span aria-hidden="true">📷</span> Cameras</a></li>
+                    }
+                    @* Its own top-level button, promoted out of the Admin dropdown — fleet monitoring
+                       is something an operator checks routinely, not an occasional administrative
+                       task, and it's gated by Nodes.Edit same as before (Admin/Nodes.cshtml.cs's own
+                       comment explains why this page uses one combined Edit permission rather than
+                       splitting View/Edit the way most other resources don't either). *@
+                    @if (showNodes)
+                    {
+                        <li class="nav-item"><a class="nav-link" href="/Admin/Nodes"><span aria-hidden="true">🔗</span> Nodes</a></li>
+                    }
+                    @* Its own top-level button rather than another item buried in the Admin dropdown
+                       — logs are something everyone with access checks routinely, not an occasional
+                       administrative task, and the dropdown was getting crowded (nine items) with
+                       several pages nobody could find without already knowing they existed. Branding,
+                       Event Colors, Backups, and the standalone Settings page moved into Settings'
+                       own tabs instead of shrinking this list by only one. *@
+                    @if (showLogs)
+                    {
+                        <li class="nav-item"><a class="nav-link" href="/Logs"><span aria-hidden="true">📜</span> Logs</a></li>
+                    }
+                    @if (showAdminDropdown)
+                    {
+                        <li class="nav-item dropdown">
+                            <a class="nav-link dropdown-toggle" href="#" id="adminNavDropdown" role="button"
+                               data-bs-toggle="dropdown" aria-expanded="false"><span aria-hidden="true">⚙️</span> Admin</a>
+                            <ul class="dropdown-menu dropdown-menu-dark" aria-labelledby="adminNavDropdown">
+                                @if (showSettings)
+                                {
+                                    <li><a class="dropdown-item" href="/Admin/Settings">Settings</a></li>
+                                }
+                                @if (showPlugins)
+                                {
+                                    <li><a class="dropdown-item" href="/Admin/Plugins">Plugins</a></li>
+                                }
+                            </ul>
+                        </li>
+                    }
                 </ul>
                 <ul class="navbar-nav me-2">
                     <li class="nav-item">
@@ -129,10 +199,14 @@
     </footer>
 
     <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js" asp-append-version="true"></script>
+    @* Loaded before anything that reads/writes a user preference, including theme.js and
+       table-pagination.js right below it. *@
+    <script src="~/js/user-preferences.js" asp-append-version="true"></script>
     <script src="~/js/theme.js" asp-append-version="true"></script>
     <script src="~/js/sortable-table.js" asp-append-version="true"></script>
     <script src="~/js/list-filter.js" asp-append-version="true"></script>
     <script src="~/js/table-pagination.js" asp-append-version="true"></script>
+    <script src="~/js/column-picker.js" asp-append-version="true"></script>
     @await RenderSectionAsync("Scripts", required: false)
 </body>
 </html>

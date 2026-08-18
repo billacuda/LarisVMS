@@ -33,6 +33,9 @@ else
                 <option value="all">All</option>
             </select>
         </div>
+        <div class="col-sm-auto ms-sm-auto">
+            <partial name="_ColumnPicker" model="@("camerasTable")" />
+        </div>
     </div>
 
     @* This form has no visible fields of its own — the node <select>, the Reassign button, and
@@ -57,22 +60,23 @@ else
     </div>
 
     <div class="table-responsive">
-        <table class="table table-hover align-middle" id="camerasTable" data-sortable data-paginate>
+        <table class="table table-hover align-middle" id="camerasTable" data-sortable data-paginate data-column-picker>
             <thead>
                 <tr>
                     <th data-no-sort><input type="checkbox" class="form-check-input" id="selectAllCameras" /></th>
                     <th data-no-sort>Status</th>
                     <th>Name</th>
-                    <th>Host</th>
-                    <th>Group</th>
-                    <th>Node</th>
-                    <th>Manufacturer / Model</th>
-                    <th>Profiles</th>
-                    <th>Capabilities</th>
-                    <th data-sort-numeric>Streams</th>
-                    <th data-sort-numeric>Storage used</th>
-                    <th data-sort-numeric>Retention</th>
-                    <th>Last probed</th>
+                    <th data-col="host">Host</th>
+                    <th data-no-sort data-col="https">HTTPS</th>
+                    <th data-col="group">Group</th>
+                    <th data-col="node">Node</th>
+                    <th data-col="model">Manufacturer / Model</th>
+                    <th data-col="profiles">Profiles</th>
+                    <th data-col="capabilities">Capabilities</th>
+                    <th data-sort-numeric data-col="streams">Streams</th>
+                    <th data-sort-numeric data-col="storage">Storage used</th>
+                    <th data-sort-numeric data-col="retention">Retention</th>
+                    <th data-col="probed">Last probed</th>
                     <th data-no-sort></th>
                 </tr>
             </thead>
@@ -107,6 +111,17 @@ else
                             }
                         </td>
                         <td>@c.Host</td>
+                        <td>
+                            @* DeviceServiceUri is stored with its scheme (http:// or https://) —
+                               AddAsync/UpdateAsync both validate it as an absolute URI before saving,
+                               so parsing it back out here is safe rather than tracking a second,
+                               separately-settable "use HTTPS" flag that could drift from what the
+                               URL itself actually says. *@
+                            @if (Uri.TryCreate(c.DeviceServiceUri, UriKind.Absolute, out var deviceUri) && deviceUri.Scheme == Uri.UriSchemeHttps)
+                            {
+                                <span title="This camera's device service URL uses HTTPS">🔒</span>
+                            }
+                        </td>
                         <td>@(c.Group?.Name ?? "—")</td>
                         <td>
                             @if (c.Node is { } node)

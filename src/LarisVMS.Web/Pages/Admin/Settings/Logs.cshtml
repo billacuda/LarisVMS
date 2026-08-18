@@ -1,0 +1,60 @@
+@page
+@model LarisVMS.Web.Pages.Admin.Settings.LogsModel
+@{
+    ViewData["Title"] = "Log settings";
+}
+<h1>Settings</h1>
+<partial name="_SettingsTabs" model="@("Logs")" />
+
+@if (!string.IsNullOrEmpty(Model.SavedMessage))
+{
+    <div class="alert alert-success">@Model.SavedMessage</div>
+}
+
+<form method="post" class="row g-3" style="max-width: 640px;">
+    <div class="col-12">
+        <label class="form-label">Application (system) log retention (days)</label>
+        <input asp-for="LogRetentionDays" type="number" min="0" class="form-control" required />
+        <div class="form-text">
+            How long the <a asp-page="/Logs/SystemLogs">System Logs</a> tab keeps this server's daily
+            log files. <strong>0 keeps them forever.</strong> Takes effect on the next sweep (every
+            six hours) — no restart needed. A recorder node sweeps its own logs on its own fixed
+            schedule; this setting does not reach them.
+        </div>
+    </div>
+
+    <div class="col-12">
+        <label class="form-label">Audit log retention (days)</label>
+        <input asp-for="AuditLogRetentionDays" type="number" min="0" class="form-control" required />
+        <div class="form-text">
+            How long the <a asp-page="/Logs/AuditLogs">Audit Logs</a> tab keeps entries.
+            <strong>0 keeps them forever</strong> — the default, since the audit trail is a compliance
+            record most video-surveillance jurisdictions expect kept, not disposable debug output like
+            the application log above. Opt into a bounded window only if you know you want one.
+        </div>
+    </div>
+
+    <div class="col-12">
+        <label class="form-label">System log path</label>
+        <input class="form-control font-monospace" value="@Model.LogPath" disabled />
+        <div class="form-text">
+            @if (Model.ConfiguredLogPathOverride is null)
+            {
+                <text>
+                    Not editable here — the application log is written before this app's settings
+                    database is reachable, specifically so a startup failure still gets recorded. To
+                    change it, set <code>Logs:Path</code> in <code>appsettings.json</code> (or the
+                    <code>LarisVMS__Logs__Path</code> environment variable) and restart.
+                </text>
+            }
+            else
+            {
+                <text>Set via the <code>Logs:Path</code> configuration key. Change it there and restart to move it again.</text>
+            }
+        </div>
+    </div>
+
+    <div class="col-12">
+        <button type="submit" class="btn btn-primary"><span aria-hidden="true">💾</span> Save</button>
+    </div>
+</form>

@@ -1,0 +1,12 @@
+@* The "Columns" toggle for column-picker.js — column-picker.js finds this by
+   [data-column-picker-for] and fills in .column-picker-menu itself; nothing here needs to change to
+   add or remove a toggleable column, since that's driven entirely by which <th> elements in the
+   target table carry their own data-col attribute.
+   Model: the target table's id. *@
+@model string
+<details class="column-picker d-inline-block position-relative" data-column-picker-for="@Model">
+    <summary class="btn btn-sm btn-outline-secondary">
+        <span aria-hidden="true">☰</span> Columns
+    </summary>
+    <div class="column-picker-menu"></div>
+</details>

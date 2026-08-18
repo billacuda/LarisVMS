@@ -1,0 +1,87 @@
+@page
+@model LarisVMS.Web.Pages.Admin.Settings.NodesModel
+@{
+    ViewData["Title"] = "Node settings";
+}
+<h1>Settings</h1>
+<partial name="_SettingsTabs" model="@("Nodes")" />
+
+@if (!string.IsNullOrEmpty(Model.SavedMessage))
+{
+    <div class="alert alert-success">@Model.SavedMessage</div>
+}
+
+<form method="post" class="row g-3" style="max-width: 560px;">
+    <div class="col-12">
+        <h5>Auto Node Updates</h5>
+        <div class="form-check">
+            <input asp-for="NodeAutoUpdateEnabled" type="checkbox" class="form-check-input" />
+            <label asp-for="NodeAutoUpdateEnabled" class="form-check-label">Auto-update recorder nodes</label>
+        </div>
+        <div class="form-text">
+            When on, every recorder node whose reported version is older than the newest
+            <strong>approved</strong> build for its platform downloads and applies it automatically
+            on its next heartbeat — builds are registered by every <code>deploy.ps1</code> run and
+            wait for review below. Turning this off freezes every node on whatever it's already
+            running until it's turned back on.
+        </div>
+    </div>
+
+    <div class="col-12 mt-4">
+        <h5>Node Builds</h5>
+        @if (Model.PendingBuildCount > 0)
+        {
+            <div class="alert alert-warning py-2 px-3 d-inline-block">
+                <strong>@Model.PendingBuildCount</strong> build(s) waiting on approval.
+            </div>
+        }
+        else
+        {
+            <p class="text-muted small mb-2">Nothing waiting on approval right now.</p>
+        }
+        <div>
+            <a class="btn btn-outline-secondary btn-sm" asp-page="/Admin/NodeBuilds/Index">Manage Node Builds &rarr;</a>
+        </div>
+        <div class="form-text">
+            Kept as its own page rather than embedded here — approving/rejecting a build needs the
+            <code>Nodes.Edit</code> permission, not <code>Settings.Edit</code>.
+        </div>
+    </div>
+
+    <div class="col-12 mt-4">
+        <h5>Registration Code</h5>
+        <label class="form-label">Registration key</label>
+        <div class="input-group">
+            <input asp-for="RegistrationKey" class="form-control font-monospace" id="registrationKeyInput" />
+            <button type="button" class="btn btn-outline-secondary" id="regenerateKeyBtn">Generate new key</button>
+        </div>
+        <div class="form-text">
+            The bearer key <code>install-node.ps1</code> presents once when a recorder node first
+            registers — only shown during the Setup wizard until now, with nowhere to come back and
+            see it again when onboarding another node later. Rotating it here has no effect on nodes
+            already registered (only checked at first registration), but every
+            <code>install-node.ps1</code> command line printed before a rotation stops working.
+        </div>
+    </div>
+
+    <div class="col-12 mt-4">
+        <button type="submit" class="btn btn-primary"><span aria-hidden="true">💾</span> Save</button>
+    </div>
+</form>
+
+@section Scripts {
+    <script>
+        (function () {
+            var btn = document.getElementById('regenerateKeyBtn');
+            var input = document.getElementById('registrationKeyInput');
+            if (!btn || !input) return;
+            btn.addEventListener('click', function () {
+                var bytes = new Uint8Array(24);
+                crypto.getRandomValues(bytes);
+                input.value = Array.prototype.map.call(bytes, function (b) {
+                    return b.toString(16).padStart(2, '0');
+                }).join('').toUpperCase();
+            });
+        })();
+    </script>
+}

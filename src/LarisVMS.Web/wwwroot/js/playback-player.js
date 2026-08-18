@@ -390,42 +390,40 @@
     var playing = false;
 
     // ── Remembered timeline position / display preference ──────────────────
-    // localStorage, not sessionStorage: "remember between refreshes" means a normal page reload,
-    // which sessionStorage would also survive, but the user's actual ask was persistence across
-    // browser restarts too, and there's nothing sensitive in a timestamp+zoom-level pair.
-    var POSITION_KEY = 'larisvms.playback.position';
-    var HOUR24_KEY = 'larisvms.playback.hour24';
+    // Server-backed (see user-preferences.js) — follows the user across devices, not just across
+    // reloads on the same browser the way localStorage did. init() (below) already waits for the
+    // preferences fetch to resolve before either load* function here is ever called.
+    var POSITION_KEY = 'playback.position';
+    var HOUR24_KEY = 'playback.hour24';
     var savePositionTimer = null;
 
     function loadPersistedPosition() {
+        var raw = window.larisvmsPreferences.get(POSITION_KEY, null);
+        if (!raw) return null;
         try {
-            var raw = localStorage.getItem(POSITION_KEY);
-            if (!raw) return null;
             var parsed = JSON.parse(raw);
             if (typeof parsed.centerMs === 'number' && typeof parsed.rangeMs === 'number') return parsed;
-        } catch (e) { /* corrupted/blocked storage — fall back to the usual default */ }
+        } catch (e) { /* corrupted value — fall back to the usual default */ }
         return null;
     }
 
     // Debounced — this fires on every playback tick (500ms) and every throttled drag-scrub tick,
-    // and a write on each one would be needless localStorage churn for a value that only needs to
-    // be current by the time the tab actually closes or reloads.
+    // and a write on each one would be needless request churn for a value that only needs to be
+    // current by the time the tab actually closes or reloads.
     function schedulePositionSave() {
         clearTimeout(savePositionTimer);
         savePositionTimer = setTimeout(function () {
             if (!timeline) return;
-            try {
-                localStorage.setItem(POSITION_KEY, JSON.stringify({ centerMs: playheadMs, rangeMs: timeline.getRange() }));
-            } catch (e) { /* private browsing or storage full — position just won't survive a reload */ }
+            window.larisvmsPreferences.set(POSITION_KEY, JSON.stringify({ centerMs: playheadMs, rangeMs: timeline.getRange() }));
         }, 500);
     }
 
     function loadHour24Preference() {
-        try { return localStorage.getItem(HOUR24_KEY) === '1'; } catch (e) { return false; }
+        return window.larisvmsPreferences.get(HOUR24_KEY, 'false') === 'true';
     }
 
     function saveHour24Preference(on) {
-        try { localStorage.setItem(HOUR24_KEY, on ? '1' : '0'); } catch (e) { /* ignore */ }
+        window.larisvmsPreferences.set(HOUR24_KEY, on);
     }
 
     function escHtml(s) {
@@ -973,7 +971,16 @@
         if (el) el.textContent = new Date(playheadMs).toLocaleString();
     }
 
+    // Waits for the preferences fetch (see user-preferences.js) before doing anything, so
+    // loadHour24Preference()'s first read already reflects real data instead of the fallback — the
+    // caller (Pages/Playback/Index.cshtml) never uses init()'s return value, so deferring the whole
+    // body costs nothing beyond the wait itself, and user-preferences.js's own GET request already
+    // started well before this script even ran.
     function init(o) {
+        window.larisvmsPreferences.whenReady().then(function () { initImpl(o); });
+    }
+
+    function initImpl(o) {
         opts = o;
         cameraById = {};
         (o.cameras || []).forEach(function (c) { cameraById[c.id] = c; });

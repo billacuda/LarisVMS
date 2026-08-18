@@ -1,0 +1,44 @@
+@page
+@model LarisVMS.Web.Pages.Admin.Settings.RecordingModel
+@{
+    ViewData["Title"] = "Recording settings";
+}
+<h1>Settings</h1>
+<partial name="_SettingsTabs" model="@("Recording")" />
+
+@if (!string.IsNullOrEmpty(Model.SavedMessage))
+{
+    <div class="alert alert-success">@Model.SavedMessage</div>
+}
+
+<form method="post" class="row g-3" style="max-width: 560px;">
+    <div class="col-12">
+        <label class="form-label">Global recording mode</label>
+        <select asp-for="RecordingMode" class="form-select">
+            <option value="Continuous">Continuous</option>
+            <option value="Motion">Motion only</option>
+            <option value="Schedule">Schedule</option>
+            <option value="Event">Event (a specific tagged trigger)</option>
+        </select>
+        <div class="form-text">
+            Schedule and Event modes need per-camera setup (windows / a driving event tag rule) to
+            actually gate anything — see each camera's own Schedule / Event tags pages. With none
+            configured, both fail open (keep everything) the same way Motion mode does for a camera
+            with no zone.
+        </div>
+    </div>
+    <div class="col-6">
+        <label class="form-label">Pre-roll (seconds)</label>
+        <input asp-for="MotionPreRollSeconds" type="number" min="0" class="form-control" required />
+        <div class="form-text">Only matters in Motion/Event mode. Lead-up kept before activity starts.</div>
+    </div>
+    <div class="col-6">
+        <label class="form-label">Post-roll (seconds)</label>
+        <input asp-for="MotionPostRollSeconds" type="number" min="0" class="form-control" required />
+        <div class="form-text">Only matters in Motion/Event mode. How long kept after activity stops.</div>
+    </div>
+
+    <div class="col-12">
+        <button type="submit" class="btn btn-primary"><span aria-hidden="true">💾</span> Save</button>
+    </div>
+</form>

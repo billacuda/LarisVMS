@@ -166,10 +166,12 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
             var before = await cameraService.GetAsync(Id.Value);
             var oldRetentionOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, Id.Value, "Retention.Days");
 
-            await cameraService.UpdateAsync(Id.Value, Name, GroupId, NodeId, Username, Password, IsEnabled, quotaBytes);
+            await cameraService.UpdateAsync(Id.Value, Name, GroupId, NodeId, Username, Password, IsEnabled, quotaBytes,
+                DeviceServiceUri);
 
             var details = AuditDiff.Build(
                 AuditDiff.Of("Name", before?.Name, Name),
+                AuditDiff.Of("Device service URL", before?.DeviceServiceUri, DeviceServiceUri),
                 AuditDiff.Of("Group", GroupName(before?.GroupId), GroupName(GroupId)),
                 AuditDiff.Of("Node", NodeName(before?.NodeId), NodeName(NodeId)),
                 AuditDiff.Of("Enabled", before?.IsEnabled.ToString(), IsEnabled.ToString()),

@@ -8,7 +8,7 @@
     Recording runs in a separate Windows Service ("node") per the architecture plan, not inside this
     IIS-hosted app, so it survives app pool recycles and deploys. Install a node with
     <code>install-node.ps1</code> using the registration key from
-    <a asp-page="/Admin/Settings" asp-fragment="node-registration">Admin &rarr; Settings</a>. Once
+    <a asp-page="/Admin/Settings/Nodes">Admin &rarr; Settings &rarr; Nodes</a>. Once
     installed, a node updates itself once a build registered by <code>deploy.ps1</code> is approved
     on <a asp-page="/Admin/NodeBuilds/Index">Admin &rarr; Node Builds</a> — no re-running the install
     script on every recorder machine.
@@ -142,9 +142,9 @@ else
     </div>
     <div data-paginate-controls-for="nodesTable" class="mt-2"></div>
     <p class="text-muted small">
-        Blank storage root uses the <a asp-page="/Admin/Settings">global default</a>. A node's own value takes
+        Blank storage root uses the <a asp-page="/Admin/Settings/StorageAndRetention">global default</a>. A node's own value takes
         priority — useful when a node records to its own local disk instead of the shared target.
-        Blank retention inherits the <a asp-page="/Admin/Settings">global default</a>; a value here
+        Blank retention inherits the <a asp-page="/Admin/Settings/StorageAndRetention">global default</a>; a value here
         overrides it for every camera on this node unless that camera has its own override too. "Days
         left" is a rough estimate from this node's write rate over the last 24h, not disk health. The
         ⚠️ count next to a node's status is how many cameras have footage still sitting on this node

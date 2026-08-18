@@ -1,0 +1,144 @@
+@page
+@model LarisVMS.Web.Pages.Admin.Settings.EventsModel
+@{
+    ViewData["Title"] = "Event settings";
+}
+<h1>Settings</h1>
+<partial name="_SettingsTabs" model="@("Events")" />
+
+@if (!string.IsNullOrEmpty(Model.SavedMessage))
+{
+    <div class="alert alert-success">@Model.SavedMessage</div>
+}
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger">@Model.ErrorMessage</div>
+}
+
+<form method="post" style="max-width: 640px;">
+    <h2 class="h5">Coverage</h2>
+    <p class="text-muted small">
+        Drawn for every camera, whether or not it can classify what it sees. Motion takes precedence
+        over plain recording for a stretch of time that has both.
+    </p>
+
+    <div class="row g-3 align-items-end mb-2">
+        <div class="col-sm-6">
+            <label class="form-label" for="MotionColor">
+                <span aria-hidden="true">@Model.MotionEmoji</span> Motion
+            </label>
+            <div class="input-group">
+                <input type="color" class="form-control form-control-color js-color-picker"
+                       value="@(Model.MotionColor ?? Model.DefaultMotion)" data-for="MotionColor"
+                       aria-label="Motion color picker" />
+                <input asp-for="MotionColor" id="MotionColor" class="form-control js-color-text"
+                       placeholder="@Model.DefaultMotion" maxlength="7" />
+                <button type="button" class="btn btn-outline-secondary js-color-reset"
+                        data-for="MotionColor" data-default="@Model.DefaultMotion"
+                        title="Reset to the built-in default">Reset</button>
+            </div>
+            <div class="form-text">Movement with no object class attached.</div>
+        </div>
+
+        <div class="col-sm-6">
+            <label class="form-label" for="RecordingColor">Recorded</label>
+            <div class="input-group">
+                <input type="color" class="form-control form-control-color js-color-picker"
+                       value="@(Model.RecordingColor ?? Model.DefaultRecording)" data-for="RecordingColor"
+                       aria-label="Recorded color picker" />
+                <input asp-for="RecordingColor" id="RecordingColor" class="form-control js-color-text"
+                       placeholder="@Model.DefaultRecording" maxlength="7" />
+                <button type="button" class="btn btn-outline-secondary js-color-reset"
+                        data-for="RecordingColor" data-default="@Model.DefaultRecording"
+                        title="Reset to the built-in default">Reset</button>
+            </div>
+            <div class="form-text">Footage exists, but nothing was detected.</div>
+        </div>
+    </div>
+
+    <h2 class="h5 mt-4">Detected objects</h2>
+    <p class="text-muted small">
+        Only cameras whose own analytics classify what they see report these — either over ONVIF, or
+        through a vendor integration (<span aria-hidden="true">🧩</span> on the Cameras list). A class
+        your cameras never report simply never appears; it costs nothing to leave configured.
+    </p>
+
+    <div class="row g-3">
+        @foreach (var kind in Model.Kinds)
+        {
+            var name = kind.ToString();
+            var fieldId = "DetectionColors_" + name;
+            var fallback = LarisVMS.Web.Pages.Admin.Settings.EventsModel.DefaultFor(kind);
+            var current = Model.DetectionColors.TryGetValue(name, out var v) ? v : null;
+            <div class="col-sm-6">
+                <label class="form-label" for="@fieldId">
+                    <span aria-hidden="true">@LarisVMS.Web.Pages.Admin.Settings.EventsModel.Emoji(kind)</span>
+                    @LarisVMS.Web.Pages.Admin.Settings.EventsModel.Label(kind)
+                </label>
+                <div class="input-group">
+                    <input type="color" class="form-control form-control-color js-color-picker"
+                           value="@(current ?? fallback)" data-for="@fieldId"
+                           aria-label="@LarisVMS.Web.Pages.Admin.Settings.EventsModel.Label(kind) color picker" />
+                    <input type="text" id="@fieldId" name="DetectionColors[@name]" value="@current"
+                           class="form-control js-color-text" placeholder="@fallback" maxlength="7" />
+                    <button type="button" class="btn btn-outline-secondary js-color-reset"
+                            data-for="@fieldId" data-default="@fallback"
+                            title="Reset to the built-in default">Reset</button>
+                </div>
+            </div>
+        }
+    </div>
+
+    <h2 class="h5 mt-4">Event tag position</h2>
+    <div class="row g-3">
+        <div class="col-sm-6">
+            <label class="form-label">Corner</label>
+            <select asp-for="EventBadgeCornerValue" class="form-select">
+                @foreach (var corner in LarisVMS.Core.EventBadgeCorner.All)
+                {
+                    <option value="@corner">@LarisVMS.Core.EventBadgeCorner.Label(corner)</option>
+                }
+            </select>
+            <div class="form-text">
+                Which corner of a live tile the motion badge and object-detection badges appear in.
+                The bottom corners already hold other controls — a tile's hover controls sit bottom
+                right, and a cell switched into playback mode puts its mini timeline bottom left —
+                so badges placed there are lifted clear of them rather than overlapping.
+            </div>
+        </div>
+    </div>
+
+    <div class="mt-4">
+        <button type="submit" class="btn btn-primary"><span aria-hidden="true">💾</span> Save</button>
+    </div>
+</form>
+
+@section Scripts {
+    <script>
+        (function () {
+            // The swatch and the hex box edit the same value from two directions. The text box stays
+            // authoritative (it's what posts, and it's the only one that can express "blank = use the
+            // default"), so the picker writes into it rather than being a separate field.
+            document.querySelectorAll('.js-color-picker').forEach(function (picker) {
+                var target = document.getElementById(picker.dataset.for);
+                if (!target) return;
+                picker.addEventListener('input', function () { target.value = picker.value; });
+                target.addEventListener('input', function () {
+                    if (/^#[0-9a-fA-F]{6}$/.test(target.value)) picker.value = target.value;
+                });
+            });
+
+            // Clearing the box (rather than writing the default into it) is what keeps this
+            // deployment tracking the built-in value.
+            document.querySelectorAll('.js-color-reset').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    var target = document.getElementById(btn.dataset.for);
+                    if (!target) return;
+                    target.value = '';
+                    var picker = document.querySelector('.js-color-picker[data-for="' + btn.dataset.for + '"]');
+                    if (picker) picker.value = btn.dataset.default;
+                });
+            });
+        })();
+    </script>
+}

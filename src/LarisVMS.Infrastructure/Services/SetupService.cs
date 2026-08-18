@@ -175,24 +175,39 @@ public class SetupService(
     /// seeded read-only across the resources that exist so far. The full ~18-resource matrix named
     /// in the plan grows as each milestone's pages land — seeding it now for resources that don't
     /// have pages yet would just be dead rows.</summary>
-    private async Task SeedViewerPermissionsAsync(CancellationToken ct)
+    /// <summary>Internal rather than private so a test can exercise it directly against a real
+    /// RoleManager + in-memory DbContext without needing the full UserManager machinery
+    /// CompleteSetupAsync (its only real caller) also requires for admin-account creation.</summary>
+    internal async Task SeedViewerPermissionsAsync(CancellationToken ct)
     {
         var role = await roleManager.FindByNameAsync("Viewer");
         if (role is null) return;
 
+        // "Logs", not "AuditLog": Pages/Logs/AuditLogs is gated by [Authorize("Logs.View")].
         (string Resource, string Action)[] viewerPermissions =
-            [("AuditLog", "View"), ("Settings", "View"), ("Views", "View"), ("Views", "Edit"), ("Playback", "View")];
+            [("Logs", "View"), ("Settings", "View"), ("Views", "View"), ("Views", "Edit"), ("Playback", "View")];
 
         foreach (var (resource, action) in viewerPermissions)
         {
+            // role.Id — the real IdentityRole GUID — not the literal string "Viewer". Every lookup
+            // this app does (PermissionService.HasPermissionAsync/GetGrantedAsync) resolves role
+            // *names* to their real Ids and compares Permission.RoleId against those Ids, so a row
+            // seeded with the bare name here could never match anything: the Viewer role has never
+            // actually held a working permission since this method was first written, for any
+            // resource, regardless of the resource-name fix a previous pass made to this same
+            // method — that fix was real but sat on top of this deeper bug. Caught by re-deriving
+            // this bug from the exact same lookup code the nav-permission work (0.95.0) reads
+            // through, not by trusting this method's own prior doc comment. A deployment whose setup
+            // already ran has old rows with RoleId = "Viewer" sitting in the database uselessly —
+            // see this pass's migration, which repairs them in place rather than leaving them dead.
             var exists = await db.Permissions.AnyAsync(
-                p => p.RoleId == "Viewer" && p.Resource == resource && p.Action == action, ct);
+                p => p.RoleId == role.Id && p.Resource == resource && p.Action == action, ct);
             if (!exists)
             {
                 db.Permissions.Add(new Permission
                 {
                     Id = Guid.NewGuid(),
-                    RoleId = "Viewer",
+                    RoleId = role.Id,
                     Resource = resource,
                     Action = action,
                     IsSystemPermission = true

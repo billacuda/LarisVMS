@@ -18,9 +18,13 @@
             <select class="form-select form-select-sm" style="width:auto;" id="viewPlayPicker"
                     title="Switch view" aria-label="Switch view"
                     onchange="if (this.value) location.href = '/Views/Play/' + this.value;">
+                @* Camera count in the label, so switching views is a choice between "House (6)" and
+                   "Yard (2)" rather than between two bare names. Counts cells, matching the Cameras
+                   column on Views/Index — the two would otherwise disagree for a view that places
+                   the same camera in more than one cell. *@
                 @foreach (var v in Model.Views)
                 {
-                    <option value="@v.Id" selected="@(v.Id == Model.CurrentViewId ? "selected" : null)">@v.Name</option>
+                    <option value="@v.Id" selected="@(v.Id == Model.CurrentViewId ? "selected" : null)">@v.Name (@ViewLayout.CountCells(v.LayoutJson))</option>
                 }
             </select>
         }
@@ -45,6 +49,7 @@
             cameras: @Html.Raw(camerasJson),
             currentViewId: @Html.Raw(JsonSerializer.Serialize(Model.CurrentViewId.ToString())),
             gridElId: 'viewPlayGrid',
+            badgeCorner: @Html.Raw(JsonSerializer.Serialize(Model.EventBadgeCornerValue)),
             kioskBtnId: 'kioskBtn',
             navElId: 'mainNav',
             toolbarElId: 'viewPlayToolbar',

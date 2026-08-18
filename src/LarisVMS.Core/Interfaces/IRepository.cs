@@ -1,3 +1,5 @@
+using System.Security.Claims;
+using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
 
 namespace LarisVMS.Core.Interfaces;
@@ -21,6 +23,29 @@ public interface IAuditService
 public interface IPermissionService
 {
     Task<bool> HasPermissionAsync(string userId, string resource, string action, CancellationToken ct = default);
+
+    /// <summary>Every (Resource, Action) pair the given principal's roles grant, resolved in at most
+    /// one database round trip regardless of how many pairs the caller ends up checking — built for
+    /// _Layout.cshtml's nav, which needs several yes/no answers on every single page render and can't
+    /// afford <see cref="HasPermissionAsync"/>'s own per-call cost (role lookup + permission lookup)
+    /// multiplied by the number of nav buttons. Role names are read straight off the principal's own
+    /// claims rather than re-queried from the database — see <see cref="PermissionSet"/>'s own doc
+    /// comment for why that's safe.</summary>
+    Task<PermissionSet> GetGrantedAsync(ClaimsPrincipal user, CancellationToken ct = default);
+}
+
+/// <summary>The result of <see cref="IPermissionService.GetGrantedAsync"/> — an Administrator-aware
+/// membership test over a fixed snapshot of granted (Resource, Action) pairs, rather than a live
+/// per-call query. <see cref="IsAdministrator"/> is checked first in <see cref="Has"/>, matching
+/// PermissionService.HasPermissionAsync's own short-circuit, so this can never disagree with the
+/// per-call check about whether an Administrator has a given permission.</summary>
+public sealed class PermissionSet(bool isAdministrator, IReadOnlySet<(string Resource, string Action)> granted)
+{
+    public bool IsAdministrator { get; } = isAdministrator;
+
+    public bool Has(string resource, string action) => IsAdministrator || granted.Contains((resource, action));
+
+    public static readonly PermissionSet None = new(false, new HashSet<(string, string)>());
 }
 
 public interface ISetupService
@@ -83,4 +108,39 @@ public interface ISettingsResolver
     Task SetOverrideAsync(SettingScope scope, Guid scopeId, string key, string? value, string? modifiedBy = null, CancellationToken ct = default);
 
     Task InvalidateAsync();
+}
+
+/// <summary>
+/// Per-user client preferences — the server-backed replacement for what used to live only in
+/// <c>localStorage</c> (theme, last-watched view, table page size, playback clock format, and so
+/// on). Deliberately a flat key/value bag rather than typed columns, matching <see cref="Setting"/>'s
+/// own shape: new preferences are added on the client without a schema change on this side.
+/// </summary>
+public interface IUserPreferenceService
+{
+    /// <summary>Every preference this user has ever set, as a flat key/value map — the client
+    /// fetches this once on page load rather than one request per key.</summary>
+    Task<Dictionary<string, string>> GetAllAsync(string userId, CancellationToken ct = default);
+
+    Task SetAsync(string userId, string key, string value, CancellationToken ct = default);
+}
+
+/// <summary>
+/// Resolves <see cref="CameraAccess"/> — the per-camera ACL layered on top of the global
+/// Resource×Action RBAC (M1's design; unenforced anywhere until M14). See
+/// <see cref="CameraAccessScopeType"/> for how a row scopes to every camera, one
+/// <see cref="CameraGroup"/> (and, cascading, its descendants), or one camera.
+/// </summary>
+public interface ICameraAccessService
+{
+    /// <summary>Every camera id this principal can exercise <paramref name="action"/> on, or
+    /// <c>null</c> meaning unrestricted (every camera). Null covers three cases deliberately treated
+    /// the same way: an Administrator (matches global RBAC's own implicit-everything rule), a
+    /// principal holding at least one <c>ScopeType.All</c> grant for this action, and — the case
+    /// that matters most for not silently breaking every existing deployment — a principal with
+    /// <i>zero</i> CameraAccess rows of their own. This table narrows access; it was never meant to
+    /// default-deny the moment it exists unpopulated, and until this pass nothing ever wrote a row
+    /// into it, so every current user of every current deployment has exactly zero rows today.</summary>
+    Task<HashSet<Guid>?> GetAccessibleCameraIdsAsync(ClaimsPrincipal user,
+        CameraAccessActions action, CancellationToken ct = default);
 }

@@ -37,9 +37,10 @@ else
             <label class="form-label small mb-0">View</label>
             <select id="playbackViewPicker" class="form-select form-select-sm" style="max-width: 16rem;">
                 <option value="">(choose a view)</option>
+                @* Camera count in the label — same form as the Views/Play picker. *@
                 @foreach (var v in Model.Views)
                 {
-                    <option value="@v.Id">@v.Name</option>
+                    <option value="@v.Id">@v.Name (@ViewLayout.CountCells(v.LayoutJson))</option>
                 }
             </select>
             <button type="button" class="btn btn-sm btn-outline-secondary" id="pbPlayPause" disabled>▶ Play</button>
