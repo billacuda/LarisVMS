@@ -72,7 +72,9 @@
             @for (int i = 1; i <= Model.TotalPages; i++)
             {
                 <li class="page-item @(i == Model.CurrentPage ? "active" : "")">
-                    <a class="page-link" href="?q=@Model.Query&actor=@Model.ActorFilter&from=@Model.From&to=@Model.To&page=@i">@i</a>
+                    @* pageNumber, not page — see AuditLogsModel.OnGetAsync's own comment for why
+                       "page" is a reserved Razor Pages route-value name and silently never binds. *@
+                    <a class="page-link" href="?q=@Model.Query&actor=@Model.ActorFilter&from=@Model.From&to=@Model.To&pageNumber=@i">@i</a>
                 </li>
             }
         </ul>

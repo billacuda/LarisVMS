@@ -38,6 +38,9 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<AppVersion> AppVersions => Set<AppVersion>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<BackupHistoryEntry> BackupHistoryEntries => Set<BackupHistoryEntry>();
+    public DbSet<EmailSettings> EmailSettings => Set<EmailSettings>();
+    public DbSet<AlertRule> AlertRules => Set<AlertRule>();
+    public DbSet<AlertDelivery> AlertDeliveries => Set<AlertDelivery>();
 
     // ── Cameras ──────────────────────────────────────────────────────────────
     public DbSet<Camera> Cameras => Set<Camera>();
@@ -66,6 +69,9 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     // endpoint both need to query ExportJobItems directly, not always by walking down from a job.
     public DbSet<ExportJob> ExportJobs => Set<ExportJob>();
     public DbSet<ExportJobItem> ExportJobItems => Set<ExportJobItem>();
+
+    // ── Bookmarks (M18) ──────────────────────────────────────────────────────
+    public DbSet<Bookmark> Bookmarks => Set<Bookmark>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -131,6 +137,47 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.FilePath).HasMaxLength(500);
             e.Property(x => x.Error).HasMaxLength(2000);
             e.HasIndex(x => x.StartedAt);
+        });
+
+        // ── EmailSettings ────────────────────────────────────────────────────
+        builder.Entity<EmailSettings>(e =>
+        {
+            e.Property(x => x.FromAddress).HasMaxLength(320).IsRequired();
+            e.Property(x => x.FromName).HasMaxLength(200).IsRequired();
+            e.Property(x => x.SmtpHost).HasMaxLength(255);
+            e.Property(x => x.SmtpUsername).HasMaxLength(500);
+            e.Property(x => x.SmtpPassword).HasConversion(new EncryptedNullableStringConverter()).HasMaxLength(500);
+            e.Property(x => x.GraphTenantId).HasMaxLength(100);
+            e.Property(x => x.GraphClientId).HasMaxLength(100);
+            e.Property(x => x.GraphClientSecret).HasConversion(new EncryptedNullableStringConverter()).HasMaxLength(500);
+            e.Property(x => x.GraphSharedMailbox).HasMaxLength(320);
+            e.Property(x => x.GmailClientId).HasMaxLength(200);
+            e.Property(x => x.GmailClientSecret).HasConversion(new EncryptedNullableStringConverter()).HasMaxLength(500);
+            e.Property(x => x.GmailRefreshToken).HasConversion(new EncryptedNullableStringConverter()).HasMaxLength(500);
+            e.Property(x => x.GmailEmailAddress).HasMaxLength(320);
+            e.Property(x => x.LastModifiedBy).HasMaxLength(256);
+        });
+
+        // ── AlertRule / AlertDelivery ────────────────────────────────────────
+        builder.Entity<AlertRule>(e =>
+        {
+            e.Property(x => x.Name).HasMaxLength(200).IsRequired();
+            e.Property(x => x.LastModifiedBy).HasMaxLength(256);
+        });
+        builder.Entity<AlertDelivery>(e =>
+        {
+            e.Property(x => x.ConfigJson).HasConversion(new EncryptedNullableStringConverter()).HasMaxLength(2000);
+            e.HasOne(x => x.AlertRule).WithMany(r => r.Deliveries)
+                .HasForeignKey(x => x.AlertRuleId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── Bookmark ─────────────────────────────────────────────────────────
+        builder.Entity<Bookmark>(e =>
+        {
+            e.Property(x => x.Note).HasMaxLength(1000).IsRequired();
+            e.Property(x => x.CreatedByUserId).HasMaxLength(450).IsRequired();
+            e.Property(x => x.CreatedByUserName).HasMaxLength(256);
+            e.HasIndex(x => new { x.CameraId, x.TimestampUtc });
         });
 
         // ── CameraGroup ──────────────────────────────────────────────────────
@@ -199,6 +246,8 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.Platform).HasMaxLength(50);
             e.Property(x => x.LastIpAddress).HasMaxLength(45);
             e.Property(x => x.MediaSigningKey).HasConversion(new EncryptedNullableStringConverter()).HasMaxLength(500);
+            // Plenty for a JSON array of up to 8 short encoder names (FfmpegCapabilityProber.KnownEncoders) — not a secret, no encryption needed.
+            e.Property(x => x.DetectedEncodersJson).HasMaxLength(500);
         });
 
         // ── Segment ──────────────────────────────────────────────────────────

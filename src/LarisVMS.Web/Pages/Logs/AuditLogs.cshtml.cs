@@ -29,13 +29,20 @@ public class AuditLogsModel(ApplicationDbContext db) : PageModel
 
     private const int PageSize = 50;
 
-    public async Task OnGetAsync(string? q, string? actor, string? from, string? to, int page = 1)
+    // pageNumber, not page: Razor Pages' own endpoint routing sets a route value literally named
+    // "page" on every request (the relative page path, used internally to pick which compiled page
+    // runs), and the composite model binder checks route values before the query string — a handler
+    // parameter also named "page" finds that entry first, fails to parse it as an int, and silently
+    // binds to 0, meaning pagination never advances past page 1 no matter what the URL says. Found
+    // and fixed via the identical bug in Snapshots/Index.cshtml.cs, which this page's own doc comment
+    // says its filter/pagination shape was ported from — same latent bug, ported right along with it.
+    public async Task OnGetAsync(string? q, string? actor, string? from, string? to, int pageNumber = 1)
     {
         Query = q;
         ActorFilter = actor;
         From = from;
         To = to;
-        CurrentPage = page < 1 ? 1 : page;
+        CurrentPage = pageNumber < 1 ? 1 : pageNumber;
 
         var query = db.AuditLogs.AsNoTracking().AsQueryable();
 

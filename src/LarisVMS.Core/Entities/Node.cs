@@ -66,5 +66,14 @@ public class Node
     /// column. The node validates a token locally against this key with no DB round trip.</summary>
     public string? MediaSigningKey { get; set; }
 
+    /// <summary>M17: JSON array of ffmpeg encoder names this node's own ffmpeg build/hardware
+    /// actually offers (from `FfmpegCapabilityProber`), among the known set LarisVMS.Media checks
+    /// for (libx264/libx265, h264_qsv/hevc_qsv, h264_nvenc/hevc_nvenc, h264_amf/hevc_amf) — probed
+    /// once at node startup (hardware doesn't change while the process is running) and refreshed on
+    /// every heartbeat like Version, not just once at registration, so a node upgrading its ffmpeg
+    /// build or GPU driver is reflected without needing to re-register. Null for a node that hasn't
+    /// reported yet or is running a pre-M17 build.</summary>
+    public string? DetectedEncodersJson { get; set; }
+
     public ICollection<Camera> Cameras { get; set; } = [];
 }

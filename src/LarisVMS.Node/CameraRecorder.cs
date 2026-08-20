@@ -7,5 +7,7 @@ namespace LarisVMS.Node;
 /// for the whole node to shut down. RtspUri (Main stream, credentials already injected) is carried
 /// alongside the session so an on-demand snapshot grab (M8's zone editor, M5's snapshot backlog
 /// item) can open its own short-lived RTSP session without RecordingSession needing to expose the
-/// URI it's already using internally.</summary>
-public sealed record CameraRecorder(CancellationTokenSource Cts, Task RunTask, RecordingSession Session, string RtspUri);
+/// URI it's already using internally. PrivacyMaskSignature (M18) is what lets Reconcile detect a
+/// Privacy zone being added/edited/removed on an already-recording camera and restart its session to
+/// pick up the change — same shape as CameraMotionRecorder.ZoneConfigSignature.</summary>
+public sealed record CameraRecorder(CancellationTokenSource Cts, Task RunTask, RecordingSession Session, string RtspUri, string PrivacyMaskSignature);

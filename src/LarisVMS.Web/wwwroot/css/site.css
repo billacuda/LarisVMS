@@ -57,6 +57,10 @@ body {
    elements outside the fullscreened tile and genuinely cannot render while it's active.) */
 .tile-fullscreen {
     background: #000;
+    /* Without this, a two-finger gesture here is claimed by the browser's own native pinch-zoom/
+       scroll handling before fullscreen-tile.js's pointer event listeners ever see it — pinch-to-zoom
+       (M16) needs those events delivered to JS instead. */
+    touch-action: none;
 }
 
 .tile-fullscreen .view-cell-status,
@@ -70,10 +74,17 @@ body {
 
 /* Views/Play's mute/fullscreen buttons are otherwise hover-only (.d-none until mouseenter) —
    always shown while this tile is the fullscreen element, since there's no hover state to rely on
-   and the exit-fullscreen button must stay reachable. */
+   and the exit-fullscreen button must stay reachable. z-index above .pb-timeline-fullscreen's own
+   (see below) is the backstop for that same "always shown, always on top" requirement — the
+   playback-player.js side additionally reserves clear space for these via paddingRight so the two
+   don't crowd each other, but this is what actually keeps the buttons themselves clickable rather
+   than sitting underneath the timeline canvas' own drag-to-scrub hit area. */
 .tile-fullscreen .pb-fullscreen-controls,
 .tile-fullscreen .view-cell-controls {
     display: flex !important;
+    /* Already position:absolute via the .position-absolute utility class in the markup — not
+       redeclared here, only the stacking order needs raising above .pb-timeline-fullscreen's z-index. */
+    z-index: 20;
 }
 
 /* The Playback timelines while they're living inside a fullscreened tile (playback-player.js moves

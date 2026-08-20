@@ -11,22 +11,29 @@ namespace LarisVMS.Media;
 /// the type itself. Input-side -ss (before -i) is used deliberately: fast and roughly
 /// keyframe-accurate for a local file, unlike SnapshotCapture's RTSP-side connection timeout.
 ///
-/// M7 pass 2 (hover thumbnails): output is capped at 150px on its longer edge with aspect ratio
-/// preserved (never upscaled, never distorted, never padded) and compressed harder than
+/// M7 pass 2 (hover thumbnails): output defaults to capped at 150px on its longer edge with aspect
+/// ratio preserved (never upscaled, never distorted, never padded) and compressed harder than
 /// SnapshotCapture's live grab (-q:v 8 vs 3) — a small glance-preview has no need for the higher
 /// quality a full-size still does, and every thumbnail this produces gets cached indefinitely
 /// alongside its source segment (see StorageManager's eviction wiring), so keeping each one small
 /// matters more here than it does for a one-off snapshot.
+///
+/// M18 follow-up: maxDimension is now a parameter, not a constant — Pages/Snapshots' own cards
+/// request a genuinely detailed frame (854px, ~480p on a 16:9 source) via this same path, since a
+/// motion-event card is something a viewer actually looks closely at, unlike a fleeting scrub-hover
+/// preview. The default stays 150 so every hover-preview and backfill caller is unaffected.
 /// </summary>
 public static class ThumbnailCapture
 {
+    public const int DefaultMaxDimension = 150;
+
     /// <summary>Returns JPEG bytes, or null if ffmpeg produced nothing (corrupt/truncated segment,
     /// offset beyond the file's actual content, timeout) — callers turn that into a 502 rather than
     /// this class deciding what an HTTP failure should look like. lowPriority runs the ffmpeg process
     /// at BelowNormal OS priority — set by the background backfill loop (ThumbnailBackfillService) so
     /// its catch-up work never meaningfully contends with live recording or an on-demand hover for
     /// CPU; on-demand callers leave this false since a user is actively waiting on those.</summary>
-    public static async Task<byte[]?> CaptureAsync(string ffmpegPath, string filePath, int offsetSeconds, CancellationToken ct, TimeSpan? timeout = null, bool lowPriority = false)
+    public static async Task<byte[]?> CaptureAsync(string ffmpegPath, string filePath, int offsetSeconds, CancellationToken ct, TimeSpan? timeout = null, bool lowPriority = false, int maxDimension = DefaultMaxDimension)
     {
         var psi = new ProcessStartInfo
         {
@@ -44,7 +51,7 @@ public static class ThumbnailCapture
             "-ss", offsetSeconds.ToString(),
             "-i", filePath,
             "-frames:v", "1",
-            "-vf", "scale=150:150:force_original_aspect_ratio=decrease",
+            "-vf", $"scale={maxDimension}:{maxDimension}:force_original_aspect_ratio=decrease",
             "-q:v", "8",
             "-f", "image2",
             "pipe:1"

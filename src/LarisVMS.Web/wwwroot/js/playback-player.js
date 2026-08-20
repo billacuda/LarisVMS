@@ -37,6 +37,14 @@
         var currentSegmentTimeOrigin = 0;
         var loadToken = 0; // bumped on every seek so a superseded in-flight fetch's *result* is a no-op on arrival
         var abortController = null; // actually cancels the superseded fetch itself, not just its result
+        // M16: confirmed live as the cause of "8x speed quietly resets to 1x after a few seconds" —
+        // teardown() calls videoEl.load() on every segment transition (including the natural
+        // end-of-segment auto-advance below, not just an explicit seek), and browsers reset
+        // playbackRate back to 1 when load() runs. Every segment load re-applies this value (see
+        // tryStartPlaybackOnce/loadWholeBufferFallback) instead of trusting the property to persist
+        // across it, so a fast-forward rate now survives however many segment boundaries playback
+        // crosses. setPlaybackRate (below) is the only writer.
+        var desiredPlaybackRate = 1;
         // Segment ids whose fetch failed (404/500/etc.) this page load — confirmed live as a real
         // amplifier of whatever caused the original failure: the tape-scrubber drag fires throttled
         // scrub ticks roughly every 120ms, and since a failed fetch never sets currentSegmentId, a
@@ -48,6 +56,110 @@
         // resolving itself, say), a fresh page load will try it again rather than remembering a
         // failure forever.
         var knownBadSegmentIds = {};
+
+        // Look-ahead buffering (M18): the immediately-next segment's full bytes, fetched in the
+        // background while the current one is still playing, so the 'ended' handler's transition
+        // can skip the network round trip entirely instead of starting the fetch cold at that exact
+        // moment. Confirmed live as the dominant cause of a visible "Loading…" blank at every ~60s
+        // segment boundary during faster-than-1x playback (the fetch+decode-setup latency is the
+        // same in wall-clock terms regardless of speed, so it eats a proportionally bigger bite out
+        // of a segment that's playing out in less real time, and recurs more often per minute of
+        // wall time too). Only ever holds one entry — the single segment expected to play next in
+        // sequence — not a general cache; an arbitrary scrub/seek always misses it and falls through
+        // to the normal fetch path unchanged. { id, promise<Uint8Array|null> }.
+        var prefetch = null;
+
+        function schedulePrefetch(afterSegment) {
+            var next = nextSegmentAfter(afterSegment.startUtc);
+            if (!next || knownBadSegmentIds[next.id] || (prefetch && prefetch.id === next.id)) return;
+            var id = next.id;
+            var p = fetch('/playback-segment/' + cameraId + '/' + id)
+                .then(function (r) {
+                    if (!r.ok) {
+                        if (r.status === 404) knownBadSegmentIds[id] = true;
+                        throw new Error('prefetch failed: ' + r.status);
+                    }
+                    return r.arrayBuffer();
+                })
+                .then(function (buf) { return new Uint8Array(buf); })
+                .catch(function () {
+                    // Swallowed deliberately — a failed prefetch just means the next real transition
+                    // falls back to fetching normally (or, for a 404, hits the existing
+                    // knownBadSegmentIds short-circuit in seekTo before ever reaching loadSegment).
+                    if (prefetch && prefetch.id === id) prefetch = null;
+                    return null;
+                });
+            prefetch = { id: id, promise: p };
+        }
+
+        // Segment-transition freeze frame: teardown() below blanks the <video> element immediately
+        // (removeAttribute('src') + load()), and loading the next segment's first frame takes real
+        // time even on a prefetch hit (a MediaSource/SourceBuffer append is still async) — confirmed
+        // live as a black flash at every segment boundary despite prefetching already eliminating the
+        // network wait. A canvas snapshot of the last painted frame, laid over the video and matched
+        // to its own object-fit:contain box, covers that gap; it's removed once the new segment has
+        // actually produced a frame to show ('seeked' or 'playing', whichever fires first) or once a
+        // load attempt ends in an error with nothing to reveal. Lazily created and left in the DOM for
+        // this tile's lifetime — cheap, and the returned teardown() hides it on tile disposal.
+        var freezeCanvas = null;
+
+        function ensureFreezeCanvas() {
+            if (freezeCanvas) return freezeCanvas;
+            var parent = videoEl.parentNode;
+            if (!parent) return null;
+            // Reuse rather than re-create: Views/Play (view-play.js) calls createTile afresh on every
+            // live→playback toggle against the same cell's <video>, so a per-call canvas would pile
+            // up one dead overlay per toggle for the life of the page.
+            freezeCanvas = parent.querySelector(':scope > .pb-freeze-frame');
+            if (freezeCanvas) return freezeCanvas;
+            freezeCanvas = document.createElement('canvas');
+            freezeCanvas.className = 'pb-freeze-frame';
+            freezeCanvas.style.cssText = 'position:absolute; inset:0; width:100%; height:100%; ' +
+                'object-fit:contain; pointer-events:none; display:none;';
+            // Inserted immediately after the video (not appended last) so later overlays — status
+            // text, badges, zoom/fullscreen controls — keep painting on top of it; position:absolute
+            // siblings with no z-index stack in DOM order.
+            parent.insertBefore(freezeCanvas, videoEl.nextSibling);
+            return freezeCanvas;
+        }
+
+        function showFreezeFrame() {
+            if (!videoEl.videoWidth || !videoEl.videoHeight) return; // nothing painted yet to freeze
+            var canvas = ensureFreezeCanvas();
+            if (!canvas) return;
+            try {
+                canvas.width = videoEl.videoWidth;
+                canvas.height = videoEl.videoHeight;
+                canvas.getContext('2d').drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+                // Matches the video's own digital-zoom transform (wireZoom, in the page glue below)
+                // so a frozen frame while zoomed in doesn't visually snap back to 1x for the gap.
+                canvas.style.transform = videoEl.style.transform || '';
+                canvas.style.transformOrigin = videoEl.style.transformOrigin || '';
+                canvas.style.display = '';
+            } catch (e) { /* worst case this one transition flashes black, same as before this existed */ }
+        }
+
+        function hideFreezeFrame() {
+            if (freezeCanvas) freezeCanvas.style.display = 'none';
+        }
+
+        // Deferred hide: waits for the new segment to actually have a frame ready ('seeked' fires
+        // once a programmatic currentTime assignment's target frame is decoded; 'playing' covers the
+        // same moment for a still-playing element) rather than hiding the instant currentTime/play()
+        // are called, which can be a tick ahead of anything actually being painted.
+        function hideFreezeFrameOnReady() {
+            if (!freezeCanvas || freezeCanvas.style.display === 'none') return;
+            var done = false;
+            function onReady() {
+                if (done) return;
+                done = true;
+                videoEl.removeEventListener('seeked', onReady);
+                videoEl.removeEventListener('playing', onReady);
+                hideFreezeFrame();
+            }
+            videoEl.addEventListener('seeked', onReady);
+            videoEl.addEventListener('playing', onReady);
+        }
 
         function findSegment(targetMs) {
             for (var i = 0; i < segments.length; i++) {
@@ -96,13 +208,69 @@
         }
 
         async function loadSegment(segment, seekSeconds, autoplay, myToken, signal) {
+            // A prefetch started while the *previous* segment was playing lets this transition skip
+            // the network round trip entirely — see prefetch's own comment. Only ever matches the
+            // sequential 'ended' advance; an arbitrary seek's target segment was never the one being
+            // prefetched, so this is always a no-op miss for that path (falls through unchanged).
+            // Before teardown() blanks the element — see showFreezeFrame's own comment. A no-op when
+            // there's nothing painted yet (first load on this tile), and harmlessly re-entrant on a
+            // rapid scrub: the video is already blank by then, so the previously captured frame
+            // stays up rather than being overwritten with nothing.
+            showFreezeFrame();
+
+            var prefetchedBytes = null;
+            if (prefetch && prefetch.id === segment.id) {
+                try { prefetchedBytes = await prefetch.promise; } catch (e) { prefetchedBytes = null; }
+                prefetch = null; // consumed either way — a hit or a settled miss, never re-tried as-is
+                if (myToken !== loadToken) return; // superseded while the (already in-flight) prefetch was awaited
+            }
+
+            var mimeType = pickMimeType(codecHint, hasAudio);
+
+            if (prefetchedBytes) {
+                teardown();
+                loadToken = myToken; // teardown() bumped it again — restore the token this call owns
+                // No "Loading…" here, deliberately — the bytes are already in hand, so the only work
+                // left is a MediaSource/SourceBuffer append that resolves in native code with no
+                // network wait. The previous segment's own playback already cleared statusEl to ''
+                // once it started, so leaving it untouched here means nothing visible flashes at all
+                // for a prefetch-hit transition. Confirmed live that setting it here regardless (as
+                // this used to) still read as a "Loading" flash on every boundary even once the
+                // network fetch itself was eliminated — the text was the visible symptom, not the
+                // fetch latency it was written to describe.
+                if (!mimeType) {
+                    if (statusEl) statusEl.textContent = 'No supported codec for this browser.';
+                    hideFreezeFrame();
+                    return;
+                }
+
+                var prefetchedMediaSource = new MediaSource();
+                videoEl.src = URL.createObjectURL(prefetchedMediaSource);
+                currentSegmentId = segment.id;
+
+                prefetchedMediaSource.addEventListener('sourceopen', function onOpen() {
+                    prefetchedMediaSource.removeEventListener('sourceopen', onOpen);
+                    if (myToken !== loadToken) return;
+                    var sourceBuffer;
+                    try {
+                        sourceBuffer = prefetchedMediaSource.addSourceBuffer(mimeType);
+                    } catch (e) {
+                        if (statusEl) statusEl.textContent = 'This browser cannot decode this stream.';
+                        hideFreezeFrame();
+                        return;
+                    }
+                    appendWholeSegment(prefetchedBytes, sourceBuffer, prefetchedMediaSource, myToken, seekSeconds, autoplay, segment);
+                });
+                return;
+            }
+
             teardown();
             loadToken = myToken; // teardown() bumped it again — restore the token this call owns
             if (statusEl) statusEl.textContent = 'Loading…';
 
-            var mimeType = pickMimeType(codecHint, hasAudio);
             if (!mimeType) {
                 if (statusEl) statusEl.textContent = 'No supported codec for this browser.';
+                hideFreezeFrame();
                 return;
             }
 
@@ -112,7 +280,10 @@
             } catch (e) {
                 // A superseded seek's fetch lands here once aborted — not a real failure, the next
                 // seek already owns the tile, so no status text should overwrite whatever it sets.
+                // Same reasoning for the freeze frame: the seek that superseded this one owns it now
+                // and will hide it when its own segment is ready.
                 if (!signal.aborted && statusEl) statusEl.textContent = 'Could not reach server.';
+                if (!signal.aborted) hideFreezeFrame();
                 return;
             }
             if (myToken !== loadToken || resp === undefined) return;
@@ -123,6 +294,7 @@
                 // this page load).
                 if (resp.status === 404) knownBadSegmentIds[segment.id] = true;
                 if (statusEl) statusEl.textContent = 'Playback error (' + resp.status + ').';
+                hideFreezeFrame();
                 return;
             }
 
@@ -139,18 +311,19 @@
                     sourceBuffer = mediaSource.addSourceBuffer(mimeType);
                 } catch (e) {
                     if (statusEl) statusEl.textContent = 'This browser cannot decode this stream.';
+                    hideFreezeFrame();
                     return;
                 }
 
                 if (resp.body) {
-                    streamIntoSourceBuffer(resp.body.getReader(), sourceBuffer, mediaSource, myToken, signal, seekSeconds, autoplay);
+                    streamIntoSourceBuffer(resp.body.getReader(), sourceBuffer, mediaSource, myToken, signal, seekSeconds, autoplay, segment);
                 } else {
                     // No streaming response body support (older browser, or an intermediary that
                     // buffers the whole thing) — fall back to the previous whole-file behavior
                     // rather than failing outright. resp is still the same Response from the
                     // enclosing loadSegment closure; arrayBuffer() works on it regardless of
                     // whether .body (the streaming reader) is exposed.
-                    loadWholeBufferFallback(resp, sourceBuffer, mediaSource, myToken, signal, seekSeconds, autoplay);
+                    loadWholeBufferFallback(resp, sourceBuffer, mediaSource, myToken, signal, seekSeconds, autoplay, segment);
                 }
             });
         }
@@ -168,7 +341,7 @@
         //
         // SourceBuffer only accepts one pending appendBuffer() at a time, so chunks are pumped one
         // at a time, each read gated on the previous append's updateend.
-        function streamIntoSourceBuffer(reader, sourceBuffer, mediaSource, myToken, signal, seekSeconds, autoplay) {
+        function streamIntoSourceBuffer(reader, sourceBuffer, mediaSource, myToken, signal, seekSeconds, autoplay, segment) {
             var startedPlayback = false;
 
             function tryStartPlaybackOnce() {
@@ -190,8 +363,15 @@
                 var bufStart = buffered.start(0);
                 currentSegmentTimeOrigin = bufStart;
                 videoEl.currentTime = Math.max(bufStart, bufStart + seekSeconds);
+                videoEl.playbackRate = desiredPlaybackRate; // load() (in teardown, just before this segment) reset it — see desiredPlaybackRate's own comment
+                hideFreezeFrameOnReady(); // held over from the previous segment until this one actually paints
                 if (statusEl) statusEl.textContent = '';
                 if (autoplay) videoEl.play().catch(function () { /* blocked by autoplay policy — stays paused with a visible control */ });
+                // Scoped to actual continuous playback (autoplay=true) — a paused scrub or a
+                // stepped-mode seek (both pass autoplay=false) has no real "next" to look ahead to,
+                // so prefetching there would just be a wasted background fetch for bytes the user is
+                // very unlikely to play through to.
+                if (autoplay) schedulePrefetch(segment);
             }
 
             function finish() {
@@ -209,6 +389,7 @@
                 if (!startedPlayback) {
                     console.error('[playback] segment fully streamed but nothing buffered for camera', cameraId);
                     if (statusEl) statusEl.textContent = 'Segment could not be decoded.';
+                    hideFreezeFrame();
                 }
             }
 
@@ -247,7 +428,7 @@
 
         // Same behavior the whole file used to have unconditionally — kept only as a fallback for
         // a fetch() Response with no streaming body support.
-        async function loadWholeBufferFallback(resp, sourceBuffer, mediaSource, myToken, signal, seekSeconds, autoplay) {
+        async function loadWholeBufferFallback(resp, sourceBuffer, mediaSource, myToken, signal, seekSeconds, autoplay, segment) {
             var bytes;
             try {
                 bytes = new Uint8Array(await resp.arrayBuffer());
@@ -256,7 +437,14 @@
                 return;
             }
             if (myToken !== loadToken) return;
+            appendWholeSegment(bytes, sourceBuffer, mediaSource, myToken, seekSeconds, autoplay, segment);
+        }
 
+        // Shared by loadWholeBufferFallback (a Response with no streaming body support) and a
+        // prefetch hit in loadSegment (bytes already fully downloaded ahead of time, nothing left to
+        // read) — both cases already have the segment's complete bytes in hand with no further
+        // network work, so appending is identical either way.
+        function appendWholeSegment(bytes, sourceBuffer, mediaSource, myToken, seekSeconds, autoplay, segment) {
             sourceBuffer.addEventListener('updateend', function () {
                 if (myToken !== loadToken) return;
                 if (mediaSource.readyState === 'open') {
@@ -267,12 +455,20 @@
                     var bufStart = buffered.start(0);
                     currentSegmentTimeOrigin = bufStart;
                     videoEl.currentTime = Math.max(bufStart, bufStart + seekSeconds);
+                    videoEl.playbackRate = desiredPlaybackRate; // see desiredPlaybackRate's own comment
+                    hideFreezeFrameOnReady(); // see the matching call in tryStartPlaybackOnce
                 } else {
                     if (statusEl) statusEl.textContent = 'Segment could not be decoded.';
+                    hideFreezeFrame();
                     return;
                 }
                 if (statusEl) statusEl.textContent = '';
                 if (autoplay) videoEl.play().catch(function () { /* blocked by autoplay policy */ });
+                // Scoped to actual continuous playback (autoplay=true) — a paused scrub or a
+                // stepped-mode seek (both pass autoplay=false) has no real "next" to look ahead to,
+                // so prefetching there would just be a wasted background fetch for bytes the user is
+                // very unlikely to play through to.
+                if (autoplay) schedulePrefetch(segment);
             });
             try {
                 sourceBuffer.appendBuffer(bytes);
@@ -313,6 +509,7 @@
                         : 'No recording available.';
                 }
                 teardown();
+                hideFreezeFrame(); // nothing is going to load here — a held frame would sit stale forever
                 return;
             }
 
@@ -320,6 +517,7 @@
                 // Already confirmed unreachable this page load — see knownBadSegmentIds' own
                 // comment for why re-fetching it here matters, not just cosmetically.
                 teardown();
+                hideFreezeFrame();
                 if (statusEl) statusEl.textContent = 'This recording is unavailable (missing on the recorder).';
                 return;
             }
@@ -365,7 +563,17 @@
                 if (!seg || targetMs < seg.startUtc || targetMs >= seg.endUtc) return;
                 videoEl.currentTime = currentSegmentTimeOrigin + (targetMs - seg.startUtc) / 1000;
             },
-            teardown: teardown
+            // M16: sets the rate immediately (for the currently loaded segment) and remembers it for
+            // every segment loaded from here on — see desiredPlaybackRate's own comment for why a
+            // one-time videoEl.playbackRate assignment doesn't survive this tile's lifetime.
+            setPlaybackRate: function (rate) {
+                desiredPlaybackRate = rate;
+                videoEl.playbackRate = rate;
+            },
+            teardown: function () {
+                teardown();
+                hideFreezeFrame(); // tile is being disposed/rebuilt — never leave a frozen frame over a dead tile
+            }
         };
     }
 
@@ -388,6 +596,8 @@
     var primaryCameraId = null;
     var playheadMs = Date.now();
     var playing = false;
+    var speedRate = 1;
+    var stepLoopToken = null; // non-null only while speedRate is outside native playbackRate's reliable range — see applySpeed
 
     // ── Remembered timeline position / display preference ──────────────────
     // Server-backed (see user-preferences.js) — follows the user across devices, not just across
@@ -395,7 +605,23 @@
     // preferences fetch to resolve before either load* function here is ever called.
     var POSITION_KEY = 'playback.position';
     var HOUR24_KEY = 'playback.hour24';
+    var EVENT_TAGS_KEY = 'playback.eventTags';
+    var VIEW_KEY = 'playback.viewId';
     var savePositionTimer = null;
+
+    // Which View was last open — a refresh used to always land back on the bare "(choose a view)"
+    // picker with no tiles/timeline at all until re-picked by hand, since only the scrub
+    // position/zoom were ever remembered, not the view selection itself. Same server-backed
+    // preferences store as POSITION_KEY, saved on every real selection (picker change or a deep
+    // link's own view resolution) and read once on init, skipped only when a deep link is present
+    // (a deliberate specific navigation outranks "whatever was open last time").
+    function loadPersistedViewId() {
+        return window.larisvmsPreferences.get(VIEW_KEY, null);
+    }
+
+    function saveViewId(viewId) {
+        window.larisvmsPreferences.set(VIEW_KEY, viewId);
+    }
 
     function loadPersistedPosition() {
         var raw = window.larisvmsPreferences.get(POSITION_KEY, null);
@@ -424,6 +650,17 @@
 
     function saveHour24Preference(on) {
         window.larisvmsPreferences.set(HOUR24_KEY, on);
+    }
+
+    // Off by default (M16) — a real-phone walkthrough found the tag-colored timeline busy/confusing
+    // for everyday review; turning it on is an opt-in "show me event detail" mode now, not the
+    // always-on default it used to be.
+    function loadEventTagsPreference() {
+        return window.larisvmsPreferences.get(EVENT_TAGS_KEY, 'false') === 'true';
+    }
+
+    function saveEventTagsPreference(on) {
+        window.larisvmsPreferences.set(EVENT_TAGS_KEY, on);
     }
 
     function escHtml(s) {
@@ -517,7 +754,7 @@
             '<div class="h-100 w-100 position-relative bg-black overflow-hidden pb-tile-frame" ' +
                 'style="outline:' + (isPrimary ? '3px solid var(--bs-primary)' : 'none') + '; outline-offset:-2px;">' +
                 '<video class="pb-video" muted playsinline ' +
-                    'style="width:100%; height:100%; object-fit:contain; transform-origin:center center; cursor:default;"></video>' +
+                    'style="width:100%; height:100%; object-fit:contain; transform-origin:center center; cursor:default; touch-action:none;"></video>' +
                 '<div class="position-absolute top-50 start-50 translate-middle text-white small text-center px-2 pb-status"></div>' +
                 '<div class="position-absolute top-0 start-0 m-1 px-2 py-1 small text-white text-truncate pb-select-primary" ' +
                     'style="background:rgba(0,0,0,.55); border-radius:.25rem; max-width:calc(100% - 96px); pointer-events:none;" ' +
@@ -540,6 +777,12 @@
                 '<div class="position-absolute bottom-0 end-0 m-1 d-flex align-items-center gap-1 pb-fullscreen-controls d-none">' +
                     window.larisvmsAudioControls.html(cam && cam.hasAudio) +
                     '<div class="btn-group btn-group-sm">' +
+                        // The page toolbar's own Play/Pause is a page-level element, so it isn't
+                        // rendered at all while a tile holds the fullscreen layer — the timeline gets
+                        // moved in (see wireFullscreen) but the transport control had no counterpart,
+                        // leaving no way to start or stop playback without exiting fullscreen first.
+                        // Drives the same togglePlay as the toolbar button and stays label-synced with it.
+                        '<button type="button" class="btn btn-outline-light pb-fs-playpause" title="Play/Pause" style="padding:.1rem .35rem;">▶</button>' +
                         '<button type="button" class="btn btn-outline-light pb-fullscreen-toggle" title="Fullscreen" style="padding:.1rem .35rem;">⛶</button>' +
                     '</div>' +
                 '</div>' +
@@ -548,68 +791,140 @@
     }
 
     // Digital zoom: CSS transform scale/translate on the <video> element itself, no server
-    // involvement. Drag-to-pan only engages once zoomed in past 1x.
+    // involvement. Drag-to-pan engages once zoomed in past 1x; at 1x the same drag instead draws a
+    // selection rectangle and zooms to fill it on release (M16's "drag-select-to-zoom on a video
+    // cell") — one gesture, two meanings depending on current zoom, rather than a second control.
     function wireZoom(tileEl, videoEl) {
+        var MAX_ZOOM = 4;
         var zoom = 1, panX = 0, panY = 0;
         function apply() { videoEl.style.transform = 'scale(' + zoom + ') translate(' + panX + 'px, ' + panY + 'px)'; }
 
         var inBtn = tileEl.querySelector('.pb-zoom-in');
         var outBtn = tileEl.querySelector('.pb-zoom-out');
         var resetBtn = tileEl.querySelector('.pb-zoom-reset');
-        if (inBtn) inBtn.addEventListener('click', function () { zoom = Math.min(4, zoom + 0.5); apply(); });
+        if (inBtn) inBtn.addEventListener('click', function () { zoom = Math.min(MAX_ZOOM, zoom + 0.5); apply(); });
         if (outBtn) outBtn.addEventListener('click', function () {
             zoom = Math.max(1, zoom - 0.5);
             if (zoom === 1) { panX = 0; panY = 0; }
             apply();
         });
-        if (resetBtn) resetBtn.addEventListener('click', function () { zoom = 1; panX = 0; panY = 0; endDrag(); apply(); });
+        if (resetBtn) resetBtn.addEventListener('click', function () { zoom = 1; panX = 0; panY = 0; endGesture(false); apply(); });
 
         // <video> is a native drag source in Chrome/Edge (you can drag a frame out like an image) —
-        // with no preventDefault here, a mousedown-then-move over the video could kick off *that*
-        // native drag concurrently with this pan handler. Once it does, the browser owns the mouse
+        // with no preventDefault on pointerdown, a mousedown-then-move over the video could kick off
+        // *that* native drag concurrently with this handler. Once it does, the browser owns the mouse
         // gesture for the rest of that drag (showing the no-drop/circle-slash cursor over anything
-        // that isn't a valid drop target, which is everywhere on this page, including this same
-        // video and the timeline canvases below it) and our own mousemove/mouseup below stop getting
+        // that isn't a valid drop target, which is everywhere on this page, including this same video
+        // and the timeline canvases below it) and our own pointermove/pointerup below stop getting
         // sane deltas — confirmed live as exactly this: dragging felt "random", working on one
-        // timeline/tile but not another, because it depended on whether that particular mousedown
-        // happened to also trigger a native dragstart. preventDefault on mousedown is the documented
-        // way to suppress it. Returned early (no preventDefault) at zoom<=1 on purpose: that's a
-        // plain click with nothing to pan, so page defaults like text selection elsewhere are left
-        // alone.
+        // timeline/tile but not another, because it depended on whether that particular pointerdown
+        // happened to also trigger a native dragstart. preventDefault on pointerdown is the documented
+        // way to suppress it, and now fires unconditionally (a version of this before drag-select-to-
+        // zoom existed left it out at zoom<=1, since there was nothing to drag yet there either) —
+        // needed now since a drag at zoom<=1 is a deliberate selection gesture too, not "nothing to
+        // do here."
         // Pointer events + setPointerCapture, not mouse events on window — see fullscreen-tile.js's
         // matching handler (and timeline.js's original write-up) for why: a lost mouseup left
         // `dragging` stuck true forever, and from then on every mousemove anywhere on the page kept
         // panning this video, intermittently stealing gestures aimed at other controls.
         var dragging = false, startX = 0, startY = 0, startPanX = 0, startPanY = 0, dragPointerId = null;
+        var selecting = false, selStartX = 0, selStartY = 0, selRectEl = null;
+        // Below this, a drag reads as a plain click (selectPrimary on the tile still fires from the
+        // ordinary 'click' event afterward — preventDefault on pointerdown doesn't suppress it) rather
+        // than a deliberate "zoom to this region" gesture.
+        var MIN_SELECT_PX = 24;
 
-        function endDrag() {
-            if (!dragging) return;
-            dragging = false;
+        function ensureSelRectEl() {
+            if (selRectEl) return selRectEl;
+            selRectEl = document.createElement('div');
+            selRectEl.style.cssText = 'position:absolute; border:1px dashed #fff; ' +
+                'background:rgba(255,255,255,.15); pointer-events:none; display:none; z-index:5;';
+            videoEl.parentElement.appendChild(selRectEl);
+            return selRectEl;
+        }
+
+        function releaseCapture() {
             if (dragPointerId !== null && videoEl.hasPointerCapture(dragPointerId)) {
                 videoEl.releasePointerCapture(dragPointerId);
             }
             dragPointerId = null;
-            videoEl.style.cursor = 'default';
         }
 
+        function endDrag() {
+            if (!dragging) return;
+            dragging = false;
+            releaseCapture();
+            videoEl.style.cursor = zoom > 1 ? 'grab' : 'default';
+        }
+
+        // commit=false on pointercancel (Esc, losing capture mid-gesture, etc.) — the selection is
+        // simply discarded rather than zooming to wherever it happened to be when interrupted.
+        function endSelect(commit) {
+            if (!selecting) return;
+            selecting = false;
+            releaseCapture();
+            var el = ensureSelRectEl();
+            var w = parseFloat(el.style.width) || 0, h = parseFloat(el.style.height) || 0;
+            var left = parseFloat(el.style.left) || 0, top = parseFloat(el.style.top) || 0;
+            el.style.display = 'none';
+            if (commit && w >= MIN_SELECT_PX && h >= MIN_SELECT_PX) {
+                var vRect = videoEl.getBoundingClientRect();
+                // The pan math that centers the selection: transform is `scale(zoom)
+                // translate(panX,panY)` around the element's own center, and CSS applies the
+                // rightmost function (translate) to the point first, then scale — so a point at
+                // offset d from center ends up at zoom*(d+pan) from center post-transform. Setting
+                // that to 0 (selection center lands exactly on the frame's center) gives
+                // pan = -d = (frameCenter - selectionCenter), independent of zoom itself.
+                var cx = left + w / 2, cy = top + h / 2;
+                zoom = Math.min(MAX_ZOOM, Math.max(1, Math.min(vRect.width / w, vRect.height / h)));
+                panX = vRect.width / 2 - cx;
+                panY = vRect.height / 2 - cy;
+                apply();
+            }
+            videoEl.style.cursor = zoom > 1 ? 'grab' : 'default';
+        }
+
+        function endGesture(commit) { endDrag(); endSelect(commit); }
+
         videoEl.addEventListener('pointerdown', function (e) {
-            if (e.button !== 0 || zoom <= 1) return;
+            if (e.button !== 0) return;
             e.preventDefault();
-            dragging = true;
-            startX = e.clientX; startY = e.clientY;
-            startPanX = panX; startPanY = panY;
             dragPointerId = e.pointerId;
             videoEl.setPointerCapture(e.pointerId);
-            videoEl.style.cursor = 'grabbing';
+            if (zoom > 1) {
+                dragging = true;
+                startX = e.clientX; startY = e.clientY;
+                startPanX = panX; startPanY = panY;
+                videoEl.style.cursor = 'grabbing';
+            } else {
+                selecting = true;
+                var vRect = videoEl.getBoundingClientRect();
+                selStartX = e.clientX - vRect.left;
+                selStartY = e.clientY - vRect.top;
+                var el = ensureSelRectEl();
+                el.style.left = selStartX + 'px'; el.style.top = selStartY + 'px';
+                el.style.width = '0px'; el.style.height = '0px';
+                el.style.display = '';
+                videoEl.style.cursor = 'crosshair';
+            }
         });
         videoEl.addEventListener('pointermove', function (e) {
-            if (!dragging) return;
-            panX = startPanX + (e.clientX - startX) / zoom;
-            panY = startPanY + (e.clientY - startY) / zoom;
-            apply();
+            if (dragging) {
+                panX = startPanX + (e.clientX - startX) / zoom;
+                panY = startPanY + (e.clientY - startY) / zoom;
+                apply();
+            } else if (selecting) {
+                var vRect = videoEl.getBoundingClientRect();
+                var x = e.clientX - vRect.left, y = e.clientY - vRect.top;
+                var el = ensureSelRectEl();
+                el.style.left = Math.min(selStartX, x) + 'px';
+                el.style.top = Math.min(selStartY, y) + 'px';
+                el.style.width = Math.abs(x - selStartX) + 'px';
+                el.style.height = Math.abs(y - selStartY) + 'px';
+            }
         });
-        videoEl.addEventListener('pointerup', endDrag);
-        videoEl.addEventListener('pointercancel', endDrag);
+        videoEl.addEventListener('pointerup', function () { endGesture(true); });
+        videoEl.addEventListener('pointercancel', function () { endGesture(false); });
     }
 
     // Double-click-to-fullscreen + wheel-zoom/drag-pan (fullscreen-tile.js), plus the audio/exit
@@ -620,6 +935,12 @@
     function wireFullscreen(frameEl, videoEl) {
         var controls = frameEl.querySelector('.pb-fullscreen-controls');
         var fsBtn = frameEl.querySelector('.pb-fullscreen-toggle');
+        var playBtn = frameEl.querySelector('.pb-fs-playpause');
+        if (playBtn) {
+            // stopPropagation so this doesn't also register as a tile click (selectPrimary).
+            playBtn.addEventListener('click', function (e) { e.stopPropagation(); togglePlay(); });
+            playBtn.textContent = playing ? '⏸' : '▶';
+        }
 
         frameEl.addEventListener('mouseenter', function () { if (controls) controls.classList.remove('d-none'); });
         frameEl.addEventListener('mouseleave', function () { if (controls) controls.classList.add('d-none'); });
@@ -649,6 +970,17 @@
             timelineHome = { parent: timelineArea.parentElement, before: timelineArea.nextSibling };
             timelineArea.classList.add('pb-timeline-fullscreen');
             frameEl.appendChild(timelineArea);
+            // Reserve room on the right for pb-fullscreen-controls (mute/volume/exit) — both anchor
+            // to this same bottom-right corner, and without this the timeline's own canvases (still
+            // draggable for scrubbing) sat directly underneath the control buttons on mobile, where
+            // there's no hover to reveal one and hide the other: confirmed live as controls that were
+            // both visually buried under the timeline's backdrop and unclickable, since the timeline
+            // canvas — a later sibling — was capturing the tap as a scrub-drag first. Measured from
+            // controls' own actual rendered width (already display:flex per .tile-fullscreen by the
+            // time this runs, same fullscreenchange handler that toggled that class runs before this
+            // callback) rather than a guessed constant, so this stays correct whether or not this
+            // camera has audio (a volume slider roughly doubles the control area's width).
+            if (controls) timelineArea.style.paddingRight = (controls.getBoundingClientRect().width + 12) + 'px';
         }
 
         function restoreTimeline() {
@@ -658,6 +990,7 @@
             // not yank it out of whichever tile does.
             if (timelineArea.parentElement !== frameEl) { timelineHome = null; return; }
             timelineArea.classList.remove('pb-timeline-fullscreen');
+            timelineArea.style.paddingRight = '';
             timelineHome.parent.insertBefore(timelineArea, timelineHome.before);
             timelineHome = null;
         }
@@ -697,13 +1030,18 @@
         return resp.ok ? await resp.json() : [];
     }
 
+    // Returns a Promise resolving once every tile's own seekTo has settled — existing callers (arrow-
+    // key nudge, timeline scrub/click) fire this without awaiting, which still works unchanged, since
+    // a Promise nobody awaits just runs to completion on its own. The stepped high-speed loop below
+    // (applySpeed) is the one caller that actually needs to wait for it — see its own comment for why.
     function seekAll(targetMs, autoplay) {
         playheadMs = targetMs;
-        Object.keys(tiles).forEach(function (id) { tiles[id].player.seekTo(targetMs, autoplay); });
+        var pending = Object.keys(tiles).map(function (id) { return tiles[id].player.seekTo(targetMs, autoplay); });
         syncTimelineCenters();
         schedulePositionSave();
         var el = opts.currentTimeId && document.getElementById(opts.currentTimeId);
         if (el) el.textContent = new Date(targetMs).toLocaleString();
+        return Promise.all(pending);
     }
 
     // Both timelines always track the one shared playhead — under the tape-scrubber model
@@ -795,7 +1133,14 @@
         } catch (e) { /* ditto */ }
     }
 
-    async function rebuildTilesFromView(viewId) {
+    // skipInitialSeek (M18): resolveDeepLink's own case — a Bookmark/Snapshot "▶ Play" link already
+    // knows exactly which instant it wants and seeks there itself right after this returns. Without
+    // this flag, this function's own persisted-position-or-most-recent seek below fired first
+    // (unawaited, so this function returned before it finished) and the deep link's own seek raced
+    // it — confirmed live as "bookmark playback starts at the beginning of the segment, not the
+    // bookmark": whichever seek's segment lookup happened to resolve last won, not necessarily the
+    // deep link's. Skipping it here removes the race entirely rather than trying to out-race it.
+    async function rebuildTilesFromView(viewId, skipInitialSeek) {
         Object.keys(tiles).forEach(function (id) { tiles[id].player.teardown(); });
         tiles = {};
 
@@ -878,6 +1223,11 @@
         var playBtn = document.getElementById(opts.playPauseBtnId);
         if (playBtn) playBtn.disabled = cells.length === 0;
 
+        if (skipInitialSeek) {
+            applySpeed(); // freshly created <video> elements default to playbackRate 1 regardless of the selected speed
+            return;
+        }
+
         // A remembered position (from a previous visit) wins over "jump to most recent recording"
         // — once the user has scrubbed anywhere, that's a stronger signal of where they want to be
         // than a fresh guess. The most-recent-recording default only applies until the first
@@ -893,16 +1243,110 @@
         if (timeline) timeline.reload();
         if (globalTimeline) globalTimeline.reload();
         seekAll(initialMs, false);
+        applySpeed(); // freshly created <video> elements default to playbackRate 1 regardless of the selected speed
+    }
+
+    // Shared by togglePlay (toggling from whatever it currently is) and resolveDeepLink (forcing
+    // straight to playing, regardless of the default paused-on-arrival state) — both need the same
+    // button-text sync across the toolbar and every tile's fullscreen transport control.
+    function setPlaying(value) {
+        playing = value;
+        var btn = document.getElementById(opts.playPauseBtnId);
+        if (btn) btn.textContent = playing ? '⏸ Pause' : '▶ Play';
+        // Every tile's fullscreen transport button mirrors the same state, so whichever one the user
+        // is looking at reads correctly regardless of which control actually toggled it.
+        document.querySelectorAll('.pb-fs-playpause').forEach(function (b) {
+            b.textContent = playing ? '⏸' : '▶';
+        });
+        applySpeed();
     }
 
     function togglePlay() {
-        playing = !playing;
-        var btn = document.getElementById(opts.playPauseBtnId);
-        if (btn) btn.textContent = playing ? '⏸ Pause' : '▶ Play';
+        setPlaying(!playing);
+    }
+
+    // ── Playback speed (M16), 1/32x-32x ──────────────────────────────────────
+    // Native HTML5 <video>.playbackRate handles slow motion down to 1/32x with no special handling
+    // needed — decoding *slower* than realtime has no extra cost. Fast-forward is the one with a
+    // ceiling: continuous decode at, say, 32x would mean decoding-and-discarding 31 out of every 32
+    // frames, real CPU cost for frames never shown, and most browsers clamp or visibly choke well
+    // below that anyway. Above NATIVE_RATE_MAX this switches to a "stepped" mode instead: every tile
+    // is paused and a timer periodically re-seeks the shared playhead forward by (tick * rate),
+    // reusing the same per-segment seek path createTile.seekTo already uses for scrubbing. Each seek
+    // decodes fresh from that segment's own keyframe rather than continuously decoding the frames in
+    // between — effectively keyframe-driven fast-forward rather than true continuous playback, which
+    // is what "I-frame-only decode" means in practice for this segment-fetch player architecture
+    // (there is no in-app demuxer parsing GOP structure to selectively decode only I-frames from a
+    // continuous stream).
+    var NATIVE_RATE_MAX = 8;
+    var STEP_TICK_MS = 200;
+
+    function applySpeed() {
+        stopStepLoop();
+        var stepping = speedRate > NATIVE_RATE_MAX;
+
         Object.keys(tiles).forEach(function (id) {
-            var v = tiles[id].videoEl;
-            if (playing) v.play().catch(function () { /* autoplay policy — user can press play again */ });
-            else v.pause();
+            var tile = tiles[id];
+            if (stepping) {
+                tile.videoEl.pause();
+            } else {
+                // Routed through the player, not a direct videoEl.playbackRate assignment — a plain
+                // assignment doesn't survive the next segment transition (every one calls
+                // videoEl.load(), which resets it), so a fast-forward rate used to quietly fall back
+                // to 1x the moment playback crossed into the next segment. setPlaybackRate remembers
+                // the rate and re-applies it on every future segment load too. Confirmed live: 8x
+                // "reset to normal speed after a few seconds" was exactly this, ~60s/8x apart.
+                tile.player.setPlaybackRate(speedRate);
+                if (playing) tile.videoEl.play().catch(function () { /* autoplay policy — user can press play again */ });
+                else tile.videoEl.pause();
+            }
+        });
+
+        if (stepping && playing) startStepLoop();
+    }
+
+    // The stepped high-speed loop waits for each step's own seek to fully settle (every tile) before
+    // scheduling the next one, rather than firing on a fixed interval regardless of completion.
+    // Confirmed live as necessary: a real segment fetch can easily take longer than one 200ms tick,
+    // and firing a new seek before the previous one lands supersedes it (see seekTo's own
+    // AbortController) before it ever gets to show a frame — with ticks close enough together, every
+    // seek gets pre-empted by the next before finishing, and the tile is stuck on "Loading…"
+    // permanently instead of stepping through frames. This is what "16x and 32x drop the video and
+    // say Loading after a few keyframes" was. Self-scheduling via setTimeout after each step's own
+    // await, rather than setInterval, is what lets the loop naturally slow to whatever the real
+    // fetch/seek latency allows instead of piling up overlapping seeks.
+    function stopStepLoop() {
+        if (stepLoopToken) stepLoopToken.cancelled = true;
+        stepLoopToken = null;
+    }
+
+    function startStepLoop() {
+        var token = { cancelled: false };
+        stepLoopToken = token;
+
+        function scheduleNext() {
+            if (!token.cancelled) setTimeout(tick, STEP_TICK_MS);
+        }
+
+        async function tick() {
+            if (token.cancelled) return;
+            // seekAll's own per-tile seekTo already catches and logs whatever it can, so nothing
+            // here should actually reject — this is a last-resort guard against the loop dying
+            // silently on an unexpected throw rather than a code path expected to run often.
+            try { await seekAll(playheadMs + STEP_TICK_MS * speedRate, false); }
+            catch (e) { console.error('[playback] stepped fast-forward tick failed', e); }
+            scheduleNext();
+        }
+
+        scheduleNext();
+    }
+
+    function wireSpeed(selectId) {
+        var select = selectId && document.getElementById(selectId);
+        if (!select) return;
+        select.addEventListener('change', function () {
+            speedRate = parseFloat(select.value) || 1;
+            applySpeed();
         });
     }
 
@@ -989,10 +1433,14 @@
 
         var picker = document.getElementById(o.pickerId);
         if (picker) {
-            picker.addEventListener('change', function () { rebuildTilesFromView(picker.value); });
+            picker.addEventListener('change', function () {
+                saveViewId(picker.value);
+                rebuildTilesFromView(picker.value);
+            });
         }
 
         var hour24 = loadHour24Preference();
+        var showEventTags = loadEventTagsPreference();
 
         // Both timelines always show the same time window and zoom level — zooming or scrubbing
         // either one mirrors onto the other via setRange/setCenter (no-callback setters, so this
@@ -1001,6 +1449,7 @@
         if (canvas) {
             timeline = window.larisvmsTimeline.create(canvas, {
                 hour24: hour24,
+                showEventTags: showEventTags,
                 getBuckets: getBucketsForPrimary,
                 // Per-camera timeline only — globalTimeline below omits this entirely, since the
                 // merged "all cameras" view has no single camera to preview. Reads primaryCameraId
@@ -1011,6 +1460,13 @@
                         ? '/playback-thumbnail/' + primaryCameraId + '?atUtc=' + encodeURIComponent(new Date(atMs).toISOString())
                         : null;
                 },
+                // M18: bookmark markers on the per-camera timeline — same primaryCameraId-at-call-time
+                // pattern as getThumbnailUrl above, so this stays correct across selectPrimary() too.
+                getBookmarks: function (fromIso, toIso) {
+                    if (!primaryCameraId) return Promise.resolve([]);
+                    var url = '/api/cameras/' + primaryCameraId + '/bookmarks?from=' + encodeURIComponent(fromIso) + '&to=' + encodeURIComponent(toIso);
+                    return fetch(url).then(function (r) { return r.ok ? r.json() : []; }).catch(function () { return []; });
+                },
                 onScrub: function (ms) { seekAll(ms, playing); },
                 onRangeChange: function (ms) { if (globalTimeline) globalTimeline.setRange(ms); schedulePositionSave(); }
             });
@@ -1020,6 +1476,7 @@
         if (globalCanvas) {
             globalTimeline = window.larisvmsTimeline.create(globalCanvas, {
                 hour24: hour24,
+                showEventTags: showEventTags,
                 getBuckets: getGlobalBuckets,
                 onScrub: function (ms) { seekAll(ms, playing); },
                 onRangeChange: function (ms) { if (timeline) timeline.setRange(ms); schedulePositionSave(); }
@@ -1037,14 +1494,82 @@
             });
         }
 
+        var eventTagsToggle = o.eventTagsToggleId && document.getElementById(o.eventTagsToggleId);
+        if (eventTagsToggle) {
+            eventTagsToggle.checked = showEventTags;
+            eventTagsToggle.addEventListener('change', function () {
+                var on = eventTagsToggle.checked;
+                saveEventTagsPreference(on);
+                if (timeline) timeline.setShowEventTags(on);
+                if (globalTimeline) globalTimeline.setShowEventTags(on);
+            });
+        }
+
+        wireSpeed(o.speedSelectId);
+
         var playBtn = document.getElementById(o.playPauseBtnId);
         if (playBtn) playBtn.addEventListener('click', togglePlay);
 
         if (o.currentTimeId) wireCurrentTimeEdit(o.currentTimeId);
         wireArrowKeyNudge();
         wireExportPanel();
+        wireBookmark();
+
+        if (o.deepLinkCameraId) {
+            // A deliberate specific navigation (Bookmarks/Snapshots "▶ Play") outranks "whichever
+            // view was open last time" — resolveDeepLink saves its own resolved view afterward, so
+            // the *next* plain reload still remembers it.
+            resolveDeepLink(o.deepLinkCameraId, o.deepLinkAtUtc);
+        } else {
+            var persistedViewId = loadPersistedViewId();
+            if (persistedViewId && viewsById[persistedViewId] && picker) {
+                picker.value = persistedViewId;
+                rebuildTilesFromView(persistedViewId);
+            }
+        }
 
         setInterval(updatePlayhead, 500);
+    }
+
+    // M18: a Bookmark's "▶ Play" link (Pages/Bookmarks/Index) arrives as ?cameraId=&atUtc=
+    // (Pages/Playback/Index.cshtml.cs) — this page has no camera picker of its own, so resolving
+    // those into "which view, which tile, which instant" happens entirely here. Picks the first view
+    // (in the same visible-to-user order the picker itself lists them) that actually contains the
+    // camera; a camera that's since been removed from every view the current user can see surfaces
+    // as a status message rather than silently landing on whatever view happened to load first.
+    async function resolveDeepLink(cameraId, atUtcIso) {
+        var statusEl = opts.deepLinkStatusId && document.getElementById(opts.deepLinkStatusId);
+        var targetView = (opts.views || []).find(function (v) {
+            return orderedCells(v).some(function (c) { return c.cameraId === cameraId; });
+        });
+        if (!targetView) {
+            if (statusEl) {
+                statusEl.textContent = "This bookmark's camera isn't in any view you can see.";
+                statusEl.className = 'small alert alert-warning py-1 px-2 mb-0';
+            }
+            return;
+        }
+
+        var picker = opts.pickerId && document.getElementById(opts.pickerId);
+        if (picker) picker.value = targetView.id;
+        saveViewId(targetView.id);
+        // true: skip rebuildTilesFromView's own persisted-position-or-most-recent seek — this
+        // function's own seek just below is the only one that should ever run for a deep link.
+        await rebuildTilesFromView(targetView.id, true);
+        selectPrimary(cameraId);
+        if (atUtcIso) {
+            // Landing on a Bookmark/Snapshot deep link and still having to hit Play is one extra,
+            // easy-to-miss step for what's supposed to be a one-click jump straight to the moment in
+            // question — explicit user ask. Every other arrival at Playback (picking a view fresh,
+            // reloading) still lands paused; this path alone starts moving immediately.
+            setPlaying(true);
+            await seekAll(new Date(atUtcIso).getTime(), true);
+            // seekAll recenters both timelines' markers (syncTimelineCenters) but doesn't refetch
+            // their bucket data for the new range on its own — without this they'd keep showing
+            // whatever range was visible at tile-construction time (effectively "now").
+            if (timeline) timeline.reload();
+            if (globalTimeline) globalTimeline.reload();
+        }
     }
 
     // ── Export (multi-camera video export trigger) ──────────────────────────
@@ -1158,6 +1683,90 @@
             setStatus('Export started — see the Exports page.', 'success');
         }).catch(function (err) {
             setStatus('Failed to start export: ' + (err && err.message ? err.message : err), 'danger');
+        }).finally(function () {
+            if (submitBtn) submitBtn.disabled = false;
+        });
+    }
+
+    // ── Bookmark (M18) ────────────────────────────────────────────────────
+    // Marks the *primary* tile's camera at the current playhead — same small-inline-form-not-a-modal
+    // shape as the export panel above. There's deliberately no camera/time picker here: a bookmark is
+    // one instant on one camera's own timeline, and that's exactly what primaryCameraId/playheadMs
+    // already track.
+    function wireBookmark() {
+        var btn = opts.bookmarkBtnId && document.getElementById(opts.bookmarkBtnId);
+        var panel = opts.bookmarkPanelId && document.getElementById(opts.bookmarkPanelId);
+        if (!btn || !panel) return;
+
+        btn.addEventListener('click', function () {
+            var wasHidden = panel.classList.contains('d-none');
+            if (wasHidden) populateBookmarkPanel();
+            panel.classList.toggle('d-none');
+        });
+
+        var submitBtn = opts.bookmarkSubmitId && document.getElementById(opts.bookmarkSubmitId);
+        if (submitBtn) submitBtn.addEventListener('click', submitBookmark);
+    }
+
+    function populateBookmarkPanel() {
+        var targetEl = opts.bookmarkTargetId && document.getElementById(opts.bookmarkTargetId);
+        if (targetEl) {
+            var cam = primaryCameraId && cameraById[primaryCameraId];
+            targetEl.textContent = cam
+                ? cam.name + ' @ ' + new Date(playheadMs).toLocaleString()
+                : 'No camera selected.';
+        }
+        var noteEl = opts.bookmarkNoteId && document.getElementById(opts.bookmarkNoteId);
+        if (noteEl) noteEl.value = '';
+        var statusEl = opts.bookmarkStatusId && document.getElementById(opts.bookmarkStatusId);
+        if (statusEl) { statusEl.textContent = ''; statusEl.className = 'small'; }
+    }
+
+    function submitBookmark() {
+        var statusEl = opts.bookmarkStatusId && document.getElementById(opts.bookmarkStatusId);
+        var noteEl = opts.bookmarkNoteId && document.getElementById(opts.bookmarkNoteId);
+        var submitBtn = opts.bookmarkSubmitId && document.getElementById(opts.bookmarkSubmitId);
+        if (!noteEl) return;
+
+        function setStatus(text, kind) {
+            if (!statusEl) return;
+            statusEl.textContent = text;
+            statusEl.className = 'small' + (kind ? ' alert alert-' + kind + ' py-1 px-2 mb-0' : '');
+        }
+
+        if (!primaryCameraId) {
+            setStatus('No camera selected.', 'danger');
+            return;
+        }
+        var note = noteEl.value.trim();
+        if (!note) {
+            setStatus('Enter a note.', 'danger');
+            return;
+        }
+
+        setStatus('Saving…', null);
+        if (submitBtn) submitBtn.disabled = true;
+
+        fetch('/api/bookmarks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                cameraId: primaryCameraId,
+                timestampUtc: new Date(playheadMs).toISOString(),
+                note: note
+            })
+        }).then(function (resp) {
+            if (!resp.ok) return resp.text().then(function (t) { throw new Error(t || ('HTTP ' + resp.status)); });
+            return resp.json();
+        }).then(function () {
+            setStatus('Bookmark saved.', 'success');
+            noteEl.value = '';
+            // Without this the new marker never appears until something unrelated (a drag, a camera
+            // switch) happens to trigger the per-camera timeline's own reload — confirmed live as
+            // "bookmarks not showing on the timeline" right after saving one.
+            if (timeline) timeline.reload();
+        }).catch(function (err) {
+            setStatus('Failed to save bookmark: ' + (err && err.message ? err.message : err), 'danger');
         }).finally(function () {
             if (submitBtn) submitBtn.disabled = false;
         });

@@ -14,7 +14,9 @@
     an Ignore zone never count toward motion in any Motion zone on this camera, even where they
     overlap. <strong>Camera-side motion</strong> and <strong>Privacy</strong> zones can be drawn and
     saved here too, but neither one does anything yet — pushing a zone to the camera itself, and
-    burning a privacy mask into the video, are both a follow-up pass.
+    burning a privacy mask into the video, are both on hold (Privacy specifically: a real,
+    not-yet-diagnosed bug breaks a masked camera's recording entirely, so it's deliberately switched
+    off rather than left enabled and broken).
 </p>
 
 <div class="row g-3">
@@ -52,7 +54,7 @@
                     <option value="ServerMotion">Motion (server-side)</option>
                     <option value="Ignore">Ignore (excluded from motion)</option>
                     <option value="CameraMotion">Motion (camera-side) — not yet active</option>
-                    <option value="Privacy">Privacy mask — not yet active</option>
+                    <option value="Privacy">Privacy mask (burn-in)</option>
                 </select>
             </div>
             <div class="mb-2" id="zoneFormSensitivityGroup">

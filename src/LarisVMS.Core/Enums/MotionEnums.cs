@@ -13,8 +13,11 @@ public enum ZoneKind
     /// nothing pushes it to a device yet — PushedToCameraAt stays null until that lands.</summary>
     CameraMotion = 1,
 
-    /// <summary>Marked for future server-side burn-in on the transcode path (M9). Stored only in
-    /// M8 pass 1 — not yet excluded from motion scoring or rendered anywhere.</summary>
+    /// <summary>M18: burned into both the recorded segments and the live feed on RecordingSession's
+    /// transcode path (PrivacyMaskFilterBuilder rasterizes each zone's bounding box into a `drawbox`
+    /// filter). Not excluded from ServerMotion's own frame-diff scoring — a privacy mask hiding an
+    /// area from view doesn't imply that area shouldn't count toward motion detection; use an Ignore
+    /// zone for that if it's also wanted.</summary>
     Privacy = 2,
 
     /// <summary>Pixels inside this polygon are excluded from the ServerMotion frame-diff sum —

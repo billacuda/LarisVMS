@@ -32,6 +32,8 @@
     var showLive = nav.Has("Cameras", "View");
     var showPlayback = nav.Has("Playback", "View");
     var showExports = nav.Has("Exports", "View");
+    var showBookmarks = nav.Has("Playback", "View");
+    var showSnapshots = nav.Has("Playback", "View");
     var showViews = nav.Has("Views", "View");
     var showCameras = nav.Has("Cameras", "View");
     var showNodes = nav.Has("Nodes", "Edit");
@@ -44,8 +46,9 @@
     // not just whichever tab happens to be first (Backups, alphabetically).
     var showSettings = nav.Has("Settings", "Edit") || nav.Has("Backups", "Edit");
     var showPlugins = nav.Has("Plugins", "View");
+    var showAlerts = nav.Has("Alerts", "Edit");
     // An empty dropdown toggle with nothing inside it is worse than no dropdown at all.
-    var showAdminDropdown = showSettings || showPlugins;
+    var showAdminDropdown = showSettings || showPlugins || showAlerts;
 }
 <!DOCTYPE html>
 <html lang="en" data-bs-theme="light">
@@ -132,6 +135,14 @@
                     {
                         <li class="nav-item"><a class="nav-link" href="/Exports"><span aria-hidden="true">🎬</span> Exports</a></li>
                     }
+                    @if (showBookmarks)
+                    {
+                        <li class="nav-item"><a class="nav-link" href="/Bookmarks"><span aria-hidden="true">🔖</span> Bookmarks</a></li>
+                    }
+                    @if (showSnapshots)
+                    {
+                        <li class="nav-item"><a class="nav-link" href="/Snapshots"><span aria-hidden="true">📸</span> Snapshots</a></li>
+                    }
                     @if (showViews)
                     {
                         <li class="nav-item"><a class="nav-link" href="/Views"><span aria-hidden="true">🖼️</span> Views</a></li>
@@ -172,6 +183,10 @@
                                 @if (showPlugins)
                                 {
                                     <li><a class="dropdown-item" href="/Admin/Plugins">Plugins</a></li>
+                                }
+                                @if (showAlerts)
+                                {
+                                    <li><a class="dropdown-item" href="/Admin/Alerts">Alerts</a></li>
                                 }
                             </ul>
                         </li>

@@ -91,7 +91,7 @@ public class ThumbnailBackfillService(NodeApiClient api, NodeWorker worker, stri
                 if (bytes is not null)
                 {
                     var relative = Path.GetRelativePath(mainDir, segmentPath);
-                    var thumbPath = Path.Combine(thumbsDir, Path.ChangeExtension(relative, null) + "_o00.jpg");
+                    var thumbPath = Path.Combine(thumbsDir, Path.ChangeExtension(relative, null) + $"_o00_{LarisVMS.Media.ThumbnailCapture.DefaultMaxDimension}.jpg");
                     await LarisVMS.Media.ThumbnailCapture.SaveToCacheAsync(thumbPath, bytes, ct);
                 }
                 processed++;
@@ -123,7 +123,7 @@ public class ThumbnailBackfillService(NodeApiClient api, NodeWorker worker, stri
             if (nowUtc - info.LastWriteTimeUtc < MinAge) continue;
 
             var relative = Path.GetRelativePath(mainDir, path);
-            var thumbPath = Path.Combine(thumbsDir, Path.ChangeExtension(relative, null) + "_o00.jpg");
+            var thumbPath = Path.Combine(thumbsDir, Path.ChangeExtension(relative, null) + $"_o00_{LarisVMS.Media.ThumbnailCapture.DefaultMaxDimension}.jpg");
             if (!File.Exists(thumbPath)) yield return path;
         }
     }

@@ -7,7 +7,10 @@ using LarisVMS.Infrastructure.Data;
 
 namespace LarisVMS.Infrastructure.Services;
 
-public class TimelineService(ApplicationDbContext db, IEventColorService eventColors) : ITimelineService
+// settings is optional (defaults to null, resolved from DI in production regardless — see
+// GetSnapshotsAsync's own comment) so the many existing tests constructing this directly with just
+// (db, palette) keep compiling unchanged; only tests exercising the new type-filtering need to pass one.
+public class TimelineService(ApplicationDbContext db, IEventColorService eventColors, ISettingsResolver? settings = null) : ITimelineService
 {
     /// <summary>
     /// Normalizes an incoming range bound to a true UTC value before it's compared against the
@@ -209,9 +212,27 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
         atUtc = NormalizeToUtc(atUtc);
         var bucketTicks = TimeSpan.FromSeconds(ThumbnailBucketSeconds).Ticks;
         var bucketedUtc = new DateTime((atUtc.Ticks / bucketTicks) * bucketTicks, DateTimeKind.Utc);
+        return await ResolveThumbnailInfoAsync(cameraId, bucketedUtc, ct);
+    }
 
+    /// <summary>M18: the Snapshots browser's own lookup — same segment/offset resolution as
+    /// GetThumbnailInfoAsync, but against the exact requested instant instead of snapping to the
+    /// nearest 5 minutes. GetThumbnailInfoAsync's bucketing exists to keep interactive scrub-hover
+    /// cheap (many requests a second while dragging) and its own doc comment already admits it can
+    /// read "up to ~10 minutes stale" — fine for a hover preview, wrong for a snapshot of one specific
+    /// motion event: a motion-mode camera's segment covering the *bucketed* instant is exactly the
+    /// kind of coverage gap a real event is likely to fall into (recording had just resumed, or
+    /// hadn't yet, at the rounded-off mark), which read as "snapshots don't show anything real" when
+    /// this reused the bucketed lookup. Snapshots renders at most one page (24) of images per load,
+    /// nowhere near hover-scrub's request volume, so there's no cost concern in resolving each one
+    /// exactly.</summary>
+    public async Task<ThumbnailInfo?> GetExactThumbnailInfoAsync(Guid cameraId, DateTime atUtc, CancellationToken ct = default)
+        => await ResolveThumbnailInfoAsync(cameraId, NormalizeToUtc(atUtc), ct);
+
+    private async Task<ThumbnailInfo?> ResolveThumbnailInfoAsync(Guid cameraId, DateTime atUtc, CancellationToken ct)
+    {
         var segment = await db.Segments
-            .Where(s => s.CameraId == cameraId && s.StartUtc <= bucketedUtc && s.EndUtc > bucketedUtc)
+            .Where(s => s.CameraId == cameraId && s.StartUtc <= atUtc && s.EndUtc > atUtc)
             .Select(s => new { s.FilePath, s.NodeId, s.StartUtc, s.DurationMs })
             .FirstOrDefaultAsync(ct);
         if (segment is null) return null;
@@ -223,7 +244,7 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
 
         // Clamped short of the segment's own end — an offset landing exactly on/past EndUtc would
         // ask ffmpeg to seek past the last frame this segment actually has.
-        var rawOffsetSeconds = (int)(bucketedUtc - segment.StartUtc).TotalSeconds;
+        var rawOffsetSeconds = (int)(atUtc - segment.StartUtc).TotalSeconds;
         var maxOffsetSeconds = Math.Max(0, segment.DurationMs / 1000 - 1);
         var offsetSeconds = Math.Clamp(rawOffsetSeconds, 0, maxOffsetSeconds);
 
@@ -316,5 +337,137 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
                         DetectionDisplay.Emoji(k), palette.ColorFor(k)))
                     .ToList()))
             .ToList();
+    }
+
+    private const int MaxSnapshotPageSize = 100;
+
+    /// <summary>Token this page-level filter uses for a custom-tag-sourced span — the admin-level
+    /// SnapshotVisibility setting has no equivalent key, since a custom tag's own IsEnabled toggle
+    /// already governs whether it exists at all; this only needs to let one viewer narrow *their own*
+    /// browsing to exclude tags for the moment, not decide system-wide visibility.</summary>
+    public const string CustomTagKindToken = "CustomTag";
+
+    public async Task<SnapshotPageDto> GetSnapshotsAsync(Guid? cameraId, DateTime? fromUtc, DateTime? toUtc, int page, int pageSize, CancellationToken ct = default, IReadOnlyCollection<string>? kinds = null)
+    {
+        pageSize = Math.Clamp(pageSize, 1, MaxSnapshotPageSize);
+
+        var query = db.MotionSpans.AsNoTracking().AsQueryable();
+        if (cameraId is { } cid) query = query.Where(m => m.CameraId == cid);
+        if (fromUtc is { } f) { f = NormalizeToUtc(f); query = query.Where(m => m.StartUtc >= f); }
+        if (toUtc is { } t) { t = NormalizeToUtc(t); query = query.Where(m => m.StartUtc <= t); }
+
+        // Admin-configurable "which event types cameras support" filter (see SnapshotVisibility) —
+        // a custom EventTagRule span is never excluded here, since each rule already carries its own
+        // IsEnabled toggle; only plain motion (no class, no rule) and each DetectionKind are gated.
+        // settings is null in every existing test that doesn't care about this (default constructor
+        // param), which resolves to "everything enabled" — the pre-existing behavior.
+        if (settings is not null)
+        {
+            var motionEnabled = await settings.GetAsync(SnapshotVisibility.MotionKey, true, ct: ct);
+            var disabledKinds = new List<DetectionKind>();
+            foreach (var kind in DetectionDisplay.AllKinds)
+            {
+                if (!await settings.GetAsync(SnapshotVisibility.DetectionKey(kind), true, ct: ct))
+                    disabledKinds.Add(kind);
+            }
+
+            query = query.Where(m =>
+                m.EventTagRuleId != null
+                || (m.DetectionKind != null && !disabledKinds.Contains(m.DetectionKind.Value))
+                || (m.DetectionKind == null && motionEnabled));
+        }
+
+        // Page-level filter (Pages/Snapshots' own toolbar) — a pure narrowing on top of whatever the
+        // admin-level filter above already allows, so a viewer can browse just "Person" for a moment
+        // without touching the system-wide setting. Null/empty means no additional narrowing (every
+        // checkbox ticked, or the filter never touched) — same "missing = show everything" default
+        // as the admin setting.
+        if (kinds is { Count: > 0 })
+        {
+            var kindSet = kinds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var wantMotion = kindSet.Contains("Motion");
+            var wantCustomTag = kindSet.Contains(CustomTagKindToken);
+            var wantedDetectionKinds = DetectionDisplay.AllKinds.Where(k => kindSet.Contains(k.ToString())).ToList();
+
+            query = query.Where(m =>
+                (m.EventTagRuleId != null && wantCustomTag)
+                || (m.DetectionKind != null && wantedDetectionKinds.Contains(m.DetectionKind.Value))
+                || (m.DetectionKind == null && m.EventTagRuleId == null && wantMotion));
+        }
+
+        var total = await query.CountAsync(ct);
+        var totalPages = Math.Max(1, (int)Math.Ceiling(total / (double)pageSize));
+        var currentPage = Math.Clamp(page, 1, totalPages);
+
+        // Zone/EventTagRule names projected via a null-conditional (left join) same as ResolveColor's
+        // own ColorHex projection above — a span whose zone/rule has since been deleted still comes
+        // back (ZoneId/EventTagRuleId themselves are SetNull/Restrict-nulled on delete, same as
+        // TimelineBucketDto's own coloring already tolerates).
+        // ThenByDescending(Id), not just StartUtc: SQL Server's OFFSET/FETCH has no guaranteed order
+        // among tied rows, and several motion spans easily share the same StartUtc to the second (a
+        // camera reporting multiple detection classes on the same real event, or several cameras
+        // triggering in the same instant) — without a fully unique tiebreaker, the same row could
+        // appear on two different pages, or a row could be skipped entirely, page to page.
+        var rows = await query
+            .OrderByDescending(m => m.StartUtc).ThenByDescending(m => m.Id)
+            .Skip((currentPage - 1) * pageSize).Take(pageSize)
+            .Select(m => new
+            {
+                m.Id,
+                m.CameraId,
+                m.StartUtc,
+                m.EndUtc,
+                m.ZoneId,
+                m.EventTagRuleId,
+                m.DetectionKind,
+                ZoneName = m.Zone != null ? m.Zone.Name : null,
+                RuleName = m.EventTagRule != null ? m.EventTagRule.Name : null,
+                RuleColorHex = m.EventTagRule != null ? m.EventTagRule.ColorHex : null
+            })
+            .ToListAsync(ct);
+
+        var cameraIds = rows.Select(r => r.CameraId).Distinct().ToList();
+        var cameraNames = await db.Cameras.Where(c => cameraIds.Contains(c.Id))
+            .Select(c => new { c.Id, c.Name }).ToDictionaryAsync(c => c.Id, c => c.Name, ct);
+
+        var palette = await eventColors.GetAsync(ct);
+
+        // Same label/color precedence as ResolveColor above (custom tag > detected class > plain
+        // motion), plus an emoji and a human label neither bucket coloring nor ResolveColor needed.
+        var items = rows.Select(r =>
+        {
+            string label, color, emoji;
+            if (r.EventTagRuleId is not null)
+            {
+                label = r.RuleName ?? "(deleted tag)";
+                color = r.RuleColorHex ?? EventColors.DefaultMotion;
+                emoji = "🏷️";
+            }
+            else if (r.DetectionKind is { } kind)
+            {
+                label = DetectionDisplay.Label(kind);
+                color = palette.ColorFor(kind);
+                emoji = DetectionDisplay.Emoji(kind);
+            }
+            else
+            {
+                label = r.ZoneName ?? "Motion";
+                color = palette.MotionColor;
+                emoji = EventColors.MotionEmoji;
+            }
+
+            // The midpoint, not the start — an event's opening instant is often the least
+            // representative frame of it (a person just entering frame edge, a car mid-approach);
+            // the middle is far more likely to actually show the thing that triggered the span.
+            // Explicit user ask: "if an event is 20 seconds long take a snapshot from 10 seconds in".
+            var duration = r.EndUtc - r.StartUtc;
+            var atUtc = r.StartUtc + TimeSpan.FromTicks(duration.Ticks / 2);
+
+            return new SnapshotDto(r.Id, r.CameraId,
+                cameraNames.TryGetValue(r.CameraId, out var name) ? name : "(deleted camera)",
+                atUtc, duration, label, color, emoji);
+        }).ToList();
+
+        return new SnapshotPageDto(items, totalPages, currentPage);
     }
 }

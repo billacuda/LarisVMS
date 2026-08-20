@@ -22,7 +22,11 @@ window.larisvmsZonesEditor = (function () {
         ServerMotion: 'Motion (server)',
         Ignore: 'Ignore',
         CameraMotion: 'Motion (camera) — inactive',
-        Privacy: 'Privacy — inactive'
+        // M18 built the burn-in (NodeWorker/RecordingSession) but a confirmed-live bug on real
+        // Intel/NVIDIA hardware (masked camera stuck cycling Connecting/Backoff forever, see
+        // CHANGELOG 0.111.0-0.112.0) made it a kill-switched no-op again (NodeWorker.PrivacyMaskEnabled
+        // = false) until the root cause is found — still "not yet active" from an admin's perspective.
+        Privacy: 'Privacy — not yet active'
     };
 
     // Closing a polygon by clicking back near its first point needs a forgiving radius in *screen*

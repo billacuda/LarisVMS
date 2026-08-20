@@ -55,9 +55,11 @@ public interface INodeService
     /// clearing it. nodeSentAtUtc (from NodeHeartbeatRequest.SentAtUtc) is compared against
     /// serverReceivedUtc to measure clock skew (see Node.ClockSkewSeconds); null (an older node
     /// build that doesn't send it yet) leaves the previous skew measurement in place rather than
-    /// clearing it to unknown on every heartbeat.</summary>
+    /// clearing it to unknown on every heartbeat. detectedEncoders (M17) is serialized to
+    /// Node.DetectedEncodersJson the same coalesce-preserve way; null leaves the previous value
+    /// alone rather than clearing a real prior probe result.</summary>
     Task RecordHeartbeatAsync(Guid nodeId, long? freeBytes, long? totalBytes, string? version, int? livePort,
-        DateTime? nodeSentAtUtc, DateTime serverReceivedUtc, CancellationToken ct = default);
+        DateTime? nodeSentAtUtc, DateTime serverReceivedUtc, List<string>? detectedEncoders = null, CancellationToken ct = default);
 
     /// <summary>Rough "days of retention remaining" per node: free bytes divided by that node's
     /// measured write rate over the last 24h. Null for a node with no free-space report yet or no

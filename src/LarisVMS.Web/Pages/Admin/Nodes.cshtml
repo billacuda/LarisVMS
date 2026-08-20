@@ -51,6 +51,7 @@ else
                     <th>IP</th>
                     <th>Version</th>
                     <th>Platform</th>
+                    <th data-no-sort>Encoders</th>
                     <th>Last seen</th>
                     <th data-sort-numeric>Cameras</th>
                     <th>Storage root</th>
@@ -80,6 +81,24 @@ else
                             <td class="font-monospace">@(n.LastIpAddress ?? "—")</td>
                             <td>@n.Version</td>
                             <td>@n.Platform</td>
+                            <td>
+                                @{
+                                    var encoders = string.IsNullOrEmpty(n.DetectedEncodersJson)
+                                        ? []
+                                        : System.Text.Json.JsonSerializer.Deserialize<List<string>>(n.DetectedEncodersJson) ?? [];
+                                }
+                                @if (encoders.Count == 0)
+                                {
+                                    <span class="text-muted small" title="No successful ffmpeg -encoders probe reported yet — needs a heartbeat from a node running M17 or later.">none reported</span>
+                                }
+                                else
+                                {
+                                    foreach (var enc in encoders)
+                                    {
+                                        <span class="badge text-bg-secondary font-monospace">@enc</span>
+                                    }
+                                }
+                            </td>
                             <td data-sort-value="@(n.LastSeenAt?.Ticks ?? 0)">
                                 @if (n.LastSeenAt is { } seen)
                                 {

@@ -125,8 +125,19 @@ window.larisvmsViewEditor = (function () {
         return Math.max(1, Math.round(pixelHeight / 60)); // 60 = cellHeight passed to GridStack.init
     }
 
+    // A newly-added cell starts at the camera's own aspect ratio rather than a blanket 16:9 — the
+    // old default silently mis-shaped every non-16:9 camera unless someone noticed and corrected the
+    // dropdown by hand, which is what made the derived phone stack letterbox those cameras (see
+    // view-play.js's mobileCellRatio). Falls back to the default for a camera with no probed
+    // resolution yet.
+    function defaultAspectFor(cameraId) {
+        var cam = cameraById[cameraId];
+        return (cam && window.LarisVMSAspectRatio.nearest(cam.width, cam.height))
+            || window.LarisVMSAspectRatio.default;
+    }
+
     function addCameraFromPalette(cameraId) {
-        var aspect = window.LarisVMSAspectRatio.default;
+        var aspect = defaultAspectFor(cameraId);
         var w = 4;
         var cell = { id: newCellId(), aspect: aspect, cameraId: cameraId, hideOnPhone: false };
         // x/y intentionally omitted so GridStack auto-places this in the first free slot.
@@ -150,11 +161,18 @@ window.larisvmsViewEditor = (function () {
 
             var cell = {
                 id: (item.id && String(item.id)) || newCellId(),
-                aspect: window.LarisVMSAspectRatio.default,
+                aspect: defaultAspectFor(cameraId),
                 cameraId: cameraId,
                 hideOnPhone: false
             };
             fillCell(contentEl, cell);
+            // Now that a dropped cell's aspect can be something other than the default, its height
+            // has to be recomputed for that aspect — otherwise the cell keeps whatever height the
+            // drop happened to produce (sized for the old blanket 16:9) while its dropdown reads a
+            // different ratio. Same correction the aspect dropdown's own change handler applies.
+            if (item.el && item.el.gridstackNode && grid) {
+                grid.update(item.el, { h: computeInitialHeight(cell.aspect, item.el.gridstackNode.w) });
+            }
         });
     }
 

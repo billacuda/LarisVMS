@@ -61,9 +61,26 @@ public interface ITimelineService
     /// its token and the node names its cache file from this one canonical value.</summary>
     Task<ThumbnailInfo?> GetThumbnailInfoAsync(Guid cameraId, DateTime atUtc, CancellationToken ct = default);
 
+    /// <summary>M18: same lookup as GetThumbnailInfoAsync but resolved against the exact requested
+    /// instant rather than snapped to the nearest 5 minutes — see the implementation's own doc
+    /// comment for why the Snapshots browser needs this instead of the bucketed version.</summary>
+    Task<ThumbnailInfo?> GetExactThumbnailInfoAsync(Guid cameraId, DateTime atUtc, CancellationToken ct = default);
+
     /// <summary>Dashboard's "most recent thumbnail" column: the newest completed segment's own
     /// last frame — see the implementation's own doc comment for why this is deliberately not
     /// GetThumbnailInfoAsync (bucketed/historical) or the live-RTSP snapshot endpoint (too heavy to
     /// poll per-camera every dashboard refresh). Null if this camera has no segments yet.</summary>
     Task<ThumbnailInfo?> GetLatestThumbnailInfoAsync(Guid cameraId, CancellationToken ct = default);
+
+    /// <summary>M18: the Snapshots browser's own query — every MotionSpan (any Source), newest
+    /// first, narrowed by an optional camera and/or date range, server-side paged. See SnapshotDto's
+    /// own doc comment for why this reuses MotionSpans directly rather than a new table: every motion
+    /// event is already "tagged" with a zone/rule/detection class, and the image itself is extracted
+    /// from the recording on demand, not captured or stored separately.
+    ///
+    /// kinds is the page's own event-type filter (checkboxes: "Motion", "CustomTag", or a
+    /// DetectionKind name — see TimelineService.CustomTagKindToken), a pure narrowing on top of
+    /// whatever the admin-level SnapshotVisibility setting already allows. Null/empty means no
+    /// additional narrowing.</summary>
+    Task<SnapshotPageDto> GetSnapshotsAsync(Guid? cameraId, DateTime? fromUtc, DateTime? toUtc, int page, int pageSize, CancellationToken ct = default, IReadOnlyCollection<string>? kinds = null);
 }

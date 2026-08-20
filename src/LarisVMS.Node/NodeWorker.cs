@@ -87,6 +87,13 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     // Segments dropped from ~16,600 to ~235 rows after this session's several version-bump restarts.
     private HashSet<string>? _knownSegmentPaths;
 
+    // M17: probed once at startup (see ExecuteAsync) and reported on every heartbeat thereafter —
+    // hardware and the installed ffmpeg build don't change while this process is running, so there's
+    // no reason to re-run FfmpegCapabilityProber on a schedule. Null until that first probe
+    // completes (heartbeat reports whatever it has; a null DetectedEncoders leaves the server's
+    // previously-stored value alone rather than clearing it — see NodeService.RecordHeartbeatAsync).
+    private IReadOnlyList<string>? _detectedEncoders;
+
     /// <summary>The active RecordingSession for a camera this node is currently recording, or null
     /// if it isn't assigned here (or isn't recording yet). Used by the live-view WebSocket endpoint
     /// to attach a viewer to the right session's tee'd live fanout.</summary>
@@ -117,7 +124,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// OnDemandThumbnailGate — a hover request that can't get a slot within 3s gives up (the caller
     /// renders "No preview available") rather than piling up behind an unbounded queue for a preview
     /// that may already be stale by the time it'd be served.</summary>
-    public async Task<byte[]?> CaptureThumbnailAsync(string filePath, int offsetSeconds, CancellationToken ct)
+    public async Task<byte[]?> CaptureThumbnailAsync(string filePath, int offsetSeconds, CancellationToken ct, int maxDimension = ThumbnailCapture.DefaultMaxDimension)
     {
         using var gateCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         gateCts.CancelAfter(TimeSpan.FromSeconds(3));
@@ -131,7 +138,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         }
         try
         {
-            return await ThumbnailCapture.CaptureAsync(ffmpegPath, filePath, offsetSeconds, ct);
+            return await ThumbnailCapture.CaptureAsync(ffmpegPath, filePath, offsetSeconds, ct, maxDimension: maxDimension);
         }
         finally
         {
@@ -190,6 +197,13 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             _logger.LogWarning(ex, "Could not fetch this node's already-known segment paths at startup — a RecordingSession started this run will treat its own on-disk history as unreported, same as before this safeguard existed.");
             _knownSegmentPaths = [];
         }
+
+        // M17: best-effort, same reasoning as every other probe on this path — a failed/empty result
+        // (FfmpegCapabilityProber never throws) just means this node reports no detected encoders
+        // this run rather than blocking startup on it.
+        _detectedEncoders = await FfmpegCapabilityProber.ProbeAsync(ffmpegPath, stoppingToken);
+        _logger.LogInformation("Detected encoder(s): {Encoders}",
+            _detectedEncoders.Count > 0 ? string.Join(", ", _detectedEncoders) : "(none — ffmpeg -encoders probe found nothing recognized, or failed)");
 
         var reconcileLoop = ReconcileLoopAsync(stoppingToken);
         var segmentReportLoop = SegmentReportLoopAsync(stoppingToken);
@@ -265,7 +279,8 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 var storageRoot = Reconcile(config, ct);
                 PersistConfigCache(config);
                 var usage = DiskSpace.TryGetUsage(storageRoot);
-                var heartbeat = await api.HeartbeatAsync(new NodeHeartbeatRequest(NodeVersion.Current, usage?.FreeBytes, usage?.TotalBytes, livePort, DateTime.UtcNow), ct);
+                var heartbeat = await api.HeartbeatAsync(new NodeHeartbeatRequest(NodeVersion.Current, usage?.FreeBytes, usage?.TotalBytes, livePort,
+                    DateTime.UtcNow, _detectedEncoders?.ToList()), ct);
 
                 // Auto-update: server only ever hands this back when a genuinely newer build exists
                 // for this node's platform and NodeAutoUpdate.Enabled is on (see Program.cs's
@@ -530,6 +545,34 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             // across every later reconcile that actually updates this camera's settings.
             _latestCameraConfig[camera.CameraId] = camera;
 
+            // M18: a Privacy zone added/edited/removed on an already-recording camera needs the
+            // session restarted to pick up the new (or now-absent) `-vf drawbox` filters — burning a
+            // mask in is baked into the encoded stream at record time, not something a later reconcile
+            // can silently change underneath an already-running ffmpeg process the way, say, retention
+            // days can. Same signature-and-restart shape as ReconcileMotion's own zone-change handling.
+            //
+            // PrivacyMaskEnabled is a deliberate kill switch, off for now: confirmed live on real
+            // Intel/NVIDIA hardware that a masked camera gets stuck cycling Connecting/Backoff forever
+            // (see CHANGELOG 0.111.0/0.112.0) — one real cause (pairing decode hwaccel with the CPU
+            // drawbox filter) was found and fixed in 0.112.0, but that did not resolve the reported
+            // symptom, and the actual root cause is still unknown. Rather than leave a Privacy zone as
+            // an attractive nuisance that breaks a camera's recording the moment one is saved, this
+            // flag makes it a safe no-op again — same as CameraMotion's own "drawable, saved, does
+            // nothing yet" state — until the real bug is found. Every helper below
+            // (PrivacyMaskFilterBuilder, EncoderSelection, RecordingSession's transcode branch, and
+            // their tests) is untouched and ready for whenever that happens; only this one switch and
+            // the effectiveZones substitution below need to change back.
+            const bool PrivacyMaskEnabled = false;
+            var effectiveZones = PrivacyMaskEnabled ? camera.Zones : [];
+            var privacyEncoder = ChoosePrivacyEncoder(effectiveZones);
+            var privacySignature = BuildPrivacyMaskSignature(effectiveZones, privacyEncoder);
+            if (_active.TryGetValue(camera.CameraId, out var activeRecorder) && activeRecorder.PrivacyMaskSignature != privacySignature)
+            {
+                _logger.LogInformation("Privacy mask configuration changed for camera {CameraId} ({Name}) — restarting recording session.", camera.CameraId, camera.Name);
+                activeRecorder.Cts.Cancel();
+                _active.TryRemove(camera.CameraId, out _);
+            }
+
             if (!_active.ContainsKey(camera.CameraId))
             {
                 // Recording only ever uses the Main stream — Sub/Third exist for the live wall and
@@ -545,9 +588,24 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                     var rtspUri = InjectCredentials(mainStream.RtspUri, camera.Username, camera.Password);
                     var outputDir = Path.Combine(storageRoot, $"cam-{camera.CameraId}", "main");
 
+                    var privacyMaskFilters = BuildPrivacyMaskFilters(effectiveZones);
+                    // privacyEncoder can be null here (capability probe hasn't completed/found nothing
+                    // yet) without meaning "record unmasked" — RecordingSession's own BuildCodecArgs
+                    // falls back to libx264 (software, always available) whenever filters are non-empty
+                    // but no specific encoder was chosen, so a Privacy zone is never silently skipped
+                    // just because the hardware probe hasn't reported in by the time this camera
+                    // started recording. Once it does, the mask-signature check above restarts this
+                    // session and picks up the real hardware encoder then.
+                    if (privacyMaskFilters.Count > 0 && privacyEncoder is null)
+                    {
+                        _logger.LogInformation("Camera {CameraId} ({Name}) has {Count} enabled Privacy zone(s) — masking with software libx264 until this node's hardware-encoder probe reports in.",
+                            camera.CameraId, camera.Name, privacyMaskFilters.Count);
+                    }
+
                     var cts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
                     var sessionLogger = loggerFactory.CreateLogger($"Recording[{camera.Name}]");
-                    var session = new RecordingSession(new RecordingSessionOptions(ffmpegPath, rtspUri, outputDir), sessionLogger);
+                    var session = new RecordingSession(new RecordingSessionOptions(ffmpegPath, rtspUri, outputDir,
+                        PrivacyMaskFilters: privacyMaskFilters.Count > 0 ? privacyMaskFilters : null, VideoEncoder: privacyEncoder), sessionLogger);
                     var capturedCameraId = camera.CameraId; // an id never goes stale the way the DTO it came from does
                     session.SegmentCompleted += segment => HandleSegmentCompleted(capturedCameraId, segment);
                     session.StreamResolutionDetected += resolution => _pendingStreamInfo.Enqueue(new StreamInfoReportItem(
@@ -565,11 +623,26 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                     // mass-discard bug. OrdinalIgnoreCase prefix match since outputDir itself is
                     // built the identical way every time (same storageRoot resolution), but real
                     // Windows/UNC paths can differ in case from run to run.
-                    var knownPathsForCamera = _knownSegmentPaths?
-                        .Where(p => p.StartsWith(outputDir, StringComparison.OrdinalIgnoreCase));
+                    //
+                    // Unioned with a live scan of outputDir, not just the process-startup snapshot:
+                    // M18's privacy-mask restart above can replace an already-running session's
+                    // RecordingSession mid-process-lifetime, and whatever files the *old* session had
+                    // already reported (from *its* own in-memory reportedPaths, which this new session
+                    // has no way to see) are sitting on disk right now — without this, the new
+                    // session's fresh, empty reportedPaths would rediscover and re-report every one of
+                    // them as if brand new, the exact duplicate-segment bug knownSegmentPaths already
+                    // exists to prevent, just via a second path into it. Harmless (a no-op superset)
+                    // for a camera's genuine first start in this process's lifetime, where
+                    // _knownSegmentPaths already covers the same files.
+                    IEnumerable<string> onDiskNow;
+                    try { onDiskNow = Directory.GetFiles(outputDir, "*.mp4", SearchOption.AllDirectories); }
+                    catch (IOException) { onDiskNow = []; } // includes DirectoryNotFoundException — a camera's first-ever start has no folder yet
+                    var knownPathsForCamera = (_knownSegmentPaths?
+                        .Where(p => p.StartsWith(outputDir, StringComparison.OrdinalIgnoreCase)) ?? [])
+                        .Union(onDiskNow, StringComparer.OrdinalIgnoreCase);
 
                     var runTask = session.RunAsync(cts.Token, knownPathsForCamera);
-                    _active[camera.CameraId] = new CameraRecorder(cts, runTask, session, rtspUri);
+                    _active[camera.CameraId] = new CameraRecorder(cts, runTask, session, rtspUri, privacySignature);
                     _logger.LogInformation("Started recording camera {CameraId} ({Name}) -> {OutputDir}", camera.CameraId, camera.Name, outputDir);
                 }
             }
@@ -768,6 +841,29 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     // per camera at most) and readable in a debugger, so there's no reason to hash away that.
     private static string BuildZoneConfigSignature(List<NodeConfigZoneDto> zones) =>
         string.Join('|', zones.OrderBy(z => z.ZoneId).Select(z => $"{z.ZoneId}:{z.Kind}:{z.Sensitivity}:{z.PolygonJson}"));
+
+    // ── Privacy masking (M18) ────────────────────────────────────────────────────
+    private static IReadOnlyList<string> BuildPrivacyMaskFilters(List<NodeConfigZoneDto> zones) =>
+        PrivacyMaskFilterBuilder.BuildDrawboxFilters(
+            zones.Where(z => z.Kind == nameof(ZoneKind.Privacy))
+                .Select(z => ZoneRasterizer.ParsePolygon(z.PolygonJson)));
+
+    /// <summary>Null when the camera has no enabled Privacy zone at all — RecordingSession never even
+    /// looks at VideoEncoder in that case (see BuildCodecArgs), so there's nothing to choose. Also
+    /// null when it does but this node's own capability probe hasn't reported an encoder yet — see
+    /// the "masking with software libx264" fallback where this is called from.</summary>
+    private string? ChoosePrivacyEncoder(List<NodeConfigZoneDto> zones) =>
+        zones.Any(z => z.Kind == nameof(ZoneKind.Privacy)) ? EncoderSelection.ChooseH264Encoder(_detectedEncoders ?? []) : null;
+
+    // Content-equality signature (same shape as BuildZoneConfigSignature) covering exactly what
+    // RecordingSession's transcode branch actually reads: each enabled Privacy zone's own polygon,
+    // plus the chosen encoder — either changing means the ffmpeg command line this camera's session
+    // was started with is now stale and needs restarting to take effect. ServerMotion/Ignore zone
+    // changes deliberately don't appear here; those only affect ReconcileMotion's own separate
+    // session, not this one.
+    private static string BuildPrivacyMaskSignature(List<NodeConfigZoneDto> zones, string? encoder) =>
+        string.Join('|', zones.Where(z => z.Kind == nameof(ZoneKind.Privacy)).OrderBy(z => z.ZoneId)
+            .Select(z => $"{z.ZoneId}:{z.PolygonJson}")) + "#" + encoder;
 
     /// <summary>M8: decides whether a segment is worth keeping for a Motion- or Event-mode camera.
     /// Pure and unit-tested directly — the actual rule is exactly two booleans, kept separate from

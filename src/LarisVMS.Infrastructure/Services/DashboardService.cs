@@ -12,12 +12,14 @@ namespace LarisVMS.Infrastructure.Services;
 public class DashboardService(ICameraService cameraService) : IDashboardService
 {
     // Same 2-minute staleness window Admin/Nodes already uses for a node's own online/offline badge
-    // — kept in sync rather than each page inventing its own threshold.
-    private static readonly TimeSpan NodeOnlineWindow = TimeSpan.FromMinutes(2);
+    // — kept in sync rather than each page inventing its own threshold. Public: AlertEvaluationPolicy
+    // (LarisVMS.Web.Services) reuses these exact windows so "offline"/"not reporting" mean the same
+    // thing on the Dashboard and in an alert firing, rather than two thresholds silently drifting.
+    public static readonly TimeSpan NodeOnlineWindow = TimeSpan.FromMinutes(2);
     // 3x NodeWorker's 15s health-report tick — one missed cycle (a transient report failure,
     // immediately retried per FlushStreamInfoAsync) shouldn't flip a camera to "not reporting";
     // several in a row should.
-    private static readonly TimeSpan HealthFreshWindow = TimeSpan.FromSeconds(45);
+    public static readonly TimeSpan HealthFreshWindow = TimeSpan.FromSeconds(45);
 
     public async Task<DashboardHealthDto> GetHealthAsync(CancellationToken ct = default)
     {

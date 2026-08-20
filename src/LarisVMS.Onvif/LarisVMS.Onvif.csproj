@@ -7,6 +7,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- OnvifPtzClient.FormatAxis (internal static) is unit tested directly — the exact numeric
+         string format a real device's XML parser needs, independent of server locale. -->
+    <InternalsVisibleTo Include="LarisVMS.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\LarisVMS.Core\LarisVMS.Core.csproj" />
   </ItemGroup>
 

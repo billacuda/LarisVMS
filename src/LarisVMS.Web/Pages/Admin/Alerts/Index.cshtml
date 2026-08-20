@@ -1,0 +1,72 @@
+@page
+@model LarisVMS.Web.Pages.Admin.Alerts.IndexModel
+@{
+    ViewData["Title"] = "Alerts";
+}
+<h1>Alerts</h1>
+
+<p class="text-muted">
+    Watches a camera or node for a condition and fires through email, webhook, ntfy, Pushover, Slack,
+    or Teams. Checked once a minute; each rule has its own cooldown so a condition that stays true
+    doesn't re-alert every tick.
+</p>
+
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger">@Model.ErrorMessage</div>
+}
+
+<div class="card mb-3">
+    <div class="table-responsive">
+        <table class="table table-sm mb-0 align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th>Name</th>
+                    <th>Condition</th>
+                    <th>Deliveries</th>
+                    <th>Last fired</th>
+                    <th>Status</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in Model.Rules)
+                {
+                    <tr>
+                        <td><a asp-page="Edit" asp-route-id="@r.Id">@r.Name</a></td>
+                        <td class="small">@r.ConditionSummary</td>
+                        <td class="small">@(r.ChannelLabels.Count == 0 ? "(none)" : string.Join(", ", r.ChannelLabels))</td>
+                        <td class="small text-muted">@(r.LastFiredAt is { } fired ? fired.ToString("u") : "never")</td>
+                        <td>
+                            @if (r.IsEnabled)
+                            {
+                                <span class="badge text-bg-success">Enabled</span>
+                            }
+                            else
+                            {
+                                <span class="badge text-bg-secondary">Disabled</span>
+                            }
+                        </td>
+                        <td class="text-end text-nowrap">
+                            <form method="post" asp-page-handler="ToggleEnabled" asp-route-id="@r.Id" class="d-inline">
+                                <button type="submit" class="btn btn-sm btn-outline-secondary">
+                                    @(r.IsEnabled ? "Disable" : "Enable")
+                                </button>
+                            </form>
+                            <form method="post" asp-page-handler="Delete" asp-route-id="@r.Id" class="d-inline"
+                                  onclick="return confirm('Delete alert rule &quot;@r.Name&quot;?');">
+                                <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                }
+                @if (Model.Rules.Count == 0)
+                {
+                    <tr><td colspan="6" class="text-center text-muted py-3">No alert rules yet.</td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<a asp-page="Edit" class="btn btn-primary">Add rule</a>

@@ -30,7 +30,19 @@ public record RecordingSessionOptions(
     /// has stopped producing output (camera stopped responding mid-connection, network stall) is
     /// the common real-world failure mode, and process liveness alone does not catch it.</summary>
     int StalledThresholdSeconds = 150,
-    int PollIntervalSeconds = 5);
+    int PollIntervalSeconds = 5,
+    /// <summary>M18: `-vf drawbox=...` expressions from PrivacyMaskFilterBuilder, one per enabled
+    /// Privacy zone on this camera. Null/empty (the default, and every camera with no Privacy zone)
+    /// keeps the original `-c copy` pipeline exactly as before this feature existed — burning in a
+    /// mask requires a real decode+encode, so a camera with nothing to mask must not pay that cost.</summary>
+    IReadOnlyList<string>? PrivacyMaskFilters = null,
+    /// <summary>The encoder to transcode with when PrivacyMaskFilters is non-empty — from
+    /// EncoderSelection.ChooseH264Encoder against this node's own detected capabilities. Ignored
+    /// entirely when PrivacyMaskFilters is empty. Null with a non-empty PrivacyMaskFilters is treated
+    /// as "fall back to libx264" (see StartFfmpeg) rather than silently keeping `-c copy` — a camera
+    /// with a configured privacy zone must never record unmasked footage because of a missing
+    /// encoder value.</summary>
+    string? VideoEncoder = null);
 
 /// <summary>
 /// Supervises one ffmpeg process recording one camera stream to disk as a sequence of fMP4
@@ -38,8 +50,11 @@ public record RecordingSessionOptions(
 /// with exponential backoff between restart attempts. Runs until the CancellationToken passed to
 /// <see cref="RunAsync"/> is cancelled.
 ///
-/// Recording is `-c copy` — no transcoding, so this has essentially no CPU cost beyond I/O — and
-/// completed segments are detected by polling the output directory rather than a FileSystemWatcher,
+/// Recording is `-c copy` by default — no transcoding, so this has essentially no CPU cost beyond
+/// I/O — unless RecordingSessionOptions.PrivacyMaskFilters is non-empty (M18), in which case it's a
+/// real decode/filter/encode instead, for exactly the cameras that need a privacy mask burned in and
+/// none of the others. Completed segments are detected by polling the output directory rather than a
+/// FileSystemWatcher,
 /// which is more predictable to reason about for something that has to run unattended for days and
 /// is known to be unreliable over SMB-backed paths (a real possibility once storage targets land in
 /// M4).
@@ -64,9 +79,10 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
     /// drive backoff timing and resets to 0 on every successful segment), this never resets, so a
     /// camera that reconnects constantly through the day is visible as "many total reconnects" even
     /// though each individual streak is short. A dropped-frames counter was considered too (the plan
-    /// doc's original health-signal sketch mentions one) but this pipeline is `-c copy` throughout —
-    /// no decode ever happens, so there is no meaningful "dropped frame" for ffmpeg to report; it was
-    /// left out rather than faked.</summary>
+    /// doc's original health-signal sketch mentions one) but at the time this pipeline was `-c copy`
+    /// throughout — no decode ever happened, so there was no meaningful "dropped frame" for ffmpeg to
+    /// report; it was left out rather than faked. M18's privacy-mask transcode path is a real decode
+    /// now, so a real dropped-frame count is possible for a masked camera — not added here yet.</summary>
     public int TotalReconnectCount { get; private set; }
 
     public event Action<RecordingSegment>? SegmentCompleted;
@@ -266,7 +282,17 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
                     }
                 }
 
-                if (stalled && !process.HasExited)
+                // Kills whenever the inner loop ended with the process still alive — not just the
+                // stalled case. Previously this only killed on a stall, so a plain cancellation (ct
+                // fires while the process is healthy) fell straight through to WaitForExitAsync below
+                // with nothing having ever told ffmpeg to stop — a real, confirmed hang risk once M18
+                // added the first caller that cancels a *single* camera's CTS mid-run to restart it
+                // for a config change (previously only whole-node shutdown ever cancelled this, which
+                // cancels and awaits every camera's session together — the same hang, just harder to
+                // notice with everything blocked on it at once rather than one camera visibly stuck).
+                // A process that already exited on its own (!process.HasExited is false here) is
+                // correctly left alone either way.
+                if (!process.HasExited)
                 {
                     TryKill(process);
                 }
@@ -393,18 +419,12 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
         // never touching the path actually handed to the filesystem.
         var teeOutputs = BuildTeeOutputs(options.SegmentSeconds, outputPattern);
 
-        string[] args =
-        [
-            "-nostdin",
-            "-rtsp_transport", "tcp",
-            "-timeout", "5000000",
-            "-i", options.RtspUri,
-            "-c", "copy",
-            "-map", "0:v",
-            "-map", "0:a?",
-            "-f", "tee",
-            "-y", teeOutputs
-        ];
+        var args = new List<string> { "-nostdin", "-rtsp_transport", "tcp", "-timeout", "5000000" };
+        args.AddRange(BuildDecodeArgs(options));
+        args.Add("-i");
+        args.Add(options.RtspUri);
+        args.AddRange(BuildCodecArgs(options));
+        args.AddRange(["-map", "0:v", "-map", "0:a?", "-f", "tee", "-y", teeOutputs]);
         foreach (var a in args) psi.ArgumentList.Add(a);
 
         logger.LogInformation("Starting ffmpeg for {RtspUri} -> {OutputDirectory}", RedactCredentials(options.RtspUri), options.OutputDirectory);
@@ -670,6 +690,36 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
     /// asserted directly in a unit test — the bug this guards against was a flag present on one leg
     /// and missing from the other, which produced no error anywhere and only surfaced as a browser
     /// rendering nothing.</summary>
+    /// <summary>M18: deliberately always empty — confirmed live (real Intel/NVIDIA hardware) that
+    /// pairing decode-side `-hwaccel` with the plain CPU `drawbox` filter this pipeline uses makes
+    /// ffmpeg fail immediately on every attempt (RecordingSession never reaches Recording, cycling
+    /// Connecting -&gt; Backoff forever with nothing ever produced). Hardware-decoded frames stay on
+    /// the GPU in a format `drawbox` — an ordinary software filter with no hwaccel awareness — can't
+    /// operate on, and this pipeline doesn't set up the explicit `hwdownload`/`format` conversion a
+    /// hwaccel decode would need to feed a CPU filter safely. The encoder (BuildCodecArgs) is still
+    /// hardware when one was detected — only the decode step falls back to software here, which is
+    /// the cheaper half of the work anyway. EncodePipeline.DecodeHwaccelArgs itself is untouched and
+    /// still available for a future consumer whose filter chain is itself hardware-native (e.g. an
+    /// adaptive-streaming downscale using `scale_cuda`/`vpp_qsv` instead of a CPU `scale` filter),
+    /// where pairing it with hwaccel decode would actually be safe.</summary>
+    internal static IReadOnlyList<string> BuildDecodeArgs(RecordingSessionOptions options) => [];
+
+    /// <summary>M18: `-c copy` (this pipeline's default, zero-CPU-cost path) for a camera with no
+    /// enabled Privacy zone, or a real filter+encode for one that has at least one — see
+    /// PrivacyMaskFilterBuilder for how a zone becomes a filter expression, and
+    /// EncoderSelection.ChooseH264Encoder for how NodeWorker picks options.VideoEncoder. Audio is
+    /// always `-c:a copy` on the transcode path — masking is a video-only concern, nothing about a
+    /// camera's audio track needs to change because one of its Privacy zones changed.</summary>
+    internal static IReadOnlyList<string> BuildCodecArgs(RecordingSessionOptions options)
+    {
+        if (options.PrivacyMaskFilters is not { Count: > 0 } filters) return ["-c", "copy"];
+
+        var encoder = options.VideoEncoder ?? "libx264";
+        var encodeArgs = EncodePipeline.BuildArgs(new EncodePipelineOptions(
+            encoder, VideoFilters: filters, Preset: EncodePipeline.RealtimePreset(encoder)));
+        return [.. encodeArgs, "-c:a", "copy"];
+    }
+
     internal static string BuildTeeOutputs(int segmentSeconds, string outputPattern) => string.Join('|',
         $"[f=segment:segment_time={segmentSeconds}:segment_atclocktime=1:reset_timestamps=1:strftime=1:" +
         $"segment_format=mp4:segment_format_options=movflags={MseMovFlags}]{EscapeForTee(outputPattern)}",

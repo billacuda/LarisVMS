@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
@@ -16,6 +17,17 @@ public class IndexModel(ICameraService cameraService, IViewService viewService, 
 {
     public List<Camera> Cameras { get; set; } = [];
     public List<View> Views { get; set; } = [];
+
+    /// <summary>M18: a Bookmark's own "▶ Play" link (Pages/Bookmarks/Index) — jumps straight to this
+    /// camera at this instant instead of the usual "pick a view, wait for it to land on 'now'" start.
+    /// Both null for an ordinary visit; the client resolves which View to load from CameraId itself
+    /// (the first visible View containing it), so this page doesn't need to know about Views to
+    /// support the deep link.</summary>
+    [BindProperty(SupportsGet = true)]
+    public Guid? CameraId { get; set; }
+
+    [BindProperty(SupportsGet = true)]
+    public DateTime? AtUtc { get; set; }
 
     public async Task OnGetAsync()
     {

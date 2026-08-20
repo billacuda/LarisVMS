@@ -1,0 +1,134 @@
+@page
+@model LarisVMS.Web.Pages.Admin.Settings.UsersModel
+@{
+    ViewData["Title"] = "Users";
+}
+<h1>Settings</h1>
+<partial name="_SettingsTabs" model="@("Users")" />
+
+<p class="text-muted">
+    Self-registration is disabled — this is the only way to create an account. Roles determine what a
+    user can do; <a asp-page="/Admin/Settings/Roles">Roles</a> manages what each role grants.
+</p>
+
+@if (!string.IsNullOrEmpty(Model.SavedMessage))
+{
+    <div class="alert alert-success">@Model.SavedMessage</div>
+}
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger">@Model.ErrorMessage</div>
+}
+
+<div class="card mb-3">
+    <div class="card-header fw-semibold">Users</div>
+    <div class="table-responsive">
+        <table class="table table-sm mb-0 align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th>Email</th>
+                    <th>Display name</th>
+                    <th>Roles</th>
+                    <th>Status</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var u in Model.Users)
+                {
+                    <tr>
+                        <td>@u.Email</td>
+                        <td>@u.DisplayName</td>
+                        <td>
+                            <form method="post" asp-page-handler="SaveRoles" class="d-flex flex-wrap gap-2 align-items-center">
+                                <input type="hidden" name="userId" value="@u.Id" />
+                                @foreach (var role in Model.Roles)
+                                {
+                                    var checkedAttr = u.RoleNames.Contains(role.Name) ? "checked" : "";
+                                    <div class="form-check form-check-inline m-0">
+                                        <input class="form-check-input" type="checkbox" name="roleIds" value="@role.Id"
+                                               id="role-@u.Id-@role.Id" @checkedAttr />
+                                        <label class="form-check-label small" for="role-@u.Id-@role.Id">@role.Name</label>
+                                    </div>
+                                }
+                                <button type="submit" class="btn btn-sm btn-outline-primary">Save</button>
+                            </form>
+                        </td>
+                        <td>
+                            @if (u.IsEnabled)
+                            {
+                                <span class="badge text-bg-success">Enabled</span>
+                            }
+                            else
+                            {
+                                <span class="badge text-bg-secondary">Disabled</span>
+                            }
+                        </td>
+                        <td class="text-end text-nowrap">
+                            <form method="post" asp-page-handler="ToggleEnabled" asp-route-userId="@u.Id" class="d-inline"
+                                  onclick="return confirm('@(u.IsEnabled ? "Disable" : "Enable") &quot;@u.Email&quot;?');">
+                                <button type="submit" class="btn btn-sm btn-outline-secondary">
+                                    @(u.IsEnabled ? "Disable" : "Enable")
+                                </button>
+                            </form>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#reset-@u.Id">
+                                Reset password
+                            </button>
+                        </td>
+                    </tr>
+                    <tr class="collapse" id="reset-@u.Id">
+                        <td colspan="5" class="bg-light">
+                            <form method="post" asp-page-handler="ResetPassword" class="row g-2 align-items-end py-2">
+                                <input type="hidden" name="userId" value="@u.Id" />
+                                <div class="col-sm-4">
+                                    <label class="form-label small mb-1">New password for @u.Email</label>
+                                    <input type="password" name="newPassword" class="form-control form-control-sm" required minlength="8" />
+                                </div>
+                                <div class="col-auto">
+                                    <button type="submit" class="btn btn-sm btn-primary">Set password</button>
+                                </div>
+                            </form>
+                        </td>
+                    </tr>
+                }
+                @if (Model.Users.Count == 0)
+                {
+                    <tr><td colspan="5" class="text-center text-muted py-3">No users yet.</td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header fw-semibold">Add a user</div>
+    <div class="card-body">
+        <form method="post" asp-page-handler="Create" class="row g-3">
+            <div class="col-sm-4">
+                <label class="form-label">Email</label>
+                <input type="email" asp-for="NewEmail" class="form-control" required />
+            </div>
+            <div class="col-sm-3">
+                <label class="form-label">Display name</label>
+                <input type="text" asp-for="NewDisplayName" class="form-control" />
+            </div>
+            <div class="col-sm-3">
+                <label class="form-label">Password</label>
+                <input type="password" asp-for="NewPassword" class="form-control" required minlength="8" />
+            </div>
+            <div class="col-12">
+                <label class="form-label d-block">Roles</label>
+                @foreach (var role in Model.Roles)
+                {
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="checkbox" name="NewRoleIds" value="@role.Id" id="newrole-@role.Id" />
+                        <label class="form-check-label" for="newrole-@role.Id">@role.Name</label>
+                    </div>
+                }
+            </div>
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary">Add user</button>
+            </div>
+        </form>
+    </div>
+</div>

@@ -60,6 +60,29 @@ public record ThumbnailInfo(string FilePath, int OffsetSeconds, string? NodeIp, 
 /// the camera's current node and having the node reject whatever doesn't live on its own disk.</summary>
 public record SegmentFileInfo(string FilePath, Guid NodeId);
 
+/// <summary>M18: one motion event rendered as a browsable "snapshot" (Pages/Snapshots) — there is no
+/// separate capture step or storage for the image itself; it's whatever GetExactThumbnailInfoAsync /
+/// /playback-thumbnail extracts from the actual recording at AtUtc, on demand, the same
+/// frame-extraction path Playback's own hover thumbnails already use. Label/ColorHex/Emoji are
+/// resolved server-side with the same precedence TimelineService's bucket coloring already applies
+/// (custom EventTagRule color wins, then a detected object class's color, then plain motion), so a
+/// snapshot's badge can never drift from how that same instant renders on the timeline itself.
+/// CameraName is "(deleted camera)" for a camera removed since — same convention as
+/// BookmarkDto/ExportDispatchCandidate.
+///
+/// AtUtc is the *midpoint* of the underlying MotionSpan, not its start — explicit user ask, since a
+/// span's opening instant is often the least representative frame of it (someone just entering the
+/// frame edge), while the middle is far more likely to actually show whatever triggered it.
+///
+/// Duration is the underlying MotionSpan's own EndUtc-StartUtc — how long the event ran, not to be
+/// confused with AtUtc, which is a single instant derived from it (its midpoint).</summary>
+public record SnapshotDto(long Id, Guid CameraId, string CameraName, DateTime AtUtc, TimeSpan Duration, string Label, string ColorHex, string Emoji);
+
+/// <summary>One page of SnapshotDto plus enough to render pagination — MotionSpans is a volume table
+/// (same reasoning as Segments), too large to page client-side the way a plain sortable table does
+/// elsewhere in this app, so this follows AuditLogs' own server-side-paging shape instead.</summary>
+public record SnapshotPageDto(IReadOnlyList<SnapshotDto> Items, int TotalPages, int CurrentPage);
+
 /// <summary>Body of POST /api/playback/view-opened — the audit-only ping playback-player.js fires
 /// when a view is selected for review. Just the view id: the server resolves the camera set from the
 /// view's own layout rather than trusting a client-supplied camera list, since this is an audit

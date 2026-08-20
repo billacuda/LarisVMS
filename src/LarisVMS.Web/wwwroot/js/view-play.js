@@ -15,8 +15,17 @@ window.larisvmsViewPlay = (function () {
     // object-fit:contain letterboxed the video into a thin band with black above and below. That's
     // the "squished vertically to almost nothing" report. Anything this short instead scales its
     // rows to fit the whole view on screen at once (see fittedRowHeight), which is what you want on
-    // a phone in landscape regardless of how the layout was built.
+    // a genuinely short *desktop* window regardless of how the layout was built.
     var shortQuery = window.matchMedia('(max-height: 600px)');
+    // A phone's own landscape width (up to ~930px on the largest current phones) exceeds phoneQuery's
+    // portrait breakpoint, so a landscape phone used to fall into the plain shortQuery branch above —
+    // the *desktop* grid, just fitted-to-height. That's a real fix for the squishing bug, but it also
+    // meant a phone rotated to landscape lost its 1/2-column phone stack entirely and went back to
+    // however many columns the desktop layout happened to use, confirmed live as "landscape doesn't
+    // keep 1 or 2 columns". 950px comfortably covers real phone landscape widths while staying below
+    // a tablet's (iPad landscape starts at 1024px) — narrow enough that this can't misfire for an
+    // ordinary short desktop window, which is what plain shortQuery below still exists to handle.
+    var phoneLandscapeQuery = window.matchMedia('(max-width: 950px) and (max-height: 600px)');
     var GRID_GAP = 6;
     var MIN_ROW_HEIGHT = 12; // a floor, so a pathological layout can't collapse cells to zero
 
@@ -106,9 +115,19 @@ window.larisvmsViewPlay = (function () {
                     '<div class="position-absolute bottom-0 end-0 m-1 d-flex align-items-center gap-1 view-cell-controls d-none">' +
                         window.larisvmsAudioControls.html(cam && cam.hasAudio) +
                         '<div class="btn-group btn-group-sm">' +
+                            (cam && cam.hasPtz
+                                ? '<button type="button" class="btn btn-outline-light view-cell-ptz-toggle" style="padding:.1rem .35rem;" title="PTZ controls" aria-label="PTZ controls">🕹️</button>'
+                                : '') +
                             '<button type="button" class="btn btn-outline-light view-cell-playback" style="padding:.1rem .35rem;" title="Playback" aria-label="Playback">⏱</button>' +
                             '<button type="button" class="btn btn-outline-light view-cell-fullscreen" style="padding:.1rem .35rem;" title="Fullscreen" aria-label="Fullscreen">⛶</button>' +
                         '</div>' +
+                    '</div>' +
+                    // Top-center, deliberately clear of every corner (badges) and both bottom edges
+                    // (mini-timeline at bottom-start, hover controls at bottom-end) — toggled by the
+                    // 🕹️ button above rather than shown on hover, since it's a deliberate action
+                    // (issuing real camera movement), not a passive status readout.
+                    '<div class="position-absolute top-0 start-50 translate-middle-x mt-1 view-cell-ptz-area">' +
+                        window.larisvmsPtzControls.html(cam && cam.hasPtz) +
                     '</div>' +
                 '</div>' +
                 // flex-shrink-0: without it, a cell whose stored height is too short for its video
@@ -139,6 +158,8 @@ window.larisvmsViewPlay = (function () {
         var miniTimelineArea = el.querySelector('.view-cell-mini-timeline-area');
         var miniTimelineCanvas = el.querySelector('.view-cell-mini-timeline');
         var miniPlayPauseBtn = el.querySelector('.view-cell-mini-playpause');
+        var ptzToggleBtn = el.querySelector('.view-cell-ptz-toggle');
+        var ptzArea = el.querySelector('.view-cell-ptz-area');
 
         var cameraId = cell.cameraId;
         var codec = cam.codec;
@@ -182,6 +203,15 @@ window.larisvmsViewPlay = (function () {
                 } else if (video.requestFullscreen) {
                     video.requestFullscreen().catch(function () {});
                 }
+            });
+        }
+        // PTZ (M18) — wired once regardless of whether the pad is currently shown; wire() itself is a
+        // no-op for a non-PTZ camera (html() rendered nothing for ptzArea to contain).
+        window.larisvmsPtzControls.wire(ptzArea, cameraId);
+        if (ptzToggleBtn && ptzArea) {
+            ptzToggleBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                ptzArea.querySelector('.ptz-pad').classList.toggle('d-none');
             });
         }
 
@@ -299,29 +329,34 @@ window.larisvmsViewPlay = (function () {
         return rows;
     }
 
-    // Row height that makes the tallest row-span in the layout end exactly at the bottom of the
-    // window. Measured from the grid's own live position rather than a guessed toolbar height, so it
-    // stays correct in kiosk mode (nav + toolbar hidden) and on any device chrome. Returns null when
-    // there's nothing to fit, leaving the caller on the fixed CELL_HEIGHT path.
-    function fittedRowHeight(container, visible) {
-        if (!visible.length) return null;
-        var totalRows = visible.reduce(function (max, c) { return Math.max(max, c.y + c.h); }, 0);
-        if (totalRows <= 0) return null;
-
+    // Row height that makes rowCount equal-height rows fill exactly the available vertical space.
+    // Measured from the grid's own live position rather than a guessed toolbar height, so it stays
+    // correct in kiosk mode (nav + toolbar hidden) and on any device chrome. Returns null when
+    // there's nothing to fit, leaving the caller on its own unfitted default.
+    function fittedRowHeight(container, rowCount) {
+        if (rowCount <= 0) return null;
         var available = window.innerHeight - container.getBoundingClientRect().top - GRID_GAP;
-        var forGaps = GRID_GAP * (totalRows - 1);
-        return Math.max(MIN_ROW_HEIGHT, (available - forGaps) / totalRows);
+        var forGaps = GRID_GAP * (rowCount - 1);
+        return Math.max(MIN_ROW_HEIGHT, (available - forGaps) / rowCount);
+    }
+
+    // How many row-units the replayed desktop layout occupies — the tallest row-span among its
+    // cells, since a cell can span more than one grid row (renderDesktop's own gridRow spans).
+    function desktopRowCount(visible) {
+        return visible.reduce(function (max, c) { return Math.max(max, c.y + c.h); }, 0);
     }
 
     // Re-fits without re-rendering. A full render() tears down and restarts every camera's MSE
     // session, which is far too heavy for a resize or a fullscreen toggle — only the container's
-    // row height actually needs to change.
+    // row height actually needs to change. Desktop-grid fitting only: the derived phone stack
+    // (renderMobile, portrait or landscape) never uses a fitted height at all — see renderMobile's
+    // own comment for why forcing one there was a real regression, not a fix.
     function applyFittedRowHeight() {
         if (!shortQuery.matches) return;
         var container = document.getElementById(opts.gridElId);
         if (!container) return;
         var visible = cells.filter(function (c) { return cameraById[c.cameraId]; });
-        var rowHeight = fittedRowHeight(container, visible);
+        var rowHeight = fittedRowHeight(container, desktopRowCount(visible));
         if (rowHeight !== null) container.style.gridAutoRows = rowHeight + 'px';
     }
 
@@ -338,7 +373,7 @@ window.larisvmsViewPlay = (function () {
             return;
         }
 
-        var rowHeight = fitToHeight ? fittedRowHeight(container, visible) : null;
+        var rowHeight = fitToHeight ? fittedRowHeight(container, desktopRowCount(visible)) : null;
         container.style.gridAutoRows = (rowHeight === null ? CELL_HEIGHT : rowHeight) + 'px';
 
         visible.forEach(function (cell) {
@@ -351,6 +386,23 @@ window.larisvmsViewPlay = (function () {
         });
     }
 
+    // The camera's *real* aspect ratio wins over the cell's stored one here, because the phone stack
+    // is a layout this app derives rather than replays — nothing about it is a user's saved choice,
+    // so it should be shaped by ground truth. The stored aspect is only a fallback for a camera whose
+    // resolution isn't known yet (never probed, or an older page not sending it).
+    //
+    // Confirmed live as "landscape on phone still squishing cameras, but not all of them": the editor
+    // defaults every newly-added cell to 16:9 regardless of the camera (view-editor.js), so any camera
+    // that isn't actually 16:9 had a cell shaped wrong for it, and object-fit:contain letterboxed the
+    // video into a band inside that cell. Always the same cameras, because it follows the camera's own
+    // resolution rather than anything about position or count. Desktop still replays the saved layout
+    // untouched — a deliberate editor choice there is a real choice, unlike this derived stack.
+    function mobileCellRatio(cell) {
+        var cam = cameraById[cell.cameraId];
+        return (cam && window.LarisVMSAspectRatio.nearest(cam.width, cam.height))
+            || (window.LarisVMSAspectRatio.isValid(cell.aspect) ? cell.aspect : window.LarisVMSAspectRatio.default);
+    }
+
     function renderMobile(container) {
         var cols = mobileTwoColumn ? 2 : 1;
         var visible = cells.filter(function (c) { return !c.hideOnPhone && cameraById[c.cameraId]; });
@@ -360,21 +412,34 @@ window.larisvmsViewPlay = (function () {
         container.style.display = 'grid';
         container.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
         container.style.gap = '6px';
-        container.style.gridAutoRows = '';
         container.innerHTML = '';
 
         if (!visible.length) {
+            container.style.gridAutoRows = '';
             container.innerHTML = '<p class="text-muted">No cameras in this view are visible on phones.</p>';
             return;
         }
+
+        // Always sized from each cell's own aspect ratio, never fitted to a computed row height —
+        // unlike the replayed desktop layout (whose cells have no intrinsic size of their own, only
+        // a row-count that a fixed CELL_HEIGHT can get wrong for the viewport), every cell here
+        // already renders at the right proportions regardless of viewport height. A landscape phone
+        // with more cameras than fit on screen at once scrolls to see the rest — exactly like
+        // portrait already does, and exactly as it should: a first attempt at fitting the stack's
+        // *height* to a short viewport (like the desktop grid does) instead squashed every cell down
+        // to a sliver once a view held more than two or three cameras, confirmed live as "vertically
+        // squished and tiny" — dividing limited landscape height across N stacked single-column
+        // cameras shrinks each one far more than the desktop grid's own fitting ever does, since a
+        // desktop layout usually spreads cameras across several of its 12 columns instead of stacking
+        // all of them in one.
+        container.style.gridAutoRows = '';
 
         rows.forEach(function (row) {
             for (var i = 0; i < row.length; i += cols) {
                 var pair = row.slice(i, i + cols);
                 pair.forEach(function (cell) {
                     var el = document.createElement('div');
-                    var ratio = window.LarisVMSAspectRatio.isValid(cell.aspect) ? cell.aspect : window.LarisVMSAspectRatio.default;
-                    el.style.aspectRatio = ratio.replace(':', '/');
+                    el.style.aspectRatio = mobileCellRatio(cell).replace(':', '/');
                     if (pair.length < cols) el.style.gridColumn = '1 / -1'; // odd one out spans full width
                     el.innerHTML = buildCellHtml(cell);
                     container.appendChild(el);
@@ -384,18 +449,28 @@ window.larisvmsViewPlay = (function () {
         });
     }
 
-    // Three layouts, checked in this order:
-    //   short viewport  → the saved layout with rows scaled to fit the window (phone in landscape,
-    //                     and any short window). Uses the real layout, so `hideOnPhone` does not
-    //                     apply — that flag belongs to the derived stack below, which is the only
-    //                     layout this app invents rather than replays.
-    //   narrow viewport → the derived single/two-column phone stack (phone in portrait).
+    // Four layouts, checked in this order:
+    //   phone landscape → the same derived single/two-column phone stack as portrait, unfitted — a
+    //                     phone rotated sideways keeps its 1/2-column shape and scrolls to see the
+    //                     rest, rather than falling back to however many columns the desktop layout
+    //                     happens to use (confirmed live: "landscape doesn't keep 1 or 2 columns" was
+    //                     exactly this falling through to the branch below instead). See
+    //                     phoneLandscapeQuery's own comment for why 950px, not phoneQuery's narrower
+    //                     portrait breakpoint.
+    //   short viewport  → the saved layout with rows scaled to fit the window (any other short
+    //                     window — a resized desktop browser, a short non-phone display). Uses the
+    //                     real layout, so `hideOnPhone` does not apply — that flag belongs to the
+    //                     derived stack above/below, which is the only layout this app invents
+    //                     rather than replays.
+    //   narrow viewport → the derived single/two-column phone stack (phone in portrait), same
+    //                     unfitted rendering as the landscape case above.
     //   otherwise       → the saved layout at the editor's own fixed row height.
     function render() {
         stopAll();
         var container = document.getElementById(opts.gridElId);
         if (!container) return;
-        if (shortQuery.matches) renderDesktop(container, true);
+        if (phoneLandscapeQuery.matches) renderMobile(container);
+        else if (shortQuery.matches) renderDesktop(container, true);
         else if (phoneQuery.matches) renderMobile(container);
         else renderDesktop(container, false);
     }
@@ -459,7 +534,7 @@ window.larisvmsViewPlay = (function () {
         // A full re-render only when the layout *mode* actually changes — crossing either breakpoint
         // means a different layout, which does need the tiles rebuilt.
         var onModeChange = function () { render(); };
-        [phoneQuery, shortQuery].forEach(function (query) {
+        [phoneQuery, shortQuery, phoneLandscapeQuery].forEach(function (query) {
             if (query.addEventListener) query.addEventListener('change', onModeChange);
             else if (query.addListener) query.addListener(onModeChange); // Safari < 14
         });

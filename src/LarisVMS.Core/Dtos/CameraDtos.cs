@@ -18,3 +18,8 @@ public record CameraProbeSummary(
     bool HasPtz, bool HasImaging, bool HasEvents, bool HasAnalyticsMetadata,
     bool HasMedia2, bool HasAudioOut, bool HasRelayOutputs, bool HasDigitalInputs,
     int StreamCount, string? Error, IReadOnlyList<string>? VideoSourceTokens = null);
+
+/// <summary>M18 "basic PTZ" — a continuous-move request from the Live page's directional pad.
+/// PanX/TiltY/ZoomX are each clamped to -1..1 server-side (IPtzService) before being sent on to the
+/// camera; 0 on an axis means "don't move it".</summary>
+public record PtzMoveRequest(double PanX, double TiltY, double ZoomX);

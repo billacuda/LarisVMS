@@ -7,7 +7,10 @@
     var camerasJson = JsonSerializer.Serialize(Model.Cameras.Select(c =>
     {
         var main = c.Streams.FirstOrDefault(s => s.Role == CameraStreamRole.Main);
-        return new { id = c.Id, name = c.Name, codec = main?.Codec, hasAudio = main?.HasAudio ?? false };
+        // width/height let a newly-added cell default to the camera's own aspect ratio instead of a
+        // blanket 16:9 — see aspect-ratio.js's nearest().
+        return new { id = c.Id, name = c.Name, codec = main?.Codec, hasAudio = main?.HasAudio ?? false,
+            width = main?.Width, height = main?.Height };
     }));
 }
 <div class="d-flex justify-content-between align-items-center mb-3">

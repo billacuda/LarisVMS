@@ -12,11 +12,17 @@ using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
 using LarisVMS.Core.Logging;
 using LarisVMS.Core.Security;
+using LarisVMS.Infrastructure.Alerts;
+using LarisVMS.Infrastructure.Alerts.Channels;
 using LarisVMS.Infrastructure.Auth;
 using LarisVMS.Infrastructure.Data;
+using LarisVMS.Infrastructure.Email;
+using LarisVMS.Infrastructure.Email.OAuth;
+using LarisVMS.Infrastructure.Email.Providers;
 using LarisVMS.Infrastructure.Repositories;
 using LarisVMS.Infrastructure.Security;
 using LarisVMS.Infrastructure.Services;
+using LarisVMS.Onvif.Soap;
 using LarisVMS.Web.Health;
 using LarisVMS.Web.Helpers;
 using LarisVMS.Web.Middleware;
@@ -199,6 +205,28 @@ builder.Services.AddScoped<IBackupService, BackupService>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
 builder.Services.AddScoped<IBrandingService, BrandingService>();
 builder.Services.AddScoped<IEventColorService, EventColorService>();
+builder.Services.AddScoped<IPtzService, PtzService>();
+builder.Services.AddScoped<IBookmarkService, BookmarkService>();
+
+// ── Email (M15 pass 1) ───────────────────────────────────────────────────────
+// One IEmailProvider per EmailProviderType, resolved by EmailProviderFactory — ported from rsolva's
+// provider-strategy shape. Only Smtp is implemented so far; Graph/Gmail are later M15 passes.
+builder.Services.AddScoped<IEmailProvider, SmtpEmailProvider>();
+builder.Services.AddScoped<IEmailProvider, GraphEmailProvider>();
+builder.Services.AddScoped<IEmailProvider, GmailEmailProvider>();
+builder.Services.AddScoped<EmailProviderFactory>();
+builder.Services.AddScoped<IEmailService, EmailService>();
+builder.Services.AddScoped<IOAuthConnectProvider, GoogleOAuthConnectProvider>();
+builder.Services.AddScoped<OAuthConnectProviderFactory>();
+
+// ── Alerting (M15 pass 4) ─────────────────────────────────────────────────────
+builder.Services.AddScoped<IAlertChannelSender, EmailAlertChannelSender>();
+builder.Services.AddScoped<IAlertChannelSender, WebhookAlertChannelSender>();
+builder.Services.AddScoped<IAlertChannelSender, NtfyAlertChannelSender>();
+builder.Services.AddScoped<IAlertChannelSender, PushoverAlertChannelSender>();
+builder.Services.AddScoped<IAlertChannelSender, SlackAlertChannelSender>();
+builder.Services.AddScoped<IAlertChannelSender, TeamsAlertChannelSender>();
+builder.Services.AddScoped<AlertChannelSenderFactory>();
 
 // First Web-tier BackgroundService — see ExportJobDispatcher's own doc comment for why exports
 // needed one instead of a synchronous per-camera download.
@@ -207,6 +235,8 @@ builder.Services.AddHostedService<BackupHostedService>();
 builder.Services.AddHostedService<LogsRetentionService>();
 builder.Services.AddHostedService<AuditLogRetentionService>();
 builder.Services.AddHostedService<CameraReprobeService>();
+builder.Services.AddHostedService<AlertEvaluatorService>();
+builder.Services.AddHostedService<BookmarkRetentionService>();
 
 // ── ONVIF HTTP client ────────────────────────────────────────────────────────
 // CameraService takes a Func<HttpClient> rather than IHttpClientFactory directly so
@@ -256,6 +286,7 @@ app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseSecurityHeaders();
 app.UseSetupRedirect();
+app.UseRegistrationDisabled();
 // After the setup gate, not before: pre-setup there may be no Settings table to read yet, and every
 // request pre-setup is already confined to the wizard's own exempt paths anyway.
 app.UsePortSegmentation();
@@ -301,7 +332,7 @@ nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest requ
     // reported to stamp; this is the one place NodeHeartbeatRequest's fields are actually read.
     var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
     await nodeService.RecordHeartbeatAsync(node.Id, request.FreeBytes, request.TotalBytes, request.Version, request.LivePort,
-        request.SentAtUtc, DateTime.UtcNow, ct);
+        request.SentAtUtc, DateTime.UtcNow, request.DetectedEncoders, ct);
 
     // ── Auto-update check ────────────────────────────────────────────────
     // Global-only gate (Admin/Settings/Nodes' NodeAutoUpdate.Enabled) — no per-node override for this
@@ -497,6 +528,57 @@ app.MapGet("/api/cameras/{cameraId:guid}/snapshot", async (Guid cameraId, ICamer
     return Results.Stream(await nodeResponse.Content.ReadAsStreamAsync(ct), "image/jpeg");
 }).RequireAuthorization("Cameras.Edit");
 
+// ── PTZ (M18 "basic PTZ") ────────────────────────────────────────────────────
+// Cameras.View, not .Edit — these controls appear on the Live page itself (same gate the page's own
+// tiles already need), narrowed per-camera by CameraAccessActions.Ptz exactly the way the export
+// trigger above narrows Exports.View by CameraAccessActions.Export. Called directly against the
+// camera's own ONVIF PTZ service (IPtzService, using the same "onvif" named HttpClient probing
+// already uses) — no node hop, since a PTZ command is a quick request/response, not a long-lived
+// session the way live view or event polling are.
+var ptzApi = app.MapGroup("/api/cameras/{cameraId:guid}/ptz").RequireAuthorization("Cameras.View");
+
+ptzApi.MapPost("/move", async (HttpContext ctx, Guid cameraId, PtzMoveRequest request,
+    IPtzService ptzService, ICameraAccessService cameraAccess, CancellationToken ct) =>
+{
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Ptz, ct);
+    if (accessible is not null && !accessible.Contains(cameraId))
+        return Results.Problem("You don't have PTZ access to this camera.", statusCode: StatusCodes.Status403Forbidden);
+
+    try
+    {
+        var moved = await ptzService.MoveAsync(cameraId, request.PanX, request.TiltY, request.ZoomX, ct);
+        return moved ? Results.Ok()
+            : Results.Problem("This camera doesn't support PTZ, or hasn't been probed since PTZ support was added.",
+                statusCode: StatusCodes.Status400BadRequest);
+    }
+    catch (OnvifFaultException ex)
+    {
+        return Results.Problem($"Camera rejected the PTZ command: {ex.Message}", statusCode: StatusCodes.Status502BadGateway);
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException)
+    {
+        return Results.Problem($"Could not reach camera: {ex.Message}", statusCode: StatusCodes.Status502BadGateway);
+    }
+});
+
+ptzApi.MapPost("/stop", async (HttpContext ctx, Guid cameraId,
+    IPtzService ptzService, ICameraAccessService cameraAccess, CancellationToken ct) =>
+{
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Ptz, ct);
+    if (accessible is not null && !accessible.Contains(cameraId))
+        return Results.Problem("You don't have PTZ access to this camera.", statusCode: StatusCodes.Status403Forbidden);
+
+    try
+    {
+        await ptzService.StopAsync(cameraId, ct);
+        return Results.Ok();
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException)
+    {
+        return Results.Problem($"Could not reach camera: {ex.Message}", statusCode: StatusCodes.Status502BadGateway);
+    }
+});
+
 // ── Zones (M8) ────────────────────────────────────────────────────────────────
 // Cameras.Edit throughout — drawing/editing zones is camera configuration, same gate as the
 // snapshot endpoint above that feeds the editor's background image.
@@ -611,6 +693,12 @@ playbackApi.MapGet("/timeline", async (Guid cameraId, DateTime from, DateTime to
 
 playbackApi.MapGet("/segments", async (Guid cameraId, DateTime from, DateTime to, ITimelineService timeline, CancellationToken ct) =>
     Results.Json(await timeline.GetSegmentsAsync(cameraId, from, to, ct)));
+
+// M18: the per-camera timeline's own bookmark markers — same Playback.View gate as the rest of this
+// group, no per-camera CameraAccess narrowing (matches Bookmarks/Snapshots' own shared-visibility
+// model, see BookmarkService's doc comment).
+playbackApi.MapGet("/bookmarks", async (Guid cameraId, DateTime from, DateTime to, IBookmarkService bookmarks, CancellationToken ct) =>
+    Results.Json(await bookmarks.ListForCameraAsync(cameraId, from, to, ct)));
 
 // Merged across the given cameraIds (repeated query param) — the "was anything recording in this
 // view" overview timeline on Pages/Playback, separate from the per-camera one above. cameraIds
@@ -750,7 +838,11 @@ app.MapGet("/playback-segment/{cameraId:guid}/{segmentId:long}", async (
 // but for one extracted JPEG hover-preview frame instead of a whole segment's bytes. Shared by both
 // the bucketed/historical lookup (atUtc-based) below and the Dashboard's "most recent" lookup —
 // everything past resolving a ThumbnailInfo is identical proxy plumbing (token, node URI, relay).
-async Task<IResult> ProxyThumbnailAsync(Guid cameraId, ThumbnailInfo? thumb, IHttpClientFactory httpFactory, CancellationToken ct)
+// 150 mirrors LarisVMS.Media.ThumbnailCapture.DefaultMaxDimension — duplicated as a literal rather
+// than referenced, since LarisVMS.Web has no project reference to LarisVMS.Media (it never runs
+// ffmpeg itself, only proxies to a node that does) and taking one on just for this constant isn't
+// worth the coupling.
+async Task<IResult> ProxyThumbnailAsync(Guid cameraId, ThumbnailInfo? thumb, IHttpClientFactory httpFactory, CancellationToken ct, int maxDimension = 150)
 {
     if (thumb is null) return Results.NotFound();
     if (thumb.NodeIp is null || thumb.NodeLivePort is null || thumb.NodeMediaSigningKey is null)
@@ -760,17 +852,38 @@ async Task<IResult> ProxyThumbnailAsync(Guid cameraId, ThumbnailInfo? thumb, IHt
             statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 
-    var token = MediaToken.IssueForThumbnail(cameraId, thumb.FilePath, thumb.OffsetSeconds, thumb.NodeMediaSigningKey, TimeSpan.FromSeconds(30));
-    var nodeUri = $"http://{thumb.NodeIp}:{thumb.NodeLivePort}/playback-thumbnail/{cameraId}" +
-        $"?path={Uri.EscapeDataString(thumb.FilePath)}&offset={thumb.OffsetSeconds}&token={Uri.EscapeDataString(token)}";
-
     // Shorter than /playback-segment's 25s — this relays one small JPEG frame, not a video segment.
     var client = httpFactory.CreateClient();
     client.Timeout = TimeSpan.FromSeconds(15);
+
+    Task<HttpResponseMessage> RequestAsync(int offsetSeconds)
+    {
+        var token = MediaToken.IssueForThumbnail(cameraId, thumb.FilePath, offsetSeconds, thumb.NodeMediaSigningKey!, TimeSpan.FromSeconds(30));
+        var nodeUri = $"http://{thumb.NodeIp}:{thumb.NodeLivePort}/playback-thumbnail/{cameraId}" +
+            $"?path={Uri.EscapeDataString(thumb.FilePath)}&offset={offsetSeconds}&token={Uri.EscapeDataString(token)}&maxDim={maxDimension}";
+        return client.GetAsync(nodeUri, HttpCompletionOption.ResponseHeadersRead, ct);
+    }
+
     HttpResponseMessage nodeResponse;
     try
     {
-        nodeResponse = await client.GetAsync(nodeUri, HttpCompletionOption.ResponseHeadersRead, ct);
+        nodeResponse = await RequestAsync(thumb.OffsetSeconds);
+
+        // Segment.DurationMs is derived from wall-clock EndUtc-StartUtc (NodeService.RecordSegmentsAsync),
+        // not a re-measurement of the file's actual encoded duration — the two can drift by a second or
+        // so, and GetExactThumbnailInfoAsync's offset (unlike the bucketed lookup's near-universal 0,
+        // always safe since any valid segment file has content at its own start) routinely targets
+        // right up against that clamp, close to the segment's believed end. ffmpeg's -ss there is
+        // unclamped against the *real* file (ThumbnailCapture.cs), so a small mismatch makes it seek
+        // past actual content and the node correctly reports that as 502 rather than hanging — confirmed
+        // live as soon as the exact-offset lookup shipped. Retrying once at offset 0 on the very same
+        // segment/file trades exact-instant precision for a guaranteed hit, only on this already-failed
+        // path — cheaper and more robust than trying to predict how much clamp margin is "enough".
+        if (nodeResponse.StatusCode == (System.Net.HttpStatusCode)StatusCodes.Status502BadGateway && thumb.OffsetSeconds != 0)
+        {
+            nodeResponse.Dispose();
+            nodeResponse = await RequestAsync(0);
+        }
     }
     catch (TaskCanceledException) when (!ct.IsCancellationRequested)
     {
@@ -791,10 +904,25 @@ async Task<IResult> ProxyThumbnailAsync(Guid cameraId, ThumbnailInfo? thumb, IHt
 }
 
 // GetThumbnailInfoAsync resolves which segment covers atUtc and buckets/clamps the offset within it
-// server-side.
+// server-side. exact=true (M18: Pages/Snapshots) skips the 5-minute bucketing and resolves the exact
+// requested instant instead — see GetExactThumbnailInfoAsync's own doc comment for why the hover-scrub
+// caller above can't just always do this. `exact = false` (a real C# default, not just bool's usual
+// zero-value) is required, not cosmetic: a minimal-API primitive parameter with no default is treated
+// as a *required* query-string value, and every caller but Snapshots omits `exact` entirely — without
+// this default the framework rejected every one of those (the hover-preview path that predates this
+// parameter) outright with 400 Bad Request. Confirmed live: every hover-thumbnail request broke the
+// moment this parameter was added without one.
 app.MapGet("/playback-thumbnail/{cameraId:guid}", async (
-    Guid cameraId, DateTime atUtc, ITimelineService timeline, IHttpClientFactory httpFactory, CancellationToken ct) =>
-    await ProxyThumbnailAsync(cameraId, await timeline.GetThumbnailInfoAsync(cameraId, atUtc, ct), httpFactory, ct)
+    Guid cameraId, DateTime atUtc, ITimelineService timeline, IHttpClientFactory httpFactory, CancellationToken ct, bool exact = false) =>
+    await ProxyThumbnailAsync(cameraId,
+        exact ? await timeline.GetExactThumbnailInfoAsync(cameraId, atUtc, ct) : await timeline.GetThumbnailInfoAsync(cameraId, atUtc, ct),
+        httpFactory, ct,
+        // exact is Snapshots' own card thumbnails — something a viewer actually looks closely at, not
+        // a fleeting scrub-hover preview, so it gets a genuinely detailed frame: 854px on the longer
+        // edge, ~480p on a 16:9 source (exactly 854x480), comfortably at-or-above 480p-equivalent
+        // detail for any other aspect ratio too. User-reported: the previous shared 150px cap (sized
+        // for a quick hover glance) made a Snapshot card's actual content hard to make out.
+        maxDimension: exact ? 854 : 150)
 ).RequireAuthorization("Playback.View");
 
 // Dashboard's "most recent thumbnail" column (Pages/Index, dashboard.js) — plain [Authorize], not
@@ -974,6 +1102,28 @@ app.MapPost("/api/exports/{itemId:guid}/retry", async (Guid itemId, IExportServi
     var ok = await exportService.RetryItemAsync(itemId, ct);
     return ok ? Results.Ok() : Results.BadRequest("Only a failed item can be retried.");
 }).RequireAuthorization("Exports.View");
+
+// ── Bookmarks (M18) ──────────────────────────────────────────────────────────
+// Triggered from Playback's own toolbar, same shape as the export trigger above: Playback.View
+// broad permission, narrowed per-camera by CameraAccessActions.Playback — a viewer who can't play
+// this camera back has nothing here worth marking either. Listing/deleting a bookmark is a
+// server-rendered Razor Page (Pages/Bookmarks/Index), not a JSON API — only *creating* one happens
+// from the JS-driven Playback page, so only that direction needs a route here.
+app.MapPost("/api/bookmarks", async (HttpContext ctx, CreateBookmarkRequest request,
+    IBookmarkService bookmarkService, ICameraAccessService cameraAccess, CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Note))
+        return Results.BadRequest("Enter a note for this bookmark.");
+
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Playback, ct);
+    if (accessible is not null && !accessible.Contains(request.CameraId))
+        return Results.Problem("You don't have playback access to this camera.", statusCode: StatusCodes.Status403Forbidden);
+
+    var userId = ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
+    var bookmark = await bookmarkService.CreateAsync(request.CameraId, request.TimestampUtc, request.Note.Trim(),
+        userId, ctx.User.Identity?.Name, ct);
+    return Results.Json(new { id = bookmark.Id });
+}).RequireAuthorization("Playback.View");
 
 app.Run();
 

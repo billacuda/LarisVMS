@@ -5,6 +5,596 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.125.0] - 2026-08-20
+
+### Fixed
+
+- **Landscape phones still squished some cameras — always the same ones.** Not a layout-geometry bug
+  like the earlier landscape reports: the derived phone stack sizes each cell from the cell's *stored*
+  aspect ratio, and the view editor defaulted every newly-added cell to `16:9` regardless of what the
+  camera actually is. Any camera that isn't 16:9 therefore got a cell shaped wrong for it from the
+  moment it was added, and `object-fit: contain` letterboxed the video into a band inside that cell —
+  consistently the same cameras, since it follows each camera's own resolution rather than anything
+  about position or count. Two changes: the derived phone stack now sizes cells from the camera's real
+  probed resolution (`nearest()` in `aspect-ratio.js` maps an actual `width×height` to the closest
+  listed ratio), falling back to the stored aspect only when the resolution isn't known; and the
+  editor now defaults a newly-added cell to the camera's own ratio instead of a blanket 16:9, so this
+  stops recurring at the source. The desktop layout still replays the saved geometry untouched — a
+  deliberate editor choice there is a real choice, unlike this derived stack.
+
+Existing views keep their stored per-cell ratios; the phone stack simply stops depending on them
+being right. Correcting a cell's dropdown in the editor is still what changes the desktop layout.
+
+Web-only, no node change.
+
+## [0.124.0] - 2026-08-20
+
+### Fixed
+
+- **A Bookmark/Snapshot "▶ Play" deep link landed paused**, needing an extra click on Play — one more
+  step than intended for what's supposed to be a one-click jump straight to the moment in question.
+  `resolveDeepLink` now starts playback immediately; every other arrival at Playback (picking a view
+  fresh, reloading) still lands paused as before.
+
+### Changed
+
+- **Snapshot card thumbnails are noticeably higher resolution.** The shared `/playback-thumbnail`
+  path was capped at 150px on the longer edge for every caller — sized for a quick scrub-hover
+  glance, but the same cap made a Snapshots card (something a viewer actually looks closely at) hard
+  to make out. `exact=true` requests (Pages/Snapshots' own cards) now request 854px — ~480p on a
+  16:9 source — while every hover-preview caller keeps the original 150px. The resolution travels as
+  a new `maxDim` query param between the Web tier and the node (not part of the signed token — a
+  quality knob, not something needing tamper-protection) and is folded into the on-disk thumbnail
+  cache filename so a 150px and an 854px capture of the same instant never collide; `ThumbnailBackfillService`
+  updated to match so its background-generated hover thumbnails still land where the on-demand path
+  looks for them.
+
+**Install-node.ps1 re-run needed** on every recorder node — `LarisVMS.Node`/`LarisVMS.NodeUpdater`
+bumped to 0.124.0 in lockstep.
+
+## [0.123.0] - 2026-08-20
+
+### Fixed
+
+- **Snapshots' "▶ Play" links (both the thumbnail and the card-footer button) went nowhere** —
+  confirmed live via "copy link address" that the rendered `href` pointed back at `/Snapshots` with
+  the page's own current filter state (`cameraId`/`from`/`to`/`kinds`), not at `/Playback` with a
+  camera and instant. The `asp-page="/Playback"`/`asp-route-*` tag-helper form of the link was the
+  common thread; Bookmarks' own "▶ Play" link does the identical job via a plain hand-written `href`
+  string and has been confirmed working since M18. Switched Snapshots to the same plain-string form
+  rather than continue chasing why the tag-helper resolved the way it did.
+
+Web-only, no node change.
+
+## [0.122.0] - 2026-08-20
+
+### Fixed
+
+- **Snapshots pagination silently never advanced past page 1**, confirmed live with a URL that
+  plainly read `...&page=26` while the page kept showing the same first item. Root cause: Razor
+  Pages' own endpoint routing sets a route value literally named `page` on every request — the
+  relative page path, used internally to pick which compiled page runs — and the framework's
+  composite model binder checks route values before the query string. A handler parameter also named
+  `page` (both here and in Audit Logs, which this page's own pagination was ported from) finds that
+  route-data entry first, fails to parse a page *path* as an `int`, and silently binds to `0`; the
+  query string's own `page=26` is never even consulted. Renamed the parameter to `pageNumber` in both
+  places — not a reserved name, so it now binds from the query string as intended.
+
+Web-only, no node change.
+
+## [0.121.0] - 2026-08-20
+
+### Fixed
+
+- **Either Playback timeline (per-camera or all-cameras) could get stuck mid-drag, unpredictably.**
+  `setPointerCapture` is supposed to guarantee a drag's `pointerup`/`pointercancel` lands back on the
+  canvas that started it regardless of where the pointer ends up — but capture can silently fail to
+  take, and when it does the release event is delivered to whatever's actually under the pointer
+  instead, which the canvas's own listeners never see. `dragging` stayed `true` forever in that case.
+  Added a window-level `pointerup`/`pointercancel` fallback that always sees the release regardless of
+  where it lands; safe to fire twice for an ordinary release since the existing dragging/pinching
+  guards make the second call a no-op.
+- **A new bookmark didn't appear on the timeline until something unrelated (a drag, a camera switch)
+  happened to trigger a reload.** `submitBookmark()`'s success handler saved the bookmark but never
+  told the per-camera timeline to re-fetch — it now reloads immediately after a successful save.
+
+### Added
+
+- **Snapshot cards now show the event's duration**, not just its timestamp — a new `Duration` field
+  on `SnapshotDto` (`EndUtc - StartUtc` off the underlying `MotionSpan`, the same span `AtUtc`'s own
+  midpoint is already derived from), formatted as `12s` / `3m 05s` / `1h 02m`.
+
+Web-only, no node change.
+
+## [0.120.0] - 2026-08-20
+
+### Fixed
+
+- **Playback still flashed a black cell at every segment boundary**, even with v0.118.0's
+  one-segment-ahead prefetch already removing the network wait and v0.119.0 already removing the
+  "Loading…" text on that path. The remaining gap is structural: switching segments tears the
+  `<video>` element down (`removeAttribute('src')` + `load()`), which blanks it immediately, while
+  the replacement `MediaSource`/`SourceBuffer` append and first decode still take real time even
+  with the bytes already in hand. Each tile now snapshots its last painted frame onto a canvas
+  overlaid on the video before the teardown, and only hides it once the new segment has genuinely
+  produced a frame (`seeked`/`playing`, whichever lands first) — so the boundary reads as a brief
+  freeze instead of a flash to black. The snapshot copies the video's current digital-zoom transform,
+  so a frozen frame while zoomed in doesn't visually snap back to 1x for the gap. Every path that
+  ends without a frame to reveal (missing/unreachable segment, undecodable stream, no recording at
+  the target time, tile disposal) clears the overlay explicitly rather than leaving a stale frame up.
+
+### Added
+
+- **Play/Pause is now available while a Playback tile is fullscreen.** The page toolbar's own
+  transport control is a page-level element and therefore isn't rendered at all in that state; the
+  timeline gets moved into the fullscreened tile, but Play/Pause had no counterpart, so starting or
+  stopping playback meant leaving fullscreen first. The fullscreen control cluster gains a button
+  driving the same toggle, label-synced with the toolbar's.
+
+Web-only, no node change.
+
+## [0.119.0] - 2026-08-20
+
+### Fixed
+
+- **Every hover-thumbnail request started 400ing.** `/playback-thumbnail`'s new `exact` parameter
+  (v0.118.0) had no default value — ASP.NET Core's minimal APIs treat a defaultless primitive
+  parameter as *required*, and every caller except Snapshots (the scrub-hover preview, the
+  Dashboard's latest-thumbnail column) omits it entirely, since it predates that parameter. Now
+  defaults to `false`.
+- **Exact-instant Snapshots thumbnails routinely failed with 502.** `Segment.DurationMs` is
+  computed from wall-clock `EndUtc - StartUtc` (`NodeService.RecordSegmentsAsync`), not
+  re-measured from the file's actual encoded length — the two can drift by a second or so. The
+  bucketed hover-preview lookup almost always requests offset 0 (always safe — any valid segment
+  file has content at its own start), but the exact lookup routinely targets an offset right up
+  against that same drift-prone boundary; the node's ffmpeg extraction seeks past the file's real
+  content and correctly reports that as 502 rather than hanging. The Web-tier proxy now retries
+  once at offset 0 on the same file on a 502, trading exact-instant precision for a guaranteed hit
+  only on this already-failed path.
+- **A "Loading…" flash still showed on every segment transition even with prefetching in place.**
+  The status text was being set unconditionally, including on a prefetch hit where the bytes are
+  already in hand and there's nothing to wait for — removed for that case.
+- **The timeline's mouse cursor could get stuck reading "grabbing".** A two-finger pinch that
+  started as a one-finger drag correctly cancelled the drag but never reset the cursor style back;
+  neither did the pinch-end path, since by then the drag state it was checking had already been
+  cleared. Now reset the moment a second finger lands.
+- **Snapshots pagination could show a duplicate or skip a row between pages.** `OFFSET`/`FETCH`
+  has no guaranteed order among rows tied on the sort key alone, and several motion spans easily
+  share the same `StartUtc` to the second. Added a deterministic secondary sort key (`Id`).
+
+### Added
+
+- **Per-visit event-type filter on the Snapshots page itself** — checkboxes (Motion, custom tags,
+  each detected class) narrow what the current viewer sees for this browse session, on top of
+  whatever the admin-level per-type setting (v0.118.0) already allows system-wide.
+
+Web-only, no node change.
+
+## [0.118.0] - 2026-08-20
+
+### Fixed
+
+- **Snapshots thumbnails were cropped and often missing.** `object-fit: cover` cropped any
+  non-16:9 source frame to fill the card instead of showing it whole — switched to `contain`.
+  Separately, thumbnails were resolved through the same 5-minute-bucketed lookup the Playback
+  timeline's hover preview uses (deliberately coarse there, to stay cheap under rapid scrub-hover)
+  — a poor fit for a motion event, which is exactly the kind of moment likely to fall in that
+  bucketed lookup's own coverage gap on a Motion-mode camera. New `GetExactThumbnailInfoAsync` /
+  `/playback-thumbnail?...&exact=true` resolves the precise requested instant instead; Snapshots
+  now uses it. A card with no image now shows "No thumbnail available" instead of a bare gap.
+- **A Bookmark/Snapshot "▶ Play" link could land at the covering segment's start instead of the
+  bookmarked instant.** Resolving the deep link's target View kicked off its own
+  persisted-position-or-most-recent-recording seek, unawaited, which raced the deep link's own seek
+  to the actual instant — whichever one's segment lookup happened to resolve last won. The deep
+  link now skips that initial seek entirely rather than trying to out-race it.
+- **Faster-than-1x playback stalled with a blank "Loading…" at every ~60s segment boundary.** Each
+  transition started fetching the next segment cold only once the current one ended. Segments now
+  prefetch one ahead in the background once the current one starts playing, so a sequential
+  transition can skip the network round trip — the same "look ahead so it's already buffered"
+  fetch is skipped harmlessly on an arbitrary seek that doesn't land on the segment being prefetched.
+- **Landscape phones lost their 1/2-column stack**, falling back to however many columns the
+  replayed desktop layout happened to use — a real fix for an earlier "squished vertically" bug,
+  but one that (over-)applied to every short viewport, phone or not. The derived phone stack now
+  also handles landscape, scrolling to show cameras beyond what fits at once — exactly like it
+  already does in portrait. (A first attempt instead tried to *fit* every row into the available
+  height without scrolling, the same way the replayed desktop layout does; confirmed live as a
+  regression of its own — dividing a short viewport across many stacked single-column cameras
+  squashed each one far more than the desktop grid's own fitting ever does, since a desktop layout
+  usually spreads cameras across several of its 12 columns instead of stacking all of them in one.
+  Reverted in favor of the simpler unfitted, scrollable stack.)
+- **Fullscreen controls (mute/volume/exit) could sit unclickable underneath the fullscreen
+  timeline** on a phone, where there's no hover to reveal one and hide the other — both anchor to
+  the same bottom-right corner with no clearance between them. The timeline now reserves space for
+  the controls' own measured width, and the controls sit above it in stacking order regardless.
+
+### Added
+
+- **Snapshots: admin-configurable event-type visibility.** New checkboxes on Admin → Settings →
+  Events (Motion + each detected class) control what appears in the Snapshots browser — a custom
+  event tag always appears regardless, since each one already has its own enabled/disabled toggle.
+  Missing = enabled, so an untouched deployment keeps showing everything it already did.
+- **Snapshots use the midpoint of the event, not its start.** A span's opening instant is often
+  the least representative frame of it (someone just entering the frame edge); the middle is far
+  more likely to actually show whatever triggered it.
+- **Bookmarks now render as markers on Playback's per-camera timeline** — a small flag at each
+  bookmarked instant, fetched alongside the timeline's own coverage buckets for the selected camera.
+- **Refreshing Playback now restores the last-open View**, not just the remembered scrub
+  position/zoom — those persisted already, but the View selection itself didn't, so a reload used
+  to always land back on a bare "(choose a view)" picker with nothing rendered.
+- **Pinch-to-zoom on both Playback timelines**, for phone/tablet — wheel-zoom (mouse/trackpad) was
+  the only way to zoom before this. Anchors on the fixed playhead center, same as wheel-zoom, not
+  the touch midpoint.
+
+Web-only, no node change.
+
+## [0.117.0] - 2026-08-19
+
+### Added
+
+- **M18: snapshots browser.** Browse motion history as thumbnails instead of only as timeline color.
+  - New **Snapshots** page (nav item beside Bookmarks) lists every motion event — zone-triggered,
+    camera-pushed, custom `EventTagRule` tags, and object detections alike — as a paged grid of
+    thumbnails, newest first, filterable by camera and date. Server-side paged (same shape as Audit
+    Logs), since `MotionSpans` is a volume table too large to page client-side.
+  - **No new table, no new capture pipeline.** This reuses `MotionSpans` directly — every motion
+    event is already "tagged" with a zone, rule, or detected class — and each card's thumbnail is
+    pulled live from `/playback-thumbnail`, the exact historical frame-extraction path Playback's own
+    hover thumbnails already use. Nothing is captured or stored a second time; a card with no image
+    just means that moment's footage has since aged out of retention.
+  - Each card's label, color, and emoji resolve with the same precedence `TimelineService`'s bucket
+    coloring already applies — a custom tag's own color wins, then a detected class's
+    admin-configurable color, then plain motion — so a snapshot can never show a different color than
+    the same instant renders as on the timeline.
+  - **▶ Play** reuses Bookmarks' own deep-link scheme (`?cameraId=&atUtc=`) into Playback.
+  - Shared across everyone holding `Playback.View`, same visibility model as Bookmarks/Exports — no
+    per-camera `CameraAccess` narrowing.
+
+Web-only, no node change.
+
+## [0.116.0] - 2026-08-19
+
+### Added
+
+- **M18: bookmarks.** Mark a moment during Playback for later, and jump straight back to it.
+  - New `Bookmark` entity — camera, instant, note, who made it — with no foreign key to `Camera`,
+    matching `ExportJobItem`'s own "historical record, don't cascade or block camera deletion"
+    precedent. Shared across everyone holding `Playback.View`, same visibility model as Exports.
+  - Playback's toolbar gets a **Bookmark…** button beside Export: marks the *primary* (starred)
+    tile's camera at the current playhead, since a bookmark is one instant on one camera's own
+    timeline, not a whole view.
+  - New **Bookmarks** page (nav item beside Exports) lists every bookmark, newest first, with a
+    **▶ Play** link back into Playback (`?cameraId=&atUtc=`). Playback has no camera picker of its
+    own, so the client resolves the deep link itself: the first View the current user can see that
+    contains that camera, then seeks to the instant. A bookmark whose camera has since dropped out
+    of every visible View surfaces a status message on arrival instead of silently landing on
+    whatever View happened to load first.
+  - New `BookmarkRetentionService` (6-hour sweep, same shape as `AuditLogRetentionService`) deletes
+    a bookmark once its camera's earliest remaining `Segment` starts after the bookmark's own
+    timestamp — "entries expire with the footage they point at," the feature's own explicit
+    requirement, not a bolted-on cleanup.
+  - Reuses `Playback.View` plus the existing per-camera `CameraAccessActions.Playback` check; no new
+    permission.
+
+Web-only, no node change.
+
+## [0.115.0] - 2026-08-19
+
+### Added
+
+- **M18: basic PTZ.** A directional pad + zoom on each PTZ-capable camera's Live tile.
+  - `OnvifPtzClient` (ONVIF ver20 PTZ, `ContinuousMove`/`Stop`) is called directly from
+    `LarisVMS.Web` — the same `"onvif"` named `HttpClient` camera probing already uses — not routed
+    through a recorder node, since a PTZ command is a quick request/response, not a long-lived
+    session the way live view or event polling are.
+  - `PtzService` resolves a camera's PTZ service address from `CameraCapabilities.RawProbeJson`
+    (populated by the capability prober since M8, previously unused for anything) plus the Main
+    stream's ONVIF profile token, and returns `false` rather than throwing when a camera has no
+    usable PTZ target — lets the API tell "doesn't support PTZ" apart from "unreachable."
+  - New `POST /api/cameras/{id}/ptz/move` and `/stop`, gated `Cameras.View` (the same broad
+    permission the Live page itself needs) narrowed by a per-camera `CameraAccessActions.Ptz` check
+    — that flag has existed in the `CameraAccess` schema since M14, listed in the admin grants page
+    as "schema-ready, not yet enforced" until this pass.
+  - The Live page's directional pad re-issues a held direction every 2 seconds and always sends an
+    explicit `Stop` on release — a client-side dead-man's-switch alongside the device's own 5-second
+    auto-stop timeout, so a dropped connection mid-press can't leave a camera panning indefinitely.
+
+  **Not yet run against a real PTZ camera** — no PTZ-capable hardware available to test against
+  during development, same caveat M17/M18's transcode work started with before real hardware access
+  changed that. The ONVIF request shapes are built from the spec and this app's existing
+  `OnvifMediaClient`/`OnvifDeviceClient` conventions, not verified live.
+
+Web-only, no node change.
+
+## [0.114.0] - 2026-08-19
+
+### Fixed
+
+- **8× playback speed quietly reset to 1× after a few seconds.** Every segment transition (including
+  the natural end-of-segment auto-advance during ordinary playback, not just an explicit seek) calls
+  `videoEl.load()`, and browsers reset `playbackRate` back to 1 when that runs — nothing re-applied
+  it afterward, so a fast-forward rate silently reverted the moment playback crossed into the next
+  segment (roughly every 60s ÷ 8 ≈ 7.5s of wall-clock time at 8×, matching "after a few seconds"
+  exactly). `createTile`'s player now remembers the desired rate (`setPlaybackRate`) and re-applies
+  it on every future segment load, not just once when the speed was chosen.
+- **16× and 32× dropped the video and got stuck on "Loading…" after a few keyframes.** The stepped
+  fast-forward loop (speeds above 8×, see 0.109.0) fired a new seek every fixed 200ms regardless of
+  whether the previous one had actually finished loading — a real segment fetch can easily take
+  longer than that, so each new seek pre-empted (`AbortController`) the one still in flight before it
+  ever got to show a frame, and with ticks close enough together every seek was pre-empted in turn,
+  forever. The loop now awaits each step's own seek before scheduling the next, self-pacing to
+  whatever the real fetch/seek latency allows instead of piling up overlapping seeks.
+
+Web-only, no node change.
+
+## [0.113.0] - 2026-08-19
+
+### Changed
+
+- **Privacy-mask burn-in (M18) is switched off and deferred.** 0.112.0's fix addressed one real,
+  confirmed bug but did not resolve the reported symptom — a camera with a Privacy zone still gets
+  stuck cycling `Connecting…`/`Reconnecting…` forever on retest, and the actual root cause is still
+  unknown. Rather than leave the feature enabled-but-broken (saving a Privacy zone currently breaks
+  that camera's recording outright), `NodeWorker.PrivacyMaskEnabled` is now `false`: a Privacy zone
+  is a safe no-op again, same as it's been since M8 and same as `CameraMotion` still is today —
+  drawable and saveable, no effect on recording. The zone editor's label reverts to "not yet active"
+  accordingly. Every underlying piece built for this (`PrivacyMaskFilterBuilder`, `EncoderSelection`,
+  `RecordingSession`'s transcode branch, and their tests) is untouched and ready for whenever the real
+  bug is found — only the one switch needs to flip back.
+
+  **install-node.ps1 re-run: not needed** — ordinary node auto-update covers it.
+  `LarisVMS.Node`/`LarisVMS.NodeUpdater` bumped to 0.113.0 in lockstep.
+
+## [0.112.0] - 2026-08-19
+
+### Fixed
+
+- **Removed one confirmed-real bug in privacy-mask burn-in — pairing decode-side `-hwaccel`
+  (`qsv`/`cuda`) with the plain CPU `drawbox` filter, which made ffmpeg fail immediately on every
+  attempt since hardware-decoded frames stay on the GPU in a format that filter can't touch.
+  `RecordingSession` no longer requests decode hwaccel for this pipeline; the encoder stays hardware
+  when one was detected. `EncodePipeline.DecodeHwaccelArgs` itself is untouched, still available for
+  a future consumer whose filter chain is itself hardware-native.**
+
+  **This did not resolve the reported symptom.** Retested live on the same real hardware after this
+  fix: a camera with a Privacy zone still gets stuck cycling `Connecting…`/`Reconnecting…`, no mask
+  and no footage. The hwaccel/CPU-filter mismatch above was real and worth removing regardless, but
+  it was not the (or not the only) cause of the original report. Root cause still unknown as of this
+  entry — **privacy-mask burn-in is on hold, deferred rather than debugged further for now.** Do not
+  enable a Privacy zone on a production camera; it currently breaks that camera's recording entirely
+  rather than degrading gracefully. `Admin`/the zone editor still lets one be drawn and saved (M8
+  behavior), which itself is worth revisiting once this is picked back up — saving one currently has
+  a real, broken effect, not a no-op.
+
+  **install-node.ps1 re-run: not needed** — ordinary node auto-update covers it.
+  `LarisVMS.Node`/`LarisVMS.NodeUpdater` bumped to 0.112.0 in lockstep.
+
+## [0.111.0] - 2026-08-19
+
+### Added
+
+- **M18 pass 1: static privacy-mask burn-in** — the first real feature to consume M17's
+  `EncodePipeline`. `ZoneKind.Privacy` has existed since M8 (drawable and saveable in the zone editor,
+  labeled "not yet active") with no effect anywhere; a camera's enabled Privacy zones now burn in as
+  black boxes over both its recordings and its live feed.
+  - Each zone burns in as its **bounding box**, not its exact drawn outline — a deliberate scope
+    decision (over-masking a few extra pixels around an odd shape is the safe default for a privacy
+    control; exact-polygon masking would need a per-pixel overlay image, real complexity for a
+    difference that only matters at the mask's own edge), via ffmpeg's own `iw`/`ih` runtime
+    variables so the filter needs no advance knowledge of the stream's actual resolution.
+  - `RecordingSession` switches from `-c copy` to a real decode/filter/encode **only** for a camera
+    with at least one enabled Privacy zone — every other camera keeps today's exact zero-transcode
+    pipeline, unchanged. Both `-f tee` legs (recorded segments and live view) share the one encoded,
+    already-masked stream, so live view can never show what a recording hides.
+  - Encoder choice prefers hardware — NVENC, then QSV, then AMF — from this node's own M17 capability
+    probe, falling back to software `libx264` (always available, and used immediately if the probe
+    hasn't reported in yet or found nothing, rather than ever recording a configured zone unmasked).
+  - Editing a camera's Privacy zones (add/edit/remove) now restarts that camera's recording session
+    to pick up the change — briefly interrupts recording for that one camera, the same trade already
+    accepted for `ServerMotion`/`Ignore` zone edits restarting the motion session.
+  - **Fixes a latent hang** found while building the restart above: `RecordingSession.RunAsync` only
+    killed a still-running ffmpeg process when the stall watchdog fired, never on a plain
+    cancellation — harmless before this pass (the only thing that ever cancelled a session mid-run
+    was whole-node shutdown, which cancels and awaits every session together), but this pass's own
+    per-camera restart is the first thing that cancels one healthy session on its own, and would have
+    hung waiting on a process nothing ever told to stop.
+
+  **Not yet run against real hardware encoders** — this is the first feature that could exercise
+  M17's QSV/NVENC/AMF paths for real, but that verification hasn't happened yet as of this pass.
+  AMD AMF's decode-hwaccel mapping in particular is still a documented guess, not a tested one (see
+  M17's own notes on why).
+
+  **install-node.ps1 re-run: not needed** — ordinary node auto-update covers it.
+  `LarisVMS.Node`/`LarisVMS.NodeUpdater` bumped to 0.111.0 in lockstep.
+
+## [0.110.0] - 2026-08-19
+
+### Added
+
+- **M17 foundation: hardware-transcode capability probing.** No consumer feature uses this yet
+  (privacy-mask burn-in and adaptive streaming, both M18, are what will) — this pass is the probe and
+  the admin-visible result it's meant to be built on.
+  - `FfmpegCapabilityProber` (`LarisVMS.Media`) runs `ffmpeg -encoders` once at node startup and
+    parses which of a closed, known set (`libx264`/`libx265`, `h264_qsv`/`hevc_qsv`,
+    `h264_nvenc`/`hevc_nvenc`, `h264_amf`/`hevc_amf`) this node's own ffmpeg build actually offers.
+    Never throws — a failed probe just means nothing gets reported that run, the same "best-effort,
+    can't block startup" pattern every other node-side probe in this app already follows.
+  - `Node.DetectedEncodersJson` stores the result, refreshed on every heartbeat (like `Version`) so a
+    node upgrading its ffmpeg build or GPU driver is reflected without re-registering.
+    `Admin → Nodes` shows each node's detected encoders as badges.
+  - `EncodePipeline` (`LarisVMS.Media`): a pure, unit-tested `-hwaccel`/`-vf`/`-c:v` argument builder
+    every downstream transcode feature will share, so each one is "pick a filter chain and call this"
+    rather than a new ffmpeg invocation invented per feature. `EncoderFamilies.For` maps a detected
+    encoder name to which decode-side `-hwaccel` actually pairs with it (`qsv`/`cuda`; AMD AMF gets
+    none — ffmpeg's own AMF decode-hwaccel support on Windows is inconsistent enough across driver
+    versions that guessing here risked being wrong more often than it helped; an AMF encode still
+    gets the hardware encoder, just with software decode feeding it, until this is revisited against
+    real AMD hardware).
+
+  None of this has been run against real Intel/NVIDIA/AMD hardware — the parsing is verified against
+  captured real `ffmpeg -encoders` output, and the hwaccel mapping against ffmpeg's own documented
+  flag names, but actual hardware-encoder behavior needs a real probe pass the same way every vendor
+  camera integration in this app's history has, before M18 builds a feature on top of it.
+
+  **install-node.ps1 re-run: not needed.** Nothing about first-time node provisioning changed;
+  ordinary node auto-update (`NodeBuildService`/`deploy.ps1`) covers this. `LarisVMS.Node`/
+  `LarisVMS.NodeUpdater` bumped to 0.110.0 in lockstep per this project's usual rule for any
+  Node-touching pass.
+
+## [0.109.0] - 2026-08-18
+
+### Added
+
+- **M16 viewing experience — partial pass.** Four of the five roadmapped items:
+  - **Pinch-to-zoom in fullscreen** (`fullscreen-tile.js`, shared by Live and Playback), alongside
+    the existing wheel-zoom/drag-pan. Tracks up to two active pointers by id — a touchscreen delivers
+    each finger as its own Pointer Events stream, the same events this file already used for mouse
+    drag-to-pan, so pinch is "the same events, tracked for two pointers" rather than a separate touch
+    API. A second finger landing hands off cleanly from an in-progress single-finger pan. Needs
+    `touch-action: none` on `.tile-fullscreen` (new in `site.css`) so the browser doesn't claim the
+    gesture as native page pinch-zoom before JS ever sees it.
+  - **Drag-select-to-zoom on a Playback grid cell.** Dragging at 1× now draws a selection rectangle
+    and zooms+pans to fill it on release, instead of only panning once already zoomed — one gesture,
+    two meanings depending on current zoom. Scoped to Playback's existing digital-zoom grid cells,
+    not Live (which has no zoom feature to extend yet).
+  - **Playback speed, 1/32×–32×**, a new toolbar selector. Native `<video>.playbackRate` covers
+    1/32× through 8× (slow motion has no decode-cost ceiling; browsers handle it natively). Above 8×
+    switches to a seek-driven "stepped" mode instead — every tile pauses and a timer periodically
+    re-seeks the shared playhead, reusing the same per-segment seek path scrubbing already uses. Each
+    seek decodes fresh from that segment's own keyframe rather than continuously decoding the frames
+    in between, which is what "I-frame-only decode" means in practice for this segment-fetch player
+    (there's no in-app demuxer parsing GOP structure to selectively decode I-frames from a continuous
+    stream) — expect a slideshow, not smooth motion, above 8×.
+  - **Playback event-tag toggle, off by default, per-user.** New `timeline.js` `showEventTags`
+    option (defaults `true` so every other caller — the View cell mini-timeline — is unaffected);
+    Playback's own toggle persists through the existing per-user preferences API
+    (`playback.eventTags`). A real-phone walkthrough (feeding the rest of this milestone) found the
+    tag-colored timeline busy for everyday review, so this flips it from always-on to opt-in.
+
+  **Deliberately not attempted, flagged rather than silently skipped: the fifth item, "mobile UI
+  polish (scoped from a real phone walkthrough)."** That walkthrough is explicit input this pass
+  doesn't have — M13's own landscape-squish bug is exactly the kind of thing that only surfaced from
+  someone's thumb on an actual phone, not from reading the CSS. Speculative mobile tweaks without a
+  concrete walkthrough to work from would be guessing, not polish.
+
+Web-only, no node change.
+
+## [0.108.0] - 2026-08-18
+
+### Added
+
+- **M15 pass 4: alerting.** `Admin → Alerts` — create a rule that watches one camera or node for a
+  condition (camera not reporting, node offline, node storage below a percentage) and fires through
+  up to six delivery channels (email, webhook, ntfy, Pushover, Slack, Teams), each with its own
+  enable toggle and config. `AlertEvaluatorService` (`BackgroundService`, 1-minute tick, same shape as
+  `CameraReprobeService`) re-evaluates every enabled rule and reuses `DashboardService`'s own
+  freshness/online windows for the first two conditions, so an alert and the Dashboard's own badges
+  always agree on what "not reporting"/"offline" means. Each rule has its own cooldown so a condition
+  that stays true doesn't re-alert every tick; deliberately no "resolved" notification when a
+  condition clears — this pass only fires on trip. A rule is scoped to exactly one camera or node
+  (not a fleet-wide wildcard) and at most one delivery per channel — both are deliberate scope calls
+  to keep the cooldown model and the edit form simple, not silent limitations.
+
+  Delivery config (webhook/Slack/Teams URLs, Pushover app/user tokens, ntfy topic) is encrypted at
+  rest through the same `SecretProtection` pattern as every other integration secret in this app —
+  a webhook URL is itself a bearer credential. Email delivery routes through the existing
+  `IEmailService`/`EmailSettings` from the earlier M15 passes rather than needing its own provider
+  config.
+
+Nothing here does hardware transcode, motion-rate, or S.M.A.R.T./CPU/GPU conditions yet — those need
+capability this app doesn't have until M17/M20. Web-only, no node change.
+
+## [0.107.0] - 2026-08-18
+
+### Added
+
+- **M15 pass 3: Gmail OAuth2 email provider**, completing the email provider abstraction (SMTP, Graph,
+  and Gmail are all implemented now). `GmailEmailProvider` (MailKit + `SaslMechanismOAuth2`, no Google
+  SDK dependency) exchanges the stored refresh token for a fresh access token on every send rather
+  than caching one. `Pages/Admin/OAuthCallback` handles the consent redirect Google sends the browser
+  back to: `GoogleOAuthConnectProvider` builds the authorization URL and exchanges the returned code
+  for a refresh token, guarded by a Data-Protector-protected `state` parameter that expires after 10
+  minutes. `Admin → Settings → Email` gained a Gmail card (client ID/secret, Gmail address, "Save and
+  connect to Google") alongside the Provider selector. `GmailRefreshToken` is written only by the
+  callback — never typed into the form, so a resave of the other fields can't accidentally clear it.
+  Ported from rsolva's `GoogleOAuthConnectProvider`/`GmailEmailProvider`/`OAuthCallback`, adapted for
+  `EmailSettings` being a singleton row instead of rsolva's multi-account `EmailAccount`.
+
+The README's new "Email" subsection documents the provider-side setup each of Graph and Gmail needs
+(Entra app registration + `Mail.Send` permission; a Google Cloud OAuth client with
+`/Admin/OAuthCallback` registered as an authorized redirect URI) — neither works out of the box the
+way SMTP does. Web-only, no node change.
+
+## [0.106.0] - 2026-08-18
+
+### Added
+
+- **M15 pass 2: Microsoft Graph email provider.** `GraphEmailProvider` (`Microsoft.Graph` +
+  `Azure.Identity`'s `ClientSecretCredential`) sends through `Users[mailbox].SendMail` using app-only
+  client-credentials auth — no per-user consent, no refresh token; the client secret itself is the
+  durable credential, encrypted at rest the same way `SmtpPassword` is. Ported send-only from rsolva's
+  `GraphEmailProvider` (LarisVMS only ever sends alerts — no inbound fetch/mark-seen half). `Admin →
+  Settings → Email` gained a Provider selector (SMTP / Microsoft Graph) and a Graph fields card
+  (tenant ID, client ID, client secret, optional shared mailbox — defaults to the from address when
+  left blank).
+
+Gmail OAuth2 is still the next M15 pass — the one that actually needs a per-user consent redirect and
+refresh-token storage, unlike Graph's app-only flow. Web-only, no node change.
+
+## [0.105.0] - 2026-08-18
+
+### Added
+
+- **M15 pass 1: outbound email.** `Admin → Settings → Email` configures the sender the alert
+  evaluator (a later M15 pass) will send through: from address/name and SMTP host/port/SSL/username/
+  password. `EmailSettings` is a singleton row; the SMTP password encrypts at rest through the same
+  `SecretProtection` pattern as camera credentials and never re-populates into the form on load (blank
+  means "unchanged," same convention as `Pages/Cameras/Edit`). "Save and send test" saves the form
+  first, then sends through exactly what was just persisted, so a test can never pass against an
+  unsaved edit. `IEmailProvider`/`EmailProviderFactory` are ported from rsolva's provider-strategy
+  shape (config passed as an opaque JSON blob per provider, dictionary-resolved by `EmailProviderType`)
+  so Graph and Gmail OAuth2 slot in later without reshaping this interface — only `SmtpEmailProvider`
+  (MailKit) exists so far. Nothing in the app calls `IEmailService` yet outside the test-send button —
+  the alert-rule evaluator that will is separate, not-yet-built work.
+
+Web-only, no node change.
+
+## [0.104.0] - 2026-08-18
+
+### Added
+
+- **Admin → Settings → Roles and → Users** — the admin UI M14.5 flagged as missing. Roles: create,
+  rename, and delete roles, and edit each role's Resource×Action permission matrix against
+  `PermissionCatalog` (the fixed, known set of pairs the app actually checks anywhere — a closed list
+  of checkboxes rather than free text, so a grant can't be typo'd into matching nothing). Users:
+  create an account (email, password, display name, role(s)), change a user's roles, enable/disable
+  an account (reuses ASP.NET Core Identity's own lockout mechanism — `LockoutEnd = MaxValue` — rather
+  than a new column), and reset a password. Two guard rails (`UserManagementPolicy`) block removing
+  the last Administrator's Administrator role or disabling the last enabled Administrator account —
+  there is no recovery path for either short of editing the database directly. `Administrator` itself
+  can't be renamed, deleted, or have its matrix edited here: `PermissionService` bypasses the
+  `Permission` table for it entirely by role name, so checkboxes would silently do nothing.
+  `AspNetRoles` had, until now, only ever held the two roles the setup wizard seeds, and `Permission`
+  rows had only ever been written by that same one-time seed — this is the first admin surface for
+  either. With self-registration disabled since 0.103.0, this is also now the only way to provision a
+  new account.
+
+Web-only, no node change.
+
+## [0.103.0] - 2026-08-18
+
+### Security
+
+- **Self-registration is now disabled.** ASP.NET Core Identity's default scaffolded UI ships a
+  `/Identity/Account/Register` page, and nothing in this app overrode or disabled it — anyone who
+  could reach the site could create an account, with no invite or approval step. A self-registered
+  account got no role and so couldn't actually do anything (every permission check fails closed with
+  zero roles), but that was an accident of there being nothing to grant a new account yet, not a
+  deliberate access control. Found while looking into why there's no admin page to manage who has an
+  account. The route now redirects to Login; real account creation is what the user-management admin
+  page above is for.
+
+Web-only, no node change.
+
 ## [0.102.0] - 2026-08-18
 
 ### Added

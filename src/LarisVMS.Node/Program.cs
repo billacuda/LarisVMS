@@ -236,6 +236,13 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid c
         await ctx.Response.WriteAsync("missing or invalid path/offset");
         return;
     }
+    // M18 follow-up: LarisVMS.Web decides this (150 for a hover-scrub preview, 854 — ~480p on a
+    // 16:9 source — for Pages/Snapshots' own cards), not the browser directly; the query param only
+    // carries that decision across the proxy hop. Not part of the signed token (unlike path/offset)
+    // since it's a quality knob, not something that needs tamper-protection — clamped rather than
+    // trusted outright regardless. Folded into the cache filename below so a 150px and an 854px
+    // request for the same offset never collide on the same cached file.
+    var maxDimension = int.TryParse(ctx.Request.Query["maxDim"], out var md) ? Math.Clamp(md, 32, 1920) : LarisVMS.Media.ThumbnailCapture.DefaultMaxDimension;
     if (!MediaToken.TryValidateThumbnail(token, cameraId, path, offsetSeconds, currentKey, out var tokenError))
     {
         ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
@@ -271,7 +278,7 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid c
     }
 
     var relativeToMain = Path.GetRelativePath(mainDir, fullPath);
-    var thumbRelative = Path.ChangeExtension(relativeToMain, null) + $"_o{offsetSeconds:D2}.jpg";
+    var thumbRelative = Path.ChangeExtension(relativeToMain, null) + $"_o{offsetSeconds:D2}_{maxDimension}.jpg";
     var thumbPath = Path.Combine(thumbsDir, thumbRelative);
 
     if (File.Exists(thumbPath))
@@ -281,7 +288,7 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid c
         return;
     }
 
-    var bytes = await worker.CaptureThumbnailAsync(fullPath, offsetSeconds, ctx.RequestAborted);
+    var bytes = await worker.CaptureThumbnailAsync(fullPath, offsetSeconds, ctx.RequestAborted, maxDimension);
     if (bytes is null)
     {
         ctx.Response.StatusCode = StatusCodes.Status502BadGateway;

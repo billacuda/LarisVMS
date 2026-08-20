@@ -44,8 +44,31 @@ else
                 }
             </select>
             <button type="button" class="btn btn-sm btn-outline-secondary" id="pbPlayPause" disabled>▶ Play</button>
+            <label class="form-label small mb-0" for="pbSpeed">Speed</label>
+            <select id="pbSpeed" class="form-select form-select-sm" style="max-width: 6rem;">
+                <option value="0.03125">1/32×</option>
+                <option value="0.0625">1/16×</option>
+                <option value="0.125">1/8×</option>
+                <option value="0.25">1/4×</option>
+                <option value="0.5">1/2×</option>
+                <option value="1" selected>1×</option>
+                <option value="2">2×</option>
+                <option value="4">4×</option>
+                <option value="8">8×</option>
+                <option value="16">16×</option>
+                <option value="32">32×</option>
+            </select>
             <button type="button" class="btn btn-sm btn-outline-secondary" id="pbExportBtn"><span aria-hidden="true">🎬</span> Export&hellip;</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="pbBookmarkBtn"><span aria-hidden="true">🔖</span> Bookmark&hellip;</button>
+            @* Populated only for a Bookmark's "▶ Play" deep link whose camera isn't in any view this
+               user can see (Pages/Bookmarks/Index.cshtml.cs's own doc comment describes this case) —
+               empty and invisible on an ordinary visit. *@
+            <span id="pbDeepLinkStatus" class="small" role="status" aria-live="polite"></span>
             <div class="form-check form-switch mb-0 ms-auto">
+                <input type="checkbox" class="form-check-input" id="pbEventTags" />
+                <label class="form-check-label small" for="pbEventTags">Event tags</label>
+            </div>
+            <div class="form-check form-switch mb-0">
                 <input type="checkbox" class="form-check-input" id="pbHour24" />
                 <label class="form-check-label small" for="pbHour24">24-hour clock</label>
             </div>
@@ -74,6 +97,22 @@ else
             </div>
         </div>
 
+        @* Hidden until Bookmark… is clicked, same "plain inline form, not a modal" shape as the
+           export panel above. Marks the *primary* (starred) tile's camera at the current playhead —
+           the same camera the per-camera timeline already drives — since a bookmark is one instant on
+           one camera's timeline, not a whole view. *@
+        <div id="pbBookmarkPanel" class="d-none border rounded p-2 mb-2 bg-body-tertiary" style="flex:0 0 auto;">
+            <div class="d-flex flex-wrap align-items-end gap-3">
+                <span id="pbBookmarkTarget" class="small text-muted"></span>
+                <div class="flex-grow-1" style="min-width:12rem;">
+                    <label class="form-label small mb-0" for="pbBookmarkNote">Note</label>
+                    <input type="text" id="pbBookmarkNote" class="form-control form-control-sm" maxlength="1000" placeholder="What's happening here?" />
+                </div>
+                <button type="button" class="btn btn-sm btn-primary" id="pbBookmarkSubmit">Save bookmark</button>
+                <span id="pbBookmarkStatus" class="small" role="status" aria-live="polite"></span>
+            </div>
+        </div>
+
         <div id="playbackTiles" style="flex:1 1 auto; min-height:0;"></div>
 
         <div id="pbTimelineArea" style="flex:0 0 auto;" class="pt-1">
@@ -89,7 +128,8 @@ else
                 every tile to that instant — neither can scroll past right now. Your position and
                 zoom level are remembered between visits. Click the time above the timeline to jump
                 to an exact second, or use the arrow keys to nudge by a second (Shift+arrow for ten)
-                while paused.
+                while paused. Speeds above 8× step through footage by seeking rather than playing
+                continuously — expect a slideshow, not smooth motion, at those speeds.
             </p>
         </div>
     </div>
@@ -126,15 +166,29 @@ else
                 globalTimelineCanvasId: 'playbackGlobalTimeline',
                 timelineAreaId: 'pbTimelineArea',
                 playPauseBtnId: 'pbPlayPause',
+                speedSelectId: 'pbSpeed',
                 currentTimeId: 'pbCurrentTime',
                 hour24ToggleId: 'pbHour24',
+                eventTagsToggleId: 'pbEventTags',
                 exportBtnId: 'pbExportBtn',
                 exportPanelId: 'pbExportPanel',
                 exportCamerasId: 'pbExportCameras',
                 exportFromId: 'pbExportFrom',
                 exportToId: 'pbExportTo',
                 exportSubmitId: 'pbExportSubmit',
-                exportStatusId: 'pbExportStatus'
+                exportStatusId: 'pbExportStatus',
+                bookmarkBtnId: 'pbBookmarkBtn',
+                bookmarkPanelId: 'pbBookmarkPanel',
+                bookmarkTargetId: 'pbBookmarkTarget',
+                bookmarkNoteId: 'pbBookmarkNote',
+                bookmarkSubmitId: 'pbBookmarkSubmit',
+                bookmarkStatusId: 'pbBookmarkStatus',
+                // M18: a Bookmark's "▶ Play" link (Pages/Bookmarks/Index) — both null for an
+                // ordinary visit. deepLinkAtUtc is an ISO string (Html.Raw's JSON-encoded form of a
+                // DateTime); the client parses it once cameras/views are loaded.
+                deepLinkCameraId: @Html.Raw(Model.CameraId is { } dlc ? System.Text.Json.JsonSerializer.Serialize(dlc.ToString()) : "null"),
+                deepLinkAtUtc: @Html.Raw(Model.AtUtc is { } dla ? System.Text.Json.JsonSerializer.Serialize(dla.ToString("o")) : "null"),
+                deepLinkStatusId: 'pbDeepLinkStatus'
             });
         })();
     </script>

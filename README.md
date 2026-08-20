@@ -15,7 +15,7 @@ work on phone, tablet, and desktop.
 
 ---
 
-## **Current version [0.102.0 ](CHANGELOG.md)**
+## **Current version [0.103.0 ](CHANGELOG.md)**
 
 ## Stack
 
@@ -183,6 +183,21 @@ Then set the matching port number in `Admin → Settings → Security`. Once set
 stop responding on the management port and every other route stops responding on the new one; leave
 the setting blank to go back to everything sharing whatever port(s) IIS already binds.
 
+### Email (`Admin → Settings → Email`)
+
+SMTP needs nothing beyond the host/port/credentials themselves. The other two providers need setup on
+the provider's side first:
+
+- **Microsoft Graph** — register an app in Entra ID, grant it the `Mail.Send` **application**
+  permission (not delegated) with admin consent, and use that app's tenant/client id and a client
+  secret. App-only auth — no redirect URI, no per-user consent, no refresh token to manage.
+- **Gmail** — create an OAuth client (type "Web application") in a Google Cloud project, and add
+  `https://<your-host>/Admin/OAuthCallback` as an **authorized redirect URI** before clicking "Save
+  and connect to Google" on the settings page, or Google will reject the redirect. The consent screen
+  needs the `https://mail.google.com/` scope enabled (or the app in testing mode with the connecting
+  account added as a test user). Losing the Data Protection key ring (see below) invalidates the
+  stored refresh token the same way it does every other encrypted credential — reconnect afterward.
+
 ## Diagnostic scripts
 
 Read-only research tools. Both open their own connection to a camera and touch nothing the recorders
@@ -207,10 +222,12 @@ than a guess.
 
 ## Data at rest
 
-- Camera credentials, SMB credentials, and node media signing keys are encrypted at rest
-  (`LarisVMS.Infrastructure.Security.SecretProtection`), keyed off a Data Protection key ring at
-  `%ProgramData%\LarisVMS\keys`. Losing this key ring makes every encrypted value unrecoverable —
-  include it in whatever backs up the server, and never delete it as part of a deploy.
+- Camera credentials, SMB credentials, node media signing keys, and every secret under
+  `Admin → Settings → Email` (SMTP password, Graph client secret, Gmail client secret and refresh
+  token) are encrypted at rest (`LarisVMS.Infrastructure.Security.SecretProtection`), keyed off a Data
+  Protection key ring at `%ProgramData%\LarisVMS\keys`. Losing this key ring makes every encrypted
+  value unrecoverable — include it in whatever backs up the server, and never delete it as part of a
+  deploy.
 - `setup-generated.json` (site root) holds the plaintext database connection string and branding.
   It is machine-specific, gitignored, and must never be committed.
 

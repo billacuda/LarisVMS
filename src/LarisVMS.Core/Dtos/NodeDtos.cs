@@ -11,8 +11,11 @@ public record NodeRegisterResponse(Guid NodeId, string Secret, string MediaSigni
 /// <summary>SentAtUtc is the node's own DateTime.UtcNow at the moment it builds this request — the
 /// web server compares that against its own receive-time to measure this node's OS clock skew (see
 /// Node.ClockSkewSeconds). Defaulted rather than required so an older node build (pre-dating this
-/// field) still deserializes cleanly against a newer Web — it just never gets a skew measurement.</summary>
-public record NodeHeartbeatRequest(string? Version, long? FreeBytes = null, long? TotalBytes = null, int? LivePort = null, DateTime? SentAtUtc = null);
+/// field) still deserializes cleanly against a newer Web — it just never gets a skew measurement.
+/// DetectedEncoders (M17) is null on an older node build the same way, and also on a newer one that
+/// simply hasn't finished its first probe yet — see NodeWorker's own caching of the probe result.</summary>
+public record NodeHeartbeatRequest(string? Version, long? FreeBytes = null, long? TotalBytes = null, int? LivePort = null,
+    DateTime? SentAtUtc = null, List<string>? DetectedEncoders = null);
 
 /// <summary>Recorder-node auto-update: a genuinely newer NodeBuildVersion exists for this node's
 /// reported Platform (NodeVersionComparer.IsNewer), and NodeAutoUpdate.Enabled is on. DownloadUrl is
@@ -27,10 +30,10 @@ public record NodeHeartbeatResponse(int IntervalSeconds, NodeUpdateInfoDto? Upda
 public record NodeConfigStreamDto(Guid StreamId, string Role, string RtspUri,
     string? Codec, int? Width, int? Height, bool HasAudio);
 
-/// <summary>M8: only ServerMotion/Ignore zones are ever sent here — CameraMotion/Privacy don't
-/// drive anything on the node (CameraMotion push happens from LarisVMS.Web over ONVIF in a
-/// follow-up pass; Privacy has no node-side effect yet at all), so there's no reason to hand a
-/// recorder node polygon data it can't act on.</summary>
+/// <summary>M8/M18: ServerMotion, Ignore, and (as of M18) Privacy zones are sent here — CameraMotion
+/// is the one left out, since nothing pushes it to a device yet (that push happens from LarisVMS.Web
+/// over ONVIF in a follow-up pass), so there's no reason to hand a recorder node polygon data it
+/// can't act on.</summary>
 public record NodeConfigZoneDto(Guid ZoneId, string Kind, string PolygonJson, double Sensitivity);
 
 /// <summary>M8 pass 8: one user-configured EventTagRule, handed to the node so CameraEventSession can

@@ -49,9 +49,14 @@ window.larisvmsTimeline = (function () {
         var rangeMs = options.initialRangeMs || (24 * 3600 * 1000);
         var centerMs = clampCenter(options.initialCenterMs || Date.now());
         var buckets = [];
+        var bookmarks = []; // M18: [{ timestampUtc }] — options.getBookmarks is optional, same as getThumbnailUrl
         var loading = false;
         var reloadTimer = null;
         var hour24 = !!options.hour24;
+        // Defaults true so every existing caller (View cell/Live mini-timelines) keeps showing tag/
+        // detection colors unchanged — only Pages/Playback passes this explicitly, per its own
+        // per-user "Event tags" toggle (M16), off by default there specifically.
+        var showEventTags = options.showEventTags !== false;
 
         // It's the *playhead* that can't pass "now", not the visible window. An earlier version
         // clamped the window's right edge instead (centerMs <= now - range/2), which quietly pinned
@@ -184,10 +189,22 @@ window.larisvmsTimeline = (function () {
             loading = true;
             var r = visibleRange();
             var bucketCount = Math.max(50, Math.min(2000, Math.round(canvas.clientWidth || 800)));
+            var fromIso = new Date(r.from).toISOString(), toIso = new Date(r.to).toISOString();
             try {
-                buckets = await options.getBuckets(new Date(r.from).toISOString(), new Date(r.to).toISOString(), bucketCount);
+                buckets = await options.getBuckets(fromIso, toIso, bucketCount);
             } catch (e) {
                 buckets = [];
+            }
+            // M18: bookmark markers — only the per-camera timeline instance supplies this (a
+            // bookmark belongs to one specific camera, same reasoning as getThumbnailUrl above being
+            // per-camera-only). Fetched alongside buckets so both are current for the same range by
+            // the time draw() runs.
+            if (options.getBookmarks) {
+                try {
+                    bookmarks = await options.getBookmarks(fromIso, toIso);
+                } catch (e) {
+                    bookmarks = [];
+                }
             }
             loading = false;
             draw();
@@ -258,9 +275,9 @@ window.larisvmsTimeline = (function () {
                 // outright over the built-in motion/recorded/gray scheme — see TimelineBucketDto's
                 // doc comment. Empty (the default, and every bucket on a camera with no tag rules and
                 // no object analytics) falls straight through to the unchanged built-in scheme.
-                var colors = (b.tagColorHexes && b.tagColorHexes.length)
+                var colors = (showEventTags && b.tagColorHexes && b.tagColorHexes.length)
                     ? b.tagColorHexes
-                    : (b.tagColorHex ? [b.tagColorHex]
+                    : (showEventTags && b.tagColorHex ? [b.tagColorHex]
                         : [b.hasMotion ? palette.motion : (b.hasRecording ? palette.recording : 'rgba(255,255,255,0.08)')]);
                 var key = colors.join('|');
                 if (runKey !== null && key !== runKey) flushRun(x1);
@@ -282,6 +299,24 @@ window.larisvmsTimeline = (function () {
                     ctx.lineTo(nowX + 0.5, h);
                     ctx.stroke();
                 }
+            }
+
+            // M18: bookmark markers — a small downward-pointing flag at the top edge of the bar for
+            // each bookmarked instant in range, distinct in shape (not just color) from the
+            // full-height playhead line so the two can never be confused even where they coincide.
+            if (bookmarks.length) {
+                ctx.fillStyle = '#ffca28';
+                bookmarks.forEach(function (b) {
+                    var bm = new Date(b.timestampUtc).getTime();
+                    if (bm < r.from || bm > r.to) return;
+                    var x = ((bm - r.from) / span) * w;
+                    ctx.beginPath();
+                    ctx.moveTo(x - 4, barTop);
+                    ctx.lineTo(x + 4, barTop);
+                    ctx.lineTo(x, barTop + 7);
+                    ctx.closePath();
+                    ctx.fill();
+                });
             }
 
             // Tick marks + scale-appropriate labels (date/hours/minutes/seconds depending on zoom —
@@ -355,14 +390,57 @@ window.larisvmsTimeline = (function () {
         // Pointer capture keeps delivering pointermove/pointerup to `canvas` regardless of where the
         // pointer physically is, as long as the button is still down.
         var dragging = false, dragStartX = 0, dragStartCenter = 0, dragMoved = false, dragPointerId = null;
+
+        // Two-finger pinch-to-zoom (phone/tablet — wheel above covers mouse/trackpad, which never
+        // fires a second simultaneous pointerdown). Tracks every currently-down pointer by id so a
+        // second touch landing mid-drag can cleanly take over from single-pointer panning instead of
+        // corrupting its state (a naive pointerdown handler would otherwise treat the second finger's
+        // own down/move as a continuation of the first finger's drag, since both share the same
+        // dragStartX/dragStartCenter). Same anchor-on-centerMs philosophy as the wheel handler above,
+        // not the touch midpoint — the playhead's job is to never move, so pinching zooms the same
+        // fixed point wheel-zoom already does, it just reads a changing finger distance instead of a
+        // scroll delta.
+        var activePointers = {}; // pointerId -> {x, y}
+        var pinching = false, pinchStartDist = 0, pinchStartRange = 0;
+
+        function pointerDistance() {
+            var ids = Object.keys(activePointers);
+            if (ids.length < 2) return 0;
+            var a = activePointers[ids[0]], b = activePointers[ids[1]];
+            return Math.hypot(a.x - b.x, a.y - b.y);
+        }
+
         canvas.addEventListener('pointerdown', function (e) {
             if (e.button !== 0) return;
+            activePointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+            canvas.setPointerCapture(e.pointerId);
+
+            var ids = Object.keys(activePointers);
+            if (ids.length >= 2) {
+                // A second (or third+, ignored below) finger just landed — hand off from panning to
+                // pinching. dragging is cancelled outright rather than left running underneath: two
+                // fingers means the gesture is a zoom, not a pan, even if the first finger started
+                // one a moment ago. Resetting the cursor here too, not just dragging itself — the
+                // first finger's own pointerdown may have already set it to 'grabbing', and neither
+                // the pinch path nor (once pinching has already cleared itself) the second finger's
+                // own pointerup ever routes back through the single-pointer cleanup that would
+                // otherwise reset it — confirmed live as a cursor stuck reading 'grabbing' after any
+                // gesture that started as a single-finger drag and then became a pinch.
+                dragging = false;
+                canvas.style.cursor = 'pointer';
+                if (ids.length === 2) {
+                    pinching = true;
+                    pinchStartDist = pointerDistance();
+                    pinchStartRange = rangeMs;
+                }
+                return;
+            }
+
             dragging = true;
             dragMoved = false;
             dragStartX = e.clientX;
             dragStartCenter = centerMs;
             dragPointerId = e.pointerId;
-            canvas.setPointerCapture(e.pointerId);
             canvas.style.cursor = 'grabbing';
         });
         // Live-scrub while dragging is throttled, not fired on every raw pointermove — a browser
@@ -376,11 +454,19 @@ window.larisvmsTimeline = (function () {
         var lastScrubFiredAt = 0;
 
         function endDrag(e) {
-            if (!dragging) return;
-            dragging = false;
-            if (dragPointerId !== null && canvas.hasPointerCapture(dragPointerId)) {
-                canvas.releasePointerCapture(dragPointerId);
+            delete activePointers[e.pointerId];
+            if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+
+            if (pinching) {
+                // Lifting one finger of a two-finger pinch drops back to zero or one remaining
+                // pointer — either way the pinch itself is over; a single remaining finger does NOT
+                // resume as a pan (it never started one, and re-basing dragStartX/dragStartCenter to
+                // wherever that finger happens to be now would jump the playhead on release).
+                if (Object.keys(activePointers).length < 2) pinching = false;
+                return;
             }
+            if (!dragging || e.pointerId !== dragPointerId) return;
+            dragging = false;
             dragPointerId = null;
             canvas.style.cursor = 'pointer';
             if (!dragMoved) {
@@ -396,7 +482,24 @@ window.larisvmsTimeline = (function () {
         }
 
         canvas.addEventListener('pointermove', function (e) {
-            if (!dragging) return;
+            if (activePointers[e.pointerId]) activePointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+
+            if (pinching) {
+                var dist = pointerDistance();
+                if (dist > 0 && pinchStartDist > 0) {
+                    // Fingers spreading apart (dist grows past pinchStartDist) should zoom IN — a
+                    // smaller rangeMs, the same direction wheel's deltaY<0 case produces — so the
+                    // factor is inverted relative to the raw distance ratio.
+                    var zoomFactor = pinchStartDist / dist;
+                    rangeMs = Math.min(MAX_RANGE_MS, Math.max(MIN_RANGE_MS, pinchStartRange * zoomFactor));
+                    draw();
+                    scheduleReload();
+                    if (options.onRangeChange) options.onRangeChange(rangeMs);
+                }
+                return;
+            }
+
+            if (!dragging || e.pointerId !== dragPointerId) return;
             var rect = canvas.getBoundingClientRect();
             var dxFrac = (e.clientX - dragStartX) / rect.width;
             if (Math.abs(e.clientX - dragStartX) > 3) dragMoved = true;
@@ -418,6 +521,20 @@ window.larisvmsTimeline = (function () {
         // pointer is gone, stop tracking it," and dragging must end here too or it stays stuck the
         // same way the original bug did.
         canvas.addEventListener('pointercancel', endDrag);
+        // Second belt-and-suspenders, at the window level: confirmed live as "either timeline can get
+        // stuck dragging, unpredictably" with a per-camera Playback page holding two of these side by
+        // side. setPointerCapture is supposed to guarantee pointerup/pointercancel land back on this
+        // canvas regardless of where the pointer physically ends up — but capture itself can silently
+        // fail to take (a pointerId already gone stale, a reflow mid-gesture, browser-specific
+        // flakiness), and when it does, the release event is delivered to whatever element is
+        // actually under the pointer instead, which this canvas's own listeners never see — dragging
+        // stays true forever, exactly the "grabbing cursor that never lets go" this file's pointer-
+        // capture rewrite was supposed to have eliminated. A window-level listener always sees the
+        // event regardless of where it lands, so it can't be defeated by a capture failure; endDrag
+        // is safe to call twice for the same release (its own dragging/pinching guards make the
+        // ordinary in-canvas case's second invocation a no-op).
+        window.addEventListener('pointerup', endDrag);
+        window.addEventListener('pointercancel', endDrag);
 
         // ── Hover thumbnails (M7 pass 2) ────────────────────────────────────
         // Independent of the drag-scrub pointermove handler above — this one bails while dragging
@@ -619,6 +736,7 @@ window.larisvmsTimeline = (function () {
             },
             getRange: function () { return rangeMs; },
             setHour24: function (on) { hour24 = !!on; draw(); },
+            setShowEventTags: function (on) { showEventTags = !!on; draw(); },
             reload: reload
         };
     }

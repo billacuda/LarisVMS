@@ -27,6 +27,8 @@ window.larisvmsFullscreenTile = (function () {
             videoEl.style.transform = '';
             videoEl.style.cursor = '';
             endDrag();
+            endPinch();
+            activePointers = {};
         }
 
         function isFs() { return document.fullscreenElement === containerEl; }
@@ -72,6 +74,18 @@ window.larisvmsFullscreenTile = (function () {
         // back to this element, and endDrag is idempotent so resetZoom can also call it directly.
         var dragging = false, startX = 0, startY = 0, startPanX = 0, startPanY = 0, dragPointerId = null;
 
+        // ── Pinch-to-zoom (M16) ──────────────────────────────────────────────
+        // Every currently-down pointer's last known position, keyed by pointerId — two entries means
+        // a pinch is in progress. A touchscreen delivers each finger as its own Pointer Events stream
+        // (same pointerdown/move/up/cancel this file already used for mouse drag-to-pan), so pinch is
+        // "the same events, tracked for up to two pointers at once" rather than a separate touch API.
+        var activePointers = {};
+        var pinchStartDist = null, pinchStartScale = 1, pinchStartMidX = 0, pinchStartMidY = 0;
+        var pinchStartPanX = 0, pinchStartPanY = 0;
+
+        function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+        function midpoint(a, b) { return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
+
         function endDrag() {
             if (!dragging) return;
             dragging = false;
@@ -82,8 +96,32 @@ window.larisvmsFullscreenTile = (function () {
             videoEl.style.cursor = isFs() && scale > minScale ? 'grab' : '';
         }
 
+        function endPinch() {
+            pinchStartDist = null;
+        }
+
         containerEl.addEventListener('pointerdown', function (e) {
-            if (e.button !== 0 || !isFs() || scale <= minScale) return;
+            if (!isFs()) return;
+            activePointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+            var ids = Object.keys(activePointers);
+
+            if (ids.length === 2) {
+                // A second finger landed — hand off from single-pointer pan (if one was active) to
+                // a pinch anchored on both fingers' current midpoint/spacing.
+                endDrag();
+                e.preventDefault();
+                containerEl.setPointerCapture(e.pointerId);
+                var p1 = activePointers[ids[0]], p2 = activePointers[ids[1]];
+                pinchStartDist = dist(p1, p2);
+                pinchStartScale = scale;
+                var mid = midpoint(p1, p2);
+                pinchStartMidX = mid.x; pinchStartMidY = mid.y;
+                pinchStartPanX = panX; pinchStartPanY = panY;
+                return;
+            }
+            if (ids.length > 2) return; // a third finger: ignored, the first two keep driving the pinch
+
+            if (e.button !== 0 || scale <= minScale) return;
             // See playback-player.js's wireZoom for why this matters: without it, dragging the
             // <video> can also kick off the browser's own native drag-out-the-frame gesture, which
             // then owns the mouse for the rest of that gesture and shows the no-drop cursor instead
@@ -97,13 +135,38 @@ window.larisvmsFullscreenTile = (function () {
             videoEl.style.cursor = 'grabbing';
         });
         containerEl.addEventListener('pointermove', function (e) {
+            if (activePointers[e.pointerId]) activePointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+
+            var ids = Object.keys(activePointers);
+            if (ids.length === 2 && pinchStartDist) {
+                e.preventDefault();
+                var p1 = activePointers[ids[0]], p2 = activePointers[ids[1]];
+                var newDist = dist(p1, p2);
+                // Guards against a division blip if both pointers briefly report the exact same
+                // point (seen on some touch digitizers for one frame at gesture start).
+                if (newDist > 0 && pinchStartDist > 0) {
+                    scale = Math.min(maxScale, Math.max(minScale, pinchStartScale * (newDist / pinchStartDist)));
+                }
+                var mid = midpoint(p1, p2);
+                panX = pinchStartPanX + (mid.x - pinchStartMidX) / scale;
+                panY = pinchStartPanY + (mid.y - pinchStartMidY) / scale;
+                apply();
+                videoEl.style.cursor = scale > minScale ? 'grab' : '';
+                return;
+            }
+
             if (!dragging) return;
             panX = startPanX + (e.clientX - startX) / scale;
             panY = startPanY + (e.clientY - startY) / scale;
             apply();
         });
-        containerEl.addEventListener('pointerup', endDrag);
-        containerEl.addEventListener('pointercancel', endDrag);
+        function onPointerEnd(e) {
+            delete activePointers[e.pointerId];
+            if (Object.keys(activePointers).length < 2) endPinch();
+            endDrag();
+        }
+        containerEl.addEventListener('pointerup', onPointerEnd);
+        containerEl.addEventListener('pointercancel', onPointerEnd);
 
         return {
             isFullscreen: isFs,

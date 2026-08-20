@@ -101,9 +101,13 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         var watermarkPercent = await settings.GetAsync("Storage.WatermarkPercent", 90, ct: ct);
 
         var cameraIds = cameras.Select(c => c.Id).ToList();
+        // M18: Privacy joins ServerMotion/Ignore here — RecordingSession's own privacy-mask burn-in
+        // needs it the same way MotionSession needs the other two. CameraMotion is still excluded:
+        // nothing pushes it to a device yet (see ZoneKind's own doc comment), so the node has no use
+        // for it.
         var zonesByCamera = await db.Zones
             .Where(z => cameraIds.Contains(z.CameraId) && z.IsEnabled
-                && (z.Kind == ZoneKind.ServerMotion || z.Kind == ZoneKind.Ignore))
+                && (z.Kind == ZoneKind.ServerMotion || z.Kind == ZoneKind.Ignore || z.Kind == ZoneKind.Privacy))
             .ToListAsync(ct);
         var zonesLookup = zonesByCamera.ToLookup(z => z.CameraId);
 
@@ -220,9 +224,10 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         => nodeSentAtUtc is { } sentAt ? (serverReceivedUtc - sentAt).TotalSeconds : null;
 
     public async Task RecordHeartbeatAsync(Guid nodeId, long? freeBytes, long? totalBytes, string? version, int? livePort,
-        DateTime? nodeSentAtUtc, DateTime serverReceivedUtc, CancellationToken ct = default)
+        DateTime? nodeSentAtUtc, DateTime serverReceivedUtc, List<string>? detectedEncoders = null, CancellationToken ct = default)
     {
         var skew = ComputeClockSkewSeconds(nodeSentAtUtc, serverReceivedUtc);
+        var encodersJson = detectedEncoders is not null ? System.Text.Json.JsonSerializer.Serialize(detectedEncoders) : null;
 
         await db.Nodes.Where(n => n.Id == nodeId).ExecuteUpdateAsync(s => s
             .SetProperty(n => n.StorageFreeBytes, freeBytes)
@@ -231,7 +236,8 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             .SetProperty(n => n.Version, n => version ?? n.Version)
             .SetProperty(n => n.LivePort, n => livePort ?? n.LivePort)
             .SetProperty(n => n.ClockSkewSeconds, n => skew ?? n.ClockSkewSeconds)
-            .SetProperty(n => n.ClockSkewMeasuredAt, n => skew != null ? serverReceivedUtc : n.ClockSkewMeasuredAt), ct);
+            .SetProperty(n => n.ClockSkewMeasuredAt, n => skew != null ? serverReceivedUtc : n.ClockSkewMeasuredAt)
+            .SetProperty(n => n.DetectedEncodersJson, n => encodersJson ?? n.DetectedEncodersJson), ct);
     }
 
     /// <summary>Every field is coalesce-preserve (`item.X ?? s.X`), not a blind overwrite — M11 added

@@ -1,0 +1,104 @@
+@page
+@model LarisVMS.Web.Pages.Admin.Settings.RolesModel
+@{
+    ViewData["Title"] = "Roles";
+}
+<h1>Settings</h1>
+<partial name="_SettingsTabs" model="@("Roles")" />
+
+<p class="text-muted">
+    Create, rename, and delete roles, and edit which Resource×Action pairs each one grants. Camera-
+    level scoping is separate — see <a asp-page="/Admin/Settings/CameraAccess">Camera Access</a>.
+</p>
+
+@if (!string.IsNullOrEmpty(Model.SavedMessage))
+{
+    <div class="alert alert-success">@Model.SavedMessage</div>
+}
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger">@Model.ErrorMessage</div>
+}
+
+@foreach (var role in Model.Roles)
+{
+    <div class="card mb-3">
+        <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+            <span>@role.Name @if (role.IsProtected) { <span class="badge text-bg-secondary ms-1">built-in</span> } <span class="text-muted fw-normal">(@role.UserCount user@(role.UserCount == 1 ? "" : "s"))</span></span>
+        </div>
+        <div class="card-body">
+            <form method="post" asp-page-handler="Save">
+                <input type="hidden" name="roleId" value="@role.Id" />
+                <div class="row g-3 mb-3">
+                    <div class="col-sm-6">
+                        <label class="form-label">Name</label>
+                        <input type="text" name="name" class="form-control" value="@role.Name" @(role.IsProtected ? "readonly" : "") />
+                    </div>
+                </div>
+
+                @if (role.IsProtected)
+                {
+                    <p class="text-muted small mb-0">
+                        The @role.Name role always holds every permission and its matrix can't be edited here.
+                    </p>
+                }
+                else
+                {
+                    <div class="table-responsive">
+                        <table class="table table-sm mb-3">
+                            <thead class="table-light">
+                                <tr><th>Grant</th><th>Description</th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var entry in Model.Catalog)
+                                {
+                                    var key = $"{entry.Resource}|{entry.Action}";
+                                    var checkedAttr = role.Granted.Contains((entry.Resource, entry.Action)) ? "checked" : "";
+                                    <tr>
+                                        <td class="text-nowrap">
+                                            <div class="form-check">
+                                                <input class="form-check-input" type="checkbox" name="permissions" value="@key"
+                                                       id="perm-@role.Id-@entry.Resource-@entry.Action" @checkedAttr />
+                                                <label class="form-check-label font-monospace" for="perm-@role.Id-@entry.Resource-@entry.Action">
+                                                    @(entry.Resource).@(entry.Action)
+                                                </label>
+                                            </div>
+                                        </td>
+                                        <td class="text-muted small">@entry.Label</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+
+                <button type="submit" class="btn btn-primary btn-sm">Save</button>
+
+                @if (!role.IsProtected)
+                {
+                    <button type="submit" formaction="?handler=Delete" class="btn btn-outline-danger btn-sm"
+                            onclick="return confirm('Delete role &quot;@role.Name&quot;?');"
+                            disabled="@(role.UserCount > 0)"
+                            title="@(role.UserCount > 0 ? "Move its users to another role first." : null)">
+                        Delete
+                    </button>
+                }
+            </form>
+        </div>
+    </div>
+}
+
+<div class="card">
+    <div class="card-header fw-semibold">Add a role</div>
+    <div class="card-body">
+        <form method="post" asp-page-handler="Create" class="row g-3">
+            <div class="col-sm-6">
+                <label class="form-label">Name</label>
+                <input type="text" asp-for="NewRoleName" class="form-control" placeholder="e.g. Operator" />
+            </div>
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary">Add role</button>
+            </div>
+        </form>
+    </div>
+</div>

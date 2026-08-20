@@ -30,6 +30,35 @@ public class TimelineServiceTests
         public Task SaveAsync(EventPalette p, string? modifiedBy, CancellationToken ct = default) => Task.CompletedTask;
     }
 
+    /// <summary>A deliberately minimal ISettingsResolver stub for GetSnapshotsAsync's type-filter
+    /// tests — the real SettingsResolver's cache is a process-wide static ConcurrentDictionary keyed
+    /// only by "{cameraId}|{nodeId}|{key}" with no per-DbContext discriminator, which would leak
+    /// values across these tests' separate InMemory databases. Only GetAsync&lt;bool&gt; is exercised
+    /// by GetSnapshotsAsync; everything else throws so an accidental new dependency here is loud
+    /// rather than silently returning a wrong default.</summary>
+    private sealed class StubSettingsResolver(Dictionary<string, bool>? values = null) : ISettingsResolver
+    {
+        public Task<string?> GetRawAsync(string key, Guid? cameraId = null, Guid? nodeId = null, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        public Task<T> GetAsync<T>(string key, T defaultValue, Guid? cameraId = null, Guid? nodeId = null, CancellationToken ct = default)
+        {
+            if (typeof(T) == typeof(bool) && values is not null && values.TryGetValue(key, out var v))
+                return Task.FromResult((T)(object)v);
+            return Task.FromResult(defaultValue);
+        }
+
+        public Task<SettingScope?> GetSourceAsync(string key, Guid? cameraId = null, Guid? nodeId = null, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public Task<string?> GetOwnOverrideAsync(SettingScope scope, Guid scopeId, string key, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public Task SetGlobalAsync(string key, string value, string? modifiedBy = null, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public Task SetOverrideAsync(SettingScope scope, Guid scopeId, string key, string? value, string? modifiedBy = null, CancellationToken ct = default)
+            => throw new NotSupportedException();
+        public Task InvalidateAsync() => Task.CompletedTask;
+    }
+
     [Fact]
     public async Task ADetectionSpanUsesTheAdminConfiguredColorForItsClass()
     {
@@ -783,5 +812,282 @@ public class TimelineServiceTests
         var buckets = await service.GetBucketsAsync(cameraId, from, from.AddHours(1), 60);
 
         Assert.Null(buckets[20].TagColorHex);
+    }
+
+    // ── GetSnapshotsAsync (M18: Snapshots browser) ───────────────────────────
+
+    [Fact]
+    public async Task SnapshotWithAZoneUsesTheZonesNameAndThePlainMotionColor()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var zone = new Zone { Id = Guid.NewGuid(), CameraId = cameraId, Name = "Front Yard", Kind = ZoneKind.ServerMotion };
+        db.Zones.Add(zone);
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.Add(new MotionSpan
+        {
+            CameraId = cameraId, Source = MotionSource.ServerMotion, ZoneId = zone.Id,
+            StartUtc = start, EndUtc = start.AddSeconds(30), Score = 0.5
+        });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
+
+        var s = Assert.Single(page.Items);
+        Assert.Equal("Front Yard", s.Label);
+        Assert.Equal(EventColors.DefaultMotion, s.ColorHex);
+        Assert.Equal("cam-1", s.CameraName);
+    }
+
+    [Fact]
+    public async Task SnapshotWithACustomTagUsesTheRulesNameAndColor()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var rule = new EventTagRule
+        {
+            Id = Guid.NewGuid(), CameraId = cameraId, Name = "Package", StartTopic = "tns1:Custom/Start",
+            ColorHex = "#ff9800", DrivesRecording = false, IsEnabled = true
+        };
+        db.EventTagRules.Add(rule);
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.Add(new MotionSpan
+        {
+            CameraId = cameraId, Source = MotionSource.CustomTag, EventTagRuleId = rule.Id,
+            StartUtc = start, EndUtc = start.AddSeconds(30), Score = 1.0
+        });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
+
+        var s = Assert.Single(page.Items);
+        Assert.Equal("Package", s.Label);
+        Assert.Equal("#ff9800", s.ColorHex);
+    }
+
+    [Fact]
+    public async Task SnapshotWithADetectionUsesTheClassLabelAndPaletteColor()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.Add(new MotionSpan
+        {
+            CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Person,
+            StartUtc = start, EndUtc = start.AddSeconds(30), Score = 1.0
+        });
+        await db.SaveChangesAsync();
+
+        var custom = new StubEventColors(new EventPalette(null, null,
+            new Dictionary<DetectionKind, string> { [DetectionKind.Person] = "#123456" }));
+        var service = new TimelineService(db, custom);
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
+
+        var s = Assert.Single(page.Items);
+        Assert.Equal("Person", s.Label);
+        Assert.Equal("#123456", s.ColorHex);
+        Assert.Equal("🚶", s.Emoji);
+    }
+
+    [Fact]
+    public async Task SnapshotWithNoZoneRuleOrDetectionFallsBackToPlainMotionLabel()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.Add(new MotionSpan
+        {
+            CameraId = cameraId, Source = MotionSource.CameraEvent,
+            StartUtc = start, EndUtc = start.AddSeconds(30), Score = 1.0
+        });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
+
+        Assert.Equal("Motion", Assert.Single(page.Items).Label);
+    }
+
+    [Fact]
+    public async Task SnapshotsAreOrderedNewestFirst()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.AddRange(
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start, EndUtc = start.AddSeconds(1) },
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start.AddMinutes(5), EndUtc = start.AddMinutes(5).AddSeconds(1) },
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start.AddMinutes(2), EndUtc = start.AddMinutes(2).AddSeconds(1) });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
+
+        Assert.Equal(
+            [start.AddMinutes(5).AddMilliseconds(500), start.AddMinutes(2).AddMilliseconds(500), start.AddMilliseconds(500)],
+            page.Items.Select(i => i.AtUtc));
+    }
+
+    [Fact]
+    public async Task SnapshotAtUtcIsTheMidpointOfTheSpanNotItsStart()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.Add(new MotionSpan
+        {
+            CameraId = cameraId, Source = MotionSource.CameraEvent,
+            StartUtc = start, EndUtc = start.AddSeconds(20)
+        });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
+
+        Assert.Equal(start.AddSeconds(10), Assert.Single(page.Items).AtUtc);
+    }
+
+    [Fact]
+    public async Task SnapshotsPageClampsToTheLastPageWhenRequestedPageIsTooHigh()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        for (var i = 0; i < 3; i++)
+        {
+            db.MotionSpans.Add(new MotionSpan
+            {
+                CameraId = cameraId, Source = MotionSource.CameraEvent,
+                StartUtc = start.AddMinutes(i), EndUtc = start.AddMinutes(i).AddSeconds(1)
+            });
+        }
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var page = await service.GetSnapshotsAsync(null, null, null, page: 99, pageSize: 2);
+
+        Assert.Equal(2, page.TotalPages);
+        Assert.Equal(2, page.CurrentPage);
+        Assert.Single(page.Items); // page 2 of a 3-item set at pageSize 2 has the one remaining row
+    }
+
+    [Fact]
+    public async Task SnapshotsCanBeFilteredByCameraAndDateRange()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var otherCameraId = Guid.NewGuid();
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.AddRange(
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start, EndUtc = start.AddSeconds(1) },
+            new MotionSpan { CameraId = otherCameraId, Source = MotionSource.CameraEvent, StartUtc = start, EndUtc = start.AddSeconds(1) },
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start.AddDays(-10), EndUtc = start.AddDays(-10).AddSeconds(1) });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var page = await service.GetSnapshotsAsync(cameraId, start.AddDays(-1), start.AddDays(1), 1, 24);
+
+        var s = Assert.Single(page.Items);
+        Assert.Equal(cameraId, s.CameraId);
+        Assert.Equal(start.AddMilliseconds(500), s.AtUtc);
+    }
+
+    [Fact]
+    public async Task SnapshotForADeletedCameraFallsBackToAPlaceholderName()
+    {
+        using var db = NewDb();
+        var cameraId = Guid.NewGuid(); // never added to db.Cameras
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.Add(new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start, EndUtc = start.AddSeconds(1) });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
+
+        Assert.Equal("(deleted camera)", Assert.Single(page.Items).CameraName);
+    }
+
+    [Fact]
+    public async Task SnapshotsKindsFilterNarrowsToOnlyTheRequestedTypes()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        var rule = new EventTagRule
+        {
+            Id = Guid.NewGuid(), CameraId = cameraId, Name = "Package", StartTopic = "tns1:Custom/Start",
+            ColorHex = "#ff9800", DrivesRecording = false, IsEnabled = true
+        };
+        db.EventTagRules.Add(rule);
+        db.MotionSpans.AddRange(
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start, EndUtc = start.AddSeconds(1) }, // plain motion
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Person, StartUtc = start.AddMinutes(1), EndUtc = start.AddMinutes(1).AddSeconds(1) },
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Vehicle, StartUtc = start.AddMinutes(2), EndUtc = start.AddMinutes(2).AddSeconds(1) },
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CustomTag, EventTagRuleId = rule.Id, StartUtc = start.AddMinutes(3), EndUtc = start.AddMinutes(3).AddSeconds(1) });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24, kinds: ["Person"]);
+
+        Assert.Equal("Person", Assert.Single(page.Items).Label);
+    }
+
+    [Fact]
+    public async Task SnapshotsKindsFilterCanIncludeMotionAndCustomTagsTogether()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        var rule = new EventTagRule
+        {
+            Id = Guid.NewGuid(), CameraId = cameraId, Name = "Package", StartTopic = "tns1:Custom/Start",
+            ColorHex = "#ff9800", DrivesRecording = false, IsEnabled = true
+        };
+        db.EventTagRules.Add(rule);
+        db.MotionSpans.AddRange(
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start, EndUtc = start.AddSeconds(1) },
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Person, StartUtc = start.AddMinutes(1), EndUtc = start.AddMinutes(1).AddSeconds(1) },
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CustomTag, EventTagRuleId = rule.Id, StartUtc = start.AddMinutes(3), EndUtc = start.AddMinutes(3).AddSeconds(1) });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24, kinds: ["Motion", TimelineService.CustomTagKindToken]);
+
+        Assert.Equal(2, page.Items.Count);
+        Assert.DoesNotContain(page.Items, i => i.Label == "Person");
+    }
+
+    [Fact]
+    public async Task SnapshotsKindsFilterExcludingEverythingReturnsNoResults()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.Add(new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start, EndUtc = start.AddSeconds(1) });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        // An explicitly empty (but non-null) set narrows to nothing — distinct from null, which means
+        // the filter was never touched and shows everything.
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24, kinds: ["Vehicle"]);
+
+        Assert.Empty(page.Items);
+    }
+
+    [Fact]
+    public async Task SnapshotsPagingIsStableAcrossTiedStartUtcValues()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        // Five spans sharing the exact same StartUtc — without a deterministic secondary sort key,
+        // OFFSET/FETCH page boundaries among tied rows are undefined and could duplicate or skip rows.
+        for (var i = 0; i < 5; i++)
+        {
+            db.MotionSpans.Add(new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start, EndUtc = start.AddSeconds(1), Score = i });
+        }
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var page1 = await service.GetSnapshotsAsync(null, null, null, 1, 2);
+        var page2 = await service.GetSnapshotsAsync(null, null, null, 2, 2);
+        var page3 = await service.GetSnapshotsAsync(null, null, null, 3, 2);
+
+        var allIds = page1.Items.Select(i => i.Id)
+            .Concat(page2.Items.Select(i => i.Id))
+            .Concat(page3.Items.Select(i => i.Id))
+            .ToList();
+        Assert.Equal(5, allIds.Count);
+        Assert.Equal(5, allIds.Distinct().Count()); // no row appeared on two pages, none missing
     }
 }

@@ -65,7 +65,7 @@ public class ThumbnailBackfillServiceTests : IDisposable
     public void SkipsASegmentThatAlreadyHasItsThumbnailCached()
     {
         WriteSegment(@"2026\08\09\14\20260809T140500Z.mp4", DateTime.UtcNow.AddMinutes(-10));
-        WriteThumbnail(@"2026\08\09\14\20260809T140500Z_o00.jpg");
+        WriteThumbnail($@"2026\08\09\14\20260809T140500Z_o00_{LarisVMS.Media.ThumbnailCapture.DefaultMaxDimension}.jpg");
 
         var found = ThumbnailBackfillService.FindAlignedSegmentsMissingThumbnails(_mainDir, _thumbsDir, DateTime.UtcNow).ToList();
 
