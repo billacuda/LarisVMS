@@ -70,12 +70,16 @@ public record SegmentFileInfo(string FilePath, Guid NodeId);
 /// CameraName is "(deleted camera)" for a camera removed since — same convention as
 /// BookmarkDto/ExportDispatchCandidate.
 ///
-/// AtUtc is the *midpoint* of the underlying MotionSpan, not its start — explicit user ask, since a
-/// span's opening instant is often the least representative frame of it (someone just entering the
-/// frame edge), while the middle is far more likely to actually show whatever triggered it.
+/// AtUtc samples ~1s into the *recorded footage* for the underlying MotionSpan — StartUtc minus
+/// Recording.MotionPreRollSeconds, plus that 1s margin — not the span's own midpoint or even StartUtc
+/// itself. See GetSnapshotsAsync for the full reasoning: a span's length isn't a reliable stand-in for
+/// "how long the subject was in frame" on this app's camera-pushed/detected spans (dominated by the
+/// camera's own event cooldown), and the subject is typically already visible at the very start of
+/// what pre-roll actually put on disk for the event, not just at StartUtc.
 ///
-/// Duration is the underlying MotionSpan's own EndUtc-StartUtc — how long the event ran, not to be
-/// confused with AtUtc, which is a single instant derived from it (its midpoint).</summary>
+/// Duration is the underlying MotionSpan's own EndUtc-StartUtc — how long the event *span* ran, not
+/// to be confused with AtUtc, which samples near its start rather than any particular fraction of
+/// this duration.</summary>
 public record SnapshotDto(long Id, Guid CameraId, string CameraName, DateTime AtUtc, TimeSpan Duration, string Label, string ColorHex, string Emoji);
 
 /// <summary>One page of SnapshotDto plus enough to render pagination — MotionSpans is a volume table

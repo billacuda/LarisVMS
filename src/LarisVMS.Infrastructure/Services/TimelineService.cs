@@ -347,6 +347,10 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
     /// browsing to exclude tags for the moment, not decide system-wide visibility.</summary>
     public const string CustomTagKindToken = "CustomTag";
 
+    /// <summary>How far past the start of the *recorded footage* (not the span) to sample a
+    /// Snapshots thumbnail — see GetSnapshotsAsync's own comment.</summary>
+    internal static readonly TimeSpan SnapshotOffsetIntoRecording = TimeSpan.FromSeconds(1);
+
     public async Task<SnapshotPageDto> GetSnapshotsAsync(Guid? cameraId, DateTime? fromUtc, DateTime? toUtc, int page, int pageSize, CancellationToken ct = default, IReadOnlyCollection<string>? kinds = null)
     {
         pageSize = Math.Clamp(pageSize, 1, MaxSnapshotPageSize);
@@ -430,6 +434,21 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
         var cameraNames = await db.Cameras.Where(c => cameraIds.Contains(c.Id))
             .Select(c => new { c.Id, c.Name }).ToDictionaryAsync(c => c.Id, c => c.Name, ct);
 
+        // Recording.MotionPreRollSeconds per camera — resolved once per distinct camera on this page
+        // (ISettingsResolver caches, so this is cheap even across many rows) rather than per row.
+        // Camera-level override only, no nodeId: MotionSpan doesn't carry which node scored it, and a
+        // node-level pre-roll override is a rarer case than a camera-level one — see
+        // GetSnapshotsAsync's own comment for why this value matters here at all. settings is null in
+        // every existing test that doesn't care about this (default constructor param), which
+        // resolves to 10 — NodeService's own hardcoded default for the same setting.
+        var preRollSecondsByCameraId = new Dictionary<Guid, int>();
+        foreach (var camId in cameraIds)
+        {
+            preRollSecondsByCameraId[camId] = settings is not null
+                ? await settings.GetAsync("Recording.MotionPreRollSeconds", 10, cameraId: camId, ct: ct)
+                : 10;
+        }
+
         var palette = await eventColors.GetAsync(ct);
 
         // Same label/color precedence as ResolveColor above (custom tag > detected class > plain
@@ -456,12 +475,37 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
                 emoji = EventColors.MotionEmoji;
             }
 
-            // The midpoint, not the start — an event's opening instant is often the least
-            // representative frame of it (a person just entering frame edge, a car mid-approach);
-            // the middle is far more likely to actually show the thing that triggered the span.
-            // Explicit user ask: "if an event is 20 seconds long take a snapshot from 10 seconds in".
             var duration = r.EndUtc - r.StartUtc;
-            var atUtc = r.StartUtc + TimeSpan.FromTicks(duration.Ticks / 2);
+            // Sampled from the start of the *recorded footage*, not the span's own midpoint —
+            // explicit user ask, superseding v0.128's detection-only version of this same idea once
+            // it became clear plain motion needed it too.
+            //
+            // A span's own length is not a reliable proxy for "how long the subject was in frame" on
+            // either kind of MotionSpan this app produces. A classified detection's length is
+            // dominated by the camera's own event cooldown/anti-dither (~10s or more on some
+            // hardware, so it doesn't spam) — a vehicle crossing the frame is long gone by the
+            // midpoint of a span that only stayed open because the camera won't re-fire sooner. Plain
+            // camera-pushed motion can have the exact same cooldown floor for the same reason. Only
+            // this app's own ServerMotion zone (frame-diff, no cooldown involved) measures a span's
+            // real duration — and even there, sampling from the start is still more useful than the
+            // midpoint, just for a different reason below.
+            //
+            // The *recording* pre-rolls by Recording.MotionPreRollSeconds before StartUtc — the
+            // subject is typically already visible at the very start of what's actually on disk for
+            // this event, not just at StartUtc itself (which is when the trigger crossed its own
+            // threshold, already partway into the subject being there). So the sample point is the
+            // start of the pre-roll buffer plus a one-second margin, not StartUtc plus that margin —
+            // at this fleet's 3s pre-roll that lands 2s *before* StartUtc.
+            //
+            // No lower clamp: a candidate landing before any segment this camera actually has on disk
+            // (a motion event moments after recording began, with less than a full pre-roll buffer
+            // built up yet) resolves to no thumbnail, same "No thumbnail available" placeholder any
+            // other missing-footage case already shows — not a reason to special-case this one.
+            // Upper-clamped to the span's own end defensively; in practice a pre-roll of even 1s
+            // already guarantees the candidate lands at or before StartUtc, well short of EndUtc.
+            var preRollSeconds = preRollSecondsByCameraId.GetValueOrDefault(r.CameraId, 10);
+            var candidate = r.StartUtc - TimeSpan.FromSeconds(preRollSeconds) + SnapshotOffsetIntoRecording;
+            var atUtc = candidate > r.EndUtc ? r.EndUtc : candidate;
 
             return new SnapshotDto(r.Id, r.CameraId,
                 cameraNames.TryGetValue(r.CameraId, out var name) ? name : "(deleted camera)",

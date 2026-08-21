@@ -29,6 +29,7 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
     [BindProperty] public string RecordingModeOverride { get; set; } = "";
     [BindProperty] public int? MotionPreRollSecondsOverride { get; set; }
     [BindProperty] public int? MotionPostRollSecondsOverride { get; set; }
+    [BindProperty] public int? SegmentSecondsOverride { get; set; }
 
     public bool IsNew => Id is null;
     public List<CameraGroup> Groups { get; set; } = [];
@@ -41,6 +42,7 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
     public string EffectiveRecordingMode { get; set; } = "Continuous";
     public int EffectiveMotionPreRollSeconds { get; set; }
     public int EffectiveMotionPostRollSeconds { get; set; }
+    public int EffectiveSegmentSeconds { get; set; }
     /// <summary>Whether this camera has at least one enabled ServerMotion zone — Motion mode does
     /// nothing without one (NodeWorker falls back to recording everything, logging a warning) so
     /// the Edit page can surface that up front instead of the operator discovering it in node logs.</summary>
@@ -126,6 +128,10 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
         MotionPostRollSecondsOverride = int.TryParse(ownPostRollOverride, out var postRoll) ? postRoll : null;
         EffectiveMotionPostRollSeconds = await settings.GetAsync("Recording.MotionPostRollSeconds", 30, cameraId: cameraId, nodeId: nodeId);
 
+        var ownSegmentSecondsOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "Recording.SegmentSeconds");
+        SegmentSecondsOverride = int.TryParse(ownSegmentSecondsOverride, out var segmentSeconds) ? segmentSeconds : null;
+        EffectiveSegmentSeconds = await settings.GetAsync("Recording.SegmentSeconds", 60, cameraId: cameraId, nodeId: nodeId);
+
         var zones = await zoneService.ListAsync(cameraId);
         HasServerMotionZone = zones.Any(z => z.Kind == ZoneKind.ServerMotion && z.IsEnabled);
 
@@ -189,6 +195,10 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
                 MotionPreRollSecondsOverride?.ToString(), User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Recording.MotionPostRollSeconds",
                 MotionPostRollSecondsOverride?.ToString(), User.Identity?.Name);
+            // Same clamp NodeService.GetConfigAsync applies when resolving this for a node.
+            var clampedSegmentSecondsOverride = SegmentSecondsOverride is { } s ? Math.Clamp(s, 5, 300) : (int?)null;
+            await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Recording.SegmentSeconds",
+                clampedSegmentSecondsOverride?.ToString(), User.Identity?.Name);
             return RedirectToPage("Index");
         }
         catch (Exception ex)

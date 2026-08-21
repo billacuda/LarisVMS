@@ -59,7 +59,7 @@ public record RecordingSessionOptions(
 /// is known to be unreliable over SMB-backed paths (a real possibility once storage targets land in
 /// M4).
 /// </summary>
-public sealed class RecordingSession(RecordingSessionOptions options, ILogger logger)
+public sealed class RecordingSession(RecordingSessionOptions options, ILogger logger) : ILiveSource
 {
     public StreamRecordingState State { get; private set; } = StreamRecordingState.Idle;
     public DateTime? LastSegmentAt { get; private set; }

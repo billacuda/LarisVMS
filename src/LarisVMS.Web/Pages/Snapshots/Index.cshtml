@@ -14,7 +14,10 @@
     card with no image means that moment's footage has since aged out of retention.
 </p>
 
-<form method="get" class="row g-2 mb-3">
+@* data-remember-filters: these selections survive navigating away and coming back, or a refresh —
+   see remember-filters.js. The Clear link below carries data-clear-filters so clearing actually
+   clears rather than being restored again on the next load. *@
+<form method="get" class="row g-2 mb-3" data-remember-filters="snapshots">
     <div class="col-md-3">
         <select name="cameraId" class="form-select form-select-sm">
             <option value="">All cameras</option>
@@ -34,7 +37,7 @@
         <button type="submit" class="btn btn-sm btn-primary w-100">Filter</button>
     </div>
     <div class="col-md-1">
-        <a href="/Snapshots" class="btn btn-sm btn-outline-secondary w-100">Clear</a>
+        <a href="/Snapshots" class="btn btn-sm btn-outline-secondary w-100" data-clear-filters>Clear</a>
     </div>
 
     @* Only checkboxes actually posted change anything (an unchecked box submits nothing at all), so
@@ -113,18 +116,8 @@ else
     </div>
 }
 
-@if (Model.Results.TotalPages > 1)
-{
-    <nav class="mt-3">
-        <ul class="pagination pagination-sm">
-            @for (int i = 1; i <= Model.Results.TotalPages; i++)
-            {
-                <li class="page-item @(i == Model.Results.CurrentPage ? "active" : "")">
-                    @* pageNumber, not page — see IndexModel.OnGetAsync's own comment for why "page" is
-                       a reserved Razor Pages route-value name and silently never binds from here. *@
-                    <a class="page-link" href="?cameraId=@Model.CameraId&from=@Model.From&to=@Model.To&pageNumber=@i@Html.Raw(kindsQuery)">@i</a>
-                </li>
-            }
-        </ul>
-    </nav>
-}
+@* pageNumber, not page — see IndexModel.OnGetAsync's own comment for why "page" is a reserved Razor
+   Pages route-value name and silently never binds from here. *@
+<partial name="Shared/_PaginationControls" model="@(new LarisVMS.Web.Helpers.PaginationViewModel(
+    Model.Results.CurrentPage, Model.Results.TotalPages,
+    p => $"?cameraId={Model.CameraId}&from={Model.From}&to={Model.To}&pageNumber={p}{kindsQuery}"))" />

@@ -30,6 +30,11 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     private readonly ConcurrentDictionary<Guid, CameraMotionRecorder> _activeMotion = new();
     private readonly ConcurrentQueue<MotionSpanReportItem> _pendingMotionSpans = new();
 
+    // M18: adaptive streaming's Sub live sessions — same concurrency reasoning as _active above (read
+    // from Program.cs's /live WebSocket endpoint on request threads, written only from the reconcile
+    // loop).
+    private readonly ConcurrentDictionary<Guid, CameraLiveSubRecorder> _activeLiveSub = new();
+
     // M8 pass 6: same shape as _activeMotion/_pendingMotionSpans above, for ONVIF PullPoint camera
     // events instead of server-side substream frame-diffing — a camera can have either signal
     // source, both, or neither, independently (see ReconcileEvents and DecideMotionSegment's use of
@@ -99,6 +104,45 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// to attach a viewer to the right session's tee'd live fanout.</summary>
     public RecordingSession? TryGetSession(Guid cameraId) => _active.TryGetValue(cameraId, out var r) ? r.Session : null;
 
+    // M18 follow-up: the /playback-segment route's partial-fetch fragment index (see
+    // Program.cs) — keyed on full file path since a completed segment file never changes, so its
+    // index never goes stale. Crude bulk-clear-on-overflow bound rather than a real LRU, same
+    // simplicity trade-off SettingsResolver's own cache already makes: this node's own segments
+    // rarely have more than a few hundred actively scrubbed-through at once, and a cleared cache
+    // just costs one extra rebuild on its next miss, not a correctness problem.
+    private readonly ConcurrentDictionary<string, IReadOnlyList<Mp4Fragment>> _fragmentIndexCache = new();
+    private const int MaxFragmentIndexCacheEntries = 500;
+
+    /// <summary>Builds (or reuses a cached) byte-offset/media-time index for one segment file — see
+    /// Mp4FragmentIndexer's own doc comment for how. A read failure (file mid-write, or genuinely
+    /// unreadable) returns an empty list and is deliberately NOT cached, so the next request retries
+    /// rather than being stuck treating a transient failure as "this file has no fragments" forever.</summary>
+    public IReadOnlyList<Mp4Fragment> GetOrBuildFragmentIndex(string fullPath)
+    {
+        if (_fragmentIndexCache.TryGetValue(fullPath, out var cached)) return cached;
+        if (_fragmentIndexCache.Count > MaxFragmentIndexCacheEntries) _fragmentIndexCache.Clear();
+
+        IReadOnlyList<Mp4Fragment> fragments;
+        try
+        {
+            using var fs = File.OpenRead(fullPath);
+            fragments = Mp4FragmentIndexer.Build(fs);
+        }
+        catch (IOException)
+        {
+            return [];
+        }
+
+        _fragmentIndexCache[fullPath] = fragments;
+        return fragments;
+    }
+
+    /// <summary>The active Sub live session for a camera, if adaptive streaming is enabled and one is
+    /// running — null covers every reason it might not be (toggle off, camera has no enabled Sub
+    /// stream, not assigned here, session hasn't started yet) identically, since the /live endpoint's
+    /// only reaction to any of them is the same: fall back to Main.</summary>
+    public ILiveSource? TryGetLiveSubSession(Guid cameraId) => _activeLiveSub.TryGetValue(cameraId, out var r) ? r.Session : null;
+
     /// <summary>Opens a short-lived RTSP session against the camera's Main stream and grabs one
     /// frame — null if the camera isn't assigned to this node (nothing to grab from) or the grab
     /// itself fails (camera unreachable, auth failure, timeout — see SnapshotCapture).</summary>
@@ -124,7 +168,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// OnDemandThumbnailGate — a hover request that can't get a slot within 3s gives up (the caller
     /// renders "No preview available") rather than piling up behind an unbounded queue for a preview
     /// that may already be stale by the time it'd be served.</summary>
-    public async Task<byte[]?> CaptureThumbnailAsync(string filePath, int offsetSeconds, CancellationToken ct, int maxDimension = ThumbnailCapture.DefaultMaxDimension)
+    public async Task<byte[]?> CaptureThumbnailAsync(string filePath, int offsetSeconds, CancellationToken ct, int maxDimension = ThumbnailCapture.DefaultMaxDimension, int quality = ThumbnailCapture.DefaultQuality)
     {
         using var gateCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         gateCts.CancelAfter(TimeSpan.FromSeconds(3));
@@ -138,7 +182,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         }
         try
         {
-            return await ThumbnailCapture.CaptureAsync(ffmpegPath, filePath, offsetSeconds, ct, maxDimension: maxDimension);
+            return await ThumbnailCapture.CaptureAsync(ffmpegPath, filePath, offsetSeconds, ct, maxDimension: maxDimension, quality: quality);
         }
         finally
         {
@@ -220,10 +264,12 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             foreach (var motion in _activeMotion.Values) motion.Cts.Cancel();
             foreach (var events in _activeEvents.Values) events.Cts.Cancel();
             foreach (var integration in _activeIntegrations.Values) integration.Cts.Cancel();
+            foreach (var liveSub in _activeLiveSub.Values) liveSub.Cts.Cancel();
             await Task.WhenAll(_active.Values.Select(r => r.RunTask)
                 .Concat(_activeMotion.Values.Select(m => m.RunTask))
                 .Concat(_activeEvents.Values.Select(e => e.RunTask))
-                .Concat(_activeIntegrations.Values.Select(i => i.RunTask)));
+                .Concat(_activeIntegrations.Values.Select(i => i.RunTask))
+                .Concat(_activeLiveSub.Values.Select(l => l.RunTask)));
 
             // Decide every still-pending segment now, with whatever motion state is left, rather
             // than lose track of it — the motion sessions above were just cancelled, but their
@@ -537,6 +583,19 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             if (_activeIntegrations.TryRemove(cameraId, out var integration)) integration.Cts.Cancel();
         }
 
+        // M18: also stops every running Sub live session outright when the toggle itself is off, not
+        // just ones for cameras no longer assigned — see ReconcileLiveSub's own doc comment for why
+        // this can't just be "skip starting new ones."
+        var liveSubKeysToStop = config.AdaptiveStreamingEnabled
+            ? _activeLiveSub.Keys.Except(desired.Keys).ToList()
+            : _activeLiveSub.Keys.ToList();
+        foreach (var cameraId in liveSubKeysToStop)
+        {
+            _logger.LogInformation("Stopping Sub live session for camera {CameraId} ({Reason}).", cameraId,
+                config.AdaptiveStreamingEnabled ? "no longer assigned to this node" : "adaptive streaming disabled");
+            if (_activeLiveSub.TryRemove(cameraId, out var liveSub)) liveSub.Cts.Cancel();
+        }
+
         foreach (var camera in config.Cameras)
         {
             // Refreshed every reconcile for every camera, new or already recording — the whole
@@ -569,6 +628,13 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             if (_active.TryGetValue(camera.CameraId, out var activeRecorder) && activeRecorder.PrivacyMaskSignature != privacySignature)
             {
                 _logger.LogInformation("Privacy mask configuration changed for camera {CameraId} ({Name}) — restarting recording session.", camera.CameraId, camera.Name);
+                activeRecorder.Cts.Cancel();
+                _active.TryRemove(camera.CameraId, out _);
+            }
+            else if (activeRecorder is not null && activeRecorder.SegmentSeconds != camera.SegmentSeconds)
+            {
+                _logger.LogInformation("Segment length changed for camera {CameraId} ({Name}) — restarting recording session ({Old}s -> {New}s).",
+                    camera.CameraId, camera.Name, activeRecorder.SegmentSeconds, camera.SegmentSeconds);
                 activeRecorder.Cts.Cancel();
                 _active.TryRemove(camera.CameraId, out _);
             }
@@ -605,6 +671,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                     var cts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
                     var sessionLogger = loggerFactory.CreateLogger($"Recording[{camera.Name}]");
                     var session = new RecordingSession(new RecordingSessionOptions(ffmpegPath, rtspUri, outputDir,
+                        SegmentSeconds: camera.SegmentSeconds,
                         PrivacyMaskFilters: privacyMaskFilters.Count > 0 ? privacyMaskFilters : null, VideoEncoder: privacyEncoder), sessionLogger);
                     var capturedCameraId = camera.CameraId; // an id never goes stale the way the DTO it came from does
                     session.SegmentCompleted += segment => HandleSegmentCompleted(capturedCameraId, segment);
@@ -642,7 +709,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                         .Union(onDiskNow, StringComparer.OrdinalIgnoreCase);
 
                     var runTask = session.RunAsync(cts.Token, knownPathsForCamera);
-                    _active[camera.CameraId] = new CameraRecorder(cts, runTask, session, rtspUri, privacySignature);
+                    _active[camera.CameraId] = new CameraRecorder(cts, runTask, session, rtspUri, privacySignature, camera.SegmentSeconds);
                     _logger.LogInformation("Started recording camera {CameraId} ({Name}) -> {OutputDir}", camera.CameraId, camera.Name, outputDir);
                 }
             }
@@ -650,6 +717,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             ReconcileMotion(camera, stoppingToken);
             ReconcileEvents(camera, stoppingToken);
             ReconcileIntegration(camera, stoppingToken);
+            if (config.AdaptiveStreamingEnabled) ReconcileLiveSub(camera, stoppingToken);
         }
 
         return storageRoot;
@@ -735,11 +803,16 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
 
         if (_activeIntegrations.TryGetValue(camera.CameraId, out var existing))
         {
-            if (existing.IntegrationKey == key) return; // already running the right one
+            // Both the plugin *and* the address it talks to have to match — the base URI follows the
+            // camera's DeviceServiceUri, so switching a camera between HTTP and HTTPS (or moving it to
+            // a different port) changes it while the key stays "dahua-cgi". Comparing the key alone
+            // left the old session running against an address that no longer answers, reconnecting
+            // forever; see CameraIntegrationRecorder's own doc comment.
+            if (existing.IntegrationKey == key && existing.BaseUri == camera.IntegrationBaseUri) return;
             existing.Cts.Cancel();
             _activeIntegrations.TryRemove(camera.CameraId, out _);
-            _logger.LogInformation("Vendor integration changed for camera {CameraId} ({Name}) — restarting it.",
-                camera.CameraId, camera.Name);
+            _logger.LogInformation("Vendor integration changed for camera {CameraId} ({Name}) — restarting it against {BaseUri}.",
+                camera.CameraId, camera.Name, camera.IntegrationBaseUri);
         }
 
         var baseUri = new Uri(camera.IntegrationBaseUri!);
@@ -767,7 +840,8 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 EventTagRuleId: null, DetectionKind: kind));
 
         var runTask = session.RunAsync(integrationCts.Token);
-        _activeIntegrations[camera.CameraId] = new CameraIntegrationRecorder(integrationCts, runTask, session, key!);
+        _activeIntegrations[camera.CameraId] = new CameraIntegrationRecorder(
+            integrationCts, runTask, session, key!, camera.IntegrationBaseUri!);
         _logger.LogInformation("Started '{Key}' integration for camera {CameraId} ({Name}).", key, camera.CameraId, camera.Name);
     }
 
@@ -841,6 +915,49 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     // per camera at most) and readable in a debugger, so there's no reason to hash away that.
     private static string BuildZoneConfigSignature(List<NodeConfigZoneDto> zones) =>
         string.Join('|', zones.OrderBy(z => z.ZoneId).Select(z => $"{z.ZoneId}:{z.Kind}:{z.Sensitivity}:{z.PolygonJson}"));
+
+    /// <summary>M18: starts/restarts/stops this camera's always-on Sub live session — independent of
+    /// ReconcileMotion above even though both key off the Sub stream's existence, the same way
+    /// ReconcileMotion/ReconcileEvents/ReconcileIntegration are all independent of one another. Only
+    /// called at all when config.AdaptiveStreamingEnabled is true (see Reconcile's caller); the
+    /// disabled case is handled entirely by Reconcile's own "stop every running Sub live session"
+    /// loop above, not here — a per-camera reconcile has no way to notice "the global toggle just
+    /// flipped off," only "this specific camera changed," so the blanket teardown has to live at the
+    /// call site instead.
+    ///
+    /// Always-on rather than viewer-count-gated: see SubLiveSession's own doc comment for why. A
+    /// camera with no enabled Sub stream simply gets no adaptive switching, same as it already gets
+    /// no motion detection without one — nothing new to explain there.</summary>
+    private void ReconcileLiveSub(NodeConfigCameraDto camera, CancellationToken stoppingToken)
+    {
+        var subStream = camera.Streams.FirstOrDefault(s => s.Role == "Sub");
+        if (subStream is null)
+        {
+            if (_activeLiveSub.TryRemove(camera.CameraId, out var stopped))
+            {
+                _logger.LogInformation("Camera {CameraId} ({Name}) no longer has a Sub stream — stopping its live session.", camera.CameraId, camera.Name);
+                stopped.Cts.Cancel();
+            }
+            return;
+        }
+
+        var subRtspUri = InjectCredentials(subStream.RtspUri, camera.Username, camera.Password);
+        if (_activeLiveSub.TryGetValue(camera.CameraId, out var existing))
+        {
+            if (existing.StreamSignature == subRtspUri) return; // already running, unchanged
+            existing.Cts.Cancel();
+            _activeLiveSub.TryRemove(camera.CameraId, out _);
+            _logger.LogInformation("Sub stream configuration changed for camera {CameraId} ({Name}) — restarting live session.", camera.CameraId, camera.Name);
+        }
+
+        var liveSubCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        var liveSubLogger = loggerFactory.CreateLogger($"LiveSub[{camera.Name}]");
+        var liveSubSession = new SubLiveSession(new SubLiveSessionOptions(ffmpegPath, subRtspUri), liveSubLogger);
+
+        var liveSubRunTask = liveSubSession.RunAsync(liveSubCts.Token);
+        _activeLiveSub[camera.CameraId] = new CameraLiveSubRecorder(liveSubCts, liveSubRunTask, liveSubSession, subRtspUri);
+        _logger.LogInformation("Started Sub live session for camera {CameraId} ({Name}).", camera.CameraId, camera.Name);
+    }
 
     // ── Privacy masking (M18) ────────────────────────────────────────────────────
     private static IReadOnlyList<string> BuildPrivacyMaskFilters(List<NodeConfigZoneDto> zones) =>

@@ -40,12 +40,35 @@ public class NodeUpdaterLogicTests
     [Fact]
     public void ParseArgsIgnoresUnknownFlagsAndTrailingDanglingFlag()
     {
-        // The trailing "--new" with no following value must not throw or consume past args.Length —
-        // ParseArgs's loop bound (args.Length - 1) exists specifically to guard this.
+        // The trailing "--new" with no following value must not throw or consume past args.Length.
+        // The loop now runs to args.Length (so a valueless flag in the final position is still seen —
+        // --restart-only needs that); the per-case "when i + 1 < args.Length" guards are what keep a
+        // dangling value-taking flag safe.
         var parsed = UpdaterLogic.ParseArgs(["--bogus", "value", "--current", @"C:\install\LarisVMS.Node.exe", "--new"]);
 
         Assert.Null(parsed.NewBinary);
         Assert.Equal(@"C:\install\LarisVMS.Node.exe", parsed.CurrentBinary);
+    }
+
+    [Fact]
+    public void ParseArgsReadsRestartOnlyAsTheFinalArgument()
+    {
+        // Specifically the last-position case: a valueless flag there was invisible under the old
+        // args.Length - 1 bound, and --restart-only is normally passed exactly like this.
+        var parsed = UpdaterLogic.ParseArgs(["--service", "LarisVMSNode", "--restart-only"]);
+
+        Assert.True(parsed.RestartOnly);
+        Assert.Equal("LarisVMSNode", parsed.ServiceName);
+        Assert.Null(parsed.NewBinary);
+        Assert.Null(parsed.CurrentBinary);
+    }
+
+    [Fact]
+    public void ParseArgsDefaultsRestartOnlyToFalseForAnOrdinaryUpdate()
+    {
+        var parsed = UpdaterLogic.ParseArgs(["--new", @"C:\staged\n.exe", "--current", @"C:\install\n.exe"]);
+
+        Assert.False(parsed.RestartOnly);
     }
 
     [Fact]

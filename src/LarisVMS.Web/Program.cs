@@ -469,7 +469,12 @@ app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICame
         ctx.User.Identity?.Name, ctx.Connection.RemoteIpAddress?.ToString(), camera.Name, ct);
 
     var token = MediaToken.Issue(cameraId, key, TimeSpan.FromSeconds(60));
-    var nodeUri = new Uri($"ws://{ip}:{port}/live/{cameraId}?token={Uri.EscapeDataString(token)}");
+    // M18: forwarded as-is, not validated against anything here — see NodeConfigResponse.
+    // AdaptiveStreamingEnabled's doc comment for why this tier doesn't also gate on the toggle; the
+    // node's own /live route already falls back to Main whenever Sub isn't actually available.
+    var role = ctx.Request.Query["role"].ToString();
+    var roleQuery = string.Equals(role, "sub", StringComparison.OrdinalIgnoreCase) ? "&role=sub" : "";
+    var nodeUri = new Uri($"ws://{ip}:{port}/live/{cameraId}?token={Uri.EscapeDataString(token)}{roleQuery}");
 
     using var nodeSocket = new ClientWebSocket();
     try
@@ -791,7 +796,7 @@ app.MapPut("/api/preferences/{key}", async (string key, HttpContext ctx, SetPref
 }).RequireAuthorization();
 
 app.MapGet("/playback-segment/{cameraId:guid}/{segmentId:long}", async (
-    Guid cameraId, long segmentId, ITimelineService timeline, IHttpClientFactory httpFactory, CancellationToken ct) =>
+    HttpContext ctx, Guid cameraId, long segmentId, ITimelineService timeline, IHttpClientFactory httpFactory, CancellationToken ct) =>
 {
     var segment = await timeline.GetSegmentForPlaybackAsync(cameraId, segmentId, ct);
     if (segment is null) return Results.NotFound();
@@ -803,8 +808,14 @@ app.MapGet("/playback-segment/{cameraId:guid}/{segmentId:long}", async (
     }
 
     var token = MediaToken.IssueForSegment(cameraId, segment.FilePath, segment.NodeMediaSigningKey, TimeSpan.FromSeconds(30));
+    // M18 follow-up: forwarded as-is, not validated against anything here — same "not part of the
+    // token, it only picks where inside an already-authorized file to start" reasoning as /live's own
+    // ?role=. The node ignores it entirely (falls back to the whole file) below its own threshold or
+    // once no usable fragment index exists, so there's nothing for this tier to double-check.
+    var seekSecondsQuery = ctx.Request.Query["seekSeconds"].ToString();
+    var seekSecondsPart = string.IsNullOrEmpty(seekSecondsQuery) ? "" : $"&seekSeconds={Uri.EscapeDataString(seekSecondsQuery)}";
     var nodeUri = $"http://{segment.NodeIp}:{segment.NodeLivePort}/playback-segment/{cameraId}" +
-        $"?path={Uri.EscapeDataString(segment.FilePath)}&token={Uri.EscapeDataString(token)}";
+        $"?path={Uri.EscapeDataString(segment.FilePath)}&token={Uri.EscapeDataString(token)}{seekSecondsPart}";
 
     // Shorter than HttpClient's 100s default — a genuinely stuck node/storage read (confirmed
     // possible: a slow SMB share) shouldn't be able to hold this request open for nearly two
@@ -831,6 +842,14 @@ app.MapGet("/playback-segment/{cameraId:guid}/{segmentId:long}", async (
         return Results.StatusCode((int)nodeResponse.StatusCode);
     }
 
+    // Present only when the node actually served a partial (fragment-aligned) response — absent for
+    // the ordinary whole-file case, which the client already treats as "started at true segment
+    // start" without needing to be told so explicitly.
+    if (nodeResponse.Headers.TryGetValues("X-Fragment-Start-Seconds", out var fragmentStartValues))
+    {
+        ctx.Response.Headers["X-Fragment-Start-Seconds"] = fragmentStartValues.FirstOrDefault();
+    }
+
     return Results.Stream(await nodeResponse.Content.ReadAsStreamAsync(ct), "video/mp4");
 }).RequireAuthorization("Playback.View");
 
@@ -842,7 +861,7 @@ app.MapGet("/playback-segment/{cameraId:guid}/{segmentId:long}", async (
 // than referenced, since LarisVMS.Web has no project reference to LarisVMS.Media (it never runs
 // ffmpeg itself, only proxies to a node that does) and taking one on just for this constant isn't
 // worth the coupling.
-async Task<IResult> ProxyThumbnailAsync(Guid cameraId, ThumbnailInfo? thumb, IHttpClientFactory httpFactory, CancellationToken ct, int maxDimension = 150)
+async Task<IResult> ProxyThumbnailAsync(Guid cameraId, ThumbnailInfo? thumb, IHttpClientFactory httpFactory, CancellationToken ct, int maxDimension = 150, int quality = 8)
 {
     if (thumb is null) return Results.NotFound();
     if (thumb.NodeIp is null || thumb.NodeLivePort is null || thumb.NodeMediaSigningKey is null)
@@ -860,7 +879,7 @@ async Task<IResult> ProxyThumbnailAsync(Guid cameraId, ThumbnailInfo? thumb, IHt
     {
         var token = MediaToken.IssueForThumbnail(cameraId, thumb.FilePath, offsetSeconds, thumb.NodeMediaSigningKey!, TimeSpan.FromSeconds(30));
         var nodeUri = $"http://{thumb.NodeIp}:{thumb.NodeLivePort}/playback-thumbnail/{cameraId}" +
-            $"?path={Uri.EscapeDataString(thumb.FilePath)}&offset={offsetSeconds}&token={Uri.EscapeDataString(token)}&maxDim={maxDimension}";
+            $"?path={Uri.EscapeDataString(thumb.FilePath)}&offset={offsetSeconds}&token={Uri.EscapeDataString(token)}&maxDim={maxDimension}&q={quality}";
         return client.GetAsync(nodeUri, HttpCompletionOption.ResponseHeadersRead, ct);
     }
 
@@ -918,11 +937,19 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (
         exact ? await timeline.GetExactThumbnailInfoAsync(cameraId, atUtc, ct) : await timeline.GetThumbnailInfoAsync(cameraId, atUtc, ct),
         httpFactory, ct,
         // exact is Snapshots' own card thumbnails — something a viewer actually looks closely at, not
-        // a fleeting scrub-hover preview, so it gets a genuinely detailed frame: 854px on the longer
-        // edge, ~480p on a 16:9 source (exactly 854x480), comfortably at-or-above 480p-equivalent
-        // detail for any other aspect ratio too. User-reported: the previous shared 150px cap (sized
-        // for a quick hover glance) made a Snapshot card's actual content hard to make out.
-        maxDimension: exact ? 854 : 150)
+        // a fleeting scrub-hover preview, so it gets a genuinely detailed frame. The cap is on the
+        // *longer* edge (scale=N:N:force_original_aspect_ratio=decrease), so on a 16:9 source 1280
+        // yields 1280x720 — the requested 720 vertical. An earlier 854 was the same arithmetic aimed
+        // at 480 vertical, which was reported as still too low to make out what's in a frame. Every
+        // common ratio clears the 480-vertical floor at this cap (4:3 -> 960, 1:1 -> 1280, portrait
+        // -> 1280); only genuinely ultrawide sources (21:9 -> 549, 2.39:1 -> 536) land between 480
+        // and 720, which is inherent to the shape rather than something a bigger cap would fix.
+        //
+        // -q:v also eases from 8 to 4: at 150px nobody reads detail out of a hover preview so heavy
+        // compression is free there, but at 1280px JPEG artifacts were themselves part of "hard to
+        // make out" — resolution alone wouldn't have fixed it.
+        maxDimension: exact ? 1280 : 150,
+        quality: exact ? 4 : 8)
 ).RequireAuthorization("Playback.View");
 
 // Dashboard's "most recent thumbnail" column (Pages/Index, dashboard.js) — plain [Authorize], not

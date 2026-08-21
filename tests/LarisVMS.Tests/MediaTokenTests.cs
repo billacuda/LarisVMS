@@ -209,6 +209,56 @@ public class MediaTokenTests
         Assert.False(MediaToken.TryValidateThumbnail(segmentToken, cameraId, path, 10, Key, out _));
     }
 
+    // ── IssueForNodeControl / TryValidateNodeControl ────────────────────────
+
+    [Fact]
+    public void NodeControlTokenRoundTripsForTheActionItWasIssuedFor()
+    {
+        var token = MediaToken.IssueForNodeControl("restart", Key, TimeSpan.FromSeconds(30));
+
+        Assert.True(MediaToken.TryValidateNodeControl(token, "restart", Key, out var error));
+        Assert.Equal("", error);
+    }
+
+    [Fact]
+    public void NodeControlTokenRejectsADifferentAction()
+    {
+        // The whole point of binding the action: a token minted for one control operation must not be
+        // replayable against another one added later.
+        var token = MediaToken.IssueForNodeControl("restart", Key, TimeSpan.FromSeconds(30));
+
+        Assert.False(MediaToken.TryValidateNodeControl(token, "shutdown", Key, out var error));
+        Assert.Equal("action mismatch", error);
+    }
+
+    [Fact]
+    public void NodeControlTokenRejectsAnExpiredToken()
+    {
+        var token = MediaToken.IssueForNodeControl("restart", Key, TimeSpan.FromSeconds(-1));
+
+        Assert.False(MediaToken.TryValidateNodeControl(token, "restart", Key, out var error));
+        Assert.Equal("expired", error);
+    }
+
+    [Fact]
+    public void NodeControlTokenRejectsADifferentSigningKey()
+    {
+        // A token signed for one node must not authorize restarting a different one.
+        var token = MediaToken.IssueForNodeControl("restart", Key, TimeSpan.FromSeconds(30));
+
+        Assert.False(MediaToken.TryValidateNodeControl(token, "restart", "00112233445566778899aabbccddeeff", out var error));
+        Assert.Equal("signature mismatch", error);
+    }
+
+    [Fact]
+    public void AMediaTokenDoesNotValidateAsANodeControlToken()
+    {
+        // Separate families, same key — a live-view token must not authorize stopping the recorder.
+        var mediaToken = MediaToken.Issue(Guid.NewGuid(), Key, TimeSpan.FromSeconds(30));
+
+        Assert.False(MediaToken.TryValidateNodeControl(mediaToken, "restart", Key, out _));
+    }
+
     // ── IssueForExport / TryValidateExport ──────────────────────────────────
 
     [Fact]

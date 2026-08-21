@@ -19,6 +19,12 @@
     <div class="alert alert-danger">@Model.ErrorMessage</div>
 }
 
+@* Survives the post-restart redirect via TempData — see NodesModel.StatusMessage. *@
+@if (!string.IsNullOrEmpty(Model.StatusMessage))
+{
+    <div class="alert @(Model.StatusIsError ? "alert-danger" : "alert-success")" role="status">@Model.StatusMessage</div>
+}
+
 @if (Model.Nodes.Count == 0)
 {
     <p class="text-muted">No nodes have registered yet.</p>
@@ -148,9 +154,16 @@ else
                                 <button type="submit" class="btn btn-sm btn-outline-primary"><span aria-hidden="true">💾</span> Save</button>
                             </td>
                         </form>
-                        <td class="text-end">
+                        <td class="text-end text-nowrap">
+                            @* Restarts the node's Windows Service only — never the machine it runs on.
+                               Confirmed because recording on this node's cameras stops for the few
+                               seconds it takes to come back. *@
+                            <form method="post" asp-page-handler="Restart" asp-route-id="@n.Id" class="d-inline"
+                                  onsubmit="return confirm('Restart the LarisVMS node service on &quot;@n.Name&quot;?\n\nRecording on its @Model.CameraCountByNode.GetValueOrDefault(n.Id) camera(s) will stop for a few seconds. This restarts the service only, not the machine.');">
+                                <button type="submit" class="btn btn-sm btn-outline-secondary" title="Restart this node's service (not the machine)"><span aria-hidden="true">🔄</span> Restart</button>
+                            </form>
                             <form method="post" asp-page-handler="Delete" asp-route-id="@n.Id" class="d-inline"
-                                  onclick="return confirm('Delete node &quot;@n.Name&quot;? Cameras assigned to it will be unassigned, not deleted. Past recordings are unaffected.');">
+                                  onsubmit="return confirm('Delete node &quot;@n.Name&quot;? Cameras assigned to it will be unassigned, not deleted. Past recordings are unaffected.');">
                                 <button type="submit" class="btn btn-sm btn-outline-danger"><span aria-hidden="true">🗑️</span> Delete</button>
                             </form>
                         </td>

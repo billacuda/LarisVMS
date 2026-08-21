@@ -16,6 +16,31 @@ body {
     font-size: 0.85rem;
 }
 
+/* Navbar links at full strength rather than Bootstrap's muted default. `.navbar-dark` renders
+   .nav-link at rgba(255,255,255,.55) and only brightens to .75 on hover — which reads as every nav
+   item being disabled, and dims the emoji icons along with the text (an emoji is a color glyph, but
+   an alpha in `color` still composites the whole glyph against the bar). Full white at rest, with
+   hover carried by a slight color shift instead of a brightness one, so hover is still legible
+   feedback without rest state having to be dimmed to make room for it.
+
+   Deliberately targeting the same specificity Bootstrap uses (.navbar-dark .navbar-nav .nav-link)
+   rather than reaching for !important, so page-level styling can still override this if it ever
+   needs to. .show/.active are included because Bootstrap styles those separately too — without
+   them, an open Admin dropdown or the current page's own link would fall back to the muted value
+   this exists to remove. */
+.navbar-dark .navbar-nav .nav-link,
+.navbar-dark .navbar-nav .nav-link.show,
+.navbar-dark .navbar-nav .nav-link.active {
+    color: #fff;
+}
+
+.navbar-dark .navbar-nav .nav-link:hover,
+.navbar-dark .navbar-nav .nav-link:focus {
+    /* Bootstrap's own blue-200 — clearly a change, but close enough to white that the bar doesn't
+       flicker in brightness as the pointer crosses it. */
+    color: #9ec5fe;
+}
+
 /* Per-user column picker (column-picker.js) — a native <details> disclosure rather than a Bootstrap
    dropdown, so opening/closing has zero dependency on Bootstrap's JS wiring against a menu this
    script populates after page load rather than at initial render. bs-body-bg/border-color are

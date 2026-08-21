@@ -9,5 +9,8 @@ namespace LarisVMS.Node;
 /// item) can open its own short-lived RTSP session without RecordingSession needing to expose the
 /// URI it's already using internally. PrivacyMaskSignature (M18) is what lets Reconcile detect a
 /// Privacy zone being added/edited/removed on an already-recording camera and restart its session to
-/// pick up the change — same shape as CameraMotionRecorder.ZoneConfigSignature.</summary>
-public sealed record CameraRecorder(CancellationTokenSource Cts, Task RunTask, RecordingSession Session, string RtspUri, string PrivacyMaskSignature);
+/// pick up the change — same shape as CameraMotionRecorder.ZoneConfigSignature. SegmentSeconds is the
+/// same idea for Recording.SegmentSeconds (M18 follow-up): it's baked into ffmpeg's own `-f segment`
+/// invocation at start, so an admin lowering it to shrink worst-case playback seek latency needs the
+/// already-running session restarted to actually take effect, not just the next new camera.</summary>
+public sealed record CameraRecorder(CancellationTokenSource Cts, Task RunTask, RecordingSession Session, string RtspUri, string PrivacyMaskSignature, int SegmentSeconds);

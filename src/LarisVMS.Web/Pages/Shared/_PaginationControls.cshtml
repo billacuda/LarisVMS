@@ -1,0 +1,49 @@
+@* Windowed page-number control — first 10, last 10, and a small window around the current page,
+   with ellipsis gaps between, instead of one link per page. Confirmed live as a real problem on
+   Snapshots: hundreds of page numbers in a single row. Arrows step ±1 and ±10 pages, plus jumps
+   straight to the first/last page. See PaginationWindow for the page-selection logic.
+   Model: PaginationViewModel (CurrentPage, TotalPages, PageUrl(page) -> href). *@
+@model LarisVMS.Web.Helpers.PaginationViewModel
+@{
+    var pages = LarisVMS.Web.Helpers.PaginationWindow.Compute(Model.CurrentPage, Model.TotalPages);
+    var atFirst = Model.CurrentPage <= 1;
+    var atLast = Model.CurrentPage >= Model.TotalPages;
+}
+@if (Model.TotalPages > 1)
+{
+    <nav class="mt-3" aria-label="Pagination">
+        <ul class="pagination pagination-sm flex-wrap mb-0">
+            <li class="page-item @(atFirst ? "disabled" : "")">
+                <a class="page-link" href="@(atFirst ? "#" : Model.PageUrl(1))" title="First page" aria-label="First page">«</a>
+            </li>
+            <li class="page-item @(atFirst ? "disabled" : "")">
+                <a class="page-link" href="@(atFirst ? "#" : Model.PageUrl(Math.Max(1, Model.CurrentPage - 10)))" title="Back 10 pages" aria-label="Back 10 pages">‹‹</a>
+            </li>
+            <li class="page-item @(atFirst ? "disabled" : "")">
+                <a class="page-link" href="@(atFirst ? "#" : Model.PageUrl(Model.CurrentPage - 1))" aria-label="Previous page">‹</a>
+            </li>
+            @foreach (var p in pages)
+            {
+                @if (p is null)
+                {
+                    <li class="page-item disabled"><span class="page-link">&hellip;</span></li>
+                }
+                else
+                {
+                    <li class="page-item @(p == Model.CurrentPage ? "active" : "")">
+                        <a class="page-link" href="@Model.PageUrl(p.Value)">@p</a>
+                    </li>
+                }
+            }
+            <li class="page-item @(atLast ? "disabled" : "")">
+                <a class="page-link" href="@(atLast ? "#" : Model.PageUrl(Model.CurrentPage + 1))" aria-label="Next page">›</a>
+            </li>
+            <li class="page-item @(atLast ? "disabled" : "")">
+                <a class="page-link" href="@(atLast ? "#" : Model.PageUrl(Math.Min(Model.TotalPages, Model.CurrentPage + 10)))" title="Forward 10 pages" aria-label="Forward 10 pages">››</a>
+            </li>
+            <li class="page-item @(atLast ? "disabled" : "")">
+                <a class="page-link" href="@(atLast ? "#" : Model.PageUrl(Model.TotalPages))" title="Last page" aria-label="Last page">»</a>
+            </li>
+        </ul>
+    </nav>
+}

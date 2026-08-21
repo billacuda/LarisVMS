@@ -40,6 +40,186 @@ public class DahuaCgiEventSessionTests
         Assert.False(session.AnyDetectionActive);
     }
 
+    /// <summary>A real CrossRegionDetection payload as this fleet's IP8M cameras emit it — one IVS
+    /// intrusion rule configured for Human *and* Vehicle, so the code alone can't say which was seen
+    /// and only the payload can. Pretty-printed across lines exactly like the camera sends it, which
+    /// is the whole reason the session has to accumulate rather than parse line by line.</summary>
+    private static string[] IntrusionEventLines(string action, string objectType) =>
+    [
+        $"Code=CrossRegionDetection;action={action};index=0;data={{",
+        "   \"Class\" : \"Normal\",",
+        "   \"Name\" : \"IVS-1\",",
+        "   \"Object\" : {",
+        "      \"Action\" : \"Appear\",",
+        "      \"BoundingBox\" : [ 3104, 2688, 4288, 5104 ],",
+        "      \"Confidence\" : 0,",
+        $"      \"ObjectType\" : \"{objectType}\"",
+        "   },",
+        "   \"RuleId\" : 1",
+        "}"
+    ];
+
+    /// <summary>A verbatim CrossRegionDetection payload captured from a real IP8M-DLB2998EW-AI with an
+    /// IVS intrusion rule active — kept exactly as the camera sends it rather than tidied, because the
+    /// things most likely to break the accumulator are precisely the messy parts: three levels of
+    /// nested braces (Object → FusionInfo → GpsPostion), a bracketed DetectRegion array whose square
+    /// brackets must NOT be counted as braces, and the object detail sitting under a singular `Object`
+    /// key rather than the `Objects[]` array the FaceDetection payload used.</summary>
+    private static string[] RealIntrusionEventLines(string action) =>
+    [
+        $"Code=CrossRegionDetection;action={action};index=0;data={{",
+        "   \"Action\" : \"Appear\",",
+        "   \"Class\" : \"Normal\",",
+        "   \"CountInGroup\" : 1,",
+        "   \"DetectRegion\" : [",
+        "      [ 1771, 1211 ],",
+        "      [ 7314, 1337 ],",
+        "      [ 7276, 5599 ],",
+        "      [ 1866, 6310 ]",
+        "   ],",
+        "   \"EventID\" : 10013,",
+        "   \"GroupID\" : 8,",
+        "   \"Name\" : \"IVS-1\",",
+        "   \"Object\" : {",
+        "      \"Action\" : \"Appear\",",
+        "      \"BelongID\" : 0,",
+        "      \"BoundingBox\" : [ 4464, 960, 4928, 3888 ],",
+        "      \"Center\" : [ 4696, 2424 ],",
+        "      \"Confidence\" : 0,",
+        "      \"FusionInfo\" : {",
+        "         \"BelongID\" : 0,",
+        "         \"GpsPosValid\" : 0,",
+        "         \"GpsPostion\" : {",
+        "            \"Latitude\" : 0.0,",
+        "            \"Longitude\" : 0.0",
+        "         },",
+        "         \"ObjectSource\" : 0",
+        "      },",
+        "      \"LowerBodyColor\" : [ 0, 0, 0, 0 ],",
+        "      \"ObjectID\" : 105,",
+        "      \"ObjectType\" : \"Human\",",
+        "      \"RelativeID\" : 0,",
+        "      \"humanTripLineDirection\" : 0",
+        "   },",
+        "   \"RealUTC\" : 1787286725,",
+        "   \"RuleID\" : 4,",
+        "   \"Track\" : [],",
+        "   \"UTCMS\" : 2",
+        "}"
+    ];
+
+    [Fact]
+    public void ARealCapturedIntrusionEventClassifiesAsPerson()
+    {
+        var (session, spans) = NewSession();
+
+        foreach (var line in RealIntrusionEventLines("Start")) session.HandleLine(line, T0);
+        Assert.Empty(spans); // nested braces must not have closed the event early
+        Assert.True(session.AnyDetectionActive);
+
+        foreach (var line in RealIntrusionEventLines("Stop")) session.HandleLine(line, T0.AddSeconds(3));
+
+        var (kind, span) = Assert.Single(spans);
+        Assert.Equal(DetectionKind.Person, kind);
+        Assert.Equal(T0, span.StartUtc);
+        Assert.Equal(T0.AddSeconds(3), span.EndUtc);
+    }
+
+    [Fact]
+    public void AnUnsubscribedCodeInterleavedBetweenEventsIsIgnored()
+    {
+        // The real stream interleaves IntelliFrame pulses between intrusion events. We never subscribe
+        // to it, but it must be harmless if it ever does arrive — and in particular must not be
+        // mistaken for a detection or left half-accumulated.
+        var (session, spans) = NewSession();
+
+        foreach (var line in RealIntrusionEventLines("Start")) session.HandleLine(line, T0);
+        session.HandleLine("Code=IntelliFrame;action=Pulse;index=0;data={", T0);
+        session.HandleLine("   \"Action\" : \"Start\",", T0);
+        session.HandleLine("   \"RealUTC\" : 1787286725", T0);
+        session.HandleLine("}", T0);
+        foreach (var line in RealIntrusionEventLines("Stop")) session.HandleLine(line, T0.AddSeconds(3));
+
+        var (kind, _) = Assert.Single(spans);
+        Assert.Equal(DetectionKind.Person, kind);
+    }
+
+    [Fact]
+    public void AnIntrusionEventIsClassifiedFromItsPayloadObjectType()
+    {
+        // The point of the whole ObjectType pass: CrossRegionDetection maps to Other by code, but a
+        // payload naming Human must produce Person instead.
+        var (session, spans) = NewSession();
+
+        foreach (var line in IntrusionEventLines("Start", "Human")) session.HandleLine(line, T0);
+        foreach (var line in IntrusionEventLines("Stop", "Human")) session.HandleLine(line, T0.AddSeconds(6));
+
+        var (kind, _) = Assert.Single(spans);
+        Assert.Equal(DetectionKind.Person, kind);
+    }
+
+    [Fact]
+    public void TheSameIntrusionRuleReportsVehicleSeparatelyFromPerson()
+    {
+        // One rule, one code, two classes — they must not collapse into a single span.
+        var (session, spans) = NewSession();
+
+        foreach (var line in IntrusionEventLines("Start", "Vehicle")) session.HandleLine(line, T0);
+        foreach (var line in IntrusionEventLines("Stop", "Vehicle")) session.HandleLine(line, T0.AddSeconds(4));
+
+        var (kind, _) = Assert.Single(spans);
+        Assert.Equal(DetectionKind.Vehicle, kind);
+    }
+
+    [Fact]
+    public void AnIntrusionEventWithNoObjectTypeFallsBackToTheCodeMapping()
+    {
+        // Firmware that publishes no object detail must keep behaving exactly as before this pass.
+        var (session, spans) = NewSession();
+
+        session.HandleLine("Code=CrossRegionDetection;action=Start;index=0", T0);
+        session.HandleLine("Code=CrossRegionDetection;action=Stop;index=0", T0.AddSeconds(3));
+
+        var (kind, _) = Assert.Single(spans);
+        Assert.Equal(DetectionKind.Other, kind);
+    }
+
+    [Fact]
+    public void BoundaryMarkersAndHeadersBetweenEventsAreIgnored()
+    {
+        // The real stream interleaves multipart boundaries and headers between events; they must not
+        // corrupt the accumulator or be mistaken for events.
+        var (session, spans) = NewSession();
+
+        foreach (var line in IntrusionEventLines("Start", "Human")) session.HandleLine(line, T0);
+        session.HandleLine("", T0);
+        session.HandleLine("--myboundary", T0);
+        session.HandleLine("Content-Type: text/plain", T0);
+        session.HandleLine("Content-Length: 152", T0);
+        session.HandleLine("", T0);
+        foreach (var line in IntrusionEventLines("Stop", "Human")) session.HandleLine(line, T0.AddSeconds(8));
+
+        var (kind, span) = Assert.Single(spans);
+        Assert.Equal(DetectionKind.Person, kind);
+        Assert.Equal(T0.AddSeconds(8), span.EndUtc);
+    }
+
+    [Fact]
+    public void AFaceEventStillClassifiesAsFaceFromItsHumanFaceObjectType()
+    {
+        // HumanFace must stay Face rather than being folded into Person — a face event and a
+        // whole-body detection are different things, and CodeMap already distinguished them.
+        var (session, spans) = NewSession();
+
+        session.HandleLine("Code=FaceDetection;action=Start;index=0;data={", T0);
+        session.HandleLine("   \"Object\" : { \"ObjectType\" : \"HumanFace\" }", T0);
+        session.HandleLine("}", T0);
+        session.HandleLine("Code=FaceDetection;action=Stop;index=0", T0.AddSeconds(2));
+
+        var (kind, _) = Assert.Single(spans);
+        Assert.Equal(DetectionKind.Face, kind);
+    }
+
     [Fact]
     public void APulseOpensAndClosesInOneEvent()
     {

@@ -222,6 +222,9 @@
     <script src="~/js/list-filter.js" asp-append-version="true"></script>
     <script src="~/js/table-pagination.js" asp-append-version="true"></script>
     <script src="~/js/column-picker.js" asp-append-version="true"></script>
+    @* Inert on any page without a form[data-remember-filters], so it costs nothing to load globally
+       rather than adding a Scripts section to each filter page that wants it. *@
+    <script src="~/js/remember-filters.js" asp-append-version="true"></script>
     @await RenderSectionAsync("Scripts", required: false)
 </body>
 </html>

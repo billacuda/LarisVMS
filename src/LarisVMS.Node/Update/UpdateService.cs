@@ -37,6 +37,46 @@ public class UpdateService(NodeConfig config, bool insecureTls, ILogger log, IHo
     /// against.</summary>
     public bool IsApplying { get; private set; }
 
+    /// <summary>Restarts this node's Windows Service on request from the Nodes page. Reuses the exact
+    /// mechanism ApplyWindows uses for an update — launch the detached updater, then stop ourselves —
+    /// with --restart-only so it skips the binary swap and only does the wait-for-stopped/start-again
+    /// half. A service can't restart itself from inside its own process (nothing would be left running
+    /// to start it again once the SCM stops it), which is why this has to go through the helper.
+    ///
+    /// Returns false when the updater binary is missing, so the caller can report that honestly rather
+    /// than stopping a recorder with nothing able to bring it back — an older node install predating
+    /// the updater would otherwise be knocked permanently offline by this button.</summary>
+    public bool TryRestartService()
+    {
+        if (!File.Exists(UpdaterPath))
+        {
+            log.LogWarning("Restart requested but the updater binary is missing at {Path} — refusing, since " +
+                "nothing would be able to start this service again. Re-run install-node.ps1.", UpdaterPath);
+            return false;
+        }
+
+        using var updater = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = UpdaterPath,
+                Arguments = $"--restart-only --service {UpdaterLogic_DefaultServiceName}",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            }
+        };
+        updater.Start();
+
+        log.LogInformation("Restart requested from the server — stopping service; the updater will start it again.");
+        lifetime.StopApplication();
+        return true;
+    }
+
+    /// <summary>Mirrors LarisVMS.NodeUpdater's own UpdaterLogic.DefaultServiceName. Duplicated rather
+    /// than referenced because LarisVMS.Node does not reference the updater project (it launches it as
+    /// a separate executable), and it's the same literal ApplyWindows already passes as --service.</summary>
+    private const string UpdaterLogic_DefaultServiceName = "LarisVMSNode";
+
     public async Task<bool> TryApplyAsync(NodeUpdateInfoDto update, CancellationToken ct)
     {
         if (IsApplying)

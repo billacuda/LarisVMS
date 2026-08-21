@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
@@ -11,6 +12,13 @@ using LarisVMS.Node;
 using LarisVMS.Node.Update;
 using LarisVMS.Onvif.Clients;
 using LarisVMS.Onvif.Soap;
+
+// M18 follow-up: below this, /playback-segment's partial-fetch path (see its own route below) isn't
+// worth the extra request round trip + fragment-index lookup — a whole-file fetch that starts within
+// the first couple seconds is already about as fast as a partial one would be, and this fleet's real
+// segments have a fragment every ~1s anyway (see the CHANGELOG entry that introduced this), so
+// there'd be nothing meaningful to skip regardless.
+const double MinSeekSecondsForPartialFetch = 2.0;
 
 // ── First-run registration ──────────────────────────────────────────────────
 // If node.config doesn't exist yet, this run must be given --server-url and --registration-key
@@ -142,7 +150,16 @@ app.Map("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWork
         return;
     }
 
-    var session = worker.TryGetSession(cameraId);
+    // M18: ?role=sub asks for the adaptive-streaming Sub live session instead of Main — not part of
+    // the signed token (see this route's own doc comment above `token`): the token already
+    // authorizes viewing *this camera's* live feed, and which quality tier of that same feed a
+    // viewer's browser asks for is a client preference, not a separate authorization boundary, the
+    // same way playback's own quality choices aren't token-bound either. Falls back to Main whenever
+    // Sub isn't actually available (toggle off, no Sub stream, session not up yet) rather than
+    // failing the request — a tile that briefly can't get Sub should still show something.
+    var wantsSub = string.Equals(ctx.Request.Query["role"].ToString(), "sub", StringComparison.OrdinalIgnoreCase);
+    ILiveSource? session = wantsSub ? worker.TryGetLiveSubSession(cameraId) : null;
+    session ??= worker.TryGetSession(cameraId);
     if (session is null)
     {
         ctx.Response.StatusCode = StatusCodes.Status404NotFound;
@@ -210,6 +227,47 @@ app.MapGet("/playback-segment/{cameraId:guid}", async (HttpContext ctx, Guid cam
     }
 
     ctx.Response.ContentType = "video/mp4";
+
+    // M18 follow-up: a late seek into a large segment used to mean downloading everything before it
+    // first — confirmed live against this fleet's real segment sizes (24-44MB at 60s/4K-HEVC) as the
+    // actual cause of "slow to load" when scrubbing, not disk speed. seekSeconds, when present, is an
+    // unsigned hint — like /live's own ?role=, not part of the token, since it only picks *where
+    // inside* an already-authorized file to start from, not a new authorization scope. Below
+    // MinSeekSecondsForPartialFetch, or with no usable fragment index, falls straight through to the
+    // original whole-file SendFileAsync below — unconditionally correct, just potentially slower.
+    if (double.TryParse(ctx.Request.Query["seekSeconds"], NumberStyles.Float, CultureInfo.InvariantCulture, out var seekSeconds)
+        && seekSeconds > MinSeekSecondsForPartialFetch)
+    {
+        var fragments = worker.GetOrBuildFragmentIndex(fullPath);
+        // The last fragment at-or-before the target — never *past* it, so the client's own "wait
+        // until the target instant is actually buffered" logic (playback-player.js) still has
+        // something to wait for rather than silently landing later than what was asked for.
+        Mp4Fragment? chosen = null;
+        foreach (var f in fragments)
+        {
+            if (f.MediaTimeSeconds > seekSeconds) break;
+            chosen = f;
+        }
+
+        // fragments[0] is always the init segment's own end (the first top-level box after
+        // ftyp+moov is the first moof) — skipping straight to it would just be the whole file, so
+        // this is only worth it when there's a genuinely *later* fragment to jump to.
+        if (fragments.Count > 0 && chosen is { } target && target.ByteOffset > fragments[0].ByteOffset)
+        {
+            // Read by the client to correct its own "buffered start + seekSeconds" seek math — the
+            // served fragment's own media time, not the segment's true start, is now what
+            // sourceBuffer.buffered.start(0) will actually report once appended.
+            ctx.Response.Headers["X-Fragment-Start-Seconds"] = target.MediaTimeSeconds.ToString(CultureInfo.InvariantCulture);
+
+            await using var fileStream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1, useAsync: true);
+            var initSegmentEnd = fragments[0].ByteOffset;
+            await CopyExactAsync(fileStream, ctx.Response.Body, initSegmentEnd, ctx.RequestAborted);
+            fileStream.Seek(target.ByteOffset, SeekOrigin.Begin);
+            await fileStream.CopyToAsync(ctx.Response.Body, ctx.RequestAborted);
+            return;
+        }
+    }
+
     await ctx.Response.SendFileAsync(fullPath, ctx.RequestAborted);
 });
 
@@ -243,6 +301,9 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid c
     // trusted outright regardless. Folded into the cache filename below so a 150px and an 854px
     // request for the same offset never collide on the same cached file.
     var maxDimension = int.TryParse(ctx.Request.Query["maxDim"], out var md) ? Math.Clamp(md, 32, 1920) : LarisVMS.Media.ThumbnailCapture.DefaultMaxDimension;
+    // ffmpeg -q:v, 2 (best) to 31 (worst). Same reasoning as maxDim above: LarisVMS.Web decides it,
+    // this only carries the decision across the proxy hop, and it's clamped rather than trusted.
+    var quality = int.TryParse(ctx.Request.Query["q"], out var qv) ? Math.Clamp(qv, 2, 31) : LarisVMS.Media.ThumbnailCapture.DefaultQuality;
     if (!MediaToken.TryValidateThumbnail(token, cameraId, path, offsetSeconds, currentKey, out var tokenError))
     {
         ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
@@ -278,7 +339,7 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid c
     }
 
     var relativeToMain = Path.GetRelativePath(mainDir, fullPath);
-    var thumbRelative = Path.ChangeExtension(relativeToMain, null) + $"_o{offsetSeconds:D2}_{maxDimension}.jpg";
+    var thumbRelative = Path.ChangeExtension(relativeToMain, null) + $"_o{offsetSeconds:D2}_{maxDimension}q{quality}.jpg";
     var thumbPath = Path.Combine(thumbsDir, thumbRelative);
 
     if (File.Exists(thumbPath))
@@ -288,7 +349,7 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid c
         return;
     }
 
-    var bytes = await worker.CaptureThumbnailAsync(fullPath, offsetSeconds, ctx.RequestAborted, maxDimension);
+    var bytes = await worker.CaptureThumbnailAsync(fullPath, offsetSeconds, ctx.RequestAborted, maxDimension, quality);
     if (bytes is null)
     {
         ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
@@ -304,6 +365,42 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid c
 
     ctx.Response.ContentType = "image/jpeg";
     await ctx.Response.Body.WriteAsync(bytes, ctx.RequestAborted);
+});
+
+// Service restart — POSTed by LarisVMS.Web when an admin presses "Restart service" on the Nodes
+// page. Same signed-token shape as every other Web->Node call, but scoped to the node itself rather
+// than a camera (MediaToken.IssueForNodeControl binds the action name, not a cameraId).
+//
+// Responds *before* actually restarting: the restart stops this very process, so a response written
+// afterward would never reach the caller and the Web tier would see a dropped connection instead of
+// a result. TryRestartService only launches the detached helper and signals shutdown, so there is a
+// real window to flush this response first.
+app.MapPost("/restart", async (HttpContext ctx, NodeWorker worker, LarisVMS.Node.Update.UpdateService updateService) =>
+{
+    var token = ctx.Request.Query["token"].ToString();
+    var currentKey = worker.MediaSigningKey;
+    if (currentKey is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
+        return;
+    }
+    if (!MediaToken.TryValidateNodeControl(token, "restart", currentKey, out var tokenError))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync(tokenError);
+        return;
+    }
+
+    if (!updateService.TryRestartService())
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsync("The updater binary this node needs to restart itself is missing. " +
+            "Re-run install-node.ps1 on this machine.");
+        return;
+    }
+
+    await ctx.Response.WriteAsync("Restarting.");
 });
 
 // Export trigger — POSTed by LarisVMS.Web's ExportJobDispatcher, never reached by a browser
@@ -556,3 +653,22 @@ static string? GetArg(string[] args, string name)
 }
 
 static bool HasFlag(string[] args, string name) => Array.IndexOf(args, name) >= 0;
+
+/// <summary>Copies exactly <paramref name="count"/> bytes from the current position of
+/// <paramref name="source"/> to <paramref name="destination"/> — Stream has no built-in bounded
+/// copy, only CopyToAsync's "copy everything left." Used to send just the init-segment prefix
+/// (a source and a partial fetch share it, then diverge) without also serving whatever mdat bytes
+/// happen to follow it.</summary>
+static async Task CopyExactAsync(Stream source, Stream destination, long count, CancellationToken ct)
+{
+    var buffer = new byte[81920];
+    var remaining = count;
+    while (remaining > 0)
+    {
+        var toRead = (int)Math.Min(buffer.Length, remaining);
+        var read = await source.ReadAsync(buffer.AsMemory(0, toRead), ct);
+        if (read <= 0) break; // short read — nothing more to copy, caller's own CopyToAsync still runs after
+        await destination.WriteAsync(buffer.AsMemory(0, read), ct);
+        remaining -= read;
+    }
+}

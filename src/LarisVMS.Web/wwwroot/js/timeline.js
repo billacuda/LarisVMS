@@ -46,7 +46,12 @@ window.larisvmsTimeline = (function () {
 
     function create(canvas, options) {
         var ctx = canvas.getContext('2d');
-        var rangeMs = options.initialRangeMs || (24 * 3600 * 1000);
+        // Clamped like setRange does, not trusted raw: initialRangeMs now comes from a persisted user
+        // preference (playback.position's rangeMs), and a corrupted or out-of-date stored value would
+        // otherwise install a range the zoom controls themselves would never permit — leaving the
+        // timeline stuck somewhere it can't be reached from, since every later change re-clamps.
+        var rangeMs = Math.min(MAX_RANGE_MS,
+            Math.max(MIN_RANGE_MS, options.initialRangeMs || (24 * 3600 * 1000)));
         var centerMs = clampCenter(options.initialCenterMs || Date.now());
         var buckets = [];
         var bookmarks = []; // M18: [{ timestampUtc }] — options.getBookmarks is optional, same as getThumbnailUrl
@@ -184,10 +189,31 @@ window.larisvmsTimeline = (function () {
             reloadTimer = setTimeout(reload, 150);
         }
 
+        // A reload requested while one is already in flight used to be silently dropped — confirmed
+        // live as "the Playback page's timelines load with only blue (recorded) coverage, no
+        // motion/event colors at all, until you zoom": create() fires its own reload() immediately for
+        // whatever centerMs/rangeMs the timeline starts with (Date.now(), before the page glue has
+        // resolved the real initial position — a deep link's instant, the persisted last-viewed
+        // position, or "most recent recording"). The page glue's own correct reload() for the real
+        // position, moments later once that resolution finishes, would arrive while the first one was
+        // still awaiting its fetch and simply vanish — leaving the timeline stuck on "now"'s coverage
+        // (real blue, since Continuous mode is always recording something, but often no motion) until
+        // some unrelated later reload (a zoom's scheduleReload) finally got a clear run. Queuing the
+        // in-flight case instead of dropping it means every requested reload eventually happens.
+        var reloadPending = false;
+
+        // The [from, to) actually covered by whatever's currently in `buckets` — set at the top of
+        // reload() (the range that fetch was *for*, not whatever centerMs has drifted to by the time
+        // the response lands) so setCenter below can tell whether the strip it's about to redraw is
+        // still backed by real data or has drifted off the edge of it.
+        var coveredRange = null;
+
         async function reload() {
-            if (loading || !options.getBuckets) return;
+            if (loading) { reloadPending = true; return; }
+            if (!options.getBuckets) return;
             loading = true;
             var r = visibleRange();
+            coveredRange = r;
             var bucketCount = Math.max(50, Math.min(2000, Math.round(canvas.clientWidth || 800)));
             var fromIso = new Date(r.from).toISOString(), toIso = new Date(r.to).toISOString();
             try {
@@ -208,6 +234,15 @@ window.larisvmsTimeline = (function () {
             }
             loading = false;
             draw();
+            // One coalesced retry, not a queue — every reload fetches the timeline's *current*
+            // visibleRange() at the moment it actually runs, so a reload requested and then
+            // superseded by another before this one even starts still only needs the one retry to end
+            // up showing the truly-latest range, same as scheduleReload's own debounce achieves for
+            // rapid zoom/pan.
+            if (reloadPending) {
+                reloadPending = false;
+                reload();
+            }
         }
 
         function draw() {
@@ -412,6 +447,13 @@ window.larisvmsTimeline = (function () {
 
         canvas.addEventListener('pointerdown', function (e) {
             if (e.button !== 0) return;
+            // Without this, a mousedown-then-move over the canvas can concurrently kick off the
+            // browser's own native "drag this element out" gesture — confirmed live as the drag
+            // cursor turning into the no-drop/circle-slash icon and the custom pan below never
+            // firing, exactly the same failure playback-player.js's wireZoom already documents and
+            // fixes for <video> the same way. Canvas isn't natively draggable in every engine, which
+            // is why this reproduced intermittently rather than every time.
+            e.preventDefault();
             activePointers[e.pointerId] = { x: e.clientX, y: e.clientY };
             canvas.setPointerCapture(e.pointerId);
 
@@ -723,7 +765,35 @@ window.larisvmsTimeline = (function () {
             // authority over centerMs while dragging=true; once it ends, onScrub's own report of the
             // release position is what the caller acts on anyway, so nothing is lost by ignoring
             // programmatic recenters in between.
-            setCenter: function (ms) { if (dragging) return; centerMs = clampCenter(ms); draw(); },
+            setCenter: function (ms) {
+                if (dragging) return;
+                centerMs = clampCenter(ms);
+                draw();
+                // Without this, ordinary playback going gray was confirmed live: this is the *only*
+                // path that moves centerMs during normal playback (the page-level 500ms
+                // playhead-follows-playback loop calls it on every tick), and until now it only ever
+                // redrew with whatever buckets the last reload() happened to fetch — never asked for
+                // more. A 10-30 minute zoom range (the common case for reviewing a specific moment)
+                // walks off the edge of its own last-fetched coverage within single-digit minutes of
+                // real playback, or seconds at higher speeds; the newly-scrolled-into stretch has no
+                // bucket data at all and reads as unrecorded gray even though the footage is right
+                // there, self-"fixing" only when some unrelated drag/zoom happened to trigger a fresh
+                // reload. Each of the two sibling timelines (per-camera, all-cameras) reloads
+                // independently, which is why one could show real colors while the other sat gray for
+                // the same instant — confirmed live as exactly that split.
+                //
+                // scheduleReload's own debounce is what keeps this cheap during smooth playback (many
+                // ticks arrive before it actually fires, coalescing into one fetch) without needing
+                // separate throttling logic here.
+                // options.getBuckets is absent for a bucket-less mini-timeline (a Live-tile/View-cell
+                // playback toggle's own scrubbable ruler) — reload() would no-op there anyway, so
+                // skip even scheduling one rather than churning a timer every tick for nothing.
+                if (!options.getBuckets) return;
+                var visible = visibleRange();
+                if (!coveredRange || visible.from < coveredRange.from || visible.to > coveredRange.to) {
+                    scheduleReload();
+                }
+            },
             getCenter: function () { return centerMs; },
             // Mirrors a zoom that happened on a sibling timeline — same no-callback-re-fire
             // reasoning as setCenter, so two synced timelines can't bounce a change back and forth.

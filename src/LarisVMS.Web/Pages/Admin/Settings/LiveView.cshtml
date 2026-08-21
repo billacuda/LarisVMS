@@ -1,0 +1,32 @@
+@page
+@model LarisVMS.Web.Pages.Admin.Settings.LiveViewModel
+@{
+    ViewData["Title"] = "Live View settings";
+}
+<h1>Settings</h1>
+<partial name="_SettingsTabs" model="@("LiveView")" />
+
+@if (!string.IsNullOrEmpty(Model.SavedMessage))
+{
+    <div class="alert alert-success">@Model.SavedMessage</div>
+}
+
+<form method="post" class="row g-3" style="max-width: 560px;">
+    <div class="col-12">
+        <div class="form-check form-switch mb-3">
+            <input class="form-check-input" type="checkbox" asp-for="AdaptiveStreamingEnabled" id="adaptiveStreamingEnabled" />
+            <label class="form-check-label" for="adaptiveStreamingEnabled">Adaptive streaming enabled</label>
+        </div>
+        <div class="form-text">
+            When on, a live tile too small to benefit from a camera's full resolution is shown its Sub
+            stream instead of Main, cutting bandwidth and decode cost — the tile switches back to Main
+            automatically once it's large enough (or fullscreen) to matter. Turning this off falls
+            every tile back to Main only, and stops every node from pulling Sub streams for live
+            viewing at all.
+        </div>
+    </div>
+
+    <div class="col-12">
+        <button type="submit" class="btn btn-primary"><span aria-hidden="true">💾</span> Save</button>
+    </div>
+</form>

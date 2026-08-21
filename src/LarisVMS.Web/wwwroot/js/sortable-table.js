@@ -3,8 +3,14 @@
 // page. A header cell opts out with data-no-sort (action columns with no meaningful order), and
 // opts into numeric comparison with data-sort-numeric. An individual <td> can override what gets
 // compared via data-sort-value (e.g. raw bytes/epoch instead of a formatted display string).
+//
+// The chosen column and direction are remembered per table through larisvmsPreferences, the same
+// server-backed store this table's page size, column choices, and filter term already use — a list
+// page comes back sorted the way it was left.
 (function () {
     'use strict';
+
+    var PREF_PREFIX = 'tableSort.';
 
     function cellSortValue(cell) {
         if (!cell) return '';
@@ -38,6 +44,29 @@
     function initTable(table) {
         if (!table.tHead || !table.tHead.rows.length) return;
         var headers = Array.prototype.slice.call(table.tHead.rows[0].cells);
+        var prefKey = PREF_PREFIX + table.id;
+
+        // Extracted from the click handler so a restored sort produces exactly the same DOM state a
+        // click would have — indicator, data-sort-dir, row order — rather than a second, subtly
+        // different code path that reapply() and table-pagination.js would then disagree about.
+        function applySort(th, columnIndex, ascending) {
+            headers.forEach(function (h) {
+                h.removeAttribute('data-sort-dir');
+                var existingIndicator = h.querySelector('.sort-indicator');
+                if (existingIndicator) existingIndicator.remove();
+            });
+
+            th.setAttribute('data-sort-dir', ascending ? 'asc' : 'desc');
+            var indicator = document.createElement('span');
+            indicator.className = 'sort-indicator ms-1';
+            indicator.textContent = ascending ? '▲' : '▼';
+            th.appendChild(indicator);
+
+            sortRows(table, columnIndex, th.hasAttribute('data-sort-numeric'), ascending);
+            // Same coupling as list-filter.js's own dispatch — lets table-pagination.js re-slice
+            // against the now-reordered rows instead of the pre-sort order.
+            document.dispatchEvent(new CustomEvent('larisvms:table-changed', { detail: { tableId: table.id } }));
+        }
 
         headers.forEach(function (th, columnIndex) {
             if (th.hasAttribute('data-no-sort')) return;
@@ -48,24 +77,23 @@
 
             th.addEventListener('click', function () {
                 var ascending = th.getAttribute('data-sort-dir') !== 'asc';
-
-                headers.forEach(function (h) {
-                    h.removeAttribute('data-sort-dir');
-                    var existingIndicator = h.querySelector('.sort-indicator');
-                    if (existingIndicator) existingIndicator.remove();
-                });
-
-                th.setAttribute('data-sort-dir', ascending ? 'asc' : 'desc');
-                var indicator = document.createElement('span');
-                indicator.className = 'sort-indicator ms-1';
-                indicator.textContent = ascending ? '▲' : '▼';
-                th.appendChild(indicator);
-
-                sortRows(table, columnIndex, th.hasAttribute('data-sort-numeric'), ascending);
-                // Same coupling as list-filter.js's own dispatch — lets table-pagination.js re-slice
-                // against the now-reordered rows instead of the pre-sort order.
-                document.dispatchEvent(new CustomEvent('larisvms:table-changed', { detail: { tableId: table.id } }));
+                applySort(th, columnIndex, ascending);
+                if (table.id) window.larisvmsPreferences.set(prefKey, columnIndex + ':' + (ascending ? 'asc' : 'desc'));
             });
+        });
+
+        if (!table.id) return; // nothing to key a preference on
+        window.larisvmsPreferences.whenReady().then(function () {
+            var saved = window.larisvmsPreferences.get(prefKey, '');
+            if (!saved) return;
+            var parts = String(saved).split(':');
+            var columnIndex = parseInt(parts[0], 10);
+            // Column count/order can change between releases, and a header can gain data-no-sort —
+            // a saved index that no longer names a sortable column is dropped rather than applied to
+            // whatever now happens to sit at that position.
+            var th = headers[columnIndex];
+            if (!th || th.hasAttribute('data-no-sort')) return;
+            applySort(th, columnIndex, parts[1] !== 'desc');
         });
     }
 

@@ -13,7 +13,12 @@ internal static class UpdaterLogic
 {
     public const string DefaultServiceName = "LarisVMSNode";
 
-    public record ParsedArgs(string? NewBinary, string? CurrentBinary, string ServiceName);
+    /// <summary>RestartOnly skips the binary swap entirely and only performs the wait-for-stopped /
+    /// start-again half — what the Nodes page's own "Restart service" button needs. Reusing this
+    /// binary rather than having the node shell out to sc.exe itself keeps one implementation of
+    /// "outlive the service, then bring it back", which is the part that has to run *outside* the
+    /// process being restarted.</summary>
+    public record ParsedArgs(string? NewBinary, string? CurrentBinary, string ServiceName, bool RestartOnly);
 
     /// <summary>Same "--flag value" scanning dploid.AgentUpdater's Program.cs uses inline — pulled out
     /// here only so it has something a test can call directly.</summary>
@@ -21,18 +26,23 @@ internal static class UpdaterLogic
     {
         string? newBinary = null, currentBinary = null;
         var serviceName = DefaultServiceName;
+        var restartOnly = false;
 
-        for (var i = 0; i < args.Length - 1; i++)
+        // Scans to args.Length (not args.Length - 1) so a valueless flag in the final position is
+        // still seen — the paired "--flag value" cases below read args[++i] only after confirming a
+        // next element exists, which is what the old bound was protecting.
+        for (var i = 0; i < args.Length; i++)
         {
             switch (args[i])
             {
-                case "--new": newBinary = args[++i]; break;
-                case "--current": currentBinary = args[++i]; break;
-                case "--service": serviceName = args[++i]; break;
+                case "--new" when i + 1 < args.Length: newBinary = args[++i]; break;
+                case "--current" when i + 1 < args.Length: currentBinary = args[++i]; break;
+                case "--service" when i + 1 < args.Length: serviceName = args[++i]; break;
+                case "--restart-only": restartOnly = true; break;
             }
         }
 
-        return new ParsedArgs(newBinary, currentBinary, serviceName);
+        return new ParsedArgs(newBinary, currentBinary, serviceName, restartOnly);
     }
 
     /// <summary>Backs up currentBinary to "{currentBinary}.bak" (if it exists), moves newBinary over

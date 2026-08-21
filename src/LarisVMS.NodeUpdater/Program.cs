@@ -23,16 +23,23 @@ const int MaxWaitSeconds = 60;
 
 var parsed = UpdaterLogic.ParseArgs(args);
 
-if (parsed.NewBinary is null || parsed.CurrentBinary is null)
+// --restart-only: no binary swap, just outlive the service and bring it back (the Nodes page's own
+// "Restart service" button). Everything below is written as "wait for stopped → [swap] → start", so
+// this mode only skips the middle step; the two halves that matter are shared verbatim.
+if (!parsed.RestartOnly)
 {
-    Console.Error.WriteLine("Usage: LarisVMS.NodeUpdater.exe --new <path> --current <path> [--service <name>]");
-    return 1;
-}
+    if (parsed.NewBinary is null || parsed.CurrentBinary is null)
+    {
+        Console.Error.WriteLine("Usage: LarisVMS.NodeUpdater.exe --new <path> --current <path> [--service <name>]");
+        Console.Error.WriteLine("   or: LarisVMS.NodeUpdater.exe --restart-only [--service <name>]");
+        return 1;
+    }
 
-if (!File.Exists(parsed.NewBinary))
-{
-    Console.Error.WriteLine($"Staged binary not found: {parsed.NewBinary}");
-    return 1;
+    if (!File.Exists(parsed.NewBinary))
+    {
+        Console.Error.WriteLine($"Staged binary not found: {parsed.NewBinary}");
+        return 1;
+    }
 }
 
 // ── Wait for service to stop ───────────────────────────────────────────────
@@ -60,13 +67,19 @@ Console.WriteLine("Service stopped.");
 
 // ── Swap binary ────────────────────────────────────────────────────────────
 
-if (!UpdaterLogic.TrySwapBinary(parsed.NewBinary, parsed.CurrentBinary, out var swapError))
+if (parsed.RestartOnly)
+{
+    Console.WriteLine("Restart-only mode — skipping binary swap.");
+}
+else if (!UpdaterLogic.TrySwapBinary(parsed.NewBinary!, parsed.CurrentBinary!, out var swapError))
 {
     Console.Error.WriteLine($"Failed to swap binary: {swapError}");
     return 1;
 }
-
-Console.WriteLine($"Binary swapped: {parsed.NewBinary} -> {parsed.CurrentBinary}");
+else
+{
+    Console.WriteLine($"Binary swapped: {parsed.NewBinary} -> {parsed.CurrentBinary}");
+}
 
 // ── Start service ──────────────────────────────────────────────────────────
 

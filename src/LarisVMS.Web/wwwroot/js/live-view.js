@@ -120,7 +120,11 @@
     // this SourceBuffer — there is no getting the same session decodable again once that happens,
     // only starting a fresh one (new init segment, clean MediaSource). `start()` is the auto-retrying
     // wrapper every caller should use; `startSession()` is one single attempt.
-    function start(cameraId, videoEl, statusEl, codecHint, hasAudio) {
+    // M18: `role` is 'main' (default, omitted from the URL) or 'sub' — which of the camera's two
+    // live-fMP4 sources (see NodeWorker.ReconcileLiveSub) this tile's WebSocket asks the node for.
+    // Purely a quality/bandwidth choice, not a security boundary (see Program.cs's own /live route
+    // comment) — every session, at either role, still needs the same signed per-camera token.
+    function start(cameraId, videoEl, statusEl, codecHint, hasAudio, role) {
         var stoppedByUser = false;
         var retryTimer = null;
         var retryDelayMs = 2000;
@@ -145,7 +149,7 @@
 
         function launch() {
             sessionStartedAt = Date.now();
-            currentStop = startSession(cameraId, videoEl, statusProxy, codecHint, hasAudio, onFrameVisible, function onEnded() {
+            currentStop = startSession(cameraId, videoEl, statusProxy, codecHint, hasAudio, role, onFrameVisible, function onEnded() {
                 if (stoppedByUser) return;
                 if (hasEverShownFrame) overlay.show();
                 // A session that ran a while before failing is a transient blip (wifi roam, brief
@@ -187,7 +191,7 @@
     // Runs exactly one session attempt and returns its stop() function. `onEnded` fires exactly
     // once, however the session stops — explicit stop() call, decode error, or WebSocket
     // close/error — so start()'s retry wrapper above has one place to decide whether to reconnect.
-    function startSession(cameraId, videoEl, statusEl, codecHint, hasAudio, onFrameVisible, onEnded) {
+    function startSession(cameraId, videoEl, statusEl, codecHint, hasAudio, role, onFrameVisible, onEnded) {
         var ended = false;
         // The <video> element outlives every session attached to it (each reconnect builds a fresh
         // MediaSource but reuses the same element), so listeners bound to it must be removed when
@@ -422,7 +426,8 @@
             });
 
             var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            socket = new WebSocket(proto + '//' + location.host + '/live/' + cameraId);
+            var roleQuery = role === 'sub' ? '?role=sub' : '';
+            socket = new WebSocket(proto + '//' + location.host + '/live/' + cameraId + roleQuery);
             socket.binaryType = 'arraybuffer';
 
             statusEl.textContent = 'Connecting…';

@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core.Entities;
 using LarisVMS.Infrastructure.Data;
+using LarisVMS.Web.Helpers;
 
 namespace LarisVMS.Web.Pages.Logs;
 
@@ -52,11 +53,14 @@ public class AuditLogsModel(ApplicationDbContext db) : PageModel
         if (!string.IsNullOrWhiteSpace(actor))
             query = query.Where(l => l.UserName != null && l.UserName.Contains(actor));
 
-        if (!string.IsNullOrWhiteSpace(from) && DateOnly.TryParse(from, out var fromDate))
-            query = query.Where(l => l.OccurredAt >= fromDate.ToDateTime(TimeOnly.MinValue));
+        // OccurredAt is UTC, while these come from a date picker that means a *local* day — see
+        // LocalDateFilter for the offset bug this fixes (a selected day was cut short by the UTC
+        // offset, which read as "the filter stops mid-afternoon").
+        if (LocalDateFilter.StartOfDayUtc(from) is { } fromUtc)
+            query = query.Where(l => l.OccurredAt >= fromUtc);
 
-        if (!string.IsNullOrWhiteSpace(to) && DateOnly.TryParse(to, out var toDate))
-            query = query.Where(l => l.OccurredAt <= toDate.ToDateTime(TimeOnly.MaxValue));
+        if (LocalDateFilter.EndOfDayUtc(to) is { } toUtc)
+            query = query.Where(l => l.OccurredAt <= toUtc);
 
         var total = await query.CountAsync();
         TotalPages = Math.Max(1, (int)Math.Ceiling(total / (double)PageSize));

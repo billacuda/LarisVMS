@@ -99,6 +99,10 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         }
 
         var watermarkPercent = await settings.GetAsync("Storage.WatermarkPercent", 90, ct: ct);
+        // M18: the admin-facing toggle for adaptive streaming (see Admin/Settings/LiveView.cshtml).
+        // Global only, no per-node/per-camera override — this is a bandwidth/CPU trade-off for the
+        // whole deployment, not something that makes sense to vary camera-by-camera.
+        var adaptiveStreamingEnabled = await settings.GetAsync("LiveView.AdaptiveStreamingEnabled", true, ct: ct);
 
         var cameraIds = cameras.Select(c => c.Id).ToList();
         // M18: Privacy joins ServerMotion/Ignore here — RecordingSession's own privacy-mask burn-in
@@ -134,6 +138,13 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             var recordingMode = await settings.GetAsync("Recording.Mode", "Continuous", cameraId: c.Id, nodeId: nodeId, ct: ct);
             var motionPreRollSeconds = await settings.GetAsync("Recording.MotionPreRollSeconds", 10, cameraId: c.Id, nodeId: nodeId, ct: ct);
             var motionPostRollSeconds = await settings.GetAsync("Recording.MotionPostRollSeconds", 30, cameraId: c.Id, nodeId: nodeId, ct: ct);
+            // Clamped, not trusted outright: this value is baked directly into ffmpeg's own
+            // `-f segment` invocation (RecordingSession.BuildTeeOutputs) with no other validation
+            // downstream. A stray 0/negative would make ffmpeg either reject the argument or (worse)
+            // roll a new file continuously; an enormous value would defeat the whole point of this
+            // setting (bounding worst-case seek latency) while still looking "set".
+            var segmentSeconds = Math.Clamp(
+                await settings.GetAsync("Recording.SegmentSeconds", 60, cameraId: c.Id, nodeId: nodeId, ct: ct), 5, 300);
             cameraDtos.Add(new NodeConfigCameraDto(
                 c.Id, c.Name, c.Username, c.Password,
                 c.Streams.Where(s => s.IsEnabled).Select(s => new NodeConfigStreamDto(
@@ -148,7 +159,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
                 // behind by a removed/newer provider quietly means "no integration" rather than
                 // asking the node to start something it can't resolve.
                 CameraIntegrations.ByKey(c.IntegrationKey)?.Key,
-                ResolveIntegrationBaseUri(c)));
+                ResolveIntegrationBaseUri(c), segmentSeconds));
         }
 
         // Cameras this node has leftover Segments for but doesn't currently record — reassigned to a
@@ -173,7 +184,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             orphanedCameraDtos.Add(new NodeConfigOrphanedCameraDto(orphanedCameraId, retentionDays));
         }
 
-        return new NodeConfigResponse(cameraDtos, storageRoot, watermarkPercent, mediaSigningKey, orphanedCameraDtos);
+        return new NodeConfigResponse(cameraDtos, storageRoot, watermarkPercent, mediaSigningKey, orphanedCameraDtos, adaptiveStreamingEnabled);
     }
 
     /// <summary>Pulls the Events service's own XAddr out of the capability prober's raw category map

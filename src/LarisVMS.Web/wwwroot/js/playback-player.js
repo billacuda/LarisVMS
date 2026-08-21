@@ -13,6 +13,9 @@
     var AVC_VIDEO_CANDIDATES = ['avc1.640028', 'avc1.4d0028'];
     var HEVC_VIDEO_CANDIDATES = ['hvc1.1.6.L93.B0', 'hev1.1.6.L93.B0'];
     var AUDIO_CODEC = 'mp4a.40.2';
+    // M18 follow-up: matches Program.cs's own MinSeekSecondsForPartialFetch on the node — see
+    // loadSegment's own comment for why this exists on both ends.
+    var MIN_SEEK_SECONDS_FOR_PARTIAL_FETCH = 2.0;
 
     function pickMimeType(codecHint, hasAudio) {
         if (!window.MediaSource) return null;
@@ -259,7 +262,9 @@
                         hideFreezeFrame();
                         return;
                     }
-                    appendWholeSegment(prefetchedBytes, sourceBuffer, prefetchedMediaSource, myToken, seekSeconds, autoplay, segment);
+                    // 0: a prefetch hit always fetched its segment whole, from true start (see
+                    // schedulePrefetch), so there's no fragment-skip offset to account for.
+                    appendWholeSegment(prefetchedBytes, sourceBuffer, prefetchedMediaSource, myToken, seekSeconds, autoplay, segment, 0);
                 });
                 return;
             }
@@ -274,9 +279,19 @@
                 return;
             }
 
+            // M18 follow-up: below MIN_SEEK_SECONDS_FOR_PARTIAL_FETCH, skip the query param entirely
+            // — same threshold the node applies on its own (Program.cs), kept here too purely so a
+            // trivial seek doesn't pay for building/escaping a URL param that would be ignored anyway.
+            // The server decides whether it can actually honor this (a usable fragment index must
+            // exist); when it can't, seekSeconds is silently ignored server-side and this falls back
+            // to the exact whole-file behavior that already existed, with fragmentStartSeconds staying
+            // 0 (see below) since no X-Fragment-Start-Seconds header comes back either.
+            var seekQuery = seekSeconds > MIN_SEEK_SECONDS_FOR_PARTIAL_FETCH
+                ? '?seekSeconds=' + encodeURIComponent(seekSeconds) : '';
+
             var resp;
             try {
-                resp = await fetch('/playback-segment/' + cameraId + '/' + segment.id, { signal: signal });
+                resp = await fetch('/playback-segment/' + cameraId + '/' + segment.id + seekQuery, { signal: signal });
             } catch (e) {
                 // A superseded seek's fetch lands here once aborted — not a real failure, the next
                 // seek already owns the tile, so no status text should overwrite whatever it sets.
@@ -298,6 +313,15 @@
                 return;
             }
 
+            // Absent (null) for the ordinary whole-file response — treated as 0 below, which is
+            // exactly the media time a whole-file fetch's first appended sample actually carries.
+            // Present only when the node actually served the fragment-skipping partial response (see
+            // Program.cs's own /playback-segment route) — the media time of whichever fragment it
+            // started from, which is at-or-before seekSeconds but not necessarily exactly it.
+            var fragmentStartHeader = resp.headers.get('X-Fragment-Start-Seconds');
+            var fragmentStartSeconds = fragmentStartHeader !== null ? parseFloat(fragmentStartHeader) : 0;
+            if (!isFinite(fragmentStartSeconds)) fragmentStartSeconds = 0;
+
             var mediaSource = new MediaSource();
             videoEl.src = URL.createObjectURL(mediaSource);
             currentSegmentId = segment.id;
@@ -316,14 +340,14 @@
                 }
 
                 if (resp.body) {
-                    streamIntoSourceBuffer(resp.body.getReader(), sourceBuffer, mediaSource, myToken, signal, seekSeconds, autoplay, segment);
+                    streamIntoSourceBuffer(resp.body.getReader(), sourceBuffer, mediaSource, myToken, signal, seekSeconds, autoplay, segment, fragmentStartSeconds);
                 } else {
                     // No streaming response body support (older browser, or an intermediary that
                     // buffers the whole thing) — fall back to the previous whole-file behavior
                     // rather than failing outright. resp is still the same Response from the
                     // enclosing loadSegment closure; arrayBuffer() works on it regardless of
                     // whether .body (the streaming reader) is exposed.
-                    loadWholeBufferFallback(resp, sourceBuffer, mediaSource, myToken, signal, seekSeconds, autoplay, segment);
+                    loadWholeBufferFallback(resp, sourceBuffer, mediaSource, myToken, signal, seekSeconds, autoplay, segment, fragmentStartSeconds);
                 }
             });
         }
@@ -341,28 +365,61 @@
         //
         // SourceBuffer only accepts one pending appendBuffer() at a time, so chunks are pumped one
         // at a time, each read gated on the previous append's updateend.
-        function streamIntoSourceBuffer(reader, sourceBuffer, mediaSource, myToken, signal, seekSeconds, autoplay, segment) {
+        function streamIntoSourceBuffer(reader, sourceBuffer, mediaSource, myToken, signal, seekSeconds, autoplay, segment, fragmentStartSeconds) {
             var startedPlayback = false;
+            // Set by finish() before its own tryStartPlaybackOnce call — "no more bytes are coming,
+            // so stop waiting for the target to appear and use whatever actually arrived".
+            var streamEnded = false;
 
             function tryStartPlaybackOnce() {
                 if (startedPlayback || myToken !== loadToken) return;
                 var buffered = sourceBuffer.buffered;
                 if (!buffered.length) return; // first chunk hasn't been processed into a range yet
-                startedPlayback = true;
 
                 // seekSeconds is an offset from the segment's *wall-clock* start, but a recorded
                 // fMP4's internal timeline doesn't have to begin at zero — these carry the
                 // baseMediaDecodeTime they were written with, so buffered can start at an arbitrary
                 // large value (confirmed live: seeking to the raw offset landed outside the
-                // buffered range entirely and rendered nothing, with no error). No upper-bound
-                // clamp is needed here the way the old whole-file version needed one: if the target
-                // is further into the segment than has streamed in yet, setting currentTime there
-                // anyway is exactly correct — HTMLMediaElement natively waits for the data to
-                // arrive and resumes on its own once it does, the same way any progressively
-                // downloaded video works.
+                // buffered range entirely and rendered nothing, with no error). fragmentStartSeconds
+                // (M18 follow-up) generalizes this the same way for a partial fetch that skipped
+                // straight to a fragment mid-segment (see loadSegment's own X-Fragment-Start-Seconds
+                // handling): bufStart there reports that fragment's own media time, not the segment's
+                // true start, so the residual offset still to seek across is (seekSeconds -
+                // fragmentStartSeconds), not seekSeconds itself. Zero for every ordinary whole-file
+                // fetch (ended-handler auto-advance and any seek the node couldn't/didn't partially
+                // serve), which reduces this to exactly the original formula.
                 var bufStart = buffered.start(0);
+                var bufEnd = buffered.end(buffered.length - 1);
+                var residualSeekSeconds = seekSeconds - fragmentStartSeconds;
+                var target = bufStart + residualSeekSeconds;
+
+                // Wait for the target instant to actually be buffered before seeking to it. An
+                // earlier version set currentTime here as soon as the *first* chunk landed, on the
+                // theory that HTMLMediaElement would wait for the rest by itself the way progressive
+                // download does. It doesn't: under MSE the browser clamps a seek to the `seekable`
+                // range, which is derived from what's currently buffered — so a deep link into the
+                // middle of a 60s segment got clamped back to the segment's start and simply played
+                // from there. Confirmed live as "clicking Play on a bookmark starts at the beginning
+                // of the minute, and you have to wait for it to buffer and then click the timeline".
+                //
+                // Only ever delays when the target genuinely isn't buffered yet. The common
+                // end-of-segment auto-advance passes a zero residual, where target == bufStart and
+                // this is satisfied by the very first chunk, exactly as before.
+                if (residualSeekSeconds > 0 && target > bufEnd && !streamEnded) {
+                    // Nothing to show at the requested instant yet, but the tile shouldn't look dead
+                    // while the rest of the segment streams in — a freeze frame from the previous
+                    // segment (if any) is still up, so this only speaks when there's nothing to see.
+                    if (statusEl && !statusEl.textContent) statusEl.textContent = 'Loading…';
+                    return;
+                }
+
+                startedPlayback = true;
                 currentSegmentTimeOrigin = bufStart;
-                videoEl.currentTime = Math.max(bufStart, bufStart + seekSeconds);
+                // Clamped to what exists: if the stream ended before reaching the target (a segment
+                // whose real content is shorter than its recorded duration — the same wall-clock vs.
+                // encoded-length drift /playback-thumbnail already compensates for), land on the last
+                // real frame rather than seeking past the end and stalling forever.
+                videoEl.currentTime = Math.min(Math.max(bufStart, target), bufEnd);
                 videoEl.playbackRate = desiredPlaybackRate; // load() (in teardown, just before this segment) reset it — see desiredPlaybackRate's own comment
                 hideFreezeFrameOnReady(); // held over from the previous segment until this one actually paints
                 if (statusEl) statusEl.textContent = '';
@@ -376,6 +433,10 @@
 
             function finish() {
                 if (myToken !== loadToken) return;
+                // Before the tryStartPlaybackOnce call below: releases the "wait for the target to
+                // buffer" guard, since no further bytes are coming and whatever arrived is all there
+                // will ever be.
+                streamEnded = true;
                 // Without endOfStream the MediaSource stays 'open', meaning duration stays
                 // unbounded and the element never fires 'ended' — which the auto-advance to the
                 // next segment depends on, so it silently never advanced.
@@ -404,7 +465,10 @@
                     try {
                         sourceBuffer.appendBuffer(result.value);
                     } catch (e) {
+                        console.error('[playback] appendBuffer failed for camera', cameraId, e);
                         if (statusEl) statusEl.textContent = 'Playback error: ' + e.message;
+                        recoverUnrecoverableMediaSource('an appendBuffer failure (' + e.name + ')',
+                            segment.startUtc + seekSeconds * 1000, autoplay);
                     }
                 }).catch(function (e) {
                     if (signal.aborted) return; // superseded — the reader was cancelled below, expected
@@ -428,7 +492,7 @@
 
         // Same behavior the whole file used to have unconditionally — kept only as a fallback for
         // a fetch() Response with no streaming body support.
-        async function loadWholeBufferFallback(resp, sourceBuffer, mediaSource, myToken, signal, seekSeconds, autoplay, segment) {
+        async function loadWholeBufferFallback(resp, sourceBuffer, mediaSource, myToken, signal, seekSeconds, autoplay, segment, fragmentStartSeconds) {
             var bytes;
             try {
                 bytes = new Uint8Array(await resp.arrayBuffer());
@@ -437,14 +501,17 @@
                 return;
             }
             if (myToken !== loadToken) return;
-            appendWholeSegment(bytes, sourceBuffer, mediaSource, myToken, seekSeconds, autoplay, segment);
+            appendWholeSegment(bytes, sourceBuffer, mediaSource, myToken, seekSeconds, autoplay, segment, fragmentStartSeconds);
         }
 
         // Shared by loadWholeBufferFallback (a Response with no streaming body support) and a
         // prefetch hit in loadSegment (bytes already fully downloaded ahead of time, nothing left to
         // read) — both cases already have the segment's complete bytes in hand with no further
-        // network work, so appending is identical either way.
-        function appendWholeSegment(bytes, sourceBuffer, mediaSource, myToken, seekSeconds, autoplay, segment) {
+        // network work, so appending is identical either way. fragmentStartSeconds is always 0 for a
+        // prefetch hit (prefetch always fetches its segment whole, from true start — see
+        // schedulePrefetch) and only ever nonzero when loadWholeBufferFallback's own caller read a
+        // real X-Fragment-Start-Seconds header off a partial response.
+        function appendWholeSegment(bytes, sourceBuffer, mediaSource, myToken, seekSeconds, autoplay, segment, fragmentStartSeconds) {
             sourceBuffer.addEventListener('updateend', function () {
                 if (myToken !== loadToken) return;
                 if (mediaSource.readyState === 'open') {
@@ -454,7 +521,13 @@
                 if (buffered.length) {
                     var bufStart = buffered.start(0);
                     currentSegmentTimeOrigin = bufStart;
-                    videoEl.currentTime = Math.max(bufStart, bufStart + seekSeconds);
+                    // The whole segment is already appended on this path, so there's nothing to wait
+                    // for the way the streaming path has to — but the same upper clamp applies: a
+                    // segment whose real encoded length falls short of its recorded duration would
+                    // otherwise be seeked past its end and stall. See tryStartPlaybackOnce for why
+                    // the residual is (seekSeconds - fragmentStartSeconds), not seekSeconds itself.
+                    videoEl.currentTime = Math.min(
+                        Math.max(bufStart, bufStart + (seekSeconds - fragmentStartSeconds)), buffered.end(buffered.length - 1));
                     videoEl.playbackRate = desiredPlaybackRate; // see desiredPlaybackRate's own comment
                     hideFreezeFrameOnReady(); // see the matching call in tryStartPlaybackOnce
                 } else {
@@ -473,7 +546,10 @@
             try {
                 sourceBuffer.appendBuffer(bytes);
             } catch (e) {
+                console.error('[playback] appendBuffer failed for camera', cameraId, e);
                 if (statusEl) statusEl.textContent = 'Playback error: ' + e.message;
+                recoverUnrecoverableMediaSource('an appendBuffer failure (' + e.name + ')',
+                    segment.startUtc + seekSeconds * 1000, autoplay);
             }
         }
 
@@ -531,6 +607,57 @@
             await loadSegment(segment, (targetMs - segment.startUtc) / 1000, autoplay, myToken, signal);
         }
 
+        function computeCurrentWallClockMs() {
+            var seg = segments.find(function (s) { return s.id === currentSegmentId; });
+            return seg ? seg.startUtc + (videoEl.currentTime - currentSegmentTimeOrigin) * 1000 : null;
+        }
+
+        // Once videoEl.error is set (a decode hiccup, not necessarily anything wrong with the file
+        // itself — confirmed live from rapid scrubbing), the *only* way to clear it is videoEl.load(),
+        // which is also what detaches the current MediaSource for good. Until that happens, every
+        // future sourceBuffer.appendBuffer() call on this element — even one for a brand new segment's
+        // brand new SourceBuffer — throws "the HTMLMediaElement.error attribute is not null" the
+        // instant it's called, and streamIntoSourceBuffer's pumpNext() only ever re-invokes itself
+        // from a successful append's 'updateend', so that throw silently stalls the whole reader with
+        // nothing left running to recover it. This was the whole tile going dead until the user forced
+        // a real reload by hand (a page refresh, or scrubbing far enough to cross two segment
+        // boundaries) — confirmed live as exactly that report.
+        //
+        // Recovery has to go through teardown() first, not straight back into seekTo(): seekTo has a
+        // same-segment fast path that only moves currentTime on the *existing* (still broken)
+        // MediaSource when the target resolves to the segment already loaded, which is exactly the
+        // common case here and would silently skip the one thing that actually fixes anything.
+        // teardown() clears currentSegmentId (defeating that fast path) and calls videoEl.load()
+        // (which is what actually resets .error), so the seekTo() right after is guaranteed to run a
+        // genuine loadSegment() against a fresh element.
+        //
+        // Debounced rather than reacting unconditionally — a codec/segment the browser genuinely
+        // can't decode must not retry in a tight loop forever. Shared by two distinct failure modes
+        // that both mean "this MediaSource/SourceBuffer is unrecoverable, start over": the videoEl
+        // 'error' event below (a real decode error), and a synchronous sourceBuffer.appendBuffer()
+        // throw (streamIntoSourceBuffer's pumpNext, appendWholeSegment) — confirmed live as a second,
+        // independent way into the identical stuck-forever symptom: QuotaExceededError is a real risk
+        // at this fleet's segment sizes (24–44MB/segment at 4K/HEVC), and unlike the 'error' event, a
+        // throw from appendBuffer() never fires 'updateend', so pumpNext's own only re-invocation path
+        // never runs again — nothing was left to notice or recover from it before this existed.
+        var lastErrorRecoveryAt = 0;
+        var ERROR_RECOVERY_COOLDOWN_MS = 3000;
+        function recoverUnrecoverableMediaSource(reason, targetMs, resumeAutoplay) {
+            var now = Date.now();
+            if (now - lastErrorRecoveryAt < ERROR_RECOVERY_COOLDOWN_MS) return;
+            lastErrorRecoveryAt = now;
+            console.error('[playback] recovering camera', cameraId, 'tile after', reason, '— reloading at', targetMs);
+            teardown();
+            if (targetMs !== null && targetMs !== undefined) {
+                seekTo(targetMs, resumeAutoplay).catch(function () { /* logged inside seekTo's own wrapper */ });
+            }
+        }
+
+        videoEl.addEventListener('error', function () {
+            if (!currentSegmentId) return; // nothing loaded yet, or already superseded — not our error to fix
+            recoverUnrecoverableMediaSource('a video decode error', computeCurrentWallClockMs(), !videoEl.paused);
+        });
+
         // Each tile auto-advances to whatever's next *for this camera*, independent of any sibling
         // tile — one camera's gap or segment boundary never waits on another's.
         videoEl.addEventListener('ended', function () {
@@ -548,10 +675,7 @@
                     console.error('[playback] seek failed', e);
                 });
             },
-            currentWallClockMs: function () {
-                var seg = segments.find(function (s) { return s.id === currentSegmentId; });
-                return seg ? seg.startUtc + (videoEl.currentTime - currentSegmentTimeOrigin) * 1000 : null;
-            },
+            currentWallClockMs: computeCurrentWallClockMs,
             // A same-segment nudge, not a full seek: no fetch, no segment lookup, just moving
             // currentTime within whatever's already loaded — for correcting small drift between
             // tiles during ongoing playback (see the page glue's resyncDriftingTiles), not for
@@ -1141,6 +1265,22 @@
     // bookmark": whichever seek's segment lookup happened to resolve last won, not necessarily the
     // deep link's. Skipping it here removes the race entirely rather than trying to out-race it.
     async function rebuildTilesFromView(viewId, skipInitialSeek) {
+        var view = viewsById[viewId];
+        return rebuildTilesFromCells(view ? orderedCells(view) : [], viewId, skipInitialSeek);
+    }
+
+    // Split out from rebuildTilesFromView so a Bookmark/Snapshot deep link can render one camera
+    // directly — no saved View needed at all, not even a synthetic one — rather than first having to
+    // find a View that happens to contain the camera. That lookup used to be the deep link's only
+    // path in, and a camera not currently placed in any View the viewer can see (a perfectly normal
+    // state — not every camera has to be curated into a layout) surfaced as a dead end: "This
+    // bookmark's camera isn't in any view you can see," even though the camera itself, and its
+    // footage, were both right there. Explicit user ask, paired with the same single-camera capability
+    // added to Pages/Live's own camera picker.
+    //
+    // viewId is null for a single-camera call — that's what suppresses the view-picker sync and the
+    // audit ping below, both of which only make sense for a real, savable View.
+    async function rebuildTilesFromCells(cells, viewId, skipInitialSeek) {
         Object.keys(tiles).forEach(function (id) { tiles[id].player.teardown(); });
         tiles = {};
 
@@ -1148,10 +1288,7 @@
         if (!tilesEl) return;
         tilesEl.innerHTML = '';
 
-        reportViewOpened(viewId);
-
-        var view = viewsById[viewId];
-        var cells = view ? orderedCells(view) : [];
+        if (viewId) reportViewOpened(viewId);
 
         // Deliberate divergence from Pages/Live and Views/Play, which faithfully reproduce a saved
         // view's own x/y/w/h arrangement and aspect ratios: Playback exists for review, where
@@ -1442,6 +1579,17 @@
         var hour24 = loadHour24Preference();
         var showEventTags = loadEventTagsPreference();
 
+        // Zoom is applied at construction, not left to rebuildTilesFromView's own restore below.
+        // That restore is reached only when a view is actually built, which two real paths skip: a
+        // Bookmark/Snapshot deep link returns early from rebuildTilesFromView (skipInitialSeek) before
+        // ever calling setRange, and a visit with no remembered view never calls it at all. In both
+        // cases the timeline stayed at the 24h default — and worse, the seekAll that follows saves the
+        // current range, so the default overwrote the user's real saved zoom. Confirmed as "the
+        // timeline zoom resets between page loads", which clicking through Snapshots reproduces every
+        // time. Setting it here makes the saved zoom independent of which path built the page.
+        var persistedPosition = loadPersistedPosition();
+        var initialRangeMs = persistedPosition ? persistedPosition.rangeMs : undefined;
+
         // Both timelines always show the same time window and zoom level — zooming or scrubbing
         // either one mirrors onto the other via setRange/setCenter (no-callback setters, so this
         // can't bounce a change back and forth between them).
@@ -1450,6 +1598,7 @@
             timeline = window.larisvmsTimeline.create(canvas, {
                 hour24: hour24,
                 showEventTags: showEventTags,
+                initialRangeMs: initialRangeMs,
                 getBuckets: getBucketsForPrimary,
                 // Per-camera timeline only — globalTimeline below omits this entirely, since the
                 // merged "all cameras" view has no single camera to preview. Reads primaryCameraId
@@ -1477,6 +1626,7 @@
             globalTimeline = window.larisvmsTimeline.create(globalCanvas, {
                 hour24: hour24,
                 showEventTags: showEventTags,
+                initialRangeMs: initialRangeMs, // kept in lockstep with the per-camera timeline above
                 getBuckets: getGlobalBuckets,
                 onScrub: function (ms) { seekAll(ms, playing); },
                 onRangeChange: function (ms) { if (timeline) timeline.setRange(ms); schedulePositionSave(); }
@@ -1532,31 +1682,36 @@
     }
 
     // M18: a Bookmark's "▶ Play" link (Pages/Bookmarks/Index) arrives as ?cameraId=&atUtc=
-    // (Pages/Playback/Index.cshtml.cs) — this page has no camera picker of its own, so resolving
-    // those into "which view, which tile, which instant" happens entirely here. Picks the first view
-    // (in the same visible-to-user order the picker itself lists them) that actually contains the
-    // camera; a camera that's since been removed from every view the current user can see surfaces
-    // as a status message rather than silently landing on whatever view happened to load first.
+    // (Pages/Playback/Index.cshtml.cs) — this page has no camera picker of its own for a plain visit,
+    // so resolving that into an actual tile happens entirely here.
+    //
+    // Renders the one camera directly (rebuildTilesFromCells with a single synthetic cell) rather
+    // than searching for a View that contains it — no saved View is needed at all. Previously this
+    // hunted for the first View (in picker order) placing the camera somewhere, which meant a
+    // perfectly normal camera that simply isn't curated into any layout dead-ended with "isn't in any
+    // view you can see" despite its footage being right there. Explicit user ask.
     async function resolveDeepLink(cameraId, atUtcIso) {
         var statusEl = opts.deepLinkStatusId && document.getElementById(opts.deepLinkStatusId);
-        var targetView = (opts.views || []).find(function (v) {
-            return orderedCells(v).some(function (c) { return c.cameraId === cameraId; });
-        });
-        if (!targetView) {
+        var cam = cameraById[cameraId];
+        if (!cam) {
+            // Deleted, disabled/unassigned since the bookmark was made, or CameraAccess no longer
+            // grants this viewer Playback on it — cameraById is already narrowed the same way the
+            // view picker's own camera list is, so this is the one check that covers all three.
             if (statusEl) {
-                statusEl.textContent = "This bookmark's camera isn't in any view you can see.";
+                statusEl.textContent = "This camera is no longer available to you.";
                 statusEl.className = 'small alert alert-warning py-1 px-2 mb-0';
             }
             return;
         }
 
+        // Not a real View, so the picker is cleared rather than pointed at something misleading, and
+        // nothing here is persisted as "the view to restore on the next plain visit" — a deep link is
+        // a one-off destination, not a standing choice the way picking a View from the dropdown is.
         var picker = opts.pickerId && document.getElementById(opts.pickerId);
-        if (picker) picker.value = targetView.id;
-        saveViewId(targetView.id);
-        // true: skip rebuildTilesFromView's own persisted-position-or-most-recent seek — this
+        if (picker) picker.value = '';
+        // true: skip rebuildTilesFromCells' own persisted-position-or-most-recent seek — this
         // function's own seek just below is the only one that should ever run for a deep link.
-        await rebuildTilesFromView(targetView.id, true);
-        selectPrimary(cameraId);
+        await rebuildTilesFromCells([{ cameraId: cameraId }], null, true);
         if (atUtcIso) {
             // Landing on a Bookmark/Snapshot deep link and still having to hit Play is one extra,
             // easy-to-miss step for what's supposed to be a one-click jump straight to the moment in

@@ -5,6 +5,427 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.138.0] - 2026-08-21
+
+### Added
+
+- **Playback can now jump straight to a scrub target inside a segment, instead of downloading
+  everything before it first.** Confirmed live against this fleet's real segment sizes (24-44MB per
+  60s segment at 4K/HEVC) as the actual cause of "slow to load, and sometimes stuck at Loading…" when
+  scrubbing — the player fetched a segment's bytes sequentially from byte 0 and only started playback
+  once the target instant was buffered, so a late scrub meant transferring most of the file first, not
+  a RAID6 disk-speed problem. Every segment file this app records is already a fragmented MP4 with
+  self-contained moof+mdat fragments (the same shape MSE itself requires — RecordingSession's own
+  movflags), so a new `Mp4FragmentIndexer` (LarisVMS.Media) walks a segment's box *headers* only (never
+  its sample data) to build an exact byte-offset/media-time map — verified field-for-field against a
+  real recorded segment before being written, not assumed from the spec. The node caches each file's
+  index (a completed segment never changes) and, for a seek past a small threshold, now serves just the
+  init segment plus the fragment nearest at-or-before the target, skipping everything between — a plain
+  unsigned query hint (`?seekSeconds=`, not part of the signed token, the same "picks *where* inside an
+  already-authorized file, not a new authorization scope" reasoning `/live`'s own `?role=` already
+  uses), with a response header telling the client exactly which instant it actually landed on so its
+  existing seek math still lands correctly. Falls straight through to the original whole-file behavior
+  below the threshold or whenever no usable index exists — unconditionally correct either way, just
+  potentially slower.
+- **New admin-configurable segment length** (Settings → Recording → "Segment length", default 60s,
+  5-300s, also camera-overridable on each camera's own Edit page) — a second, independent lever on the
+  same underlying cost: shorter segments cap the worst case a late scrub could ever have to skip across,
+  at the cost of more (smaller) files on disk. Baked into ffmpeg's own `-f segment` invocation at
+  start, so changing it restarts the affected camera's recording session to take effect, the same
+  "brief interruption, same as editing a Privacy zone" story `NodeWorker.ReconcileMotion` already has
+  for a changed zone signature.
+
+**LarisVMS.Node change — install-node.ps1 re-run: not needed** — ordinary node auto-update covers it;
+nothing about first-time provisioning changed.
+
+## [0.137.1] - 2026-08-21
+
+### Fixed
+
+- **Adaptive streaming (v0.137.0) left every switched tile stuck reconnecting** — a live tile moved to
+  Sub still declared its SourceBuffer with the *Main* stream's codec. Confirmed against this
+  deployment's own data: every camera here records `hevc` on Main but `H264` on Sub, so a tile that
+  switched to Sub opened an `hvc1.1.6.L93.B0,mp4a.40.2` SourceBuffer and was then fed H.264 bytes. MSE
+  treats a declared-codec/track-list mismatch as a hard failure, not a degradation, so the very first
+  Sub fragment tripped a `sourceBuffer error` → `NotSupportedError: Failed to load because no
+  supported source was found` → the retry wrapper relaunched and hit the identical wall, forever.
+  Exactly the mismatch class `pickMimeType`'s own doc comment already describes for the Main path,
+  reintroduced through the new Sub path because the client only ever had Main's codec to work with.
+  Each camera's Sub codec and audio flag are now sent alongside Main's, and a tile picks whichever
+  pair matches the role it's actually requesting — re-evaluated on every live (re)start, so the
+  quality override and the fullscreen force-to-Main switch both carry the right codec with them.
+
+Web-only, no node change (the node side was already serving Sub correctly — init segments were
+arriving, the browser just couldn't decode them).
+
+## [0.137.0] - 2026-08-21
+
+### Added
+
+- **Adaptive streaming (M18's last open item): a live tile too small to benefit from a camera's full
+  Main resolution is now shown its Sub stream instead, cutting bandwidth and decode cost.** Nodes now
+  run a second, always-on ffmpeg session per camera pulling just the Sub stream (`SubLiveSession`,
+  mirroring `MotionSession`'s own supervise/backoff loop) — the same MSE-fragmented fMP4 shape
+  `RecordingSession`'s live tee leg already produces, drained through the same `Mp4BoxScanner`. A new
+  `ILiveSource` interface (satisfied by both `RecordingSession` and `SubLiveSession` with no behavior
+  change to either) lets `LiveViewerHandler` serve a viewer from whichever one it's handed, and the
+  `/live/{cameraId}` route picks between them on a plain `?role=sub` query parameter — not part of the
+  signed viewing token, since which quality tier of a camera's own feed a viewer's browser asks for is
+  a client preference, not a separate authorization boundary. Each live tile in a View decides Main vs
+  Sub itself from its saved GridStack geometry (a small or short cell, or a busy grid with 6+ cameras
+  on screen, picks Sub) plus a manual per-tile override button (Auto → HD → SD → Auto) that appears
+  whenever a camera actually has a Sub stream. Entering fullscreen always forces Main regardless of the
+  automatic choice or a manual "SD" pin — the one case where showing Sub would be actively wrong.
+  Sessions are reconciled the same always-on way as motion/event sessions (not started on the first
+  viewer / stopped on the last) to avoid introducing a new viewer-reference-counting pattern into this
+  codebase, accepting the small continuous Sub-stream RTSP cost as the trade.
+- **New admin toggle: Settings → Live View → "Adaptive streaming enabled"** (default on). The node
+  itself is the sole, authoritative gate — turning it off actually tears down/never starts a single
+  Sub live session anywhere, not just hides the client-side switching; the Web tier's `/live` proxy
+  just forwards whatever `?role=` a viewer asks for and relies on the node's own fallback-to-Main when
+  Sub isn't running, rather than duplicating the check.
+
+**LarisVMS.Node change — install-node.ps1 re-run: not needed** — ordinary node auto-update covers it;
+nothing about first-time provisioning changed.
+
+## [0.136.0] - 2026-08-21
+
+### Fixed
+
+- **The gray-instead-of-blue timeline bug, root-caused via a concrete repro** (a specific camera and
+  ~20-minute window, cross-checked directly against `Segments` — confirmed gapless, real recording the
+  whole time, so this was never a data problem). `setCenter()` — the *only* path that moves a
+  timeline's `centerMs` during ordinary playback, called every 500ms by the page-level
+  playhead-follows-playback loop — only ever redrew with whatever `buckets` the last `reload()`
+  happened to fetch; it never asked for more. At a 10–30 minute zoom range (the common case for
+  reviewing a specific moment), continuous playback walks the visible window off the edge of its own
+  last-fetched coverage within single-digit minutes of real playback (or seconds at higher speeds) —
+  the newly-scrolled-into stretch has no bucket data at all and reads as unrecorded gray even though
+  the footage is right there. It only ever "fixed" itself when an unrelated manual drag or zoom
+  happened to trigger a fresh `reload()`, and reverted the moment playback advanced past that fetch's
+  own coverage again. The per-camera and all-cameras timelines reload independently, which is why one
+  could show real colors while the other sat gray for the exact same instant — confirmed live as
+  exactly that split. `setCenter` now tracks the `[from, to)` its buckets actually cover and schedules
+  a reload the moment the visible window drifts outside it, reusing the existing debounce so smooth
+  continuous playback still coalesces into one fetch rather than one per tick.
+
+Web-only, no node change.
+
+## [0.135.0] - 2026-08-21
+
+### Changed
+
+- **Snapshot thumbnails now sample from the start of the pre-roll buffer, not the span's midpoint —
+  for every span, not just classified detections.** v0.128 sampled a detection ~1s after its own
+  `StartUtc`, on the reasoning that a detection span's length is dominated by the camera's own event
+  cooldown rather than how long the subject was in frame. Explicit follow-up: plain camera-pushed
+  motion can have that exact same cooldown/anti-dither floor (some hardware holds it to 10s or more
+  specifically so it doesn't spam), so the span's own midpoint was never more reliable there either —
+  it now gets identical treatment. The sample point also now accounts for `Recording
+  .MotionPreRollSeconds`: recording pre-rolls before `StartUtc`, so the subject is typically already
+  visible at the very start of what's actually on disk for the event, not just at `StartUtc` itself
+  (which is when the trigger crossed its own threshold, already partway into the subject being
+  there). `AtUtc` is now `StartUtc − MotionPreRollSeconds + 1s` — at this fleet's 3s pre-roll, 2s
+  *before* `StartUtc`. Resolved per camera (the setting is camera-overridable), upper-clamped to the
+  span's own end defensively. No lower clamp: a candidate landing before any segment actually on disk
+  (an event moments after recording began, before a full pre-roll buffer exists) resolves to no
+  thumbnail — the same "No thumbnail available" placeholder any other missing-footage case already
+  shows, not a reason to special-case this one.
+
+Web-only, no node change.
+
+## [0.134.0] - 2026-08-21
+
+### Fixed
+
+- **Timeline dragging showed the browser's own no-drop/cancel cursor and stopped working**, always on
+  the per-camera timeline, never the all-cameras one. A native HTML5 drag was starting from the same
+  pointerdown that was supposed to begin the custom pan gesture — the exact same bug class this
+  codebase already hit and fixed for `<video>` (playback-player.js's `wireZoom`), just not applied to
+  the timeline canvas. Added the same `e.preventDefault()` fix.
+- **Playback could die mid-scrub with `Failed to execute 'appendBuffer' on 'SourceBuffer': The
+  HTMLMediaElement.error attribute is not null`, and pressing Play afterward silently did nothing** —
+  the two were the same bug. Once `videoEl.error` is set (a decode hiccup from rapid scrubbing), every
+  later `appendBuffer()` call throws until something calls `videoEl.load()`, and the streaming
+  reader's own loop only ever re-invokes itself from a successful append's `updateend` — so the first
+  throw silently stalled it for good, with no path back except a manual page refresh or scrubbing far
+  enough to force a fresh segment load by hand. Added a native `error` listener that tears the tile
+  down and reloads at its current position automatically, debounced against a codec the browser
+  genuinely can't decode retrying forever.
+- **The main (per-camera) Playback timeline loaded showing only blue (recorded) coverage, no
+  motion/event colors, until a zoom triggered a redraw.** A real race: `timeline.js`'s own `reload()`
+  fires immediately when a timeline is created, for whatever `centerMs` it starts with (`Date.now()`,
+  before the page glue has resolved the real initial position — a deep link's instant, the persisted
+  last-viewed position, or "most recent recording"). The page glue's own *correct* `reload()` for that
+  real position, moments later, could arrive while the first one was still awaiting its fetch —
+  `reload()`'s own `if (loading) return;` guard silently dropped it rather than queuing it, leaving the
+  timeline stuck on "now"'s coverage (real blue, since Continuous mode is always recording something,
+  often with no motion) until an unrelated later reload got a clear run. A reload requested while one
+  is in flight is now queued and coalesced into one retry once the in-flight one finishes, rather than
+  dropped.
+
+### Changed
+
+- **A Bookmark/Snapshot "▶ Play" link now opens just that one camera**, not a saved View containing
+  it. Previously the deep link searched for the first View (in picker order) that happened to place
+  the camera somewhere, which meant a camera that simply isn't curated into any layout — a completely
+  normal state — dead-ended with "isn't in any view you can see" even though its footage was right
+  there. Explicit user ask; matches the new single-camera capability on the Live page below.
+  `playback-player.js` gained `rebuildTilesFromCells`, factored out of the View-based renderer so
+  both paths share one tile-building implementation.
+- **Live page gained a "📷 Camera" dropdown beside the View picker**, listing every camera the viewer
+  can watch with a filter box at the top, to view one camera directly with no saved View involved.
+  Same `<details>` popover shape `_ColumnPicker.cshtml` already established elsewhere in this app for
+  "small filterable list in a dropdown." Reuses the existing View-rendering pipeline entirely (one
+  synthetic full-width cell), so PTZ, audio, fullscreen, and the mobile aspect-ratio handling all work
+  identically to a real 1-camera View.
+- **Snapshots and Audit Logs pagination no longer lists every page number** — confirmed live as
+  hundreds of links in one row on a large result set. New windowed control (`PaginationWindow`/
+  `_PaginationControls.cshtml`, shared by both pages): the first 10 pages, the last 10, and a small
+  window around the current page so its position stays visible even deep in the middle, with ellipsis
+  gaps between — collapsing to a plain, gapless run when the total is small enough that the windows
+  already overlap. Arrows for ±1 page and ±10 pages, plus jump-to-first/last. Audit Logs' filter
+  values (free-text search/actor) are now properly URL-escaped when building page links, closing a
+  latent bug where an `&` in a search term would have corrupted the resulting query string.
+
+### Notes
+
+- **Checked, not a bug:** "events after ~10pm only show as plain motion, not classified" — local-hour
+  breakdown of classified vs. plain-motion spans shows classification falling off sharply after dark
+  (13 → 8 → 1 across three consecutive hours) mirroring daylight almost exactly, on every camera. This
+  is the camera's own IR/night-mode limiting its onboard AI classification, not something in this
+  app's pipeline.
+- **Open, needs a repro:** recorded coverage sometimes renders gray instead of blue on the timeline,
+  not fixed by zooming, though the video itself still plays back fine. The two server queries that
+  would explain a disagreement between "is this covered" and "does this segment exist" use identical
+  overlap logic against the same table, so this needs a concrete camera + time window to chase further
+  rather than more speculation.
+
+Web-only, no node change.
+
+## [0.133.0] - 2026-08-21
+
+### Fixed
+
+- **Every camera's smart-event connection was reconnecting every 3 minutes, healthy or not.** The
+  session's read timeout was written on the stated assumption that "the camera sends a keep-alive
+  comment line every ~30s" — confirmed live that it doesn't, at least not on our subscription, which
+  deliberately excludes the motion codes these cameras emit most of the time. So a perfectly good
+  connection looked dead on a 3-minute cycle, forever, on all six cameras. That's not just log noise:
+  `attach` only delivers events from the moment it subscribes, so each reconnect is a few seconds in
+  which a detection is lost with no trace. Fixed from both ends — the subscription now includes
+  `VideoMotionInfo` purely as a keep-alive (a bare `action=State` ping carrying only a timestamp,
+  mapped to no `DetectionKind`, so it can never be mistaken for a detection), and the timeout backstop
+  moves from 3 to 15 minutes now that it only has to catch a socket that died without signalling —
+  which a read error or EOF usually surfaces on its own anyway.
+
+### Notes
+
+Worth recording, since it cost real debugging time and will recur: these cameras serve
+`eventManager.cgi?action=attach` to **one subscriber at a time**. A `curl` session left open against
+a camera silently starves the recorder node — the node still connects and gets HTTP 200, but receives
+no events at all and times out on the cycle above. Symptom is detections stopping dead while plain
+ONVIF motion keeps working normally. Close any manual `attach` session when finished diagnosing.
+
+**Install-node.ps1 re-run needed** on every recorder node — `LarisVMS.Node`/`LarisVMS.NodeUpdater`
+bumped to 0.133.0 in lockstep.
+
+## [0.132.0] - 2026-08-21
+
+### Fixed
+
+- **The Playback timeline's zoom level reset between page loads.** It was already being saved
+  correctly (both wheel and pinch report the change, and it persists alongside the scrub position) —
+  the bug was on restore. The saved zoom was only reapplied inside `rebuildTilesFromView`, which two
+  real paths never reach: a Bookmark/Snapshot "▶ Play" deep link returns early from it
+  (`skipInitialSeek`) *before* the `setRange` call, and a visit with no remembered view never calls it
+  at all. In both cases the timeline stayed at the 24-hour default — and the `seekAll` that follows
+  then saved that default over the user's real zoom, so clicking through Snapshots actively destroyed
+  the setting rather than merely ignoring it. Both timelines now take the persisted zoom as their
+  `initialRangeMs` at construction, making it independent of which path built the page.
+- `timeline.js` now clamps `initialRangeMs` to the same limits `setRange` enforces. It previously
+  trusted the value raw, which was harmless when it came from a caller's own constant but isn't now
+  that it comes from a stored preference — a corrupted value could install a range the zoom controls
+  themselves would never permit, and every later change re-clamps, leaving no way back to it.
+
+Web-only, no node change.
+
+## [0.131.0] - 2026-08-21
+
+### Added
+
+- **Dahua/Amcrest detections now classify from the event's own payload, not just its code.** An IVS
+  rule fires a single code (`CrossRegionDetection` for intrusion, `CrossLineDetection` for a tripwire)
+  for *every* object class it's configured to match, so the code alone can only ever say "an object
+  was seen" — which is why an intrusion rule set to Human **and** Vehicle showed up as a generic
+  "📦 Object" for both. The class is right there in the event's `data` payload as
+  `Objects[].ObjectType`, which this app previously ignored by design. `DahuaCgiEventParser` now reads
+  it (`Human` → Person, `Vehicle` → Vehicle, `HumanFace` → Face, `Animal`/`Pet` → Animal) and prefers
+  it over the code mapping, falling back to the old behavior whenever a payload carries no object
+  detail — so firmware that publishes none is entirely unaffected.
+- Reading that payload required the session to stop being strictly line-oriented: the JSON is
+  pretty-printed across many lines, so `DahuaCgiEventSession` now accumulates from the `data={` header
+  until the braces balance before parsing. Multipart boundaries, headers and blank lines between
+  events are ignored as before, and an event with no payload balances immediately and takes the same
+  path with no buffering. A malformed payload that never closes its brace is capped at 64 KB rather
+  than blocking every later event behind it.
+
+### Notes
+
+Verified against this fleet's IP8M-DLB2998EW-AI cameras, whose behavior differs materially from the
+IP5M models alongside them and is worth recording:
+
+- With **Smart Motion Detection** on they emit no classified code at all over CGI — not
+  `SmartMotionHuman`, not `SmartMotionVehicle`, not plain `SmartMotion`, even subscribed by explicit
+  name. Only `VideoMotion`, carrying a `SmartMotionEnable` field that merely echoes whether SMD is
+  switched on (it flips to `false` when SMD is disabled), so it says nothing about what was seen and
+  must not be treated as a detection.
+- With an **IVS** rule (`Class=Normal`, `Type=CrossRegionDetection`) they emit full object detail
+  including `ObjectType`, `Confidence` and a `BoundingBox`. IVS is therefore the working path for
+  person/vehicle detection on these models.
+- Those bounding boxes are the first real object-geometry source found on this fleet — the M21
+  real-time overlay is currently listed as blocked for want of one. Not consumed yet.
+
+**Install-node.ps1 re-run needed** on every recorder node — `LarisVMS.Node`/`LarisVMS.NodeUpdater`
+bumped to 0.131.0 in lockstep.
+
+## [0.130.0] - 2026-08-21
+
+### Fixed
+
+- **Snapshots and Audit Logs date filters were off by the UTC offset**, cutting the selected day
+  short — confirmed live at UTC-7, where results stopped at 4:59 PM (exactly 23:59:59Z) and the last
+  seven hours of the chosen day were missing entirely. An `<input type="date">` posts a bare
+  `yyyy-MM-dd` with no timezone, and both pages passed the parsed value straight through as
+  `DateTimeKind.Unspecified`; everything downstream treats Unspecified as already-UTC (deliberately —
+  `TimelineService.NormalizeToUtc`'s other callers really do send UTC), so a local day became a UTC
+  day. New `LocalDateFilter` converts the picked date to the UTC instants bounding that day in the
+  server's own zone — the same zone every timestamp beside the filter is already rendered in.
+- **A Bookmark/Snapshot "▶ Play" link landed at the start of the containing minute** rather than the
+  bookmarked instant, unless you waited for the segment to buffer and then clicked the timeline. The
+  player set `currentTime` as soon as the *first* chunk arrived, on the assumption that the element
+  would wait for the rest the way progressive download does. Under MSE it doesn't: the browser clamps
+  a seek to the `seekable` range, which is derived from what's currently buffered — so a target 45s
+  into a 60s segment was clamped back to the segment's start and simply played from there. Playback
+  now waits for the requested instant to actually be buffered before seeking to it, then plays from
+  exactly that point. This only ever delays when the target genuinely isn't buffered yet: the
+  end-of-segment auto-advance seeks to offset 0, which the very first chunk already satisfies, so
+  normal continuous playback is unchanged. A segment whose real encoded length falls short of its
+  recorded duration now clamps to its last real frame instead of seeking past the end and stalling.
+
+Web-only, no node change.
+
+## [0.129.0] - 2026-08-21
+
+### Fixed
+
+- **A vendor integration kept talking to a camera's old address after that address changed.**
+  `ReconcileIntegration` compared only the integration *key* when deciding whether a running session
+  was still correct, never the base URI it connects to. That URI is derived from the camera's
+  `DeviceServiceUri`, so turning HTTPS off on a camera changes it from `https://host` to
+  `http://host` while the key stays `dahua-cgi` — the session kept its now-dead `https` address and
+  logged "connection dropped — will reconnect" forever, with nothing short of a node restart picking
+  up the change. `CameraIntegrationRecorder` now carries the base URI and the reconcile compares
+  both. Found live on two cameras whose HTTPS was switched off mid-session.
+
+### Added
+
+- **"Restart" button per node on Admin → Nodes** — restarts that node's Windows Service only, never
+  the machine. A service cannot restart itself from inside its own process (nothing would be left to
+  start it again once the SCM stops it), so this reuses the update path's existing mechanism: a new
+  `--restart-only` mode on `LarisVMS.NodeUpdater` that skips the binary swap and performs just the
+  wait-for-stopped / start-again half, launched as a detached process before the node stops itself.
+  Proxied through the Web tier like every other Web→Node call, authorized by a new node-scoped
+  `MediaToken.IssueForNodeControl` that binds the action name (so a token minted for one control
+  operation can never be replayed against another) and carries no camera id, since the target is the
+  node process. Gated on `Nodes.Edit`, confirmed in the browser because recording on that node's
+  cameras stops for a few seconds, and audited as `Node.Restart`. A node whose updater binary is
+  missing refuses the request and says so rather than being stopped with nothing able to restart it.
+
+### Changed
+
+- The Delete-node confirmation moved from `onclick` to `onsubmit` on the form. `onclick` fired on any
+  click inside the form rather than on submission, and didn't reliably block an Enter-key submit.
+
+**Install-node.ps1 re-run needed** on every recorder node — `LarisVMS.Node`/`LarisVMS.NodeUpdater`
+bumped to 0.129.0 in lockstep. The restart button specifically requires the updated
+`LarisVMS.NodeUpdater.exe` to be present, since that's what performs the restart.
+
+## [0.128.0] - 2026-08-21
+
+### Changed
+
+- **Object-detection snapshots now sample 1s after the event starts** instead of at the span's
+  midpoint. A detection span's length is dominated by the camera's own event cooldown (~10s on this
+  fleet, so it doesn't spam) rather than by how long the subject was actually in frame — a vehicle
+  crossing the frame is long gone by the midpoint of a span that only stayed open because the camera
+  won't re-fire sooner. Plain motion and custom-tag spans are unchanged and still use the midpoint:
+  their length really is roughly how long the movement lasted, so the middle remains the most
+  representative frame there. A detection shorter than the offset clamps to its own end rather than
+  sampling past it, where frame extraction would fail outright.
+- **List pages now remember their filter text and sort column**, alongside the page size and column
+  choices they already remembered — a list came back unfiltered and unsorted while the two
+  neighboring controls in the same toolbar restored themselves. Applies everywhere the shared table
+  modules are used (Cameras, Dashboard, Bookmarks, Nodes, Views, Exports). A saved sort whose column
+  index no longer names a sortable column is dropped rather than applied to whatever now sits at that
+  position, so a future column change can't leave a table sorted by the wrong thing.
+
+### Added
+
+- **Snapshots and Audit Logs remember their filter selections** across navigating away and back, or a
+  refresh — both pages keep their entire state in the query string, so neither survived leaving the
+  page. New `remember-filters.js`: arriving *with* a query string records it, arriving without one
+  restores what was recorded (via `location.replace`, so the bare URL doesn't sit in history where
+  Back would bounce off it), and "Clear" wipes the saved value rather than being immediately undone
+  by it. Server-backed through the same preference store as every other preference, so filters follow
+  the user across devices rather than being per-browser.
+
+Web-only, no node change.
+
+## [0.127.0] - 2026-08-20
+
+### Changed
+
+- **Navbar links are no longer muted.** Bootstrap's `navbar-dark` renders nav links at
+  `rgba(255,255,255,.55)` and only brightens to `.75` on hover, which reads as every nav item being
+  disabled — and dims the emoji icons along with the text, since an alpha in `color` composites the
+  whole glyph against the bar. Links now sit at full white, with hover carried by a slight color
+  shift (Bootstrap's own blue-200) rather than a brightness one, so hover stays legible feedback
+  without the rest state having to be dimmed to make room for it. The open-dropdown and active-link
+  states are covered too, which Bootstrap styles separately.
+
+Web-only, no node change.
+
+## [0.126.0] - 2026-08-20
+
+### Fixed
+
+- **Landscape phones stacked every camera on top of each other.** The derived phone stack reused the
+  view's `mobileTwoColumn` setting for its column count — but that's a choice made about a *portrait*
+  phone, tall and narrow, where 1 (or 2) columns is right. A landscape phone is roughly 850×400, so a
+  single column made each cell the full ~850px wide and therefore ~478px tall at 16:9, taller than
+  the entire viewport: every camera filled more than the screen and you scrolled through them one at
+  a time. Landscape now derives its own column count, picking the fewest columns (largest cells) that
+  still let a whole row fit the viewport height, capped at 4. Adding columns is specifically the safe
+  lever here and not a repeat of the fitted-row-height attempt reverted earlier — more columns makes
+  each cell narrower and proportionally shorter with its aspect ratio fully intact, so nothing is
+  squashed. Landscape also flows cells sequentially rather than replaying the desktop row grouping,
+  whose "odd one out spans full width" rule would have re-created the oversized cells this fixes.
+
+### Changed
+
+- **Snapshot thumbnails raised to 720 vertical** (from 480). The cap is on the frame's longer edge,
+  so a 16:9 source now renders 1280×720. Every common ratio clears a 480-vertical floor at this cap
+  (4:3 → 960, 1:1 and portrait → 1280); only genuinely ultrawide sources (21:9 → 549, 2.39:1 → 536)
+  land between, which is inherent to the shape rather than something a larger cap would fix. JPEG
+  quality also eases from `-q:v 8` to `4` for these: at 150px heavy compression is free, but at
+  1280px the artifacts were themselves part of "hard to make out", so resolution alone wouldn't have
+  fixed it. Hover-scrub previews are unchanged at 150px/`-q:v 8`. Quality travels as a `q` query
+  param alongside `maxDim` and is folded into the thumbnail cache filename, same as `maxDim`.
+
+**Install-node.ps1 re-run needed** on every recorder node — `LarisVMS.Node`/`LarisVMS.NodeUpdater`
+bumped to 0.126.0 in lockstep.
+
 ## [0.125.0] - 2026-08-20
 
 ### Fixed

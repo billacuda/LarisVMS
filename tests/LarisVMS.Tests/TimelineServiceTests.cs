@@ -30,13 +30,14 @@ public class TimelineServiceTests
         public Task SaveAsync(EventPalette p, string? modifiedBy, CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    /// <summary>A deliberately minimal ISettingsResolver stub for GetSnapshotsAsync's type-filter
-    /// tests — the real SettingsResolver's cache is a process-wide static ConcurrentDictionary keyed
-    /// only by "{cameraId}|{nodeId}|{key}" with no per-DbContext discriminator, which would leak
-    /// values across these tests' separate InMemory databases. Only GetAsync&lt;bool&gt; is exercised
-    /// by GetSnapshotsAsync; everything else throws so an accidental new dependency here is loud
-    /// rather than silently returning a wrong default.</summary>
-    private sealed class StubSettingsResolver(Dictionary<string, bool>? values = null) : ISettingsResolver
+    /// <summary>A deliberately minimal ISettingsResolver stub for GetSnapshotsAsync's type-filter and
+    /// pre-roll tests — the real SettingsResolver's cache is a process-wide static
+    /// ConcurrentDictionary keyed only by "{cameraId}|{nodeId}|{key}" with no per-DbContext
+    /// discriminator, which would leak values across these tests' separate InMemory databases. Only
+    /// GetAsync&lt;bool&gt; and GetAsync&lt;int&gt; are exercised by GetSnapshotsAsync; everything
+    /// else throws so an accidental new dependency here is loud rather than silently returning a
+    /// wrong default.</summary>
+    private sealed class StubSettingsResolver(Dictionary<string, bool>? values = null, Dictionary<string, int>? intValues = null) : ISettingsResolver
     {
         public Task<string?> GetRawAsync(string key, Guid? cameraId = null, Guid? nodeId = null, CancellationToken ct = default)
             => throw new NotSupportedException();
@@ -45,6 +46,8 @@ public class TimelineServiceTests
         {
             if (typeof(T) == typeof(bool) && values is not null && values.TryGetValue(key, out var v))
                 return Task.FromResult((T)(object)v);
+            if (typeof(T) == typeof(int) && intValues is not null && intValues.TryGetValue(key, out var iv))
+                return Task.FromResult((T)(object)iv);
             return Task.FromResult(defaultValue);
         }
 
@@ -866,6 +869,96 @@ public class TimelineServiceTests
     }
 
     [Fact]
+    public async Task DetectionSnapshotSamplesFromTheStartOfThePreRollNotTheMidpoint()
+    {
+        // No real settings resolver here (2-arg TimelineService constructor), so pre-roll falls back
+        // to the same 10s default NodeService itself hardcodes for the same setting: AtUtc lands at
+        // start - 10s + 1s = start - 9s. A detection span's length is set by the camera's own event
+        // cooldown, not by how long the subject was in frame — sampling from the start of what's
+        // actually on disk for the event is where the subject is, unlike the midpoint of a span kept
+        // open only because the camera won't re-fire sooner. See GetSnapshotsAsync's own comment.
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.Add(new MotionSpan
+        {
+            CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Vehicle,
+            StartUtc = start, EndUtc = start.AddSeconds(30), Score = 1.0
+        });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
+
+        Assert.Equal(start.AddSeconds(-9), Assert.Single(page.Items).AtUtc);
+    }
+
+    [Fact]
+    public async Task PlainMotionSnapshotAlsoSamplesFromTheStartOfThePreRollNotTheMidpoint()
+    {
+        // Explicit user ask: plain motion gets the exact same treatment as a detection now — a
+        // camera-pushed motion event can have the same cooldown-inflated span length a detection
+        // does, so the span's own midpoint is no more reliable there either.
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.Add(new MotionSpan
+        {
+            CameraId = cameraId, Source = MotionSource.ServerMotion,
+            StartUtc = start, EndUtc = start.AddSeconds(30), Score = 0.5
+        });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
+
+        Assert.Equal(start.AddSeconds(-9), Assert.Single(page.Items).AtUtc);
+    }
+
+    [Fact]
+    public async Task SnapshotOffsetUsesTheCamerasOwnConfiguredPreRoll()
+    {
+        // The exact scenario reported live: a 3s pre-roll should land the snapshot 2s before
+        // StartUtc (3s pre-roll minus the 1s margin lands the candidate 2s early), not at some
+        // hardcoded value — confirms the per-camera setting is actually read, not just the default.
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.Add(new MotionSpan
+        {
+            CameraId = cameraId, Source = MotionSource.ServerMotion,
+            StartUtc = start, EndUtc = start.AddSeconds(30), Score = 0.5
+        });
+        await db.SaveChangesAsync();
+
+        var settingsResolver = new StubSettingsResolver(
+            intValues: new Dictionary<string, int> { ["Recording.MotionPreRollSeconds"] = 3 });
+        var service = new TimelineService(db, DefaultPalette, settingsResolver);
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
+
+        Assert.Equal(start.AddSeconds(-2), Assert.Single(page.Items).AtUtc);
+    }
+
+    [Fact]
+    public async Task ASpanShorterThanThePreRollOffsetStillClampsToItsOwnEnd()
+    {
+        // Defensive upper clamp: with a 0s pre-roll the candidate lands at start+1s, past this span's
+        // own 400ms end — must clamp to EndUtc rather than seek past content that doesn't exist.
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.Add(new MotionSpan
+        {
+            CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Person,
+            StartUtc = start, EndUtc = start.AddMilliseconds(400), Score = 1.0
+        });
+        await db.SaveChangesAsync();
+
+        var settingsResolver = new StubSettingsResolver(
+            intValues: new Dictionary<string, int> { ["Recording.MotionPreRollSeconds"] = 0 });
+        var service = new TimelineService(db, DefaultPalette, settingsResolver);
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
+
+        Assert.Equal(start.AddMilliseconds(400), Assert.Single(page.Items).AtUtc);
+    }
+
+    [Fact]
     public async Task SnapshotWithADetectionUsesTheClassLabelAndPaletteColor()
     {
         var (db, cameraId, _) = await SeedCameraAsync();
@@ -920,13 +1013,15 @@ public class TimelineServiceTests
         var service = new TimelineService(db, DefaultPalette);
         var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
 
+        // Default 10s pre-roll (no real settings resolver in play) minus the 1s margin: -9s off each
+        // span's own StartUtc.
         Assert.Equal(
-            [start.AddMinutes(5).AddMilliseconds(500), start.AddMinutes(2).AddMilliseconds(500), start.AddMilliseconds(500)],
+            [start.AddMinutes(5).AddSeconds(-9), start.AddMinutes(2).AddSeconds(-9), start.AddSeconds(-9)],
             page.Items.Select(i => i.AtUtc));
     }
 
     [Fact]
-    public async Task SnapshotAtUtcIsTheMidpointOfTheSpanNotItsStart()
+    public async Task SnapshotAtUtcSamplesFromThePreRollNotTheSpanMidpoint()
     {
         var (db, cameraId, _) = await SeedCameraAsync();
         var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
@@ -940,7 +1035,7 @@ public class TimelineServiceTests
         var service = new TimelineService(db, DefaultPalette);
         var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
 
-        Assert.Equal(start.AddSeconds(10), Assert.Single(page.Items).AtUtc);
+        Assert.Equal(start.AddSeconds(-9), Assert.Single(page.Items).AtUtc);
     }
 
     [Fact]
@@ -983,7 +1078,7 @@ public class TimelineServiceTests
 
         var s = Assert.Single(page.Items);
         Assert.Equal(cameraId, s.CameraId);
-        Assert.Equal(start.AddMilliseconds(500), s.AtUtc);
+        Assert.Equal(start.AddSeconds(-9), s.AtUtc); // default 10s pre-roll minus the 1s margin
     }
 
     [Fact]

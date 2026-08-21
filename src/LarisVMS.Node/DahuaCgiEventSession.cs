@@ -28,11 +28,21 @@ namespace LarisVMS.Node;
 public sealed class DahuaCgiEventSession(
     Uri baseUri, string? username, string? password, ILogger logger, Func<HttpMessageHandler>? handlerFactory = null)
 {
-    /// <summary>Nothing arrives on an idle camera for long stretches, so a read timeout would fire
-    /// constantly on a perfectly healthy connection. The camera sends a keep-alive comment line every
-    /// ~30s; this is generous enough not to trip on that while still catching a genuinely dead
-    /// socket that never signalled close.</summary>
-    private static readonly TimeSpan ReadTimeout = TimeSpan.FromMinutes(3);
+    /// <summary>How long a silent connection is given before it's assumed dead and reconnected.
+    ///
+    /// This was 3 minutes, on the stated assumption that "the camera sends a keep-alive comment line
+    /// every ~30s". Confirmed live that it does not — not on this subscription — so every camera in
+    /// the fleet was reconnecting every 3 minutes indefinitely, healthy or not. That matters beyond
+    /// log noise: attach only delivers events from the moment it subscribes, so each reconnect is a
+    /// few seconds in which a detection is lost with no trace.
+    ///
+    /// Two changes address it together: the subscription now includes a keep-alive code
+    /// (DahuaCgiEventParser.KeepAliveCodes) so an active camera keeps the connection visibly alive,
+    /// and this backstop is longer, since it now only has to catch a socket that died without
+    /// signalling — which a read error or EOF usually surfaces on its own anyway. Long enough not to
+    /// churn on a genuinely quiet camera, short enough that a silently-dead socket still recovers
+    /// without operator intervention.</summary>
+    private static readonly TimeSpan ReadTimeout = TimeSpan.FromMinutes(15);
 
     private readonly Dictionary<DetectionKind, MotionHysteresis> _hysteresis = [];
 
@@ -184,14 +194,79 @@ public sealed class DahuaCgiEventSession(
         }
     }
 
-    /// <summary>internal for tests: drives the whole classify/hysteresis path from one raw line with
-    /// no socket involved, which is what makes this session's real behavior testable.</summary>
+    // An event's data payload is pretty-printed JSON spanning many lines, so a line-at-a-time reader
+    // can't see it whole. These accumulate from the "Code=…;data={" header until the braces balance,
+    // then hand the complete text to the parser. Events without a data blob balance immediately (zero
+    // braces) and take the same path with no buffering, so nothing about the simple case changes.
+    private readonly System.Text.StringBuilder _pending = new();
+    private int _pendingDepth;
+    private bool _accumulating;
+
+    // A malformed or truncated payload would otherwise accumulate forever, holding every subsequent
+    // event hostage behind a brace that never closes. Well clear of the ~1.5 KB a real FaceDetection
+    // payload occupies.
+    private const int MaxPendingChars = 64 * 1024;
+
+    private static int BraceDelta(string s)
+    {
+        var depth = 0;
+        foreach (var c in s)
+        {
+            if (c == '{') depth++;
+            else if (c == '}') depth--;
+        }
+        return depth;
+    }
+
+    /// <summary>internal for tests: drives the whole classify/hysteresis path from raw lines with no
+    /// socket involved, which is what makes this session's real behavior testable. Feed the lines of
+    /// an event in order; a multi-line payload is buffered until complete.</summary>
     internal void HandleLine(string line, DateTime? nowUtc = null)
     {
-        var parsed = DahuaCgiEventParser.ParseLine(line);
+        if (_accumulating)
+        {
+            _pending.Append('\n').Append(line);
+            _pendingDepth += BraceDelta(line);
+            if (_pendingDepth > 0 && _pending.Length <= MaxPendingChars) return;
+
+            // Balanced (or over the cap — parse what we have rather than discard a real event whose
+            // payload was truncated; the header, which is all the classification strictly needs, is
+            // intact either way).
+            _accumulating = false;
+            var text = _pending.ToString();
+            _pending.Clear();
+            HandleEvent(text, nowUtc);
+            return;
+        }
+
+        // Boundary markers, Content-Type/Length headers and blank lines all land here and are
+        // ignored, exactly as before — only a Code= line starts an event.
+        if (!line.TrimStart().StartsWith("Code=", StringComparison.OrdinalIgnoreCase)) return;
+
+        var depth = BraceDelta(line);
+        if (depth > 0)
+        {
+            _accumulating = true;
+            _pendingDepth = depth;
+            _pending.Clear();
+            _pending.Append(line);
+            return;
+        }
+
+        HandleEvent(line, nowUtc);
+    }
+
+    private void HandleEvent(string fullText, DateTime? nowUtc)
+    {
+        var parsed = DahuaCgiEventParser.ParseEvent(fullText);
         if (parsed is not { } evt) return;
 
-        var kind = DahuaCgiEventParser.Classify(evt.Code);
+        // The payload's own object class wins over the code's mapping when present: one IVS rule
+        // fires the same code (CrossRegionDetection) for every class it matches, so the code alone
+        // can only say "an object" while the payload says which. Falls back to the code mapping for
+        // firmware that publishes no object detail, which is exactly the previous behavior.
+        var kind = DahuaCgiEventParser.ClassifyObjectType(evt.ObjectType)
+            ?? DahuaCgiEventParser.Classify(evt.Code);
         if (kind is not { } detectionKind) return;
 
         // Stamped with the node's own clock, deliberately — the CGI payload carries no trustworthy

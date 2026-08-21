@@ -167,6 +167,58 @@ public static class MediaToken
         return true;
     }
 
+    /// <summary>Node control (Web -&gt; Node): authorizes one administrative action against the node
+    /// itself rather than against any camera's media — currently only "restart", from the Nodes
+    /// page's own button. Binds the action name so a token minted for one control operation can
+    /// never be replayed against a different one that gets added later, and carries no cameraId at
+    /// all because the target is the node process.
+    ///
+    /// Deliberately its own pair rather than an overload of the media ones: this authorizes stopping
+    /// a recorder, which is a materially different (and more consequential) thing than reading a
+    /// frame, and the existing media paths are verified end-to-end in a real browser — a bug
+    /// introduced by overloading them would be far worse than the small duplication here. Same
+    /// reasoning IssueForExport records for staying separate.</summary>
+    public static string IssueForNodeControl(string action, string signingKeyHex, TimeSpan validFor)
+    {
+        var exp = DateTimeOffset.UtcNow.Add(validFor).ToUnixTimeSeconds();
+        var payload = $"nodectl:{action}:{exp}";
+        return $"{payload}.{Sign(payload, signingKeyHex)}";
+    }
+
+    public static bool TryValidateNodeControl(string? token, string expectedAction, string signingKeyHex, out string error)
+    {
+        error = "";
+        if (string.IsNullOrEmpty(token)) { error = "missing token"; return false; }
+
+        var dot = token.LastIndexOf('.');
+        if (dot < 0) { error = "malformed token"; return false; }
+        var payload = token[..dot];
+        var providedSig = token[(dot + 1)..];
+
+        byte[] provided, expected;
+        try
+        {
+            provided = Convert.FromHexString(providedSig);
+            expected = Convert.FromHexString(Sign(payload, signingKeyHex));
+        }
+        catch (FormatException)
+        {
+            error = "malformed signature";
+            return false;
+        }
+
+        if (!CryptographicOperations.FixedTimeEquals(provided, expected)) { error = "signature mismatch"; return false; }
+
+        var parts = payload.Split(':', 3);
+        if (parts.Length != 3 || parts[0] != "nodectl") { error = "malformed payload"; return false; }
+        if (!long.TryParse(parts[2], out var exp)) { error = "malformed payload"; return false; }
+
+        if (!string.Equals(parts[1], expectedAction, StringComparison.Ordinal)) { error = "action mismatch"; return false; }
+        if (DateTimeOffset.UtcNow.ToUnixTimeSeconds() > exp) { error = "expired"; return false; }
+
+        return true;
+    }
+
     /// <summary>Export trigger (Web -&gt; Node): authorizes exactly one export item request for one
     /// camera — same short-lived-HMAC shape as IssueForSegment but binds cameraId + exportItemId
     /// instead of cameraId + filePath, since the whole point of this call is *telling* the node

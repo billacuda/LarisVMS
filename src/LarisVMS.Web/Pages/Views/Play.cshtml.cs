@@ -19,6 +19,12 @@ public class PlayModel(IViewService viewService, ICameraService cameraService, I
     /// stored, because it drives positioning classes in the browser.</summary>
     public string EventBadgeCornerValue { get; set; } = EventBadgeCorner.Default;
 
+    /// <summary>M18: the same "LiveView.AdaptiveStreamingEnabled" setting NodeService.GetConfigAsync
+    /// resolves for nodes — the client needs it too, to decide whether to ever ask for `?role=sub` at
+    /// all (and whether to show the per-tile quality override). Resolved for both the normal View
+    /// path and the single-camera path below, same as EventBadgeCornerValue.</summary>
+    public bool AdaptiveStreamingEnabled { get; set; } = true;
+
     public string Name { get; set; } = string.Empty;
     public string LayoutJson { get; set; } = "{\"cells\":[],\"mobileTwoColumn\":false}";
     public List<Camera> Cameras { get; set; } = [];
@@ -35,9 +41,44 @@ public class PlayModel(IViewService viewService, ICameraService cameraService, I
     public int TourIndex { get; set; }
     public int TourIntervalSeconds { get; set; }
 
-    public async Task<IActionResult> OnGetAsync(Guid? id, bool tour, int i)
+    /// <summary>Set only for the single-camera picker (new dropdown beside the View picker, explicit
+    /// user ask) — non-null tells the client to render one ad hoc tile for this camera instead of
+    /// parsing LayoutJson. No saved View is used or required, same "render it directly, don't hunt
+    /// for a View that happens to contain it" reasoning as Playback's own deep-link resolution
+    /// (playback-player.js's resolveDeepLink). LayoutJson/CurrentViewId stay at their defaults in
+    /// this mode; the client only looks at LayoutJson when SingleCameraId is absent.</summary>
+    public Guid? SingleCameraId { get; set; }
+
+    public async Task<IActionResult> OnGetAsync(Guid? id, Guid? cameraId, bool tour, int i)
     {
         var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
+
+        // Resolved once, up front, since both the normal View path and the single-camera path need
+        // the same CameraAccess-narrowed feed — the picker dropdown lists it, the player consumes it,
+        // and (for the single-camera path) authorization for the requested camera is "is it in this
+        // list", the same enforcement Cameras already gets everywhere else on this page.
+        var all = await cameraService.ListAsync();
+        Cameras = all.Where(c => c.IsEnabled && c.NodeId is not null).ToList();
+        var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(User, CameraAccessActions.View);
+        if (accessible is not null) Cameras = Cameras.Where(c => accessible.Contains(c.Id)).ToList();
+
+        if (id is null && cameraId is not null)
+        {
+            var camera = Cameras.FirstOrDefault(c => c.Id == cameraId.Value);
+            if (camera is null) return RedirectToPage("Index");
+
+            Name = camera.Name;
+            SingleCameraId = camera.Id;
+            Views = await viewService.ListVisibleToAsync(userId);
+            EventBadgeCornerValue = EventBadgeCorner.Normalize(
+                await settings.GetRawAsync(Admin.Settings.EventsModel.EventBadgeCornerKey));
+            AdaptiveStreamingEnabled = await settings.GetAsync("LiveView.AdaptiveStreamingEnabled", true);
+
+            await auditService.LogAsync("Camera.WatchSingle", userId, User.Identity?.Name,
+                HttpContext.Connection.RemoteIpAddress?.ToString(), camera.Name);
+
+            return Page();
+        }
 
         if (id is null)
         {
@@ -56,26 +97,13 @@ public class PlayModel(IViewService viewService, ICameraService cameraService, I
         Views = await viewService.ListVisibleToAsync(userId);
         EventBadgeCornerValue = EventBadgeCorner.Normalize(
             await settings.GetRawAsync(Admin.Settings.EventsModel.EventBadgeCornerKey));
-
-        var all = await cameraService.ListAsync();
-        Cameras = all.Where(c => c.IsEnabled && c.NodeId is not null).ToList();
-
-        // Narrows the client-side camera feed to whatever CameraAccess grants this viewer for View —
-        // this page's primary purpose is live viewing; the per-cell playback toggle it also offers
-        // rides on the same feed rather than a separate Playback check, since a cell that can't even
-        // appear here has nothing to toggle into playback mode in the first place. A cell whose
-        // camera isn't in this feed can't be started at all: view-play.js looks its metadata up via
-        // cameraById and bails with no camera found, before ever requesting a stream — the
-        // enforcement is that the camera's data never reaches the client, not a client-side check
-        // the browser could be made to skip.
-        var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(User, CameraAccessActions.View);
-        if (accessible is not null) Cameras = Cameras.Where(c => accessible.Contains(c.Id)).ToList();
+        AdaptiveStreamingEnabled = await settings.GetAsync("LiveView.AdaptiveStreamingEnabled", true);
 
         // Names resolved from the view's own layout, not from the Cameras list above — that list is
         // every enabled camera on the system (it feeds the client-side player), not this view's own
         // set, so using it would log every camera in the deployment on every view opened.
         var viewCameraNames = ViewLayout.CameraIds(view.LayoutJson)
-            .Select(cameraId => all.FirstOrDefault(c => c.Id == cameraId)?.Name ?? cameraId.ToString())
+            .Select(vc => all.FirstOrDefault(c => c.Id == vc)?.Name ?? vc.ToString())
             .ToList();
         await auditService.LogAsync("View.Watch", userId, User.Identity?.Name,
             HttpContext.Connection.RemoteIpAddress?.ToString(),

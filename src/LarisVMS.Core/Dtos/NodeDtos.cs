@@ -80,12 +80,21 @@ public record NodeConfigScheduleWindowDto(Guid Id, string Days, TimeOnly StartTi
 /// appends whatever path its vendor API uses — sent explicitly rather than parsed out of
 /// EventsServiceUri on the node, since a camera can need an integration while having no ONVIF events
 /// service at all.</summary>
+/// <summary>SegmentSeconds: how long each recorded Main-stream file covers before ffmpeg rolls to the
+/// next one (RecordingSessionOptions.SegmentSeconds, default 60 — unset until this existed).
+/// Confirmed live as the dominant cost of a late seek within a segment: Playback fetches a segment's
+/// bytes sequentially and only starts at the target instant once its bytes are actually buffered, so
+/// a 60s segment at this fleet's real sizes (24-44MB) means downloading up to that whole amount before
+/// landing on a scrub target near its end. Shorter segments cap that worst case proportionally, at the
+/// cost of more Segments rows and more small files on disk. Same "restart to apply" story as a
+/// changed Privacy mask signature — it's baked into ffmpeg's own `-f segment` invocation at start, not
+/// something a later reconcile can adjust on an already-running process.</summary>
 public record NodeConfigCameraDto(Guid CameraId, string Name, string? Username, string? Password,
     List<NodeConfigStreamDto> Streams, int? RetentionDays, long? QuotaBytes, List<NodeConfigZoneDto> Zones,
     string RecordingMode, int MotionPreRollSeconds, int MotionPostRollSeconds,
     string? EventsServiceUri, List<NodeConfigEventTagRuleDto> EventTagRules,
     List<NodeConfigScheduleWindowDto> ScheduleWindows,
-    string? IntegrationKey = null, string? IntegrationBaseUri = null);
+    string? IntegrationKey = null, string? IntegrationBaseUri = null, int SegmentSeconds = 60);
 /// <summary>A camera this node has leftover Segments for but is no longer assigned to record
 /// (reassigned to a different node, or deleted) — StorageManager's orphaned-folder sweep uses
 /// RetentionDays here so leftover footage still ages out on the same schedule it always would have,
@@ -95,8 +104,22 @@ public record NodeConfigCameraDto(Guid CameraId, string Name, string? Username, 
 /// all, which StorageManager falls back to a flat default for.</summary>
 public record NodeConfigOrphanedCameraDto(Guid CameraId, int? RetentionDays);
 
+/// <summary>AdaptiveStreamingEnabled (M18) is the server-side "LiveView.AdaptiveStreamingEnabled"
+/// setting, resolved once here rather than left for the node to fetch on its own — same pattern as
+/// every other node-wide setting already flowing through this DTO (WatermarkPercent). The node is
+/// the sole, authoritative gate: it drives SubLiveSession reconciliation directly (see
+/// NodeWorker.ReconcileLiveSub) — when false, Sub live sessions are torn down/never started, so a
+/// disabled toggle actually stops the extra RTSP pulls, not just hides the option client-side.
+/// LarisVMS.Web's /live proxy forwards a viewer's `?role=sub` request as-is and never itself checks
+/// this flag — there's nothing to gate there: if the node has no Sub session running (toggle off, or
+/// hasn't reconciled since it flipped), the node's own /live route already falls back to Main, and a
+/// second independent check on the Web tier would just be two places that can disagree about the
+/// same underlying fact. Defaults true purely so an older, not-yet-updated node (whose own
+/// NodeConfigResponse deserialization would otherwise leave a bool defaulted to false) doesn't
+/// silently read "disabled" — this default is never actually seen by a current build, which always
+/// gets a real resolved value from GetConfigAsync.</summary>
 public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? StorageRootPath, int WatermarkPercent,
-    string MediaSigningKey, List<NodeConfigOrphanedCameraDto> OrphanedCameras);
+    string MediaSigningKey, List<NodeConfigOrphanedCameraDto> OrphanedCameras, bool AdaptiveStreamingEnabled = true);
 
 /// <summary>One completed MotionSpan, batch-reported the same way SegmentReportItem is — see
 /// NodeService.RecordMotionSpansAsync for why plain REST + EF insert is enough here despite the

@@ -28,6 +28,10 @@ window.larisvmsViewPlay = (function () {
     var phoneLandscapeQuery = window.matchMedia('(max-width: 950px) and (max-height: 600px)');
     var GRID_GAP = 6;
     var MIN_ROW_HEIGHT = 12; // a floor, so a pathological layout can't collapse cells to zero
+    // Ceiling on the derived landscape column count (see landscapeColumns). Four cameras across a
+    // ~850px-wide phone is already ~210px each — past that they're too small to be worth watching,
+    // so a view with many cameras scrolls rather than shrinking them further.
+    var MAX_LANDSCAPE_COLUMNS = 4;
 
     var opts = null;
     var cells = [];
@@ -118,6 +122,17 @@ window.larisvmsViewPlay = (function () {
                             (cam && cam.hasPtz
                                 ? '<button type="button" class="btn btn-outline-light view-cell-ptz-toggle" style="padding:.1rem .35rem;" title="PTZ controls" aria-label="PTZ controls">🕹️</button>'
                                 : '') +
+                            // M18: only offered when both the deployment-wide toggle is on and this
+                            // particular camera has a Sub stream to switch to — a camera without one
+                            // is always Main regardless, same as the PTZ button's own cam.hasPtz gate
+                            // just above. Starts as "Auto" (desiredRole decides); clicking cycles
+                            // Auto -> HD (forces Main) -> SD (forces Sub) -> Auto. Label, not an icon:
+                            // this is a three-state control, and a glyph set that reads unambiguously
+                            // as "currently auto / forced high / forced low" at a glance doesn't exist
+                            // the way ⏱/⛶'s do for a two-state toggle.
+                            (opts.adaptiveStreamingEnabled && cam && cam.hasSub
+                                ? '<button type="button" class="btn btn-outline-light view-cell-quality" style="padding:.1rem .35rem; font-size:.7rem;" title="Stream quality: Auto" aria-label="Stream quality">Auto</button>'
+                                : '') +
                             '<button type="button" class="btn btn-outline-light view-cell-playback" style="padding:.1rem .35rem;" title="Playback" aria-label="Playback">⏱</button>' +
                             '<button type="button" class="btn btn-outline-light view-cell-fullscreen" style="padding:.1rem .35rem;" title="Fullscreen" aria-label="Fullscreen">⛶</button>' +
                         '</div>' +
@@ -137,6 +152,32 @@ window.larisvmsViewPlay = (function () {
                 '<div class="px-1 small text-truncate bg-body-tertiary flex-shrink-0">' + escHtml(name) + '</div>' +
             '</div>'
         );
+    }
+
+    // M18: how many cameras are actually on screen right now — part of the adaptive-streaming size
+    // signal below (desiredRole), since a tile's *stored* w/h can understate how small it actually
+    // renders on a phone stack (renderMobile keeps each cell's original w/h even though the derived
+    // layout no longer uses them for sizing the way the desktop grid does).
+    function visibleCellCount() {
+        return cells.filter(function (c) { return cameraById[c.cameraId]; }).length;
+    }
+
+    // M18: which live source a tile should ask for absent any manual override or fullscreen — a
+    // small tile has nothing to gain from Main's extra resolution, so Sub costs the node/network
+    // less for the same perceived picture. Deliberately driven by the *stored* GridStack geometry
+    // (columns/rows out of the 12-wide grid) rather than measuring actual rendered pixels: an
+    // element's real box isn't known until after layout, which would mean either a ResizeObserver
+    // per tile or a live-restart on every resize — both rejected in favor of reusing geometry this
+    // page already has up front, matching the existing "only a mode change rebuilds tiles" policy
+    // (see the resize listener's own comment in init()). visibleCellCount() is folded in as a second
+    // signal specifically for the phone stack, whose cells keep their desktop-authored w/h even
+    // though they're laid out completely differently there.
+    function desiredRole(cell, cam) {
+        if (!opts.adaptiveStreamingEnabled || !cam || !cam.hasSub) return 'main';
+        if (visibleCellCount() <= 1) return 'main'; // nothing else on screen to save bandwidth for
+        if (cell.w <= 4 || cell.h <= 3) return 'sub';
+        if (visibleCellCount() >= 6) return 'sub';
+        return 'main';
     }
 
     // Reuses playback-player.js's own MSE/segment-fetch tile (exactly what the Playback page uses)
@@ -160,6 +201,7 @@ window.larisvmsViewPlay = (function () {
         var miniPlayPauseBtn = el.querySelector('.view-cell-mini-playpause');
         var ptzToggleBtn = el.querySelector('.view-cell-ptz-toggle');
         var ptzArea = el.querySelector('.view-cell-ptz-area');
+        var qualityBtn = el.querySelector('.view-cell-quality');
 
         var cameraId = cell.cameraId;
         var codec = cam.codec;
@@ -170,6 +212,19 @@ window.larisvmsViewPlay = (function () {
         var pbTimeline = null;
         var pbPlaying = false;
         var inPlaybackMode = false;
+        // M18: null = Auto (desiredRole decides); 'main'/'sub' = pinned by the quality button below.
+        // Per-cell, not per-camera — the same camera in two cells of a view can be pinned differently.
+        var qualityOverride = null;
+
+        // Fullscreen always forces Main regardless of Auto/override — the one case where showing Sub
+        // would be actively wrong (a viewer who just asked to see this camera as large as possible is
+        // exactly who benefits from Main's extra resolution), so it overrides even a manual "SD" pin
+        // rather than deferring to it.
+        function effectiveRole() {
+            if (fsHandle && fsHandle.isFullscreen()) return 'main';
+            if (qualityOverride) return qualityOverride;
+            return desiredRole(cell, cam);
+        }
 
         if (hoverTarget && controls) {
             hoverTarget.addEventListener('mouseenter', function () { controls.classList.remove('d-none'); });
@@ -188,9 +243,15 @@ window.larisvmsViewPlay = (function () {
         var fsHandle = frameEl && window.larisvmsFullscreenTile
             ? window.larisvmsFullscreenTile.wire(frameEl, video, {
                 onFullscreenChange: function (active) {
-                    if (!fullscreenBtn) return;
-                    fullscreenBtn.textContent = active ? '⤢' : '⛶';
-                    fullscreenBtn.title = active ? 'Exit fullscreen' : 'Fullscreen';
+                    if (fullscreenBtn) {
+                        fullscreenBtn.textContent = active ? '⤢' : '⛶';
+                        fullscreenBtn.title = active ? 'Exit fullscreen' : 'Fullscreen';
+                    }
+                    // M18: entering/exiting fullscreen can change effectiveRole() (see its own doc
+                    // comment on why fullscreen always wins) — restart live with the new role. Only
+                    // when actually live: a cell toggled into playback mode has no liveStop to swap,
+                    // and exitPlaybackModeIfActive already calls startLive() fresh on its way back.
+                    if (!inPlaybackMode && liveStop) { liveStop(); startLive(); }
                 }
             })
             : null;
@@ -214,11 +275,33 @@ window.larisvmsViewPlay = (function () {
                 ptzArea.querySelector('.ptz-pad').classList.toggle('d-none');
             });
         }
+        // M18: Auto -> HD (pin Main) -> SD (pin Sub) -> Auto. A pin set while fullscreen still takes
+        // effect once fullscreen is exited (effectiveRole() only overrides *while* fullscreen is
+        // active, it doesn't clear qualityOverride) — the button's own label always reflects the pin
+        // itself, not whatever fullscreen is temporarily forcing on top of it.
+        if (qualityBtn) {
+            qualityBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                qualityOverride = qualityOverride === null ? 'main' : (qualityOverride === 'main' ? 'sub' : null);
+                var label = qualityOverride === 'main' ? 'HD' : (qualityOverride === 'sub' ? 'SD' : 'Auto');
+                qualityBtn.textContent = label;
+                qualityBtn.title = 'Stream quality: ' + label;
+                if (!inPlaybackMode && liveStop) { liveStop(); startLive(); }
+            });
+        }
 
         function startLive() {
+            // Codec/audio must follow the role, not the camera: Sub is a separately encoded stream
+            // and routinely differs from Main (H.264 vs HEVC, and usually no audio track at all).
+            // MSE treats a SourceBuffer whose declared codec or track list doesn't match the arriving
+            // init segment as a hard failure, not a downgrade — see the Sub fields' own comment in
+            // Play.cshtml for the confirmed symptom this caused.
+            var role = effectiveRole();
+            var roleCodec = role === 'sub' ? cam.subCodec : codec;
+            var roleHasAudio = role === 'sub' ? cam.subHasAudio : hasAudio;
             // Retained per-cell specifically so entering playback mode can end this session cleanly
             // instead of leaving it running underneath the swapped-in player.
-            liveStop = window.larisvmsLiveView.start(cameraId, video, status, codec, hasAudio);
+            liveStop = window.larisvmsLiveView.start(cameraId, video, status, roleCodec, roleHasAudio, role);
         }
 
         async function enterPlaybackMode() {
@@ -403,15 +486,49 @@ window.larisvmsViewPlay = (function () {
             || (window.LarisVMSAspectRatio.isValid(cell.aspect) ? cell.aspect : window.LarisVMSAspectRatio.default);
     }
 
-    function renderMobile(container) {
-        var cols = mobileTwoColumn ? 2 : 1;
+    // Landscape needs its own column count, not the portrait one. `mobileTwoColumn` is a choice made
+    // about a *portrait* phone — tall and narrow, where 1 (or optionally 2) columns is right. Reusing
+    // it in landscape reads badly: a landscape phone is ~850x400, so a single column makes each cell
+    // the full ~850px wide and therefore ~478px tall at 16:9 — taller than the entire viewport. Every
+    // camera then fills more than the screen and you scroll through them one at a time, confirmed
+    // live as "all of the cameras keep getting stacked on top of each other in landscape".
+    //
+    // Adding columns is specifically the safe lever here, and is not a repeat of the fitted-height
+    // attempt that was reverted earlier (see renderMobile's own comment): more columns makes each cell
+    // narrower and therefore proportionally shorter, with its aspect ratio fully intact — nothing is
+    // squashed. Picks the fewest columns (largest cells) that still let a whole row fit the viewport
+    // height, using the *tallest* cell among the visible cameras so none of them overflow.
+    function landscapeColumns(container, visible) {
+        var available = window.innerHeight - container.getBoundingClientRect().top - GRID_GAP;
+        var width = container.clientWidth;
+        if (available <= 0 || width <= 0) return mobileTwoColumn ? 2 : 1;
+
+        // Smallest ratio = tallest cell for a given width; sizing to that keeps every other camera
+        // comfortably within the height too.
+        var tallest = visible.reduce(function (min, cell) {
+            var r = window.LarisVMSAspectRatio.ratio(mobileCellRatio(cell));
+            return Math.min(min, r);
+        }, Infinity);
+        if (!isFinite(tallest) || tallest <= 0) return mobileTwoColumn ? 2 : 1;
+
+        for (var cols = 1; cols <= MAX_LANDSCAPE_COLUMNS; cols++) {
+            var cellWidth = (width - GRID_GAP * (cols - 1)) / cols;
+            if (cellWidth / tallest <= available) return cols;
+        }
+        return MAX_LANDSCAPE_COLUMNS;
+    }
+
+    function renderMobile(container, landscape) {
         var visible = cells.filter(function (c) { return !c.hideOnPhone && cameraById[c.cameraId]; });
+        var cols = landscape && visible.length
+            ? landscapeColumns(container, visible)
+            : (mobileTwoColumn ? 2 : 1);
         var ordered = visible.slice().sort(function (a, b) { return (a.y - b.y) || (a.x - b.x); });
         var rows = desktopRows(ordered);
 
         container.style.display = 'grid';
         container.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
-        container.style.gap = '6px';
+        container.style.gap = GRID_GAP + 'px';
         container.innerHTML = '';
 
         if (!visible.length) {
@@ -423,28 +540,43 @@ window.larisvmsViewPlay = (function () {
         // Always sized from each cell's own aspect ratio, never fitted to a computed row height —
         // unlike the replayed desktop layout (whose cells have no intrinsic size of their own, only
         // a row-count that a fixed CELL_HEIGHT can get wrong for the viewport), every cell here
-        // already renders at the right proportions regardless of viewport height. A landscape phone
-        // with more cameras than fit on screen at once scrolls to see the rest — exactly like
-        // portrait already does, and exactly as it should: a first attempt at fitting the stack's
-        // *height* to a short viewport (like the desktop grid does) instead squashed every cell down
-        // to a sliver once a view held more than two or three cameras, confirmed live as "vertically
-        // squished and tiny" — dividing limited landscape height across N stacked single-column
-        // cameras shrinks each one far more than the desktop grid's own fitting ever does, since a
-        // desktop layout usually spreads cameras across several of its 12 columns instead of stacking
-        // all of them in one.
+        // already renders at the right proportions regardless of viewport height. Fitting the stack's
+        // *height* to a short viewport (like the desktop grid does) was tried and reverted: it
+        // squashed every cell down to a sliver once a view held more than two or three cameras,
+        // confirmed live as "vertically squished and tiny".
+        //
+        // Landscape's fix for the same underlying problem is columns, not heights (see
+        // landscapeColumns): more columns shrinks cells proportionally, aspect ratio intact, which is
+        // exactly what fitting a row height could never do. A view with more cameras than fit even at
+        // MAX_LANDSCAPE_COLUMNS still scrolls to see the rest, same as portrait.
         container.style.gridAutoRows = '';
+
+        function appendCell(cell, spanFullWidth) {
+            var el = document.createElement('div');
+            el.style.aspectRatio = mobileCellRatio(cell).replace(':', '/');
+            if (spanFullWidth) el.style.gridColumn = '1 / -1';
+            el.innerHTML = buildCellHtml(cell);
+            container.appendChild(el);
+            startCellVideo(el, cell);
+        }
+
+        if (landscape) {
+            // Straight sequential flow across the computed columns, deliberately ignoring the desktop
+            // row grouping below. That grouping (plus its "odd one out spans full width" rule) exists
+            // to keep a portrait 1/2-column stack reading like the saved layout, but it actively works
+            // against the point of landscape's extra columns: a desktop row holding a single camera
+            // would claim an entire grid row on its own, and a lone trailing camera would stretch
+            // across every column — both re-creating exactly the oversized cells this branch exists to
+            // avoid. Ordering is still the same top-to-bottom/left-to-right reading of the saved
+            // layout, so which camera comes first doesn't change, only how they pack.
+            ordered.forEach(function (cell) { appendCell(cell, false); });
+            return;
+        }
 
         rows.forEach(function (row) {
             for (var i = 0; i < row.length; i += cols) {
                 var pair = row.slice(i, i + cols);
-                pair.forEach(function (cell) {
-                    var el = document.createElement('div');
-                    el.style.aspectRatio = mobileCellRatio(cell).replace(':', '/');
-                    if (pair.length < cols) el.style.gridColumn = '1 / -1'; // odd one out spans full width
-                    el.innerHTML = buildCellHtml(cell);
-                    container.appendChild(el);
-                    startCellVideo(el, cell);
-                });
+                pair.forEach(function (cell) { appendCell(cell, pair.length < cols); });
             }
         });
     }
@@ -469,10 +601,63 @@ window.larisvmsViewPlay = (function () {
         stopAll();
         var container = document.getElementById(opts.gridElId);
         if (!container) return;
-        if (phoneLandscapeQuery.matches) renderMobile(container);
+        if (phoneLandscapeQuery.matches) renderMobile(container, true);
         else if (shortQuery.matches) renderDesktop(container, true);
-        else if (phoneQuery.matches) renderMobile(container);
+        else if (phoneQuery.matches) renderMobile(container, false);
         else renderDesktop(container, false);
+    }
+
+    // Single-camera picker beside the View dropdown — explicit user ask: "list all cameras with a
+    // quick filter at the top, select a single camera to view." A <select> can't hold a filter input,
+    // so this is a <details> popover (same "small filterable list in a dropdown" shape
+    // _ColumnPicker.cshtml/column-picker.js already establish elsewhere in this app) rather than a
+    // new UI convention. Navigates via a full page load (?cameraId=X), same as the View picker's own
+    // location.href — bookmarkable, server-authorized against the same CameraAccess-narrowed list
+    // either way, and no separate client-only render path to keep in sync with the server one.
+    function wireCameraPicker(o) {
+        var details = o.cameraPickerDetailsId && document.getElementById(o.cameraPickerDetailsId);
+        var filterInput = o.cameraPickerFilterId && document.getElementById(o.cameraPickerFilterId);
+        var list = o.cameraPickerListId && document.getElementById(o.cameraPickerListId);
+        if (!details || !filterInput || !list) return;
+
+        var cameras = (o.cameras || []).slice().sort(function (a, b) {
+            return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+        });
+
+        function render(filterText) {
+            var term = (filterText || '').trim().toLowerCase();
+            list.innerHTML = '';
+            cameras
+                .filter(function (c) { return !term || c.name.toLowerCase().indexOf(term) !== -1; })
+                .forEach(function (c) {
+                    var a = document.createElement('a');
+                    a.className = 'list-group-item list-group-item-action py-1 px-2 small';
+                    a.href = '/Views/Play?cameraId=' + encodeURIComponent(c.id);
+                    a.textContent = (c.id === o.singleCameraId ? '★ ' : '') + c.name;
+                    list.appendChild(a);
+                });
+            if (!list.children.length) {
+                var empty = document.createElement('div');
+                empty.className = 'text-muted small px-2 py-1';
+                empty.textContent = 'No cameras match.';
+                list.appendChild(empty);
+            }
+        }
+        render('');
+
+        filterInput.addEventListener('input', function () { render(filterInput.value); });
+        // Opened fresh every time, not left showing whatever was typed last visit — the summary
+        // click that reveals the popover doesn't otherwise touch the input at all.
+        details.addEventListener('toggle', function () {
+            if (details.open) { filterInput.value = ''; render(''); filterInput.focus(); }
+        });
+
+        // Same "close on outside click" as column-picker.js's own <details> popover — a plain
+        // <details> only closes its own <summary> click natively, not a click anywhere else on the
+        // page, so without this the popover stays open indefinitely once opened.
+        document.addEventListener('click', function (e) {
+            if (details.open && !details.contains(e.target)) details.open = false;
+        });
     }
 
     function wireKiosk(kioskBtnId, navElId, toolbarElId) {
@@ -508,24 +693,40 @@ window.larisvmsViewPlay = (function () {
 
     function init(o) {
         opts = o;
-        var parsed = { cells: [], mobileTwoColumn: false };
-        try {
-            var p = JSON.parse(o.layoutJson);
-            if (p && Array.isArray(p.cells)) parsed = p;
-        } catch (e) { /* corrupted layout — render empty rather than fail the page */ }
-
-        cells = parsed.cells;
-        mobileTwoColumn = !!parsed.mobileTwoColumn;
-
         cameraById = {};
         (o.cameras || []).forEach(function (c) { cameraById[c.id] = c; });
+
+        // Single-camera picker (new dropdown beside the View picker, explicit user ask): one ad hoc
+        // cell for this camera, filling the whole grid exactly as if it were a 1-camera View — reuses
+        // every existing rendering path (renderDesktop/renderMobile, PTZ, audio, fullscreen, the
+        // mobile aspect-ratio fix) with no new rendering code, the same "render it directly, no saved
+        // layout involved" approach playback-player.js's own single-camera deep link uses. w:12/h:8 is
+        // simply the editor's own placement math for a freshly-added camera at that width (see
+        // view-editor.js's computeInitialHeight) rather than anything specific to this mode — on a
+        // short viewport applyFittedRowHeight already rescales every row to fit regardless of h, and a
+        // real 1-camera View gets exactly the same starting shape today.
+        if (o.singleCameraId) {
+            cells = [{ id: 'single-camera', x: 0, y: 0, w: 12, h: 8, cameraId: o.singleCameraId, hideOnPhone: false }];
+            mobileTwoColumn = false;
+        } else {
+            var parsed = { cells: [], mobileTwoColumn: false };
+            try {
+                var p = JSON.parse(o.layoutJson);
+                if (p && Array.isArray(p.cells)) parsed = p;
+            } catch (e) { /* corrupted layout — render empty rather than fail the page */ }
+
+            cells = parsed.cells;
+            mobileTwoColumn = !!parsed.mobileTwoColumn;
+        }
 
         // What Pages/Live redirects to on its next visit — read server-side now (Live/Index.cshtml.cs
         // OnGetAsync), not client-side, so the choice follows the user to another browser/device
         // instead of resetting there. Not recorded for a tour hop — a tour rotates through views on
         // its own timer, so whichever one it happened to be sitting on when the tab closed isn't a
-        // deliberate choice worth restoring later.
-        if (o.currentViewId && !o.isTour) {
+        // deliberate choice worth restoring later. Not recorded for single-camera mode either — an ad
+        // hoc camera pick is a one-off destination, not a standing choice the way selecting a View
+        // from the dropdown is (same reasoning Playback's own deep link uses for not persisting).
+        if (o.currentViewId && !o.isTour && !o.singleCameraId) {
             window.larisvmsPreferences.set('lastViewId', o.currentViewId);
         }
 
@@ -550,6 +751,7 @@ window.larisvmsViewPlay = (function () {
         });
 
         wireKiosk(o.kioskBtnId, o.navElId, o.toolbarElId);
+        wireCameraPicker(o);
         if (o.isTour) wireTour(o.tourViewIds, o.tourIndex, o.tourIntervalSeconds);
     }
 

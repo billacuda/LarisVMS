@@ -178,6 +178,16 @@
                 segment still counts as worth keeping.
             </div>
         </div>
+        <div class="col-6">
+            <label class="form-label">Segment length override (seconds)</label>
+            <input asp-for="SegmentSecondsOverride" type="number" min="5" max="300" class="form-control"
+                   placeholder="(inherit — currently @Model.EffectiveSegmentSeconds s)" />
+            <div class="form-text">
+                Applies regardless of recording mode. Smaller for a busy/high-resolution camera keeps
+                worst-case Playback scrub latency down; changing it restarts this camera's recording
+                session (brief interruption) to take effect.
+            </div>
+        </div>
     }
     <div class="col-12">
         <button type="submit" class="btn btn-primary">@(Model.IsNew ? "Add & probe" : "Save")</button>

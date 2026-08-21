@@ -135,11 +135,35 @@ public class DahuaCgiEventParserTests
         Assert.Contains("SmartMotionHuman", codes);
         Assert.Contains("SmartMotionVehicle", codes);
         Assert.Contains("CrossLineDetection", codes);
-        // Subscribing to plain motion would double-report what ONVIF already delivers.
+        Assert.Contains("CrossRegionDetection", codes);
+        // Subscribing to plain motion would double-report what ONVIF already delivers. Checked as an
+        // exact element rather than a substring so it doesn't accidentally reject VideoMotionInfo,
+        // which is a different code and is subscribed on purpose (see below).
         Assert.DoesNotContain("VideoMotion", codes);
         Assert.DoesNotContain("All", codes);
-        // Every code offered to the camera must be one this app can actually act on.
-        Assert.All(codes, code => Assert.NotNull(DahuaCgiEventParser.Classify(code)));
+
+        // Every code is either one this app can act on, or a deliberate keep-alive. The keep-alive
+        // must classify as nothing, so it can never be mistaken for a detection — that property is
+        // what makes subscribing to it safe.
+        Assert.Contains("VideoMotionInfo", codes);
+        Assert.Null(DahuaCgiEventParser.Classify("VideoMotionInfo"));
+        Assert.All(
+            codes.Where(c => c != "VideoMotionInfo"),
+            code => Assert.NotNull(DahuaCgiEventParser.Classify(code)));
+    }
+
+    [Fact]
+    public void AKeepAliveEventProducesNoDetection()
+    {
+        // The real shape the camera sends — a bare State ping with only a timestamp. It exists to
+        // keep the connection from looking dead, and must produce nothing else.
+        var evt = DahuaCgiEventParser.ParseEvent(
+            "Code=VideoMotionInfo;action=State;index=0;data={\n   \"RealUTC\" : 1787288021\n}");
+
+        Assert.NotNull(evt);
+        Assert.Equal("VideoMotionInfo", evt!.Value.Code);
+        Assert.Null(DahuaCgiEventParser.Classify(evt.Value.Code));
+        Assert.Null(DahuaCgiEventParser.ClassifyObjectType(evt.Value.ObjectType));
     }
 
     [Theory]

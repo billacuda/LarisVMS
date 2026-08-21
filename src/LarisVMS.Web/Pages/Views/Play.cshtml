@@ -7,11 +7,21 @@
     var camerasJson = JsonSerializer.Serialize(Model.Cameras.Select(c =>
     {
         var main = c.Streams.FirstOrDefault(s => s.Role == CameraStreamRole.Main);
+        // M18: the Sub stream's own codec/audio, carried separately from Main's rather than assumed
+        // to match it. A tile switched to Sub (adaptive streaming) is fed Sub's bytes, and MSE
+        // requires the SourceBuffer's declared codec — and its full track list — to match what
+        // actually arrives. Confirmed live as a hard failure, not a degradation: a camera recording
+        // HEVC+AAC on Main but H.264 (and usually no audio track at all) on Sub opened an
+        // `hvc1...,mp4a.40.2` SourceBuffer, and the very first Sub fragment tripped a sourceBuffer
+        // error → "no supported source was found" → endless reconnect loop. Same mismatch class
+        // pickMimeType's own doc comment in live-view.js already describes for the Main path.
+        var sub = c.Streams.FirstOrDefault(s => s.Role == CameraStreamRole.Sub && s.IsEnabled);
         // width/height are the Main stream's own probed resolution — the derived phone stack sizes
         // its cells from the camera's real aspect rather than the editor-chosen one, which could
         // never have matched for any camera that isn't 16:9 (see aspect-ratio.js's nearest()).
         return new { id = c.Id, name = c.Name, codec = main?.Codec, hasAudio = main?.HasAudio ?? false,
             hasPtz = c.Capabilities != null && c.Capabilities.HasPtz,
+            hasSub = sub != null, subCodec = sub?.Codec, subHasAudio = sub?.HasAudio ?? false,
             width = main?.Width, height = main?.Height };
     }));
 }
@@ -32,6 +42,26 @@
                     <option value="@v.Id" selected="@(v.Id == Model.CurrentViewId ? "selected" : null)">@v.Name (@ViewLayout.CountCells(v.LayoutJson))</option>
                 }
             </select>
+        }
+        @* Watch one camera directly, no saved View needed — explicit user ask. A <select> can't hold
+           a filter box, so this is a <details> popover instead, same convention _ColumnPicker.cshtml
+           already establishes for "small filterable list in a dropdown" on this app's other pages.
+           Populated/filtered/wired by view-play.js's wireCameraPicker, from the same Model.Cameras
+           feed (already CameraAccess-narrowed) the player itself consumes — nothing here can offer a
+           camera the viewer isn't already allowed to watch. *@
+        @if (Model.Cameras.Count > 0)
+        {
+            <details class="d-inline-block position-relative" id="cameraPickerDetails">
+                <summary class="btn btn-sm btn-outline-secondary" style="list-style:none; cursor:pointer;">
+                    <span aria-hidden="true">📷</span> Camera
+                </summary>
+                <div class="position-absolute end-0 mt-1 p-2 bg-body border rounded shadow"
+                     style="z-index:1000; width:16rem; max-height:20rem; overflow-y:auto;">
+                    <input type="search" class="form-control form-control-sm mb-2" id="cameraPickerFilter"
+                           placeholder="Filter cameras…" aria-label="Filter cameras" autocomplete="off" />
+                    <div id="cameraPickerList" class="list-group list-group-flush"></div>
+                </div>
+            </details>
         }
         <button type="button" class="btn btn-sm btn-outline-secondary" id="kioskBtn" title="Toggle fullscreen kiosk mode">⛶ Fullscreen</button>
         <a class="btn btn-sm btn-outline-secondary" asp-page="Index">Back to views</a>
@@ -54,8 +84,13 @@
             layoutJson: @Html.Raw(JsonSerializer.Serialize(Model.LayoutJson)),
             cameras: @Html.Raw(camerasJson),
             currentViewId: @Html.Raw(JsonSerializer.Serialize(Model.CurrentViewId.ToString())),
+            singleCameraId: @Html.Raw(Model.SingleCameraId is { } sc ? JsonSerializer.Serialize(sc.ToString()) : "null"),
+            cameraPickerDetailsId: 'cameraPickerDetails',
+            cameraPickerFilterId: 'cameraPickerFilter',
+            cameraPickerListId: 'cameraPickerList',
             gridElId: 'viewPlayGrid',
             badgeCorner: @Html.Raw(JsonSerializer.Serialize(Model.EventBadgeCornerValue)),
+            adaptiveStreamingEnabled: @Html.Raw(Model.AdaptiveStreamingEnabled ? "true" : "false"),
             kioskBtnId: 'kioskBtn',
             navElId: 'mainNav',
             toolbarElId: 'viewPlayToolbar',

@@ -27,13 +27,17 @@ public static class ThumbnailCapture
 {
     public const int DefaultMaxDimension = 150;
 
+    /// <summary>ffmpeg -q:v for a hover-sized preview. Deliberately lossy: at 150px nobody is reading
+    /// detail out of it, and these are cached indefinitely alongside their segment.</summary>
+    public const int DefaultQuality = 8;
+
     /// <summary>Returns JPEG bytes, or null if ffmpeg produced nothing (corrupt/truncated segment,
     /// offset beyond the file's actual content, timeout) — callers turn that into a 502 rather than
     /// this class deciding what an HTTP failure should look like. lowPriority runs the ffmpeg process
     /// at BelowNormal OS priority — set by the background backfill loop (ThumbnailBackfillService) so
     /// its catch-up work never meaningfully contends with live recording or an on-demand hover for
     /// CPU; on-demand callers leave this false since a user is actively waiting on those.</summary>
-    public static async Task<byte[]?> CaptureAsync(string ffmpegPath, string filePath, int offsetSeconds, CancellationToken ct, TimeSpan? timeout = null, bool lowPriority = false, int maxDimension = DefaultMaxDimension)
+    public static async Task<byte[]?> CaptureAsync(string ffmpegPath, string filePath, int offsetSeconds, CancellationToken ct, TimeSpan? timeout = null, bool lowPriority = false, int maxDimension = DefaultMaxDimension, int quality = DefaultQuality)
     {
         var psi = new ProcessStartInfo
         {
@@ -52,7 +56,7 @@ public static class ThumbnailCapture
             "-i", filePath,
             "-frames:v", "1",
             "-vf", $"scale={maxDimension}:{maxDimension}:force_original_aspect_ratio=decrease",
-            "-q:v", "8",
+            "-q:v", quality.ToString(),
             "-f", "image2",
             "pipe:1"
         ];

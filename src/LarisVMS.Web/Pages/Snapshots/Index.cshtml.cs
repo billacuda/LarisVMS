@@ -5,6 +5,7 @@ using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
 using LarisVMS.Infrastructure.Services;
+using LarisVMS.Web.Helpers;
 
 namespace LarisVMS.Web.Pages.Snapshots;
 
@@ -68,10 +69,11 @@ public class IndexModel(ITimelineService timelineService, ICameraService cameraS
         Kinds = kinds;
         Cameras = (await cameraService.ListAsync(ct)).OrderBy(c => c.Name).ToList();
 
-        // Day-granularity local dates, no timezone conversion — same simplification AuditLogsModel
-        // already applies to its own from/to filters.
-        DateTime? fromUtc = DateOnly.TryParse(from, out var fd) ? fd.ToDateTime(TimeOnly.MinValue) : null;
-        DateTime? toUtc = DateOnly.TryParse(to, out var td) ? td.ToDateTime(TimeOnly.MaxValue) : null;
+        // The picked dates are local days, converted here to the UTC instants that bound them — see
+        // LocalDateFilter for why passing them through unconverted silently truncated the selected
+        // day at 4:59 PM in a UTC-7 deployment.
+        var fromUtc = LocalDateFilter.StartOfDayUtc(from);
+        var toUtc = LocalDateFilter.EndOfDayUtc(to);
 
         Results = await timelineService.GetSnapshotsAsync(cameraId, fromUtc, toUtc, pageNumber < 1 ? 1 : pageNumber, PageSize, ct, kinds);
     }

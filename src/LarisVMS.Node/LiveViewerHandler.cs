@@ -6,16 +6,21 @@ using LarisVMS.Media;
 namespace LarisVMS.Node;
 
 /// <summary>
-/// Streams one camera's tee'd live fMP4 fanout to one connected WebSocket viewer: waits for (or
-/// reuses) the current ffmpeg attempt's init segment, sends it once, then forwards every subsequent
-/// fragment. Each viewer gets its own bounded channel between RecordingSession's stdout-drain loop
-/// and its WebSocket send loop specifically so a slow client (or a stalled network write) can never
-/// back-pressure that drain loop — which is also what's keeping ffmpeg's stdout pipe (and therefore
-/// the whole tee, recording leg included) from blocking.
+/// Streams one camera's live fMP4 fanout to one connected WebSocket viewer: waits for (or reuses)
+/// the current ffmpeg attempt's init segment, sends it once, then forwards every subsequent
+/// fragment. Each viewer gets its own bounded channel between the source's stdout-drain loop and
+/// its WebSocket send loop specifically so a slow client (or a stalled network write) can never
+/// back-pressure that drain loop — which, for the Main source (RecordingSession), is also what's
+/// keeping ffmpeg's stdout pipe (and therefore the whole tee, recording leg included) from blocking.
+///
+/// Takes <see cref="ILiveSource"/> rather than RecordingSession directly (M18: adaptive streaming)
+/// so the same handler serves a viewer from either RecordingSession's live tee leg (Main) or
+/// SubLiveSession (Sub) without needing to know which — the caller picks the source, this just
+/// drains it.
 /// </summary>
 public static class LiveViewerHandler
 {
-    public static async Task RunAsync(WebSocket socket, RecordingSession session, ILogger logger, CancellationToken ct)
+    public static async Task RunAsync(WebSocket socket, ILiveSource session, ILogger logger, CancellationToken ct)
     {
         byte[] initSegment;
         try
