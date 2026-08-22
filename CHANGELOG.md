@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.142.2] - 2026-08-22
+
+### Fixed
+
+- **Clicking the Playback timeline to an earlier point within an already-loaded segment could
+  freeze the video on its last frame, with no error in the console and nothing logged on either
+  server.** A same-segment "no reload needed" fast path moved `currentTime` on the assumption that
+  the whole segment was buffered. Since the node's partial-fetch optimization, it usually isn't:
+  a seek that lands mid-segment is served starting from the nearest fragment boundary, not the
+  segment's true start, so only part of it was ever appended — yet the load still calls
+  `endOfStream()` once that partial content ends, which makes the browser treat the *entire*
+  segment duration as seekable. A backward click within that same segment was therefore a legal
+  seek into bytes that would never arrive: no `error` event, no `ended` event, nothing to hang
+  recovery off of — the element just sat on whatever it last painted. Intermittent because it only
+  triggered when two clicks landed in the same ~60s segment; a click into a different segment
+  always worked. The fast path now checks the actual buffered range and falls back to a real reload
+  when the target isn't in it. A stall watchdog was also added as a backstop for any other silent
+  MSE stall, so a future one can't go unnoticed the same way.
+- **The node's partial-fetch fragment selection compared an absolute media timestamp against a
+  segment-relative seek offset**, found while tracing the freeze above. `Mp4Fragment.MediaTimeSeconds`
+  is a fragment's raw `tfdt` value on the file's own media timeline, not relative to the segment's
+  wall-clock start the way the client's `seekSeconds` is. For a file whose media timeline didn't
+  start at zero, this could land a seek a few seconds early, or — for a large enough offset —
+  silently disable partial fetch for that file entirely (falling through to a full-segment
+  download on every seek into it). The node now computes seek offsets relative to the segment's
+  own first fragment.
+
+Node change; install-node.ps1 re-run not needed, ordinary auto-update covers it.
+
 ## [0.142.1] - 2026-08-22
 
 ### Fixed

@@ -240,13 +240,23 @@ app.MapGet("/playback-segment/{cameraId:guid}", async (HttpContext ctx, Guid cam
         && seekSeconds > MinSeekSecondsForPartialFetch)
     {
         var fragments = await worker.GetOrBuildFragmentIndexAsync(fullPath, ctx.RequestAborted);
+        // Mp4Fragment.MediaTimeSeconds is the raw tfdt baseMediaDecodeTime, an absolute media-timeline
+        // value — but seekSeconds (from the client) is relative to the *segment's* wall-clock start.
+        // These only happen to be the same number when a file's media timeline starts at zero, which
+        // this fleet's recordings don't reliably do (confirmed live from the client side — see
+        // playback-player.js's own X-Fragment-Start-Seconds comment). fragments[0] is the first moof
+        // in the file, so its own MediaTimeSeconds is exactly the offset to subtract to make every
+        // comparison below segment-relative; previously, a nonzero base here made seeks land early by
+        // that amount, and a base of a minute or more made this loop break on the very first fragment
+        // every time, silently disabling partial fetch for that file entirely.
+        var baseMediaTimeSeconds = fragments.Count > 0 ? fragments[0].MediaTimeSeconds : 0.0;
         // The last fragment at-or-before the target — never *past* it, so the client's own "wait
         // until the target instant is actually buffered" logic (playback-player.js) still has
         // something to wait for rather than silently landing later than what was asked for.
         Mp4Fragment? chosen = null;
         foreach (var f in fragments)
         {
-            if (f.MediaTimeSeconds > seekSeconds) break;
+            if (f.MediaTimeSeconds - baseMediaTimeSeconds > seekSeconds) break;
             chosen = f;
         }
 
@@ -276,11 +286,14 @@ app.MapGet("/playback-segment/{cameraId:guid}", async (HttpContext ctx, Guid cam
                 {
                     // Read by the client to correct its own "buffered start + seekSeconds" seek math
                     // — the served fragment's own media time, not the segment's true start, is now
-                    // what sourceBuffer.buffered.start(0) will actually report once appended. Set only
-                    // now, after the open has actually succeeded — setting it earlier and then falling
-                    // back to a whole-file send below would leave a stale header on a response it
-                    // doesn't describe.
-                    ctx.Response.Headers["X-Fragment-Start-Seconds"] = target.MediaTimeSeconds.ToString(CultureInfo.InvariantCulture);
+                    // what sourceBuffer.buffered.start(0) will actually report once appended. Segment-
+                    // relative (see baseMediaTimeSeconds above), matching seekSeconds's own units — the
+                    // client only ever works in segment-relative time and has no way to know this
+                    // file's absolute media-timeline base. Set only now, after the open has actually
+                    // succeeded — setting it earlier and then falling back to a whole-file send below
+                    // would leave a stale header on a response it doesn't describe.
+                    ctx.Response.Headers["X-Fragment-Start-Seconds"] =
+                        (target.MediaTimeSeconds - baseMediaTimeSeconds).ToString(CultureInfo.InvariantCulture);
                     var initSegmentEnd = fragments[0].ByteOffset;
                     await CopyExactAsync(fileStream, ctx.Response.Body, initSegmentEnd, ctx.RequestAborted);
                     fileStream.Seek(target.ByteOffset, SeekOrigin.Begin);
