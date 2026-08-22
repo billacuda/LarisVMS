@@ -82,7 +82,17 @@ public class ThumbnailBackfillService(NodeApiClient api, NodeWorker worker, stri
             if (!Directory.Exists(mainDir)) continue;
             var thumbsDir = Path.Combine(storageRoot, $"cam-{camera.CameraId}", "thumbs");
 
-            foreach (var segmentPath in FindAlignedSegmentsMissingThumbnails(mainDir, thumbsDir, now))
+            // Materialized (not the raw lazy IEnumerable) specifically so a transient storage I/O
+            // error can be retried as one unit — confirmed live as a real need: an
+            // IOException("An unexpected network error occurred") from a dropped SMB session used to
+            // abort this camera's directory walk (and, propagating up through BackfillOnceAsync's own
+            // foreach, every camera *after* it in this pass too) over what was often a few-second
+            // blip. Retried per camera, not per pass, so one camera's bad luck doesn't cost every
+            // other camera's already-collected results.
+            var candidates = StorageRetry.Execute(logger, $"Thumbnail backfill scan for camera {camera.CameraId}",
+                () => FindAlignedSegmentsMissingThumbnails(mainDir, thumbsDir, now));
+
+            foreach (var segmentPath in candidates)
             {
                 if (ct.IsCancellationRequested) return false;
                 if (processed >= MaxPerPass) return false;
@@ -107,9 +117,18 @@ public class ThumbnailBackfillService(NodeApiClient api, NodeWorker worker, stri
     /// <summary>Pure enumeration extracted so it's testable against a real temp directory the same
     /// way StorageManager.EnumerateEvictable is — every segment under mainDir whose own filename
     /// timestamp falls on a BucketMinutes boundary and old enough to trust, that doesn't already have
-    /// a matching offset-0 thumbnail in thumbsDir.</summary>
-    internal static IEnumerable<string> FindAlignedSegmentsMissingThumbnails(string mainDir, string thumbsDir, DateTime nowUtc)
+    /// a matching offset-0 thumbnail in thumbsDir.
+    ///
+    /// Eagerly materialized to a List, not a lazy `yield return` — deliberately, so the caller
+    /// (BackfillOnceAsync) can wrap the *whole* walk in StorageRetry as one unit. A `yield return`
+    /// enumerator throwing mid-walk on a transient storage error can't be retried by re-entering the
+    /// same call (C# forbids `yield return` inside a try/catch, only try/finally), so the caller would
+    /// have no way to distinguish "genuinely done" from "died partway through" — and confirmed live as
+    /// exactly that: an IOException from a dropped SMB session used to abort mid-directory-walk with
+    /// whatever had been found so far silently discarded.</summary>
+    internal static List<string> FindAlignedSegmentsMissingThumbnails(string mainDir, string thumbsDir, DateTime nowUtc)
     {
+        var results = new List<string>();
         foreach (var path in Directory.EnumerateFiles(mainDir, "*.mp4", SearchOption.AllDirectories))
         {
             var stem = Path.GetFileNameWithoutExtension(path);
@@ -124,7 +143,8 @@ public class ThumbnailBackfillService(NodeApiClient api, NodeWorker worker, stri
 
             var relative = Path.GetRelativePath(mainDir, path);
             var thumbPath = Path.Combine(thumbsDir, Path.ChangeExtension(relative, null) + $"_o00_{LarisVMS.Media.ThumbnailCapture.DefaultMaxDimension}q{LarisVMS.Media.ThumbnailCapture.DefaultQuality}.jpg");
-            if (!File.Exists(thumbPath)) yield return path;
+            if (!File.Exists(thumbPath)) results.Add(path);
         }
+        return results;
     }
 }

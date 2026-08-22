@@ -5,13 +5,79 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.141.0] - 2026-08-21
+
+### Fixed
+
+- **Recording could get permanently stuck after a storage outage, needing a manual node restart to
+  recover.** Root-caused against a real, extended outage (multiple hours): once ffmpeg's segment-file
+  write hit a dropped SMB path, RecordingSession's own stall watchdog correctly detected it and killed the
+  process — but `Process.Kill()` only *asks* Windows to terminate a process; a process blocked on an
+  uninterruptible kernel-mode I/O wait (exactly what a dead network share write is) can take far
+  longer than expected to actually exit, sometimes effectively indefinitely until the OS's own network
+  stack gives up on that I/O first. `RunAsync` awaited that exit with no timeout — so the *entire*
+  recording session for that camera sat frozen at that one line for the rest of the outage: never
+  reaching the reconnect/backoff logic below it, never starting a fresh ffmpeg attempt, recording
+  nothing, invisible in the log because nothing there ever threw. The wait is now bounded
+  (`RecordingSessionOptions.KillTimeoutSeconds`, 15s default): past it, the old (possibly still
+  technically alive) process is abandoned — not blocked on any further — and the session moves straight
+  to its existing backoff-and-reconnect cycle, so a stuck kill now costs at most ~15s instead of the
+  rest of the outage. Recording now keeps retrying to reach storage indefinitely at the existing
+  capped backoff (up to 60s between attempts) rather than ever settling into a stuck state — a full
+  node restart is no longer the only way to recover. Known, accepted trade-off: the abandoned process
+  may briefly still hold the camera's RTSP connection open until its own stuck I/O clears, which could
+  cause the fresh attempt's own connection to be momentarily refused by cameras that cap concurrent
+  clients — self-resolving once the old process actually exits, same as it already does today.
+
+Node change; install-node.ps1 re-run not needed, ordinary auto-update covers it.
+
+## [0.140.0] - 2026-08-21
+
+### Added
+
+- **A node now retries a transient storage I/O error a few times before giving up, instead of
+  failing (or silently stalling) on the first hiccup.** Confirmed live: an SMB-backed storage path
+  dropped for a stretch, surfacing as `IOException: An unexpected network error occurred` —
+  recording itself recovered with a node restart, but two other paths shared the same exposure and
+  didn't: `ThumbnailBackfillService`'s directory walk used to abort its *entire* pass (every camera
+  after the one that hit the error, not just that one) over what was often a several-second blip, and
+  the Playback byte-offset partial-fetch added last version (indexed scrub seeking) does more,
+  smaller reads against the same path than the old whole-file fetch did — more exposed to a brief
+  drop, surfacing as a stuck-then-catches-up player with nothing in the console, since a slow read
+  isn't an error. New `StorageRetry` (three attempts, short backoff) wraps: the fragment-index build,
+  opening a segment for either the partial or whole-file `/playback-segment` response, and
+  `ThumbnailBackfillService`'s per-camera directory scan (which also switched from a lazy enumerator
+  to a materialized list specifically so the whole walk can be retried as one unit — a `yield return`
+  generator can't be re-entered after throwing mid-walk). Scoped to `IOException` only; a request that
+  still can't reach storage after retrying reports a real error instead of hanging indefinitely.
+
+Node change; install-node.ps1 re-run not needed, ordinary auto-update covers it.
+
+## [0.139.0] - 2026-08-21
+
+### Fixed
+
+- **Classified-detection snapshots (Person/Vehicle/Face/Animal/Object) regressed to wrong, sometimes
+  empty-scene thumbnails, and a spike of `/playback-thumbnail` 502s.** v0.135.0 moved every snapshot's
+  sample point back into the recording's pre-roll buffer, on the reasoning that the subject is already
+  visible before `StartUtc`. True for plain motion, but wrong for a classified detection: the camera's
+  own classifier only confirms *what* it saw at `StartUtc` itself, so reaching back into the pre-roll
+  buffer risked sampling a moment *before* the subject entered frame — the exact event a good thumbnail
+  matters most for. The same shift also explains the 502 spike: landing further from `StartUtc` made an
+  exact-instant lookup more likely to fall in the wrong segment or right at a segment's own
+  drift-prone tail. Classified detections are back to `StartUtc + 1s` (v0.128.0's original behavior,
+  unaffected by pre-roll); plain motion and custom event-tag spans keep the pre-roll-based sample point
+  v0.135.0 introduced, which was correct for them and is not part of this regression.
+
+Web-only, no node change.
+
 ## [0.138.0] - 2026-08-21
 
 ### Added
 
 - **Playback can now jump straight to a scrub target inside a segment, instead of downloading
-  everything before it first.** Confirmed live against this fleet's real segment sizes (24-44MB per
-  60s segment at 4K/HEVC) as the actual cause of "slow to load, and sometimes stuck at Loading…" when
+  everything before it first.** Confirmed live against real-world segment sizes (tens of MB per
+  60s segment at high resolution/HEVC) as the actual cause of "slow to load, and sometimes stuck at Loading…" when
   scrubbing — the player fetched a segment's bytes sequentially from byte 0 and only started playback
   once the target instant was buffered, so a late scrub meant transferring most of the file first, not
   a RAID6 disk-speed problem. Every segment file this app records is already a fragmented MP4 with
@@ -43,8 +109,8 @@ nothing about first-time provisioning changed.
 ### Fixed
 
 - **Adaptive streaming (v0.137.0) left every switched tile stuck reconnecting** — a live tile moved to
-  Sub still declared its SourceBuffer with the *Main* stream's codec. Confirmed against this
-  deployment's own data: every camera here records `hevc` on Main but `H264` on Sub, so a tile that
+  Sub still declared its SourceBuffer with the *Main* stream's codec. Confirmed against real camera
+  data: a camera can easily record `hevc` on Main but `H264` on Sub, so a tile that
   switched to Sub opened an `hvc1.1.6.L93.B0,mp4a.40.2` SourceBuffer and was then fed H.264 bytes. MSE
   treats a declared-codec/track-list mismatch as a hard failure, not a degradation, so the very first
   Sub fragment tripped a `sourceBuffer error` → `NotSupportedError: Failed to load because no
@@ -125,7 +191,7 @@ Web-only, no node change.
   .MotionPreRollSeconds`: recording pre-rolls before `StartUtc`, so the subject is typically already
   visible at the very start of what's actually on disk for the event, not just at `StartUtc` itself
   (which is when the trigger crossed its own threshold, already partway into the subject being
-  there). `AtUtc` is now `StartUtc − MotionPreRollSeconds + 1s` — at this fleet's 3s pre-roll, 2s
+  there). `AtUtc` is now `StartUtc − MotionPreRollSeconds + 1s` — at a 3s pre-roll (a common setting), 2s
   *before* `StartUtc`. Resolved per camera (the setting is camera-overridable), upper-clamped to the
   span's own end defensively. No lower clamp: a candidate landing before any segment actually on disk
   (an event moments after recording began, before a full pre-roll buffer exists) resolves to no
@@ -209,9 +275,9 @@ Web-only, no node change.
 
 - **Every camera's smart-event connection was reconnecting every 3 minutes, healthy or not.** The
   session's read timeout was written on the stated assumption that "the camera sends a keep-alive
-  comment line every ~30s" — confirmed live that it doesn't, at least not on our subscription, which
+  comment line every ~30s" — confirmed live that it doesn't, at least not on a subscription that
   deliberately excludes the motion codes these cameras emit most of the time. So a perfectly good
-  connection looked dead on a 3-minute cycle, forever, on all six cameras. That's not just log noise:
+  connection looked dead on a 3-minute cycle, forever, across every camera on the plugin. That's not just log noise:
   `attach` only delivers events from the moment it subscribes, so each reconnect is a few seconds in
   which a detection is lost with no trace. Fixed from both ends — the subscription now includes
   `VideoMotionInfo` purely as a keep-alive (a bare `action=State` ping carrying only a timestamp,
@@ -272,8 +338,8 @@ Web-only, no node change.
 
 ### Notes
 
-Verified against this fleet's IP8M-DLB2998EW-AI cameras, whose behavior differs materially from the
-IP5M models alongside them and is worth recording:
+Verified against a real IP8M-DLB2998EW-AI camera, whose behavior differs materially from the
+IP5M models it's often paired with and is worth recording:
 
 - With **Smart Motion Detection** on they emit no classified code at all over CGI — not
   `SmartMotionHuman`, not `SmartMotionVehicle`, not plain `SmartMotion`, even subscribed by explicit
@@ -283,7 +349,7 @@ IP5M models alongside them and is worth recording:
 - With an **IVS** rule (`Class=Normal`, `Type=CrossRegionDetection`) they emit full object detail
   including `ObjectType`, `Confidence` and a `BoundingBox`. IVS is therefore the working path for
   person/vehicle detection on these models.
-- Those bounding boxes are the first real object-geometry source found on this fleet — the M21
+- Those bounding boxes are the first real object-geometry source found on any camera tested — the M21
   real-time overlay is currently listed as blocked for want of one. Not consumed yet.
 
 **Install-node.ps1 re-run needed** on every recorder node — `LarisVMS.Node`/`LarisVMS.NodeUpdater`
@@ -294,8 +360,8 @@ bumped to 0.131.0 in lockstep.
 ### Fixed
 
 - **Snapshots and Audit Logs date filters were off by the UTC offset**, cutting the selected day
-  short — confirmed live at UTC-7, where results stopped at 4:59 PM (exactly 23:59:59Z) and the last
-  seven hours of the chosen day were missing entirely. An `<input type="date">` posts a bare
+  short — confirmed live at a negative UTC offset, where results stopped mid-afternoon (exactly
+  23:59:59Z) and the last several hours of the chosen day were missing entirely. An `<input type="date">` posts a bare
   `yyyy-MM-dd` with no timezone, and both pages passed the parsed value straight through as
   `DateTimeKind.Unspecified`; everything downstream treats Unspecified as already-UTC (deliberately —
   `TimelineService.NormalizeToUtc`'s other callers really do send UTC), so a local day became a UTC
@@ -356,8 +422,8 @@ bumped to 0.129.0 in lockstep. The restart button specifically requires the upda
 ### Changed
 
 - **Object-detection snapshots now sample 1s after the event starts** instead of at the span's
-  midpoint. A detection span's length is dominated by the camera's own event cooldown (~10s on this
-  fleet, so it doesn't spam) rather than by how long the subject was actually in frame — a vehicle
+  midpoint. A detection span's length is dominated by the camera's own event cooldown (~10s on some
+  hardware, so it doesn't spam) rather than by how long the subject was actually in frame — a vehicle
   crossing the frame is long gone by the midpoint of a span that only stayed open because the camera
   won't re-fire sooner. Plain motion and custom-tag spans are unchanged and still use the midpoint:
   their length really is roughly how long the movement lasted, so the middle remains the most
@@ -1477,7 +1543,7 @@ audio fields, so the dashboard's Audio column stays blank for their cameras unti
   (`AnimalDetector`, `PetDetector`, `AbandonedObject`, `ObjectAppearance`, `MissingObject`,
   `ObjectRemoval`) and over the Dahua/Amcrest integration (`AnimalDetection`, `SmartMotionAnimal`,
   `PetDetection`, `LeftDetection`, `AbandonedObjectDetection`, `TakenAwayDetection`,
-  `MissingObjectDetection`). None of this deployment's cameras are known to emit them — they cost
+  `MissingObjectDetection`). No camera tested so far is known to emit them — they cost
   nothing until one does.
 
 - **Several object classes seen at once are all shown, on both surfaces.** A camera watching a person
@@ -1588,17 +1654,17 @@ audio fields, so the dashboard's Audio column stays blank for their cameras unti
     mean loading arbitrary code onto recorder machines. Adding a vendor is one descriptor plus one
     session, each registered in exactly one place.
   - Detection re-runs on every probe, so a camera picks up (or loses) an integration when its
-    reported identity changes — including hardware already in the fleet that a later release starts
+    reported identity changes — including already-added hardware that a later release starts
     recognizing. An unknown key (config from a newer server, or a provider since removed) degrades to
     "no integration" rather than failing config generation or stopping a camera recording.
 - **First provider: Dahua / Amcrest smart events.** Reads person and vehicle detections from the
   camera's own Smart Motion Detection over Dahua's CGI event API, feeding the exact same detection
   spans, badges, timeline colors and Motion-mode retention that 0.85.0 built for ONVIF.
-  - **This is what makes 0.85.0 actually work on this fleet.** Those cameras classify objects onboard
-    with SMD enabled, but publish nothing object-shaped over ONVIF — confirmed against 21,747
-    recorded events containing only motion/tamper/monitoring topics, and a metadata track carrying a
-    motion-cell grid rather than object geometry. The classification was always happening; it just
-    had no route into the app until now.
+  - **This is what makes 0.85.0 actually work on this camera family.** These cameras classify objects
+    onboard with SMD enabled, but publish nothing object-shaped over ONVIF — confirmed against a large
+    sample of recorded events containing only motion/tamper/monitoring topics, and a metadata track
+    carrying a motion-cell grid rather than object geometry. The classification was always happening;
+    it just had no route into the app until now.
   - Subscribes only to codes the app can act on, not `[All]` — which would also stream every
     heartbeat, storage and config-change event the camera produces. Plain motion is deliberately
     excluded, since ONVIF already delivers it and taking both would double-report one event.
@@ -1606,8 +1672,8 @@ audio fields, so the dashboard's Audio column stays blank for their cameras unti
 ### Known limitations
 
 - **The vendor event codes are unverified against real hardware.** The code table comes from Dahua's
-  documentation and covers several firmware generations' spellings, but this deployment's exact
-  firmware hasn't been observed emitting them. An unrecognized code is ignored safely (no misbehavior,
+  documentation and covers several firmware generations' spellings, but no specific firmware build has
+  been observed emitting them yet. An unrecognized code is ignored safely (no misbehavior,
   just no badge), and adding a spelling is a one-line change. `probe-dahua-events.ps1` prints exactly
   what a camera really sends.
 
@@ -1628,8 +1694,8 @@ audio fields, so the dashboard's Audio column stays blank for their cameras unti
 
 ### Research
 
-- **Bounding-box spike result: not achievable on the current camera fleet.** Probing a Driveway
-  camera (Dahua/Amcrest family, the same RTSP path all six units use) established:
+- **Bounding-box spike result: not achievable on the cameras tested.** Probing a
+  camera (Dahua/Amcrest family, the same RTSP path every unit in this family uses) established:
   - A metadata track **does** exist (stream index 2) and ffmpeg **can** demux it cleanly with
     `-map 0:d` — 6963 bytes of valid ONVIF XML in 15 seconds, no repeat of the muxer failure that
     made the recording pipeline stop mapping data streams in the first place.
@@ -2129,10 +2195,10 @@ to trigger on. **LarisVMS.Node change — install-node.ps1 re-run needed on ever
 - **Exporting a range that spans a camera reassignment now produces multiple downloadable files
   instead of failing.** 0.66.0 gave this a clear error message but still refused the export outright;
   now the item is split into one export per node actually involved (e.g. a "Front Door" export
-  covering a move from NVR1 to WINSERV1 becomes two items, each dispatched to the node that actually
-  holds its slice of footage) — each reuses the exact same node-side ffmpeg/concat path as a normal
-  export, just scoped to that node's own segments. Output filenames now always include the node name
-  (e.g. `FrontDoor_NVR1_...mp4`) so the two parts of a split never collide, and the Exports page shows
+  covering a move from one recorder node to another becomes two items, each dispatched to the node that
+  actually holds its slice of footage) — each reuses the exact same node-side ffmpeg/concat path as a
+  normal export, just scoped to that node's own segments. Output filenames now always include the node
+  name (e.g. `FrontDoor_NodeName_...mp4`) so the two parts of a split never collide, and the Exports page shows
   which node each item's footage came from. Retrying an item that failed under 0.66.0's old
   all-or-nothing check will now go through this split path instead. Web-only, no node change.
 
@@ -2217,8 +2283,8 @@ to trigger on. **LarisVMS.Node change — install-node.ps1 re-run needed on ever
   that node — so once a camera got reassigned to a different node (or deleted entirely), its leftover
   `cam-{id}/main/` folder on the old node became permanently invisible to retention and quota: no
   `RetentionDays`/`QuotaBytes` value exists for a camera that's no longer in the node's own config, so
-  nothing ever aged it out. Confirmed live: two cameras reassigned away from NVR1 left 1,158 real,
-  still-existing segment files each sitting untouched on its disk since 08-08, permanently driving
+  nothing ever aged it out. Confirmed live: two cameras reassigned away from a node left over a
+  thousand real, still-existing segment files sitting untouched on its disk, permanently driving
   `Admin`'s stale-segment warning with no way to clear short of manual cleanup. Now swept using the
   camera's own actual retention policy — a new `NodeConfigResponse.OrphanedCameras` list lets
   `NodeService.GetConfigAsync` hand back `Retention.Days` for any camera this node has leftover
@@ -2355,15 +2421,15 @@ to trigger on. **LarisVMS.Node change — install-node.ps1 re-run needed on ever
 ### Fixed
 
 - **`install-node.ps1` had no UTF-8 BOM, breaking it under Windows PowerShell 5.1** — confirmed live
-  on nvr1 as "Missing closing ')'"/"Missing closing '}'" parse errors that made no sense against the
+  on a real recorder node as "Missing closing ')'"/"Missing closing '}'" parse errors that made no sense against the
   actual source. Root cause: PowerShell 7 (used to verify the file was fine) defaults to UTF-8 for a
   BOM-less script; Windows PowerShell 5.1 (the Windows default `powershell.exe`) instead falls back
   to the system ANSI codepage, which mangles the em dashes and curly apostrophes this codebase's
   comments use throughout into byte sequences that break the tokenizer — reproduced exactly by
   decoding the file as Windows-1252 and reparsing it. All four first-party scripts
   (`install-node.ps1`, `build-node.ps1`, `deploy.ps1`, `fix-legacy-segments.ps1`) now carry a UTF-8
-  BOM, which both PowerShell versions honor correctly. The share copy at
-  `\\files1\install\LarisVMS\node\win\install-node.ps1` was updated directly so nvr1 doesn't need to
+  BOM, which both PowerShell versions honor correctly. The network share copy of
+  `install-node.ps1` was updated directly so the affected node doesn't need to
   wait for a redeploy to retry.
 
 ## [0.52.0] - 2026-08-13
@@ -2528,11 +2594,11 @@ to trigger on. **LarisVMS.Node change — install-node.ps1 re-run needed on ever
   ruled that explanation out. Re-measured properly using a signal internal to the cameras themselves:
   a `LastClockSynchronization` notification carries a timestamp in its payload *and* one in the
   message's `UtcTime` attribute, so comparing those two isolates how the camera formats a timestamp
-  from what any other clock says. On four of six cameras they disagree by **exactly 60.00 minutes,
-  with zero variance across 35+ samples each**. Drift is never exactly an hour with no variance —
+  from what any other clock says. On a majority of the cameras tested they disagree by **exactly 60.00
+  minutes, with zero variance across 35+ samples each**. Drift is never exactly an hour with no variance —
   that signature is a daylight-saving conversion bug in the camera's ONVIF layer, converting correct
   local time to "UTC" with the standard offset instead of the current DST one. It lands differently
-  per unit (firmware version, most likely): on two of the six the `UtcTime` attribute carries the
+  per unit (firmware version, most likely): on some of the cameras tested the `UtcTime` attribute carries the
   hour error and therefore got ingested, on the rest it doesn't. The 0.44.0 code fix was already the
   right one and is unchanged; only its explanation, the logged warning, and the code comments were
   wrong. The warning no longer tells operators to go fix NTP — it now names the one-hour DST
@@ -2677,8 +2743,8 @@ to trigger on. **LarisVMS.Node change — install-node.ps1 re-run needed on ever
 ### Fixed
 
 - **Critical: every node process restart could silently delete real, already-recorded footage that
-  already had valid database rows.** Confirmed live: `Segments` rows dropped from ~16,600 to ~235
-  after this session's several version-bump deploys. Root cause: `RecordingSession.RunAsync` rescans
+  already had valid database rows.** Confirmed live: `Segments` row counts dropped by well over 98%
+  after several version-bump deploys in a row. Root cause: `RecordingSession.RunAsync` rescans
   its camera's *entire* on-disk history from scratch every time it starts, with zero memory of what
   the server already has rows for — this in-session tracking (`reportedPaths`) already correctly
   survives an *ffmpeg* reconnect within one run, but a full *node process* restart creates a brand
@@ -2699,12 +2765,12 @@ to trigger on. **LarisVMS.Node change — install-node.ps1 re-run needed on ever
   Continuous no longer carries any risk of a later restart retroactively re-deciding footage recorded
   under the old mode — a segment's keep/discard decision is now made exactly once, at the moment it
   first completes, full stop. Three new tests exercise the actual rescan-skip behavior against a real
-  temp directory. **This is a LarisVMS.Node change — install-node.ps1 re-run needed on both WINSERV1
-  and NVR1 as soon as possible.**
+  temp directory. **This is a LarisVMS.Node change — install-node.ps1 re-run needed on every recorder
+  node as soon as possible.**
 
 ### Known limitations
 
-- This fixes the bug going forward — footage already lost to this bug earlier today cannot be
+- This fixes the bug going forward — footage already lost to this bug before the fix landed cannot be
   recovered; the files are gone. The `Segments` rows for that footage should already have been
   cleaned up by the v0.30.0 reconciliation sweep (or will be on its next hourly pass), so the
   timeline should stop showing playable-looking gaps for it once that catches up.
@@ -2734,7 +2800,7 @@ to trigger on. **LarisVMS.Node change — install-node.ps1 re-run needed on ever
   camera-event span before it closes. Two new tests lock in the exact scenario: `LastMotionAtUtc`
   frozen at the rising timestamp across a 10-minute gap while `IsActive` stays true throughout, only
   going false once a real falling-edge tick arrives. **This is a LarisVMS.Node change —
-  install-node.ps1 re-run needed on both WINSERV1 and NVR1.**
+  install-node.ps1 re-run needed on every recorder node.**
 
 ## [0.35.0] - 2026-08-11
 
@@ -2775,11 +2841,11 @@ video filter under stream copy, so burn-in needs its own design pass, not a drop
 - **Unverified against a real camera** — same caveat every M8 pass has shipped with. ONVIF PullPoint
   support and topic naming vary significantly by vendor/firmware; `CameraEventClassifier`'s topic
   markers cover the common ONVIF-standard motion topics but may need adjusting once watched against
-  real notifications from this deployment's actual cameras.
+  real notifications from real cameras in the field.
 - No restart-on-config-change for an event session the way zone changes restart a motion session —
   credentials/EventsServiceUri essentially never change for an existing camera in practice, and a
   session that starts failing its subscribe attempt recovers on its own retry regardless.
-- **This is a LarisVMS.Node change — install-node.ps1 re-run needed on both WINSERV1 and NVR1.**
+- **This is a LarisVMS.Node change — install-node.ps1 re-run needed on every recorder node.**
 
 ## [0.34.0] - 2026-08-10
 
@@ -2869,7 +2935,7 @@ browser session, same as any UI-only pass shipped that way in this project's his
   not just near its tail, correctly keeps it — one comparison still covers pre-roll, post-roll, and
   "motion happened during the segment" together, same as before. New test proves both the bug (the
   old anchor misses it) and the fix (the new one catches it) side by side. **This is a LarisVMS.Node
-  change — install-node.ps1 re-run needed on both WINSERV1 and NVR1.**
+  change — install-node.ps1 re-run needed on every recorder node.**
 
 ## [0.31.0] - 2026-08-10
 
@@ -3450,7 +3516,8 @@ environment to test the constraint directly.
 - **Playback never loaded any video, root cause found: every timeline/segment range query was
   silently shifted by the server's UTC offset.** ASP.NET's query-string binding parses a value like
   `2026-08-08T21:45:31.890Z` into a `DateTime` with `Kind=Local`, *converted* to the server's zone —
-  verified directly: on this UTC-7 host it binds as `14:45:31 Local`, seven hours off. SQL Server's
+  verified directly: on a host at a negative UTC offset it binds several hours off from the intended
+  instant. SQL Server's
   `datetime2` carries no offset, so EF sent that shifted wall-clock value straight into
   `WHERE StartUtc < @to AND EndUtc > @from` and every range query searched the wrong window. The
   failure was asymmetric, which is why it was hard to spot: the *timeline* still looked fine (its
@@ -3819,8 +3886,8 @@ convention.
 - `live-view.js` always tried H.264 codec strings first when opening the browser's `SourceBuffer`,
   regardless of what the camera's stream actually is. `MediaSource.isTypeSupported` only checks
   whether the browser *could* decode a codec family in the abstract, so it reports H.264 as supported
-  on essentially every browser even when the camera is HEVC (true for all six cameras in this
-  install — `CameraStream.Codec = "hevc"`, since recording is `-c copy` and every one of them
+  on essentially every browser even when the camera is HEVC (true for every camera in this
+  install — `CameraStream.Codec = "hevc"`, since recording is `-c copy` and each one
   natively encodes HEVC). The mismatch meant a SourceBuffer typed for H.264 was fed real HEVC bytes,
   which fails to decode, and the browser tears down the errored `MediaSource` — surfacing as no video
   and the "removed from parent media source" error above rather than a clear codec message. The
@@ -3854,7 +3921,7 @@ convention.
   polls every 30s, with a lazy server-side backfill if a node's stored key is still null. An existing
   node now self-heals within one reconcile cycle; no re-registration, no restart.
 - `install-node.ps1` never opened a firewall rule for the M5 live-view port — confirmed on a real
-  node (`NVR1`): `LarisVMS.Web`'s proxy could open a TCP connection to the port, but every WebSocket
+  node: `LarisVMS.Web`'s proxy could open a TCP connection to the port, but every WebSocket
   request just hung until timeout rather than failing fast, because nothing was actually listening
   from the *firewall's* perspective. Now creates an inbound allow rule for `-LivePort` (default 8554)
   idempotently. Also added the missing `-LivePort` parameter itself — the node's own `--live-port`

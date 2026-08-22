@@ -869,14 +869,16 @@ public class TimelineServiceTests
     }
 
     [Fact]
-    public async Task DetectionSnapshotSamplesFromTheStartOfThePreRollNotTheMidpoint()
+    public async Task DetectionSnapshotSamplesOneSecondAfterStartIgnoringPreRoll()
     {
-        // No real settings resolver here (2-arg TimelineService constructor), so pre-roll falls back
-        // to the same 10s default NodeService itself hardcodes for the same setting: AtUtc lands at
-        // start - 10s + 1s = start - 9s. A detection span's length is set by the camera's own event
-        // cooldown, not by how long the subject was in frame — sampling from the start of what's
-        // actually on disk for the event is where the subject is, unlike the midpoint of a span kept
-        // open only because the camera won't re-fire sooner. See GetSnapshotsAsync's own comment.
+        // A classified detection (Person/Vehicle/Face/Animal/Object) fires the instant the camera's
+        // own classifier confirms the subject — it's already on-frame right at StartUtc, so this
+        // samples StartUtc + 1s regardless of the camera's configured pre-roll (10s default here, via
+        // the 2-arg TimelineService constructor with no real settings resolver — proves pre-roll is
+        // genuinely ignored for a classified span, not just defaulted to something that happens to
+        // net out the same). Reaching back into the pre-roll buffer instead risks landing before the
+        // subject entered frame — confirmed live as empty-scene thumbnails once that was tried. See
+        // GetSnapshotsAsync's own comment.
         var (db, cameraId, _) = await SeedCameraAsync();
         var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
         db.MotionSpans.Add(new MotionSpan
@@ -889,7 +891,7 @@ public class TimelineServiceTests
         var service = new TimelineService(db, DefaultPalette);
         var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
 
-        Assert.Equal(start.AddSeconds(-9), Assert.Single(page.Items).AtUtc);
+        Assert.Equal(start.AddSeconds(1), Assert.Single(page.Items).AtUtc);
     }
 
     [Fact]
@@ -939,8 +941,10 @@ public class TimelineServiceTests
     [Fact]
     public async Task ASpanShorterThanThePreRollOffsetStillClampsToItsOwnEnd()
     {
-        // Defensive upper clamp: with a 0s pre-roll the candidate lands at start+1s, past this span's
-        // own 400ms end — must clamp to EndUtc rather than seek past content that doesn't exist.
+        // Defensive upper clamp: a detection's start+1s candidate lands past this span's own 400ms
+        // end — must clamp to EndUtc rather than seek past content that doesn't exist. The configured
+        // pre-roll here is irrelevant to a DetectionKind span (see GetSnapshotsAsync) — included
+        // anyway to prove that's really true, not just untested.
         var (db, cameraId, _) = await SeedCameraAsync();
         var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
         db.MotionSpans.Add(new MotionSpan

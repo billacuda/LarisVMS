@@ -114,10 +114,12 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     private const int MaxFragmentIndexCacheEntries = 500;
 
     /// <summary>Builds (or reuses a cached) byte-offset/media-time index for one segment file — see
-    /// Mp4FragmentIndexer's own doc comment for how. A read failure (file mid-write, or genuinely
-    /// unreadable) returns an empty list and is deliberately NOT cached, so the next request retries
-    /// rather than being stuck treating a transient failure as "this file has no fragments" forever.</summary>
-    public IReadOnlyList<Mp4Fragment> GetOrBuildFragmentIndex(string fullPath)
+    /// Mp4FragmentIndexer's own doc comment for how. Retries a few times (StorageRetry) on a
+    /// transient storage I/O error — confirmed live as a real need on this fleet's SMB-backed storage
+    /// — before giving up; a final failure returns an empty list and is deliberately NOT cached, so
+    /// the next request tries again rather than being stuck treating a transient failure as "this
+    /// file has no fragments" forever.</summary>
+    public async Task<IReadOnlyList<Mp4Fragment>> GetOrBuildFragmentIndexAsync(string fullPath, CancellationToken ct)
     {
         if (_fragmentIndexCache.TryGetValue(fullPath, out var cached)) return cached;
         if (_fragmentIndexCache.Count > MaxFragmentIndexCacheEntries) _fragmentIndexCache.Clear();
@@ -125,8 +127,11 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         IReadOnlyList<Mp4Fragment> fragments;
         try
         {
-            using var fs = File.OpenRead(fullPath);
-            fragments = Mp4FragmentIndexer.Build(fs);
+            fragments = await StorageRetry.ExecuteAsync(_logger, $"Fragment index build for {fullPath}", () =>
+            {
+                using var fs = File.OpenRead(fullPath);
+                return Task.FromResult<IReadOnlyList<Mp4Fragment>>(Mp4FragmentIndexer.Build(fs));
+            }, ct);
         }
         catch (IOException)
         {

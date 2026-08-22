@@ -111,14 +111,64 @@ restore is deliberately left to other tools, e.g. SSMS); application log capture
 viewer (`Logs → System Logs`); and a
 health dashboard (the Dashboard page, auto-refreshing, sortable and paginated, with an optional
 thumbnail column) showing each camera's live fps/bitrate/reconnect count, the audio codec and sample
-rate it is actually sending, and every node's online status. Alerting, ONVIF-pushed motion zones, on-screen bounding-box overlays, and a mobile-specific UI
-pass are not built yet.
+rate it is actually sending, and every node's online status.
 
-Hardware-transcode fallback for browsers that can't decode a camera's native codec, main/sub
-auto-switch, and instant replay are not built yet (M5 pass-1 scope), and PTZ/audio and further
-investigation tooling (bookmarks, evidence lock, smart search) haven't started — see
-[CHANGELOG.md](CHANGELOG.md) for what's shipped and the architecture plan for the full milestone
-roadmap (PTZ/audio → export/investigation → operations → object detection).
+**M14 (identity & access control)**: a Roles admin page (create/rename/delete a role, edit its
+Resource×Action permission matrix against a fixed, closed permission catalog — no free-text grants
+that could typo into matching nothing) and a Users admin page (create an account, assign roles,
+enable/disable via account lockout, reset a password), with self-registration disabled now that
+there's a real way to provision accounts. Per-camera/group access control (`Admin → Settings → Camera
+Access`) narrows a role's View/Playback/Export/PTZ/Talk/Configure access down to specific cameras or
+groups — a role with no grants is unrestricted, so this only ever narrows, never silently locks out an
+existing deployment. Per-role session lifetime, server-backed user preferences (theme, last-watched
+view, table page sizes — follow the user across devices/browsers instead of living in localStorage),
+and running live/playback traffic on a port of its own (see below) round out the milestone.
+
+**M15 (notifications)**: outbound email (`Admin → Settings → Email`) through SMTP, Microsoft Graph
+(app-only, no per-user consent), or Gmail (OAuth2, needs a one-time consent redirect — see below), and
+**Alerting** (`Admin → Alerts`) — a rule watches one camera or node for a condition (not reporting,
+offline, storage below a percentage) and fires through up to six channels: email, webhook, ntfy,
+Pushover, Slack, or Teams, each independently configured and cooled down so a standing condition
+doesn't re-alert every tick.
+
+**M16 (viewing experience)**: pinch-to-zoom in fullscreen (Live and Playback alike, alongside the
+existing wheel-zoom/drag-pan), drag-select-to-zoom on a Playback tile, a playback speed selector from
+1/32× to 32× (native `playbackRate` through 8×, a seek-driven stepped/slideshow mode above that), and
+a per-user toggle for the timeline's event-tag coloring (off by default — a real-phone walkthrough
+found it busy for everyday review).
+
+**M17 (hardware-transcode groundwork)**: each node probes its own `ffmpeg -encoders` output at startup
+and reports which hardware encoders it actually has (QSV/NVENC/AMF, badged on `Admin → Nodes`), behind
+a shared, unit-tested `-hwaccel`/`-vf`/`-c:v` argument builder every transcode-needing feature below
+now shares rather than each inventing its own ffmpeg invocation.
+
+**M18 (recording pipeline)**: **Bookmarks** — mark a moment during Playback with a note, and a
+Bookmarks page lists every one with a "▶ Play" deep link back to the exact instant (entries expire
+along with the footage they point at). **Snapshots** — every motion/detection event gets a
+timeline-matched thumbnail browsable on its own page (paged, filterable, same deep-link-to-Playback
+behavior as Bookmarks) instead of only ever being a color on the timeline. **Basic PTZ** — a
+directional pad + zoom on each PTZ-capable camera's Live tile (not yet run against real PTZ hardware).
+**Adaptive streaming** — a live tile too small to benefit from a camera's full resolution is
+automatically served its Sub stream instead of Main, with a manual per-tile Auto/HD/SD override and
+fullscreen always forcing Main; a global toggle (`Admin → Settings → Live View`) lets an admin disable
+it, and the node itself is the sole gate — turning it off actually stops the extra Sub-stream pulls,
+not just hides the client-side switching. **Configurable segment length** (`Admin → Settings →
+Recording`, also per-camera) and **indexed scrub seeking** — Playback can now jump straight to a
+scrub target inside a segment instead of downloading everything before it first, the fix for a real,
+measured slow/stuck-loading scrub on large (24–44MB) 4K/HEVC segments. Static privacy-mask burn-in
+(per-camera `Privacy` zones, burned in via the M17 encode pipeline) is implemented and tested but
+**currently shipped disabled** — validated live, it gets a masked camera stuck cycling
+Connecting/Backoff on real Intel/NVIDIA hardware, and the root cause wasn't found before it was
+kill-switched back to safe/off pending real diagnostic logs from a stuck attempt.
+
+Real-time on-screen bounding-box overlays remain blocked on hardware, not on this app: per-frame boxes
+need the ONVIF metadata RTP track, and every camera probed on this fleet (including a Dahua/Amcrest
+model whose vendor CGI events do carry a `BoundingBox`, not yet consumed) either carries only a
+motion-cell grid over ONVIF or hasn't had that box wired up yet. ONVIF-pushed motion zones, instant
+replay, evidence lock, smart search, a hardware-decode fallback for a browser that can't natively
+decode a camera's codec, and a dedicated mobile-UI polish pass (scoped from a real phone walkthrough,
+not guessed from the CSS) haven't started — see [CHANGELOG.md](CHANGELOG.md) for everything shipped
+and the architecture plan for the full milestone roadmap.
 
 Recorder nodes require **FFmpeg** on the machine they run on (LGPL "shared" build recommended — see
 the plan's licensing note). Point a node at it with `--ffmpeg-path` or `LARISVMS_FFMPEG_PATH`, or put

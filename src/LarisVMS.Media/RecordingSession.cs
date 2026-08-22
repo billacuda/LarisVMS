@@ -31,6 +31,18 @@ public record RecordingSessionOptions(
     /// the common real-world failure mode, and process liveness alone does not catch it.</summary>
     int StalledThresholdSeconds = 150,
     int PollIntervalSeconds = 5,
+    /// <summary>How long RunAsync waits for a killed ffmpeg process (and its stdout/stderr drain
+    /// tasks, which only complete once the process's own pipes close) to actually finish before
+    /// giving up on waiting and moving straight to backoff/reconnect instead. Confirmed live
+    /// (2026-08-21) as a real, serious gap without this bound: a process blocked on an
+    /// uninterruptible kernel-mode I/O wait — this fleet's SMB-backed storage dropping mid-write —
+    /// can leave Process.Kill's TerminateProcess taking a long time, sometimes far longer than this
+    /// timeout, to actually take effect, since the OS still has to unwind that stuck I/O first.
+    /// Recording sat completely frozen at this exact wait for a 2+ hour outage: never reaching the
+    /// reconnect logic below, never starting a fresh attempt, until a full node restart forced it.
+    /// See RunAsync's own handling for what happens when this elapses — the old process is abandoned
+    /// (left to exit on its own whenever its stuck I/O clears) rather than blocked on forever.</summary>
+    int KillTimeoutSeconds = 15,
     /// <summary>M18: `-vf drawbox=...` expressions from PrivacyMaskFilterBuilder, one per enabled
     /// Privacy zone on this camera. Null/empty (the default, and every camera with no Privacy zone)
     /// keeps the original `-c copy` pipeline exactly as before this feature existed — burning in a
@@ -297,25 +309,58 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
                     TryKill(process);
                 }
 
-                await process.WaitForExitAsync(CancellationToken.None);
-                await stderrTask;
-                await stdoutTask;
+                // Bounded — see RecordingSessionOptions.KillTimeoutSeconds' own doc comment for why
+                // an unbounded wait here was a real, confirmed multi-hour outage: a killed process
+                // stuck on unresponsive network I/O (this fleet's SMB-backed storage dropping
+                // mid-write) can take far longer than this to actually exit, and until it does, this
+                // camera's *entire* recording session sat frozen at this exact line — never reaching
+                // the reconnect logic below, never starting a fresh attempt. When the timeout wins the
+                // race, the old process (and its now-orphaned stdout/stderr drain tasks) is simply
+                // abandoned rather than blocked on any further — it isn't leaked, just left to finish
+                // exiting on its own time; the loop moves on to a fresh attempt regardless.
+                var exitAndDrain = Task.WhenAll(process.WaitForExitAsync(CancellationToken.None), stderrTask, stdoutTask);
+                var exitedCleanly = await Task.WhenAny(exitAndDrain, Task.Delay(TimeSpan.FromSeconds(options.KillTimeoutSeconds))) == exitAndDrain;
+                if (!exitedCleanly)
+                {
+                    logger.LogWarning(
+                        "ffmpeg did not exit within {Timeout}s of being killed — abandoning this attempt and starting a fresh one rather than blocking recording indefinitely. " +
+                        "The old process may still be alive briefly (stuck on an unresponsive network write) and will exit on its own once that clears.",
+                        options.KillTimeoutSeconds);
+                    // Observed in the background so a fault here (e.g. reading a stream this
+                    // attempt's own Dispose() below has since torn down) can never surface as an
+                    // unobserved-task-exception, and so the eventual outcome is at least visible in
+                    // the log rather than vanishing silently.
+                    _ = exitAndDrain.ContinueWith(t =>
+                    {
+                        if (t.IsFaulted) logger.LogDebug(t.Exception, "Abandoned ffmpeg attempt's own cleanup finished with an error (harmless — already moved on).");
+                        else logger.LogDebug("Abandoned ffmpeg attempt finally finished exiting on its own.");
+                    }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                }
 
+                // Safe either way — purely reads whatever's actually on disk right now, doesn't
+                // depend on the process itself having exited.
                 FinalizeInProgressSegment(reportedPaths);
 
                 if (ct.IsCancellationRequested) break;
 
-                if (!stalled && process.ExitCode == 0)
+                if (exitedCleanly)
                 {
-                    // Clean exit with code 0 shouldn't normally happen for a live RTSP tee (only
-                    // stops on kill/cancel) — treat it as a failure needing backoff rather than a
-                    // silent stop, so a camera that closes the connection doesn't quietly stop
-                    // recording forever.
-                    logger.LogWarning("ffmpeg exited cleanly (code 0) without being asked to — restarting.");
+                    if (!stalled && process.ExitCode == 0)
+                    {
+                        // Clean exit with code 0 shouldn't normally happen for a live RTSP tee (only
+                        // stops on kill/cancel) — treat it as a failure needing backoff rather than a
+                        // silent stop, so a camera that closes the connection doesn't quietly stop
+                        // recording forever.
+                        logger.LogWarning("ffmpeg exited cleanly (code 0) without being asked to — restarting.");
+                    }
+                    LastError = $"ffmpeg exited with code {process.ExitCode}.";
+                }
+                else
+                {
+                    LastError = $"ffmpeg did not exit within {options.KillTimeoutSeconds}s of being killed — abandoned and restarting.";
                 }
                 consecutiveFailures++;
                 TotalReconnectCount++;
-                LastError = $"ffmpeg exited with code {process.ExitCode}.";
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

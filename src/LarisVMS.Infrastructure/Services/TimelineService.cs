@@ -476,36 +476,40 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
             }
 
             var duration = r.EndUtc - r.StartUtc;
-            // Sampled from the start of the *recorded footage*, not the span's own midpoint —
-            // explicit user ask, superseding v0.128's detection-only version of this same idea once
-            // it became clear plain motion needed it too.
+            // Sample point depends on whether this span has a classified object behind it.
             //
-            // A span's own length is not a reliable proxy for "how long the subject was in frame" on
-            // either kind of MotionSpan this app produces. A classified detection's length is
-            // dominated by the camera's own event cooldown/anti-dither (~10s or more on some
-            // hardware, so it doesn't spam) — a vehicle crossing the frame is long gone by the
-            // midpoint of a span that only stayed open because the camera won't re-fire sooner. Plain
-            // camera-pushed motion can have the exact same cooldown floor for the same reason. Only
-            // this app's own ServerMotion zone (frame-diff, no cooldown involved) measures a span's
-            // real duration — and even there, sampling from the start is still more useful than the
-            // midpoint, just for a different reason below.
+            // A classified detection (Person/Vehicle/Face/Animal/Object) fires the instant the camera's
+            // own classifier confirms what it saw — the subject is already on-frame right at StartUtc,
+            // and the span's own length past that is dominated by the camera's event cooldown/anti-dither
+            // (~10s or more on some hardware, so it doesn't spam), not by how long the subject stuck
+            // around. StartUtc + a one-second margin is what actually shows the subject; going back
+            // further into the pre-roll buffer risks landing *before* the subject entered frame — an
+            // empty-scene thumbnail for exactly the event that most needs a good one. Confirmed live as
+            // a real regression once the pre-roll-based sample point (below) was applied here too: wrong
+            // thumbnails, plus a spike of 502s from /playback-thumbnail's exact lookup landing in the
+            // wrong segment or right at a segment's drift-prone tail.
             //
-            // The *recording* pre-rolls by Recording.MotionPreRollSeconds before StartUtc — the
-            // subject is typically already visible at the very start of what's actually on disk for
-            // this event, not just at StartUtc itself (which is when the trigger crossed its own
-            // threshold, already partway into the subject being there). So the sample point is the
-            // start of the pre-roll buffer plus a one-second margin, not StartUtc plus that margin —
-            // at this fleet's 3s pre-roll that lands 2s *before* StartUtc.
+            // Plain motion and a custom event-tag rule (no classified kind) get no such "already
+            // visible" guarantee — generic movement can still be arriving as the trigger fires, so the
+            // *recording's* own pre-roll (which starts Recording.MotionPreRollSeconds before StartUtc)
+            // is more likely to actually catch the subject entering frame than StartUtc itself is.
             //
-            // No lower clamp: a candidate landing before any segment this camera actually has on disk
-            // (a motion event moments after recording began, with less than a full pre-roll buffer
-            // built up yet) resolves to no thumbnail, same "No thumbnail available" placeholder any
-            // other missing-footage case already shows — not a reason to special-case this one.
-            // Upper-clamped to the span's own end defensively; in practice a pre-roll of even 1s
-            // already guarantees the candidate lands at or before StartUtc, well short of EndUtc.
-            var preRollSeconds = preRollSecondsByCameraId.GetValueOrDefault(r.CameraId, 10);
-            var candidate = r.StartUtc - TimeSpan.FromSeconds(preRollSeconds) + SnapshotOffsetIntoRecording;
-            var atUtc = candidate > r.EndUtc ? r.EndUtc : candidate;
+            // No lower clamp on the pre-roll candidate: landing before any segment this camera actually
+            // has on disk (an event moments after recording began, with less than a full pre-roll
+            // buffer built up yet) resolves to no thumbnail, same "No thumbnail available" placeholder
+            // any other missing-footage case already shows.
+            DateTime atUtc;
+            if (r.DetectionKind is not null)
+            {
+                var candidate = r.StartUtc + SnapshotOffsetIntoRecording;
+                atUtc = candidate > r.EndUtc ? r.EndUtc : candidate;
+            }
+            else
+            {
+                var preRollSeconds = preRollSecondsByCameraId.GetValueOrDefault(r.CameraId, 10);
+                var candidate = r.StartUtc - TimeSpan.FromSeconds(preRollSeconds) + SnapshotOffsetIntoRecording;
+                atUtc = candidate > r.EndUtc ? r.EndUtc : candidate;
+            }
 
             return new SnapshotDto(r.Id, r.CameraId,
                 cameraNames.TryGetValue(r.CameraId, out var name) ? name : "(deleted camera)",

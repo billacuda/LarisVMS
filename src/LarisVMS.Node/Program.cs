@@ -122,6 +122,7 @@ var app = builder.Build();
 app.UseWebSockets();
 
 var liveLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("LiveView");
+var playbackLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Playback");
 
 app.Map("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWorker worker) =>
 {
@@ -238,7 +239,7 @@ app.MapGet("/playback-segment/{cameraId:guid}", async (HttpContext ctx, Guid cam
     if (double.TryParse(ctx.Request.Query["seekSeconds"], NumberStyles.Float, CultureInfo.InvariantCulture, out var seekSeconds)
         && seekSeconds > MinSeekSecondsForPartialFetch)
     {
-        var fragments = worker.GetOrBuildFragmentIndex(fullPath);
+        var fragments = await worker.GetOrBuildFragmentIndexAsync(fullPath, ctx.RequestAborted);
         // The last fragment at-or-before the target — never *past* it, so the client's own "wait
         // until the target instant is actually buffered" logic (playback-player.js) still has
         // something to wait for rather than silently landing later than what was asked for.
@@ -254,18 +255,59 @@ app.MapGet("/playback-segment/{cameraId:guid}", async (HttpContext ctx, Guid cam
         // this is only worth it when there's a genuinely *later* fragment to jump to.
         if (fragments.Count > 0 && chosen is { } target && target.ByteOffset > fragments[0].ByteOffset)
         {
-            // Read by the client to correct its own "buffered start + seekSeconds" seek math — the
-            // served fragment's own media time, not the segment's true start, is now what
-            // sourceBuffer.buffered.start(0) will actually report once appended.
-            ctx.Response.Headers["X-Fragment-Start-Seconds"] = target.MediaTimeSeconds.ToString(CultureInfo.InvariantCulture);
+            // Opened (and retried) before anything is written to the response — a transient storage
+            // blip here just falls through to the whole-file path below, rather than failing the
+            // request outright, since nothing has been committed to the client yet at this point.
+            FileStream? fileStream = null;
+            try
+            {
+                fileStream = await StorageRetry.ExecuteAsync(playbackLogger, $"Opening {fullPath} for partial fetch", () =>
+                    Task.FromResult(new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1, useAsync: true)),
+                    ctx.RequestAborted);
+            }
+            catch (IOException ex)
+            {
+                playbackLogger.LogWarning(ex, "Giving up on the partial fetch for {Path} after retries — falling back to a whole-file send.", fullPath);
+            }
 
-            await using var fileStream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1, useAsync: true);
-            var initSegmentEnd = fragments[0].ByteOffset;
-            await CopyExactAsync(fileStream, ctx.Response.Body, initSegmentEnd, ctx.RequestAborted);
-            fileStream.Seek(target.ByteOffset, SeekOrigin.Begin);
-            await fileStream.CopyToAsync(ctx.Response.Body, ctx.RequestAborted);
-            return;
+            if (fileStream is not null)
+            {
+                await using (fileStream)
+                {
+                    // Read by the client to correct its own "buffered start + seekSeconds" seek math
+                    // — the served fragment's own media time, not the segment's true start, is now
+                    // what sourceBuffer.buffered.start(0) will actually report once appended. Set only
+                    // now, after the open has actually succeeded — setting it earlier and then falling
+                    // back to a whole-file send below would leave a stale header on a response it
+                    // doesn't describe.
+                    ctx.Response.Headers["X-Fragment-Start-Seconds"] = target.MediaTimeSeconds.ToString(CultureInfo.InvariantCulture);
+                    var initSegmentEnd = fragments[0].ByteOffset;
+                    await CopyExactAsync(fileStream, ctx.Response.Body, initSegmentEnd, ctx.RequestAborted);
+                    fileStream.Seek(target.ByteOffset, SeekOrigin.Begin);
+                    await fileStream.CopyToAsync(ctx.Response.Body, ctx.RequestAborted);
+                }
+                return;
+            }
         }
+    }
+
+    // Whole-file path — probes that the file can actually be opened (retried) before committing to
+    // SendFileAsync's own internal open, so a transient storage blip gets the same few-retry grace
+    // here too instead of failing the request outright. The probe's own handle is closed immediately;
+    // SendFileAsync opens its own.
+    try
+    {
+        await StorageRetry.ExecuteAsync(playbackLogger, $"Opening {fullPath}", () =>
+        {
+            using var probe = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            return Task.FromResult(true);
+        }, ctx.RequestAborted);
+    }
+    catch (IOException ex)
+    {
+        playbackLogger.LogWarning(ex, "Giving up on {Path} after retries — storage still unreachable.", fullPath);
+        ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
+        return;
     }
 
     await ctx.Response.SendFileAsync(fullPath, ctx.RequestAborted);
