@@ -861,7 +861,7 @@ app.MapGet("/playback-segment/{cameraId:guid}/{segmentId:long}", async (
 // than referenced, since LarisVMS.Web has no project reference to LarisVMS.Media (it never runs
 // ffmpeg itself, only proxies to a node that does) and taking one on just for this constant isn't
 // worth the coupling.
-async Task<IResult> ProxyThumbnailAsync(Guid cameraId, ThumbnailInfo? thumb, IHttpClientFactory httpFactory, CancellationToken ct, int maxDimension = 150, int quality = 8)
+async Task<IResult> ProxyThumbnailAsync(Guid cameraId, ThumbnailInfo? thumb, IHttpClientFactory httpFactory, CancellationToken ct, HttpContext httpContext, bool longLivedCache, int maxDimension = 150, int quality = 8)
 {
     if (thumb is null) return Results.NotFound();
     if (thumb.NodeIp is null || thumb.NodeLivePort is null || thumb.NodeMediaSigningKey is null)
@@ -919,6 +919,26 @@ async Task<IResult> ProxyThumbnailAsync(Guid cameraId, ThumbnailInfo? thumb, IHt
         return Results.StatusCode((int)nodeResponse.StatusCode);
     }
 
+    // longLivedCache is false only for the "latest" lookup (Dashboard) — that one's whole point is
+    // showing whatever's newest, so caching it would just freeze the dashboard on the first frame it
+    // ever saw. Every atUtc-based lookup (hover-preview and Snapshots' exact cards alike) targets a
+    // specific already-recorded instant, so the browser can skip the network on most repeat views
+    // rather than re-fetching bytes it already has — confirmed live as the real cost behind Snapshots
+    // feeling uncached even though the node's own on-disk cache was already being hit: every reload
+    // still paid a full round trip per card.
+    //
+    // Deliberately NOT `immutable`/a year-long max-age, even though the underlying footage itself
+    // never changes: the *extraction* can — this exact deployment already has one real example, a
+    // batch of pre-M18 cache files on disk with a different naming scheme than this code now expects
+    // (no `_{maxDim}q{quality}` suffix), proof the node-side generation logic has changed under
+    // already-served URLs before and could again (a future quality/crop fix, say). A day-scale
+    // max-age cuts the network round trip for the case this exists to fix (reloading the same page
+    // again shortly after) while any such change still self-heals within a bounded window, with no
+    // manual cache-busting scheme needed. `private`, not `public` — this is an authenticated,
+    // per-user-permissioned resource (RequireAuthorization below), not something a shared/intermediary
+    // cache should ever store.
+    if (longLivedCache) httpContext.Response.Headers.CacheControl = "private, max-age=86400";
+
     return Results.Stream(await nodeResponse.Content.ReadAsStreamAsync(ct), "image/jpeg");
 }
 
@@ -932,10 +952,10 @@ async Task<IResult> ProxyThumbnailAsync(Guid cameraId, ThumbnailInfo? thumb, IHt
 // parameter) outright with 400 Bad Request. Confirmed live: every hover-thumbnail request broke the
 // moment this parameter was added without one.
 app.MapGet("/playback-thumbnail/{cameraId:guid}", async (
-    Guid cameraId, DateTime atUtc, ITimelineService timeline, IHttpClientFactory httpFactory, CancellationToken ct, bool exact = false) =>
+    Guid cameraId, DateTime atUtc, ITimelineService timeline, IHttpClientFactory httpFactory, CancellationToken ct, HttpContext httpContext, bool exact = false) =>
     await ProxyThumbnailAsync(cameraId,
         exact ? await timeline.GetExactThumbnailInfoAsync(cameraId, atUtc, ct) : await timeline.GetThumbnailInfoAsync(cameraId, atUtc, ct),
-        httpFactory, ct,
+        httpFactory, ct, httpContext, longLivedCache: true,
         // exact is Snapshots' own card thumbnails — something a viewer actually looks closely at, not
         // a fleeting scrub-hover preview, so it gets a genuinely detailed frame. The cap is on the
         // *longer* edge (scale=N:N:force_original_aspect_ratio=decrease), so on a 16:9 source 1280
@@ -956,8 +976,8 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (
 // Playback.View, matching Pages/Index's own gate (IndexModel has no specific resource policy) rather
 // than the stricter one the historical/scrub lookup above uses.
 app.MapGet("/playback-thumbnail/{cameraId:guid}/latest", async (
-    Guid cameraId, ITimelineService timeline, IHttpClientFactory httpFactory, CancellationToken ct) =>
-    await ProxyThumbnailAsync(cameraId, await timeline.GetLatestThumbnailInfoAsync(cameraId, ct), httpFactory, ct)
+    Guid cameraId, ITimelineService timeline, IHttpClientFactory httpFactory, CancellationToken ct, HttpContext httpContext) =>
+    await ProxyThumbnailAsync(cameraId, await timeline.GetLatestThumbnailInfoAsync(cameraId, ct), httpFactory, ct, httpContext, longLivedCache: false)
 ).RequireAuthorization();
 
 // ── Multi-camera export ──────────────────────────────────────────────────────

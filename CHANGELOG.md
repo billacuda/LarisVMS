@@ -5,6 +5,73 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.142.1] - 2026-08-22
+
+### Fixed
+
+- **The timeline strip and time readout sat behind the picture after jumping into the middle of a
+  segment.** Opening a Snapshot or Bookmark seeks partway into a segment, which the node serves as a
+  partial fetch starting at the nearest fragment boundary. The player stored that fragment's own
+  media time as the segment's wall-clock origin — but that value corresponds to the segment's start
+  *plus* the fragment offset, not to the segment's start. The seek itself was already correct, so the
+  video played the right frames while every wall-clock readout derived from it (the timeline strip,
+  the current-time display, cross-tile drift correction) read early by however far into the segment
+  the seek had landed — showing the segment's own start instead of the event, then snapping forward
+  once the next segment loaded whole. Unaffected for ordinary whole-file loads.
+
+Web-only, no node change.
+
+## [0.142.0] - 2026-08-22
+
+### Added
+
+- **Snapshots shows a live "N of M ready" counter for the current page's thumbnails.** Each card's
+  image is generated on demand the first time it's requested — there's no pre-generated backlog behind
+  it the way hover-preview thumbnails have a background backfill service for — so a fresh page of
+  never-before-viewed instants can take a few real seconds per image while ffmpeg extracts each frame,
+  previously with no visible sign anything was happening beyond the grid slowly filling in. A small
+  badge next to the page title now counts down as each thumbnail resolves (loaded, or fell back to "No
+  thumbnail available" — both count as done, only genuinely still-generating images count as
+  remaining), fading out once every visible card is settled. Purely client-side and scoped to the
+  current page's own cards — there's no system-wide count to show, since nothing pre-generates these
+  ahead of a viewer actually looking.
+
+Web-only, no node change.
+
+### Fixed
+
+- **Timeline events and playback position could read up to ~20 seconds behind the actual video
+  content.** `RecordingSession.PollForCompletedSegments` stamped a completed segment's `StartUtc`
+  from the output file's filesystem creation time — the instant ffmpeg opens/truncates the file and
+  writes its initial `frag_keyframe+empty_moov` header, which can land well before the first real
+  frame actually arrives (a full RTSP handshake/negotiation happens on the first segment after any
+  reconnect). Every timeline position computed from that timestamp then read as earlier than the
+  true content by exactly that connect gap — worse on less-stable connections that reconnect more
+  often. Segment start (and end, which is really "whenever the next segment truly started") is now
+  taken from the wall-clock moment the file is first observed past a small header-only threshold
+  during the existing poll loop, bounding the error to roughly one poll interval instead.
+- **Live view defaulted to serving cameras' lower-resolution Sub stream instead of Main.** Adaptive
+  Streaming (any View with 6+ visible tiles, or any tile smaller than a 4×3 grid cell) was enabled
+  by default, which read as a general quality regression on typical multi-camera dashboards. Now
+  off by default; recording was never affected by this setting.
+- **Snapshots re-downloaded every thumbnail from the recorder on each page load.** The node has
+  cached these on disk since M7, but `/playback-thumbnail` sent no caching headers, so the browser
+  paid a full round trip per card on every visit — 24 of them per page, each crossing to the node and
+  its (often network-backed) storage, which read as "these aren't cached at all" even on a repeat
+  view of the same page. Historical (`atUtc`-based) thumbnails — Snapshots' cards and Playback's
+  hover previews — now carry a one-day private cache header, so a repeat view is served straight from
+  the browser. The Dashboard's "latest" thumbnail is deliberately excluded, since showing the newest
+  frame is its entire purpose. Bounded at a day rather than marked immutable so that any future
+  change to how frames are extracted still self-heals without manual cache-busting.
+- **Jumping to an earlier point on the Playback timeline could hang forever, needing a full page
+  refresh to recover.** The `/playback-segment` fetch had no client-side timeout — a merely slow
+  (not failed) response from the node, such as a cold read of an older segment off SMB-backed
+  storage, left the tile waiting indefinitely with nothing to time it out or retry. Unlike a network
+  error or a decode failure, that never reached any of the existing recovery handling, since both of
+  those require a response (or a failed one) to have happened at all. A slow response now times out
+  after 20 seconds, retries automatically once, and only then shows an error — clearing most cold
+  reads without the user ever noticing, and no longer requiring a manual refresh for the rest.
+
 ## [0.141.0] - 2026-08-21
 
 ### Fixed

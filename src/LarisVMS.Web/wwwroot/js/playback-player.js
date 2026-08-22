@@ -16,6 +16,16 @@
     // M18 follow-up: matches Program.cs's own MinSeekSecondsForPartialFetch on the node — see
     // loadSegment's own comment for why this exists on both ends.
     var MIN_SEEK_SECONDS_FOR_PARTIAL_FETCH = 2.0;
+    // How long to wait for the node to even start responding to /playback-segment before giving up
+    // on this attempt — confirmed live as a real gap: a merely *slow* (not failed, not aborted)
+    // response, e.g. a cold read of an older segment off SMB-backed storage, left `await fetch`
+    // pending forever with nothing to time it out. Unlike a network error or an HTTP error status,
+    // that never reaches any of this file's existing recovery paths (those all require a response,
+    // or a decode failure, to have happened at all) — the tile just sat on "Loading…" until the user
+    // forced a real reload by hand. Generous on purpose: a cold SMB read can legitimately take
+    // several seconds, and this only needs to catch "stuck", not shave latency off a normal slow
+    // read.
+    var PLAYBACK_SEGMENT_FETCH_TIMEOUT_MS = 20000;
 
     function pickMimeType(codecHint, hasAudio) {
         if (!window.MediaSource) return null;
@@ -210,7 +220,7 @@
             try { videoEl.removeAttribute('src'); videoEl.load(); } catch (e) { /* ignore */ }
         }
 
-        async function loadSegment(segment, seekSeconds, autoplay, myToken, signal) {
+        async function loadSegment(segment, seekSeconds, autoplay, myToken, signal, isRetryAfterTimeout) {
             // A prefetch started while the *previous* segment was playing lets this transition skip
             // the network round trip entirely — see prefetch's own comment. Only ever matches the
             // sequential 'ended' advance; an arbitrary seek's target segment was never the one being
@@ -289,18 +299,54 @@
             var seekQuery = seekSeconds > MIN_SEEK_SECONDS_FOR_PARTIAL_FETCH
                 ? '?seekSeconds=' + encodeURIComponent(seekSeconds) : '';
 
+            // Combines the caller's own supersede signal with a local timeout — fetch() only accepts
+            // one signal, and AbortSignal.any() isn't reliably available across this fleet's browser
+            // range, so the timeout's own controller is aborted from both sources instead.
+            var fetchController = new AbortController();
+            var onOuterAbort = function () { fetchController.abort(); };
+            signal.addEventListener('abort', onOuterAbort);
+            var timedOut = false;
+            var timeoutHandle = setTimeout(function () {
+                timedOut = true;
+                fetchController.abort();
+            }, PLAYBACK_SEGMENT_FETCH_TIMEOUT_MS);
+
             var resp;
             try {
-                resp = await fetch('/playback-segment/' + cameraId + '/' + segment.id + seekQuery, { signal: signal });
+                resp = await fetch('/playback-segment/' + cameraId + '/' + segment.id + seekQuery, { signal: fetchController.signal });
             } catch (e) {
+                signal.removeEventListener('abort', onOuterAbort);
+                clearTimeout(timeoutHandle);
+
                 // A superseded seek's fetch lands here once aborted — not a real failure, the next
                 // seek already owns the tile, so no status text should overwrite whatever it sets.
                 // Same reasoning for the freeze frame: the seek that superseded this one owns it now
                 // and will hide it when its own segment is ready.
-                if (!signal.aborted && statusEl) statusEl.textContent = 'Could not reach server.';
-                if (!signal.aborted) hideFreezeFrame();
+                if (signal.aborted) return;
+
+                if (timedOut) {
+                    // One automatic retry before giving up — a cold SMB read finishing just after
+                    // this timeout fires is the common case, not a genuinely dead node, so a single
+                    // extra attempt clears most of these without the user ever noticing. myToken and
+                    // signal are still valid (nothing superseded this seek — only the fetch itself
+                    // stalled), so retrying loadSegment directly reuses them rather than re-running
+                    // seekTo's own segment lookup for a segment that's already known.
+                    if (!isRetryAfterTimeout) {
+                        if (myToken !== loadToken) return;
+                        await loadSegment(segment, seekSeconds, autoplay, myToken, signal, true);
+                        return;
+                    }
+                    if (statusEl) statusEl.textContent = 'Recorder is not responding — try again shortly.';
+                    hideFreezeFrame();
+                    return;
+                }
+
+                if (statusEl) statusEl.textContent = 'Could not reach server.';
+                hideFreezeFrame();
                 return;
             }
+            signal.removeEventListener('abort', onOuterAbort);
+            clearTimeout(timeoutHandle);
             if (myToken !== loadToken || resp === undefined) return;
             if (!resp.ok) {
                 // 404 specifically means "this file doesn't exist on the recorder" — a state that
@@ -414,7 +460,18 @@
                 }
 
                 startedPlayback = true;
-                currentSegmentTimeOrigin = bufStart;
+                // Minus fragmentStartSeconds, not bare bufStart: this variable means "the media time
+                // that corresponds to the segment's wall-clock *start*" (see its declaration), and on
+                // a partial fetch bufStart is the media time of the fragment the node skipped ahead
+                // to — which corresponds to segStart + fragmentStartSeconds, not segStart. Storing
+                // bare bufStart made computeCurrentWallClockMs read exactly fragmentStartSeconds too
+                // early, so the timeline strip and the time readout sat behind the picture by however
+                // far into the segment the seek had landed, while the video itself played the right
+                // frames (the seek math below was already correct). At a deep link into the middle of
+                // a segment that reads as the timeline starting at the segment's own start instead of
+                // the event, then snapping forward once the next segment loads whole (origin 0 again).
+                // Zero for every ordinary whole-file fetch, which leaves this exactly as it was.
+                currentSegmentTimeOrigin = bufStart - fragmentStartSeconds;
                 // Clamped to what exists: if the stream ended before reaching the target (a segment
                 // whose real content is shorter than its recorded duration — the same wall-clock vs.
                 // encoded-length drift /playback-thumbnail already compensates for), land on the last
@@ -520,7 +577,7 @@
                 var buffered = sourceBuffer.buffered;
                 if (buffered.length) {
                     var bufStart = buffered.start(0);
-                    currentSegmentTimeOrigin = bufStart;
+                    currentSegmentTimeOrigin = bufStart - fragmentStartSeconds; // see tryStartPlaybackOnce for why this isn't bare bufStart
                     // The whole segment is already appended on this path, so there's nothing to wait
                     // for the way the streaming path has to — but the same upper clamp applies: a
                     // segment whose real encoded length falls short of its recorded duration would

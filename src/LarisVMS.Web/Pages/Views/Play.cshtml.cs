@@ -23,7 +23,7 @@ public class PlayModel(IViewService viewService, ICameraService cameraService, I
     /// resolves for nodes — the client needs it too, to decide whether to ever ask for `?role=sub` at
     /// all (and whether to show the per-tile quality override). Resolved for both the normal View
     /// path and the single-camera path below, same as EventBadgeCornerValue.</summary>
-    public bool AdaptiveStreamingEnabled { get; set; } = true;
+    public bool AdaptiveStreamingEnabled { get; set; } = false;
 
     public string Name { get; set; } = string.Empty;
     public string LayoutJson { get; set; } = "{\"cells\":[],\"mobileTwoColumn\":false}";
@@ -72,7 +72,7 @@ public class PlayModel(IViewService viewService, ICameraService cameraService, I
             Views = await viewService.ListVisibleToAsync(userId);
             EventBadgeCornerValue = EventBadgeCorner.Normalize(
                 await settings.GetRawAsync(Admin.Settings.EventsModel.EventBadgeCornerKey));
-            AdaptiveStreamingEnabled = await settings.GetAsync("LiveView.AdaptiveStreamingEnabled", true);
+            AdaptiveStreamingEnabled = await settings.GetAsync("LiveView.AdaptiveStreamingEnabled", false);
 
             await auditService.LogAsync("Camera.WatchSingle", userId, User.Identity?.Name,
                 HttpContext.Connection.RemoteIpAddress?.ToString(), camera.Name);
@@ -97,7 +97,7 @@ public class PlayModel(IViewService viewService, ICameraService cameraService, I
         Views = await viewService.ListVisibleToAsync(userId);
         EventBadgeCornerValue = EventBadgeCorner.Normalize(
             await settings.GetRawAsync(Admin.Settings.EventsModel.EventBadgeCornerKey));
-        AdaptiveStreamingEnabled = await settings.GetAsync("LiveView.AdaptiveStreamingEnabled", true);
+        AdaptiveStreamingEnabled = await settings.GetAsync("LiveView.AdaptiveStreamingEnabled", false);
 
         // Names resolved from the view's own layout, not from the Cameras list above — that list is
         // every enabled camera on the system (it feeds the client-side player), not this view's own

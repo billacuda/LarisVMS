@@ -12,19 +12,19 @@ namespace LarisVMS.Web.Pages.Admin.Settings;
 [Authorize("Settings.Edit")]
 public class LiveViewModel(ISettingsResolver settings, IAuditService auditService) : PageModel
 {
-    [BindProperty] public bool AdaptiveStreamingEnabled { get; set; } = true;
+    [BindProperty] public bool AdaptiveStreamingEnabled { get; set; } = false;
 
     public string? SavedMessage { get; set; }
 
     public async Task OnGetAsync()
     {
-        AdaptiveStreamingEnabled = await settings.GetAsync("LiveView.AdaptiveStreamingEnabled", true);
+        AdaptiveStreamingEnabled = await settings.GetAsync("LiveView.AdaptiveStreamingEnabled", false);
     }
 
     public async Task<IActionResult> OnPostAsync()
     {
         var by = User.Identity?.Name;
-        var oldValue = await settings.GetAsync("LiveView.AdaptiveStreamingEnabled", true);
+        var oldValue = await settings.GetAsync("LiveView.AdaptiveStreamingEnabled", false);
 
         await settings.SetGlobalAsync("LiveView.AdaptiveStreamingEnabled", AdaptiveStreamingEnabled.ToString(), by);
 

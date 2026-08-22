@@ -102,7 +102,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         // M18: the admin-facing toggle for adaptive streaming (see Admin/Settings/LiveView.cshtml).
         // Global only, no per-node/per-camera override — this is a bandwidth/CPU trade-off for the
         // whole deployment, not something that makes sense to vary camera-by-camera.
-        var adaptiveStreamingEnabled = await settings.GetAsync("LiveView.AdaptiveStreamingEnabled", true, ct: ct);
+        var adaptiveStreamingEnabled = await settings.GetAsync("LiveView.AdaptiveStreamingEnabled", false, ct: ct);
 
         var cameraIds = cameras.Select(c => c.Id).ToList();
         // M18: Privacy joins ServerMotion/Ignore here — RecordingSession's own privacy-mask burn-in

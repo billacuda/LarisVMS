@@ -241,6 +241,11 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
         // in case from how this run's own Directory.GetFiles happens to return the same path.
         var reportedPaths = new HashSet<string>(knownPaths ?? [], StringComparer.OrdinalIgnoreCase);
 
+        // Same whole-session scope as reportedPaths, for the same reason: an ffmpeg reconnect mid-way
+        // through must not lose track of a still-open file's already-observed first-real-data instant.
+        // See PollForCompletedSegments' own comment for what this is for.
+        var firstRealDataObservedUtc = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+
         while (!ct.IsCancellationRequested)
         {
             State = StreamRecordingState.Connecting;
@@ -277,7 +282,7 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
                     // before it needs it, regardless of how long this attempt has been running.
                     EnsureUpcomingHourDirectories();
 
-                    PollForCompletedSegments(reportedPaths);
+                    PollForCompletedSegments(reportedPaths, firstRealDataObservedUtc);
 
                     if (State != StreamRecordingState.Recording && reportedPaths.Count > 0)
                     {
@@ -339,7 +344,7 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
 
                 // Safe either way — purely reads whatever's actually on disk right now, doesn't
                 // depend on the process itself having exited.
-                FinalizeInProgressSegment(reportedPaths);
+                FinalizeInProgressSegment(reportedPaths, firstRealDataObservedUtc);
 
                 if (ct.IsCancellationRequested) break;
 
@@ -478,11 +483,22 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
         return process;
     }
 
+    /// <summary>How many bytes a still-open segment file must reach before it's trusted to contain a
+    /// real frame rather than just the `frag_keyframe+empty_moov` header ffmpeg writes the instant it
+    /// opens the file (StartFfmpeg's own comment). Comfortably larger than any bare fMP4 ftyp+moov
+    /// header, comfortably smaller than even a highly-compressed single keyframe at realistic camera
+    /// bitrates — see PollForCompletedSegments' own comment for why this matters.</summary>
+    private const long MinRealDataBytes = 4096;
+
     /// <summary>internal, not private: unit-tested directly against a real temp directory (see
     /// LarisVMS.Tests) to prove a pre-seeded reportedPaths entry is skipped rather than re-firing
     /// SegmentCompleted — the actual bug fix in RunAsync's knownPaths parameter, exercised here
-    /// without needing to spawn a real ffmpeg process.</summary>
-    internal void PollForCompletedSegments(HashSet<string> reportedPaths)
+    /// without needing to spawn a real ffmpeg process.
+    ///
+    /// firstRealDataObservedUtc is RunAsync's own dictionary, threaded through the same way
+    /// reportedPaths is — see its declaration there for why this is scoped to the whole session
+    /// rather than reset per ffmpeg attempt.</summary>
+    internal void PollForCompletedSegments(HashSet<string> reportedPaths, Dictionary<string, DateTime> firstRealDataObservedUtc)
     {
         string[] files;
         try
@@ -497,6 +513,26 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
         catch (IOException)
         {
             return; // directory transiently unavailable (e.g. SMB hiccup) — try again next poll
+        }
+
+        // The still-open (last) file gets a chance to record its own true start here, on whichever
+        // poll first catches it past the header-only size — before it's ever looked at by the
+        // completed-files loop below, possibly several polls later once a newer file supersedes it.
+        // A completed segment's own FileInfo.CreationTimeUtc is the moment ffmpeg opened/truncated the
+        // file, which can be well before the first real frame lands (a full RTSP handshake/negotiation
+        // happens in between on the first segment after any (re)connect) — every timeline position
+        // computed downstream from that timestamp then reads as earlier than the true content by
+        // exactly that connect gap. This bounds the error to roughly one poll interval instead.
+        if (files.Length > 0)
+        {
+            var openPath = files[^1];
+            if (!firstRealDataObservedUtc.ContainsKey(openPath))
+            {
+                FileInfo? openInfo;
+                try { openInfo = new FileInfo(openPath); }
+                catch (IOException) { openInfo = null; }
+                if (openInfo is { Length: >= MinRealDataBytes }) firstRealDataObservedUtc[openPath] = DateTime.UtcNow;
+            }
         }
 
         // Every file except the last is guaranteed closed: ffmpeg's segment muxer only ever has one
@@ -520,8 +556,17 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
             // the stall watchdog).
             if (info.Length == 0) continue;
 
-            var start = info.CreationTimeUtc;
-            var end = new FileInfo(files[i + 1]).CreationTimeUtc;
+            // Prefer the true first-real-data instant captured above (or on an earlier poll, while
+            // this file was still the open/last one); CreationTimeUtc is only a fallback for the rare
+            // case a segment was never caught mid-growth (e.g. a node restart landed exactly between
+            // polls). The next file's own boundary gets the same preference, since segment i's end is
+            // really "whenever segment i+1 truly started" — but its entry isn't consumed here, since
+            // this same file still needs to serve as *its own* start once it reaches this loop in a
+            // later iteration.
+            var start = firstRealDataObservedUtc.TryGetValue(path, out var observedStart) ? observedStart : info.CreationTimeUtc;
+            var nextPath = files[i + 1];
+            var end = firstRealDataObservedUtc.TryGetValue(nextPath, out var observedEnd) ? observedEnd : new FileInfo(nextPath).CreationTimeUtc;
+            firstRealDataObservedUtc.Remove(path);
             LastSegmentAt = DateTime.UtcNow;
             if (EstimateBitrateKbps(info.Length, end - start) is { } bitrateKbps) CurrentBitrateKbps = bitrateKbps;
             SegmentCompleted?.Invoke(new RecordingSegment(path, start, end, info.Length));
@@ -531,7 +576,7 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
     /// <summary>Called after the process has exited (clean stop, crash, or watchdog kill) — the
     /// last file ffmpeg was writing when it stopped is still a real, playable segment (frag_keyframe
     /// + empty_moov survives a truncated write), so it is reported too rather than silently dropped.</summary>
-    private void FinalizeInProgressSegment(HashSet<string> reportedPaths)
+    private void FinalizeInProgressSegment(HashSet<string> reportedPaths, Dictionary<string, DateTime> firstRealDataObservedUtc)
     {
         string[] files;
         try { files = Directory.GetFiles(options.OutputDirectory, "*.mp4", SearchOption.AllDirectories); }
@@ -547,7 +592,7 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
         catch (IOException) { return; }
         if (info.Length == 0) return; // never got any data — not a real segment
 
-        var start = info.CreationTimeUtc;
+        var start = firstRealDataObservedUtc.TryGetValue(last, out var observed) ? observed : info.CreationTimeUtc;
         var end = DateTime.UtcNow;
         if (EstimateBitrateKbps(info.Length, end - start) is { } bitrateKbps) CurrentBitrateKbps = bitrateKbps;
         SegmentCompleted?.Invoke(new RecordingSegment(last, start, end, info.Length));
