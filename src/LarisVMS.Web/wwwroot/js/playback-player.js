@@ -48,6 +48,25 @@
         // Media-timeline value corresponding to the loaded segment's wall-clock start. Usually 0,
         // but not guaranteed — see the buffered-range handling in loadSegment.
         var currentSegmentTimeOrigin = 0;
+        // "The current segment's bytes are all appended and endOfStream() has been called", i.e.
+        // sourceBuffer.buffered is final and can't still be truncated by an in-flight load being
+        // aborted. Gates seekTo's same-segment fast path — see its own comment for why moving
+        // currentTime on a segment that *isn't* in this state strands the tile silently. Not the
+        // same thing as currentSegmentId being set: that is assigned optimistically the moment the
+        // MediaSource is attached, before a single byte has been appended.
+        var currentSegmentComplete = false;
+        // The blob URL currently attached to videoEl, kept only so teardown() can revoke it. The
+        // blob registry holds a strong reference until revoked, so without this every abandoned
+        // MediaSource — one per seek, per tile — kept its SourceBuffer and up to a whole segment's
+        // appended bytes (24-44MB at this fleet's 4K/HEVC sizes) alive for the life of the page.
+        // A drag-scrub supersedes a seek roughly every throttle tick, so these piled up fast.
+        // live-view.js has always revoked its own; this file never did.
+        var currentObjectUrl = null;
+        // The wall-clock instant the most recent seekTo was asked for, used as the stall watchdog's
+        // recovery target. Deliberately not re-derived from videoEl.currentTime at recovery time:
+        // during a stalled seek that reports the requested position, but during a *failed* load it
+        // reports 0, which would silently send recovery to the segment's start instead.
+        var lastSeekTargetMs = null;
         var loadToken = 0; // bumped on every seek so a superseded in-flight fetch's *result* is a no-op on arrival
         var abortController = null; // actually cancels the superseded fetch itself, not just its result
         // M16: confirmed live as the cause of "8x speed quietly resets to 1x after a few seconds" —
@@ -181,6 +200,23 @@
             return null;
         }
 
+        // Whether a media-timeline instant is actually decodable right now. A partial-fetch load
+        // (see loadSegment's own X-Fragment-Start-Seconds handling) only ever appends bytes from
+        // its chosen fragment onward, but still calls endOfStream() once that partial content ends
+        // — which makes the *entire* segment duration part of the seekable range, not just what was
+        // actually appended. seekTo's same-segment fast path checks this before trusting
+        // currentSegmentComplete alone, since that flag only says "this load finished", not "this
+        // particular instant was ever fetched".
+        function isTimeBuffered(t) {
+            var b = videoEl.buffered;
+            for (var i = 0; i < b.length; i++) {
+                // Small margin off the end of each range — a target sitting exactly at the edge has
+                // nothing decoded just after it to actually play into.
+                if (t >= b.start(i) && t <= b.end(i) - 0.1) return true;
+            }
+            return false;
+        }
+
         function nextSegmentAfter(targetMs) {
             var best = null;
             segments.forEach(function (s) {
@@ -216,8 +252,15 @@
             loadToken++;
             currentSegmentId = null;
             currentSegmentTimeOrigin = 0;
+            currentSegmentComplete = false;
             try { videoEl.pause(); } catch (e) { /* ignore */ }
             try { videoEl.removeAttribute('src'); videoEl.load(); } catch (e) { /* ignore */ }
+            // Release the previous MediaSource's blob URL — see currentObjectUrl's own comment for
+            // why leaving this unrevoked leaks a whole segment's appended bytes per seek.
+            if (currentObjectUrl) {
+                try { URL.revokeObjectURL(currentObjectUrl); } catch (e) { /* ignore */ }
+                currentObjectUrl = null;
+            }
         }
 
         async function loadSegment(segment, seekSeconds, autoplay, myToken, signal, isRetryAfterTimeout) {
@@ -258,7 +301,8 @@
                 }
 
                 var prefetchedMediaSource = new MediaSource();
-                videoEl.src = URL.createObjectURL(prefetchedMediaSource);
+                currentObjectUrl = URL.createObjectURL(prefetchedMediaSource);
+                videoEl.src = currentObjectUrl;
                 currentSegmentId = segment.id;
 
                 prefetchedMediaSource.addEventListener('sourceopen', function onOpen() {
@@ -369,7 +413,8 @@
             if (!isFinite(fragmentStartSeconds)) fragmentStartSeconds = 0;
 
             var mediaSource = new MediaSource();
-            videoEl.src = URL.createObjectURL(mediaSource);
+            currentObjectUrl = URL.createObjectURL(mediaSource);
+            videoEl.src = currentObjectUrl;
             currentSegmentId = segment.id;
 
             mediaSource.addEventListener('sourceopen', function onOpen() {
@@ -504,6 +549,11 @@
                 // updateend never got a chance to fire tryStartPlaybackOnce before this ran —
                 // idempotent either way via the startedPlayback guard.
                 tryStartPlaybackOnce();
+                // Only now — not merely because the fetch/stream reached its end — is
+                // sourceBuffer.buffered guaranteed final. Gates seekTo's same-segment fast path;
+                // see currentSegmentComplete's own comment for why setting it any earlier let a
+                // seek land on an instant that had never actually been appended.
+                if (startedPlayback) currentSegmentComplete = true;
                 if (!startedPlayback) {
                     console.error('[playback] segment fully streamed but nothing buffered for camera', cameraId);
                     if (statusEl) statusEl.textContent = 'Segment could not be decoded.';
@@ -587,6 +637,9 @@
                         Math.max(bufStart, bufStart + (seekSeconds - fragmentStartSeconds)), buffered.end(buffered.length - 1));
                     videoEl.playbackRate = desiredPlaybackRate; // see desiredPlaybackRate's own comment
                     hideFreezeFrameOnReady(); // see the matching call in tryStartPlaybackOnce
+                    // The whole segment landed in one appendBuffer call — see
+                    // currentSegmentComplete's own comment for what this gates.
+                    currentSegmentComplete = true;
                 } else {
                     if (statusEl) statusEl.textContent = 'Segment could not be decoded.';
                     hideFreezeFrame();
@@ -611,6 +664,7 @@
         }
 
         async function seekTo(targetMs, autoplay) {
+            lastSeekTargetMs = targetMs; // recovery target for the stall watchdog, below
             var myToken = ++loadToken;
             // Actually cancel whatever this tile had in flight (not just mark its result stale) —
             // confirmed live as necessary, not just defensive: rapid scrubbing left dozens of
@@ -655,10 +709,26 @@
                 return;
             }
 
-            if (segment.id === currentSegmentId) {
-                videoEl.currentTime = currentSegmentTimeOrigin + (targetMs - segment.startUtc) / 1000;
-                if (autoplay) videoEl.play().catch(function () { /* see above */ });
-                return;
+            // Same segment already loaded — normally cheap enough to just nudge currentTime with no
+            // network round trip at all. But a partial-fetch load (see loadSegment's own
+            // X-Fragment-Start-Seconds handling) only ever appends bytes from the fragment the node
+            // skipped ahead to, not the whole segment — and finish() still calls endOfStream() once
+            // that partial content ends, which makes the browser treat the *entire* segment duration
+            // as seekable. currentSegmentComplete alone can't tell "loaded" apart from "loaded, but
+            // only part of it was ever fetched", so isTimeBuffered checks the actual buffered range
+            // too. Confirmed live as the cause of a silent freeze: setting currentTime to an instant
+            // that was never appended is a legal seek into a MediaSource that has already ended, so
+            // no more bytes are ever coming for it — the element sits on the last painted frame
+            // forever with no 'error' and no 'ended' event to hang recovery off of. Falling through
+            // to loadSegment instead re-requests the segment with its own seekSeconds, same as if it
+            // weren't loaded at all.
+            if (segment.id === currentSegmentId && currentSegmentComplete) {
+                var targetTime = currentSegmentTimeOrigin + (targetMs - segment.startUtc) / 1000;
+                if (isTimeBuffered(targetTime)) {
+                    videoEl.currentTime = targetTime;
+                    if (autoplay) videoEl.play().catch(function () { /* see above */ });
+                    return;
+                }
             }
 
             await loadSegment(segment, (targetMs - segment.startUtc) / 1000, autoplay, myToken, signal);
@@ -722,6 +792,33 @@
             if (seg) seekTo(seg.endUtc + 1, true);
         });
 
+        // Stall watchdog: a backstop for any silent MSE stall, not just the specific fast-path bug
+        // above (which is now guarded against directly) — confirmed live that a seek into an
+        // instant that will never be buffered produces neither an 'error' nor an 'ended' event, so
+        // without this the tile simply sat on its last painted frame forever with nothing in the
+        // console to explain why. 'waiting' fires whenever the element blocks on data it doesn't
+        // have; if that isn't resolved within STALL_TIMEOUT_MS by a genuine 'playing'/'seeked'/
+        // 'timeupdate', treat it as stuck and route it through the same recovery every other
+        // unrecoverable-MediaSource case uses — reusing recoverUnrecoverableMediaSource (rather
+        // than a parallel recovery path) keeps its cooldown and its teardown-before-seekTo
+        // ordering, both explained on its own comment above.
+        var STALL_TIMEOUT_MS = 3000;
+        var stallTimer = null;
+        function clearStallTimer() {
+            if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
+        }
+        videoEl.addEventListener('waiting', function () {
+            clearStallTimer();
+            stallTimer = setTimeout(function () {
+                stallTimer = null;
+                console.warn('[playback] camera', cameraId, 'tile stalled waiting for', lastSeekTargetMs, '— recovering');
+                recoverUnrecoverableMediaSource('a stalled seek', lastSeekTargetMs, !videoEl.paused);
+            }, STALL_TIMEOUT_MS);
+        });
+        videoEl.addEventListener('playing', clearStallTimer);
+        videoEl.addEventListener('seeked', clearStallTimer);
+        videoEl.addEventListener('timeupdate', clearStallTimer);
+
         return {
             // Wrapped so a rejection can never escape as an unhandled promise: every caller
             // (seekAll, the 'ended' handler) fires this and moves on without awaiting, so an
@@ -753,6 +850,7 @@
             },
             teardown: function () {
                 teardown();
+                clearStallTimer(); // tile is being disposed/rebuilt — a pending timer must not fire recovery on it later
                 hideFreezeFrame(); // tile is being disposed/rebuilt — never leave a frozen frame over a dead tile
             }
         };
