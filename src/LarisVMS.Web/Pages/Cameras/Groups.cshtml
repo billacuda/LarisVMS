@@ -4,42 +4,97 @@
     ViewData["Title"] = "Camera groups";
 }
 <h1>Camera groups</h1>
-<p class="text-muted">Sites / buildings / floors — used to organize cameras and to scope settings overrides.</p>
+<p class="text-muted">
+    Sites / buildings / floors — used to organize cameras, to scope settings overrides, and as the
+    scope a role's <a asp-page="/Admin/Settings/CameraAccess">Camera Access</a> grant narrows down to.
+    Add or move a camera between groups directly below — the same change as picking a Group on that
+    camera's own <a asp-page="/Cameras/Edit">Edit</a> page.
+</p>
 
 @if (!string.IsNullOrEmpty(Model.ErrorMessage))
 {
     <div class="alert alert-danger">@Model.ErrorMessage</div>
 }
+@if (!string.IsNullOrEmpty(Model.SavedMessage))
+{
+    <div class="alert alert-success">@Model.SavedMessage</div>
+}
 
-<ul class="list-group mb-4" style="max-width: 480px;">
-    @foreach (var g in Model.Groups)
-    {
-        <li class="list-group-item d-flex justify-content-between align-items-center">
-            <span style="padding-left: @(Model.Depth(g) * 1.25)rem;">@g.Name</span>
+<div class="card mb-4" style="max-width: 640px;">
+    <div class="card-header fw-semibold">Add group</div>
+    <div class="card-body">
+        <form method="post" asp-page-handler="Create" class="row g-2">
+            <div class="col-12">
+                <label class="form-label">New group name</label>
+                <input asp-for="NewName" class="form-control" required />
+            </div>
+            <div class="col-12">
+                <label class="form-label">Parent</label>
+                <select asp-for="NewParentId" class="form-select">
+                    <option value="">(top level)</option>
+                    @foreach (var g in Model.Groups)
+                    {
+                        <option value="@g.Id">@g.Name</option>
+                    }
+                </select>
+            </div>
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary"><span aria-hidden="true">➕</span> Add group</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+@foreach (var g in Model.Groups)
+{
+    var members = Model.Cameras.Where(c => c.GroupId == g.Id).OrderBy(c => c.Name).ToList();
+    var unassignedOrElsewhere = Model.Cameras.Where(c => c.GroupId != g.Id).OrderBy(c => c.Name).ToList();
+
+    <div class="card mb-3" style="max-width: 640px;">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span class="fw-semibold" style="padding-left: @(Model.Depth(g) * 1.25)rem;">@g.Name</span>
             <form method="post" asp-page-handler="Delete" asp-route-id="@g.Id" class="d-inline"
                   onclick="return confirm('Delete this group?');">
                 <button type="submit" class="btn btn-sm btn-outline-danger"><span aria-hidden="true">🗑️</span> Delete</button>
             </form>
-        </li>
-    }
-</ul>
-
-<form method="post" asp-page-handler="Create" class="row g-2" style="max-width: 480px;">
-    <div class="col-12">
-        <label class="form-label">New group name</label>
-        <input asp-for="NewName" class="form-control" required />
-    </div>
-    <div class="col-12">
-        <label class="form-label">Parent</label>
-        <select asp-for="NewParentId" class="form-select">
-            <option value="">(top level)</option>
-            @foreach (var g in Model.Groups)
+        </div>
+        <div class="card-body">
+            @if (members.Count == 0)
             {
-                <option value="@g.Id">@g.Name</option>
+                <p class="text-muted small mb-2">No cameras in this group yet.</p>
             }
-        </select>
+            else
+            {
+                <ul class="list-group list-group-flush mb-2">
+                    @foreach (var c in members)
+                    {
+                        <li class="list-group-item d-flex justify-content-between align-items-center px-0">
+                            <span>@c.Name</span>
+                            <form method="post" asp-page-handler="AssignCamera" class="d-inline">
+                                <input type="hidden" name="cameraId" value="@c.Id" />
+                                <button type="submit" class="btn btn-sm btn-outline-secondary">Remove</button>
+                            </form>
+                        </li>
+                    }
+                </ul>
+            }
+
+            @if (unassignedOrElsewhere.Count > 0)
+            {
+                <form method="post" asp-page-handler="AssignCamera" class="d-flex gap-2 align-items-end">
+                    <div class="flex-grow-1">
+                        <label class="form-label small mb-1">Add a camera</label>
+                        <select name="cameraId" class="form-select form-select-sm">
+                            @foreach (var c in unassignedOrElsewhere)
+                            {
+                                <option value="@c.Id">@c.Name@(c.GroupId is not null ? $" (currently in {Model.Groups.FirstOrDefault(og => og.Id == c.GroupId)?.Name})" : "")</option>
+                            }
+                        </select>
+                    </div>
+                    <input type="hidden" name="groupId" value="@g.Id" />
+                    <button type="submit" class="btn btn-sm btn-primary">Add</button>
+                </form>
+            }
+        </div>
     </div>
-    <div class="col-12">
-        <button type="submit" class="btn btn-primary"><span aria-hidden="true">➕</span> Add group</button>
-    </div>
-</form>
+}

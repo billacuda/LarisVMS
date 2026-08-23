@@ -1,14 +1,17 @@
 @page
-@model LarisVMS.Web.Pages.Admin.Settings.UsersModel
+@model LarisVMS.Web.Pages.Admin.Settings.Permissions.UsersModel
 @{
-    ViewData["Title"] = "Users";
+    ViewData["Title"] = "Permissions — Users";
 }
 <h1>Settings</h1>
-<partial name="_SettingsTabs" model="@("Users")" />
+<partial name="_SettingsTabs" model="@("Permissions")" />
+<partial name="_PermissionsTabs" model="@("Users")" />
 
 <p class="text-muted">
     Self-registration is disabled — this is the only way to create an account. Roles determine what a
-    user can do; <a asp-page="/Admin/Settings/Roles">Roles</a> manages what each role grants.
+    user can do; the <a asp-page="/Admin/Settings/Permissions/Roles">Roles</a> tab manages each role's
+    scope tier and expiry, and the <a asp-page="/Admin/Settings/Permissions/Matrix">Permissions
+    Matrix</a> tab manages what each role grants.
 </p>
 
 @if (!string.IsNullOrEmpty(Model.SavedMessage))
@@ -53,6 +56,20 @@
                                 }
                                 <button type="submit" class="btn btn-sm btn-outline-primary">Save</button>
                             </form>
+                            @if (u.ActiveExpiries.Count > 0)
+                            {
+                                <div class="mt-1">
+                                    @foreach (var expiry in u.ActiveExpiries)
+                                    {
+                                        <div class="small text-muted">
+                                            @expiry.RoleName expires @expiry.ExpiresAtUtc.ToLocalTime().ToString("g")
+                                            <form method="post" asp-page-handler="ExtendExpiry" asp-route-expiryId="@expiry.Id" class="d-inline">
+                                                <button type="submit" class="btn btn-sm btn-link p-0 align-baseline">Extend</button>
+                                            </form>
+                                        </div>
+                                    }
+                                </div>
+                            }
                         </td>
                         <td>
                             @if (u.IsEnabled)

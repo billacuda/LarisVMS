@@ -13,4 +13,10 @@ public class CameraGroup
     public CameraGroup? Parent { get; set; }
     public ICollection<CameraGroup> Children { get; set; } = [];
     public ICollection<Camera> Cameras { get; set; } = [];
+
+    /// <summary>A top-level node is a "Site" in the roles/permissions overhaul's org &gt; site &gt;
+    /// camera_group scope hierarchy; anything underneath one is a "Camera Group". Not EF-mapped —
+    /// use <c>g.ParentId == null</c> directly in server-side LINQ queries (translates to SQL), this
+    /// property only for already-materialized C# code (Razor views, in-memory LINQ).</summary>
+    public bool IsSite => ParentId is null;
 }

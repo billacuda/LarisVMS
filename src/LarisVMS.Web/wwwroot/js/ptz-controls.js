@@ -39,6 +39,7 @@ window.larisvmsPtzControls = (function () {
                 '<div class="d-flex gap-1 mt-1">' +
                     zoomBtn(-1, '−') + zoomBtn(1, '+') +
                 '</div>' +
+                '<div class="ptz-status small text-warning mt-1 d-none"></div>' +
             '</div>'
         );
     }
@@ -53,12 +54,35 @@ window.larisvmsPtzControls = (function () {
 
         var reissueTimer = null;
         var activePointerId = null;
+        var statusEl = pad.querySelector('.ptz-status');
+        var statusTimer = null;
+
+        // Roles/permissions overhaul, pass 4: a 409 here means another operator with higher PTZ
+        // priority currently holds this camera (PtzArbitrationService) — worth surfacing, unlike
+        // every other failure mode this function still treats as best-effort/silent, since it's the
+        // one case with a real, actionable reason attached (retryAfterSeconds).
+        function showStatus(text, holdMs) {
+            if (!statusEl) return;
+            statusEl.textContent = text;
+            statusEl.classList.remove('d-none');
+            if (statusTimer) clearTimeout(statusTimer);
+            statusTimer = setTimeout(function () { statusEl.classList.add('d-none'); }, holdMs);
+        }
 
         function post(path, body) {
             return fetch('/api/cameras/' + cameraId + '/ptz/' + path, {
                 method: 'POST',
                 headers: body ? { 'Content-Type': 'application/json' } : undefined,
                 body: body ? JSON.stringify(body) : undefined
+            }).then(function (res) {
+                if (res.status === 409) {
+                    res.json().then(function (problem) {
+                        var retry = problem && problem.retryAfterSeconds;
+                        showStatus(retry ? 'Locked by higher priority — retry in ' + retry + 's' : 'Locked by higher priority',
+                            Math.min(Math.max((retry || 5) * 1000, 2000), 15000));
+                    }).catch(function () { /* body wasn't JSON — nothing more to show */ });
+                }
+                return res;
             }).catch(function () { /* best-effort — a dropped PTZ command isn't worth surfacing an error for */ });
         }
 

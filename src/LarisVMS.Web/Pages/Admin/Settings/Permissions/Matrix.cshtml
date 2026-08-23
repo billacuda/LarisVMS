@@ -1,0 +1,105 @@
+@page
+@model LarisVMS.Web.Pages.Admin.Settings.Permissions.MatrixModel
+@{
+    ViewData["Title"] = "Permissions Matrix";
+}
+<h1>Settings</h1>
+<partial name="_SettingsTabs" model="@("Permissions")" />
+<partial name="_PermissionsTabs" model="@("Matrix")" />
+
+<p class="text-muted">
+    Which Resource×Action pairs each role grants. The Super Admin role (marked
+    <span class="badge text-bg-secondary">built-in</span>) always holds every permission and isn't
+    editable here. Camera-level scoping is separate — see
+    <a asp-page="/Admin/Settings/CameraAccess">Camera Access</a> — and each role's scope tier, expiry,
+    and PTZ priority live on the <a asp-page="/Admin/Settings/Permissions/Roles">Roles</a> tab. Live
+    view, PTZ, two-way audio, playback, export, and camera-edit access are all further narrowed
+    per-camera or per-site on the Camera Access page — a checkbox here only controls whether a role
+    can use the feature at all, not which cameras it reaches.
+</p>
+
+@if (!string.IsNullOrEmpty(Model.SavedMessage))
+{
+    <div class="alert alert-success">@Model.SavedMessage</div>
+}
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger">@Model.ErrorMessage</div>
+}
+
+@if (Model.RoleColumns.Count == 0)
+{
+    <p class="text-muted">No roles exist yet.</p>
+}
+else
+{
+    @* One empty form per editable role column — checkboxes below reference these by id via the
+       HTML `form` attribute, so a single shared table can hold every role's own independent submit
+       without nesting <form> elements inside table cells. *@
+    @foreach (var col in Model.RoleColumns.Where(c => !c.IsProtected))
+    {
+        <form method="post" asp-page-handler="Save" id="form-@col.Id">
+            <input type="hidden" name="roleId" value="@col.Id" />
+        </form>
+    }
+
+    <div class="table-responsive">
+        <table class="table table-sm align-middle mb-3">
+            <thead class="table-light">
+                <tr>
+                    <th>Permission</th>
+                    @foreach (var col in Model.RoleColumns)
+                    {
+                        <th class="text-center text-nowrap">
+                            @col.Name
+                            @if (col.IsProtected) { <span class="badge text-bg-secondary ms-1">built-in</span> }
+                        </th>
+                    }
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var entry in Model.Catalog)
+                {
+                    <tr>
+                        <td class="text-nowrap">
+                            <span class="font-monospace">@(entry.Resource).@(entry.Action)</span>
+                            <div class="text-muted small">@entry.Label</div>
+                        </td>
+                        @foreach (var col in Model.RoleColumns)
+                        {
+                            <td class="text-center">
+                                @if (col.IsProtected)
+                                {
+                                    <span class="text-success" title="Always granted">✓</span>
+                                }
+                                else
+                                {
+                                    var key = $"{entry.Resource}|{entry.Action}";
+                                    var isChecked = Model.GrantedByRoleId[col.Id].Contains((entry.Resource, entry.Action));
+                                    <input class="form-check-input" type="checkbox" name="permissions" value="@key"
+                                           form="form-@col.Id" checked="@isChecked" />
+                                }
+                            </td>
+                        }
+                    </tr>
+                }
+                <tr>
+                    <td class="fw-semibold">Save</td>
+                    @foreach (var col in Model.RoleColumns)
+                    {
+                        <td class="text-center">
+                            @if (!col.IsProtected)
+                            {
+                                <button type="submit" form="form-@col.Id" class="btn btn-sm btn-primary">Save</button>
+                            }
+                            else
+                            {
+                                <span class="text-muted">—</span>
+                            }
+                        </td>
+                    }
+                </tr>
+            </tbody>
+        </table>
+    </div>
+}

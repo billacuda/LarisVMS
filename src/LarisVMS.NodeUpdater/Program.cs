@@ -12,14 +12,31 @@
 //   1. Wait until the service reaches Stopped state (max 60s) — LarisVMS.Node.exe holds its own file
 //      open while running, so the swap below can't happen until the SCM has actually released it.
 //   2. Back up the current binary, move the new one over it (UpdaterLogic.TrySwapBinary).
-//   3. Start the service again and re-apply the same failure-recovery config install-node.ps1 sets at
-//      install time — a raw binary swap doesn't touch service configuration, but re-applying here is
-//      cheap insurance against a service that was ever re-registered without it.
+//   3. Start the service again (with a few retries — see StartServiceWithRetries) and re-apply the
+//      same failure-recovery config install-node.ps1 sets at install time — a raw binary swap doesn't
+//      touch service configuration, but re-applying here is cheap insurance against a service that
+//      was ever re-registered without it.
+//
+// Logging: this process runs detached from a Windows Service with no console session, so plain
+// Console output — everything below used to be — went nowhere the one time this actually mattered:
+// a failed update left the service stopped with zero trace of why. Log() below writes the same lines
+// both to Console (harmless, and still useful if anyone ever runs this by hand) and to a rolling daily
+// file next to LarisVMS.Node's own log directory, so a future failure here is actually diagnosable
+// from the node machine afterward instead of relying on catching it live.
 
 using System.Diagnostics;
 using LarisVMS.NodeUpdater;
 
 const int MaxWaitSeconds = 60;
+// A first attempt failing here isn't necessarily the final word — "the service" as sc.exe sees it
+// can still be finishing a SERVICE_STOPPED -> fully released transition, or a security product can
+// hold a momentary lock on the freshly-swapped exe, for a few seconds after IsServiceStopped already
+// reported STOPPED above. Confirmed as a real gap live: the one time this update path failed, nothing
+// in this process's own control flow ever retried the start step — it was exactly one shot.
+const int MaxStartAttempts = 5;
+const int StartRetryDelaySeconds = 10;
+
+var logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "logs");
 
 var parsed = UpdaterLogic.ParseArgs(args);
 
@@ -30,21 +47,21 @@ if (!parsed.RestartOnly)
 {
     if (parsed.NewBinary is null || parsed.CurrentBinary is null)
     {
-        Console.Error.WriteLine("Usage: LarisVMS.NodeUpdater.exe --new <path> --current <path> [--service <name>]");
-        Console.Error.WriteLine("   or: LarisVMS.NodeUpdater.exe --restart-only [--service <name>]");
+        Log("ERROR", "Usage: LarisVMS.NodeUpdater.exe --new <path> --current <path> [--service <name>]");
+        Log("ERROR", "   or: LarisVMS.NodeUpdater.exe --restart-only [--service <name>]");
         return 1;
     }
 
     if (!File.Exists(parsed.NewBinary))
     {
-        Console.Error.WriteLine($"Staged binary not found: {parsed.NewBinary}");
+        Log("ERROR", $"Staged binary not found: {parsed.NewBinary}");
         return 1;
     }
 }
 
 // ── Wait for service to stop ───────────────────────────────────────────────
 
-Console.WriteLine($"Waiting for service '{parsed.ServiceName}' to stop...");
+Log("INFO", $"Waiting for service '{parsed.ServiceName}' to stop...");
 
 var stopped = false;
 for (var i = 0; i < MaxWaitSeconds * 2; i++)
@@ -59,50 +76,74 @@ for (var i = 0; i < MaxWaitSeconds * 2; i++)
 
 if (!stopped)
 {
-    Console.Error.WriteLine($"Service '{parsed.ServiceName}' did not stop within {MaxWaitSeconds}s. Aborting.");
+    Log("ERROR", $"Service '{parsed.ServiceName}' did not stop within {MaxWaitSeconds}s. Aborting — the service is " +
+        "left stopped and will need a manual `sc start` (or a re-run of install-node.ps1's service registration).");
     return 1;
 }
 
-Console.WriteLine("Service stopped.");
+Log("INFO", "Service stopped.");
 
 // ── Swap binary ────────────────────────────────────────────────────────────
 
 if (parsed.RestartOnly)
 {
-    Console.WriteLine("Restart-only mode — skipping binary swap.");
+    Log("INFO", "Restart-only mode — skipping binary swap.");
 }
 else if (!UpdaterLogic.TrySwapBinary(parsed.NewBinary!, parsed.CurrentBinary!, out var swapError))
 {
-    Console.Error.WriteLine($"Failed to swap binary: {swapError}");
+    Log("ERROR", $"Failed to swap binary: {swapError}. The service is left stopped on its previous binary " +
+        "(a '.bak' may be sitting next to it — see TrySwapBinary's own comment on why it's not auto-restored) " +
+        "and was never restarted.");
     return 1;
 }
 else
 {
-    Console.WriteLine($"Binary swapped: {parsed.NewBinary} -> {parsed.CurrentBinary}");
+    Log("INFO", $"Binary swapped: {parsed.NewBinary} -> {parsed.CurrentBinary}");
 }
 
 // ── Start service ──────────────────────────────────────────────────────────
 
-Console.WriteLine($"Starting service '{parsed.ServiceName}'...");
-try
+if (!await StartServiceWithRetriesAsync(parsed.ServiceName))
 {
-    RunCommand("sc.exe", $"start {parsed.ServiceName}");
-    Console.WriteLine("Service started.");
-
-    // Re-apply failure recovery in case the service was re-registered — same config
-    // install-node.ps1 sets at install time (see that script's own "configure service recovery" step).
-    try { RunCommand("sc.exe", $"failure {parsed.ServiceName} reset= 86400 actions= restart/60000/restart/60000/restart/60000"); }
-    catch { /* best-effort; not fatal */ }
-    try { RunCommand("sc.exe", $"failureflag {parsed.ServiceName} 1"); }
-    catch { /* best-effort; not fatal */ }
-}
-catch (Exception ex)
-{
-    Console.Error.WriteLine($"Failed to start service: {ex.Message}");
+    Log("ERROR", $"Giving up starting '{parsed.ServiceName}' after {MaxStartAttempts} attempts. " +
+        $"The service is left stopped — start it manually (`sc start {parsed.ServiceName}`) and check its own " +
+        "Windows Event Log entries for why sc.exe itself is refusing.");
     return 1;
 }
 
+Log("INFO", "Service started.");
+
+// Re-apply failure recovery in case the service was re-registered — same config install-node.ps1
+// sets at install time (see that script's own "configure service recovery" step). Best-effort:
+// the service is already back up at this point, so a failure here shouldn't be reported as an
+// overall failure of the update.
+try { RunCommand("sc.exe", $"failure {parsed.ServiceName} reset= 86400 actions= restart/60000/restart/60000/restart/60000"); }
+catch (Exception ex) { Log("WARN", $"Could not re-apply service failure-recovery config: {ex.Message}"); }
+try { RunCommand("sc.exe", $"failureflag {parsed.ServiceName} 1"); }
+catch (Exception ex) { Log("WARN", $"Could not re-apply service failureflag: {ex.Message}"); }
+
 return 0;
+
+// ── Start-with-retries (the one step that used to be single-shot) ──────────────────────────────
+
+async Task<bool> StartServiceWithRetriesAsync(string serviceName)
+{
+    for (var attempt = 1; attempt <= MaxStartAttempts; attempt++)
+    {
+        Log("INFO", $"Starting service '{serviceName}' (attempt {attempt}/{MaxStartAttempts})...");
+        try
+        {
+            RunCommand("sc.exe", $"start {serviceName}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log("WARN", $"Attempt {attempt}/{MaxStartAttempts} to start '{serviceName}' failed: {ex.Message}");
+            if (attempt < MaxStartAttempts) await Task.Delay(TimeSpan.FromSeconds(StartRetryDelaySeconds));
+        }
+    }
+    return false;
+}
 
 // ── Helpers (sc.exe-dependent — not unit tested, see UpdaterLogic's doc comment) ────────────────
 
@@ -137,4 +178,31 @@ static void RunCommand(string exe, string args)
     proc.WaitForExit(15_000);
     if (proc.ExitCode != 0)
         throw new Exception($"{exe} exited with code {proc.ExitCode}");
+}
+
+// Writes both to Console (still useful if this is ever run by hand from a terminal) and to a
+// rolling daily file next to LarisVMS.Node's own logs — same directory, same one-file-per-day
+// convention as LarisVMS.Core.Logging.FileLoggerProvider, kept as a small standalone copy here
+// rather than a project reference so this exe stays the minimal, dependency-free binary it's
+// designed to be (see this file's own top comment). This is the fix for a real incident: this
+// process runs detached from a Windows Service with no console session, so before this existed,
+// whatever went wrong here — a stop-wait timeout, a failed swap, sc.exe refusing to start the
+// service — left absolutely nothing to explain it afterward.
+void Log(string level, string message)
+{
+    var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{level}] {message}";
+    (level == "ERROR" ? Console.Error : Console.Out).WriteLine(line);
+
+    try
+    {
+        Directory.CreateDirectory(logDir);
+        var path = Path.Combine(logDir, $"updater-{DateTime.Now:yyyyMMdd}.log");
+        File.AppendAllText(path, line + Environment.NewLine);
+    }
+    catch
+    {
+        // Best-effort — an unwritable log directory must never stop the actual update work this
+        // process exists to do. The Console line above still carries the message if anyone is
+        // watching live; this is only the durable copy for after the fact.
+    }
 }

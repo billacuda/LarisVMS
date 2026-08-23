@@ -3,10 +3,13 @@ namespace LarisVMS.Core.Auth;
 /// <summary>
 /// The fixed list of every Resource×Action pair this app actually checks somewhere (an
 /// <c>[Authorize("Resource.Action")]</c>, a <c>RequireAuthorization("Resource.Action")</c>, or a
-/// <c>PermissionSet.Has("Resource", "Action")</c> nav-visibility check) plus "Settings.View", which
-/// SetupService has seeded onto the Viewer role since M1 but nothing yet gates on — kept in the
-/// catalog so the permissions editor can show and grant it rather than silently hiding a permission
-/// that already exists in the database. <see cref="PermissionPolicyProvider"/> itself accepts *any*
+/// <c>PermissionSet.Has("Resource", "Action")</c> nav-visibility check), plus two that exist in the
+/// database and the permissions editor but nothing gates on yet: "Settings.View" (seeded onto Viewer
+/// since M1) and "Dashboard.View" (added in the roles/permissions overhaul's pass 3, matching
+/// permission_matrix.txt's "View device health &amp; diagnostics" row, but not wired up to
+/// Pages/Index — see that page's own doc comment for why). Both are kept in the catalog so the
+/// permissions editor can show and grant them rather than silently hiding a permission that already
+/// exists in the database. <see cref="PermissionPolicyProvider"/> itself accepts *any*
 /// "{Resource}.{Action}" string dynamically and doesn't consult this list — this exists purely so the
 /// admin permissions editor has a closed, known set of checkboxes to render instead of free text,
 /// which would let an admin grant a typo'd permission that matches nothing anywhere.
@@ -31,5 +34,18 @@ public static class PermissionCatalog
         new("Nodes", "Edit", "Manage recording nodes"),
         new("Plugins", "View", "View the plugins page"),
         new("Alerts", "Edit", "Manage alert rules and delivery channels"),
+
+        // Roles/permissions overhaul, pass 3 — added to reach the target permission_matrix.txt's
+        // 25-permission shape. Each maps a matrix row onto a genuinely separate enforcement point
+        // this app already has (or now has); see RoleSeedService's per-role seeding table and the
+        // pass 3 CHANGELOG entry for the full row-by-row mapping, including which matrix rows have
+        // no code home yet and were deliberately left unseeded rather than half-built.
+        new("Bookmarks", "Edit", "Create bookmarks on recorded footage"),
+        new("Dashboard", "View", "View the camera health dashboard"),
+        new("CameraGroups", "Edit", "Create, rename, and delete camera groups"),
+        new("Users", "Edit", "Create, edit, and deactivate user accounts"),
+        new("Roles", "Assign", "Assign roles to user accounts"),
+        new("Retention", "Edit", "Change the data retention policy"),
+        new("Logs", "Export", "Export the audit log"),
     ];
 }

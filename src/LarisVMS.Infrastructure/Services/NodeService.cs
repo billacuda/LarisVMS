@@ -24,7 +24,11 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
     public async Task<NodeRegisterResponse> RegisterAsync(NodeRegisterRequest request, CancellationToken ct = default)
     {
         var expectedKey = await settings.GetRawAsync("Node.RegistrationKey", ct: ct);
-        if (string.IsNullOrEmpty(expectedKey) || request.RegistrationKey != expectedKey)
+        // FixedTimeEquals, not !=, matching this class's own AuthenticateAsync below (see this
+        // class's doc comment) — a plain string comparison short-circuits on the first differing
+        // byte, which leaks how many leading characters of the registration key a guess got right
+        // through the response timing.
+        if (string.IsNullOrEmpty(expectedKey) || !FixedTimeEquals(request.RegistrationKey ?? "", expectedKey))
             throw new UnauthorizedAccessException("Invalid registration key.");
 
         var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));

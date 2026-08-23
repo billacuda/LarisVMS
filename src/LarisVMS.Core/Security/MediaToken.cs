@@ -377,3 +377,24 @@ public static class MediaToken
     private static string Sign(string payload, string signingKeyHex)
         => Convert.ToHexString(HMACSHA256.HashData(Convert.FromHexString(signingKeyHex), Encoding.UTF8.GetBytes(payload)));
 }
+
+/// <summary>
+/// Builds a Web -&gt; Node HTTP request carrying a media token as an <c>Authorization: Bearer</c>
+/// header rather than only a <c>?token=</c> query param. A query string lands in access logs and
+/// proxy logs verbatim; the header doesn't. Still appends the same value as a query param alongside
+/// the header (see each <see cref="MediaToken"/> issuer's own call sites) so a node still running a
+/// build that only reads the query param keeps working during a rollout — every node's own
+/// <c>ExtractToken</c> prefers the header when both are present and falls back to the query param
+/// otherwise, so this is safe to send in either order relative to which side updates first. Once
+/// every node in the fleet is confirmed past the build that reads the header, a later pass can stop
+/// appending the query param and delete each node endpoint's fallback.
+/// </summary>
+public static class MediaTokenRequest
+{
+    public static HttpRequestMessage Create(HttpMethod method, string uri, string token)
+    {
+        var request = new HttpRequestMessage(method, uri);
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        return request;
+    }
+}

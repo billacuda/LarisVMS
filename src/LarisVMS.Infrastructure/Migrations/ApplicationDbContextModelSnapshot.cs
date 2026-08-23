@@ -1024,6 +1024,78 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.ToTable("Permissions");
                 });
 
+            modelBuilder.Entity("LarisVMS.Core.Entities.RoleAssignmentExpiry", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("AssignedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("AssignedByUserId")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime>("ExpiresAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("RoleId")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("nvarchar(450)");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("nvarchar(450)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ExpiresAtUtc");
+
+                    b.HasIndex("UserId", "RoleId")
+                        .IsUnique();
+
+                    b.ToTable("RoleAssignmentExpiries");
+                });
+
+            modelBuilder.Entity("LarisVMS.Core.Entities.RoleProfile", b =>
+                {
+                    b.Property<string>("RoleId")
+                        .HasMaxLength(450)
+                        .HasColumnType("nvarchar(450)");
+
+                    b.Property<bool>("AutoExpires")
+                        .HasColumnType("bit");
+
+                    b.Property<int?>("DefaultExpiryMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("IsSystemRole")
+                        .HasColumnType("bit");
+
+                    b.Property<int>("MaxScopeTier")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("PtzLockoutSeconds")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("PtzPriorityLevel")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Tag")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.HasKey("RoleId");
+
+                    b.HasIndex("Tag")
+                        .IsUnique();
+
+                    b.ToTable("RoleProfiles");
+                });
+
             modelBuilder.Entity("LarisVMS.Core.Entities.ScheduleWindow", b =>
                 {
                     b.Property<Guid>("Id")

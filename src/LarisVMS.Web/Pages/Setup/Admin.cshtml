@@ -2,9 +2,9 @@
 @model LarisVMS.Web.Pages.Setup.AdminModel
 @{
     Layout = "_SetupLayout";
-    ViewData["Title"] = "Administrator";
+    ViewData["Title"] = "Super Admin";
 }
-<h5 class="mb-3">2. Administrator account</h5>
+<h5 class="mb-3">2. Super Admin account</h5>
 @if (!string.IsNullOrEmpty(Model.ErrorMessage))
 {
     <div class="alert alert-danger">@Model.ErrorMessage</div>

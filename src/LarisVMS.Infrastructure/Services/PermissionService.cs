@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using LarisVMS.Core.Auth;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Interfaces;
 using LarisVMS.Infrastructure.Data;
@@ -18,14 +19,16 @@ public class PermissionService(ApplicationDbContext db, UserManager<ApplicationU
         var roles = await userManager.GetRolesAsync(user);
         if (roles.Count == 0) return false;
 
-        // Administrator implicitly has every permission — it's the role that grants the matrix, so
-        // it can't depend on rows in the matrix itself without risking a self-referential lockout.
-        if (roles.Contains("Administrator")) return true;
-
         var roleIds = await db.Roles
             .Where(r => roles.Contains(r.Name!))
             .Select(r => r.Id)
             .ToListAsync(ct);
+
+        // Super Admin implicitly has every permission — it's the role that grants the matrix, so it
+        // can't depend on rows in the matrix itself without risking a self-referential lockout.
+        // Resolved by RoleProfile.Tag rather than the role's (renamable) Name — see RoleSeedService.
+        if (await db.RoleProfiles.AnyAsync(p => roleIds.Contains(p.RoleId) && p.Tag == RoleTags.SuperAdmin, ct))
+            return true;
 
         return await db.Permissions.AnyAsync(p =>
             roleIds.Contains(p.RoleId) && p.Resource == resource && p.Action == action, ct);
@@ -44,12 +47,14 @@ public class PermissionService(ApplicationDbContext db, UserManager<ApplicationU
         // avoid on a view that renders on every single page in the app.
         var roleNames = user.FindAll(ClaimTypes.Role).Select(c => c.Value).ToList();
         if (roleNames.Count == 0) return PermissionSet.None;
-        if (roleNames.Contains("Administrator")) return new PermissionSet(true, new HashSet<(string, string)>());
 
         var roleIds = await db.Roles
             .Where(r => roleNames.Contains(r.Name!))
             .Select(r => r.Id)
             .ToListAsync(ct);
+
+        if (await db.RoleProfiles.AnyAsync(p => roleIds.Contains(p.RoleId) && p.Tag == RoleTags.SuperAdmin, ct))
+            return new PermissionSet(true, new HashSet<(string, string)>());
 
         var granted = await db.Permissions
             .Where(p => roleIds.Contains(p.RoleId))

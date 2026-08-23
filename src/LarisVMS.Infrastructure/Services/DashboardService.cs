@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
@@ -9,7 +10,7 @@ namespace LarisVMS.Infrastructure.Services;
 /// online status. Split out of Pages/Index.cshtml.cs's own OnGetAsync so the exact same computation
 /// backs both the server-rendered initial page load and GET /api/dashboard's 60s AJAX refresh — the
 /// two must never independently drift out of sync with each other.</summary>
-public class DashboardService(ICameraService cameraService) : IDashboardService
+public class DashboardService(ICameraService cameraService, ICameraAccessService cameraAccess) : IDashboardService
 {
     // Same 2-minute staleness window Admin/Nodes already uses for a node's own online/offline badge
     // — kept in sync rather than each page inventing its own threshold. Public: AlertEvaluationPolicy
@@ -21,9 +22,17 @@ public class DashboardService(ICameraService cameraService) : IDashboardService
     // several in a row should.
     public static readonly TimeSpan HealthFreshWindow = TimeSpan.FromSeconds(45);
 
-    public async Task<DashboardHealthDto> GetHealthAsync(CancellationToken ct = default)
+    public async Task<DashboardHealthDto> GetHealthAsync(ClaimsPrincipal user, CancellationToken ct = default)
     {
         var cameras = await cameraService.ListAsync(ct);
+
+        // Filtered here, at the source, rather than after building rows — every computation below
+        // (rows, the recording/not-reporting/disabled counts, and the online-node tally) derives
+        // from `cameras`, so a restricted principal's summary numbers and node count also only ever
+        // reflect what they can actually see, not the true system-wide totals.
+        var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(user, CameraAccessActions.View, ct);
+        if (accessible is not null) cameras = cameras.Where(c => accessible.Contains(c.Id)).ToList();
+
         var now = DateTime.UtcNow;
 
         var rows = cameras.Select(c =>

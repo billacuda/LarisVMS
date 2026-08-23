@@ -164,17 +164,36 @@ builder.Services.ConfigureApplicationCookie(options =>
             hoursPerRole.Add(await settings.GetAsync(SessionLifetimePolicy.SettingKey(roleId), SessionLifetimePolicy.DefaultHours));
 
         var window = SessionLifetimePolicy.EffectiveWindow(hoursPerRole);
-        if (!SessionLifetimePolicy.HasExpired(issuedUtc.Value, DateTimeOffset.UtcNow, window)) return;
+        if (SessionLifetimePolicy.HasExpired(issuedUtc.Value, DateTimeOffset.UtcNow, window))
+        {
+            ctx.RejectPrincipal();
+            await ctx.HttpContext.SignOutAsync(IdentityConstants.ApplicationScheme);
+            return;
+        }
 
-        ctx.RejectPrincipal();
-        await ctx.HttpContext.SignOutAsync(IdentityConstants.ApplicationScheme);
+        // Roles/permissions overhaul, pass 5: RoleAssignmentExpirySweepService only runs once a
+        // minute — a user whose own session also happened to expire around the same time could
+        // otherwise re-log in and have a fresh cookie minted with a role that's already past its
+        // ExpiresAtUtc but hasn't been swept yet. This narrows that window from "up to one sweep
+        // interval" to "the very next request": a full sign-out rather than surgically dropping just
+        // the one expired role claim, matching this handler's own existing all-or-nothing shape above.
+        var userId = ctx.Principal.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        if (userId is not null &&
+            await db.RoleAssignmentExpiries.AnyAsync(e => e.UserId == userId && roleIds.Contains(e.RoleId) && e.ExpiresAtUtc <= DateTime.UtcNow))
+        {
+            ctx.RejectPrincipal();
+            await ctx.HttpContext.SignOutAsync(IdentityConstants.ApplicationScheme);
+        }
     };
 });
 
 // ── Authorization / RBAC ──────────────────────────────────────────────────────
 builder.Services.AddAuthorization(options =>
 {
-    options.AddPolicy("AdministratorOnly", policy => policy.RequireRole("Administrator"));
+    // "Administrator" renamed to "Super Admin" by the roles/permissions overhaul (see
+    // RoleSeedService) — this policy is currently unreferenced anywhere, but kept correct so it
+    // doesn't silently break the day something wires it up.
+    options.AddPolicy("AdministratorOnly", policy => policy.RequireRole("Super Admin"));
 });
 builder.Services.AddScoped<IAuthorizationHandler, PermissionAuthorizationHandler>();
 // Resolves any "{Resource}.{Action}" policy name (e.g. "Cameras.Edit") on the fly, instead of
@@ -185,6 +204,7 @@ builder.Services.AddSingleton<IAuthorizationPolicyProvider, PermissionPolicyProv
 // ── Application services ──────────────────────────────────────────────────────
 builder.Services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
 builder.Services.AddScoped<ISetupService, SetupService>();
+builder.Services.AddScoped<IRoleSeedService, RoleSeedService>();
 builder.Services.AddScoped<IPermissionService, PermissionService>();
 builder.Services.AddScoped<IAuditService, AuditService>();
 builder.Services.AddScoped<ISettingsResolver, SettingsResolver>();
@@ -207,6 +227,12 @@ builder.Services.AddScoped<IBrandingService, BrandingService>();
 builder.Services.AddScoped<IEventColorService, EventColorService>();
 builder.Services.AddScoped<IPtzService, PtzService>();
 builder.Services.AddScoped<IBookmarkService, BookmarkService>();
+
+// Roles/permissions overhaul, pass 4: PTZ priority arbitration. PtzArbitrationService is a
+// singleton — one shared in-process hold table per camera, not per-request state (see its own doc
+// comment) — while PtzPriorityResolver stays scoped like every other DbContext-backed service here.
+builder.Services.AddSingleton<IPtzArbitrationService, PtzArbitrationService>();
+builder.Services.AddScoped<IPtzPriorityResolver, PtzPriorityResolver>();
 
 // ── Email (M15 pass 1) ───────────────────────────────────────────────────────
 // One IEmailProvider per EmailProviderType, resolved by EmailProviderFactory — ported from rsolva's
@@ -237,6 +263,7 @@ builder.Services.AddHostedService<AuditLogRetentionService>();
 builder.Services.AddHostedService<CameraReprobeService>();
 builder.Services.AddHostedService<AlertEvaluatorService>();
 builder.Services.AddHostedService<BookmarkRetentionService>();
+builder.Services.AddHostedService<RoleAssignmentExpirySweepService>();
 
 // ── ONVIF HTTP client ────────────────────────────────────────────────────────
 // CameraService takes a Func<HttpClient> rather than IHttpClientFactory directly so
@@ -271,6 +298,21 @@ var app = builder.Build();
 
 // Wire the Data Protection provider into the DB-column encryption helper before any DB access.
 SecretProtection.Configure(app.Services.GetRequiredService<IDataProtectionProvider>());
+
+// Roles/permissions overhaul: seeds the 8 built-in roles' RoleProfile rows (renaming
+// Administrator/Viewer to Super Admin/Guest-Viewer in place along the way) — see RoleSeedService.
+// Idempotent, so safe to run on every startup; only runs once the database actually exists, since a
+// brand-new deployment reaches this point before the setup wizard has configured a connection
+// string at all, and every RoleSeedService query would otherwise throw.
+using (var startupScope = app.Services.CreateScope())
+{
+    var setupService = startupScope.ServiceProvider.GetRequiredService<ISetupService>();
+    if (await setupService.IsDatabaseConfiguredAsync())
+    {
+        var roleSeedService = startupScope.ServiceProvider.GetRequiredService<IRoleSeedService>();
+        await roleSeedService.SeedAsync();
+    }
+}
 
 if (app.Environment.IsDevelopment())
 {
@@ -441,11 +483,25 @@ nodesApi.MapPost("/exports/complete", async (HttpContext ctx, List<ExportComplet
 // signed token below is what keeps that port from being wide open to anything else on the LAN that
 // knows the URL shape).
 app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICameraService cameraService,
-    IAuditService auditService, CancellationToken ct) =>
+    ICameraAccessService cameraAccess, IAuditService auditService, CancellationToken ct) =>
 {
     if (!ctx.WebSockets.IsWebSocketRequest)
     {
         ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+
+    // Global RBAC (Cameras.View, below) says this principal can view *some* camera's live feed;
+    // CameraAccess narrows that to *this* camera. Previously unchecked here — the camera/view list
+    // pages already filter by this same call, but this endpoint (the one that actually streams
+    // video) took only the global gate, so a CameraAccess-restricted user could still open any other
+    // camera's live feed directly by GUID. null means unrestricted (admin, an All-scope grant, or a
+    // principal with zero CameraAccess rows — see GetAccessibleCameraIdsAsync's own doc comment).
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.View, ct);
+    if (accessible is not null && !accessible.Contains(cameraId))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+        await ctx.Response.WriteAsync("You don't have access to this camera.");
         return;
     }
 
@@ -477,6 +533,10 @@ app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICame
     var nodeUri = new Uri($"ws://{ip}:{port}/live/{cameraId}?token={Uri.EscapeDataString(token)}{roleQuery}");
 
     using var nodeSocket = new ClientWebSocket();
+    // Also sent as ?token= above for a node that hasn't updated yet — see MediaTokenRequest's own
+    // doc comment. The WebSocket upgrade request is still a plain HTTP GET at the point the node
+    // reads this, so the header arrives the same way it would on any other request.
+    nodeSocket.Options.SetRequestHeader("Authorization", $"Bearer {token}");
     try
     {
         await nodeSocket.ConnectAsync(nodeUri, ct);
@@ -498,8 +558,16 @@ app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICame
 // in general, not one specific file). Cameras.Edit, not .View — capturing a frame on demand opens
 // a real (if short) RTSP session against the camera, which is a configuration-adjacent action
 // (only the zone editor calls this in M8 pass 1), not a passive view.
-app.MapGet("/api/cameras/{cameraId:guid}/snapshot", async (Guid cameraId, ICameraService cameraService, IHttpClientFactory httpFactory, CancellationToken ct) =>
+app.MapGet("/api/cameras/{cameraId:guid}/snapshot", async (HttpContext ctx, Guid cameraId, ICameraService cameraService,
+    ICameraAccessService cameraAccess, IHttpClientFactory httpFactory, CancellationToken ct) =>
 {
+    // Configure, not View/Playback — this is the zone editor's own configuration-adjacent capture
+    // (see this endpoint's own Cameras.Edit gate below), the same category CameraAccessActions.Ptz
+    // narrows Cameras.View by for the PTZ endpoints above. Previously relied on the global gate alone.
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Configure, ct);
+    if (accessible is not null && !accessible.Contains(cameraId))
+        return Results.Problem("You don't have configuration access to this camera.", statusCode: StatusCodes.Status403Forbidden);
+
     var camera = await cameraService.GetAsync(cameraId, ct);
     if (camera?.Node is not { LastIpAddress: { } ip, LivePort: { } port, MediaSigningKey: { } key })
     {
@@ -516,7 +584,10 @@ app.MapGet("/api/cameras/{cameraId:guid}/snapshot", async (Guid cameraId, ICamer
     HttpResponseMessage nodeResponse;
     try
     {
-        nodeResponse = await client.GetAsync(nodeUri, HttpCompletionOption.ResponseHeadersRead, ct);
+        // See MediaTokenRequest's own doc comment: also sent as ?token= above for a node that
+        // hasn't updated yet.
+        nodeResponse = await client.SendAsync(MediaTokenRequest.Create(HttpMethod.Get, nodeUri, token),
+            HttpCompletionOption.ResponseHeadersRead, ct);
     }
     catch (TaskCanceledException) when (!ct.IsCancellationRequested)
     {
@@ -542,19 +613,46 @@ app.MapGet("/api/cameras/{cameraId:guid}/snapshot", async (Guid cameraId, ICamer
 // session the way live view or event polling are.
 var ptzApi = app.MapGroup("/api/cameras/{cameraId:guid}/ptz").RequireAuthorization("Cameras.View");
 
+// Roles/permissions overhaul, pass 4: after the existing CameraAccessActions.Ptz check, a requester
+// whose held roles carry a PTZ priority (RoleProfile.PtzPriorityLevel) is now subject to priority
+// arbitration on top of it — a higher-priority holder locks the camera against lower/equal-priority
+// commands until their own lockout window elapses. A requester with no priority at all (every custom
+// role by default, plus Investigator/Auditor, Guest/Viewer, API/Integration) skips arbitration
+// entirely and keeps today's unrestricted first-come behavior — the deliberate migration-safety
+// property that leaves every pre-existing deployment's PTZ behavior unchanged until an admin opts a
+// role in.
 ptzApi.MapPost("/move", async (HttpContext ctx, Guid cameraId, PtzMoveRequest request,
-    IPtzService ptzService, ICameraAccessService cameraAccess, CancellationToken ct) =>
+    IPtzService ptzService, ICameraAccessService cameraAccess, IPtzArbitrationService arbitration,
+    IPtzPriorityResolver priorityResolver, CancellationToken ct) =>
 {
     var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Ptz, ct);
     if (accessible is not null && !accessible.Contains(cameraId))
         return Results.Problem("You don't have PTZ access to this camera.", statusCode: StatusCodes.Status403Forbidden);
 
+    var userId = ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
+    var priority = await priorityResolver.GetPtzPriorityAsync(ctx.User, ct);
+    var now = DateTime.UtcNow;
+
+    if (priority is { } p)
+    {
+        var decision = arbitration.TryAcquire(cameraId, userId, p.PriorityLevel, now);
+        if (!decision.Granted)
+            return Results.Problem("Another operator with higher PTZ priority currently controls this camera.",
+                statusCode: StatusCodes.Status409Conflict,
+                extensions: new Dictionary<string, object?> { ["retryAfterSeconds"] = decision.RetryAfterSeconds });
+    }
+
     try
     {
         var moved = await ptzService.MoveAsync(cameraId, request.PanX, request.TiltY, request.ZoomX, ct);
-        return moved ? Results.Ok()
-            : Results.Problem("This camera doesn't support PTZ, or hasn't been probed since PTZ support was added.",
+        if (!moved)
+            return Results.Problem("This camera doesn't support PTZ, or hasn't been probed since PTZ support was added.",
                 statusCode: StatusCodes.Status400BadRequest);
+
+        // Only on an actual successful move, never on a mere view — matches "viewing does not reset
+        // the timer."
+        if (priority is { } granted) arbitration.RecordCommand(cameraId, userId, granted.PriorityLevel, granted.LockoutSeconds, now);
+        return Results.Ok();
     }
     catch (OnvifFaultException ex)
     {
@@ -566,12 +664,27 @@ ptzApi.MapPost("/move", async (HttpContext ctx, Guid cameraId, PtzMoveRequest re
     }
 });
 
+// Same arbitration check as /move (an unrelated lower-priority stray stop must not interrupt an
+// active higher-priority hold) but never calls RecordCommand or releases the hold — lockout is
+// strictly time-based, never released early by stopping.
 ptzApi.MapPost("/stop", async (HttpContext ctx, Guid cameraId,
-    IPtzService ptzService, ICameraAccessService cameraAccess, CancellationToken ct) =>
+    IPtzService ptzService, ICameraAccessService cameraAccess, IPtzArbitrationService arbitration,
+    IPtzPriorityResolver priorityResolver, CancellationToken ct) =>
 {
     var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Ptz, ct);
     if (accessible is not null && !accessible.Contains(cameraId))
         return Results.Problem("You don't have PTZ access to this camera.", statusCode: StatusCodes.Status403Forbidden);
+
+    var userId = ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
+    var priority = await priorityResolver.GetPtzPriorityAsync(ctx.User, ct);
+    if (priority is { } p)
+    {
+        var decision = arbitration.TryAcquire(cameraId, userId, p.PriorityLevel, DateTime.UtcNow);
+        if (!decision.Granted)
+            return Results.Problem("Another operator with higher PTZ priority currently controls this camera.",
+                statusCode: StatusCodes.Status409Conflict,
+                extensions: new Dictionary<string, object?> { ["retryAfterSeconds"] = decision.RetryAfterSeconds });
+    }
 
     try
     {
@@ -693,15 +806,35 @@ scheduleWindowApi.MapDelete("", async (Guid id, IScheduleWindowService windows, 
 // segment file per request via MediaToken.IssueForSegment rather than a whole camera's live feed.
 var playbackApi = app.MapGroup("/api/cameras/{cameraId:guid}").RequireAuthorization("Playback.View");
 
-playbackApi.MapGet("/timeline", async (Guid cameraId, DateTime from, DateTime to, int? buckets, ITimelineService timeline, CancellationToken ct) =>
-    Results.Json(await timeline.GetBucketsAsync(cameraId, from, to, buckets ?? 200, ct)));
+// Both narrowed by CameraAccess — this is the data that drives the timeline strip and segment
+// fetches for one specific camera, i.e. the same "can this principal actually review this camera's
+// footage" question /playback-segment itself has to answer. Previously relied on the group's global
+// Playback.View gate alone, same gap as /playback-segment's own (see that endpoint's own comment).
+playbackApi.MapGet("/timeline", async (HttpContext ctx, Guid cameraId, DateTime from, DateTime to, int? buckets,
+    ITimelineService timeline, ICameraAccessService cameraAccess, CancellationToken ct) =>
+{
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Playback, ct);
+    if (accessible is not null && !accessible.Contains(cameraId))
+        return Results.Problem("You don't have playback access to this camera.", statusCode: StatusCodes.Status403Forbidden);
+    return Results.Json(await timeline.GetBucketsAsync(cameraId, from, to, buckets ?? 200, ct));
+});
 
-playbackApi.MapGet("/segments", async (Guid cameraId, DateTime from, DateTime to, ITimelineService timeline, CancellationToken ct) =>
-    Results.Json(await timeline.GetSegmentsAsync(cameraId, from, to, ct)));
+playbackApi.MapGet("/segments", async (HttpContext ctx, Guid cameraId, DateTime from, DateTime to,
+    ITimelineService timeline, ICameraAccessService cameraAccess, CancellationToken ct) =>
+{
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Playback, ct);
+    if (accessible is not null && !accessible.Contains(cameraId))
+        return Results.Problem("You don't have playback access to this camera.", statusCode: StatusCodes.Status403Forbidden);
+    return Results.Json(await timeline.GetSegmentsAsync(cameraId, from, to, ct));
+});
 
 // M18: the per-camera timeline's own bookmark markers — same Playback.View gate as the rest of this
 // group, no per-camera CameraAccess narrowing (matches Bookmarks/Snapshots' own shared-visibility
-// model, see BookmarkService's doc comment).
+// model, see BookmarkService's doc comment). Deliberately left as-is: unlike /timeline and /segments
+// above (which hand back actual recording data for one camera), a bookmark is metadata that's
+// already visible in full on the shared Bookmarks/Snapshots pages regardless of CameraAccess: this
+// route narrowing while those don't would just be an inconsistent partial filter, not a real
+// boundary. Revisit only if that shared-visibility model itself changes.
 playbackApi.MapGet("/bookmarks", async (Guid cameraId, DateTime from, DateTime to, IBookmarkService bookmarks, CancellationToken ct) =>
     Results.Json(await bookmarks.ListForCameraAsync(cameraId, from, to, ct)));
 
@@ -709,10 +842,21 @@ playbackApi.MapGet("/bookmarks", async (Guid cameraId, DateTime from, DateTime t
 // view" overview timeline on Pages/Playback, separate from the per-camera one above. cameraIds
 // omitted falls back to every camera (see GetGlobalBucketsAsync's own doc comment) — playback-
 // player.js always passes the current view's own camera set, so in practice this stays scoped to
-// what's actually on screen rather than the whole system.
-app.MapGet("/api/timeline", async (DateTime from, DateTime to, int? buckets, Guid[]? cameraIds, ITimelineService timeline, CancellationToken ct) =>
-    Results.Json(await timeline.GetGlobalBucketsAsync(from, to, buckets ?? 200, cameraIds, ct))
-).RequireAuthorization("Playback.View");
+// what's actually on screen rather than the whole system. Narrowed by CameraAccess regardless of
+// what the caller passed: a restricted principal could otherwise still learn "something was
+// recording/had motion somewhere" for a camera it can't open, either by omitting cameraIds (the
+// documented every-camera fallback) or by naming a disallowed id directly — the merged buckets
+// carry no camera identity themselves, but the boolean flags they carry are still a (weak) signal
+// about cameras this principal has no access to.
+app.MapGet("/api/timeline", async (HttpContext ctx, DateTime from, DateTime to, int? buckets, Guid[]? cameraIds,
+    ITimelineService timeline, ICameraAccessService cameraAccess, CancellationToken ct) =>
+{
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Playback, ct);
+    var scopedCameraIds = accessible is null
+        ? cameraIds
+        : (cameraIds is null || cameraIds.Length == 0 ? accessible.ToArray() : cameraIds.Where(accessible.Contains).ToArray());
+    return Results.Json(await timeline.GetGlobalBucketsAsync(from, to, buckets ?? 200, scopedCameraIds, ct));
+}).RequireAuthorization("Playback.View");
 
 // Audit-only: Pages/Playback resolves which view (and therefore which cameras) is being reviewed
 // entirely client-side, so there is no existing server hit that knows "this user just started
@@ -743,17 +887,32 @@ app.MapPost("/api/playback/view-opened", async (HttpContext ctx, ViewOpenedReque
 
 // M8: Live-view motion indicator's signal — polled periodically by live-view.js, not pushed. Gated
 // Cameras.View (not Playback.View) since it's a Live-page concern, matching /live's own gate.
-app.MapGet("/api/cameras/motion-state", async (ITimelineService timeline, CancellationToken ct) =>
-    Results.Json(await timeline.GetCamerasWithActiveMotionAsync(ct))
-).RequireAuthorization("Cameras.View");
+// Filtered by CameraAccess, same action as /live itself — this returns every camera id with active
+// motion system-wide with no per-camera scoping of its own, which let a CameraAccess-restricted
+// principal enumerate camera GUIDs (and their live motion state) outside its grants entirely
+// through this endpoint, then open them directly via /live.
+app.MapGet("/api/cameras/motion-state", async (HttpContext ctx, ITimelineService timeline,
+    ICameraAccessService cameraAccess, CancellationToken ct) =>
+{
+    var ids = await timeline.GetCamerasWithActiveMotionAsync(ct);
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.View, ct);
+    if (accessible is not null) ids = ids.Where(accessible.Contains).ToList();
+    return Results.Json(ids);
+}).RequireAuthorization("Cameras.View");
 
 // Companion to motion-state: which cameras are seeing a *classified* object right now
 // (person/vehicle/face) rather than just movement. Separate endpoint rather than a wider
 // motion-state payload so the existing badge keeps working untouched on any client that hasn't been
-// updated, and so a deployment with no object-capable cameras pays nothing for it.
-app.MapGet("/api/cameras/detection-state", async (ITimelineService timeline, CancellationToken ct) =>
-    Results.Json(await timeline.GetActiveDetectionsAsync(ct))
-).RequireAuthorization("Cameras.View");
+// updated, and so a deployment with no object-capable cameras pays nothing for it. Filtered by
+// CameraAccess for the same reason motion-state above now is.
+app.MapGet("/api/cameras/detection-state", async (HttpContext ctx, ITimelineService timeline,
+    ICameraAccessService cameraAccess, CancellationToken ct) =>
+{
+    var states = await timeline.GetActiveDetectionsAsync(ct);
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.View, ct);
+    if (accessible is not null) states = states.Where(s => accessible.Contains(s.CameraId)).ToList();
+    return Results.Json(states);
+}).RequireAuthorization("Cameras.View");
 
 // The admin-configured palette, for the parts of the UI that draw event colors client-side. Only
 // motion and recording are needed here: a detected object's color already rides along on each
@@ -769,9 +928,10 @@ app.MapGet("/api/timeline/colors", async (IEventColorService eventColors, Cancel
 // M11: Pages/Index's own 60s AJAX refresh (dashboard.js) — same IDashboardService.GetHealthAsync
 // Pages/Index.cshtml.cs's OnGetAsync itself calls, so the polled data and the server-rendered
 // initial page can never independently drift out of sync. Plain [Authorize] (no specific resource
-// policy), matching IndexModel's own gate — the dashboard shows a summary, not a resource to scope.
-app.MapGet("/api/dashboard", async (IDashboardService dashboardService, CancellationToken ct) =>
-    Results.Json(await dashboardService.GetHealthAsync(ct))
+// policy), matching IndexModel's own gate — see that page's doc comment for why Dashboard.View isn't
+// wired up here yet despite existing in PermissionCatalog since pass 3.
+app.MapGet("/api/dashboard", async (HttpContext ctx, IDashboardService dashboardService, CancellationToken ct) =>
+    Results.Json(await dashboardService.GetHealthAsync(ctx.User, ct))
 ).RequireAuthorization();
 
 // ── User preferences (M14) ───────────────────────────────────────────────────
@@ -796,8 +956,17 @@ app.MapPut("/api/preferences/{key}", async (string key, HttpContext ctx, SetPref
 }).RequireAuthorization();
 
 app.MapGet("/playback-segment/{cameraId:guid}/{segmentId:long}", async (
-    HttpContext ctx, Guid cameraId, long segmentId, ITimelineService timeline, IHttpClientFactory httpFactory, CancellationToken ct) =>
+    HttpContext ctx, Guid cameraId, long segmentId, ITimelineService timeline, ICameraAccessService cameraAccess,
+    IHttpClientFactory httpFactory, CancellationToken ct) =>
 {
+    // The group's Playback.View gate says this principal can review *some* camera's footage;
+    // CameraAccess narrows it to *this* camera — this is the endpoint that actually streams the
+    // video bytes, previously reachable for any cameraId once the global gate was met. Same fix as
+    // /live's own (see that endpoint's own comment).
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Playback, ct);
+    if (accessible is not null && !accessible.Contains(cameraId))
+        return Results.Problem("You don't have playback access to this camera.", statusCode: StatusCodes.Status403Forbidden);
+
     var segment = await timeline.GetSegmentForPlaybackAsync(cameraId, segmentId, ct);
     if (segment is null) return Results.NotFound();
     if (segment.NodeIp is null || segment.NodeLivePort is null || segment.NodeMediaSigningKey is null)
@@ -825,7 +994,10 @@ app.MapGet("/playback-segment/{cameraId:guid}/{segmentId:long}", async (
     HttpResponseMessage nodeResponse;
     try
     {
-        nodeResponse = await client.GetAsync(nodeUri, HttpCompletionOption.ResponseHeadersRead, ct);
+        // See MediaTokenRequest's own doc comment: also sent as ?token= above for a node that
+        // hasn't updated yet.
+        nodeResponse = await client.SendAsync(MediaTokenRequest.Create(HttpMethod.Get, nodeUri, token),
+            HttpCompletionOption.ResponseHeadersRead, ct);
     }
     catch (TaskCanceledException) when (!ct.IsCancellationRequested)
     {
@@ -880,7 +1052,9 @@ async Task<IResult> ProxyThumbnailAsync(Guid cameraId, ThumbnailInfo? thumb, IHt
         var token = MediaToken.IssueForThumbnail(cameraId, thumb.FilePath, offsetSeconds, thumb.NodeMediaSigningKey!, TimeSpan.FromSeconds(30));
         var nodeUri = $"http://{thumb.NodeIp}:{thumb.NodeLivePort}/playback-thumbnail/{cameraId}" +
             $"?path={Uri.EscapeDataString(thumb.FilePath)}&offset={offsetSeconds}&token={Uri.EscapeDataString(token)}&maxDim={maxDimension}&q={quality}";
-        return client.GetAsync(nodeUri, HttpCompletionOption.ResponseHeadersRead, ct);
+        // See MediaTokenRequest's own doc comment: also sent as ?token= above for a node that
+        // hasn't updated yet.
+        return client.SendAsync(MediaTokenRequest.Create(HttpMethod.Get, nodeUri, token), HttpCompletionOption.ResponseHeadersRead, ct);
     }
 
     HttpResponseMessage nodeResponse;
@@ -952,8 +1126,17 @@ async Task<IResult> ProxyThumbnailAsync(Guid cameraId, ThumbnailInfo? thumb, IHt
 // parameter) outright with 400 Bad Request. Confirmed live: every hover-thumbnail request broke the
 // moment this parameter was added without one.
 app.MapGet("/playback-thumbnail/{cameraId:guid}", async (
-    Guid cameraId, DateTime atUtc, ITimelineService timeline, IHttpClientFactory httpFactory, CancellationToken ct, HttpContext httpContext, bool exact = false) =>
-    await ProxyThumbnailAsync(cameraId,
+    Guid cameraId, DateTime atUtc, ITimelineService timeline, ICameraAccessService cameraAccess,
+    IHttpClientFactory httpFactory, CancellationToken ct, HttpContext httpContext, bool exact = false) =>
+{
+    // Narrowed by CameraAccess same as /playback-segment and the playbackApi group — this is the
+    // Snapshots-card and hover-scrub lookup, and previously relied on the group's global
+    // Playback.View gate alone with no per-camera check of its own.
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(httpContext.User, CameraAccessActions.Playback, ct);
+    if (accessible is not null && !accessible.Contains(cameraId))
+        return Results.Problem("You don't have playback access to this camera.", statusCode: StatusCodes.Status403Forbidden);
+
+    return await ProxyThumbnailAsync(cameraId,
         exact ? await timeline.GetExactThumbnailInfoAsync(cameraId, atUtc, ct) : await timeline.GetThumbnailInfoAsync(cameraId, atUtc, ct),
         httpFactory, ct, httpContext, longLivedCache: true,
         // exact is Snapshots' own card thumbnails — something a viewer actually looks closely at, not
@@ -969,16 +1152,26 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (
         // compression is free there, but at 1280px JPEG artifacts were themselves part of "hard to
         // make out" — resolution alone wouldn't have fixed it.
         maxDimension: exact ? 1280 : 150,
-        quality: exact ? 4 : 8)
-).RequireAuthorization("Playback.View");
+        quality: exact ? 4 : 8);
+}).RequireAuthorization("Playback.View");
 
 // Dashboard's "most recent thumbnail" column (Pages/Index, dashboard.js) — plain [Authorize], not
 // Playback.View, matching Pages/Index's own gate (IndexModel has no specific resource policy) rather
-// than the stricter one the historical/scrub lookup above uses.
+// than the stricter one the historical/scrub lookup above uses. Still narrowed by CameraAccess
+// (View, matching the Dashboard's own per-row filtering in DashboardService) even though the group
+// gate stays plain-authenticated: this is per-camera hiding, not a new RBAC requirement, so a
+// restricted camera stays hidden even if this endpoint is hit directly rather than only through a
+// Dashboard row that was already filtered out.
 app.MapGet("/playback-thumbnail/{cameraId:guid}/latest", async (
-    Guid cameraId, ITimelineService timeline, IHttpClientFactory httpFactory, CancellationToken ct, HttpContext httpContext) =>
-    await ProxyThumbnailAsync(cameraId, await timeline.GetLatestThumbnailInfoAsync(cameraId, ct), httpFactory, ct, httpContext, longLivedCache: false)
-).RequireAuthorization();
+    Guid cameraId, ITimelineService timeline, ICameraAccessService cameraAccess,
+    IHttpClientFactory httpFactory, CancellationToken ct, HttpContext httpContext) =>
+{
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(httpContext.User, CameraAccessActions.View, ct);
+    if (accessible is not null && !accessible.Contains(cameraId))
+        return Results.Problem("You don't have access to this camera.", statusCode: StatusCodes.Status403Forbidden);
+
+    return await ProxyThumbnailAsync(cameraId, await timeline.GetLatestThumbnailInfoAsync(cameraId, ct), httpFactory, ct, httpContext, longLivedCache: false);
+}).RequireAuthorization();
 
 // ── Multi-camera export ──────────────────────────────────────────────────────
 // Trigger from Playback's toolbar. Async: creates the job/items and returns immediately —
@@ -1052,7 +1245,10 @@ app.MapGet("/export-download/{exportItemId:guid}", async (
     HttpResponseMessage nodeResponse;
     try
     {
-        nodeResponse = await client.GetAsync(nodeUri, HttpCompletionOption.ResponseHeadersRead, ct);
+        // See MediaTokenRequest's own doc comment: also sent as ?token= above for a node that
+        // hasn't updated yet.
+        nodeResponse = await client.SendAsync(MediaTokenRequest.Create(HttpMethod.Get, nodeUri, token),
+            HttpCompletionOption.ResponseHeadersRead, ct);
     }
     catch (TaskCanceledException) when (!ct.IsCancellationRequested)
     {
@@ -1128,7 +1324,9 @@ app.MapDelete("/api/exports/{jobId:guid}", async (
                 $"?path={Uri.EscapeDataString(file.FilePath)}&token={Uri.EscapeDataString(token)}";
             var client = httpFactory.CreateClient();
             client.Timeout = TimeSpan.FromSeconds(10);
-            await client.DeleteAsync(nodeUri, ct);
+            // See MediaTokenRequest's own doc comment: also sent as ?token= above for a node that
+            // hasn't updated yet.
+            await client.SendAsync(MediaTokenRequest.Create(HttpMethod.Delete, nodeUri, token), ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -1151,11 +1349,13 @@ app.MapPost("/api/exports/{itemId:guid}/retry", async (Guid itemId, IExportServi
 }).RequireAuthorization("Exports.View");
 
 // ── Bookmarks (M18) ──────────────────────────────────────────────────────────
-// Triggered from Playback's own toolbar, same shape as the export trigger above: Playback.View
-// broad permission, narrowed per-camera by CameraAccessActions.Playback — a viewer who can't play
-// this camera back has nothing here worth marking either. Listing/deleting a bookmark is a
-// server-rendered Razor Page (Pages/Bookmarks/Index), not a JSON API — only *creating* one happens
-// from the JS-driven Playback page, so only that direction needs a route here.
+// Triggered from Playback's own toolbar. Roles/permissions overhaul, pass 3: creating a bookmark
+// now also requires Bookmarks.Edit (its own coarse gate, distinct from Playback.View — a role can
+// hold one without the other, e.g. API/Integration keeps limited Playback but never Bookmarks),
+// still narrowed per-camera by CameraAccessActions.Playback — a viewer who can't play this camera
+// back has nothing here worth marking either. Listing/deleting a bookmark is a server-rendered Razor
+// Page (Pages/Bookmarks/Index), not a JSON API — only *creating* one happens from the JS-driven
+// Playback page, so only that direction needs a route here.
 app.MapPost("/api/bookmarks", async (HttpContext ctx, CreateBookmarkRequest request,
     IBookmarkService bookmarkService, ICameraAccessService cameraAccess, CancellationToken ct) =>
 {
@@ -1170,7 +1370,7 @@ app.MapPost("/api/bookmarks", async (HttpContext ctx, CreateBookmarkRequest requ
     var bookmark = await bookmarkService.CreateAsync(request.CameraId, request.TimestampUtc, request.Note.Trim(),
         userId, ctx.User.Identity?.Name, ct);
     return Results.Json(new { id = bookmark.Id });
-}).RequireAuthorization("Playback.View");
+}).RequireAuthorization("Playback.View", "Bookmarks.Edit");
 
 app.Run();
 

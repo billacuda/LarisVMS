@@ -4,7 +4,7 @@ namespace LarisVMS.Web.Middleware;
 
 /// <summary>
 /// M14: when an admin configures a dedicated port for live view and playback traffic
-/// (Admin &gt; Settings &gt; Security, <see cref="SettingKey"/>), separates it from the management
+/// (Admin &gt; Settings &gt; Live View, <see cref="SettingKey"/>), separates it from the management
 /// interface at the application level — a request for a media route (see <see cref="MediaRoutes"/>)
 /// on any port other than the configured one is refused, and a request for anything else on the
 /// configured media port is refused too. Refused with 404, not 403 or a redirect: a probe on the

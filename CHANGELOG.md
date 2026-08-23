@@ -5,6 +5,284 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.147.3] - 2026-08-23
+
+### Added
+
+- **`Admin > Settings > Camera Access` grants can now be edited in place**, not just added and
+  removed. Each grant row gets an "Edit" toggle revealing the same scope/actions form "Add a grant"
+  uses, pre-filled with its current values — the role a grant belongs to still isn't editable (moving
+  a grant to a different role is what Remove + Add already does), but its scope and actions are, with
+  the same scope-tier validation (`RoleScopePolicy.CanGrant`) the Add path already enforces. The
+  scope-type show/hide script generalized to wire any number of these forms on the page instead of
+  one hardcoded set of element ids.
+
+## [0.147.2] - 2026-08-23
+
+### Fixed
+
+- **`Cameras > Groups` had no way to add a camera to a group** — the only path was opening each
+  camera's own Edit page individually and picking a Group from its dropdown, with no visibility into
+  a group's membership from the Groups page itself. Each group now lists its member cameras (with a
+  Remove action) and a compact "Add a camera" picker, both writing through the same
+  `ICameraService.UpdateAsync` path Cameras/Edit's own Group field already uses — no new data model,
+  just a second, more discoverable entry point to the same field. Also links this page to
+  `Camera Access`, since a group is exactly the scope a role's camera-access grant narrows down to.
+
+## [0.147.1] - 2026-08-23
+
+### Changed
+
+- **`Admin > Settings > Permissions > Roles`: each role's card is now collapsed by default** (click
+  the header to expand) instead of always showing every field for all 8 roles at once, and "Add a
+  role" moved from the bottom of the page to the top.
+
+## [0.147.0] - 2026-08-23
+
+### Added
+
+- **Roles & permissions overhaul, pass 5 of 5 (final pass): auto-expiring role assignments.** A new
+  `RoleAssignmentExpirySweepService` ticks every minute, finds every `RoleAssignmentExpiry` row past
+  its `ExpiresAtUtc`, removes that role from the user, deletes the row, and audit-logs it
+  (`Role.Expired`) — if that removal leaves the user with zero roles at all, the account is disabled
+  the same way the Users page's own toggle does (`User.Disable`, automatic). A defensive guard skips
+  removing the role if it would strip the deployment's last enabled Super Admin, leaving both the role
+  and the expiry row in place and logging a warning every tick instead — unreachable in normal
+  operation, since Super Admin never auto-expires by default, but kept for a direct-DB-edit edge case.
+  `Admin > Settings > Permissions > Users` now creates a `RoleAssignmentExpiry` row automatically
+  (defaulting to now + the role's own `DefaultExpiryMinutes`) whenever an auto-expiring role
+  (`RoleProfile.AutoExpires`) is newly assigned to a user — at account creation or via the role
+  checkboxes — and cleans the row up again if that role is later removed; each user's active
+  expiries are now listed inline with an "Extend" action that pushes the expiry back out to now plus
+  the role's own default (the practical admin override for "the default wasn't long enough," rather
+  than a raw timestamp picker this compact per-row UI has no room for). `Program.cs`'s
+  `OnValidatePrincipal` chain gained one more cheap check alongside the existing session-lifetime one:
+  a user holding an already-expired-but-not-yet-swept role assignment is signed out immediately on
+  their next request, narrowing the worst case (re-logging in and silently regaining an
+  already-expired role) from "up to one sweep interval" to "the very next request."
+
+This completes the roles & permissions overhaul plan (`planning-mode-for-larisvms-enumerated-tulip.md`)
+— all 5 passes shipped. Web-only, no node change.
+
+## [0.146.0] - 2026-08-23
+
+### Added
+
+- **Roles & permissions overhaul, pass 4 of 5: PTZ priority arbitration.** Camera PTZ control used to
+  be pure first-come — anyone with PTZ access could move a camera at any time, with no contention
+  handling. A requester whose held roles carry a PTZ priority (`RoleProfile.PtzPriorityLevel`, e.g.
+  Super Admin 3000, System Admin 2500, Security Manager 2000, Operator 1500, Installer/Technician
+  1000) now locks out lower-or-equal-priority commands on that camera for `PtzLockoutSeconds` (900s
+  for every seeded role) after their own last command — a higher-priority operator always pre-empts a
+  lower one immediately, and viewing doesn't reset the lockout timer, only an actual move does. A
+  denied command gets a 409 with how many seconds remain; the on-screen PTZ pad now shows a brief
+  "Locked by higher priority — retry in Ns" message instead of silently dropping the command. A
+  requester with no PTZ priority at all — every custom role by default, plus Investigator/Auditor,
+  Guest/Viewer, and API/Integration, none of which participate in arbitration — skips it entirely and
+  keeps today's unrestricted first-come behavior, so no pre-existing deployment's PTZ behavior changes
+  until an admin opts a role in. New `IPtzArbitrationService` (in-memory singleton — a live per-camera
+  contention lock has no meaning across an app restart, so it isn't persisted) and `IPtzPriorityResolver`
+  (DB-backed, resolves a principal's highest-priority held role).
+
+Web-only, no node change. 7 new unit tests (`PtzArbitrationPolicy`). Pass 5 (auto-expiring role
+assignments) follows in a later release.
+
+## [0.145.0] - 2026-08-23
+
+### Added
+
+- **Roles & permissions overhaul, pass 3 of 5: the full permission matrix.** `PermissionCatalog`
+  grows from 14 to 21 entries (`Bookmarks.Edit`, `CameraGroups.Edit`, `Dashboard.View`, `Users.Edit`,
+  `Roles.Assign`, `Retention.Edit`, `Logs.Export`), each wired to a real enforcement point: Camera
+  Groups (`Admin > Cameras > Groups`) now requires `CameraGroups.Edit` instead of the broader
+  `Cameras.Edit`; `Admin > Settings > Permissions > Users` now requires `Users.Edit`, and actually
+  changing which roles a user holds additionally requires `Roles.Assign` — tier-capped
+  (`RoleScopePolicy.CanAssignRole`) so only an Org-tier holder can assign an Org-tier role to anyone;
+  `Admin > Settings > Storage and Retention` now requires `Retention.Edit` instead of the general
+  `Settings.Edit`; creating or deleting a bookmark now additionally requires `Bookmarks.Edit`
+  alongside the existing per-camera Playback check; the audit log (`Logs > Audit Logs`) gained a CSV
+  export button gated by the new `Logs.Export`, independent of `Logs.View`.
+- **`RoleSeedService` now seeds real `Permission` and `CameraAccess` grants for the 6 net-new
+  built-in roles** (System Admin, Security Manager, Operator, Investigator/Auditor, Installer/
+  Technician, API/Integration) — pass 1 only created the roles themselves, so until now every one of
+  them held zero grants and could do nothing at all. Seeding follows the target
+  `permission_matrix.txt` row by row; a "limited" cell seeds the same grant as "full" (this app's
+  existing default is "a grant row is unrestricted until an admin narrows it," and there's no
+  site/group structure yet on a fresh install to narrow a default into) — narrowing a role for a real
+  deployment (e.g. Security Manager to just their own site) is a deliberate post-seed admin action via
+  `Camera Access`, exactly like every pre-existing role already works.
+
+### Notes
+
+- **Deliberately unseeded, not silently dropped** — several matrix rows have no enforcement point in
+  this app yet and were left out of every role's grant rather than half-built: "Delete recordings" (no
+  manual-delete feature — only automatic retention eviction), "Receive real-time alerts" /
+  "Acknowledge or dismiss alerts" (no in-app alert inbox — only rule-based email/webhook delivery),
+  "Manage billing & licensing" (no such feature — LarisVMS's licensing model is AGPL + commercial
+  dual-licensing, not per-feature gating), "Configure integrations / API keys" (the `IntegrationKey`
+  field lives inside `Cameras.Edit`'s single coarse gate with no independent enforcement point yet),
+  and "Assign cameras to groups/sites" / "Add or remove cameras" / "Network or firmware configuration"
+  (all three are folded into the single existing `Cameras.Edit` gate — Razor Pages `[Authorize]` is
+  page-level only, and `Cameras/Edit` mixes all of these into one page/handler set, matching
+  `Admin/Nodes.cshtml.cs`'s own documented reason for not splitting per-handler). "Cross-site
+  visibility" needs no new grant — it already falls out of `RoleProfile.MaxScopeTier` from pass 2.
+- **One deliberate deviation from the literal matrix**: Installer/Technician is seeded with
+  `Cameras.View` even though its own matrix row says "none" — `Cameras.View` is also this app's gate
+  for the camera list (`Cameras/Index`), the only real entry point into `Cameras/Edit`, so the literal
+  value would leave the role unable to reach any camera it's otherwise fully entitled to configure.
+- **`Dashboard.View` exists in the catalog but isn't wired up to `Pages/Index` yet** — every user lands
+  there immediately after login with no role-aware landing page to send a `Dashboard.View`-less user
+  to instead, so gating it now would 403 every existing Guest/Viewer-role user on their very next
+  login. Deferred until this app has a real post-login landing redirect.
+
+Web-only, no node change. 9 new unit tests (`RoleScopePolicy.CanAssignRole`). Passes 4-5 (PTZ priority
+arbitration, auto-expiring role assignments) follow in later releases.
+
+## [0.144.0] - 2026-08-23
+
+### Added
+
+- **Roles & permissions overhaul, pass 2 of 5: scope-tier enforcement on Camera Access grants.**
+  `Admin > Settings > Camera Access` now rejects a grant that exceeds the role's
+  `RoleProfile.MaxScopeTier` (from pass 1): a Group-tier role (e.g. Operator, Installer/Technician)
+  can no longer be granted every camera or a whole site, only a narrower group or a single camera; a
+  Site-tier role (e.g. System Admin, Security Manager, Investigator/Auditor) can no longer be granted
+  every camera, but can still be granted a whole site or narrower. Org-tier roles (Super Admin,
+  API/Integration) are unrestricted, matching today's behavior. A role with no RoleProfile row (any
+  pre-existing custom role) defaults to the most restrictive tier (Group) — existing grants already on
+  such a role are untouched, this only gates *new* grants going forward. Pure decision logic lives in
+  `RoleScopePolicy`, unit-tested independently of the page.
+
+Web-only, no node change. Passes 3-5 (the full permission matrix, PTZ priority arbitration, and
+auto-expiring role assignments) follow in later releases.
+
+## [0.143.0] - 2026-08-23
+
+### Added
+
+- **Roles & permissions overhaul, pass 1 of 5: role metadata, seeding, and a consolidated
+  Permissions admin page.** First pass of a standalone plan (see
+  `planning-mode-for-larisvms-enumerated-tulip.md`) bringing the role system up to an
+  organization > site > camera_group scope hierarchy with 8 named roles, each carrying a max scope
+  tier, an auto-expiry default, and a PTZ priority/lockout level — `RoleProfile` (new table, one row
+  per role, keyed by RoleId) and `RoleAssignmentExpiry` (new table, schema only this pass — the
+  per-assignment expiry sweep and UI land in pass 5). `Administrator` renames in place to
+  `Super Admin` and `Viewer` to `Guest/Viewer` (same role Id, so every existing Permission/
+  CameraAccess/AspNetUserRoles row keeps resolving with no remapping); the other 6 roles (System
+  Admin, Security Manager, Operator, Investigator/Auditor, Installer/Technician, API/Integration)
+  are seeded fresh. Seeding is idempotent (`RoleSeedService`, runs at every app startup) and never
+  touches a pre-existing custom role — a name collision with one of the 6 new roles seeds the
+  built-in under a disambiguated name instead of adopting the custom role. The Super Admin
+  matrix-bypass in `PermissionService`/`CameraAccessService` now resolves via `RoleProfile.Tag`
+  instead of the literal role name "Administrator", with a `SecurityStamp` bump on every existing
+  holder during the rename so an already-logged-in session doesn't lose the bypass until its own
+  security-stamp refresh.
+- **Admin > Settings > Roles, Users, and Security are now one Permissions page** (`Admin > Settings
+  > Permissions`), with its own Matrix / Roles / Users sub-tabs (real routed pages, matching this
+  app's existing tab convention, not client-side panels). Roles gained per-role scope tier,
+  auto-expiry default, and PTZ priority/lockout fields, plus the per-role session-lifetime setting
+  relocated here from the retired Security tab. Matrix is a new role × permission grid (every role
+  as its own column) replacing the old one-role-at-a-time checkbox table — still binary full/none
+  this pass, becoming true full/limited/none once pass 3 extends the permission catalog. Users is
+  unchanged other than the route move. Security's other setting (the live/playback custom port) is
+  not permission-related and moved onto the Live View tab instead of the new Permissions page.
+
+Web-only, no node change. Passes 2-5 (scope-tier enforcement, the full permission matrix, PTZ
+priority arbitration, and auto-expiring role assignments) follow in later releases.
+
+## [0.142.6] - 2026-08-23
+
+### Added
+
+- **Admin/Nodes' stale-footage warning (⚠️) now lists which cameras and when each one's leftover
+  footage will age out of retention on hover**, instead of just a bare count with a generic message.
+  The date shown is computed the same way the node's own retention sweep actually decides it — the
+  newest of that camera's segments still on this node, plus whatever retention period applies to it
+  there (camera+node override, falling back to the node's own default, same resolution
+  `NodeService.GetConfigAsync` already uses for this exact purpose) — so it's also exactly when that
+  camera drops out of the warning on its own, with nothing to do about it.
+
+Web-only, no node change.
+
+## [0.142.5] - 2026-08-23
+
+### Fixed
+
+- **A recorder node's binary-swap update could leave the Windows Service stopped with no trace of
+  why, needing a manual restart to recover.** `LarisVMS.NodeUpdater.exe` — the small detached helper
+  that waits for the service to stop, swaps the binary, and starts it back up — only ever wrote to
+  the console, but runs with no console session at all when launched from a Windows Service. Whatever
+  it logged (a stop-wait timeout, a failed swap, `sc.exe` refusing to start the service) went nowhere,
+  and Windows' own service-failure recovery doesn't apply here either, since the service stops itself
+  deliberately rather than crashing. It now writes a rolling daily log to
+  `%ProgramData%\LarisVMS\logs\updater-*.log`, the same directory the node's own log already lives
+  in. The final `sc start` step also now retries up to 5 times (10s apart) instead of giving up after
+  one attempt — confirmed as a real gap: a moment-long file lock or service-state transition right
+  after the stop-wait completes was enough to fail a single attempt outright.
+
+**Node and NodeUpdater change — install-node.ps1 re-run IS needed on every existing node.** Unlike an
+ordinary node update, `LarisVMS.NodeUpdater.exe` itself is never part of the auto-update payload
+(only `LarisVMS.Node.exe` is downloaded and swapped in-place) — it's placed once by
+`install-node.ps1` and never replaced afterward. A node that hasn't had install-node.ps1 re-run since
+this release will keep running the old, silent updater helper even after its `LarisVMS.Node.exe` has
+auto-updated past this version.
+
+## [0.142.4] - 2026-08-22
+
+### Security
+
+- **Export access is now enforced as a sub-permission of Playback access, per camera.** A
+  CameraAccess grant of Export for a camera only ever counts if the same principal also holds
+  Playback for that camera — a role holding "Export: all cameras" but "Playback: camera A only" can
+  now only export camera A, regardless of what the Export grant on its own says. Enforced at
+  resolution time (`CameraAccessService.Resolve`), so it applies correctly no matter how the
+  underlying grants were configured; the admin assignment page still lists Export as an independent
+  checkbox for now.
+- **The Dashboard now hides a camera (its health row and thumbnail) entirely if the viewer lacks
+  View access to it**, rather than showing every camera regardless of per-camera restrictions. The
+  summary counts (recording/not-reporting/disabled, and the online-node tally) are computed only
+  over what's visible, so they no longer imply hidden cameras exist. `/playback-thumbnail/.../latest`
+  itself is now also camera-scoped if requested directly, not just hidden via the row it's normally
+  reached from.
+- **`/playback-thumbnail/{cameraId}` (Snapshots' card thumbnails and hover-scrub previews) now
+  enforces the same per-camera Playback check** the rest of the playback surface already got in
+  0.142.3 — this one endpoint was listed as fixed then but the change was never actually made.
+
+Web-only, no node change.
+
+## [0.142.3] - 2026-08-22
+
+### Security
+
+- **A CameraAccess-restricted user could open, watch, and scrub any camera's live and recorded video
+  by GUID, bypassing their per-camera restriction entirely.** The camera and playback list pages,
+  and every write action (PTZ, export, bookmarks), already narrowed by the per-camera CameraAccess
+  ACL layered on top of the global role permission — but the endpoints that actually serve video
+  bytes (`/live`, `/playback-segment`, the per-camera timeline/segments lookups, hover thumbnails,
+  and the zone editor's snapshot capture) checked only the global permission, never the per-camera
+  one. Since the UI simply doesn't list a restricted camera, this was invisible unless a restricted
+  user's own camera GUID was already known — but three endpoints handed those GUIDs out directly:
+  the live-view motion/detection indicators returned every camera's id system-wide with no
+  filtering, and the merged overview timeline fell back to every camera whenever the caller didn't
+  ask for specific ones (its own documented behavior). All of the above now enforce the same
+  per-camera check the list pages always have. Deployments that have never configured CameraAccess
+  are entirely unaffected — an unrestricted principal (including every user of every install that
+  hasn't set up per-camera restrictions) still sees everything, exactly as before.
+- **Media tokens (the short-lived, per-request credentials Web mints for every Web→Node call —
+  live view, playback, thumbnails, exports, node restart) now travel as an `Authorization: Bearer`
+  header instead of only a `?token=` query string.** A query string lands in access logs and any
+  intermediate proxy's logs verbatim; a header doesn't. Still sent as a query param too, alongside
+  the header, so a node on the previous build keeps working during the rollout — a later release
+  will stop sending the query param once the fleet has updated. No visible change in normal use.
+- **The node registration key was compared with a plain string `!=` instead of a constant-time
+  comparison**, inconsistent with every other secret comparison in the same class (and the class's
+  own doc comment, which already describes the constant-time approach as the intended pattern).
+  Now uses the same `CryptographicOperations.FixedTimeEquals` helper the rest of the class already
+  relies on.
+
+Node change (the media-token header); install-node.ps1 re-run not needed, ordinary auto-update
+covers it.
+
 ## [0.142.2] - 2026-08-22
 
 ### Fixed

@@ -7,6 +7,7 @@ using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
 using LarisVMS.Infrastructure.Data;
+using LarisVMS.Web.Services;
 
 namespace LarisVMS.Web.Pages.Admin.Settings;
 
@@ -25,7 +26,8 @@ namespace LarisVMS.Web.Pages.Admin.Settings;
 [Authorize("Settings.Edit")]
 public class CameraAccessModel(ApplicationDbContext db, IAuditService auditService) : PageModel
 {
-    public record GrantRow(Guid Id, string RoleName, string ScopeDescription, string ActionsDescription);
+    public record GrantRow(Guid Id, string RoleId, string RoleName, CameraAccessScopeType ScopeType, Guid? ScopeId,
+        string ScopeDescription, CameraAccessActions Actions, string ActionsDescription);
 
     [BindProperty] public string RoleId { get; set; } = string.Empty;
     [BindProperty] public CameraAccessScopeType ScopeType { get; set; } = CameraAccessScopeType.All;
@@ -58,6 +60,16 @@ public class CameraAccessModel(ApplicationDbContext db, IAuditService auditServi
             return Page();
         }
 
+        var maxScopeTier = (await db.RoleProfiles.FirstOrDefaultAsync(p => p.RoleId == role.Id, ct))
+            ?.MaxScopeTier ?? RoleScopeTier.Group;
+        var targetIsSite = ScopeType == CameraAccessScopeType.Group &&
+            Groups.FirstOrDefault(g => g.Id == ScopeId)?.IsSite == true;
+        if (!RoleScopePolicy.CanGrant(maxScopeTier, ScopeType, targetIsSite))
+        {
+            ErrorMessage = RoleScopePolicy.DenialReason(maxScopeTier, ScopeType);
+            return Page();
+        }
+
         var actions = ParseActions(Actions);
         if (actions == CameraAccessActions.None) { ErrorMessage = "Choose at least one action to grant."; return Page(); }
 
@@ -72,18 +84,71 @@ public class CameraAccessModel(ApplicationDbContext db, IAuditService auditServi
         });
         await db.SaveChangesAsync(ct);
 
-        var scopeText = ScopeType switch
-        {
-            CameraAccessScopeType.All => "every camera",
-            CameraAccessScopeType.Group => Groups.FirstOrDefault(g => g.Id == ScopeId)?.Name ?? ScopeId.ToString(),
-            _ => Cameras.FirstOrDefault(c => c.Id == ScopeId)?.Name ?? ScopeId.ToString()
-        };
+        var scopeText = ScopeText(ScopeType, ScopeId);
         await auditService.LogAsync("CameraAccess.Grant",
             User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, User.Identity?.Name,
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             $"{role.Name}: {actions} on {scopeText}", ct);
 
         SavedMessage = "Grant added.";
+        await LoadAsync(ct);
+        return Page();
+    }
+
+    /// <summary>Changes an existing grant's scope and/or actions in place — same validation as Add
+    /// (scope-tier cap, at least one action), but the role a grant belongs to isn't editable here:
+    /// moving a grant to a different role is exactly what Remove + Add already does, and keeping Edit
+    /// to "narrow or widen what this role already has" keeps the form (and its scope-tier checks)
+    /// identical in shape to Add's.</summary>
+    public async Task<IActionResult> OnPostEditAsync(Guid id, CameraAccessScopeType scopeType, Guid? scopeId,
+        [FromForm] List<string> actions, CancellationToken ct)
+    {
+        await LoadAsync(ct);
+
+        var row = await db.CameraAccesses.FirstOrDefaultAsync(a => a.Id == id, ct);
+        if (row is null) { ErrorMessage = "That grant no longer exists."; return Page(); }
+
+        var role = Roles.FirstOrDefault(r => r.Id == row.PrincipalId);
+        var roleName = role?.Name ?? row.PrincipalId;
+
+        if (scopeType != CameraAccessScopeType.All && scopeId is null)
+        {
+            ErrorMessage = scopeType == CameraAccessScopeType.Group
+                ? "Choose a camera group." : "Choose a camera.";
+            return Page();
+        }
+
+        var maxScopeTier = (await db.RoleProfiles.FirstOrDefaultAsync(p => p.RoleId == row.PrincipalId, ct))
+            ?.MaxScopeTier ?? RoleScopeTier.Group;
+        var targetIsSite = scopeType == CameraAccessScopeType.Group &&
+            Groups.FirstOrDefault(g => g.Id == scopeId)?.IsSite == true;
+        if (!RoleScopePolicy.CanGrant(maxScopeTier, scopeType, targetIsSite))
+        {
+            ErrorMessage = RoleScopePolicy.DenialReason(maxScopeTier, scopeType);
+            return Page();
+        }
+
+        var parsedActions = ParseActions(actions);
+        if (parsedActions == CameraAccessActions.None) { ErrorMessage = "Choose at least one action to grant."; return Page(); }
+
+        var oldScopeText = ScopeText(row.ScopeType, row.ScopeId);
+        var oldActions = row.Actions;
+        var newScopeText = ScopeText(scopeType, scopeId);
+
+        row.ScopeType = scopeType;
+        row.ScopeId = scopeType == CameraAccessScopeType.All ? null : scopeId;
+        row.Actions = parsedActions;
+        await db.SaveChangesAsync(ct);
+
+        var details = AuditDiff.Build(
+            AuditDiff.Of("Scope", oldScopeText, newScopeText),
+            AuditDiff.Of("Actions", oldActions.ToString(), parsedActions.ToString()));
+        await auditService.LogAsync("CameraAccess.Update",
+            User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, User.Identity?.Name,
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            details is null ? $"{roleName}: {newScopeText}" : $"{roleName}: {details}", ct);
+
+        SavedMessage = "Grant updated.";
         await LoadAsync(ct);
         return Page();
     }
@@ -114,6 +179,15 @@ public class CameraAccessModel(ApplicationDbContext db, IAuditService auditServi
         return result;
     }
 
+    /// <summary>Human-readable scope description, e.g. for the grants table and audit log entries —
+    /// "every camera" for All, the group/camera name (or a "(deleted ...)" fallback) otherwise.</summary>
+    private string ScopeText(CameraAccessScopeType scopeType, Guid? scopeId) => scopeType switch
+    {
+        CameraAccessScopeType.All => "every camera",
+        CameraAccessScopeType.Group => Groups.FirstOrDefault(g => g.Id == scopeId)?.Name ?? "(deleted group)",
+        _ => Cameras.FirstOrDefault(c => c.Id == scopeId)?.Name ?? "(deleted camera)"
+    };
+
     private async Task LoadAsync(CancellationToken ct)
     {
         Roles = await db.Roles.OrderBy(r => r.Name).ToListAsync(ct);
@@ -126,13 +200,12 @@ public class CameraAccessModel(ApplicationDbContext db, IAuditService auditServi
 
         Grants = rows.Select(r => new GrantRow(
             r.Id,
+            r.PrincipalId,
             Roles.FirstOrDefault(role => role.Id == r.PrincipalId)?.Name ?? r.PrincipalId,
-            r.ScopeType switch
-            {
-                CameraAccessScopeType.All => "Every camera",
-                CameraAccessScopeType.Group => Groups.FirstOrDefault(g => g.Id == r.ScopeId)?.Name ?? "(deleted group)",
-                _ => Cameras.FirstOrDefault(c => c.Id == r.ScopeId)?.Name ?? "(deleted camera)"
-            },
+            r.ScopeType,
+            r.ScopeId,
+            ScopeText(r.ScopeType, r.ScopeId),
+            r.Actions,
             r.Actions.ToString()))
             .OrderBy(g => g.RoleName).ThenBy(g => g.ScopeDescription).ToList();
     }

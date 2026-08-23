@@ -62,6 +62,11 @@ public interface ICameraService
     /// query, not a stored flag: once those rows are gone (retention sweep or manual delete), a
     /// camera drops out on its own with no explicit "clear" step.</summary>
     Task<Dictionary<Guid, List<Guid>>> GetStaleSegmentNodeIdsAsync(CancellationToken ct = default);
+
+    /// <summary>Same underlying stale (camera, node) pairs as GetStaleSegmentNodeIdsAsync, with the
+    /// camera name and newest-still-there timestamp attached — see StaleSegmentDetail's own doc
+    /// comment for why the newest, not oldest, is what determines when the warning clears.</summary>
+    Task<List<StaleSegmentDetail>> GetStaleSegmentDetailsAsync(CancellationToken ct = default);
 }
 
 public interface ICameraGroupService

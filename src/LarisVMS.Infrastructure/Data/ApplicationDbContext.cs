@@ -35,6 +35,8 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<UserPreference> UserPreferences => Set<UserPreference>();
     public DbSet<Permission> Permissions => Set<Permission>();
     public DbSet<CameraAccess> CameraAccesses => Set<CameraAccess>();
+    public DbSet<RoleProfile> RoleProfiles => Set<RoleProfile>();
+    public DbSet<RoleAssignmentExpiry> RoleAssignmentExpiries => Set<RoleAssignmentExpiry>();
     public DbSet<AppVersion> AppVersions => Set<AppVersion>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<BackupHistoryEntry> BackupHistoryEntries => Set<BackupHistoryEntry>();
@@ -113,6 +115,24 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
         {
             e.Property(x => x.PrincipalId).HasMaxLength(450).IsRequired();
             e.HasIndex(x => new { x.PrincipalType, x.PrincipalId, x.ScopeType, x.ScopeId });
+        });
+
+        // ── RoleProfile (roles/permissions overhaul) ────────────────────────
+        builder.Entity<RoleProfile>(e =>
+        {
+            e.HasKey(x => x.RoleId);
+            e.Property(x => x.RoleId).HasMaxLength(450);
+            e.Property(x => x.Tag).HasMaxLength(20).IsRequired();
+            e.HasIndex(x => x.Tag).IsUnique();
+        });
+
+        // ── RoleAssignmentExpiry (roles/permissions overhaul) ───────────────
+        builder.Entity<RoleAssignmentExpiry>(e =>
+        {
+            e.Property(x => x.UserId).HasMaxLength(450).IsRequired();
+            e.Property(x => x.RoleId).HasMaxLength(450).IsRequired();
+            e.HasIndex(x => new { x.UserId, x.RoleId }).IsUnique();
+            e.HasIndex(x => x.ExpiresAtUtc);
         });
 
         // ── AppVersion ───────────────────────────────────────────────────────

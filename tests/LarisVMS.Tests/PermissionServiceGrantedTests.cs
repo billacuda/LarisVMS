@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
+using LarisVMS.Core.Auth;
 using LarisVMS.Core.Entities;
 using LarisVMS.Infrastructure.Data;
 using LarisVMS.Infrastructure.Services;
@@ -58,13 +59,19 @@ public class PermissionServiceGrantedTests
     }
 
     [Fact]
-    public async Task AdministratorHasEverythingWithNoPermissionRowsSeededAtAll()
+    public async Task SuperAdminHasEverythingWithNoPermissionRowsSeededAtAll()
     {
-        // Proves the short-circuit: an Administrator role claim alone is enough, with zero
-        // Permission/Role rows in the database — matches HasPermissionAsync's own reasoning that
-        // Administrator can't depend on rows in the matrix it's the one granting.
+        // Proves the short-circuit: a role tagged SUPER is enough, with zero Permission rows in the
+        // database — matches HasPermissionAsync's own reasoning that Super Admin can't depend on rows
+        // in the matrix it's the one granting. The bypass is resolved via RoleProfile.Tag, not the
+        // role's (renamable) Name, so both a real role row and its RoleProfile need to exist here.
         using var db = NewDb();
-        var result = await NewService(db).GetGrantedAsync(AuthenticatedAs("Administrator"));
+        var role = new IdentityRole("Super Admin") { NormalizedName = "SUPER ADMIN" };
+        db.Roles.Add(role);
+        db.RoleProfiles.Add(new RoleProfile { RoleId = role.Id, Tag = RoleTags.SuperAdmin });
+        await db.SaveChangesAsync();
+
+        var result = await NewService(db).GetGrantedAsync(AuthenticatedAs("Super Admin"));
 
         Assert.True(result.IsAdministrator);
         Assert.True(result.Has("AnythingAtAll", "EvenMadeUp"));

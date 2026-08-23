@@ -4,6 +4,10 @@
    upload, and table actions with their own OnPost handlers, which would be awkward and risky to
    merge into one giant page/handler. Sorted alphabetically by label, not by any notion of importance
    or how often a given tab is used.
+   "Permissions" (roles/permissions overhaul) folds together what used to be three separate tabs —
+   Roles, Users, and Security — into Pages/Admin/Settings/Permissions/{Matrix,Roles,Users}.cshtml,
+   itself tab-stripped one level down by _PermissionsTabs.cshtml. Security's live/playback custom
+   port setting moved onto the Live View tab instead, since it isn't permission-related.
    Model: the active tab's key. *@
 @model string
 @{
@@ -18,11 +22,9 @@
         ("LiveView", "/Admin/Settings/LiveView", "🖥️ Live View"),
         ("Logs", "/Admin/Settings/Logs", "📝 Logs"),
         ("Nodes", "/Admin/Settings/Nodes", "🔌 Nodes"),
+        ("Permissions", "/Admin/Settings/Permissions/Matrix", "🛡️ Permissions"),
         ("Recording", "/Admin/Settings/Recording", "🎥 Recording"),
-        ("Roles", "/Admin/Settings/Roles", "🛡️ Roles"),
-        ("Security", "/Admin/Settings/Security", "🔐 Security"),
-        ("StorageAndRetention", "/Admin/Settings/StorageAndRetention", "🗄️ Storage and Retention"),
-        ("Users", "/Admin/Settings/Users", "👤 Users")
+        ("StorageAndRetention", "/Admin/Settings/StorageAndRetention", "🗄️ Storage and Retention")
     ];
 }
 <ul class="nav nav-tabs mb-3 flex-wrap">

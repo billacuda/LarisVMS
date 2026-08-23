@@ -39,14 +39,63 @@
             <tbody>
                 @foreach (var g in Model.Grants)
                 {
+                    var editId = $"edit-{g.Id}";
                     <tr>
                         <td>@g.RoleName</td>
                         <td>@g.ScopeDescription</td>
                         <td class="small font-monospace">@g.ActionsDescription</td>
-                        <td class="text-end">
+                        <td class="text-end text-nowrap">
+                            <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#@editId">
+                                Edit
+                            </button>
                             <form method="post" asp-page-handler="Remove" asp-route-id="@g.Id" class="d-inline"
                                   onclick="return confirm('Remove this grant?');">
                                 <button type="submit" class="btn btn-sm btn-outline-danger">Remove</button>
+                            </form>
+                        </td>
+                    </tr>
+                    <tr class="collapse" id="@editId">
+                        <td colspan="4" class="bg-light">
+                            <form method="post" asp-page-handler="Edit" asp-route-id="@g.Id" class="row g-3 py-2 camera-access-form">
+                                <div class="col-sm-4">
+                                    <label class="form-label">Scope</label>
+                                    <select name="scopeType" class="form-select scope-type-select">
+                                        <option value="@CameraAccessScopeType.All" selected="@(g.ScopeType == CameraAccessScopeType.All)">Every camera</option>
+                                        <option value="@CameraAccessScopeType.Group" selected="@(g.ScopeType == CameraAccessScopeType.Group)">A camera group (and its sub-groups)</option>
+                                        <option value="@CameraAccessScopeType.Camera" selected="@(g.ScopeType == CameraAccessScopeType.Camera)">A single camera</option>
+                                    </select>
+                                </div>
+                                <div class="col-sm-4 scope-id-field" style="display:none;">
+                                    <label class="form-label">&nbsp;</label>
+                                    <select name="scopeId" class="form-select scope-id-group" style="display:none;">
+                                        <option value="">(choose a group)</option>
+                                        @foreach (var grp in Model.Groups)
+                                        {
+                                            <option value="@grp.Id" selected="@(g.ScopeType == CameraAccessScopeType.Group && g.ScopeId == grp.Id)">@grp.MaterializedPath @grp.Name</option>
+                                        }
+                                    </select>
+                                    <select class="form-select scope-id-camera" style="display:none;">
+                                        <option value="">(choose a camera)</option>
+                                        @foreach (var cam in Model.Cameras)
+                                        {
+                                            <option value="@cam.Id" selected="@(g.ScopeType == CameraAccessScopeType.Camera && g.ScopeId == cam.Id)">@cam.Name</option>
+                                        }
+                                    </select>
+                                </div>
+                                <div class="col-12">
+                                    <label class="form-label d-block">Actions granted</label>
+                                    @foreach (var action in new[] { CameraAccessActions.View, CameraAccessActions.Playback, CameraAccessActions.Export, CameraAccessActions.Ptz, CameraAccessActions.Talk, CameraAccessActions.Configure })
+                                    {
+                                        <div class="form-check form-check-inline">
+                                            <input class="form-check-input" type="checkbox" name="actions" value="@action"
+                                                   id="action-@action-@g.Id" checked="@g.Actions.HasFlag(action)">
+                                            <label class="form-check-label" for="action-@action-@g.Id">@action</label>
+                                        </div>
+                                    }
+                                </div>
+                                <div class="col-12">
+                                    <button type="submit" class="btn btn-sm btn-primary">Save</button>
+                                </div>
                             </form>
                         </td>
                     </tr>
@@ -63,7 +112,7 @@
 <div class="card">
     <div class="card-header fw-semibold">Add a grant</div>
     <div class="card-body">
-        <form method="post" asp-page-handler="Add" class="row g-3">
+        <form method="post" asp-page-handler="Add" class="row g-3 camera-access-form">
             <div class="col-sm-4">
                 <label class="form-label">Role</label>
                 <select asp-for="RoleId" class="form-select">
@@ -76,22 +125,22 @@
             </div>
             <div class="col-sm-4">
                 <label class="form-label">Scope</label>
-                <select asp-for="ScopeType" id="scopeType" class="form-select">
+                <select asp-for="ScopeType" class="form-select scope-type-select">
                     <option value="@CameraAccessScopeType.All">Every camera</option>
                     <option value="@CameraAccessScopeType.Group">A camera group (and its sub-groups)</option>
                     <option value="@CameraAccessScopeType.Camera">A single camera</option>
                 </select>
             </div>
-            <div class="col-sm-4" id="scopeIdField" style="display:none;">
+            <div class="col-sm-4 scope-id-field" style="display:none;">
                 <label class="form-label">&nbsp;</label>
-                <select asp-for="ScopeId" id="scopeIdGroup" class="form-select" style="display:none;">
+                <select asp-for="ScopeId" class="form-select scope-id-group" style="display:none;">
                     <option value="">(choose a group)</option>
                     @foreach (var grp in Model.Groups)
                     {
                         <option value="@grp.Id">@grp.MaterializedPath @grp.Name</option>
                     }
                 </select>
-                <select id="scopeIdCamera" class="form-select" style="display:none;">
+                <select class="form-select scope-id-camera" style="display:none;">
                     <option value="">(choose a camera)</option>
                     @foreach (var cam in Model.Cameras)
                     {
@@ -127,36 +176,47 @@
 
 @section Scripts {
     <script>
+        // Wires every .camera-access-form on the page (the "Add a grant" form and each grant row's
+        // own "Edit" form) identically, scoped by querySelector within each form rather than by id —
+        // ids would collide across N edit rows, classes don't.
         (function () {
-            var scopeType = document.getElementById('scopeType');
-            var scopeIdField = document.getElementById('scopeIdField');
-            var scopeIdGroup = document.getElementById('scopeIdGroup');
-            var scopeIdCamera = document.getElementById('scopeIdCamera');
-            if (!scopeType) return;
+            document.querySelectorAll('.camera-access-form').forEach(function (form) {
+                var scopeType = form.querySelector('.scope-type-select');
+                var scopeIdField = form.querySelector('.scope-id-field');
+                var scopeIdGroup = form.querySelector('.scope-id-group');
+                var scopeIdCamera = form.querySelector('.scope-id-camera');
+                if (!scopeType) return;
 
-            // Two separate <select> elements sharing one visible slot rather than one dynamically
-            // repopulated <select> — whichever one is visible is also the one actually named
-            // "ScopeId" for model binding (scopeIdCamera has no name of its own; its value is copied
-            // onto the real ScopeId field on submit), so there's never a stale option value from the
-            // other list left bound.
-            function update() {
-                var isGroup = scopeType.value === '@((int)CameraAccessScopeType.Group)';
-                var isCamera = scopeType.value === '@((int)CameraAccessScopeType.Camera)';
-                scopeIdField.style.display = (isGroup || isCamera) ? '' : 'none';
-                scopeIdGroup.style.display = isGroup ? '' : 'none';
-                scopeIdCamera.style.display = isCamera ? '' : 'none';
-                scopeIdGroup.disabled = !isGroup;
-            }
-            scopeType.addEventListener('change', update);
-            update();
+                // Two separate <select> elements sharing one visible slot rather than one dynamically
+                // repopulated <select> — whichever one is visible is also the one actually named
+                // "ScopeId"/"scopeId" for model binding (scopeIdCamera has no name of its own; its
+                // value is copied onto the real scope-id field on submit), so there's never a stale
+                // option value from the other list left bound.
+                function update() {
+                    var isGroup = scopeType.value === '@((int)CameraAccessScopeType.Group)';
+                    var isCamera = scopeType.value === '@((int)CameraAccessScopeType.Camera)';
+                    scopeIdField.style.display = (isGroup || isCamera) ? '' : 'none';
+                    scopeIdGroup.style.display = isGroup ? '' : 'none';
+                    scopeIdCamera.style.display = isCamera ? '' : 'none';
+                    scopeIdGroup.disabled = !isGroup;
+                    // An edit form can load with Camera already selected (a grant being edited) —
+                    // the camera <select> has the right option pre-selected server-side, but it isn't
+                    // the one actually named for model binding, so its value needs copying across
+                    // here too, not just on its own later 'change' event.
+                    if (isCamera) scopeIdGroup.value = scopeIdCamera.value;
+                }
+                scopeType.addEventListener('change', update);
+                update();
 
-            scopeIdCamera.addEventListener('change', function () {
-                scopeIdGroup.value = scopeIdCamera.value;
+                scopeIdCamera.addEventListener('change', function () {
+                    scopeIdGroup.value = scopeIdCamera.value;
+                });
+                // Camera selection posts through the same scope-id field as the group one — enabling
+                // the hidden group <select> and mirroring the chosen value into it (above) is simpler
+                // than a second server-side parameter, since Razor Pages model-binds the scope id from
+                // whichever <select name="ScopeId"/"scopeId"> value made it into the form regardless
+                // of which one was visible.
             });
-            // Camera selection posts through the same ScopeId field as the group one — enabling the
-            // hidden group <select> and mirroring the chosen value into it (above) is simpler than a
-            // second server-side parameter, since Razor Pages model-binds ScopeId from whichever
-            // <select name="ScopeId"> value made it into the form regardless of which one was visible.
         })();
     </script>
 }

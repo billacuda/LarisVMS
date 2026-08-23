@@ -10,6 +10,10 @@
 {
     <div class="alert alert-success">@Model.SavedMessage</div>
 }
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger">@Model.ErrorMessage</div>
+}
 
 <form method="post" class="row g-3" style="max-width: 560px;">
     <div class="col-12">
@@ -23,6 +27,29 @@
             automatically once it's large enough (or fullscreen) to matter. Turning this off falls
             every tile back to Main only, and stops every node from pulling Sub streams for live
             viewing at all.
+        </div>
+    </div>
+
+    <div class="col-12 mt-4">
+        <h5>Live/playback port</h5>
+        <p class="text-muted small">
+            Separates live view and playback traffic (the <code>/live</code> WebSocket relay,
+            <code>/playback-segment</code>, <code>/playback-thumbnail</code>,
+            <code>/export-download</code>, and camera snapshots) onto a port of its own, away from
+            the management interface — useful if you want to firewall the two differently, or expose
+            only one of them beyond the LAN.
+        </p>
+    </div>
+    <div class="col-6">
+        <label class="form-label">Custom port</label>
+        <input asp-for="CustomPort" type="number" min="1" max="65535" class="form-control" placeholder="(none — everything on the same port)" />
+        <div class="form-text">
+            Setting this alone doesn't open a new listening port — IIS's own site bindings do that.
+            Add a matching <code>New-WebBinding</code> for this port on the same site first (see the
+            README), <strong>then</strong> set it here. Once set, live/playback routes stop
+            responding on the management port, and every other route stops responding on this one.
+            Leave blank to disable — everything goes back to sharing whatever port(s) IIS already
+            binds.
         </div>
     </div>
 

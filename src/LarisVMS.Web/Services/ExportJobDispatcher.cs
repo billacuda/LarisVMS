@@ -145,7 +145,11 @@ public class ExportJobDispatcher(IServiceScopeFactory scopeFactory, IHttpClientF
         client.Timeout = TimeSpan.FromSeconds(25);
         try
         {
-            var response = await client.PostAsJsonAsync(nodeUri, request, ct);
+            // See MediaTokenRequest's own doc comment: also sent as ?token= above for a node that
+            // hasn't updated yet.
+            var httpRequest = MediaTokenRequest.Create(HttpMethod.Post, nodeUri, token);
+            httpRequest.Content = JsonContent.Create(request);
+            var response = await client.SendAsync(httpRequest, ct);
             if (!response.IsSuccessStatusCode)
             {
                 await exportService.MarkItemFailedAsync(candidate.ExportItemId,

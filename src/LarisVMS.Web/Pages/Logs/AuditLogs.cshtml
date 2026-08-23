@@ -32,6 +32,13 @@
     <div class="col-md-1">
         <a href="/Logs/AuditLogs" class="btn btn-sm btn-outline-secondary w-100" data-clear-filters>Clear</a>
     </div>
+    @if (Model.CanExport)
+    {
+        <div class="col-md-1">
+            <a href="?handler=Export&q=@Uri.EscapeDataString(Model.Query ?? "")&actor=@Uri.EscapeDataString(Model.ActorFilter ?? "")&from=@Uri.EscapeDataString(Model.From ?? "")&to=@Uri.EscapeDataString(Model.To ?? "")"
+               class="btn btn-sm btn-outline-secondary w-100">Export CSV</a>
+        </div>
+    }
 </form>
 
 <div class="card">

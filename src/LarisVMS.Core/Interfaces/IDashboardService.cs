@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using LarisVMS.Core.Dtos;
 
 namespace LarisVMS.Core.Interfaces;
@@ -23,6 +24,9 @@ public interface IEventColorService
 public interface IDashboardService
 {
     /// <summary>Per-camera health rows plus summary counts — the exact data Pages/Index renders on
-    /// first load and GET /api/dashboard returns for its 60s AJAX refresh.</summary>
-    Task<DashboardHealthDto> GetHealthAsync(CancellationToken ct = default);
+    /// first load and GET /api/dashboard returns for its 60s AJAX refresh. Rows (and every count
+    /// derived from them) are narrowed to cameras this principal holds CameraAccessActions.View for
+    /// — a restricted principal's dashboard hides a camera entirely rather than merely gating its
+    /// thumbnail, the same way the camera/playback list pages already hide theirs.</summary>
+    Task<DashboardHealthDto> GetHealthAsync(ClaimsPrincipal user, CancellationToken ct = default);
 }

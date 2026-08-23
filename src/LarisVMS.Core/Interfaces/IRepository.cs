@@ -48,6 +48,21 @@ public sealed class PermissionSet(bool isAdministrator, IReadOnlySet<(string Res
     public static readonly PermissionSet None = new(false, new HashSet<(string, string)>());
 }
 
+/// <summary>
+/// Seeds the roles/permissions overhaul's role metadata: renames Administrator/Viewer in place to
+/// Super Admin/Guest-Viewer (preserving their Id, so every existing Permission/CameraAccess/
+/// AspNetUserRoles row keeps resolving with no remapping), upserts their RoleProfile rows, and
+/// creates the other 6 built-in roles plus their RoleProfile rows. Idempotent — safe to call on
+/// every app startup; each step checks its own precondition (role exists under old/new name,
+/// RoleProfile row already present) rather than relying on a single all-or-nothing guard, so a
+/// partially-applied prior run or a retried deploy never duplicates rows or re-does finished work.
+/// Never touches a pre-existing custom role — no rename, no RoleProfile row, no permission changes.
+/// </summary>
+public interface IRoleSeedService
+{
+    Task SeedAsync(CancellationToken ct = default);
+}
+
 public interface ISetupService
 {
     Task<bool> IsSetupCompleteAsync(CancellationToken ct = default);

@@ -8,8 +8,11 @@ namespace LarisVMS.Web.Pages.Admin.Settings;
 
 /// <summary>Global storage/retention defaults — the base of the Camera &rarr; Node &rarr; Global
 /// chain a per-camera or per-node override falls back to. Split out of the old single
-/// Admin/Settings page into its own tab.</summary>
-[Authorize("Settings.Edit")]
+/// Admin/Settings page into its own tab.
+///
+/// Roles/permissions overhaul, pass 3: gated by Retention.Edit (was Settings.Edit) — matches
+/// permission_matrix.txt's "Data retention policy management" row.</summary>
+[Authorize("Retention.Edit")]
 public class StorageAndRetentionModel(ISettingsResolver settings, IAuditService auditService) : PageModel
 {
     [BindProperty] public string? StorageRootPath { get; set; }

@@ -136,7 +136,7 @@ app.Map("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWork
     // current by every reconcile cycle (see NodeWorker's doc comment), specifically so a node that
     // had none locally at startup (registered before M5) still validates correctly within a
     // reconcile cycle or two, no restart needed.
-    var token = ctx.Request.Query["token"].ToString();
+    var token = ExtractToken(ctx);
     var currentKey = worker.MediaSigningKey;
     if (currentKey is null)
     {
@@ -179,7 +179,7 @@ app.Map("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWork
 // that ever changes, not a substitute for it.
 app.MapGet("/playback-segment/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWorker worker) =>
 {
-    var token = ctx.Request.Query["token"].ToString();
+    var token = ExtractToken(ctx);
     var path = ctx.Request.Query["path"].ToString();
     var currentKey = worker.MediaSigningKey;
     if (currentKey is null)
@@ -334,7 +334,7 @@ app.MapGet("/playback-segment/{cameraId:guid}", async (HttpContext ctx, Guid cam
 // never from anything else the client sends, so it can't be spoofed into naming an arbitrary file.
 app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWorker worker) =>
 {
-    var token = ctx.Request.Query["token"].ToString();
+    var token = ExtractToken(ctx);
     var path = ctx.Request.Query["path"].ToString();
     var currentKey = worker.MediaSigningKey;
     if (currentKey is null)
@@ -432,7 +432,7 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid c
 // real window to flush this response first.
 app.MapPost("/restart", async (HttpContext ctx, NodeWorker worker, LarisVMS.Node.Update.UpdateService updateService) =>
 {
-    var token = ctx.Request.Query["token"].ToString();
+    var token = ExtractToken(ctx);
     var currentKey = worker.MediaSigningKey;
     if (currentKey is null)
     {
@@ -468,7 +468,7 @@ app.MapPost("/restart", async (HttpContext ctx, NodeWorker worker, LarisVMS.Node
 // everything ffmpeg needs) and runs the actual concat on a background Task.Run.
 app.MapPost("/export/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ExportRequest request, NodeWorker worker, ExportRunner exportRunner) =>
 {
-    var token = ctx.Request.Query["token"].ToString();
+    var token = ExtractToken(ctx);
     var currentKey = worker.MediaSigningKey;
     if (currentKey is null)
     {
@@ -555,7 +555,7 @@ app.MapPost("/export/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, Ex
 // exact path) rather than the export-trigger family above.
 app.MapGet("/export-file/{exportItemId:guid}", async (HttpContext ctx, Guid exportItemId, NodeWorker worker) =>
 {
-    var token = ctx.Request.Query["token"].ToString();
+    var token = ExtractToken(ctx);
     var path = ctx.Request.Query["path"].ToString();
     var currentKey = worker.MediaSigningKey;
     if (currentKey is null)
@@ -613,7 +613,7 @@ app.MapGet("/export-file/{exportItemId:guid}", async (HttpContext ctx, Guid expo
 // delete the file it points to.
 app.MapDelete("/export-file/{exportItemId:guid}", async (HttpContext ctx, Guid exportItemId, NodeWorker worker) =>
 {
-    var token = ctx.Request.Query["token"].ToString();
+    var token = ExtractToken(ctx);
     var path = ctx.Request.Query["path"].ToString();
     var currentKey = worker.MediaSigningKey;
     if (currentKey is null)
@@ -672,7 +672,7 @@ app.MapDelete("/export-file/{exportItemId:guid}", async (HttpContext ctx, Guid e
 // media in general, same as live view, not one specific file.
 app.MapGet("/snapshot/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWorker worker) =>
 {
-    var token = ctx.Request.Query["token"].ToString();
+    var token = ExtractToken(ctx);
     var currentKey = worker.MediaSigningKey;
     if (currentKey is null)
     {
@@ -705,6 +705,21 @@ static string? GetArg(string[] args, string name)
 {
     var idx = Array.IndexOf(args, name);
     return idx >= 0 && idx + 1 < args.Length ? args[idx + 1] : null;
+}
+
+/// <summary>Media token, from an `Authorization: Bearer {token}` header if the caller sent one, else
+/// the legacy `?token=` query param — Web now sends both (see Web's own token-issuing call sites)
+/// specifically so this node and a not-yet-updated one can both be running during a rollout without
+/// either rejecting the other's requests. Header preferred once present: it's the one that actually
+/// stops the token from landing in access logs and proxy logs the way a query string does, which is
+/// the whole reason for adding it. Once every node in the fleet has updated past this build, Web can
+/// stop sending the query param and this fallback can be deleted.</summary>
+static string? ExtractToken(HttpContext ctx)
+{
+    var header = ctx.Request.Headers.Authorization.ToString();
+    if (header.StartsWith("Bearer ", StringComparison.Ordinal)) return header["Bearer ".Length..];
+    var queryToken = ctx.Request.Query["token"].ToString();
+    return string.IsNullOrEmpty(queryToken) ? null : queryToken;
 }
 
 static bool HasFlag(string[] args, string name) => Array.IndexOf(args, name) >= 0;

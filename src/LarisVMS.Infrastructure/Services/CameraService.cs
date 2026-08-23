@@ -186,6 +186,15 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
             .ToDictionary(g => g.Key, g => g.Select(r => r.NodeId).ToList());
     }
 
+    public async Task<List<StaleSegmentDetail>> GetStaleSegmentDetailsAsync(CancellationToken ct = default)
+        => await (
+            from s in db.Segments
+            join c in db.Cameras on s.CameraId equals c.Id
+            where s.NodeId != c.NodeId
+            group s by new { s.CameraId, c.Name, s.NodeId } into g
+            select new StaleSegmentDetail(g.Key.CameraId, g.Key.Name, g.Key.NodeId, g.Max(x => x.EndUtc)))
+            .ToListAsync(ct);
+
     public async Task DeleteAsync(Guid id, CancellationToken ct = default)
     {
         // ExecuteDeleteAsync issues the DELETE directly rather than loading the entity first — a

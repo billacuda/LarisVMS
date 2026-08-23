@@ -30,7 +30,14 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
     public Dictionary<Guid, int?> RetentionOverride { get; set; } = [];
     public Dictionary<Guid, double?> DaysRemaining { get; set; } = [];
     public Dictionary<Guid, int> StaleCameraCountByNode { get; set; } = [];
+    public Dictionary<Guid, List<StaleCameraRow>> StaleCamerasByNode { get; set; } = [];
     public string? ErrorMessage { get; set; }
+
+    /// <summary>One row of the warning-emoji tooltip's detail list — ClearsAtUtc is when this
+    /// camera's *last* remaining stale segment on this node ages past retention (see
+    /// StaleSegmentDetail's own doc comment for why it's the newest segment, not the oldest, that
+    /// determines this), which is the same moment the camera drops out of the warning on its own.</summary>
+    public record StaleCameraRow(string CameraName, DateTime ClearsAtUtc);
 
     public async Task OnGetAsync()
     {
@@ -44,10 +51,25 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
         // Cameras/Index shows the same underlying data per-camera (which node(s) still hold its
         // stale footage); here it's inverted to "how many cameras have footage stranded on this
         // node" — a live query, no stored flag, same reasoning as the per-camera badge.
-        StaleCameraCountByNode = (await cameraService.GetStaleSegmentNodeIdsAsync())
-            .SelectMany(kv => kv.Value.Select(nodeId => nodeId))
-            .GroupBy(nodeId => nodeId)
+        var staleDetails = await cameraService.GetStaleSegmentDetailsAsync();
+        StaleCameraCountByNode = staleDetails
+            .GroupBy(d => d.NodeId)
             .ToDictionary(g => g.Key, g => g.Count());
+
+        // Same resolution NodeService.GetConfigAsync uses to hand a retention value to this exact
+        // node for this exact camera's orphaned footage (camera+node override -> node default ->
+        // 30-day hardcoded fallback, matching StorageManager.SweepOrphanedCameraFolders' own
+        // fallback constant) — so "falls off <date>" in the tooltip is the same date the node's own
+        // sweep will actually act on, not a separate guess at it.
+        StaleCamerasByNode = [];
+        foreach (var d in staleDetails)
+        {
+            var retentionDays = await settings.GetAsync<int?>("Retention.Days", 30, cameraId: d.CameraId, nodeId: d.NodeId);
+            var clearsAtUtc = d.NewestSegmentEndUtc.AddDays(retentionDays ?? 30);
+            if (!StaleCamerasByNode.TryGetValue(d.NodeId, out var rows))
+                StaleCamerasByNode[d.NodeId] = rows = [];
+            rows.Add(new StaleCameraRow(d.CameraName, clearsAtUtc));
+        }
 
         DaysRemaining = await nodeService.GetEstimatedDaysRemainingAsync();
 
@@ -123,8 +145,10 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
 
         try
         {
-            var response = await client.PostAsync(
-                $"http://{ip}:{port}/restart?token={Uri.EscapeDataString(token)}", content: null);
+            // See MediaTokenRequest's own doc comment: also sent as ?token= below for a node that
+            // hasn't updated yet.
+            var response = await client.SendAsync(MediaTokenRequest.Create(HttpMethod.Post,
+                $"http://{ip}:{port}/restart?token={Uri.EscapeDataString(token)}", token));
 
             if (response.IsSuccessStatusCode)
             {

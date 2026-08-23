@@ -97,8 +97,10 @@ public class SetupService(
     {
         if (await IsSetupCompleteAsync(ct)) return;
 
-        await EnsureRoleAsync("Administrator", ct);
-        await EnsureRoleAsync("Viewer", ct);
+        // Super Admin and Guest/Viewer (plus the other 6 built-in roles and their RoleProfile rows)
+        // are seeded by RoleSeedService at every app startup — including this deployment's very
+        // first one, before the setup wizard's own POST can ever reach here — so both already exist
+        // by this point. Nothing here creates a role of its own anymore.
         await SeedViewerPermissionsAsync(ct);
 
         var admin = new ApplicationUser
@@ -115,7 +117,7 @@ public class SetupService(
             throw new InvalidOperationException($"Unable to create administrator account. {errors}");
         }
 
-        await userManager.AddToRoleAsync(admin, "Administrator");
+        await userManager.AddToRoleAsync(admin, "Super Admin");
 
         if (!await db.AppVersions.AnyAsync(ct))
         {
@@ -165,22 +167,16 @@ public class SetupService(
         return Task.FromResult<(string?, string?)>((null, null));
     }
 
-    private async Task EnsureRoleAsync(string roleName, CancellationToken ct)
-    {
-        if (!await roleManager.RoleExistsAsync(roleName))
-            await roleManager.CreateAsync(new IdentityRole(roleName));
-    }
-
-    /// <summary>Administrator implicitly has every permission (see PermissionService); Viewer is
-    /// seeded read-only across the resources that exist so far. The full ~18-resource matrix named
-    /// in the plan grows as each milestone's pages land — seeding it now for resources that don't
-    /// have pages yet would just be dead rows.</summary>
+    /// <summary>Super Admin implicitly has every permission (see PermissionService); Guest/Viewer
+    /// (né Viewer) is seeded read-only across the resources that exist so far. The full ~18-resource
+    /// matrix named in the plan grows as each milestone's pages land — seeding it now for resources
+    /// that don't have pages yet would just be dead rows.</summary>
     /// <summary>Internal rather than private so a test can exercise it directly against a real
     /// RoleManager + in-memory DbContext without needing the full UserManager machinery
     /// CompleteSetupAsync (its only real caller) also requires for admin-account creation.</summary>
     internal async Task SeedViewerPermissionsAsync(CancellationToken ct)
     {
-        var role = await roleManager.FindByNameAsync("Viewer");
+        var role = await roleManager.FindByNameAsync("Guest/Viewer");
         if (role is null) return;
 
         // "Logs", not "AuditLog": Pages/Logs/AuditLogs is gated by [Authorize("Logs.View")].

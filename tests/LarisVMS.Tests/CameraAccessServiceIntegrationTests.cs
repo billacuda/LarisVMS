@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
+using LarisVMS.Core.Auth;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
 using LarisVMS.Infrastructure.Data;
@@ -38,7 +39,7 @@ public class CameraAccessServiceIntegrationTests
     }
 
     [Fact]
-    public async Task AnAdministratorIsAlwaysUnrestrictedEvenWithGrantsPresentForOtherRoles()
+    public async Task ASuperAdminIsAlwaysUnrestrictedEvenWithGrantsPresentForOtherRoles()
     {
         var (db, roles, service) = NewHarness();
         var viewer = await roles.CreateAsync(new IdentityRole("Viewer")) is { Succeeded: true }
@@ -48,9 +49,12 @@ public class CameraAccessServiceIntegrationTests
             Id = Guid.NewGuid(), PrincipalType = CameraAccessPrincipalType.Role, PrincipalId = viewer!.Id,
             ScopeType = CameraAccessScopeType.Camera, ScopeId = Guid.NewGuid(), Actions = CameraAccessActions.View
         });
+        var superAdmin = await roles.CreateAsync(new IdentityRole("Super Admin")) is { Succeeded: true }
+            ? await roles.FindByNameAsync("Super Admin") : null;
+        db.RoleProfiles.Add(new RoleProfile { RoleId = superAdmin!.Id, Tag = RoleTags.SuperAdmin });
         await db.SaveChangesAsync();
 
-        var result = await service.GetAccessibleCameraIdsAsync(AuthenticatedAs("admin-1", "Administrator"), CameraAccessActions.View);
+        var result = await service.GetAccessibleCameraIdsAsync(AuthenticatedAs("admin-1", "Super Admin"), CameraAccessActions.View);
 
         Assert.Null(result);
     }

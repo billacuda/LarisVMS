@@ -9,12 +9,12 @@ using LarisVMS.Infrastructure.Services;
 namespace LarisVMS.Tests;
 
 /// <summary>
-/// Every Permission row SeedViewerPermissionsAsync ever wrote used the literal string "Viewer" as
-/// RoleId instead of the real AspNetRoles.Id GUID — invisible in review because both look like "a
-/// role identifier", and invisible in production because the only user this app has ever really
-/// exercised is an Administrator, which bypasses the Permission table via PermissionService's own
-/// implicit-everything short-circuit. This doesn't just assert the stored RoleId matches the real
-/// role's Id — it runs the actual seed-then-resolve pipeline end to end through
+/// Every Permission row SeedViewerPermissionsAsync ever wrote used the literal string "Viewer" (the
+/// role's pre-overhaul name) as RoleId instead of the real AspNetRoles.Id GUID — invisible in review
+/// because both look like "a role identifier", and invisible in production because the only user
+/// this app has ever really exercised is a Super Admin, which bypasses the Permission table via
+/// PermissionService's own implicit-everything short-circuit. This doesn't just assert the stored
+/// RoleId matches the real role's Id — it runs the actual seed-then-resolve pipeline end to end through
 /// PermissionService.GetGrantedAsync, which is the only way this class of bug (a value that "looks
 /// like" the right type but is compared against the wrong thing) reliably gets caught.
 /// </summary>
@@ -42,15 +42,15 @@ public class SetupServiceViewerPermissionSeedingTests
     public async Task SeededPermissionRowsUseTheRealRoleIdNotTheLiteralRoleName()
     {
         var (db, roles, setup) = NewHarness();
-        await roles.CreateAsync(new IdentityRole("Viewer"));
-        var viewerRole = await roles.FindByNameAsync("Viewer");
+        await roles.CreateAsync(new IdentityRole("Guest/Viewer"));
+        var viewerRole = await roles.FindByNameAsync("Guest/Viewer");
 
         await setup.SeedViewerPermissionsAsync(CancellationToken.None);
 
         var permissions = await db.Permissions.ToListAsync();
         Assert.NotEmpty(permissions);
         Assert.All(permissions, p => Assert.Equal(viewerRole!.Id, p.RoleId));
-        Assert.DoesNotContain(permissions, p => p.RoleId == "Viewer");
+        Assert.DoesNotContain(permissions, p => p.RoleId == "Guest/Viewer");
     }
 
     [Fact]
@@ -60,13 +60,13 @@ public class SetupServiceViewerPermissionSeedingTests
         // question the navbar and every [Authorize("...")] page ask at runtime. Before the fix this
         // returned false for every resource, unconditionally — the RoleId never matched anything.
         var (db, roles, setup) = NewHarness();
-        await roles.CreateAsync(new IdentityRole("Viewer"));
+        await roles.CreateAsync(new IdentityRole("Guest/Viewer"));
         await setup.SeedViewerPermissionsAsync(CancellationToken.None);
 
         var permissionService = new PermissionService(db, null!);
         var user = new System.Security.Claims.ClaimsPrincipal(
             new System.Security.Claims.ClaimsIdentity(
-                [new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.Role, "Viewer")],
+                [new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.Role, "Guest/Viewer")],
                 "TestAuth"));
 
         var granted = await permissionService.GetGrantedAsync(user);
@@ -80,7 +80,7 @@ public class SetupServiceViewerPermissionSeedingTests
     public async Task SeedingIsIdempotentAcrossRepeatedCalls()
     {
         var (db, roles, setup) = NewHarness();
-        await roles.CreateAsync(new IdentityRole("Viewer"));
+        await roles.CreateAsync(new IdentityRole("Guest/Viewer"));
 
         await setup.SeedViewerPermissionsAsync(CancellationToken.None);
         var firstCount = await db.Permissions.CountAsync();

@@ -1,0 +1,147 @@
+@page
+@model LarisVMS.Web.Pages.Admin.Settings.Permissions.RolesModel
+@using LarisVMS.Core.Enums
+@{
+    ViewData["Title"] = "Permissions — Roles";
+}
+<h1>Settings</h1>
+<partial name="_SettingsTabs" model="@("Permissions")" />
+<partial name="_PermissionsTabs" model="@("Roles")" />
+
+<p class="text-muted">
+    Create, rename, and delete roles, and set each one's scope tier, auto-expiry, and PTZ priority.
+    Grant permissions on the <a asp-page="/Admin/Settings/Permissions/Matrix">Permissions Matrix</a>
+    tab, and camera-level scoping on <a asp-page="/Admin/Settings/CameraAccess">Camera Access</a>.
+</p>
+
+@if (!string.IsNullOrEmpty(Model.SavedMessage))
+{
+    <div class="alert alert-success">@Model.SavedMessage</div>
+}
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger">@Model.ErrorMessage</div>
+}
+
+<div class="card mb-3">
+    <div class="card-header fw-semibold">Add a role</div>
+    <div class="card-body">
+        <form method="post" asp-page-handler="Create" class="row g-3">
+            <div class="col-sm-6">
+                <label class="form-label">Name</label>
+                <input type="text" asp-for="NewRoleName" class="form-control" placeholder="e.g. Operator" />
+            </div>
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary">Add role</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<style>
+    .role-caret { display: inline-block; transition: transform .15s ease; }
+    .card-header[aria-expanded="true"] .role-caret { transform: rotate(90deg); }
+</style>
+
+@foreach (var role in Model.Roles)
+{
+    var bodyId = $"role-body-{role.Id}";
+    <div class="card mb-3">
+        <div class="card-header fw-semibold d-flex justify-content-between align-items-center" role="button"
+             style="cursor:pointer" data-bs-toggle="collapse" data-bs-target="#@bodyId"
+             aria-expanded="false" aria-controls="@bodyId">
+            <span>
+                <span class="role-caret me-1">▶</span>
+                @role.Name
+                @if (role.IsSystemRole) { <span class="badge text-bg-secondary ms-1">built-in</span> }
+                <span class="text-muted fw-normal">(@role.UserCount user@(role.UserCount == 1 ? "" : "s"))</span>
+            </span>
+        </div>
+        <div class="collapse" id="@bodyId">
+        <div class="card-body">
+            <form method="post" asp-page-handler="Save">
+                <input type="hidden" name="roleId" value="@role.Id" />
+                <div class="row g-3 mb-3">
+                    <div class="col-sm-6">
+                        <label class="form-label">Name</label>
+                        <input type="text" name="name" class="form-control" value="@role.Name" @(role.IsProtected ? "readonly" : "") />
+                    </div>
+                </div>
+
+                @if (role.IsProtected)
+                {
+                    <p class="text-muted small mb-0">
+                        The Super Admin role always holds every permission at organization scope, never
+                        expires, and always pre-empts every other PTZ priority — none of that is
+                        editable here.
+                    </p>
+                }
+                else
+                {
+                    <div class="row g-3 mb-3">
+                        <div class="col-sm-4">
+                            <label class="form-label">Max scope tier</label>
+                            <select name="maxScopeTier" class="form-select">
+                                @foreach (RoleScopeTier tier in Enum.GetValues<RoleScopeTier>())
+                                {
+                                    <option value="@((int)tier)" selected="@(tier == role.MaxScopeTier)">@tier</option>
+                                }
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="row g-3 mb-3 align-items-end">
+                        <div class="col-sm-3">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" name="autoExpires" value="true"
+                                       id="expires-@role.Id" checked="@role.AutoExpires" />
+                                <label class="form-check-label" for="expires-@role.Id">Auto-expires</label>
+                            </div>
+                        </div>
+                        <div class="col-sm-4">
+                            <label class="form-label">Default expiry (minutes)</label>
+                            <input type="number" min="1" name="defaultExpiryMinutes" class="form-control"
+                                   value="@role.DefaultExpiryMinutes" />
+                            <div class="form-text">e.g. 480 = 8h shift, 1440 = 24h, 43200 = 30d.</div>
+                        </div>
+                    </div>
+
+                    <div class="row g-3 mb-3">
+                        <div class="col-sm-4">
+                            <label class="form-label">PTZ priority level</label>
+                            <input type="number" min="1" max="9999" name="ptzPriorityLevel" class="form-control"
+                                   value="@role.PtzPriorityLevel" placeholder="(none — no PTZ arbitration)" />
+                        </div>
+                        <div class="col-sm-4">
+                            <label class="form-label">PTZ lockout (seconds)</label>
+                            <input type="number" min="0" name="ptzLockoutSeconds" class="form-control"
+                                   value="@role.PtzLockoutSeconds" />
+                        </div>
+                    </div>
+                }
+
+                <div class="row g-3 mb-3">
+                    <div class="col-sm-4">
+                        <label class="form-label">Session lifetime (hours)</label>
+                        <input type="number" min="0" name="sessionLifetimeHours" class="form-control"
+                               value="@role.SessionLifetimeHours" />
+                        <div class="form-text">0 = never expire.</div>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-primary btn-sm">Save</button>
+
+                @if (!role.IsProtected)
+                {
+                    <button type="submit" formaction="?handler=Delete" class="btn btn-outline-danger btn-sm"
+                            onclick="return confirm('Delete role &quot;@role.Name&quot;?');"
+                            disabled="@(role.UserCount > 0)"
+                            title="@(role.UserCount > 0 ? "Move its users to another role first." : null)">
+                        Delete
+                    </button>
+                }
+            </form>
+        </div>
+        </div>
+    </div>
+}

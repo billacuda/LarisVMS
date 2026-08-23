@@ -137,4 +137,90 @@ public class CameraAccessServiceTests
 
         Assert.DoesNotContain(ungrouped.CameraId, result!);
     }
+
+    // ── Export is a sub-permission of Playback ──────────────────────────────────
+    // A camera only ever counts as export-accessible if this principal can also play it back,
+    // regardless of what the Export grant itself says — see Resolve's own comment on why.
+
+    [Fact]
+    public void ExportWithoutPlaybackForTheSameCameraGrantsNothing()
+    {
+        var camId = Guid.NewGuid();
+        var rows = new[] { Row(CameraAccessScopeType.Camera, camId, CameraAccessActions.Export) };
+
+        var result = CameraAccessService.Resolve(rows, CameraAccessActions.Export, [], new Dictionary<Guid, string>());
+
+        Assert.Empty(result!);
+    }
+
+    [Fact]
+    public void ExportAndPlaybackForTheSameCameraGrantsExactlyThatCamera()
+    {
+        var camId = Guid.NewGuid();
+        var rows = new[] { Row(CameraAccessScopeType.Camera, camId, CameraAccessActions.Export | CameraAccessActions.Playback) };
+
+        var result = CameraAccessService.Resolve(rows, CameraAccessActions.Export, [], new Dictionary<Guid, string>());
+
+        Assert.Equal([camId], result);
+    }
+
+    [Fact]
+    public void ExportGrantedForOneCameraButPlaybackOnlyForAnotherGrantsNothing()
+    {
+        var exportCam = Guid.NewGuid();
+        var playbackCam = Guid.NewGuid();
+        var rows = new[]
+        {
+            Row(CameraAccessScopeType.Camera, exportCam, CameraAccessActions.Export),
+            Row(CameraAccessScopeType.Camera, playbackCam, CameraAccessActions.Playback)
+        };
+
+        var result = CameraAccessService.Resolve(rows, CameraAccessActions.Export, [], new Dictionary<Guid, string>());
+
+        Assert.DoesNotContain(exportCam, result!);
+    }
+
+    [Fact]
+    public void AnAllScopeExportGrantIsNarrowedToWhateverCamerasPlaybackAllows()
+    {
+        var playbackCam = Guid.NewGuid();
+        var rows = new[]
+        {
+            Row(CameraAccessScopeType.All, null, CameraAccessActions.Export),
+            Row(CameraAccessScopeType.Camera, playbackCam, CameraAccessActions.Playback)
+        };
+
+        var result = CameraAccessService.Resolve(rows, CameraAccessActions.Export, [], new Dictionary<Guid, string>());
+
+        Assert.Equal([playbackCam], result);
+    }
+
+    [Fact]
+    public void ACameraScopedExportGrantSurvivesAnAllScopePlaybackGrant()
+    {
+        var exportCam = Guid.NewGuid();
+        var rows = new[]
+        {
+            Row(CameraAccessScopeType.Camera, exportCam, CameraAccessActions.Export),
+            Row(CameraAccessScopeType.All, null, CameraAccessActions.Playback)
+        };
+
+        var result = CameraAccessService.Resolve(rows, CameraAccessActions.Export, [], new Dictionary<Guid, string>());
+
+        Assert.Equal([exportCam], result);
+    }
+
+    [Fact]
+    public void AllScopeExportAndAllScopePlaybackTogetherAreFullyUnrestricted()
+    {
+        var rows = new[]
+        {
+            Row(CameraAccessScopeType.All, null, CameraAccessActions.Export),
+            Row(CameraAccessScopeType.All, null, CameraAccessActions.Playback)
+        };
+
+        var result = CameraAccessService.Resolve(rows, CameraAccessActions.Export, [], new Dictionary<Guid, string>());
+
+        Assert.Null(result);
+    }
 }

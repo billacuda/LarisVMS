@@ -5,33 +5,40 @@ namespace LarisVMS.Tests;
 public class RoleManagementPolicyTests
 {
     [Fact]
-    public void AdministratorCannotBeRenamed()
+    public void TheSuperAdminTaggedRoleCannotBeRenamed()
     {
-        Assert.False(RoleManagementPolicy.CanRename("Administrator"));
+        Assert.False(RoleManagementPolicy.CanRename("SUPER"));
     }
 
     [Fact]
-    public void AnyOtherRoleCanBeRenamed()
+    public void AnyOtherTagOrNoTagCanBeRenamed()
     {
-        Assert.True(RoleManagementPolicy.CanRename("Viewer"));
+        Assert.True(RoleManagementPolicy.CanRename("VIEWER"));
+        Assert.True(RoleManagementPolicy.CanRename(null));
     }
 
     [Fact]
-    public void AdministratorCanNeverBeDeletedEvenWithNoUsers()
+    public void TheSuperAdminTaggedRoleCanNeverBeDeletedEvenWithNoUsers()
     {
-        Assert.False(RoleManagementPolicy.CanDelete("Administrator", userCount: 0));
+        Assert.False(RoleManagementPolicy.CanDelete("SUPER", userCount: 0));
     }
 
     [Fact]
     public void ARoleStillHoldingUsersCannotBeDeleted()
     {
-        Assert.False(RoleManagementPolicy.CanDelete("Operator", userCount: 3));
+        Assert.False(RoleManagementPolicy.CanDelete("OPERATOR", userCount: 3));
     }
 
     [Fact]
     public void ARoleWithNoUsersCanBeDeleted()
     {
-        Assert.True(RoleManagementPolicy.CanDelete("Operator", userCount: 0));
+        Assert.True(RoleManagementPolicy.CanDelete("OPERATOR", userCount: 0));
+    }
+
+    [Fact]
+    public void ACustomRoleWithNoTagCanBeDeletedOnceEmpty()
+    {
+        Assert.True(RoleManagementPolicy.CanDelete(null, userCount: 0));
     }
 
     [Fact]
