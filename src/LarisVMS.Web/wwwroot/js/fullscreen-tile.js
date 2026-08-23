@@ -8,6 +8,17 @@
 window.larisvmsFullscreenTile = (function () {
     'use strict';
 
+    // Shared across every tile using this module — only one element can be entering/exiting
+    // fullscreen at a time, so this doesn't need to be per-tile. Set synchronously the instant a
+    // fullscreen request/exit is *issued*, not once it completes: v0.148.1 gated view-play.js's
+    // matchMedia mode-change listener on document.fullscreenElement alone, but that still raced and
+    // still tore every camera down on live testing — a mobile browser's viewport resize (collapsing
+    // address-bar chrome) that requestFullscreen() triggers isn't guaranteed to fire after
+    // 'fullscreenchange' does, so matchMedia's own 'change' event can still land while
+    // document.fullscreenElement is still null. This flag covers the whole request from the moment
+    // it's issued, closing that race instead of racing it.
+    var transitioning = false;
+
     // Deliberately a separate implementation/state from Playback's own button-driven digital zoom
     // (wireZoom/.pb-zoom-in/out/reset in playback-player.js), not a shared one — that zoom stays
     // exactly as-is for the normal (non-fullscreen) grid view; this one only ever runs while this
@@ -35,14 +46,19 @@ window.larisvmsFullscreenTile = (function () {
 
         containerEl.addEventListener('dblclick', function (e) {
             e.stopPropagation();
+            transitioning = true;
             if (isFs()) {
-                document.exitFullscreen().catch(function () { /* ignore */ });
+                document.exitFullscreen().catch(function () { transitioning = false; /* ignore */ });
             } else {
-                containerEl.requestFullscreen().catch(function () { /* ignore — e.g. iframe policy */ });
+                // requestFullscreen()'s own rejection (e.g. iframe policy) never fires
+                // 'fullscreenchange', so this catch is the only place that clears the flag on that
+                // path — without it a denied request would leave transitioning stuck true forever.
+                containerEl.requestFullscreen().catch(function () { transitioning = false; /* ignore */ });
             }
         });
 
         document.addEventListener('fullscreenchange', function () {
+            transitioning = false;
             var active = isFs();
             containerEl.classList.toggle('tile-fullscreen', active);
             if (!active) resetZoom();
@@ -174,5 +190,5 @@ window.larisvmsFullscreenTile = (function () {
         };
     }
 
-    return { wire: wire };
+    return { wire: wire, isTransitioning: function () { return transitioning; } };
 })();

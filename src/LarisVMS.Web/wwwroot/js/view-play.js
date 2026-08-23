@@ -746,9 +746,16 @@ window.larisvmsViewPlay = (function () {
         // reached through matchMedia instead of the plain resize listener. Deferred rather than
         // dropped: a mode change that genuinely happens while fullscreen (an actual orientation change
         // mid-session) still applies once fullscreen ends.
+        //
+        // Gating on document.fullscreenElement alone (v0.148.1) still reproduced live: the viewport
+        // resize that triggers this matchMedia listener isn't guaranteed to land after
+        // 'fullscreenchange' sets document.fullscreenElement, so the check could still see it null
+        // mid-transition. fullscreen-tile.js now also tracks "a fullscreen request/exit is in flight"
+        // from the moment it's issued rather than from when it completes — check that too.
         var pendingModeChange = false;
         var onModeChange = function () {
-            if (document.fullscreenElement) { pendingModeChange = true; return; }
+            var fsPending = window.larisvmsFullscreenTile && window.larisvmsFullscreenTile.isTransitioning();
+            if (document.fullscreenElement || fsPending) { pendingModeChange = true; return; }
             render();
         };
         [phoneQuery, shortQuery, phoneLandscapeQuery].forEach(function (query) {

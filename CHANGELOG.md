@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.148.2] - 2026-08-23
+
+### Fixed
+
+- **v0.148.1's fix for the fullscreen black-screen bug didn't actually close it — confirmed still
+  reproducing live.** That fix gated the matchMedia mode-change listener on `document.fullscreenElement`
+  alone, on the assumption that flag is already set by the time the listener runs. It isn't, reliably:
+  the viewport resize that crosses `shortQuery`/`phoneLandscapeQuery` (a mobile browser collapsing its
+  address-bar chrome on fullscreen entry) isn't guaranteed to land *after* the browser's own
+  `fullscreenchange` event sets `document.fullscreenElement` — so the matchMedia listener could still
+  fire while it read `null`, and still triggered the full `render()` teardown/restart of every camera's
+  live session. `fullscreen-tile.js` now tracks "a fullscreen request/exit is in flight" from the
+  instant it's *issued* (set synchronously in the double-click handler, before `requestFullscreen()`/
+  `exitFullscreen()` is even called) rather than from when the browser confirms it — closing the race
+  instead of racing it. `view-play.js`'s mode-change guard checks this new flag alongside
+  `document.fullscreenElement`.
+
+Web-only, no node change.
+
 ## [0.148.1] - 2026-08-23
 
 ### Fixed
