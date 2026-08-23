@@ -31,11 +31,17 @@
         <input asp-for="Name" class="form-control" required />
     </div>
     <div class="col-12">
-        <label class="form-label">Device service URL</label>
+        <label class="form-label">
+            Device service URL
+            @if (!Model.IsNew)
+            {
+                <button type="button" class="help-icon" data-help-target="deviceUriHelp" tabindex="0" aria-label="Help">ℹ️</button>
+            }
+        </label>
         <input asp-for="DeviceServiceUri" class="form-control font-monospace" placeholder="http://192.168.1.50/onvif/device_service" required />
         @if (!Model.IsNew)
         {
-            <div class="form-text">
+            <div class="help-text-source" id="deviceUriHelp">
                 Change the scheme here (<code>http://</code> &harr; <code>https://</code>) if the
                 camera's own web server switches, or update the address if its IP changes. Saving a
                 change re-probes the camera automatically, since its capability report can otherwise
@@ -43,31 +49,28 @@
             </div>
         }
     </div>
-    <div class="col-12">
-        <label class="form-label">Groups</label>
-        <select asp-for="GroupIds" class="form-select" multiple size="8">
-            @* The built-in "All Cameras" group is excluded — it's on every camera unconditionally
-               (CameraService.SetCameraGroupsAsync re-adds it regardless of what's submitted here), so
-               showing a checkbox for it would be misleading: unchecking it and saving wouldn't remove it. *@
-            @foreach (var siteGroup in Model.Groups.Where(g => g.Id != CameraGroup.AllCamerasId).GroupBy(Model.SiteIdOf))
-            {
-                var site = Model.Groups.First(g => g.Id == siteGroup.Key);
-                <optgroup label="@site.Name">
-                    @foreach (var g in siteGroup)
+    @if (!Model.IsNew)
+    {
+        <div class="col-12">
+            <label class="form-label">Groups</label>
+            <div>
+                @if (Model.CurrentGroups.Count == 0)
+                {
+                    <span class="text-muted">Not in any group yet.</span>
+                }
+                else
+                {
+                    @foreach (var g in Model.CurrentGroups)
                     {
-                        var indent = new string(' ', Model.Depth(g) * 2);
-                        <option value="@g.Id" selected="@Model.GroupIds.Contains(g.Id)">@indent@g.Name</option>
+                        <span class="badge text-bg-secondary me-1">@g.Name</span>
                     }
-                </optgroup>
-            }
-        </select>
-        <div class="form-text">
-            Ctrl/Cmd-click to select more than one — every selected group must be under the same
-            site (a camera belongs to one site, but any number of groups beneath it). Options are
-            grouped by site — everything under one <code>&lt;optgroup&gt;</code> shares a site;
-            picking across two different ones is what triggers the "single site" error on save.
+                }
+            </div>
+            <div class="form-text">
+                <a asp-page="Groups">Manage groups &rarr;</a>
+            </div>
         </div>
-    </div>
+    }
     <div class="col-12">
         <label class="form-label">Recorder node</label>
         <select asp-for="NodeId" class="form-select">
@@ -99,18 +102,24 @@
             </div>
         </div>
         <div class="col-6">
-            <label class="form-label">Storage quota (GB)</label>
+            <label class="form-label">
+                Storage quota (GB)
+                <button type="button" class="help-icon" data-help-target="quotaHelp" tabindex="0" aria-label="Help">ℹ️</button>
+            </label>
             <input asp-for="QuotaGb" type="number" step="0.1" min="0" class="form-control" placeholder="(no quota — shares the pool)" />
-            <div class="form-text">
+            <div class="help-text-source" id="quotaHelp">
                 Using @ByteFormat.Format(Model.StorageUsedBytes) now. Oldest footage is
                 evicted first once this camera goes over quota.
             </div>
         </div>
         <div class="col-6">
-            <label class="form-label">Retention override (days)</label>
+            <label class="form-label">
+                Retention override (days)
+                <button type="button" class="help-icon" data-help-target="retentionHelp" tabindex="0" aria-label="Help">ℹ️</button>
+            </label>
             <input asp-for="RetentionDaysOverride" type="number" min="0" class="form-control"
                    placeholder="(inherit — currently @Model.EffectiveRetentionDays days)" />
-            <div class="form-text">0 = keep forever on this camera. Blank inherits the node's/global setting.</div>
+            <div class="help-text-source" id="retentionHelp">0 = keep forever on this camera. Blank inherits the node's/global setting.</div>
         </div>
         <div class="col-6">
             <label class="form-label">Recording mode override</label>
@@ -133,11 +142,14 @@
             }
             else
             {
-                <div class="form-text">
-                    Segments with no activity — from a Motion zone@(hasOnvifEvents ? " or this camera's own ONVIF motion events" : "") —
-                    are deleted shortly after they're written, instead of waiting for a retention sweep
-                    (<a asp-page="Zones" asp-route-id="@Model.Id">manage zones</a>).
-                    <strong>Unverified against a real camera</strong> — see CHANGELOG.
+                <div class="mt-1">
+                    <button type="button" class="help-icon" data-help-target="motionModeHelp" tabindex="0" aria-label="Help">ℹ️ About Motion mode</button>
+                    <div class="help-text-source" id="motionModeHelp">
+                        Segments with no activity — from a Motion zone@(hasOnvifEvents ? " or this camera's own ONVIF motion events" : "") —
+                        are deleted shortly after they're written, instead of waiting for a retention sweep
+                        (<a asp-page="Zones" asp-route-id="@Model.Id">manage zones</a>).
+                        <strong>Unverified against a real camera</strong> — see CHANGELOG.
+                    </div>
                 </div>
             }
             @if (!Model.HasScheduleWindow)
@@ -149,10 +161,13 @@
             }
             else
             {
-                <div class="form-text">
-                    Schedule mode keeps a segment only if it starts inside an enabled window
-                    (<a asp-page="Schedule" asp-route-id="@Model.Id">manage schedule</a>), evaluated
-                    against the recorder node's own local clock.
+                <div class="mt-1">
+                    <button type="button" class="help-icon" data-help-target="scheduleModeHelp" tabindex="0" aria-label="Help">ℹ️ About Schedule mode</button>
+                    <div class="help-text-source" id="scheduleModeHelp">
+                        Schedule mode keeps a segment only if it starts inside an enabled window
+                        (<a asp-page="Schedule" asp-route-id="@Model.Id">manage schedule</a>), evaluated
+                        against the recorder node's own local clock.
+                    </div>
                 </div>
             }
             @if (!Model.HasDrivingEventRule)
@@ -167,38 +182,50 @@
             }
             else
             {
-                <div class="form-text">
-                    Event mode keeps a segment only if a driving
-                    (<a asp-page="EventTags" asp-route-id="@Model.Id">event tag rule</a>) fired within
-                    its pre/post-roll window — not any activity, unlike Motion mode.
-                    <strong>Unverified against a real camera</strong> — see CHANGELOG.
+                <div class="mt-1">
+                    <button type="button" class="help-icon" data-help-target="eventModeHelp" tabindex="0" aria-label="Help">ℹ️ About Event mode</button>
+                    <div class="help-text-source" id="eventModeHelp">
+                        Event mode keeps a segment only if a driving
+                        (<a asp-page="EventTags" asp-route-id="@Model.Id">event tag rule</a>) fired within
+                        its pre/post-roll window — not any activity, unlike Motion mode.
+                        <strong>Unverified against a real camera</strong> — see CHANGELOG.
+                    </div>
                 </div>
             }
         </div>
         <div class="col-6">
-            <label class="form-label">Pre-roll override (seconds)</label>
+            <label class="form-label">
+                Pre-roll override (seconds)
+                <button type="button" class="help-icon" data-help-target="preRollHelp" tabindex="0" aria-label="Help">ℹ️</button>
+            </label>
             <input asp-for="MotionPreRollSecondsOverride" type="number" min="0" class="form-control"
                    placeholder="(inherit — currently @Model.EffectiveMotionPreRollSeconds s)" />
-            <div class="form-text">
+            <div class="help-text-source" id="preRollHelp">
                 Only matters in Motion mode. How far <strong>before</strong> activity starts a
                 segment still counts as worth keeping — this is how much lead-up you get on a
                 motion event, e.g. someone walking into frame before they trip the zone.
             </div>
         </div>
         <div class="col-6">
-            <label class="form-label">Post-roll override (seconds)</label>
+            <label class="form-label">
+                Post-roll override (seconds)
+                <button type="button" class="help-icon" data-help-target="postRollHelp" tabindex="0" aria-label="Help">ℹ️</button>
+            </label>
             <input asp-for="MotionPostRollSecondsOverride" type="number" min="0" class="form-control"
                    placeholder="(inherit — currently @Model.EffectiveMotionPostRollSeconds s)" />
-            <div class="form-text">
+            <div class="help-text-source" id="postRollHelp">
                 Only matters in Motion mode. How long <strong>after</strong> activity stops a
                 segment still counts as worth keeping.
             </div>
         </div>
         <div class="col-6">
-            <label class="form-label">Segment length override (seconds)</label>
+            <label class="form-label">
+                Segment length override (seconds)
+                <button type="button" class="help-icon" data-help-target="segmentLengthHelp" tabindex="0" aria-label="Help">ℹ️</button>
+            </label>
             <input asp-for="SegmentSecondsOverride" type="number" min="5" max="300" class="form-control"
                    placeholder="(inherit — currently @Model.EffectiveSegmentSeconds s)" />
-            <div class="form-text">
+            <div class="help-text-source" id="segmentLengthHelp">
                 Applies regardless of recording mode. Smaller for a busy/high-resolution camera keeps
                 worst-case Playback scrub latency down; changing it restarts this camera's recording
                 session (brief interruption) to take effect.

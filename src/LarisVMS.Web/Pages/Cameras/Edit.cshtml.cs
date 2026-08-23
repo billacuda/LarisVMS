@@ -10,18 +10,13 @@ using LarisVMS.Core.Interfaces;
 namespace LarisVMS.Web.Pages.Cameras;
 
 [Authorize("Cameras.Edit")]
-public class EditModel(ICameraService cameraService, ICameraGroupService groupService, INodeService nodeService,
+public class EditModel(ICameraService cameraService, INodeService nodeService,
     ISettingsResolver settings, IZoneService zoneService, IEventTagRuleService eventTagRuleService,
     IScheduleWindowService scheduleWindowService, IAuditService auditService) : PageModel
 {
     [BindProperty] public Guid? Id { get; set; }
     [BindProperty] public string Name { get; set; } = string.Empty;
     [BindProperty] public string DeviceServiceUri { get; set; } = string.Empty;
-    /// <summary>Roles/permissions overhaul: a camera can belong to any number of groups, as long as
-    /// they all share one top-level Site (CameraGroupPolicy) — enforced server-side in
-    /// SetCameraGroupsAsync, not here, so a violation surfaces as ErrorMessage like any other save
-    /// failure rather than being silently filtered client-side.</summary>
-    [BindProperty] public List<Guid> GroupIds { get; set; } = [];
     [BindProperty] public Guid? NodeId { get; set; }
     [BindProperty] public string? Username { get; set; }
     [BindProperty] public string? Password { get; set; }
@@ -36,23 +31,14 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
     [BindProperty] public int? SegmentSecondsOverride { get; set; }
 
     public bool IsNew => Id is null;
-    public List<CameraGroup> Groups { get; set; } = [];
 
-    /// <summary>Indentation depth for the Groups multi-select — same formula as
-    /// Cameras/Groups.cshtml.cs's own Depth helper (that page's own group listing).</summary>
-    public int Depth(CameraGroup group) => group.MaterializedPath.Count(c => c == '/') - 1;
+    /// <summary>Read-only — group membership is managed on Cameras/Groups now, not here (this page
+    /// used to carry an editable multi-select with its own site-conflict validation surface; moved out
+    /// to keep this form to what's actually about the camera itself). Excludes the built-in "All
+    /// Cameras" group (CameraGroup.AllCamerasId), same as every other "current groups" display in this
+    /// app — it's true for every camera, so listing it here is noise, not information.</summary>
+    public List<CameraGroup> CurrentGroups { get; set; } = [];
 
-    private Dictionary<Guid, Guid?>? _parentIdByGroupId;
-    /// <summary>Which top-level Site a group ultimately belongs to (CameraGroupPolicy) — built once
-    /// from Groups itself, since CameraGroup doesn't eagerly load Parent. Used to organize the Groups
-    /// multi-select into one &lt;optgroup&gt; per Site, so the "every selected group must share one
-    /// site" rule this page's own SetCameraGroupsAsync call enforces is visible up front instead of
-    /// only surfacing as a save-time error with no way to tell which groups conflicted.</summary>
-    public Guid SiteIdOf(CameraGroup group)
-    {
-        _parentIdByGroupId ??= Groups.ToDictionary(g => g.Id, g => g.ParentId);
-        return CameraGroupPolicy.SiteIdOf(group.Id, _parentIdByGroupId);
-    }
     public List<Node> Nodes { get; set; } = [];
     public CameraCapabilities? Capabilities { get; set; }
     public List<CameraStream> Streams { get; set; } = [];
@@ -94,7 +80,6 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
 
     public async Task<IActionResult> OnGetAsync(Guid? id, string? deviceServiceUri, string? suggestedName)
     {
-        Groups = await groupService.GetTreeAsync();
         Nodes = await nodeService.ListAsync();
         Id = id;
 
@@ -105,7 +90,7 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
 
             Name = camera.Name;
             DeviceServiceUri = camera.DeviceServiceUri;
-            GroupIds = camera.Groups.Select(g => g.Id).ToList();
+            CurrentGroups = camera.Groups.Where(g => g.Id != CameraGroup.AllCamerasId).OrderBy(g => g.Name).ToList();
             NodeId = camera.NodeId;
             IsEnabled = camera.IsEnabled;
             Capabilities = camera.Capabilities;
@@ -164,7 +149,6 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
 
     public async Task<IActionResult> OnPostAsync()
     {
-        Groups = await groupService.GetTreeAsync();
         Nodes = await nodeService.ListAsync();
 
         try
@@ -173,12 +157,11 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
             {
                 // Stays on Edit (rather than Index) so the auto-probe this triggers — capabilities,
                 // streams — is immediately visible; that feedback matters most right when a camera
-                // is first added.
+                // is first added. No initial group here — group membership is set up afterward on
+                // Cameras/Groups; every camera picks up the built-in "All Cameras" group regardless
+                // (CameraService.AddAsync).
                 var camera = await cameraService.AddAsync(new AddCameraRequest(Name, DeviceServiceUri, Username, Password,
-                    GroupIds.Count > 0 ? GroupIds[0] : null));
-                // AddAsync only takes one initial group (see its own doc comment); apply the rest of
-                // whatever was multi-selected on this shared Add/Edit form the same way an edit would.
-                if (GroupIds.Count > 1) await cameraService.SetCameraGroupsAsync(camera.Id, GroupIds);
+                    GroupId: null));
                 if (NodeId is not null)
                     await nodeService.AssignCameraAsync(camera.Id, NodeId);
                 await LogAsync("Camera.Create", $"{Name} ({camera.Id})");
@@ -198,12 +181,10 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
 
             await cameraService.UpdateAsync(Id.Value, Name, NodeId, Username, Password, IsEnabled, quotaBytes,
                 DeviceServiceUri);
-            await cameraService.SetCameraGroupsAsync(Id.Value, GroupIds);
 
             var details = AuditDiff.Build(
                 AuditDiff.Of("Name", before?.Name, Name),
                 AuditDiff.Of("Device service URL", before?.DeviceServiceUri, DeviceServiceUri),
-                AuditDiff.Of("Groups", GroupNames(before?.Groups.Select(g => g.Id)), GroupNames(GroupIds)),
                 AuditDiff.Of("Node", NodeName(before?.NodeId), NodeName(NodeId)),
                 AuditDiff.Of("Enabled", before?.IsEnabled.ToString(), IsEnabled.ToString()),
                 AuditDiff.Of("Quota", QuotaText(before?.QuotaBytes), QuotaText(quotaBytes)),
@@ -270,7 +251,7 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
         {
             Name = camera.Name;
             DeviceServiceUri = camera.DeviceServiceUri;
-            GroupIds = camera.Groups.Select(g => g.Id).ToList();
+            CurrentGroups = camera.Groups.Where(g => g.Id != CameraGroup.AllCamerasId).OrderBy(g => g.Name).ToList();
             NodeId = camera.NodeId;
             IsEnabled = camera.IsEnabled;
             Capabilities = camera.Capabilities;
@@ -282,7 +263,6 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
             await LoadEffectiveSettingsAsync(Id.Value, camera.NodeId);
             StorageUsedBytes = (await cameraService.GetStorageUsageAsync()).GetValueOrDefault(Id.Value);
         }
-        Groups = await groupService.GetTreeAsync();
         Nodes = await nodeService.ListAsync();
         return Page();
     }
@@ -303,14 +283,10 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
             ? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value : null,
             User.Identity?.Name, HttpContext.Connection.RemoteIpAddress?.ToString(), details);
 
-    // Names rather than raw GUIDs in the audit trail — "Node: NVR1 → WINSERV1" is readable months
-    // later in a way two opaque ids never are. Both lists are already loaded by OnPostAsync, so this
-    // costs no extra queries. Falls back to the id if the referenced row is gone (deleted between
-    // the edit being loaded and submitted), which is still better than logging nothing.
-    private string GroupNames(IEnumerable<Guid>? groupIds) => groupIds is null
-        ? string.Empty
-        : string.Join(", ", groupIds.Select(id => Groups.FirstOrDefault(g => g.Id == id)?.Name ?? id.ToString()));
-
+    // A name rather than a raw GUID in the audit trail — "Node: NVR1 → WINSERV1" is readable months
+    // later in a way two opaque ids never are. Already loaded by OnPostAsync, so this costs no extra
+    // query. Falls back to the id if the referenced row is gone (deleted between the edit being loaded
+    // and submitted), which is still better than logging nothing.
     private string NodeName(Guid? nodeId) => nodeId is null
         ? string.Empty
         : Nodes.FirstOrDefault(n => n.Id == nodeId)?.Name ?? nodeId.ToString()!;

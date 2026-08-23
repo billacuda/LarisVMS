@@ -49,9 +49,12 @@
                     <input asp-for="BackupTime" class="form-control" placeholder="03:00" />
                 </div>
                 <div class="col-sm-6">
-                    <label class="form-label" asp-for="BackupDirectory">Backup directory</label>
+                    <label class="form-label" asp-for="BackupDirectory">
+                        Backup directory
+                        <button type="button" class="help-icon" data-help-target="backupDirHelp" tabindex="0" aria-label="Help">ℹ️</button>
+                    </label>
                     <input asp-for="BackupDirectory" class="form-control" placeholder="D:\Backups\LarisVMS" />
-                    <div class="form-text">
+                    <div class="help-text-source" id="backupDirHelp">
                         Absolute path the SQL Server service account can write to. Pick a location
                         that won't be wiped by app redeployments.
                     </div>

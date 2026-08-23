@@ -23,13 +23,19 @@
 
 <form method="post" class="row g-3" style="max-width: 560px;">
     <div class="col-12">
-        <label class="form-label" for="AppName">Application name</label>
+        <label class="form-label" for="AppName">
+            Application name
+            <button type="button" class="help-icon" data-help-target="appNameHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
         <input asp-for="AppName" id="AppName" class="form-control" maxlength="100" />
-        <div class="form-text">Shown in the navbar, the browser tab title and the footer.</div>
+        <div class="help-text-source" id="appNameHelp">Shown in the navbar, the browser tab title and the footer.</div>
     </div>
 
     <div class="col-sm-6">
-        <label class="form-label" for="PrimaryColor">Primary color</label>
+        <label class="form-label" for="PrimaryColor">
+            Primary color
+            <button type="button" class="help-icon" data-help-target="primaryColorHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
         <div class="input-group">
             @* The color input is the picker; the text input is what actually posts, so a value can
                also be pasted in exactly (and so an empty value stays empty — a color input can't
@@ -40,11 +46,14 @@
             <input asp-for="PrimaryColor" id="PrimaryColor" class="form-control" placeholder="#0d6efd"
                    pattern="^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$" />
         </div>
-        <div class="form-text">Buttons and links. Blank = Bootstrap default blue.</div>
+        <div class="help-text-source" id="primaryColorHelp">Buttons and links. Blank = Bootstrap default blue.</div>
     </div>
 
     <div class="col-sm-6">
-        <label class="form-label" for="AccentColor">Navbar color</label>
+        <label class="form-label" for="AccentColor">
+            Navbar color
+            <button type="button" class="help-icon" data-help-target="accentColorHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
         <div class="input-group">
             <input type="color" class="form-control form-control-color" id="AccentColorPicker"
                    value="@(Model.AccentColor ?? "#212529")" title="Pick a navbar color"
@@ -52,11 +61,14 @@
             <input asp-for="AccentColor" id="AccentColor" class="form-control" placeholder="#212529"
                    pattern="^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$" />
         </div>
-        <div class="form-text">Blank = the default dark navbar.</div>
+        <div class="help-text-source" id="accentColorHelp">Blank = the default dark navbar.</div>
     </div>
 
     <div class="col-12">
-        <label class="form-label" for="FontKey">Font</label>
+        <label class="form-label" for="FontKey">
+            Font
+            <button type="button" class="help-icon" data-help-target="fontHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
         <select asp-for="FontKey" id="FontKey" class="form-select">
             <option value="">Default (Bootstrap)</option>
             @foreach (var (key, label) in Model.FontChoices)
@@ -64,14 +76,17 @@
                 <option value="@key" selected="@(key == Model.FontKey ? "selected" : null)">@label</option>
             }
         </select>
-        <div class="form-text">
+        <div class="help-text-source" id="fontHelp">
             A fixed list of widely-available font stacks — no web fonts are downloaded, and no
             custom CSS is accepted.
         </div>
     </div>
 
     <div class="col-12">
-        <label class="form-label" for="LogoFile">Logo</label>
+        <label class="form-label" for="LogoFile">
+            Logo
+            <button type="button" class="help-icon" data-help-target="logoHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
         <div class="d-flex align-items-center gap-3 mb-2">
             <img id="logoPreview" src="@(Model.LogoDataUri ?? "")" alt="Current logo preview"
                  class="border rounded bg-body-tertiary p-1"
@@ -79,7 +94,7 @@
             <span id="logoEmpty" class="text-muted small @(Model.LogoDataUri is null ? "" : "d-none")">No logo set.</span>
         </div>
         <input type="file" id="LogoFile" class="form-control" accept="image/png,image/jpeg,image/gif,image/webp" />
-        <div class="form-text">
+        <div class="help-text-source" id="logoHelp">
             PNG, JPEG, GIF or WebP, under @(Model.MaxLogoBytes / 1024)KB. Shown beside the app name in
             the navbar, scaled to fit. SVG isn't accepted, since an SVG file can carry script.
         </div>

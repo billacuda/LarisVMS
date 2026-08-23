@@ -13,12 +13,12 @@
 
 <form method="post" class="row g-3" style="max-width: 560px;">
     <div class="col-12">
-        <h5>Auto Node Updates</h5>
+        <h5>Auto Node Updates <button type="button" class="help-icon" data-help-target="autoUpdateHelp" tabindex="0" aria-label="Help">ℹ️</button></h5>
         <div class="form-check">
             <input asp-for="NodeAutoUpdateEnabled" type="checkbox" class="form-check-input" />
             <label asp-for="NodeAutoUpdateEnabled" class="form-check-label">Auto-update recorder nodes</label>
         </div>
-        <div class="form-text">
+        <div class="help-text-source" id="autoUpdateHelp">
             When on, every recorder node whose reported version is older than the newest
             <strong>approved</strong> build for its platform downloads and applies it automatically
             on its next heartbeat — builds are registered by every <code>deploy.ps1</code> run and
@@ -28,7 +28,7 @@
     </div>
 
     <div class="col-12 mt-4">
-        <h5>Node Builds</h5>
+        <h5>Node Builds <button type="button" class="help-icon" data-help-target="nodeBuildsHelp" tabindex="0" aria-label="Help">ℹ️</button></h5>
         @if (Model.PendingBuildCount > 0)
         {
             <div class="alert alert-warning py-2 px-3 d-inline-block">
@@ -42,7 +42,7 @@
         <div>
             <a class="btn btn-outline-secondary btn-sm" asp-page="/Admin/NodeBuilds/Index">Manage Node Builds &rarr;</a>
         </div>
-        <div class="form-text">
+        <div class="help-text-source" id="nodeBuildsHelp">
             Kept as its own page rather than embedded here — approving/rejecting a build needs the
             <code>Nodes.Edit</code> permission, not <code>Settings.Edit</code>.
         </div>
@@ -50,12 +50,15 @@
 
     <div class="col-12 mt-4">
         <h5>Registration Code</h5>
-        <label class="form-label">Registration key</label>
+        <label class="form-label">
+            Registration key
+            <button type="button" class="help-icon" data-help-target="regKeyHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
         <div class="input-group">
             <input asp-for="RegistrationKey" class="form-control font-monospace" id="registrationKeyInput" />
             <button type="button" class="btn btn-outline-secondary" id="regenerateKeyBtn">Generate new key</button>
         </div>
-        <div class="form-text">
+        <div class="help-text-source" id="regKeyHelp">
             The bearer key <code>install-node.ps1</code> presents once when a recorder node first
             registers — only shown during the Setup wizard until now, with nowhere to come back and
             see it again when onboarding another node later. Rotating it here has no effect on nodes

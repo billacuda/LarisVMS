@@ -13,14 +13,17 @@
 
 <form method="post" class="row g-3" style="max-width: 560px;">
     <div class="col-12">
-        <label class="form-label">Global recording mode</label>
+        <label class="form-label">
+            Global recording mode
+            <button type="button" class="help-icon" data-help-target="modeHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
         <select asp-for="RecordingMode" class="form-select">
             <option value="Continuous">Continuous</option>
             <option value="Motion">Motion only</option>
             <option value="Schedule">Schedule</option>
             <option value="Event">Event (a specific tagged trigger)</option>
         </select>
-        <div class="form-text">
+        <div class="help-text-source" id="modeHelp">
             Schedule and Event modes need per-camera setup (windows / a driving event tag rule) to
             actually gate anything — see each camera's own Schedule / Event tags pages. With none
             configured, both fail open (keep everything) the same way Motion mode does for a camera
@@ -28,20 +31,29 @@
         </div>
     </div>
     <div class="col-6">
-        <label class="form-label">Pre-roll (seconds)</label>
+        <label class="form-label">
+            Pre-roll (seconds)
+            <button type="button" class="help-icon" data-help-target="preRollHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
         <input asp-for="MotionPreRollSeconds" type="number" min="0" class="form-control" required />
-        <div class="form-text">Only matters in Motion/Event mode. Lead-up kept before activity starts.</div>
+        <div class="help-text-source" id="preRollHelp">Only matters in Motion/Event mode. Lead-up kept before activity starts.</div>
     </div>
     <div class="col-6">
-        <label class="form-label">Post-roll (seconds)</label>
+        <label class="form-label">
+            Post-roll (seconds)
+            <button type="button" class="help-icon" data-help-target="postRollHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
         <input asp-for="MotionPostRollSeconds" type="number" min="0" class="form-control" required />
-        <div class="form-text">Only matters in Motion/Event mode. How long kept after activity stops.</div>
+        <div class="help-text-source" id="postRollHelp">Only matters in Motion/Event mode. How long kept after activity stops.</div>
     </div>
 
     <div class="col-12">
-        <label class="form-label">Segment length (seconds)</label>
+        <label class="form-label">
+            Segment length (seconds)
+            <button type="button" class="help-icon" data-help-target="segmentHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
         <input asp-for="SegmentSeconds" type="number" min="5" max="300" class="form-control" required />
-        <div class="form-text">
+        <div class="help-text-source" id="segmentHelp">
             How long each recorded file covers before rolling to the next one. Playback fetches a
             segment's full bytes and only starts at the exact instant you scrub to once that much has
             downloaded — shorter segments cap that worst case, at the cost of more (smaller) files on

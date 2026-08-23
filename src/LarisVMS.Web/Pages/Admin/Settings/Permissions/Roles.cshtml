@@ -99,10 +99,13 @@
                             </div>
                         </div>
                         <div class="col-sm-4">
-                            <label class="form-label">Default expiry (minutes)</label>
+                            <label class="form-label">
+                                Default expiry (minutes)
+                                <button type="button" class="help-icon" data-help-target="expiryHelp-@role.Id" tabindex="0" aria-label="Help">ℹ️</button>
+                            </label>
                             <input type="number" min="1" name="defaultExpiryMinutes" class="form-control"
                                    value="@role.DefaultExpiryMinutes" />
-                            <div class="form-text">e.g. 480 = 8h shift, 1440 = 24h, 43200 = 30d.</div>
+                            <div class="help-text-source" id="expiryHelp-@role.Id">e.g. 480 = 8h shift, 1440 = 24h, 43200 = 30d.</div>
                         </div>
                     </div>
 
@@ -122,10 +125,13 @@
 
                 <div class="row g-3 mb-3">
                     <div class="col-sm-4">
-                        <label class="form-label">Session lifetime (hours)</label>
+                        <label class="form-label">
+                            Session lifetime (hours)
+                            <button type="button" class="help-icon" data-help-target="sessionHelp-@role.Id" tabindex="0" aria-label="Help">ℹ️</button>
+                        </label>
                         <input type="number" min="0" name="sessionLifetimeHours" class="form-control"
                                value="@role.SessionLifetimeHours" />
-                        <div class="form-text">0 = never expire.</div>
+                        <div class="help-text-source" id="sessionHelp-@role.Id">0 = never expire.</div>
                     </div>
                 </div>
 

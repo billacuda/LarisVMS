@@ -52,10 +52,15 @@
 {
     var members = Model.Cameras.Where(c => c.Groups.Any(mg => mg.Id == g.Id)).OrderBy(c => c.Name).ToList();
     var isBuiltIn = g.Id == CameraGroup.AllCamerasId;
+    var bodyId = $"group-body-{g.Id}";
 
     <div class="card mb-3" style="max-width: 640px; margin-left: @(Model.Depth(g) * 1.75)rem;">
         <div class="card-header d-flex justify-content-between align-items-center">
-            <span class="fw-semibold">@g.Name</span>
+            <button type="button" class="btn btn-link text-decoration-none p-0 fw-semibold group-collapse-toggle"
+                    data-bs-toggle="collapse" data-bs-target="#@bodyId" aria-expanded="true">
+                <span class="group-collapse-icon" aria-hidden="true">▾</span> @g.Name
+                <span class="text-muted small fw-normal">(@members.Count)</span>
+            </button>
             @if (!isBuiltIn)
             {
                 <form method="post" asp-page-handler="Delete" asp-route-id="@g.Id" class="d-inline"
@@ -64,43 +69,45 @@
                 </form>
             }
         </div>
-        <div class="card-body">
-            @if (isBuiltIn)
-            {
-                <p class="text-muted small mb-0">
-                    Built in — every camera is automatically a member (@members.Count total). Nothing
-                    to manage here; membership follows camera creation/deletion on its own.
-                </p>
-            }
-            else
-            {
-                @if (members.Count == 0)
+        <div class="collapse show" id="@bodyId">
+            <div class="card-body">
+                @if (isBuiltIn)
                 {
-                    <p class="text-muted small mb-2">No cameras in this group yet.</p>
+                    <p class="text-muted small mb-0">
+                        Built in — every camera is automatically a member (@members.Count total).
+                        Nothing to manage here; membership follows camera creation/deletion on its own.
+                    </p>
                 }
                 else
                 {
-                    <ul class="list-group list-group-flush mb-2">
-                        @foreach (var c in members)
-                        {
-                            <li class="list-group-item d-flex justify-content-between align-items-center px-0">
-                                <span>@c.Name</span>
-                                <form method="post" asp-page-handler="RemoveCamera" class="d-inline">
-                                    <input type="hidden" name="cameraId" value="@c.Id" />
-                                    <input type="hidden" name="groupId" value="@g.Id" />
-                                    <button type="submit" class="btn btn-sm btn-outline-secondary">Remove</button>
-                                </form>
-                            </li>
-                        }
-                    </ul>
-                }
+                    @if (members.Count == 0)
+                    {
+                        <p class="text-muted small mb-2">No cameras in this group yet.</p>
+                    }
+                    else
+                    {
+                        <ul class="list-group list-group-flush mb-2">
+                            @foreach (var c in members)
+                            {
+                                <li class="list-group-item d-flex justify-content-between align-items-center px-0">
+                                    <span>@c.Name</span>
+                                    <form method="post" asp-page-handler="RemoveCamera" class="d-inline">
+                                        <input type="hidden" name="cameraId" value="@c.Id" />
+                                        <input type="hidden" name="groupId" value="@g.Id" />
+                                        <button type="submit" class="btn btn-sm btn-outline-secondary">Remove</button>
+                                    </form>
+                                </li>
+                            }
+                        </ul>
+                    }
 
-                <button type="button" class="btn btn-sm btn-primary manage-cameras-btn" data-bs-toggle="modal" data-bs-target="#manageCamerasModal"
-                        data-group-id="@g.Id" data-group-name="@g.Name"
-                        data-member-ids="@string.Join(",", members.Select(m => m.Id))">
-                    Manage cameras
-                </button>
-            }
+                    <button type="button" class="btn btn-sm btn-primary manage-cameras-btn" data-bs-toggle="modal" data-bs-target="#manageCamerasModal"
+                            data-group-id="@g.Id" data-group-name="@g.Name"
+                            data-member-ids="@string.Join(",", members.Select(m => m.Id))">
+                        Manage cameras
+                    </button>
+                }
+            </div>
         </div>
     </div>
 }
@@ -155,6 +162,15 @@
         </div>
     </div>
 </div>
+
+@section Styles {
+    <style>
+        /* Rotates the collapse chevron to match Bootstrap's own aria-expanded state on the toggle
+           button — set automatically by the collapse plugin, no extra JS needed to track it. */
+        .group-collapse-icon { display: inline-block; transition: transform .15s ease-in-out; }
+        .group-collapse-toggle[aria-expanded="false"] .group-collapse-icon { transform: rotate(-90deg); }
+    </style>
+}
 
 @section Scripts {
     <script>

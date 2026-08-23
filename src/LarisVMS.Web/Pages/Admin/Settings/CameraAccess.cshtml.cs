@@ -38,6 +38,26 @@ public class CameraAccessModel(ApplicationDbContext db, IAuditService auditServi
     public List<Microsoft.AspNetCore.Identity.IdentityRole> Roles { get; set; } = [];
     public List<CameraGroup> Groups { get; set; } = [];
     public List<Camera> Cameras { get; set; } = [];
+
+    private Dictionary<Guid, CameraGroup>? _groupsById;
+    /// <summary>"Site A / Building 1 / Floor 2" — the scope picker's own option text used to show
+    /// MaterializedPath verbatim (a slash-joined chain of the group's own and every ancestor's raw
+    /// Guid, e.g. "/3fa85f64-.../7c9e6679-.../ Floor 2"), not names, since MaterializedPath is built
+    /// from ids specifically so renaming a group never has to cascade-rewrite every descendant's path
+    /// — it was never meant to be displayed. This walks ParentId instead, resolving each ancestor's own
+    /// Name from the already-loaded flat Groups list.</summary>
+    public string GroupPathName(CameraGroup group)
+    {
+        _groupsById ??= Groups.ToDictionary(g => g.Id);
+        var names = new List<string>();
+        CameraGroup? current = group;
+        while (current is not null)
+        {
+            names.Insert(0, current.Name);
+            current = current.ParentId is { } parentId ? _groupsById.GetValueOrDefault(parentId) : null;
+        }
+        return string.Join(" / ", names);
+    }
     public string? ErrorMessage { get; set; }
     public string? SavedMessage { get; set; }
 

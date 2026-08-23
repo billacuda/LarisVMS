@@ -5,6 +5,61 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.153.0] - 2026-08-23
+
+### Added
+
+- **Field-level help text collapses behind an ℹ️ icon (hover or click to reveal) instead of always
+  sitting under the field**, across every admin/settings page and `Cameras/Edit` where it had piled up
+  enough to make the form itself read as more help text than form: `Cameras/Edit`, `Admin > Settings >
+  Branding/Recording/Storage and Retention/Nodes/Logs/Events/Security/LiveView/Cameras/Backups`,
+  `Admin > Settings > Permissions > Roles`, and `Admin > Alerts > Edit`. New `help-popover.js`
+  (Bootstrap Popover, `trigger: 'hover focus'` — a click already focuses the icon, so this covers both
+  asks from one config without needing a separate outside-click dismiss handler) sources each popover's
+  content from a same-page `.help-text-source` element via an explicit `data-help-target` id, not DOM
+  proximity — needed because a few fields (Recording mode override, in particular) already had several
+  conditional help blocks stacked after one input. Loaded globally in `_Layout.cshtml`, inert on any
+  page with no `.help-icon` elements. Genuinely actionable warnings (a missing Motion zone/schedule
+  window/event rule) stay as visible, always-shown text — only the plain explanatory blocks collapse.
+
+### Changed
+
+- **`Cameras/Edit` no longer edits group membership** — it now shows an existing camera's current
+  groups as plain badges (built-in "All Cameras" excluded, same as every other "current groups" display
+  in this app) with a link to `Cameras/Groups`, which already owns adding/removing a camera to/from a
+  group via its "Manage cameras" popup. Removes the multi-select, its site-grouped `<optgroup>`
+  rendering, and the `SetCameraGroupsAsync` call from this page's save handler entirely — the "Add
+  camera" flow no longer offers an initial group either (every new camera still gets the built-in "All
+  Cameras" group automatically, per `CameraService.AddAsync`).
+
+Web-only, no node change.
+
+## [0.152.0] - 2026-08-23
+
+### Added
+
+- **`Cameras > Groups` cards are now collapsible.** Each group's name is a toggle (Bootstrap collapse,
+  chevron rotates to match) that shows/hides its body — the member list and Manage Cameras button, or
+  the built-in "All Cameras" group's own summary line — with a member count now shown right in the
+  header regardless of collapse state. Expanded by default, same as today's behavior; useful once a
+  fleet has enough sites/sub-groups (plus the built-in group, v0.151.0) that the page runs long.
+
+Web-only, no node change.
+
+## [0.151.1] - 2026-08-23
+
+### Fixed
+
+- **`Admin > Settings > Camera Access`'s group picker showed raw GUIDs instead of readable names** —
+  e.g. `/3fa85f64-.../7c9e6679-.../ Floor 2` instead of `Site A / Building 1 / Floor 2`. Reported live.
+  The `<option>` text rendered `MaterializedPath` directly, but that column is built from each
+  ancestor's own *id* (deliberately — so renaming a group never has to cascade-rewrite every
+  descendant's path) and was never meant to be displayed. New `CameraAccessModel.GroupPathName` walks
+  `ParentId` instead, resolving each ancestor's real `Name` from the already-loaded group list, and
+  both the "Add a grant" and per-grant "Edit" pickers now use it.
+
+Web-only, no node change.
+
 ## [0.151.0] - 2026-08-23
 
 ### Added

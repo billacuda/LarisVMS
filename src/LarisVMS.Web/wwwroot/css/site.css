@@ -183,3 +183,22 @@ body {
     border: 1px solid rgba(255, 255, 255, 0.5);
     border-radius: 0.25rem;
 }
+
+/* help-popover.js: a field's help text collapses behind this icon (hover/focus reveals it as a
+   popover) instead of always sitting under the field — several admin pages had enough of these
+   that the form itself was more help text than form. The [id] source div (class help-text-source)
+   stays in the DOM as the popover's content but is never shown directly. */
+.help-icon {
+    display: inline-flex;
+    align-items: center;
+    background: none;
+    border: none;
+    padding: 0 0 0 0.25rem;
+    line-height: 1;
+    cursor: help;
+    font-size: 0.85em;
+    vertical-align: text-top;
+}
+.help-text-source {
+    display: none;
+}

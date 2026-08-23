@@ -129,14 +129,17 @@
     <h2 class="h5 mt-4">Event tag position</h2>
     <div class="row g-3">
         <div class="col-sm-6">
-            <label class="form-label">Corner</label>
+            <label class="form-label">
+                Corner
+                <button type="button" class="help-icon" data-help-target="cornerHelp" tabindex="0" aria-label="Help">ℹ️</button>
+            </label>
             <select asp-for="EventBadgeCornerValue" class="form-select">
                 @foreach (var corner in LarisVMS.Core.EventBadgeCorner.All)
                 {
                     <option value="@corner">@LarisVMS.Core.EventBadgeCorner.Label(corner)</option>
                 }
             </select>
-            <div class="form-text">
+            <div class="help-text-source" id="cornerHelp">
                 Which corner of a live tile the motion badge and object-detection badges appear in.
                 The bottom corners already hold other controls — a tile's hover controls sit bottom
                 right, and a cell switched into playback mode puts its mini timeline bottom left —

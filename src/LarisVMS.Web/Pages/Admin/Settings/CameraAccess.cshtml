@@ -71,7 +71,7 @@
                                         <option value="">(choose a group)</option>
                                         @foreach (var grp in Model.Groups)
                                         {
-                                            <option value="@grp.Id" selected="@(g.ScopeType == CameraAccessScopeType.Group && g.ScopeId == grp.Id)">@grp.MaterializedPath @grp.Name</option>
+                                            <option value="@grp.Id" selected="@(g.ScopeType == CameraAccessScopeType.Group && g.ScopeId == grp.Id)">@Model.GroupPathName(grp)</option>
                                         }
                                     </select>
                                     <select class="form-select scope-id-camera" style="display:none;">
@@ -137,7 +137,7 @@
                     <option value="">(choose a group)</option>
                     @foreach (var grp in Model.Groups)
                     {
-                        <option value="@grp.Id">@grp.MaterializedPath @grp.Name</option>
+                        <option value="@grp.Id">@Model.GroupPathName(grp)</option>
                     }
                 </select>
                 <select class="form-select scope-id-camera" style="display:none;">

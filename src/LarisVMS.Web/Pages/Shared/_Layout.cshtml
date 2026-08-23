@@ -230,6 +230,9 @@
     @* Inert on any page without a form[data-remember-filters], so it costs nothing to load globally
        rather than adding a Scripts section to each filter page that wants it. *@
     <script src="~/js/remember-filters.js" asp-append-version="true"></script>
+    @* Same "inert unless a page opts in" reasoning — a page with no .help-icon elements just finds
+       nothing to wire up. *@
+    <script src="~/js/help-popover.js" asp-append-version="true"></script>
     @await RenderSectionAsync("Scripts", required: false)
 </body>
 </html>

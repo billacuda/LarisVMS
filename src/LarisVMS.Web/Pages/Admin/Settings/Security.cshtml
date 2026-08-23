@@ -24,17 +24,23 @@
 
 <form method="post" class="row g-3" style="max-width: 720px;">
     <div class="col-12">
-        <label class="form-label">Management / API</label>
+        <label class="form-label">
+            Management / API
+            <button type="button" class="help-icon" data-help-target="mgmtListHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
         <textarea asp-for="ManagementAllowList" class="form-control font-monospace" rows="6"
                   placeholder="10.0.0.0/24&#10;192.168.1.50&#10;# office VPN"></textarea>
-        <div class="form-text">Everything except live view and playback — the admin UI, and the REST API.</div>
+        <div class="help-text-source" id="mgmtListHelp">Everything except live view and playback — the admin UI, and the REST API.</div>
     </div>
 
     <div class="col-12">
-        <label class="form-label">Live View / Playback</label>
+        <label class="form-label">
+            Live View / Playback
+            <button type="button" class="help-icon" data-help-target="liveViewListHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
         <textarea asp-for="LiveViewAllowList" class="form-control font-monospace" rows="6"
                   placeholder="10.0.0.0/24"></textarea>
-        <div class="form-text">
+        <div class="help-text-source" id="liveViewListHelp">
             The <code>/live</code> WebSocket relay, <code>/playback-segment</code>,
             <code>/playback-thumbnail</code>, <code>/export-download</code>, and camera snapshots.
         </div>

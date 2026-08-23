@@ -19,9 +19,12 @@
     <div class="col-12">
         <div class="form-check form-switch mb-3">
             <input class="form-check-input" type="checkbox" asp-for="AdaptiveStreamingEnabled" id="adaptiveStreamingEnabled" />
-            <label class="form-check-label" for="adaptiveStreamingEnabled">Adaptive streaming enabled</label>
+            <label class="form-check-label" for="adaptiveStreamingEnabled">
+                Adaptive streaming enabled
+                <button type="button" class="help-icon" data-help-target="adaptiveHelp" tabindex="0" aria-label="Help">ℹ️</button>
+            </label>
         </div>
-        <div class="form-text">
+        <div class="help-text-source" id="adaptiveHelp">
             When on, a live tile too small to benefit from a camera's full resolution is shown its Sub
             stream instead of Main, cutting bandwidth and decode cost — the tile switches back to Main
             automatically once it's large enough (or fullscreen) to matter. Turning this off falls
@@ -41,9 +44,12 @@
         </p>
     </div>
     <div class="col-6">
-        <label class="form-label">Custom port</label>
+        <label class="form-label">
+            Custom port
+            <button type="button" class="help-icon" data-help-target="customPortHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
         <input asp-for="CustomPort" type="number" min="1" max="65535" class="form-control" placeholder="(none — everything on the same port)" />
-        <div class="form-text">
+        <div class="help-text-source" id="customPortHelp">
             Setting this alone doesn't open a new listening port — IIS's own site bindings do that.
             Add a matching <code>New-WebBinding</code> for this port on the same site first (see the
             README), <strong>then</strong> set it here. Once set, live/playback routes stop
