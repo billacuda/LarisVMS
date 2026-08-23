@@ -63,8 +63,8 @@ public class CameraAccessServiceTests
     public void AGroupGrantIncludesEveryCameraDirectlyInThatGroup()
     {
         var groupId = Guid.NewGuid();
-        var camInGroup = new CameraAccessService.CameraGroupInfo(Guid.NewGuid(), "/site-a/");
-        var camElsewhere = new CameraAccessService.CameraGroupInfo(Guid.NewGuid(), "/site-b/");
+        var camInGroup = new CameraAccessService.CameraGroupInfo(Guid.NewGuid(), ["/site-a/"]);
+        var camElsewhere = new CameraAccessService.CameraGroupInfo(Guid.NewGuid(), ["/site-b/"]);
         var rows = new[] { Row(CameraAccessScopeType.Group, groupId, CameraAccessActions.View) };
         var paths = new Dictionary<Guid, string> { [groupId] = "/site-a/" };
 
@@ -80,7 +80,7 @@ public class CameraAccessServiceTests
         // Granting "/site-a/" must also reach a camera whose own group is "/site-a/bldg-2/" —
         // the whole reason CameraGroup carries a materialized path.
         var groupId = Guid.NewGuid();
-        var camInDescendant = new CameraAccessService.CameraGroupInfo(Guid.NewGuid(), "/site-a/bldg-2/");
+        var camInDescendant = new CameraAccessService.CameraGroupInfo(Guid.NewGuid(), ["/site-a/bldg-2/"]);
         var rows = new[] { Row(CameraAccessScopeType.Group, groupId, CameraAccessActions.View) };
         var paths = new Dictionary<Guid, string> { [groupId] = "/site-a/" };
 
@@ -96,7 +96,7 @@ public class CameraAccessServiceTests
         // trailing slash convention would falsely include a sibling whose name happens to start
         // the same way.
         var groupId = Guid.NewGuid();
-        var sibling = new CameraAccessService.CameraGroupInfo(Guid.NewGuid(), "/site-ab/");
+        var sibling = new CameraAccessService.CameraGroupInfo(Guid.NewGuid(), ["/site-ab/"]);
         var rows = new[] { Row(CameraAccessScopeType.Group, groupId, CameraAccessActions.View) };
         var paths = new Dictionary<Guid, string> { [groupId] = "/site-a/" };
 
@@ -110,7 +110,7 @@ public class CameraAccessServiceTests
     {
         var directCam = Guid.NewGuid();
         var groupId = Guid.NewGuid();
-        var camInGroup = new CameraAccessService.CameraGroupInfo(Guid.NewGuid(), "/site-a/");
+        var camInGroup = new CameraAccessService.CameraGroupInfo(Guid.NewGuid(), ["/site-a/"]);
         var rows = new[]
         {
             Row(CameraAccessScopeType.Camera, directCam, CameraAccessActions.View),
@@ -129,13 +129,30 @@ public class CameraAccessServiceTests
     public void ACameraWithNoGroupIsNeverReachedByAGroupGrant()
     {
         var groupId = Guid.NewGuid();
-        var ungrouped = new CameraAccessService.CameraGroupInfo(Guid.NewGuid(), null);
+        var ungrouped = new CameraAccessService.CameraGroupInfo(Guid.NewGuid(), []);
         var rows = new[] { Row(CameraAccessScopeType.Group, groupId, CameraAccessActions.View) };
         var paths = new Dictionary<Guid, string> { [groupId] = "/site-a/" };
 
         var result = CameraAccessService.Resolve(rows, CameraAccessActions.View, [ungrouped], paths);
 
         Assert.DoesNotContain(ungrouped.CameraId, result!);
+    }
+
+    [Fact]
+    public void ACameraInMultipleGroupsIsReachedByAGrantOnEitherOne()
+    {
+        // Roles/permissions overhaul: a camera can belong to several groups at once (as long as they
+        // share one Site — CameraGroupPolicy enforces that at the write side, not here) — a grant on
+        // just one of them must still reach the camera.
+        var groupAId = Guid.NewGuid();
+        var groupBId = Guid.NewGuid();
+        var camInBoth = new CameraAccessService.CameraGroupInfo(Guid.NewGuid(), ["/site-a/wing-1/", "/site-a/wing-2/"]);
+        var rows = new[] { Row(CameraAccessScopeType.Group, groupBId, CameraAccessActions.View) };
+        var paths = new Dictionary<Guid, string> { [groupAId] = "/site-a/wing-1/", [groupBId] = "/site-a/wing-2/" };
+
+        var result = CameraAccessService.Resolve(rows, CameraAccessActions.View, [camInBoth], paths);
+
+        Assert.Contains(camInBoth.CameraId, result!);
     }
 
     // ── Export is a sub-permission of Playback ──────────────────────────────────

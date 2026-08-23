@@ -48,14 +48,13 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
 
     // An Expression<Func<...>>, not a plain method — EF Core needs the actual expression tree (not a
     // compiled delegate) to translate the projection into a SQL column list plus the joins implied by
-    // Group/Capabilities/Streams, which is what makes Select(ProjectWithoutCredentials) below work
+    // Groups/Capabilities/Streams, which is what makes Select(ProjectWithoutCredentials) below work
     // without any .Include() calls and, critically, without ever selecting the Username/Password
     // columns into the query at all.
     private static readonly Expression<Func<Camera, Camera>> ProjectWithoutCredentials = c => new Camera
     {
         Id = c.Id,
         NodeId = c.NodeId,
-        GroupId = c.GroupId,
         Name = c.Name,
         Host = c.Host,
         OnvifPort = c.OnvifPort,
@@ -73,7 +72,7 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
         IsEnabled = c.IsEnabled,
         CreatedAt = c.CreatedAt,
         LastProbedAt = c.LastProbedAt,
-        Group = c.Group,
+        Groups = c.Groups,
         Node = c.Node,
         Capabilities = c.Capabilities,
         Streams = c.Streams
@@ -96,10 +95,18 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
             DeviceServiceUri = request.DeviceServiceUri,
             Username = string.IsNullOrWhiteSpace(request.Username) ? null : request.Username,
             Password = string.IsNullOrWhiteSpace(request.Password) ? null : request.Password,
-            GroupId = request.GroupId,
             IsEnabled = true,
             CreatedAt = DateTime.UtcNow
         };
+
+        // One initial group at creation time, same UX as before this camera could belong to several —
+        // more groups are added afterward via SetCameraGroupsAsync (Cameras/Edit's own picker, or
+        // Groups.cshtml's per-group camera picker), not here.
+        if (request.GroupId is { } groupId)
+        {
+            var group = await db.CameraGroups.FindAsync([groupId], ct);
+            if (group is not null) camera.Groups.Add(group);
+        }
 
         db.Cameras.Add(camera);
         await db.SaveChangesAsync(ct);
@@ -109,14 +116,13 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
         return camera;
     }
 
-    public async Task UpdateAsync(Guid id, string name, Guid? groupId, Guid? nodeId, string? username, string? password,
+    public async Task UpdateAsync(Guid id, string name, Guid? nodeId, string? username, string? password,
         bool isEnabled, long? quotaBytes, string? deviceServiceUri = null, CancellationToken ct = default)
     {
         var camera = await db.Cameras.FirstOrDefaultAsync(c => c.Id == id, ct)
             ?? throw new InvalidOperationException("Camera not found.");
 
         camera.Name = name;
-        camera.GroupId = groupId;
         camera.NodeId = nodeId;
         camera.IsEnabled = isEnabled;
         camera.QuotaBytes = quotaBytes;
@@ -150,6 +156,32 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
             return;
         }
 
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task SetCameraGroupsAsync(Guid cameraId, IReadOnlyList<Guid> groupIds, CancellationToken ct = default)
+    {
+        var camera = await db.Cameras.Include(c => c.Groups).FirstOrDefaultAsync(c => c.Id == cameraId, ct)
+            ?? throw new InvalidOperationException("Camera not found.");
+
+        var distinctIds = groupIds.Distinct().ToList();
+        if (distinctIds.Count > 0)
+        {
+            // Small table (sites/buildings/floors), loaded whole rather than filtered — CameraGroupPolicy
+            // needs every ancestor's ParentId to walk up to each candidate group's Site, not just the
+            // candidates themselves.
+            var parentIdByGroupId = await db.CameraGroups.AsNoTracking()
+                .Select(g => new { g.Id, g.ParentId }).ToDictionaryAsync(g => g.Id, g => g.ParentId, ct);
+            if (!CameraGroupPolicy.AllShareOneSite(distinctIds, parentIdByGroupId))
+                throw new InvalidOperationException("A camera can only belong to groups under a single site.");
+        }
+
+        var targetGroups = distinctIds.Count == 0
+            ? []
+            : await db.CameraGroups.Where(g => distinctIds.Contains(g.Id)).ToListAsync(ct);
+
+        camera.Groups.Clear();
+        foreach (var group in targetGroups) camera.Groups.Add(group);
         await db.SaveChangesAsync(ct);
     }
 
@@ -207,7 +239,10 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
 
     public async Task<int> SplitChannelsAsync(Guid cameraId, CancellationToken ct = default)
     {
-        var camera = await db.Cameras.FirstOrDefaultAsync(c => c.Id == cameraId, ct)
+        // .Include(c => c.Groups): each split-off sibling below copies this camera's group
+        // membership, which needs the collection actually loaded rather than the empty in-memory
+        // default a plain FirstOrDefaultAsync would leave it as.
+        var camera = await db.Cameras.Include(c => c.Groups).FirstOrDefaultAsync(c => c.Id == cameraId, ct)
             ?? throw new InvalidOperationException("Camera not found.");
 
         var summary = await ProbeAsync(cameraId, ct);
@@ -250,7 +285,7 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
                 DeviceServiceUri = camera.DeviceServiceUri,
                 Username = camera.Username,
                 Password = camera.Password,
-                GroupId = camera.GroupId,
+                Groups = camera.Groups.ToList(),
                 NodeId = camera.NodeId,
                 VideoSourceToken = channels[i],
                 IsEnabled = true,

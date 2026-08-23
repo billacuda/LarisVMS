@@ -12,6 +12,9 @@ public class CameraGroup
 
     public CameraGroup? Parent { get; set; }
     public ICollection<CameraGroup> Children { get; set; } = [];
+
+    /// <summary>Every camera belonging to this group — many-to-many (see Camera.Groups' own doc
+    /// comment for the single-site invariant CameraGroupPolicy enforces on top of this).</summary>
     public ICollection<Camera> Cameras { get; set; } = [];
 
     /// <summary>A top-level node is a "Site" in the roles/permissions overhaul's org &gt; site &gt;

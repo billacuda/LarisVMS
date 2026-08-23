@@ -7,8 +7,7 @@
 <p class="text-muted">
     Sites / buildings / floors — used to organize cameras, to scope settings overrides, and as the
     scope a role's <a asp-page="/Admin/Settings/CameraAccess">Camera Access</a> grant narrows down to.
-    Add or move a camera between groups directly below — the same change as picking a Group on that
-    camera's own <a asp-page="/Cameras/Edit">Edit</a> page.
+    A camera can belong to any number of groups, as long as they're all under the same top-level site.
 </p>
 
 @if (!string.IsNullOrEmpty(Model.ErrorMessage))
@@ -47,8 +46,7 @@
 
 @foreach (var g in Model.Groups)
 {
-    var members = Model.Cameras.Where(c => c.GroupId == g.Id).OrderBy(c => c.Name).ToList();
-    var unassignedOrElsewhere = Model.Cameras.Where(c => c.GroupId != g.Id).OrderBy(c => c.Name).ToList();
+    var members = Model.Cameras.Where(c => c.Groups.Any(mg => mg.Id == g.Id)).OrderBy(c => c.Name).ToList();
 
     <div class="card mb-3" style="max-width: 640px;">
         <div class="card-header d-flex justify-content-between align-items-center">
@@ -70,8 +68,9 @@
                     {
                         <li class="list-group-item d-flex justify-content-between align-items-center px-0">
                             <span>@c.Name</span>
-                            <form method="post" asp-page-handler="AssignCamera" class="d-inline">
+                            <form method="post" asp-page-handler="RemoveCamera" class="d-inline">
                                 <input type="hidden" name="cameraId" value="@c.Id" />
+                                <input type="hidden" name="groupId" value="@g.Id" />
                                 <button type="submit" class="btn btn-sm btn-outline-secondary">Remove</button>
                             </form>
                         </li>
@@ -79,22 +78,87 @@
                 </ul>
             }
 
-            @if (unassignedOrElsewhere.Count > 0)
-            {
-                <form method="post" asp-page-handler="AssignCamera" class="d-flex gap-2 align-items-end">
-                    <div class="flex-grow-1">
-                        <label class="form-label small mb-1">Add a camera</label>
-                        <select name="cameraId" class="form-select form-select-sm">
-                            @foreach (var c in unassignedOrElsewhere)
-                            {
-                                <option value="@c.Id">@c.Name@(c.GroupId is not null ? $" (currently in {Model.Groups.FirstOrDefault(og => og.Id == c.GroupId)?.Name})" : "")</option>
-                            }
-                        </select>
-                    </div>
-                    <input type="hidden" name="groupId" value="@g.Id" />
-                    <button type="submit" class="btn btn-sm btn-primary">Add</button>
-                </form>
-            }
+            <button type="button" class="btn btn-sm btn-primary manage-cameras-btn" data-bs-toggle="modal" data-bs-target="#manageCamerasModal"
+                    data-group-id="@g.Id" data-group-name="@g.Name"
+                    data-member-ids="@string.Join(",", members.Select(m => m.Id))">
+                Manage cameras
+            </button>
         </div>
     </div>
+}
+
+@if (Model.Groups.Count == 0)
+{
+    <p class="text-muted">No groups yet — add one above.</p>
+}
+
+<div class="modal fade" id="manageCamerasModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-scrollable">
+        <div class="modal-content">
+            <form method="post" asp-page-handler="SetGroupCameras">
+                <input type="hidden" name="groupId" id="manageCamerasGroupId" />
+                <div class="modal-header">
+                    <h5 class="modal-title">Cameras in <span id="manageCamerasGroupName"></span></h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    @if (Model.Cameras.Count == 0)
+                    {
+                        <p class="text-muted mb-0">No cameras exist yet.</p>
+                    }
+                    else
+                    {
+                        @foreach (var c in Model.Cameras)
+                        {
+                            <div class="form-check">
+                                <input class="form-check-input manage-cameras-checkbox" type="checkbox" name="cameraIds"
+                                       value="@c.Id" id="managecam-@c.Id" data-camera-id="@c.Id" />
+                                <label class="form-check-label" for="managecam-@c.Id">
+                                    @c.Name
+                                    @if (c.Groups.Count > 0)
+                                    {
+                                        <span class="text-muted small">(currently: @string.Join(", ", c.Groups.Select(cg => cg.Name)))</span>
+                                    }
+                                </label>
+                            </div>
+                        }
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+    <script>
+        // The one shared modal above is reused for every group's "Manage cameras" button rather than
+        // rendering N modals (one per group) with N full copies of the camera checkbox list — its
+        // show.bs.modal listener reads which group was clicked from the triggering button's own data
+        // attributes and (re)populates the form's hidden groupId, heading, and checkbox states before
+        // Bootstrap actually shows it.
+        (function () {
+            var modal = document.getElementById('manageCamerasModal');
+            if (!modal) return;
+
+            modal.addEventListener('show.bs.modal', function (event) {
+                var btn = event.relatedTarget;
+                if (!btn) return;
+
+                var groupId = btn.getAttribute('data-group-id');
+                var groupName = btn.getAttribute('data-group-name');
+                var memberIds = (btn.getAttribute('data-member-ids') || '').split(',').filter(Boolean);
+
+                document.getElementById('manageCamerasGroupId').value = groupId;
+                document.getElementById('manageCamerasGroupName').textContent = groupName;
+
+                modal.querySelectorAll('.manage-cameras-checkbox').forEach(function (cb) {
+                    cb.checked = memberIds.indexOf(cb.getAttribute('data-camera-id')) !== -1;
+                });
+            });
+        })();
+    </script>
 }

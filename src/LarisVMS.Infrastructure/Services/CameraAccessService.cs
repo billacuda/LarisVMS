@@ -48,13 +48,16 @@ public class CameraAccessService(ApplicationDbContext db) : ICameraAccessService
 
         var cameras = await db.Cameras
             .AsNoTracking()
-            .Select(c => new CameraGroupInfo(c.Id, c.Group != null ? c.Group.MaterializedPath : null))
+            .Select(c => new CameraGroupInfo(c.Id, c.Groups.Select(g => g.MaterializedPath).ToList()))
             .ToListAsync(ct);
 
         return Resolve(rows, action, cameras, groupPathsById);
     }
 
-    internal readonly record struct CameraGroupInfo(Guid CameraId, string? GroupMaterializedPath);
+    /// <summary>GroupMaterializedPaths: every group this camera belongs to (roles/permissions
+    /// overhaul, a camera can belong to several groups as long as they share one Site — see
+    /// CameraGroupPolicy) — empty for a camera in no group at all.</summary>
+    internal readonly record struct CameraGroupInfo(Guid CameraId, IReadOnlyList<string> GroupMaterializedPaths);
 
     /// <summary>Pure resolution over already-fetched rows — unit-tested directly
     /// (CameraAccessServiceTests) without a real DbContext.</summary>
@@ -101,8 +104,8 @@ public class CameraAccessService(ApplicationDbContext db) : ICameraAccessService
 
         foreach (var camera in cameras)
         {
-            if (camera.GroupMaterializedPath is null) continue;
-            if (grantedGroupPaths.Any(p => camera.GroupMaterializedPath.StartsWith(p!, StringComparison.Ordinal)))
+            if (camera.GroupMaterializedPaths.Any(path =>
+                    grantedGroupPaths.Any(p => path.StartsWith(p!, StringComparison.Ordinal))))
                 result.Add(camera.CameraId);
         }
 

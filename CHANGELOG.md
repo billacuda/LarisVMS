@@ -5,6 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.148.1] - 2026-08-23
+
+### Fixed
+
+- **Double-clicking a camera fullscreen on Views → Play (live) showed several seconds of black
+  screen instead of switching instantly**, confirmed live via a browser console trace: `render()` —
+  which tears every camera's live session down and restarts them — was firing right as fullscreen
+  was entered. Root cause: entering the real Fullscreen API on one tile can itself change
+  `window.innerHeight`/`innerWidth` enough to cross the `shortQuery`/`phoneLandscapeQuery` layout
+  breakpoints (a mobile browser collapsing its address bar chrome on fullscreen entry is the most
+  common trigger) — those breakpoints' own `matchMedia` "mode changed" listener unconditionally
+  called `render()`, the same destructive full rebuild the existing plain-`resize` handler already
+  takes care to avoid. Fullscreen toggling no longer triggers a mode-change render — a genuine layout
+  mode change that happens while a tile is fullscreen (an actual orientation change mid-session) is
+  deferred and still applied once fullscreen ends, so nothing is silently dropped.
+
+Web-only, no node change.
+
+## [0.148.0] - 2026-08-23
+
+### Added
+
+- **A camera can now belong to more than one camera group at once**, as long as every group it's in
+  shares the same top-level site (a camera belongs to exactly one site, and any number of
+  groups/sub-groups beneath it — enforced by the new `CameraGroupPolicy`, not the schema). Replaces
+  the old single `Camera.GroupId` with a many-to-many membership, migrated automatically (every
+  existing camera's single group carries over as its one membership going in).
+  - `Cameras > Groups`: each group's "Manage cameras" button opens a popup listing every camera with
+    a checkbox, multi-select — replaces the previous one-at-a-time dropdown (v0.147.2). Saving diffs
+    the checked set against current membership and updates only what changed, preserving each
+    camera's other group memberships. A quick per-camera "Remove" stays on the group's own member
+    list for single removals without opening the popup.
+  - `Cameras/Edit`'s Group field is now a multi-select instead of a single dropdown.
+  - `Cameras/Index`'s Group column lists every group a camera belongs to.
+  - Camera Access grants scoped to a group now reach a camera through *any* of its group memberships,
+    not just one — `CameraAccessService`'s resolution logic (and its `CameraGroupInfo` type) updated
+    accordingly, with a new test proving a grant on one of a camera's several groups still reaches it.
+  - New `ICameraService.SetCameraGroupsAsync` (replaces group assignment inside `UpdateAsync`, which
+    only ever supported one group) — throws if the given groups don't all share one site, surfaced as
+    a normal save error.
+
+Web-only, no node change. 8 new unit tests (`CameraGroupPolicy`, plus one new `CameraAccessService`
+multi-group case).
+
+## [0.147.4] - 2026-08-23
+
+### Fixed
+
+- **Two collapsible admin panels were unreadable in dark mode — white background, white text.** Both
+  used Bootstrap's `.bg-light` utility for a "revealed panel" background: a static light-gray color
+  that (unlike `.card`, `.table`, and most Bootstrap 5.3 components) doesn't adapt to
+  `data-bs-theme="dark"`, while the surrounding page's own text color does. Camera Access's new
+  inline grant-edit row (this session, v0.147.3) and the Users page's existing "Reset password" row
+  both now use `.bg-body-secondary` instead, which is defined from a CSS custom property Bootstrap's
+  dark-mode selector does redefine.
+
 ## [0.147.3] - 2026-08-23
 
 ### Added

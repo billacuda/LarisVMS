@@ -122,7 +122,7 @@ else
                                 <span title="This camera's device service URL uses HTTPS">🔒</span>
                             }
                         </td>
-                        <td>@(c.Group?.Name ?? "—")</td>
+                        <td>@(c.Groups.Count > 0 ? string.Join(", ", c.Groups.Select(g => g.Name)) : "—")</td>
                         <td>
                             @if (c.Node is { } node)
                             {

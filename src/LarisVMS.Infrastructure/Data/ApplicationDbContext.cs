@@ -227,11 +227,14 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.VideoSourceToken).HasMaxLength(200);
             // ICameraIntegrationProvider.Key — a short stable slug like "dahua-cgi", not free text.
             e.Property(x => x.IntegrationKey).HasMaxLength(100);
-            e.HasOne(x => x.Group).WithMany(g => g.Cameras)
-                .HasForeignKey(x => x.GroupId).OnDelete(DeleteBehavior.SetNull);
             e.HasOne(x => x.Node).WithMany(n => n.Cameras)
                 .HasForeignKey(x => x.NodeId).OnDelete(DeleteBehavior.SetNull);
             e.HasIndex(x => x.Name);
+            // Many-to-many, EF-managed shadow join table — a camera can belong to any number of
+            // groups (CameraGroupPolicy enforces they all share one Site at the application layer).
+            // No explicit join entity: the relationship carries no columns of its own.
+            e.HasMany(x => x.Groups).WithMany(g => g.Cameras)
+                .UsingEntity(j => j.ToTable("CameraGroupMemberships"));
         });
 
         // ── CameraCapabilities (1:1 with Camera) ────────────────────────────

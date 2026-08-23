@@ -23,9 +23,18 @@ public interface ICameraService
     /// form always submits the camera's current address, so this only matters to a caller that
     /// deliberately omits it. A real change (most commonly http &lt;-&gt; https) re-derives
     /// Host/OnvifPort from the new URI, exactly as AddAsync does, and triggers a re-probe since the
-    /// device's own capability report can otherwise go stale against the new address.</summary>
-    Task UpdateAsync(Guid id, string name, Guid? groupId, Guid? nodeId, string? username, string? password,
+    /// device's own capability report can otherwise go stale against the new address. Group
+    /// membership isn't a parameter here — see SetCameraGroupsAsync, its own separate concern since a
+    /// camera can belong to any number of groups.</summary>
+    Task UpdateAsync(Guid id, string name, Guid? nodeId, string? username, string? password,
         bool isEnabled, long? quotaBytes, string? deviceServiceUri = null, CancellationToken ct = default);
+
+    /// <summary>Replaces a camera's entire group membership with exactly the given set — not an
+    /// incremental add/remove, so a caller changing only one group's membership (e.g. Groups.cshtml's
+    /// per-group camera picker) must compute the camera's full desired set first. Throws
+    /// InvalidOperationException if the given groups don't all share one top-level Site
+    /// (CameraGroupPolicy.AllShareOneSite) — a camera belongs to exactly one Site at a time.</summary>
+    Task SetCameraGroupsAsync(Guid cameraId, IReadOnlyList<Guid> groupIds, CancellationToken ct = default);
 
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 

@@ -734,10 +734,31 @@ window.larisvmsViewPlay = (function () {
 
         // A full re-render only when the layout *mode* actually changes — crossing either breakpoint
         // means a different layout, which does need the tiles rebuilt.
-        var onModeChange = function () { render(); };
+        //
+        // Except while a tile is fullscreen: entering/exiting the real Fullscreen API on one tile
+        // (fullscreen-tile.js) can itself change window.innerHeight/innerWidth enough to cross
+        // shortQuery/phoneLandscapeQuery's own breakpoints — mobile browsers collapsing their address
+        // bar chrome on fullscreen entry is the most common trigger, confirmed live: double-clicking a
+        // tile fullscreen fired this listener, which tore every camera's live session down and
+        // restarted them (render()'s own stopAll()), several seconds of black screen for what should
+        // have been an instant, zero-teardown fullscreen toggle — exactly the "far too heavy for a
+        // resize or a fullscreen toggle" scenario applyFittedRowHeight below exists to avoid, just
+        // reached through matchMedia instead of the plain resize listener. Deferred rather than
+        // dropped: a mode change that genuinely happens while fullscreen (an actual orientation change
+        // mid-session) still applies once fullscreen ends.
+        var pendingModeChange = false;
+        var onModeChange = function () {
+            if (document.fullscreenElement) { pendingModeChange = true; return; }
+            render();
+        };
         [phoneQuery, shortQuery, phoneLandscapeQuery].forEach(function (query) {
             if (query.addEventListener) query.addEventListener('change', onModeChange);
             else if (query.addListener) query.addListener(onModeChange); // Safari < 14
+        });
+        document.addEventListener('fullscreenchange', function () {
+            if (document.fullscreenElement || !pendingModeChange) return;
+            pendingModeChange = false;
+            render();
         });
 
         // Ordinary resizes inside the same mode only need the row height recomputed. Debounced and

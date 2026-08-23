@@ -10,7 +10,6 @@ public class Camera
     /// and probed before it has anywhere to record to.</summary>
     public Guid? NodeId { get; set; }
 
-    public Guid? GroupId { get; set; }
     public string Name { get; set; } = string.Empty;
 
     public string Host { get; set; } = string.Empty;
@@ -63,7 +62,13 @@ public class Camera
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? LastProbedAt { get; set; }
 
-    public CameraGroup? Group { get; set; }
+    /// <summary>Every camera group this camera belongs to — a camera can be in any number of groups,
+    /// but (enforced at the application layer, not the schema, by CameraGroupPolicy) all of them must
+    /// share the same top-level ancestor: a camera belongs to exactly one Site, and any number of
+    /// groups/sub-groups beneath it. Many-to-many (CameraGroupMemberships join table, EF-managed, no
+    /// explicit entity class needed since it carries no columns of its own).</summary>
+    public ICollection<CameraGroup> Groups { get; set; } = [];
+
     public Node? Node { get; set; }
     public CameraCapabilities? Capabilities { get; set; }
     public ICollection<CameraStream> Streams { get; set; } = [];

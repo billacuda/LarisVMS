@@ -1,7 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
-using LarisVMS.Core;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Interfaces;
 
@@ -19,14 +18,16 @@ public class GroupsModel(ICameraGroupService groupService, ICameraService camera
 
     public List<CameraGroup> Groups { get; set; } = [];
 
-    /// <summary>Every camera, loaded once per request — assigning a camera to a group here is a
-    /// small, contained write (just Camera.GroupId), not the full Cameras/Edit form, so this page
-    /// doesn't need cameraService.GetAsync's richer per-camera detail, only what the membership list
-    /// and the "add a camera" picker need to render.</summary>
+    /// <summary>Every camera, loaded once per request — the "manage this group's cameras" popup and
+    /// the per-group member list both read from this rather than each issuing their own query.</summary>
     public List<Camera> Cameras { get; set; } = [];
 
-    public string? ErrorMessage { get; set; }
-    public string? SavedMessage { get; set; }
+    // TempData, not plain properties: every handler on this page ends in RedirectToPage (so the
+    // camera-membership changes below are never resubmitted by a page refresh), and a plain property
+    // doesn't survive a redirect — the page model is recreated fresh on the following GET. Matches
+    // Admin/Nodes.cshtml.cs's own StatusMessage/StatusIsError convention for the same reason.
+    [TempData] public string? ErrorMessage { get; set; }
+    [TempData] public string? SavedMessage { get; set; }
 
     public async Task OnGetAsync()
     {
@@ -43,7 +44,6 @@ public class GroupsModel(ICameraGroupService groupService, ICameraService camera
 
     public async Task<IActionResult> OnPostDeleteAsync(Guid id)
     {
-        await LoadAsync();
         try
         {
             await groupService.DeleteAsync(id);
@@ -55,42 +55,71 @@ public class GroupsModel(ICameraGroupService groupService, ICameraService camera
         return RedirectToPage();
     }
 
-    /// <summary>Adds a camera to a group, or removes it (groupId null) — the same single-field write
-    /// Cameras/Edit's own form does via ICameraService.UpdateAsync, just reachable from the group's
-    /// own page instead of needing to open each camera individually. Every other field is passed back
-    /// unchanged (null username/password leaves credentials alone, same convention Edit's own form
-    /// relies on — see CameraService.UpdateAsync's doc comment).</summary>
-    public async Task<IActionResult> OnPostAssignCameraAsync(Guid cameraId, Guid? groupId, CancellationToken ct)
+    /// <summary>Sets exactly which cameras belong to one group — the "Manage cameras" popup's Save
+    /// action (checkbox per camera, multi-select). Diffs the submitted set against current membership
+    /// and, for each camera whose membership in *this* group actually changed, rewrites its full
+    /// group list via SetCameraGroupsAsync (add/remove just this one group, keep its others) — a
+    /// camera can belong to several groups, so this must never blindly overwrite the whole list with
+    /// just what's checked here. A camera whose new set would span more than one site is skipped with
+    /// its own error rather than aborting the whole batch, so an admin fixing one mistake doesn't lose
+    /// every other change in the same save.</summary>
+    public async Task<IActionResult> OnPostSetGroupCamerasAsync(Guid groupId, List<Guid> cameraIds, CancellationToken ct)
     {
         await LoadAsync(ct);
 
-        var camera = Cameras.FirstOrDefault(c => c.Id == cameraId);
-        if (camera is null)
+        var group = Groups.FirstOrDefault(g => g.Id == groupId);
+        if (group is null) { ErrorMessage = "That group no longer exists."; return RedirectToPage(); }
+
+        var currentMemberIds = Cameras.Where(c => c.Groups.Any(g => g.Id == groupId)).Select(c => c.Id).ToHashSet();
+        var targetMemberIds = cameraIds.ToHashSet();
+        var changedCameraIds = targetMemberIds.Except(currentMemberIds).Concat(currentMemberIds.Except(targetMemberIds)).ToList();
+
+        var errors = new List<string>();
+        var changedCount = 0;
+
+        foreach (var cameraId in changedCameraIds)
         {
-            ErrorMessage = "That camera no longer exists.";
-            return Page();
+            var camera = Cameras.FirstOrDefault(c => c.Id == cameraId);
+            if (camera is null) continue;
+
+            var newGroupIds = camera.Groups.Select(g => g.Id).ToHashSet();
+            var adding = targetMemberIds.Contains(cameraId);
+            if (adding) newGroupIds.Add(groupId); else newGroupIds.Remove(groupId);
+
+            try
+            {
+                await cameraService.SetCameraGroupsAsync(cameraId, newGroupIds.ToList(), ct);
+                changedCount++;
+                await auditService.LogAsync("Camera.Update", CurrentUserId, CurrentUserName, RemoteIp,
+                    $"{camera.Name} ({camera.Id}) — Group: {(adding ? "added" : "removed")} \"{group.Name}\"", ct);
+            }
+            catch (InvalidOperationException ex)
+            {
+                errors.Add($"{camera.Name}: {ex.Message}");
+            }
         }
 
-        var oldGroupName = GroupName(camera.GroupId);
-        var newGroupName = GroupName(groupId);
-
-        await cameraService.UpdateAsync(cameraId, camera.Name, groupId, camera.NodeId, null, null,
-            camera.IsEnabled, camera.QuotaBytes, ct: ct);
-
-        var details = AuditDiff.Build(AuditDiff.Of("Group", oldGroupName, newGroupName));
-        if (details is not null)
-            await auditService.LogAsync("Camera.Update", CurrentUserId, CurrentUserName, RemoteIp,
-                $"{camera.Name} ({camera.Id}) — {details}", ct);
-
-        SavedMessage = groupId is null
-            ? $"\"{camera.Name}\" removed from its group."
-            : $"\"{camera.Name}\" added to \"{newGroupName}\".";
+        if (errors.Count > 0) ErrorMessage = string.Join(" ", errors);
+        if (changedCount > 0) SavedMessage = $"Updated \"{group.Name}\" — {changedCount} camera(s) changed.";
         return RedirectToPage();
     }
 
-    private string GroupName(Guid? groupId) => groupId is null
-        ? "(none)"
-        : Groups.FirstOrDefault(g => g.Id == groupId)?.Name ?? groupId.ToString()!;
+    /// <summary>Quick single-camera removal from the group card's own member list, without opening
+    /// the full "Manage cameras" popup — keeps every other group membership that camera has.</summary>
+    public async Task<IActionResult> OnPostRemoveCameraAsync(Guid cameraId, Guid groupId, CancellationToken ct)
+    {
+        await LoadAsync(ct);
+        var camera = Cameras.FirstOrDefault(c => c.Id == cameraId);
+        if (camera is null) { ErrorMessage = "That camera no longer exists."; return RedirectToPage(); }
+
+        var newGroupIds = camera.Groups.Select(g => g.Id).Where(id => id != groupId).ToList();
+        await cameraService.SetCameraGroupsAsync(cameraId, newGroupIds, ct);
+        await auditService.LogAsync("Camera.Update", CurrentUserId, CurrentUserName, RemoteIp,
+            $"{camera.Name} ({camera.Id}) — Group: removed", ct);
+
+        SavedMessage = $"\"{camera.Name}\" removed from its group.";
+        return RedirectToPage();
+    }
 
     private string? CurrentUserId => User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
     private string? CurrentUserName => User.Identity?.Name;

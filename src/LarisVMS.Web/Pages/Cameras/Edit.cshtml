@@ -43,14 +43,17 @@
         }
     </div>
     <div class="col-12">
-        <label class="form-label">Group</label>
-        <select asp-for="GroupId" class="form-select">
-            <option value="">(none)</option>
+        <label class="form-label">Groups</label>
+        <select asp-for="GroupIds" class="form-select" multiple size="5">
             @foreach (var g in Model.Groups)
             {
-                <option value="@g.Id">@g.Name</option>
+                <option value="@g.Id" selected="@Model.GroupIds.Contains(g.Id)">@g.Name</option>
             }
         </select>
+        <div class="form-text">
+            Ctrl/Cmd-click to select more than one — every selected group must be under the same
+            site (a camera belongs to one site, but any number of groups beneath it).
+        </div>
     </div>
     <div class="col-12">
         <label class="form-label">Recorder node</label>

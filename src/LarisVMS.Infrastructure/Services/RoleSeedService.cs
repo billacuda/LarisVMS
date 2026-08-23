@@ -63,12 +63,12 @@ public class RoleSeedService(
     /// Cameras.Edit's single coarse gate with no independent enforcement point — API/Integration's
     /// need for that one field without general camera-edit rights isn't buildable without a
     /// dedicated integration-key surface this app doesn't have yet), "Cross-site visibility" (already
-    /// derived from RoleProfile.MaxScopeTier, pass 2 — not an independently grantable cell), and
-    /// "Assign cameras to groups/sites" (the Camera.GroupId field inside Cameras/Edit's single form —
-    /// folded into Cameras.Edit like "Add/remove cameras" and "Network/firmware configuration" below,
-    /// since Razor Pages [Authorize] can't gate one field within an already Cameras.Edit-gated page
-    /// without a per-handler authorization pattern this codebase deliberately doesn't use elsewhere
-    /// — see Admin/Nodes.cshtml.cs's own comment on the same MVC1001 limitation).
+    /// derived from RoleProfile.MaxScopeTier, pass 2 — not an independently grantable cell). "Assign
+    /// cameras to groups/sites" *was* deferred here for the same field-level-split reason as
+    /// "Add/remove cameras" and "Network/firmware configuration" below, but shipped as its own
+    /// dedicated surface shortly after this pass (ICameraService.SetCameraGroupsAsync, Cameras/Edit's
+    /// multi-select, and Cameras/Groups' own per-group camera picker) — CameraGroups.Edit gates the
+    /// latter, Cameras.Edit still gates the former (unchanged, still merged, still deferred).
     ///
     /// One deliberate deviation from the literal matrix: Technician gets Cameras.View even though its
     /// own row marks that "none" — Cameras.View is also this app's gate for Cameras/Index (the camera

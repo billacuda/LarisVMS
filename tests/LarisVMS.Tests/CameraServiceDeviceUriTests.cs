@@ -113,7 +113,7 @@ public class CameraServiceDeviceUriTests
         var (db, service) = NewService();
         var camera = await SeedCameraAsync(db);
 
-        await service.UpdateAsync(camera.Id, "Front Door", null, null, null, null, true, null,
+        await service.UpdateAsync(camera.Id, "Front Door", null, null, null, true, null,
             deviceServiceUri: "https://10.0.0.5/onvif/device_service");
 
         var updated = await db.Cameras.AsNoTracking().FirstAsync(c => c.Id == camera.Id);
@@ -130,7 +130,7 @@ public class CameraServiceDeviceUriTests
         var (db, service) = NewService();
         var camera = await SeedCameraAsync(db);
 
-        await service.UpdateAsync(camera.Id, "Front Door", null, null, null, null, true, null,
+        await service.UpdateAsync(camera.Id, "Front Door", null, null, null, true, null,
             deviceServiceUri: "http://10.0.0.9:8080/onvif/device_service");
 
         var updated = await db.Cameras.AsNoTracking().FirstAsync(c => c.Id == camera.Id);
@@ -144,7 +144,7 @@ public class CameraServiceDeviceUriTests
         var (db, service) = NewService();
         var camera = await SeedCameraAsync(db);
 
-        await service.UpdateAsync(camera.Id, "Front Door", null, null, null, null, true, null,
+        await service.UpdateAsync(camera.Id, "Front Door", null, null, null, true, null,
             deviceServiceUri: null);
 
         var updated = await db.Cameras.AsNoTracking().FirstAsync(c => c.Id == camera.Id);
@@ -160,7 +160,7 @@ public class CameraServiceDeviceUriTests
         var (db, service) = NewService();
         var camera = await SeedCameraAsync(db);
 
-        await service.UpdateAsync(camera.Id, "Front Door", null, null, null, null, true, null,
+        await service.UpdateAsync(camera.Id, "Front Door", null, null, null, true, null,
             deviceServiceUri: OriginalUri);
 
         var updated = await db.Cameras.AsNoTracking().FirstAsync(c => c.Id == camera.Id);
@@ -173,7 +173,7 @@ public class CameraServiceDeviceUriTests
         var (db, service) = NewService();
         var camera = await SeedCameraAsync(db);
 
-        await service.UpdateAsync(camera.Id, "Front Door", null, null, null, null, true, null,
+        await service.UpdateAsync(camera.Id, "Front Door", null, null, null, true, null,
             deviceServiceUri: "https://10.0.0.5/onvif/device_service");
 
         var updated = await db.Cameras.AsNoTracking().FirstAsync(c => c.Id == camera.Id);
@@ -188,7 +188,7 @@ public class CameraServiceDeviceUriTests
         var camera = await SeedCameraAsync(db);
 
         await Assert.ThrowsAsync<ArgumentException>(() =>
-            service.UpdateAsync(camera.Id, "Front Door", null, null, null, null, true, null,
+            service.UpdateAsync(camera.Id, "Front Door", null, null, null, true, null,
                 deviceServiceUri: "not a uri"));
 
         var unchanged = await db.Cameras.AsNoTracking().FirstAsync(c => c.Id == camera.Id);
