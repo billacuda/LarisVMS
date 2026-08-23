@@ -10,7 +10,7 @@ namespace LarisVMS.Infrastructure.Services;
 /// online status. Split out of Pages/Index.cshtml.cs's own OnGetAsync so the exact same computation
 /// backs both the server-rendered initial page load and GET /api/dashboard's 60s AJAX refresh — the
 /// two must never independently drift out of sync with each other.</summary>
-public class DashboardService(ICameraService cameraService, ICameraAccessService cameraAccess) : IDashboardService
+public class DashboardService(ICameraService cameraService, ICameraAccessService cameraAccess, INodeService nodeService) : IDashboardService
 {
     // Same 2-minute staleness window Admin/Nodes already uses for a node's own online/offline badge
     // — kept in sync rather than each page inventing its own threshold. Public: AlertEvaluationPolicy
@@ -60,5 +60,14 @@ public class DashboardService(ICameraService cameraService, ICameraAccessService
 
         return new DashboardHealthDto(rows, recordingCount, notReportingCount, disabledCount,
             nodesOnlineCount, nodesTotalCount);
+    }
+
+    public async Task<List<NodeStatusRow>> GetAllNodeStatusAsync(CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+        var nodes = await nodeService.ListAsync(ct);
+        return nodes.Select(n => new NodeStatusRow(n.Id, n.Name,
+            n.LastSeenAt is { } seen && now - seen < NodeOnlineWindow,
+            n.StorageFreeBytes, n.StorageTotalBytes, n.Version, n.Platform)).ToList();
     }
 }

@@ -1,0 +1,41 @@
+@page
+@model LarisVMS.Web.Pages.Admin.ApiKeys.EditModel
+@{
+    ViewData["Title"] = "Add API key";
+}
+<h1>Add API key</h1>
+
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger">@Model.ErrorMessage</div>
+}
+
+<form method="post" asp-page-handler="Save">
+    <div class="card mb-3">
+        <div class="card-body">
+            <div class="row g-3">
+                <div class="col-sm-6">
+                    <label class="form-label">Name</label>
+                    <input type="text" asp-for="Name" class="form-control" placeholder="e.g. Checkmk monitoring" />
+                </div>
+                <div class="col-sm-6">
+                    <label class="form-label">Role</label>
+                    <select asp-for="RoleId" class="form-select">
+                        <option value="">(choose a role)</option>
+                        @foreach (var r in Model.Roles)
+                        {
+                            <option value="@r.Id">@r.Name</option>
+                        }
+                    </select>
+                    <div class="form-text">
+                        The key acts with exactly this role's permissions — nothing more, nothing less.
+                        "API/Integration" is the built-in role shaped for this.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary">Create key</button>
+    <a asp-page="Index" class="btn btn-outline-secondary">Cancel</a>
+</form>

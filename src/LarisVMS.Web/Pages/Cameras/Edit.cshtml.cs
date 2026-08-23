@@ -37,6 +37,22 @@ public class EditModel(ICameraService cameraService, ICameraGroupService groupSe
 
     public bool IsNew => Id is null;
     public List<CameraGroup> Groups { get; set; } = [];
+
+    /// <summary>Indentation depth for the Groups multi-select — same formula as
+    /// Cameras/Groups.cshtml.cs's own Depth helper (that page's own group listing).</summary>
+    public int Depth(CameraGroup group) => group.MaterializedPath.Count(c => c == '/') - 1;
+
+    private Dictionary<Guid, Guid?>? _parentIdByGroupId;
+    /// <summary>Which top-level Site a group ultimately belongs to (CameraGroupPolicy) — built once
+    /// from Groups itself, since CameraGroup doesn't eagerly load Parent. Used to organize the Groups
+    /// multi-select into one &lt;optgroup&gt; per Site, so the "every selected group must share one
+    /// site" rule this page's own SetCameraGroupsAsync call enforces is visible up front instead of
+    /// only surfacing as a save-time error with no way to tell which groups conflicted.</summary>
+    public Guid SiteIdOf(CameraGroup group)
+    {
+        _parentIdByGroupId ??= Groups.ToDictionary(g => g.Id, g => g.ParentId);
+        return CameraGroupPolicy.SiteIdOf(group.Id, _parentIdByGroupId);
+    }
     public List<Node> Nodes { get; set; } = [];
     public CameraCapabilities? Capabilities { get; set; }
     public List<CameraStream> Streams { get; set; } = [];

@@ -132,7 +132,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
         {
             // Only stamped on success — a failed fetch (network blip, web tier restarting) should
             // retry on the next 5-minute sweep, not wait a full extra hour for the next scheduled one.
-            if (await ReconcileAsync(deletedPaths, ct)) _lastReconciledAtUtc = now;
+            if (await ReconcileAsync(config, storageRoot, deletedPaths, ct)) _lastReconciledAtUtc = now;
         }
 
         // Anything left over from a prior sweep's failed report rides along with this sweep's own
@@ -265,7 +265,68 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
     /// the web tier's side, "this file is gone" means the same thing regardless of which sweep
     /// noticed it. Returns false (and reports nothing) on a fetch failure so the caller can retry
     /// sooner than the next scheduled reconcile interval.</summary>
-    private async Task<bool> ReconcileAsync(List<string> deletedPaths, CancellationToken ct)
+    /// <summary>
+    /// Recovers footage that exists on disk but has no <c>Segment</c> row — the reverse of the
+    /// deletion reconciliation below, and the repair path for the reporting outage fixed in 0.150.0
+    /// (a node whose report loop died kept recording perfectly while the server was never told, so
+    /// hours of real footage sat on disk invisible to Playback). Also covers any future case where a
+    /// report was lost for good: the file on disk is the source of truth, so anything under a camera's
+    /// own recording directory that the web tier doesn't know about gets offered back to it.
+    ///
+    /// Safe to run repeatedly: <c>Segment.FilePath</c> is uniquely indexed and
+    /// <c>NodeService.RecordSegmentsAsync</c> already detaches duplicate-key rows rather than failing
+    /// the batch, so re-reporting something already known is a no-op rather than an error.
+    ///
+    /// Timestamps come from file metadata, never from the filename: ffmpeg's <c>-strftime</c> pattern
+    /// writes names in the node's *local* zone despite their trailing "Z" (see RecordingSession's own
+    /// comment on why that's deliberate), so parsing them as UTC would silently offset every recovered
+    /// segment by the node's UTC offset. CreationTimeUtc/LastWriteTimeUtc are unambiguous and are what
+    /// the normal reporting path already derives its own start/end from.
+    /// </summary>
+    private async Task ImportOrphanedSegmentsAsync(NodeConfigResponse config, string storageRoot,
+        List<string> knownPaths, CancellationToken ct)
+    {
+        var known = new HashSet<string>(knownPaths, StringComparer.OrdinalIgnoreCase);
+        var now = DateTime.UtcNow;
+        var toImport = new List<SegmentReportItem>();
+
+        foreach (var camera in config.Cameras)
+        {
+            var cameraDir = Path.Combine(storageRoot, $"cam-{camera.CameraId}", "main");
+            if (!Directory.Exists(cameraDir)) continue;
+
+            List<FileInfo> files;
+            // Same MinAge floor the eviction loops use — never touch the segment ffmpeg may still be
+            // writing, which has no meaningful end time yet and would import as a truncated row that
+            // the normal reporting path is about to report correctly anyway.
+            try { files = EnumerateEvictable(cameraDir, now); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                logger.LogWarning(ex, "Could not scan {CameraDir} for unreported footage — skipping this camera in this sweep.", cameraDir);
+                continue;
+            }
+
+            toImport.AddRange(SelectImportableSegments(camera.CameraId, files, known));
+        }
+
+        if (toImport.Count == 0) return;
+
+        try
+        {
+            await api.ReportSegmentsAsync(toImport, ct);
+            logger.LogInformation(
+                "Imported {Count} segment(s) found on disk with no database row — recovered footage is now visible in Playback.",
+                toImport.Count);
+        }
+        catch (Exception ex) when (NodeWorker.IsRetryable(ex, ct))
+        {
+            // Not re-queued: the files stay on disk, so the very next reconcile rediscovers them
+            // exactly the same way. Nothing is lost by simply trying again later.
+            logger.LogWarning(ex, "Failed to import {Count} recovered segment(s) — will retry next reconcile.", toImport.Count);
+        }
+    }
+
+    private async Task<bool> ReconcileAsync(NodeConfigResponse config, string storageRoot, List<string> deletedPaths, CancellationToken ct)
     {
         List<string> knownPaths;
         try
@@ -278,14 +339,62 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             return false;
         }
 
-        var missing = SelectMissingPaths(knownPaths);
-        if (missing.Count > 0)
+        // Guard 1: prove storage is genuinely reachable before believing any File.Exists miss. See
+        // StorageHealth's own doc comment — an unreachable SMB share reports every path as simply
+        // "not there", which would otherwise delete every row this node owns for footage still on disk.
+        if (!StorageHealth.CanReachStorage(storageRoot))
         {
-            logger.LogInformation(
-                "Reconciliation sweep found {Count} segment row(s) (of {Total} checked) pointing at files no longer on disk — reporting for cleanup.",
-                missing.Count, knownPaths.Count);
-            deletedPaths.AddRange(missing);
+            logger.LogWarning(
+                "Reconciliation sweep skipped — storage root {StorageRoot} did not pass a read/write probe, so a missing file can't be told apart from an unreachable share. Will retry next sweep.",
+                storageRoot);
+            return false;
         }
+
+        // The other direction: footage on disk the web tier has no row for. Runs before the deletion
+        // inference below and independently of it — an import can never lose data, so it doesn't need
+        // the same paranoia the deletion path does (the reachability probe above is enough).
+        await ImportOrphanedSegmentsAsync(config, storageRoot, knownPaths, ct);
+
+        var missing = SelectMissingPaths(knownPaths);
+        if (missing.Count == 0) return true;
+
+        // Guard 2: re-check every candidate after a moment. A blip that starts *after* the probe above
+        // passed still lands here, and a genuinely deleted file stays gone on a second look — so this
+        // costs one extra stat per candidate (a small list in normal operation) and removes the entire
+        // class of "transient unavailability read as deletion".
+        try { await Task.Delay(TimeSpan.FromSeconds(5), ct); }
+        catch (OperationCanceledException) { return false; }
+
+        if (!StorageHealth.CanReachStorage(storageRoot))
+        {
+            logger.LogWarning("Reconciliation sweep abandoned — storage stopped responding while re-verifying {Count} candidate(s). Will retry next sweep.", missing.Count);
+            return false;
+        }
+
+        var confirmed = SelectMissingPaths(missing);
+        if (confirmed.Count < missing.Count)
+        {
+            logger.LogWarning(
+                "Reconciliation sweep: {Recovered} of {Candidates} candidate(s) reappeared on re-check — storage was briefly unavailable, not genuinely missing. Only confirmed deletions are being reported.",
+                missing.Count - confirmed.Count, missing.Count);
+        }
+        if (confirmed.Count == 0) return true;
+
+        // Guard 3: a mass disappearance is a fault, not a fleet of real deletions this sweep somehow
+        // didn't perform itself. Refusing here only delays genuine orphan cleanup by one sweep; acting
+        // wrongly permanently drops rows for footage that still exists.
+        if (StorageHealth.IsImplausibleMissingCount(confirmed.Count, knownPaths.Count))
+        {
+            logger.LogError(
+                "Reconciliation sweep refusing to report {Count} of {Total} segment(s) as deleted — that proportion indicates a storage fault, not real deletions. Nothing has been reported; investigate the storage backend, then this will resolve itself on a later sweep once storage is healthy.",
+                confirmed.Count, knownPaths.Count);
+            return false;
+        }
+
+        logger.LogInformation(
+            "Reconciliation sweep found {Count} segment row(s) (of {Total} checked) pointing at files no longer on disk — reporting for cleanup.",
+            confirmed.Count, knownPaths.Count);
+        deletedPaths.AddRange(confirmed);
 
         return true;
     }
@@ -294,6 +403,37 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
     /// directory the same way EnumerateEvictable is, without a network round trip.</summary>
     internal static List<string> SelectMissingPaths(IEnumerable<string> knownPaths)
         => knownPaths.Where(p => !File.Exists(p)).ToList();
+
+    /// <summary>Which of this camera's on-disk files the web tier has no row for — the pure half of
+    /// <see cref="ImportOrphanedSegmentsAsync"/>, extracted for the same reason every other decision in
+    /// this class is. Paths are compared case-insensitively: these are Windows/UNC paths, where the
+    /// same file can legitimately be spelled with different casing than the row that recorded it, and
+    /// treating those as different would re-import a segment that is already known on every sweep.</summary>
+    internal static List<SegmentReportItem> SelectImportableSegments(Guid cameraId, IEnumerable<FileInfo> files,
+        HashSet<string> knownPaths)
+    {
+        var result = new List<SegmentReportItem>();
+        foreach (var file in files)
+        {
+            if (knownPaths.Contains(file.FullName)) continue;
+            // Same 0-byte guard PollForCompletedSegments applies: ffmpeg creates the file before it can
+            // fail the header write, so an empty file is a failed-connection artifact, never a real
+            // recording.
+            if (file.Length == 0) continue;
+
+            // LastWriteTimeUtc (when writing finished) rather than a next-file boundary: for an
+            // already-closed file this is its true end, and unlike the live path there's no in-flight
+            // observation to prefer over it. Guarded because a file whose metadata is nonsensical (a
+            // clock change mid-write) would otherwise import a zero or negative duration.
+            var start = file.CreationTimeUtc;
+            var end = file.LastWriteTimeUtc;
+            if (end <= start) continue;
+
+            result.Add(new SegmentReportItem(cameraId, "Main", start, end,
+                file.FullName, file.Length, Codec: null, Width: null, Height: null, HasAudio: false));
+        }
+        return result;
+    }
 
     /// <summary>Every cached thumbnail file belonging to mainFilePath (M7 pass 2) — derived purely
     /// from the segment's own relative path/filename under mainDir (never client-supplied), globbing

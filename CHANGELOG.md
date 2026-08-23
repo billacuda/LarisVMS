@@ -5,6 +5,233 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.151.0] - 2026-08-23
+
+### Added
+
+- **A built-in "All Cameras" camera group.** Seeded once (idempotent, safe on every startup —
+  `CameraGroupSeedService`, same shape as the existing `RoleSeedService`) and every camera belongs to
+  it unconditionally: a freshly created camera is added immediately (`CameraService.AddAsync`), and
+  every existing camera is backfilled by the same seeder. It can't be renamed, deleted
+  (`CameraGroupService.DeleteAsync` refuses it), or have a camera individually removed from it — every
+  membership mutation funnels through `CameraService.SetCameraGroupsAsync`, which now always re-adds it
+  regardless of what a caller submits, so there's exactly one enforcement point rather than needing to
+  guard every caller separately.
+  - Exempt from `CameraGroupPolicy`'s "every group must share one site" rule — it's top-level and on
+    every camera, so without an exemption it would collide with each camera's real site. The policy
+    itself stays untouched (still a pure, general rule); `SetCameraGroupsAsync` strips it from the
+    candidate set before the site check runs, then adds it back unconditionally afterward.
+  - `Cameras > Groups`' card for it shows a plain membership count with no Delete button, no "Manage
+    cameras" button, and no per-camera Remove buttons — there's nothing to manage. `Cameras/Edit`'s
+    Groups multi-select excludes it entirely, since a checkbox the server would silently re-check on
+    save would be misleading.
+  - A `CameraAccess` grant scoped to this group cascades to every camera through the existing
+    `MaterializedPath`-prefix resolution already in `CameraAccessService` — functionally identical to
+    the existing `ScopeType.All`, with no changes needed to that service.
+  - Identified by a fixed sentinel `Guid` (`CameraGroup.AllCamerasId`) rather than a new
+    `IsSystemGroup` column — there's exactly one built-in group, so a generalized "system group"
+    concept isn't needed yet.
+
+Web-only, no node change.
+
+## [0.150.2] - 2026-08-23
+
+### Fixed
+
+- **`Admin > Settings > Camera Access` — choosing "A camera group" or "A single camera" as a grant's
+  scope never revealed a picker to actually choose one, and saving always failed with "Choose a camera
+  group"/"Choose a camera" no matter what.** Reported live. The show/hide script compared the scope
+  `<select>`'s value against the enum's numeric cast (`@((int)CameraAccessScopeType.Group)` → `"1"`),
+  but the `<option>` elements themselves render as the enum's *name* (`@CameraAccessScopeType.Group` →
+  `"Group"`, no cast) — the comparison never matched, so the picker field stayed hidden and its
+  `<select>` stayed disabled (a disabled control never submits a value, so even forcing it visible
+  wouldn't have helped). Fixed by comparing against the same un-cast rendering the options actually use.
+  Affected both the "Add a grant" form and every grant row's "Edit" form (one shared script).
+
+Web-only, no node change.
+
+## [0.150.1] - 2026-08-23
+
+### Fixed
+
+- **`Cameras > Groups`' "Manage cameras" popup repeated the same site-conflict warning next to every
+  single camera** (v0.149.2's own fix, "currently: X (Site) — checking a group under a different site
+  will fail" per row) — reported live as noisy, especially once a camera's only group was itself a
+  site (rendering the redundant "All Cameras (All Cameras)"). The rule is now stated once at the top
+  of the popup; each camera keeps its plain "(currently: X, Y)" group list with no per-row repetition
+  and no site-name annotation.
+- **A nested group's card only indented its title text, not the card itself** — a building/floor under
+  a site looked the same width and alignment as its parent, with just the name shifted a little to the
+  right inside an otherwise identical box. The whole card now indents by depth (`margin-left`), reading
+  as an actual nested section rather than a flat list with indented labels.
+
+Web-only, no node change.
+
+## [0.150.0] - 2026-08-23
+
+### Fixed
+
+- **Recording gaps on Continuous-mode cameras: hours of footage recorded to disk but never reported,
+  showing on Playback as "No recording here".** Diagnosed from real node logs after a live report that
+  most cameras had blank timeline spans. Confirmed instance on `nvr1`: at 2026-08-21 16:36:18 every
+  node→server report type (segments, stream info, motion spans, camera events) stopped at the same
+  instant and did not resume for 2h20m, until the service happened to restart at 18:56 — while ffmpeg
+  kept recording perfectly throughout (`Recording[...]` and `Integration[...]` log activity continues
+  right through the window). The footage was on disk the whole time; the server was simply never told
+  about it, so Playback had no `Segment` rows to draw.
+
+  Root cause: `NodeApiClient` sets `HttpClient.Timeout` to 15s, and an HttpClient timeout throws
+  `TaskCanceledException` — which *derives from* `OperationCanceledException`. Every node→server
+  report's catch filtered on `ex is not OperationCanceledException`, deliberately excluding it, so a
+  single slow or black-holed request escaped the catch entirely and faulted `SegmentReportLoopAsync`.
+  Three things then conspired to make that permanent and invisible:
+  - `ExecuteAsync` awaits `Task.WhenAll(reconcileLoop, segmentReportLoop, gatedDecisionLoop)`, which
+    only completes once *every* loop finishes — the other two run until shutdown, so the faulted task
+    sat unobserved and nothing restarted it. Recording was unaffected, which is why this never looked
+    like an outage.
+  - The stored exception surfaced only at shutdown, where `catch (OperationCanceledException) { }`
+    swallowed it — so it never reached the log at all. There is no error in the logs for the entire
+    2h20m window.
+  - The batch in flight when it threw was never re-queued (the re-queue lives in the catch that didn't
+    run), so those segments are permanently absent from the timeline even though their `.mp4` files
+    exist on disk.
+
+  Fixed by distinguishing "our own token was cancelled" (a real shutdown — propagate and end the loop)
+  from "the HTTP call timed out" (transient — log, re-queue, retry next cycle) via a new
+  `NodeWorker.IsRetryable`, applied to all four report flushes and the heartbeat/config cycle. The
+  report loop body additionally gets a catch-all guard so no future unanticipated exception can end
+  reporting outright either — a failed tick is now logged and retried on the next one instead of being
+  the last tick that ever runs. 3 new unit tests cover the exact discrimination that was wrong.
+
+  Ordinary transport failures were always handled correctly (`Failed to report ... will retry next
+  cycle` appears 54 times across recent logs) — only the timeout path was fatal, which is why this
+  presented as rare, unpredictable, hours-long gaps rather than steady breakage.
+
+- **A brief storage outage could delete database rows for footage that still exists.**
+  `StorageManager`'s reconciliation sweep decided a `Segment` row was orphaned purely from
+  `File.Exists` returning false — but `File.Exists` answers *false, not an error*, for a path on an
+  unreachable SMB share. A share that blipped during the hourly sweep therefore made every segment the
+  node owns look deleted at once, and the web tier dropped all those rows for footage sitting safely on
+  disk. This node's logs already carry real `storage I/O error` events against its share, so the
+  hazard was live rather than theoretical. Three independent guards now stand in front of that
+  inference (new `StorageHealth`):
+  - **A read/write probe of the storage root** before any missing-file inference is trusted — a canary
+    file is written *and read back*, since a half-broken share can accept a write into a local cache
+    while not serving reads, which is exactly the state that manufactures false "missing".
+    `Directory.Exists` alone isn't enough: it can answer true from a cached mount whose share is gone.
+  - **A re-verification pass**: candidates are re-checked after a short delay (with a second
+    reachability probe), catching a blip that begins *after* the first probe passed. Anything that
+    reappears is logged as a recovered false positive rather than reported.
+  - **A plausibility ceiling**: past 10% of a node's known segments appearing to vanish at once (only
+    applied at 50+ known segments, so a small node legitimately evicting most of its footage is
+    unaffected), the sweep refuses to report anything and logs an error naming the storage backend as
+    the likely cause. Deletions the node actually performed are reported directly from the eviction
+    loops and never rely on this inference, so refusing here only ever delays genuine orphan cleanup
+    by a sweep — the safe direction.
+
+### Added
+
+- **Recovery import for footage on disk with no database row.** The reverse of the reconciliation
+  above, and the repair path for the reporting outage fixed in this same release: a node whose report
+  loop had died kept recording perfectly, so real footage exists on disk that Playback shows as a gap.
+  Each reconciliation sweep now also scans each configured camera's own recording directory and offers
+  back anything the web tier has no `Segment` row for. Notes:
+  - **Idempotent by construction** — `Segment.FilePath` is uniquely indexed and
+    `NodeService.RecordSegmentsAsync` already detaches duplicate-key rows rather than failing the
+    batch, so re-offering a known segment is a no-op, not an error.
+  - **Timestamps come from file metadata, never the filename.** ffmpeg's `-strftime` pattern writes
+    names in the node's *local* zone despite their trailing `Z` (deliberate — see `RecordingSession`),
+    so parsing them as UTC would silently offset every recovered segment by the node's UTC offset.
+  - Skips the file ffmpeg may still be writing (the same 5-minute floor eviction uses), 0-byte
+    failed-connection artifacts, and any file whose metadata implies a zero/negative duration.
+  - Runs after the retention and quota passes, so footage already past its retention window is deleted
+    first and never re-imported.
+  - Recovers automatically on the first sweep after a node starts — no admin action needed.
+
+**Node change — `install-node.ps1` re-run needed on every recorder node.** `LarisVMS.Node` and
+`LarisVMS.NodeUpdater` bumped to 0.150.0 in lockstep. Existing gaps are recovered automatically within
+about five minutes of each node coming back up.
+
+## [0.149.2] - 2026-08-23
+
+### Fixed
+
+- **"A camera can only belong to groups under a single site" was confusing with no way to see or set a
+  camera's site** — reported live while testing multi-group cameras (v0.148.0). There's no separate
+  site field: a group's site is simply whichever top-level (no-parent) group it descends from, but
+  neither place that lets you pick groups for a camera showed that hierarchy at all.
+  - `Cameras/Edit`'s Groups multi-select now renders one `<optgroup>` per site (indenting descendants
+    within it), instead of every group across every site as one flat, unlabeled list — picking across
+    two different `<optgroup>`s is exactly what triggers the "single site" error, and now it's visible
+    before you hit it, not just after.
+  - `Cameras > Groups`' "Manage cameras" popup now names each camera's *current* site alongside its
+    existing group memberships (`"currently: Building 1 (Site A)"`), with a one-line note that checking
+    a group under a different site will fail.
+  - `Cameras > Groups`' own page intro now says outright that there's no separate site field — a
+    top-level group *is* a site — instead of only describing the "must share a site" rule without ever
+    saying how a site actually gets created.
+
+Web-only, no node change.
+
+## [0.149.1] - 2026-08-23
+
+### Added
+
+- **M20 pass 2: IP allow lists.** `Admin > Settings > Security` (revived — retired during the roles/
+  permissions overhaul when its only setting moved to Live View; this is new content, not a
+  resurrection) — two independent allow lists, one for management/API traffic and one for live view/
+  playback, each a list of individual IPs or CIDR blocks, one per line. Reuses the same management-vs-
+  media request classification (`MediaRoutes.IsMediaPath`) `PortSegmentationMiddleware` already
+  established, so `GET /api/v1/status` (M20 pass 1) falls under the management/API list automatically.
+  Blank (the default) means unrestricted, same "open by default" philosophy every other access-control
+  feature in this app already follows. Enforced by `IpAllowListMiddleware`, rejecting with 404 rather
+  than 403 — matching `PortSegmentationMiddleware`'s own reasoning that a request outside a boundary
+  should learn nothing about what exists on the other side of it. Parsing/matching logic
+  (`IpAllowListPolicy`) normalizes an IPv4-mapped IPv6 client address before comparison, so a dual-stack
+  Kestrel socket reporting a client as `::ffff:10.0.0.5` still matches a plain `10.0.0.0/24` entry.
+  **Self-lockout guarded against**: saving a management/API list that would exclude the address making
+  the save is refused outright (the page itself is management traffic) rather than silently applied —
+  there's still no recovery from a bad save that already went through short of direct database access,
+  but this closes the most common way to reach that state by accident.
+
+Web-only, no node change.
+
+## [0.149.0] - 2026-08-23
+
+### Added
+
+- **M20 pass 1: REST API foundation + API keys.** The first piece of M20 (Linux/Postgres platform work,
+  M19, is on hold) — a machine credential for external automation, distinct from every existing
+  cookie-session-only `/api/*` endpoint.
+  - `Admin > API Keys`: create a key bound to a Role (any role — "API/Integration", seeded read-only-
+    shaped since the roles/permissions overhaul, is the natural default) and revoke one. The raw key is
+    shown exactly once at creation and never stored or re-displayed — only its SHA-256 hash (`ApiKey`
+    entity, new table) and a short plaintext prefix for telling keys apart in the list.
+  - New `GET /api/v1/status`, authenticated via an `X-Api-Key` header (`ApiKeyAuthMiddleware`, scoped to
+    `/api/v1/*` only) instead of the usual login cookie: per-camera connected/recording/fps/bitrate
+    (reusing `IDashboardService.GetHealthAsync`'s existing `CameraAccess` scoping unmodified — a key
+    bound to a restricted role sees only what that role can see) plus every node's online status and
+    storage (`IDashboardService.GetAllNodeStatusAsync`, new — unlike the health-dashboard's own node
+    tally, includes a node with zero cameras assigned). Gated on the existing `Dashboard.View`
+    permission, unused anywhere else in the app until now. Usable for Checkmk-style external monitoring
+    without a real user login.
+  - An API key carries only a Role, no user identity — `PermissionAuthorizationHandler` gained a
+    role-claim fallback (`IPermissionService.HasPermissionForRoleNameAsync`) for a principal with no
+    `ClaimTypes.NameIdentifier` at all, and `CameraAccessService`'s own "not authenticated" guard now
+    checks `IsAuthenticated` rather than the presence of a user id, so a role-only principal resolves
+    its Role-scoped `CameraAccess` grants correctly instead of silently seeing nothing. Both changes are
+    additive — a normal cookie-authenticated user's resolution path is unchanged.
+  - Key hashing (`SecretHash`, `LarisVMS.Infrastructure/Security`) is extracted from `NodeService`,
+    which already hashed `Node.ApiKeyHash` the same way (plain SHA-256 + fixed-time comparison, the
+    right tool for a generated high-entropy secret) — behavior-preserving refactor, `NodeService` now
+    calls the shared helper instead of its own private copy.
+  - **Deliberately out of scope, flagged not silently skipped**: config CRUD through the REST API (the
+    auth plumbing supports any future `/api/v1/*` route, but only the one monitoring endpoint exists so
+    far); M14's own flagged gap (playback data-proxy endpoints not independently re-checking
+    `CameraAccess`) stays open, unrelated to this new surface; no rate limiting on the new endpoint yet.
+
+Web-only, no node change.
+
 ## [0.148.2] - 2026-08-23
 
 ### Fixed

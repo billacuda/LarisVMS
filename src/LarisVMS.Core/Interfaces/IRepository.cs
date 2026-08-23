@@ -24,6 +24,13 @@ public interface IPermissionService
 {
     Task<bool> HasPermissionAsync(string userId, string resource, string action, CancellationToken ct = default);
 
+    /// <summary>Same resolution as <see cref="HasPermissionAsync"/> (role → Permission rows, with the
+    /// same Super Admin bypass), but starting from a role name instead of a user id — for a principal
+    /// that carries no <c>ClaimTypes.NameIdentifier</c> at all, namely an API-key-authenticated request
+    /// (M20). An API key is bound to exactly one Role and nothing else, so there's no user to look
+    /// up.</summary>
+    Task<bool> HasPermissionForRoleNameAsync(string roleName, string resource, string action, CancellationToken ct = default);
+
     /// <summary>Every (Resource, Action) pair the given principal's roles grant, resolved in at most
     /// one database round trip regardless of how many pairs the caller ends up checking — built for
     /// _Layout.cshtml's nav, which needs several yes/no answers on every single page render and can't
@@ -59,6 +66,18 @@ public sealed class PermissionSet(bool isAdministrator, IReadOnlySet<(string Res
 /// Never touches a pre-existing custom role — no rename, no RoleProfile row, no permission changes.
 /// </summary>
 public interface IRoleSeedService
+{
+    Task SeedAsync(CancellationToken ct = default);
+}
+
+/// <summary>
+/// Seeds the built-in "All Cameras" CameraGroup (CameraGroup.AllCamerasId) if it doesn't exist yet,
+/// then backfills any camera not already linked to it. Idempotent — safe on every startup, same
+/// shape as IRoleSeedService: a camera added between startups is picked up by CameraService.AddAsync
+/// directly, so this only ever needs to catch up rows from before the group existed or from a report
+/// that never landed.
+/// </summary>
+public interface ICameraGroupSeedService
 {
     Task SeedAsync(CancellationToken ct = default);
 }

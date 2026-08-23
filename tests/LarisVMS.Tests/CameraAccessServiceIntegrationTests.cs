@@ -122,4 +122,31 @@ public class CameraAccessServiceIntegrationTests
         Assert.NotNull(result);
         Assert.Empty(result);
     }
+
+    // M20: an API-key-authenticated principal carries a Role claim but deliberately no
+    // ClaimTypes.NameIdentifier at all (see ApiKeyAuthMiddleware) — this was the actual bug found while
+    // building that feature: the old guard treated "no NameIdentifier" as "not authenticated, sees
+    // nothing", which silently made every API key see zero cameras regardless of its role's grants.
+    [Fact]
+    public async Task ARoleOnlyPrincipalWithNoUserIdStillResolvesItsRoleGrant()
+    {
+        var (db, roles, service) = NewHarness();
+        await roles.CreateAsync(new IdentityRole("API/Integration"));
+        var apiRole = await roles.FindByNameAsync("API/Integration");
+        var camId = Guid.NewGuid();
+        db.Cameras.Add(new Camera { Id = camId, Name = "Front Door", Host = "10.0.0.1", DeviceServiceUri = "http://10.0.0.1/onvif" });
+        db.CameraAccesses.Add(new CameraAccess
+        {
+            Id = Guid.NewGuid(), PrincipalType = CameraAccessPrincipalType.Role, PrincipalId = apiRole!.Id,
+            ScopeType = CameraAccessScopeType.Camera, ScopeId = camId, Actions = CameraAccessActions.View
+        });
+        await db.SaveChangesAsync();
+
+        var roleOnly = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim(ClaimTypes.Role, "API/Integration")], authenticationType: "ApiKey"));
+
+        var result = await service.GetAccessibleCameraIdsAsync(roleOnly, CameraAccessActions.View);
+
+        Assert.Equal([camId], result);
+    }
 }

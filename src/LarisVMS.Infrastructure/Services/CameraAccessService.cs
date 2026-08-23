@@ -12,8 +12,13 @@ public class CameraAccessService(ApplicationDbContext db) : ICameraAccessService
 {
     public async Task<HashSet<Guid>?> GetAccessibleCameraIdsAsync(ClaimsPrincipal user, CameraAccessActions action, CancellationToken ct = default)
     {
+        // Checked on IsAuthenticated, not on NameIdentifier's presence: an API-key-authenticated
+        // principal (M20) carries a Role claim but no NameIdentifier at all (it's bound to a Role, not
+        // a user — see ApiKeyAuthMiddleware). userId staying null below is fine — the User-scoped
+        // branch of the CameraAccess query just never matches a null PrincipalId, so a role-only
+        // principal still resolves correctly through its Role-scoped grants.
+        if (user.Identity?.IsAuthenticated != true) return []; // not authenticated — sees nothing, not everything
         var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-        if (userId is null) return []; // not authenticated — sees nothing, not everything
 
         var roleNames = user.FindAll(ClaimTypes.Role).Select(c => c.Value).ToList();
         var roleIds = roleNames.Count == 0

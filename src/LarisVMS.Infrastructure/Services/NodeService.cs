@@ -1,5 +1,4 @@
 using System.Security.Cryptography;
-using System.Text;
 using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
@@ -7,6 +6,7 @@ using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
 using LarisVMS.Infrastructure.Data;
+using LarisVMS.Infrastructure.Security;
 
 namespace LarisVMS.Infrastructure.Services;
 
@@ -28,7 +28,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         // class's doc comment) — a plain string comparison short-circuits on the first differing
         // byte, which leaks how many leading characters of the registration key a guess got right
         // through the response timing.
-        if (string.IsNullOrEmpty(expectedKey) || !FixedTimeEquals(request.RegistrationKey ?? "", expectedKey))
+        if (string.IsNullOrEmpty(expectedKey) || !SecretHash.FixedTimeEquals(request.RegistrationKey ?? "", expectedKey))
             throw new UnauthorizedAccessException("Invalid registration key.");
 
         var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
@@ -36,7 +36,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         {
             Id = Guid.NewGuid(),
             Name = request.Hostname,
-            ApiKeyHash = Hash(secret),
+            ApiKeyHash = SecretHash.Hash(secret),
             // Signs the short-lived media tokens LarisVMS.Web issues for live view (M5); the node
             // needs its own copy to validate a token locally with no DB round trip, so — same as
             // the bearer secret — it's handed back once in NodeRegisterResponse and persisted
@@ -61,9 +61,8 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         var node = await db.Nodes.FirstOrDefaultAsync(n => n.Id == id, ct);
         if (node is null) return null;
 
-        var candidateHash = Hash(secret);
-        var matchesCurrent = FixedTimeEquals(candidateHash, node.ApiKeyHash);
-        var matchesPrevious = node.PreviousApiKeyHash is not null && FixedTimeEquals(candidateHash, node.PreviousApiKeyHash);
+        var matchesCurrent = SecretHash.Matches(secret, node.ApiKeyHash);
+        var matchesPrevious = node.PreviousApiKeyHash is not null && SecretHash.Matches(secret, node.PreviousApiKeyHash);
         if (!matchesCurrent && !matchesPrevious) return null;
 
         node.LastSeenAt = DateTime.UtcNow;
@@ -504,10 +503,4 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         // historical recordings, not live node state, and shouldn't disappear with the node.
         await db.Nodes.Where(n => n.Id == nodeId).ExecuteDeleteAsync(ct);
     }
-
-    private static string Hash(string secret)
-        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(secret)));
-
-    private static bool FixedTimeEquals(string a, string b)
-        => CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(a), Encoding.UTF8.GetBytes(b));
 }

@@ -43,6 +43,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<EmailSettings> EmailSettings => Set<EmailSettings>();
     public DbSet<AlertRule> AlertRules => Set<AlertRule>();
     public DbSet<AlertDelivery> AlertDeliveries => Set<AlertDelivery>();
+    public DbSet<ApiKey> ApiKeys => Set<ApiKey>();
 
     // ── Cameras ──────────────────────────────────────────────────────────────
     public DbSet<Camera> Cameras => Set<Camera>();
@@ -124,6 +125,16 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.RoleId).HasMaxLength(450);
             e.Property(x => x.Tag).HasMaxLength(20).IsRequired();
             e.HasIndex(x => x.Tag).IsUnique();
+        });
+
+        // ── ApiKey (M20 pass 1) ──────────────────────────────────────────────
+        builder.Entity<ApiKey>(e =>
+        {
+            e.Property(x => x.Name).HasMaxLength(200).IsRequired();
+            e.Property(x => x.KeyHash).HasMaxLength(64).IsRequired();
+            e.Property(x => x.KeyPrefix).HasMaxLength(20).IsRequired();
+            e.Property(x => x.RoleId).HasMaxLength(450).IsRequired();
+            e.HasIndex(x => x.KeyHash).IsUnique();
         });
 
         // ── RoleAssignmentExpiry (roles/permissions overhaul) ───────────────

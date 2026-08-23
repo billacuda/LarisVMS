@@ -47,8 +47,9 @@
     var showSettings = nav.Has("Settings", "Edit") || nav.Has("Backups", "Edit");
     var showPlugins = nav.Has("Plugins", "View");
     var showAlerts = nav.Has("Alerts", "Edit");
+    var showApiKeys = nav.Has("ApiKeys", "Edit");
     // An empty dropdown toggle with nothing inside it is worse than no dropdown at all.
-    var showAdminDropdown = showSettings || showPlugins || showAlerts;
+    var showAdminDropdown = showSettings || showPlugins || showAlerts || showApiKeys;
 }
 <!DOCTYPE html>
 <html lang="en" data-bs-theme="light">
@@ -187,6 +188,10 @@
                                 @if (showAlerts)
                                 {
                                     <li><a class="dropdown-item" href="/Admin/Alerts">Alerts</a></li>
+                                }
+                                @if (showApiKeys)
+                                {
+                                    <li><a class="dropdown-item" href="/Admin/ApiKeys">API Keys</a></li>
                                 }
                             </ul>
                         </li>

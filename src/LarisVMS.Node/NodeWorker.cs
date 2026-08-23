@@ -344,7 +344,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                     await updateService.TryApplyAsync(heartbeat.UpdateAvailable, ct);
                 }
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (IsRetryable(ex, ct))
             {
                 _logger.LogError(ex, "Heartbeat/config cycle failed — will retry.");
                 TryStartFromCacheIfIdle(ct);
@@ -390,6 +390,29 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         }
     }
 
+    /// <summary>
+    /// Whether an exception caught around a node→web call is a transient failure worth logging and
+    /// retrying, versus this node genuinely shutting down.
+    ///
+    /// The distinction is load-bearing and was a real, confirmed multi-hour outage: these catches used
+    /// to filter on <c>ex is not OperationCanceledException</c> alone, but an <see cref="HttpClient"/>
+    /// timeout (NodeApiClient sets 15s) throws <see cref="TaskCanceledException"/>, which *derives
+    /// from* OperationCanceledException — so a single slow/black-holed request escaped the catch
+    /// entirely, faulted <see cref="SegmentReportLoopAsync"/>, and killed all node→web reporting until
+    /// the service was restarted. Nothing noticed, because <c>Task.WhenAll</c> in ExecuteAsync only
+    /// completes once *every* loop finishes: the other two loops kept running, so the fault sat
+    /// unobserved (and was then swallowed by ExecuteAsync's own OperationCanceledException catch at
+    /// shutdown, so it never even reached the log). Meanwhile recording carried on writing files
+    /// perfectly — the segments simply never got reported, leaving hours of footage on disk that
+    /// Playback shows as a gap. Confirmed on nvr1, 2026-08-21 16:36→18:56 (2h20m).
+    ///
+    /// Checking the token rather than the exception type is what separates the two cases: on a real
+    /// shutdown our own <paramref name="ct"/> is cancelled and the exception should propagate (ending
+    /// the loop cleanly); on an HTTP timeout it isn't, so this is just another retryable failure.
+    /// </summary>
+    internal static bool IsRetryable(Exception ex, CancellationToken ct)
+        => ex is not OperationCanceledException || !ct.IsCancellationRequested;
+
     private async Task SegmentReportLoopAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
@@ -397,12 +420,24 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             try { await Task.Delay(TimeSpan.FromSeconds(15), ct); }
             catch (OperationCanceledException) { break; }
 
-            await FlushSegmentsAsync(ct);
-            EnqueueHealthReports();
-            await FlushStreamInfoAsync(ct);
-            EnqueueMotionCheckpoints();
-            await FlushMotionSpansAsync(ct);
-            await FlushCameraEventsAsync(ct);
+            // Belt and braces alongside IsRetryable above: every Flush below already handles its own
+            // failures, but this loop going down takes *all* node→web reporting with it and can't
+            // recover without a service restart (see IsRetryable's own doc comment for the outage that
+            // proved it), so nothing unanticipated gets to end it either. A tick that fails wholesale
+            // is logged and retried on the next one rather than being the last tick that ever runs.
+            try
+            {
+                await FlushSegmentsAsync(ct);
+                EnqueueHealthReports();
+                await FlushStreamInfoAsync(ct);
+                EnqueueMotionCheckpoints();
+                await FlushMotionSpansAsync(ct);
+                await FlushCameraEventsAsync(ct);
+            }
+            catch (Exception ex) when (IsRetryable(ex, ct))
+            {
+                _logger.LogError(ex, "Report cycle failed unexpectedly — will retry next cycle.");
+            }
         }
     }
 
@@ -491,7 +526,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             await api.ReportSegmentsAsync(batch, ct);
             _logger.LogInformation("Reported {Count} segment(s).", batch.Count);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (IsRetryable(ex, ct))
         {
             // Re-queue on failure (server unreachable) rather than lose the record of what was
             // actually written to disk — the segment file already exists regardless of whether the
@@ -512,7 +547,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             await api.ReportStreamInfoAsync(batch, ct);
             _logger.LogInformation("Reported stream info for {Count} stream(s).", batch.Count);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (IsRetryable(ex, ct))
         {
             // Same re-queue-on-failure reasoning as segments — ffmpeg only prints this once per
             // (re)start, so losing it here means waiting for the next restart rather than the next
@@ -533,7 +568,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             await api.ReportMotionSpansAsync(batch, ct);
             _logger.LogInformation("Reported {Count} motion span(s).", batch.Count);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (IsRetryable(ex, ct))
         {
             foreach (var item in batch) _pendingMotionSpans.Enqueue(item);
             _logger.LogWarning(ex, "Failed to report {Count} motion span(s) — will retry next cycle.", batch.Count);
@@ -551,7 +586,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             await api.ReportCameraEventsAsync(batch, ct);
             _logger.LogInformation("Reported {Count} camera event(s).", batch.Count);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (IsRetryable(ex, ct))
         {
             foreach (var item in batch) _pendingCameraEvents.Enqueue(item);
             _logger.LogWarning(ex, "Failed to report {Count} camera event(s) — will retry next cycle.", batch.Count);

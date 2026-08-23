@@ -40,6 +40,9 @@ public class CameraGroupService(ApplicationDbContext db) : ICameraGroupService
         var group = await db.CameraGroups.FindAsync([id], ct);
         if (group is null) return;
 
+        if (id == CameraGroup.AllCamerasId)
+            throw new InvalidOperationException("The \"All Cameras\" group is built in and can't be deleted.");
+
         var hasChildren = await db.CameraGroups.AnyAsync(g => g.ParentId == id, ct);
         if (hasChildren)
             throw new InvalidOperationException("Cannot delete a group that has child groups.");

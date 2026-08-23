@@ -8,6 +8,8 @@
    Roles, Users, and Security — into Pages/Admin/Settings/Permissions/{Matrix,Roles,Users}.cshtml,
    itself tab-stripped one level down by _PermissionsTabs.cshtml. Security's live/playback custom
    port setting moved onto the Live View tab instead, since it isn't permission-related.
+   Security itself came back (M20 pass 2) for the IP allow lists — a new, genuinely security/network-
+   access themed pair of settings, not a resurrection of the retired tab's old content.
    Model: the active tab's key. *@
 @model string
 @{
@@ -24,6 +26,7 @@
         ("Nodes", "/Admin/Settings/Nodes", "🔌 Nodes"),
         ("Permissions", "/Admin/Settings/Permissions/Matrix", "🛡️ Permissions"),
         ("Recording", "/Admin/Settings/Recording", "🎥 Recording"),
+        ("Security", "/Admin/Settings/Security", "🔒 Security"),
         ("StorageAndRetention", "/Admin/Settings/StorageAndRetention", "🗄️ Storage and Retention")
     ];
 }

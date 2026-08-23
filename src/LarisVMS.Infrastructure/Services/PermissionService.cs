@@ -34,6 +34,18 @@ public class PermissionService(ApplicationDbContext db, UserManager<ApplicationU
             roleIds.Contains(p.RoleId) && p.Resource == resource && p.Action == action, ct);
     }
 
+    public async Task<bool> HasPermissionForRoleNameAsync(string roleName, string resource, string action, CancellationToken ct = default)
+    {
+        var roleId = await db.Roles.Where(r => r.Name == roleName).Select(r => r.Id).FirstOrDefaultAsync(ct);
+        if (roleId is null) return false;
+
+        if (await db.RoleProfiles.AnyAsync(p => p.RoleId == roleId && p.Tag == RoleTags.SuperAdmin, ct))
+            return true;
+
+        return await db.Permissions.AnyAsync(p =>
+            p.RoleId == roleId && p.Resource == resource && p.Action == action, ct);
+    }
+
     public async Task<PermissionSet> GetGrantedAsync(ClaimsPrincipal user, CancellationToken ct = default)
     {
         if (user.Identity?.IsAuthenticated != true) return PermissionSet.None;

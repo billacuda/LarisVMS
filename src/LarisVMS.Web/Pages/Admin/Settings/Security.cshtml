@@ -1,0 +1,46 @@
+@page
+@model LarisVMS.Web.Pages.Admin.Settings.SecurityModel
+@{
+    ViewData["Title"] = "Security settings";
+}
+<h1>Settings</h1>
+<partial name="_SettingsTabs" model="@("Security")" />
+
+@if (!string.IsNullOrEmpty(Model.SavedMessage))
+{
+    <div class="alert alert-success">@Model.SavedMessage</div>
+}
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger">@Model.ErrorMessage</div>
+}
+
+<p class="text-muted">
+    One IP or CIDR block per line (e.g. <code>10.0.0.5</code> or <code>10.0.0.0/24</code>); lines
+    starting with <code>#</code> are ignored. Leave a list blank to leave it unrestricted — that's the
+    default. A management/API list that would exclude the address you're saving from is refused rather
+    than applied.
+</p>
+
+<form method="post" class="row g-3" style="max-width: 720px;">
+    <div class="col-12">
+        <label class="form-label">Management / API</label>
+        <textarea asp-for="ManagementAllowList" class="form-control font-monospace" rows="6"
+                  placeholder="10.0.0.0/24&#10;192.168.1.50&#10;# office VPN"></textarea>
+        <div class="form-text">Everything except live view and playback — the admin UI, and the REST API.</div>
+    </div>
+
+    <div class="col-12">
+        <label class="form-label">Live View / Playback</label>
+        <textarea asp-for="LiveViewAllowList" class="form-control font-monospace" rows="6"
+                  placeholder="10.0.0.0/24"></textarea>
+        <div class="form-text">
+            The <code>/live</code> WebSocket relay, <code>/playback-segment</code>,
+            <code>/playback-thumbnail</code>, <code>/export-download</code>, and camera snapshots.
+        </div>
+    </div>
+
+    <div class="col-12">
+        <button type="submit" class="btn btn-primary"><span aria-hidden="true">💾</span> Save</button>
+    </div>
+</form>

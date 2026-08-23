@@ -1,0 +1,79 @@
+@page
+@model LarisVMS.Web.Pages.Admin.ApiKeys.IndexModel
+@{
+    ViewData["Title"] = "API Keys";
+}
+<h1>API Keys</h1>
+
+<p class="text-muted">
+    Machine credentials for the REST API (<code>GET /api/v1/status</code> so far). Each key acts with
+    whichever Role it's bound to — send it in the <code>X-Api-Key</code> header. There's no per-key
+    scoping beyond that Role's own permissions.
+</p>
+
+@if (Model.NewRawKey is not null)
+{
+    <div class="alert alert-success">
+        <strong>"@Model.NewKeyName" created.</strong> Copy this key now — it won't be shown again.
+        <div class="input-group mt-2">
+            <input type="text" class="form-control font-monospace" value="@Model.NewRawKey" readonly
+                   id="newRawKey" onclick="this.select();" />
+            <button type="button" class="btn btn-outline-secondary" onclick="navigator.clipboard.writeText(document.getElementById('newRawKey').value)">Copy</button>
+        </div>
+    </div>
+}
+
+<div class="card mb-3">
+    <div class="table-responsive">
+        <table class="table table-sm mb-0 align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th>Name</th>
+                    <th>Role</th>
+                    <th>Key</th>
+                    <th>Created</th>
+                    <th>Last used</th>
+                    <th>Status</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var k in Model.Keys)
+                {
+                    <tr>
+                        <td>@k.Name</td>
+                        <td>@k.RoleName</td>
+                        <td class="font-monospace small">@k.KeyPrefix&hellip;</td>
+                        <td class="small text-muted">@k.CreatedAtUtc.ToString("u")</td>
+                        <td class="small text-muted">@(k.LastUsedAtUtc is { } used ? used.ToString("u") : "never")</td>
+                        <td>
+                            @if (k.Revoked)
+                            {
+                                <span class="badge text-bg-secondary">Revoked</span>
+                            }
+                            else
+                            {
+                                <span class="badge text-bg-success">Active</span>
+                            }
+                        </td>
+                        <td class="text-end">
+                            @if (!k.Revoked)
+                            {
+                                <form method="post" asp-page-handler="Revoke" asp-route-id="@k.Id" class="d-inline"
+                                      onclick="return confirm('Revoke &quot;@k.Name&quot;? Anything using this key will stop working immediately.');">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger">Revoke</button>
+                                </form>
+                            }
+                        </td>
+                    </tr>
+                }
+                @if (Model.Keys.Count == 0)
+                {
+                    <tr><td colspan="7" class="text-center text-muted py-3">No API keys yet.</td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<a asp-page="Edit" class="btn btn-primary">Add key</a>

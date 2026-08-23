@@ -193,8 +193,13 @@
                 // value is copied onto the real scope-id field on submit), so there's never a stale
                 // option value from the other list left bound.
                 function update() {
-                    var isGroup = scopeType.value === '@((int)CameraAccessScopeType.Group)';
-                    var isCamera = scopeType.value === '@((int)CameraAccessScopeType.Camera)';
+                    // Compared against the option values as Razor actually renders them — @@EnumValue
+                    // (no cast) prints the enum's *name* ("Group"), not its underlying int — a mismatch
+                    // here previously meant isGroup/isCamera were never true, so the group/camera picker
+                    // never appeared and its disabled <select> never submitted a value even if forced
+                    // visible, always failing server-side validation with "Choose a camera group."
+                    var isGroup = scopeType.value === '@CameraAccessScopeType.Group';
+                    var isCamera = scopeType.value === '@CameraAccessScopeType.Camera';
                     scopeIdField.style.display = (isGroup || isCamera) ? '' : 'none';
                     scopeIdGroup.style.display = isGroup ? '' : 'none';
                     scopeIdCamera.style.display = isCamera ? '' : 'none';

@@ -205,6 +205,7 @@ builder.Services.AddSingleton<IAuthorizationPolicyProvider, PermissionPolicyProv
 builder.Services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
 builder.Services.AddScoped<ISetupService, SetupService>();
 builder.Services.AddScoped<IRoleSeedService, RoleSeedService>();
+builder.Services.AddScoped<ICameraGroupSeedService, CameraGroupSeedService>();
 builder.Services.AddScoped<IPermissionService, PermissionService>();
 builder.Services.AddScoped<IAuditService, AuditService>();
 builder.Services.AddScoped<ISettingsResolver, SettingsResolver>();
@@ -227,6 +228,7 @@ builder.Services.AddScoped<IBrandingService, BrandingService>();
 builder.Services.AddScoped<IEventColorService, EventColorService>();
 builder.Services.AddScoped<IPtzService, PtzService>();
 builder.Services.AddScoped<IBookmarkService, BookmarkService>();
+builder.Services.AddScoped<IApiKeyService, ApiKeyService>();
 
 // Roles/permissions overhaul, pass 4: PTZ priority arbitration. PtzArbitrationService is a
 // singleton — one shared in-process hold table per camera, not per-request state (see its own doc
@@ -311,6 +313,9 @@ using (var startupScope = app.Services.CreateScope())
     {
         var roleSeedService = startupScope.ServiceProvider.GetRequiredService<IRoleSeedService>();
         await roleSeedService.SeedAsync();
+
+        var cameraGroupSeedService = startupScope.ServiceProvider.GetRequiredService<ICameraGroupSeedService>();
+        await cameraGroupSeedService.SeedAsync();
     }
 }
 
@@ -332,6 +337,9 @@ app.UseRegistrationDisabled();
 // After the setup gate, not before: pre-setup there may be no Settings table to read yet, and every
 // request pre-setup is already confined to the wizard's own exempt paths anyway.
 app.UsePortSegmentation();
+// M20 pass 2: same "after the setup gate" reasoning — pre-setup there's no admin yet to have
+// configured a list, so it would read empty/open regardless.
+app.UseIpAllowList();
 
 app.UseRouting();
 // Needed before UseAuthorization so the /live WS upgrade request survives the pipeline as a
@@ -342,6 +350,10 @@ app.UseAuthentication();
 // placement — it establishes the node principal (via HttpContext.Items, not a ClaimsPrincipal,
 // since these endpoints don't carry [Authorize] policies) independently of the cookie scheme.
 app.UseMiddleware<NodeAuthMiddleware>();
+// M20 pass 1: authenticates /api/v1/* via the "X-Api-Key" header — see its own doc comment for why
+// this one *does* build a real ClaimsPrincipal (role claim only, no NameIdentifier) rather than using
+// HttpContext.Items the way NodeAuthMiddleware does.
+app.UseMiddleware<ApiKeyAuthMiddleware>();
 app.UseAuthorization();
 
 app.MapRazorPages();
@@ -933,6 +945,22 @@ app.MapGet("/api/timeline/colors", async (IEventColorService eventColors, Cancel
 app.MapGet("/api/dashboard", async (HttpContext ctx, IDashboardService dashboardService, CancellationToken ct) =>
     Results.Json(await dashboardService.GetHealthAsync(ctx.User, ct))
 ).RequireAuthorization();
+
+// ── REST API (M20 pass 1) ────────────────────────────────────────────────────
+// Authenticated by ApiKeyAuthMiddleware above via the "X-Api-Key" header (or, since that middleware
+// only ever *adds* a principal and never removes one, an admin's own cookie session also reaches this
+// the same as any other [Authorize]'d page). Gated on Dashboard.View — already in PermissionCatalog,
+// already seeded onto the built-in "API/Integration" role, unused anywhere else in the app until now.
+// Cameras are scoped through CameraAccess exactly like Pages/Index and GET /api/dashboard already are
+// (GetHealthAsync is reused unmodified) — a key bound to a camera-restricted role sees only what that
+// role can see. Node storage has no such per-node ACL anywhere in this app, so it's a flat list of
+// every node (GetAllNodeStatusAsync), not narrowed the way GetHealthAsync's own node tally is.
+app.MapGet("/api/v1/status", async (HttpContext ctx, IDashboardService dashboardService, CancellationToken ct) =>
+{
+    var health = await dashboardService.GetHealthAsync(ctx.User, ct);
+    var nodes = await dashboardService.GetAllNodeStatusAsync(ct);
+    return Results.Json(new { cameras = health.Rows, nodes });
+}).RequireAuthorization("Dashboard.View");
 
 // ── User preferences (M14) ───────────────────────────────────────────────────
 // The server-backed replacement for what used to live only in localStorage — theme, last-watched

@@ -47,5 +47,9 @@ public static class PermissionCatalog
         new("Roles", "Assign", "Assign roles to user accounts"),
         new("Retention", "Edit", "Change the data retention policy"),
         new("Logs", "Export", "Export the audit log"),
+
+        // M20 pass 1 — gates Admin/ApiKeys, not the REST API itself: what an issued key can actually
+        // do is entirely governed by whichever Role it's bound to, resolved through this same catalog.
+        new("ApiKeys", "Edit", "Issue and revoke REST API keys"),
     ];
 }

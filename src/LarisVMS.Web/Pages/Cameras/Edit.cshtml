@@ -1,5 +1,6 @@
 @page "{id:guid?}"
 @model LarisVMS.Web.Pages.Cameras.EditModel
+@using LarisVMS.Core.Entities
 @{
     ViewData["Title"] = Model.IsNew ? "Add camera" : "Edit camera";
 }
@@ -44,15 +45,27 @@
     </div>
     <div class="col-12">
         <label class="form-label">Groups</label>
-        <select asp-for="GroupIds" class="form-select" multiple size="5">
-            @foreach (var g in Model.Groups)
+        <select asp-for="GroupIds" class="form-select" multiple size="8">
+            @* The built-in "All Cameras" group is excluded — it's on every camera unconditionally
+               (CameraService.SetCameraGroupsAsync re-adds it regardless of what's submitted here), so
+               showing a checkbox for it would be misleading: unchecking it and saving wouldn't remove it. *@
+            @foreach (var siteGroup in Model.Groups.Where(g => g.Id != CameraGroup.AllCamerasId).GroupBy(Model.SiteIdOf))
             {
-                <option value="@g.Id" selected="@Model.GroupIds.Contains(g.Id)">@g.Name</option>
+                var site = Model.Groups.First(g => g.Id == siteGroup.Key);
+                <optgroup label="@site.Name">
+                    @foreach (var g in siteGroup)
+                    {
+                        var indent = new string(' ', Model.Depth(g) * 2);
+                        <option value="@g.Id" selected="@Model.GroupIds.Contains(g.Id)">@indent@g.Name</option>
+                    }
+                </optgroup>
             }
         </select>
         <div class="form-text">
             Ctrl/Cmd-click to select more than one — every selected group must be under the same
-            site (a camera belongs to one site, but any number of groups beneath it).
+            site (a camera belongs to one site, but any number of groups beneath it). Options are
+            grouped by site — everything under one <code>&lt;optgroup&gt;</code> shares a site;
+            picking across two different ones is what triggers the "single site" error on save.
         </div>
     </div>
     <div class="col-12">

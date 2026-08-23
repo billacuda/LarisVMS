@@ -108,6 +108,12 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
             if (group is not null) camera.Groups.Add(group);
         }
 
+        // Every camera belongs to the built-in "All Cameras" group unconditionally — see its own doc
+        // comment. Guarded against a double-add on the off chance request.GroupId was already it.
+        var allCamerasGroup = await db.CameraGroups.FindAsync([CameraGroup.AllCamerasId], ct);
+        if (allCamerasGroup is not null && camera.Groups.All(g => g.Id != allCamerasGroup.Id))
+            camera.Groups.Add(allCamerasGroup);
+
         db.Cameras.Add(camera);
         await db.SaveChangesAsync(ct);
 
@@ -164,7 +170,12 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
         var camera = await db.Cameras.Include(c => c.Groups).FirstOrDefaultAsync(c => c.Id == cameraId, ct)
             ?? throw new InvalidOperationException("Camera not found.");
 
-        var distinctIds = groupIds.Distinct().ToList();
+        // The built-in "All Cameras" group is exempt from the single-site rule below (it's top-level
+        // and on every camera, so naively including it would collide with each camera's real site) and
+        // always re-added regardless of what the caller passed — this is the one method every group-
+        // membership mutation funnels through, which is what makes "can't be removed" true everywhere
+        // without needing to special-case every caller individually.
+        var distinctIds = groupIds.Distinct().Where(id => id != CameraGroup.AllCamerasId).ToList();
         if (distinctIds.Count > 0)
         {
             // Small table (sites/buildings/floors), loaded whole rather than filtered — CameraGroupPolicy
@@ -179,6 +190,9 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
         var targetGroups = distinctIds.Count == 0
             ? []
             : await db.CameraGroups.Where(g => distinctIds.Contains(g.Id)).ToListAsync(ct);
+
+        var allCamerasGroup = await db.CameraGroups.FindAsync([CameraGroup.AllCamerasId], ct);
+        if (allCamerasGroup is not null) targetGroups.Add(allCamerasGroup);
 
         camera.Groups.Clear();
         foreach (var group in targetGroups) camera.Groups.Add(group);

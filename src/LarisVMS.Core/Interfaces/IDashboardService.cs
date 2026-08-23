@@ -29,4 +29,10 @@ public interface IDashboardService
     /// — a restricted principal's dashboard hides a camera entirely rather than merely gating its
     /// thumbnail, the same way the camera/playback list pages already hide theirs.</summary>
     Task<DashboardHealthDto> GetHealthAsync(ClaimsPrincipal user, CancellationToken ct = default);
+
+    /// <summary>Every Node, for the M20 monitoring API — unlike GetHealthAsync's own node tally, not
+    /// narrowed to nodes that currently have a camera assigned, and not CameraAccess-scoped (there's no
+    /// per-node ACL anywhere in this app; Nodes.Edit gates the whole Admin Nodes page, not a subset of
+    /// nodes within it).</summary>
+    Task<List<NodeStatusRow>> GetAllNodeStatusAsync(CancellationToken ct = default);
 }

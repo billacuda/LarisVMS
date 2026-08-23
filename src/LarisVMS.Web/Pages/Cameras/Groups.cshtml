@@ -1,5 +1,6 @@
 @page
 @model LarisVMS.Web.Pages.Cameras.GroupsModel
+@using LarisVMS.Core.Entities
 @{
     ViewData["Title"] = "Camera groups";
 }
@@ -8,6 +9,9 @@
     Sites / buildings / floors — used to organize cameras, to scope settings overrides, and as the
     scope a role's <a asp-page="/Admin/Settings/CameraAccess">Camera Access</a> grant narrows down to.
     A camera can belong to any number of groups, as long as they're all under the same top-level site.
+    <strong>There's no separate "site" field to set</strong> — a group's site is simply whichever
+    top-level group (no parent) it descends from; add one with "Parent" left as "(top level)" below
+    to create a new site, or a sub-group under an existing one for a building/floor within it.
 </p>
 
 @if (!string.IsNullOrEmpty(Model.ErrorMessage))
@@ -47,42 +51,56 @@
 @foreach (var g in Model.Groups)
 {
     var members = Model.Cameras.Where(c => c.Groups.Any(mg => mg.Id == g.Id)).OrderBy(c => c.Name).ToList();
+    var isBuiltIn = g.Id == CameraGroup.AllCamerasId;
 
-    <div class="card mb-3" style="max-width: 640px;">
+    <div class="card mb-3" style="max-width: 640px; margin-left: @(Model.Depth(g) * 1.75)rem;">
         <div class="card-header d-flex justify-content-between align-items-center">
-            <span class="fw-semibold" style="padding-left: @(Model.Depth(g) * 1.25)rem;">@g.Name</span>
-            <form method="post" asp-page-handler="Delete" asp-route-id="@g.Id" class="d-inline"
-                  onclick="return confirm('Delete this group?');">
-                <button type="submit" class="btn btn-sm btn-outline-danger"><span aria-hidden="true">🗑️</span> Delete</button>
-            </form>
+            <span class="fw-semibold">@g.Name</span>
+            @if (!isBuiltIn)
+            {
+                <form method="post" asp-page-handler="Delete" asp-route-id="@g.Id" class="d-inline"
+                      onclick="return confirm('Delete this group?');">
+                    <button type="submit" class="btn btn-sm btn-outline-danger"><span aria-hidden="true">🗑️</span> Delete</button>
+                </form>
+            }
         </div>
         <div class="card-body">
-            @if (members.Count == 0)
+            @if (isBuiltIn)
             {
-                <p class="text-muted small mb-2">No cameras in this group yet.</p>
+                <p class="text-muted small mb-0">
+                    Built in — every camera is automatically a member (@members.Count total). Nothing
+                    to manage here; membership follows camera creation/deletion on its own.
+                </p>
             }
             else
             {
-                <ul class="list-group list-group-flush mb-2">
-                    @foreach (var c in members)
-                    {
-                        <li class="list-group-item d-flex justify-content-between align-items-center px-0">
-                            <span>@c.Name</span>
-                            <form method="post" asp-page-handler="RemoveCamera" class="d-inline">
-                                <input type="hidden" name="cameraId" value="@c.Id" />
-                                <input type="hidden" name="groupId" value="@g.Id" />
-                                <button type="submit" class="btn btn-sm btn-outline-secondary">Remove</button>
-                            </form>
-                        </li>
-                    }
-                </ul>
-            }
+                @if (members.Count == 0)
+                {
+                    <p class="text-muted small mb-2">No cameras in this group yet.</p>
+                }
+                else
+                {
+                    <ul class="list-group list-group-flush mb-2">
+                        @foreach (var c in members)
+                        {
+                            <li class="list-group-item d-flex justify-content-between align-items-center px-0">
+                                <span>@c.Name</span>
+                                <form method="post" asp-page-handler="RemoveCamera" class="d-inline">
+                                    <input type="hidden" name="cameraId" value="@c.Id" />
+                                    <input type="hidden" name="groupId" value="@g.Id" />
+                                    <button type="submit" class="btn btn-sm btn-outline-secondary">Remove</button>
+                                </form>
+                            </li>
+                        }
+                    </ul>
+                }
 
-            <button type="button" class="btn btn-sm btn-primary manage-cameras-btn" data-bs-toggle="modal" data-bs-target="#manageCamerasModal"
-                    data-group-id="@g.Id" data-group-name="@g.Name"
-                    data-member-ids="@string.Join(",", members.Select(m => m.Id))">
-                Manage cameras
-            </button>
+                <button type="button" class="btn btn-sm btn-primary manage-cameras-btn" data-bs-toggle="modal" data-bs-target="#manageCamerasModal"
+                        data-group-id="@g.Id" data-group-name="@g.Name"
+                        data-member-ids="@string.Join(",", members.Select(m => m.Id))">
+                    Manage cameras
+                </button>
+            }
         </div>
     </div>
 }
@@ -108,16 +126,21 @@
                     }
                     else
                     {
+                        <p class="text-muted small">
+                            Checking a camera already in a group under a different site will fail —
+                            see each camera's current group(s) below.
+                        </p>
                         @foreach (var c in Model.Cameras)
                         {
                             <div class="form-check">
                                 <input class="form-check-input manage-cameras-checkbox" type="checkbox" name="cameraIds"
                                        value="@c.Id" id="managecam-@c.Id" data-camera-id="@c.Id" />
+                                @{ var otherGroups = c.Groups.Where(cg => cg.Id != CameraGroup.AllCamerasId).ToList(); }
                                 <label class="form-check-label" for="managecam-@c.Id">
                                     @c.Name
-                                    @if (c.Groups.Count > 0)
+                                    @if (otherGroups.Count > 0)
                                     {
-                                        <span class="text-muted small">(currently: @string.Join(", ", c.Groups.Select(cg => cg.Name)))</span>
+                                        <span class="text-muted small">(currently: @string.Join(", ", otherGroups.Select(cg => cg.Name)))</span>
                                     }
                                 </label>
                             </div>

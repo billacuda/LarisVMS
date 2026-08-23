@@ -5,6 +5,15 @@ namespace LarisVMS.Core.Entities;
 /// don't need a recursive query.</summary>
 public class CameraGroup
 {
+    /// <summary>The one built-in group every camera belongs to unconditionally — seeded by
+    /// CameraGroupSeedService, never renamable or deletable (CameraGroupService.DeleteAsync guards it),
+    /// and exempt from CameraGroupPolicy's single-site rule (CameraService.SetCameraGroupsAsync strips
+    /// it from the site check, then always re-adds it regardless of what a caller submits, which is
+    /// also what makes "can't be removed" true — every membership mutation funnels through that one
+    /// method). A fixed sentinel id, not an IsSystemGroup column: there's exactly one of these, so a
+    /// generalized "system group" concept isn't needed yet.</summary>
+    public static readonly Guid AllCamerasId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
     public Guid Id { get; set; }
     public Guid? ParentId { get; set; }
     public string Name { get; set; } = string.Empty;
