@@ -42,6 +42,13 @@ param(
     # $InstallDir *before* an update is ever triggered, since UpdateService looks for it next to the
     # currently-running exe and just logs a warning and skips the update if it's missing.
     [string]$UpdaterBinaryPath = (Join-Path $PSScriptRoot 'LarisVMS.NodeUpdater.exe'),
+    # Object detection plan decisions 2/3: LarisVMS.Vision.Service.exe + its execution provider's own
+    # native DLLs + models\ — all optional (build-node.ps1 -SkipVision omits them entirely), a plain
+    # recording-only node needs none of it. NodeWorker's own VisionServiceSupervisor looks for this
+    # exact fixed filename in its own install directory (AppContext.BaseDirectory) at runtime, so
+    # every sibling file next to it here (native DLLs, models\) has to land in $InstallDir too, not
+    # just the exe.
+    [string]$VisionBinaryPath  = (Join-Path $PSScriptRoot 'LarisVMS.Vision.Service.exe'),
     [string]$InstallDir        = 'C:\Program Files\LarisVMS\Node',
     [string]$ServiceName       = 'LarisVMSNode',
     [string]$ServiceDisplay    = 'LarisVMS Node',
@@ -83,6 +90,20 @@ function Stop-OrphanedFfmpeg {
     $procs = Get-Process -Name ffmpeg -ErrorAction SilentlyContinue
     if ($procs) {
         Write-Host "    Found $($procs.Count) orphaned ffmpeg process(es) still running - stopping..."
+        $procs | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+    }
+}
+
+# Same reasoning as Stop-OrphanedFfmpeg above — LarisVMS.Vision.Service.exe is a child process
+# NodeWorker's own VisionServiceSupervisor launches, and Windows doesn't kill children when their
+# parent service is stopped. Node's own graceful shutdown is supposed to stop it first, but if the
+# SCM's stop timeout is hit before that finishes, it's left running and holding its own exe/DLLs open,
+# which fails the copy below with "being used by another process."
+function Stop-OrphanedVisionService {
+    $procs = Get-Process -Name 'LarisVMS.Vision.Service' -ErrorAction SilentlyContinue
+    if ($procs) {
+        Write-Host "    Found $($procs.Count) orphaned LarisVMS.Vision.Service process(es) still running - stopping..."
         $procs | Stop-Process -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 2
     }
@@ -169,6 +190,14 @@ if (-not (Test-Path $UpdaterBinaryPath)) {
     Write-Host "WARNING: Updater binary not found: $UpdaterBinaryPath — this node will not be able to auto-update until LarisVMS.NodeUpdater.exe is installed (re-run this script once it's available)." -ForegroundColor Yellow
 }
 
+# Not fatal — a package built with build-node.ps1 -SkipVision, or a plain recording-only node that
+# doesn't want AI detection at all, legitimately has no Vision Service here. AI detection stays
+# unavailable on this node (every other detection path is unaffected) until it's installed.
+$hasVision = Test-Path $VisionBinaryPath
+if (-not $hasVision) {
+    Write-Host "NOTE: LarisVMS.Vision.Service.exe not found: $VisionBinaryPath — this node will run recording-only, with no AI object detection available, until it's installed." -ForegroundColor Yellow
+}
+
 # ── stop existing service ────────────────────────────────────────────────────
 # Must happen before anything below touches $InstallDir: a running node's ffmpeg.exe/DLLs and its
 # own LarisVMS.Node.exe can be locked by the currently-running process, so overwriting them while the
@@ -193,6 +222,7 @@ if ($existingSvc) {
         Write-Ok "Stopped"
     }
     Stop-OrphanedFfmpeg
+    Stop-OrphanedVisionService
 }
 
 # ── resolve ffmpeg ───────────────────────────────────────────────────────────
@@ -259,6 +289,21 @@ New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 Copy-ItemWithRetry $BinaryPath (Join-Path $InstallDir 'LarisVMS.Node.exe')
 if (Test-Path $UpdaterBinaryPath) {
     Copy-ItemWithRetry $UpdaterBinaryPath (Join-Path $InstallDir 'LarisVMS.NodeUpdater.exe')
+}
+if ($hasVision) {
+    # Every sibling file next to LarisVMS.Vision.Service.exe in the package — its execution
+    # provider's own native DLLs (onnxruntime.dll, and for a Cuda build cuDNN/TensorRT's own), not
+    # just the exe itself — plus models\. Copied by name pattern rather than an exhaustive fixed
+    # list: which native DLLs actually ship alongside it depends on which -Accel variant
+    # build-node.ps1 was run with, and hardcoding one variant's set here would silently drop files a
+    # different variant needs.
+    $visionSourceDir = Split-Path $VisionBinaryPath -Parent
+    Copy-ItemWithRetry (Join-Path $visionSourceDir 'LarisVMS.Vision.Service.*') $InstallDir
+    Copy-ItemWithRetry (Join-Path $visionSourceDir '*.dll') $InstallDir
+    $modelsSourceDir = Join-Path $visionSourceDir 'models'
+    if (Test-Path $modelsSourceDir) {
+        Copy-ItemWithRetry $modelsSourceDir $InstallDir
+    }
 }
 Write-Ok "Files installed"
 

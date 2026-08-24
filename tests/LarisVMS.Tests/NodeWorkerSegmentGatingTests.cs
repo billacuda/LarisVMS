@@ -1,4 +1,5 @@
 using LarisVMS.Core.Dtos;
+using LarisVMS.Core.Enums;
 using LarisVMS.Node;
 
 namespace LarisVMS.Tests;
@@ -39,6 +40,55 @@ public class NodeWorkerSegmentGatingTests
     public void SignalSessionDiscardsSegmentsOutsideTheWindow()
     {
         Assert.True(NodeWorker.ShouldDiscardSegment(hasSignalSession: true, hadSignalInWindow: false));
+    }
+}
+
+/// <summary>Covers NodeWorker.ResolvePrimaryMotionSource — object detection plan decision 9's rule
+/// for which of the three generic "something moved" sources (ServerMotion/CameraEvent/Integration)
+/// gets to gate a Motion-mode segment and report plain motion spans, when a camera has more than one
+/// configured. Pure and unit-tested directly, same reasoning as ShouldDiscardSegment above.</summary>
+public class NodeWorkerResolvePrimaryMotionSourceTests
+{
+    [Theory]
+    [InlineData("ServerMotion", MotionDetectionSource.ServerMotion)]
+    [InlineData("CameraEvent", MotionDetectionSource.CameraEvent)]
+    [InlineData("Integration", MotionDetectionSource.Integration)]
+    [InlineData("AiDetection", MotionDetectionSource.AiDetection)]
+    [InlineData("servermotion", MotionDetectionSource.ServerMotion)] // case-insensitive, same as RecordingMode's own parse
+    public void ExplicitChoiceAlwaysWinsRegardlessOfWhatsConfigured(string explicitChoice, MotionDetectionSource expected)
+    {
+        Assert.Equal(expected, NodeWorker.ResolvePrimaryMotionSource(explicitChoice, hasIntegration: true, hasEventSession: true));
+        Assert.Equal(expected, NodeWorker.ResolvePrimaryMotionSource(explicitChoice, hasIntegration: false, hasEventSession: false));
+    }
+
+    [Fact]
+    public void NoExplicitChoicePrefersIntegrationFirst()
+    {
+        Assert.Equal(MotionDetectionSource.Integration,
+            NodeWorker.ResolvePrimaryMotionSource(null, hasIntegration: true, hasEventSession: true));
+    }
+
+    [Fact]
+    public void NoExplicitChoiceFallsBackToCameraEventWhenNoIntegration()
+    {
+        Assert.Equal(MotionDetectionSource.CameraEvent,
+            NodeWorker.ResolvePrimaryMotionSource(null, hasIntegration: false, hasEventSession: true));
+    }
+
+    [Fact]
+    public void NoExplicitChoiceFallsBackToServerMotionWhenNeitherIsConfigured()
+    {
+        Assert.Equal(MotionDetectionSource.ServerMotion,
+            NodeWorker.ResolvePrimaryMotionSource(null, hasIntegration: false, hasEventSession: false));
+    }
+
+    [Fact]
+    public void UnparseableChoiceIsTreatedAsUnset()
+    {
+        // A newer server value this node's build doesn't know, or a genuinely empty string — same
+        // "fail open to the dynamic fallback" philosophy as RecordingMode's own unrecognized-string case.
+        Assert.Equal(MotionDetectionSource.Integration,
+            NodeWorker.ResolvePrimaryMotionSource("SomethingNewer", hasIntegration: true, hasEventSession: false));
     }
 }
 

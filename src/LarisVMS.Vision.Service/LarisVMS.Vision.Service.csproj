@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!-- Published once per accelerator (object detection plan decision 2), same MSBuild switch as
+       LarisVMS.Vision itself and aitest before it:
+
+           dotnet publish -p:Accel=Cuda        Nvidia GPU
+           dotnet publish -p:Accel=DirectML    Any DX12 GPU incl. AMD/Intel
+           dotnet publish -p:Accel=OpenVino    Intel iGPU/CPU
+           dotnet publish -p:Accel=Cpu         No GPU
+
+       Not declared here — LarisVMS.Vision.csproj owns the Accel/ACCEL_* plumbing and the matching
+       YoloDotNet.ExecutionProvider.* package reference. MSBuild propagates a command-line global
+       property like -p:Accel=Cuda through to a ProjectReference's own build automatically, so
+       building or publishing *this* project with -p:Accel=X is enough to make LarisVMS.Vision
+       build against the matching provider too — nothing extra needed here. -->
+
+  <ItemGroup>
+    <!-- The only project allowed to reference LarisVMS.Vision — see that project's own csproj
+         comment for why LarisVMS.Node must never do the same. -->
+    <ProjectReference Include="..\LarisVMS.Vision\LarisVMS.Vision.csproj" />
+    <ProjectReference Include="..\LarisVMS.Core\LarisVMS.Core.csproj" />
+  </ItemGroup>
+
+</Project>

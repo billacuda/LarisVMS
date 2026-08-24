@@ -107,6 +107,22 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         // whole deployment, not something that makes sense to vary camera-by-camera.
         var adaptiveStreamingEnabled = await settings.GetAsync("LiveView.AdaptiveStreamingEnabled", false, ct: ct);
 
+        // Object detection plan decision 2: purely a per-node admin override (Node.AiAccelerator),
+        // not resolved through ISettingsResolver's global/node/camera chain the way the settings
+        // above are — a node's own hardware is a fact about that specific machine, not something a
+        // global default or camera-scoped override makes sense for. Null (never configured) reads
+        // as "Auto", the same "resolve automatically" meaning the enum's own Auto value carries.
+        var aiAccelerator = await db.Nodes.Where(n => n.Id == nodeId).Select(n => n.AiAccelerator).FirstOrDefaultAsync(ct);
+
+        // Object detection plan decisions 7/2: global detection policy, resolved once here the
+        // same way WatermarkPercent/AdaptiveStreamingEnabled already are — see NodeConfigResponse's
+        // own doc comments for why these are deployment-wide rather than per-camera settings.
+        var reportIdleDetections = await settings.GetAsync("Detection.ReportIdleDetections", false, ct: ct);
+        var aiDetectionWidth = await settings.GetAsync("Detection.Width", 1280, ct: ct);
+        var aiDetectionHeight = await settings.GetAsync("Detection.Height", 720, ct: ct);
+        var aiConfidence = await settings.GetAsync("Detection.Confidence", 0.35, ct: ct);
+        var aiIou = await settings.GetAsync("Detection.Iou", 0.5, ct: ct);
+
         var cameraIds = cameras.Select(c => c.Id).ToList();
         // M18: Privacy joins ServerMotion/Ignore here — RecordingSession's own privacy-mask burn-in
         // needs it the same way MotionSession needs the other two. CameraMotion is still excluded:
@@ -162,7 +178,8 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
                 // behind by a removed/newer provider quietly means "no integration" rather than
                 // asking the node to start something it can't resolve.
                 CameraIntegrations.ByKey(c.IntegrationKey)?.Key,
-                ResolveIntegrationBaseUri(c), segmentSeconds));
+                ResolveIntegrationBaseUri(c), segmentSeconds,
+                c.AiDetectionEnabled, c.MotionDetectionSource?.ToString()));
         }
 
         // Cameras this node has leftover Segments for but doesn't currently record — reassigned to a
@@ -187,7 +204,9 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             orphanedCameraDtos.Add(new NodeConfigOrphanedCameraDto(orphanedCameraId, retentionDays));
         }
 
-        return new NodeConfigResponse(cameraDtos, storageRoot, watermarkPercent, mediaSigningKey, orphanedCameraDtos, adaptiveStreamingEnabled);
+        return new NodeConfigResponse(cameraDtos, storageRoot, watermarkPercent, mediaSigningKey, orphanedCameraDtos,
+            adaptiveStreamingEnabled, (aiAccelerator ?? AiAccelerator.Auto).ToString(),
+            reportIdleDetections, aiDetectionWidth, aiDetectionHeight, aiConfidence, aiIou);
     }
 
     /// <summary>Pulls the Events service's own XAddr out of the capability prober's raw category map
@@ -238,10 +257,13 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         => nodeSentAtUtc is { } sentAt ? (serverReceivedUtc - sentAt).TotalSeconds : null;
 
     public async Task RecordHeartbeatAsync(Guid nodeId, long? freeBytes, long? totalBytes, string? version, int? livePort,
-        DateTime? nodeSentAtUtc, DateTime serverReceivedUtc, List<string>? detectedEncoders = null, CancellationToken ct = default)
+        DateTime? nodeSentAtUtc, DateTime serverReceivedUtc, List<string>? detectedEncoders = null,
+        List<string>? detectedAccelerators = null, CancellationToken ct = default)
     {
         var skew = ComputeClockSkewSeconds(nodeSentAtUtc, serverReceivedUtc);
         var encodersJson = detectedEncoders is not null ? System.Text.Json.JsonSerializer.Serialize(detectedEncoders) : null;
+        // Object detection plan decision 2: same coalesce-preserve shape as encodersJson above.
+        var acceleratorsJson = detectedAccelerators is not null ? System.Text.Json.JsonSerializer.Serialize(detectedAccelerators) : null;
 
         await db.Nodes.Where(n => n.Id == nodeId).ExecuteUpdateAsync(s => s
             .SetProperty(n => n.StorageFreeBytes, freeBytes)
@@ -251,7 +273,8 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             .SetProperty(n => n.LivePort, n => livePort ?? n.LivePort)
             .SetProperty(n => n.ClockSkewSeconds, n => skew ?? n.ClockSkewSeconds)
             .SetProperty(n => n.ClockSkewMeasuredAt, n => skew != null ? serverReceivedUtc : n.ClockSkewMeasuredAt)
-            .SetProperty(n => n.DetectedEncodersJson, n => encodersJson ?? n.DetectedEncodersJson), ct);
+            .SetProperty(n => n.DetectedEncodersJson, n => encodersJson ?? n.DetectedEncodersJson)
+            .SetProperty(n => n.DetectedAcceleratorsJson, n => acceleratorsJson ?? n.DetectedAcceleratorsJson), ct);
     }
 
     /// <summary>Every field is coalesce-preserve (`item.X ?? s.X`), not a blind overwrite — M11 added
@@ -363,6 +386,12 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
 
     public async Task RecordMotionSpansAsync(Guid nodeId, IReadOnlyList<MotionSpanReportItem> spans, CancellationToken ct = default)
     {
+        // Object detection plan decision 5: resolved once per distinct category name actually
+        // reported in this batch, not once per item — a busy batch can report the same category
+        // (e.g. "Vehicle") many times in one call, and caching avoids redundant round-trips (and,
+        // more importantly, redundant find-or-create races) within a single call.
+        var categoryCache = new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
+
         // M8: a still-open span is checkpointed periodically (NodeWorker.EnqueueMotionCheckpoints),
         // not just reported once on close — without upserting, every checkpoint of the same
         // long-running span would pile up as its own row instead of one row that keeps extending.
@@ -372,6 +401,10 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         // for one span all carry the same triple.
         foreach (var item in spans)
         {
+            var detectedObjectCategoryId = item.DetectedObjectCategory is { } categoryName
+                ? await ResolveDetectedObjectCategoryIdAsync(categoryName, categoryCache, ct)
+                : (Guid?)null;
+
             // M8 pass 8: EventTagRuleId joins the identity key alongside ZoneId — both the built-in
             // camera-pushed classifier and a custom EventTagRule report with ZoneId=null, so without
             // this a rule's span starting at the same instant as a built-in motion span (or another
@@ -380,10 +413,18 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             // object-detection span reports with ZoneId and EventTagRuleId both null, exactly like a
             // built-in motion span, so without it a person detected at the same instant as plain
             // motion (the normal case — a camera fires both families for one real event) would
-            // collide with it and silently steal its checkpoints.
+            // collide with it and silently steal its checkpoints. DetectedObjectLabel joins for the
+            // identical reason on the AI-detection side: LarisVMS.Vision.Service debounces per raw
+            // class name (a Dictionary<string, MotionHysteresis>, mirroring
+            // DahuaCgiEventSession's own per-DetectionKind dictionary — both collapse multiple
+            // simultaneous instances of the same class into one span, an existing, accepted
+            // simplification this doesn't change), so the label is what actually distinguishes,
+            // say, a "car" span from a "person" span reported at the same instant — the coarser
+            // DetectedObjectCategoryId alone would collide the two together.
             var existing = await db.MotionSpans.FirstOrDefaultAsync(m =>
                 m.CameraId == item.CameraId && m.ZoneId == item.ZoneId && m.EventTagRuleId == item.EventTagRuleId
-                && m.DetectionKind == item.DetectionKind && m.StartUtc == item.StartUtc, ct);
+                && m.DetectionKind == item.DetectionKind && m.DetectedObjectLabel == item.DetectedObjectLabel
+                && m.StartUtc == item.StartUtc, ct);
 
             if (existing is not null)
             {
@@ -391,6 +432,19 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
                 // older report should never pull EndUtc backward.
                 if (item.EndUtc > existing.EndUtc) existing.EndUtc = item.EndUtc;
                 existing.Score = Math.Max(existing.Score, item.Score);
+                // Object detection plan decision 10: LarisVMS.Vision.Service's own best-frame
+                // tracking is already monotonic (a later report's box is never worse than an
+                // earlier one for the same track), so a later checkpoint can just overwrite rather
+                // than needing its own comparison here.
+                if (item.BestFrameAtUtc is not null)
+                {
+                    existing.BestFrameAtUtc = item.BestFrameAtUtc;
+                    existing.BestBoxX = item.BestBoxX;
+                    existing.BestBoxY = item.BestBoxY;
+                    existing.BestBoxW = item.BestBoxW;
+                    existing.BestBoxH = item.BestBoxH;
+                    existing.BestBoxConfidence = item.BestBoxConfidence;
+                }
                 continue;
             }
 
@@ -401,15 +455,28 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
                 EventTagRuleId = item.EventTagRuleId,
                 // M8 pass 8: a non-null EventTagRuleId always means a custom-tag span regardless of
                 // ZoneId (which a custom-tag report never sets anyway) — checked first for that
-                // reason. A null EventTagRuleId falls back to pass 6's original two-way inference: a
-                // null ZoneId only ever comes from the built-in camera-pushed classifier, since a
-                // ServerMotion span always names the zone that detected it.
+                // reason. AiDetection is checked next, ahead of the original two-way ZoneId
+                // inference below, since an AI-detection report also always has ZoneId=null (it has
+                // no zone concept of its own) and would otherwise be misread as CameraEvent. A null
+                // ZoneId with no EventTagRuleId or category only ever comes from the built-in
+                // camera-pushed classifier, since a ServerMotion span always names the zone that
+                // detected it.
                 Source = item.EventTagRuleId is not null ? MotionSource.CustomTag
+                    : detectedObjectCategoryId is not null ? MotionSource.AiDetection
                     : item.ZoneId is null ? MotionSource.CameraEvent : MotionSource.ServerMotion,
                 // Object detections stay Source=CameraEvent (they arrive over the same PullPoint
                 // channel from the same classifier) and are distinguished by this instead — see
-                // DetectionKind's own doc comment for why the two are separate questions.
+                // DetectionKind's own doc comment for why the two are separate questions. Always
+                // null for an AiDetection-sourced span — see DetectedObjectCategoryId below.
                 DetectionKind = item.DetectionKind,
+                DetectedObjectCategoryId = detectedObjectCategoryId,
+                DetectedObjectLabel = item.DetectedObjectLabel,
+                BestFrameAtUtc = item.BestFrameAtUtc,
+                BestBoxX = item.BestBoxX,
+                BestBoxY = item.BestBoxY,
+                BestBoxW = item.BestBoxW,
+                BestBoxH = item.BestBoxH,
+                BestBoxConfidence = item.BestBoxConfidence,
                 StartUtc = item.StartUtc,
                 EndUtc = item.EndUtc,
                 Score = item.Score
@@ -434,6 +501,54 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
                 foreach (var entry in ex.Entries) entry.State = EntityState.Detached;
             }
         }
+    }
+
+    /// <summary>Find-or-create for a DetectedObjectCategory row, auto-assigning a color only on
+    /// create — object detection plan decision 5's "pick one automatically that hasn't been used
+    /// yet." <paramref name="cache"/> is scoped to one RecordMotionSpansAsync call, so a batch that
+    /// reports the same brand-new category name several times only creates one row (and only
+    /// queries the database once) for it.</summary>
+    private async Task<Guid> ResolveDetectedObjectCategoryIdAsync(string categoryName, Dictionary<string, Guid> cache, CancellationToken ct)
+    {
+        if (cache.TryGetValue(categoryName, out var cachedId)) return cachedId;
+
+        var existing = await db.DetectedObjectCategories.FirstOrDefaultAsync(c => c.Name == categoryName, ct);
+        if (existing is not null)
+        {
+            cache[categoryName] = existing.Id;
+            return existing.Id;
+        }
+
+        var existingColors = await db.DetectedObjectCategories.Select(c => c.ColorHex).ToListAsync(ct);
+        var category = new DetectedObjectCategory
+        {
+            Id = Guid.NewGuid(),
+            Name = categoryName,
+            ColorHex = DetectedObjectColorAssigner.PickNextColor(existingColors),
+            FirstSeenUtc = DateTime.UtcNow
+        };
+        db.DetectedObjectCategories.Add(category);
+
+        try
+        {
+            // Saved immediately, not batched with the rest of this call's own SaveChangesAsync, so
+            // its Id is committed and visible before any MotionSpan row below references it via FK.
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException) when (db.Entry(category).State != EntityState.Detached)
+        {
+            // Lost a race against another concurrent report creating the same brand-new category
+            // name at the same time (two nodes, or two cameras on one node, both seeing a genuinely
+            // new class for the first time in the same instant) — the unique index on Name rejected
+            // this insert. Detach our own now-orphaned attempt and use whichever row actually won.
+            db.Entry(category).State = EntityState.Detached;
+            var winner = await db.DetectedObjectCategories.FirstAsync(c => c.Name == categoryName, ct);
+            cache[categoryName] = winner.Id;
+            return winner.Id;
+        }
+
+        cache[categoryName] = category.Id;
+        return category.Id;
     }
 
     /// <summary>M8 pass 6: every raw ONVIF PullPoint notification a node reported, logged verbatim —
@@ -486,12 +601,13 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             .ExecuteUpdateAsync(u => u.SetProperty(c => c.NodeId, nodeId), ct);
     }
 
-    public async Task UpdateAsync(Guid nodeId, string name, string? storageRootPath, CancellationToken ct = default)
+    public async Task UpdateAsync(Guid nodeId, string name, string? storageRootPath, AiAccelerator? aiAccelerator = null, CancellationToken ct = default)
     {
         var node = await db.Nodes.FirstOrDefaultAsync(n => n.Id == nodeId, ct)
             ?? throw new InvalidOperationException("Node not found.");
         node.Name = name;
         node.StorageRootPath = string.IsNullOrWhiteSpace(storageRootPath) ? null : storageRootPath;
+        node.AiAccelerator = aiAccelerator;
         await db.SaveChangesAsync(ct);
     }
 

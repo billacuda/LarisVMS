@@ -64,6 +64,9 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<EventTagRule> EventTagRules => Set<EventTagRule>();
     public DbSet<ScheduleWindow> ScheduleWindows => Set<ScheduleWindow>();
 
+    // ── Object detection ─────────────────────────────────────────────────────
+    public DbSet<DetectedObjectCategory> DetectedObjectCategories => Set<DetectedObjectCategory>();
+
     // ── Views (M6) ───────────────────────────────────────────────────────────
     public DbSet<View> Views => Set<View>();
 
@@ -292,6 +295,9 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.MediaSigningKey).HasConversion(new EncryptedNullableStringConverter()).HasMaxLength(500);
             // Plenty for a JSON array of up to 8 short encoder names (FfmpegCapabilityProber.KnownEncoders) — not a secret, no encryption needed.
             e.Property(x => x.DetectedEncodersJson).HasMaxLength(500);
+            // Plenty for a JSON array of the (at most 4) AiAccelerator names AccelCapabilityProber
+            // can ever report — not a secret, no encryption needed.
+            e.Property(x => x.DetectedAcceleratorsJson).HasMaxLength(200);
         });
 
         // ── Segment ──────────────────────────────────────────────────────────
@@ -327,6 +333,8 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.Platform).HasMaxLength(50).IsRequired();
             e.Property(x => x.FilePath).HasMaxLength(500).IsRequired();
             e.Property(x => x.Sha256).HasMaxLength(64).IsRequired();
+            e.Property(x => x.VisionFilePath).HasMaxLength(500);
+            e.Property(x => x.VisionSha256).HasMaxLength(64);
             e.Property(x => x.Notes).HasMaxLength(1000);
             e.Property(x => x.ApprovedBy).HasMaxLength(256);
             // What GetLatestForPlatformAsync queries on every heartbeat from every checked-in node —
@@ -373,6 +381,13 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             // null-out workaround — EventTagRuleService.DeleteAsync, not a DB cascade.
             e.HasOne(x => x.EventTagRule).WithMany()
                 .HasForeignKey(x => x.EventTagRuleId).OnDelete(DeleteBehavior.Restrict);
+            // Same multi-cascade-path reasoning as Zone/EventTagRule above — DetectedObjectCategory
+            // rows are never expected to be deleted in practice (see its own doc comment), but if
+            // one ever is, the span should survive with its attribution cleared rather than be
+            // deleted, and SQL Server can't express that as a second SetNull path here either.
+            e.HasOne(x => x.DetectedObjectCategory).WithMany()
+                .HasForeignKey(x => x.DetectedObjectCategoryId).OnDelete(DeleteBehavior.Restrict);
+            e.Property(x => x.DetectedObjectLabel).HasMaxLength(100);
             e.HasKey(x => x.Id).IsClustered(false);
             e.HasIndex(x => new { x.CameraId, x.StartUtc }).IsClustered();
         });
@@ -405,6 +420,14 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.HasOne(x => x.Camera).WithMany()
                 .HasForeignKey(x => x.CameraId).OnDelete(DeleteBehavior.Cascade);
             e.HasIndex(x => x.CameraId);
+        });
+
+        // ── DetectedObjectCategory (object detection plan decision 5) ──────────
+        builder.Entity<DetectedObjectCategory>(e =>
+        {
+            e.Property(x => x.Name).HasMaxLength(100).IsRequired();
+            e.Property(x => x.ColorHex).HasMaxLength(9).IsRequired(); // "#rrggbbaa" worst case, same bound EventTagRule.ColorHex uses
+            e.HasIndex(x => x.Name).IsUnique();
         });
 
         // ── ExportJob / ExportJobItem ────────────────────────────────────────

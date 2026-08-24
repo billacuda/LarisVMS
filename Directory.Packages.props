@@ -19,6 +19,14 @@
     <PackageVersion Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.10" />
     <PackageVersion Include="Microsoft.Graph" Version="6.5.0" />
     <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
+    <!-- LarisVMS.Vision / LarisVMS.Vision.Service — object detection (see the detection plan).
+         Versions match what aitest (g:\Projects\aitest) already proved out. -->
+    <PackageVersion Include="YoloDotNet" Version="4.2.0" />
+    <PackageVersion Include="YoloDotNet.ExecutionProvider.Cuda" Version="1.1.0" />
+    <PackageVersion Include="YoloDotNet.ExecutionProvider.DirectML" Version="1.0.0" />
+    <PackageVersion Include="YoloDotNet.ExecutionProvider.OpenVino" Version="1.1.0" />
+    <PackageVersion Include="YoloDotNet.ExecutionProvider.Cpu" Version="1.1.0" />
+    <PackageVersion Include="System.Management" Version="10.0.0" />
     <!-- Testing -->
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageVersion Include="xunit" Version="2.9.3" />

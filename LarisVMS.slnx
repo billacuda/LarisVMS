@@ -3,6 +3,8 @@
     <Project Path="src/LarisVMS.Core/LarisVMS.Core.csproj" />
     <Project Path="src/LarisVMS.Onvif/LarisVMS.Onvif.csproj" />
     <Project Path="src/LarisVMS.Media/LarisVMS.Media.csproj" />
+    <Project Path="src/LarisVMS.Vision/LarisVMS.Vision.csproj" />
+    <Project Path="src/LarisVMS.Vision.Service/LarisVMS.Vision.Service.csproj" />
     <Project Path="src/LarisVMS.Infrastructure/LarisVMS.Infrastructure.csproj" />
     <Project Path="src/LarisVMS.Web/LarisVMS.Web.csproj" />
     <Project Path="src/LarisVMS.Node/LarisVMS.Node.csproj" />

@@ -43,6 +43,27 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     private readonly ConcurrentDictionary<Guid, CameraIntegrationRecorder> _activeIntegrations = new();
     private readonly ConcurrentQueue<CameraEventReportItem> _pendingCameraEvents = new();
 
+    // Object detection plan decisions 2/3/7: NodeWorker holds no session object of its own for AI
+    // detection (the whole pipeline lives in the sibling LarisVMS.Vision.Service process) — just
+    // enough bookkeeping to avoid redundant start calls and to fold Vision Service's own reports
+    // into the existing _pendingMotionSpans pipeline. Concurrent for the same reason _active is:
+    // read from Program.cs's own new localhost-only POST /detections handler (a request thread),
+    // written from the reconcile loop.
+    private readonly ConcurrentDictionary<Guid, CameraVisionRecorder> _activeVision = new();
+    private readonly ConcurrentDictionary<Guid, byte> _warnedVisionNoAccelerator = new();
+    private readonly ConcurrentDictionary<Guid, byte> _warnedVisionMissingSubStream = new();
+    private readonly VisionServiceSupervisor _visionSupervisor =
+        new(AppContext.BaseDirectory, loggerFactory.CreateLogger<VisionServiceSupervisor>());
+    private readonly HttpClient _visionHttp = new() { BaseAddress = new Uri($"http://127.0.0.1:{VisionServiceSupervisor.Port}/") };
+
+    /// <summary>Same client this worker's own reconcile loop uses to start/stop watching a camera —
+    /// exposed so DetectionOverlayHandler (decision 6's live-view box overlay) can poll
+    /// GET /cameras/{id}/detections without opening a second HttpClient against the same base
+    /// address.</summary>
+    public HttpClient VisionHttpClient => _visionHttp;
+    private IReadOnlyList<AiAccelerator> _detectedAccelerators = [];
+    private AiAccelerator? _resolvedAccelerator;
+
     // M8 pass 2: each camera's SegmentCompleted handler (see HandleSegmentCompleted) fires from
     // that camera's own RecordingSession.RunAsync task, so multiple cameras can call in
     // concurrently — a plain HashSet would race. TryAdd used purely as a "have we warned about
@@ -213,6 +234,40 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         }
     }
 
+    // Object detection plan decision 10: its own small gate, mirroring OnDemandThumbnailGate above —
+    // separate from it (not shared) for the same reason the thumbnail on-demand/background gates are
+    // kept apart: a burst of snapshot-image requests shouldn't be able to starve an ordinary hover
+    // preview, or vice versa.
+    private static readonly SemaphoreSlim OnDemandSnapshotGate = new(2, 2);
+
+    /// <summary>Object detection plan decision 10: extracts one cropped JPEG frame from an
+    /// already-recorded segment file for an AI-detection MotionSpan's best-frame image — same
+    /// "no camera-assignment check" reasoning as CaptureThumbnailAsync (the /snapshot-image route's
+    /// own directory-prefix validation already confirms filePath belongs to this node before this is
+    /// ever called).</summary>
+    public async Task<byte[]?> CaptureSnapshotImageAsync(string filePath, int offsetSeconds,
+        double boxX, double boxY, double boxW, double boxH, int frameWidth, int frameHeight, CancellationToken ct)
+    {
+        using var gateCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        gateCts.CancelAfter(TimeSpan.FromSeconds(3));
+        try
+        {
+            await OnDemandSnapshotGate.WaitAsync(gateCts.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return null; // gate stayed full for 3s straight — treat like any other capture failure
+        }
+        try
+        {
+            return await SnapshotImageCapture.CaptureAsync(ffmpegPath, filePath, offsetSeconds, boxX, boxY, boxW, boxH, frameWidth, frameHeight, ct);
+        }
+        finally
+        {
+            OnDemandSnapshotGate.Release();
+        }
+    }
+
     /// <summary>The key currently used to validate incoming live-view tokens. Seeded from the locally
     /// persisted registration (set for any node that registered after M5 shipped), then kept current
     /// by every reconcile cycle's GetConfigAsync response — the server hands this out through the
@@ -254,6 +309,14 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         _logger.LogInformation("Detected encoder(s): {Encoders}",
             _detectedEncoders.Count > 0 ? string.Join(", ", _detectedEncoders) : "(none — ffmpeg -encoders probe found nothing recognized, or failed)");
 
+        // Object detection plan decision 2: probed once, same reasoning as encoders above — this
+        // node's hardware doesn't change while the process is running. AccelSelection combines this
+        // with the admin's own AiAccelerator choice (from config, resolved fresh every reconcile)
+        // to decide which accelerator to actually use.
+        _detectedAccelerators = await AccelCapabilityProber.ProbeAsync();
+        _logger.LogInformation("Detected AI accelerator(s): {Accelerators}",
+            _detectedAccelerators.Count > 0 ? string.Join(", ", _detectedAccelerators) : "(none detected)");
+
         var reconcileLoop = ReconcileLoopAsync(stoppingToken);
         var segmentReportLoop = SegmentReportLoopAsync(stoppingToken);
         var gatedDecisionLoop = GatedDecisionLoopAsync(stoppingToken);
@@ -286,6 +349,13 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             await FlushStreamInfoAsync(CancellationToken.None);
             await FlushMotionSpansAsync(CancellationToken.None);
             await FlushCameraEventsAsync(CancellationToken.None);
+
+            // No RunTask to await for AI detection — the whole pipeline lives in the sibling
+            // process, not an in-process session object — so stopping it is just tearing down the
+            // process itself. Vision Service's own shutdown (CameraDetectionPipeline.DisposeAsync)
+            // flushes any in-progress spans and reports them back before it exits, the same
+            // philosophy every other session type here already follows.
+            _visionSupervisor.Stop();
         }
     }
 
@@ -331,7 +401,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 PersistConfigCache(config);
                 var usage = DiskSpace.TryGetUsage(storageRoot);
                 var heartbeat = await api.HeartbeatAsync(new NodeHeartbeatRequest(NodeVersion.Current, usage?.FreeBytes, usage?.TotalBytes, livePort,
-                    DateTime.UtcNow, _detectedEncoders?.ToList()), ct);
+                    DateTime.UtcNow, _detectedEncoders?.ToList(), _detectedAccelerators.Select(a => a.ToString()).ToList()), ct);
 
                 // Auto-update: server only ever hands this back when a genuinely newer build exists
                 // for this node's platform and NodeAutoUpdate.Enabled is on (see Program.cs's
@@ -623,6 +693,35 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             if (_activeIntegrations.TryRemove(cameraId, out var integration)) integration.Cts.Cancel();
         }
 
+        foreach (var cameraId in _activeVision.Keys.Except(desired.Keys).ToList())
+        {
+            _logger.LogInformation("Camera {CameraId} no longer assigned to this node — stopping AI detection.", cameraId);
+            if (_activeVision.TryRemove(cameraId, out _)) _ = StopVisionWatchAsync(cameraId);
+        }
+
+        // Object detection plan decisions 2/3: resolved once per reconcile (this node's own hardware
+        // doesn't change; the admin's AiAccelerator choice can, so this is re-evaluated every cycle
+        // the same way every other config-driven decision here is). Auto never falls back to Cpu —
+        // see AccelSelection's own doc comment.
+        var desiredAccelerator = Enum.TryParse<AiAccelerator>(config.AiAccelerator, ignoreCase: true, out var parsedAccel)
+            ? parsedAccel : AiAccelerator.Auto;
+        _resolvedAccelerator = AccelSelection.Choose(desiredAccelerator, _detectedAccelerators);
+
+        var anyCameraWantsAiDetection = config.Cameras.Any(c => c.AiDetectionEnabled);
+        if (anyCameraWantsAiDetection && _resolvedAccelerator is not null)
+        {
+            _visionSupervisor.EnsureRunning();
+        }
+        else
+        {
+            if (_visionSupervisor.IsRunning) _logger.LogInformation("Stopping LarisVMS.Vision.Service — no longer needed.");
+            _visionSupervisor.Stop();
+            // The sibling process is gone, so every camera it was watching needs a fresh /start
+            // call once it (or a usable accelerator) comes back — nothing to explicitly stop
+            // per-camera here, the process teardown already did that.
+            _activeVision.Clear();
+        }
+
         // M18: also stops every running Sub live session outright when the toggle itself is off, not
         // just ones for cameras no longer assigned — see ReconcileLiveSub's own doc comment for why
         // this can't just be "skip starting new ones."
@@ -771,6 +870,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             ReconcileMotion(camera, stoppingToken);
             ReconcileEvents(camera, stoppingToken);
             ReconcileIntegration(camera, stoppingToken);
+            ReconcileVision(camera, config);
             if (config.AdaptiveStreamingEnabled) ReconcileLiveSub(camera, stoppingToken);
         }
 
@@ -815,13 +915,24 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         var capturedCameraId = camera.CameraId; // same staleness reasoning as HandleSegmentCompleted's own capture
         eventSession.EventObserved += observed => _pendingCameraEvents.Enqueue(
             new CameraEventReportItem(capturedCameraId, observed.Topic, observed.UtcTime, observed.PayloadJson, observed.IsMotion));
-        eventSession.MotionSpanCompleted += result => _pendingMotionSpans.Enqueue(
-            new MotionSpanReportItem(capturedCameraId, null, result.StartUtc, result.EndUtc, result.PeakScore));
+        // Object detection plan decision 9: MotionSpanCompleted (plain motion) and DetectionSpanCompleted
+        // (the camera's own onboard object classifier) are both the CameraEvent source — same PullPoint
+        // channel, same session — so both gate together, restricted to whichever of the three generic
+        // sources is the camera's chosen primary in Motion mode. RuleSpanCompleted (a named EventTagRule)
+        // stays unconditional — it always reports regardless of the chosen primary.
+        eventSession.MotionSpanCompleted += result =>
+        {
+            if (ShouldReportGenericMotion(capturedCameraId, MotionDetectionSource.CameraEvent))
+                _pendingMotionSpans.Enqueue(new MotionSpanReportItem(capturedCameraId, null, result.StartUtc, result.EndUtc, result.PeakScore));
+        };
         eventSession.RuleSpanCompleted += (ruleId, result) => _pendingMotionSpans.Enqueue(
             new MotionSpanReportItem(capturedCameraId, null, result.StartUtc, result.EndUtc, result.PeakScore, ruleId));
-        eventSession.DetectionSpanCompleted += (kind, result) => _pendingMotionSpans.Enqueue(
-            new MotionSpanReportItem(capturedCameraId, null, result.StartUtc, result.EndUtc, result.PeakScore,
-                EventTagRuleId: null, DetectionKind: kind));
+        eventSession.DetectionSpanCompleted += (kind, result) =>
+        {
+            if (ShouldReportGenericMotion(capturedCameraId, MotionDetectionSource.CameraEvent))
+                _pendingMotionSpans.Enqueue(new MotionSpanReportItem(capturedCameraId, null, result.StartUtc, result.EndUtc, result.PeakScore,
+                    EventTagRuleId: null, DetectionKind: kind));
+        };
 
         var eventsRunTask = eventSession.RunAsync(eventsCts.Token);
         _activeEvents[camera.CameraId] = new CameraEventRecorder(eventsCts, eventsRunTask, eventSession, ruleSignature);
@@ -889,9 +1000,14 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         }
 
         var capturedCameraId = camera.CameraId; // same staleness reasoning as ReconcileEvents' own capture
-        session.DetectionSpanCompleted += (kind, result) => _pendingMotionSpans.Enqueue(
-            new MotionSpanReportItem(capturedCameraId, null, result.StartUtc, result.EndUtc, result.PeakScore,
-                EventTagRuleId: null, DetectionKind: kind));
+        // Object detection plan decision 9: this is the Integration source, restricted to whichever
+        // of the three generic sources is the camera's chosen primary in Motion mode.
+        session.DetectionSpanCompleted += (kind, result) =>
+        {
+            if (ShouldReportGenericMotion(capturedCameraId, MotionDetectionSource.Integration))
+                _pendingMotionSpans.Enqueue(new MotionSpanReportItem(capturedCameraId, null, result.StartUtc, result.EndUtc, result.PeakScore,
+                    EventTagRuleId: null, DetectionKind: kind));
+        };
 
         var runTask = session.RunAsync(integrationCts.Token);
         _activeIntegrations[camera.CameraId] = new CameraIntegrationRecorder(
@@ -957,8 +1073,14 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         var motionCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         var motionLogger = loggerFactory.CreateLogger($"Motion[{camera.Name}]");
         var motionSession = new MotionSession(motionOptions, zoneMasks, motionLogger);
-        motionSession.MotionSpanCompleted += (zoneId, result) => _pendingMotionSpans.Enqueue(
-            new MotionSpanReportItem(camera.CameraId, zoneId, result.StartUtc, result.EndUtc, result.PeakScore));
+        // Object detection plan decision 9: this is ServerMotion, one of the three generic
+        // "something moved" sources restricted to whichever one is the camera's chosen primary in
+        // Motion mode — see ShouldReportGenericMotion's own doc comment.
+        motionSession.MotionSpanCompleted += (zoneId, result) =>
+        {
+            if (ShouldReportGenericMotion(camera.CameraId, MotionDetectionSource.ServerMotion))
+                _pendingMotionSpans.Enqueue(new MotionSpanReportItem(camera.CameraId, zoneId, result.StartUtc, result.EndUtc, result.PeakScore));
+        };
 
         var motionRunTask = motionSession.RunAsync(motionCts.Token);
         _activeMotion[camera.CameraId] = new CameraMotionRecorder(motionCts, motionRunTask, motionSession, signature);
@@ -969,6 +1091,117 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     // per camera at most) and readable in a debugger, so there's no reason to hash away that.
     private static string BuildZoneConfigSignature(List<NodeConfigZoneDto> zones) =>
         string.Join('|', zones.OrderBy(z => z.ZoneId).Select(z => $"{z.ZoneId}:{z.Kind}:{z.Sensitivity}:{z.PolygonJson}"));
+
+    /// <summary>Starts/replaces/stops this camera's AI detection watch via LarisVMS.Vision.Service's
+    /// own control API (object detection plan decisions 2/3/7) — independent of
+    /// ReconcileMotion/ReconcileEvents/ReconcileIntegration above, the same way they're independent
+    /// of each other: a camera can have AI detection enabled with or without any of the others
+    /// configured. No-op entirely if AI detection isn't enabled for this camera, this node has no
+    /// usable accelerator resolved, or the Vision Service process isn't currently running —
+    /// Reconcile's own EnsureRunning/Stop call, made once per cycle before this per-camera loop
+    /// runs, already logs the "why" for the process-level cases; this only warns for the
+    /// per-camera-specific ones (no accelerator, no Sub stream).</summary>
+    private void ReconcileVision(NodeConfigCameraDto camera, NodeConfigResponse config)
+    {
+        if (!camera.AiDetectionEnabled || _resolvedAccelerator is null || !_visionSupervisor.IsRunning)
+        {
+            if (_activeVision.TryRemove(camera.CameraId, out _)) _ = StopVisionWatchAsync(camera.CameraId);
+
+            if (camera.AiDetectionEnabled && _resolvedAccelerator is null && _warnedVisionNoAccelerator.TryAdd(camera.CameraId, 0))
+            {
+                _logger.LogWarning(
+                    "Camera {CameraId} ({Name}) has AI detection enabled but this node has no usable " +
+                    "accelerator resolved — every other detection path already configured for it is unaffected.",
+                    camera.CameraId, camera.Name);
+            }
+            return;
+        }
+
+        var subStream = camera.Streams.FirstOrDefault(s => s.Role == "Sub");
+        if (subStream is null)
+        {
+            if (_warnedVisionMissingSubStream.TryAdd(camera.CameraId, 0))
+            {
+                _logger.LogWarning("Camera {CameraId} ({Name}) has AI detection enabled but no Sub stream to watch it on.",
+                    camera.CameraId, camera.Name);
+            }
+            return;
+        }
+
+        var subRtspUri = InjectCredentials(subStream.RtspUri, camera.Username, camera.Password);
+        var signature = string.Join('|', subRtspUri, config.AiDetectionWidth, config.AiDetectionHeight,
+            config.AiConfidence, config.AiIou, config.ReportIdleDetections, _resolvedAccelerator);
+
+        if (_activeVision.TryGetValue(camera.CameraId, out var existing) && existing.ConfigSignature == signature) return; // already watching, unchanged
+
+        var request = new VisionStartCameraRequest(
+            camera.CameraId, subRtspUri, config.AiDetectionWidth, config.AiDetectionHeight,
+            AccelToFfmpegHwaccel(_resolvedAccelerator.Value), config.AiConfidence, config.AiIou,
+            config.ReportIdleDetections, $"http://127.0.0.1:{livePort}");
+
+        _activeVision[camera.CameraId] = new CameraVisionRecorder(signature);
+        _ = StartVisionWatchAsync(request);
+        _logger.LogInformation("Starting AI detection watch for camera {CameraId} ({Name}).", camera.CameraId, camera.Name);
+    }
+
+    /// <summary>Maps a resolved AiAccelerator to VisionSession's own -hwaccel value. Only Nvidia
+    /// maps to a real value: CUDA's scale_cuda GPU-hybrid decode is the only pairing actually
+    /// verified end to end (in aitest, against real cameras) — see VisionSession.StartFfmpeg's own
+    /// doc comment. Intel/AMD still get GPU-accelerated *inference* (whichever execution provider
+    /// this Vision Service build was compiled for), just CPU decode until an equivalent verified
+    /// hwaccel pairing exists for them.</summary>
+    private static string? AccelToFfmpegHwaccel(AiAccelerator accelerator) => accelerator switch
+    {
+        AiAccelerator.Nvidia => "cuda",
+        _ => null
+    };
+
+    private async Task StartVisionWatchAsync(VisionStartCameraRequest request)
+    {
+        try
+        {
+            var response = await _visionHttp.PostAsJsonAsync($"/cameras/{request.CameraId}/start", request);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("Failed to start AI detection for camera {CameraId}: Vision Service returned {Status}.",
+                    request.CameraId, response.StatusCode);
+                _activeVision.TryRemove(request.CameraId, out _); // retry on the next reconcile tick
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to reach LarisVMS.Vision.Service to start watching camera {CameraId} — will retry next reconcile.", request.CameraId);
+            _activeVision.TryRemove(request.CameraId, out _);
+        }
+    }
+
+    private async Task StopVisionWatchAsync(Guid cameraId)
+    {
+        try
+        {
+            await _visionHttp.PostAsync($"/cameras/{cameraId}/stop", null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to tell LarisVMS.Vision.Service to stop watching camera {CameraId} (it may already be stopped, or the process itself may be gone).", cameraId);
+        }
+    }
+
+    /// <summary>Called from Program.cs's new localhost-only POST /detections handler — folds a
+    /// closed/checkpointed AI-detection span from LarisVMS.Vision.Service straight into the
+    /// existing _pendingMotionSpans/FlushMotionSpansAsync pipeline, unchanged, the same way every
+    /// other detection source already does.</summary>
+    public void ReportVisionDetection(VisionDetectionReportItem item)
+    {
+        _pendingMotionSpans.Enqueue(new MotionSpanReportItem(
+            item.CameraId, null, item.StartUtc, item.EndUtc, item.Score,
+            EventTagRuleId: null, DetectionKind: null,
+            DetectedObjectCategory: item.DetectedObjectCategory, DetectedObjectLabel: item.DetectedObjectLabel,
+            BestFrameAtUtc: item.BestFrameAtUtc, BestBoxX: item.BestBoxX, BestBoxY: item.BestBoxY,
+            BestBoxW: item.BestBoxW, BestBoxH: item.BestBoxH, BestBoxConfidence: item.BestBoxConfidence));
+
+        if (_activeVision.TryGetValue(item.CameraId, out var recorder)) recorder.RecordDetection(item.EndUtc);
+    }
 
     /// <summary>M18: starts/restarts/stops this camera's always-on Sub live session — independent of
     /// ReconcileMotion above even though both key off the Sub stream's existence, the same way
@@ -1050,6 +1283,43 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// deleting every segment it ever records.</summary>
     internal static bool ShouldDiscardSegment(bool hasSignalSession, bool hadSignalInWindow)
         => hasSignalSession && !hadSignalInWindow;
+
+    /// <summary>Object detection plan decision 9: resolves which of ServerMotion/CameraEvent/
+    /// Integration is a Motion-mode camera's current "primary" generic motion-detection source — the
+    /// admin's own explicit Camera.MotionDetectionSource choice when set, or (a camera created before
+    /// this setting existed, or whose admin hasn't visited camera setup since) the richest signal
+    /// actually configured for it, in priority order Integration &gt; CameraEvent &gt; ServerMotion —
+    /// proposed default per the plan's own open-questions section. Pure and unit-tested directly,
+    /// same reasoning as ShouldDiscardSegment above — a dynamic fallback computed fresh every time
+    /// from whatever's actually running right now (so removing a camera's last configured
+    /// integration, say, falls through to CameraEvent on the very next reconcile), not a one-time
+    /// data migration/backfill baked in once at upgrade time.</summary>
+    internal static MotionDetectionSource ResolvePrimaryMotionSource(string? explicitChoice, bool hasIntegration, bool hasEventSession)
+    {
+        if (Enum.TryParse<MotionDetectionSource>(explicitChoice, ignoreCase: true, out var chosen)) return chosen;
+        if (hasIntegration) return MotionDetectionSource.Integration;
+        if (hasEventSession) return MotionDetectionSource.CameraEvent;
+        return MotionDetectionSource.ServerMotion;
+    }
+
+    /// <summary>Object detection plan decision 9: true if a generic "something moved" span from
+    /// `source` (ServerMotion/CameraEvent/Integration) should actually be reported to the timeline
+    /// for `cameraId` right now. Always true outside Motion mode — every configured source already
+    /// tags the timeline freely there today, unchanged. In Motion mode, true only for whichever
+    /// source ResolvePrimaryMotionSource resolves as this camera's current primary — the other two
+    /// generic sources' own plain-motion spans are suppressed so the timeline doesn't collect
+    /// redundant overlapping "something moved" entries for the same real event. Looked up fresh from
+    /// _latestCameraConfig every time a candidate span closes, not captured at session-creation time
+    /// — the exact staleness bug HandleSegmentCompleted's own doc comment already documents for
+    /// RecordingMode, which would otherwise apply here too. Never called for EventTagRule
+    /// (RuleSpanCompleted) or AI-detection reporting — both always report regardless of the chosen
+    /// primary, see MotionDetectionSource's own doc comment.</summary>
+    private bool ShouldReportGenericMotion(Guid cameraId, MotionDetectionSource source)
+    {
+        if (!_latestCameraConfig.TryGetValue(cameraId, out var camera)) return true; // fail open, same as HandleSegmentCompleted's own "no cached config" fallback
+        if (!Enum.TryParse<RecordingMode>(camera.RecordingMode, ignoreCase: true, out var mode) || mode != RecordingMode.Motion) return true;
+        return ResolvePrimaryMotionSource(camera.MotionDetectionSource, _activeIntegrations.ContainsKey(cameraId), _activeEvents.ContainsKey(cameraId)) == source;
+    }
 
     /// <summary>M8 Schedule mode: true if segmentStartUtc falls inside any enabled window, evaluated
     /// against the *recording node's own local system clock* (TimeZoneInfo.Local via
@@ -1158,16 +1428,20 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         // Motion or Event from here down.
         var hasMotionSession = _activeMotion.ContainsKey(cameraId);
         var hasEventSession = _activeEvents.ContainsKey(cameraId);
-        // M8 pass 6: either signal source counts for Motion — a camera relying only on its own
-        // onboard detection (no ServerMotion zone drawn at all) must still gate correctly, not just
-        // one with a server-side zone. Event mode is narrower: only a *driving* EventTagRule counts,
-        // since Event mode's whole point is "record only for this specific tagged trigger," not "any
-        // activity" — an event session with no DrivesRecording=true rule contributes nothing, same
-        // as having no session at all. See DecideGatedSegment for the matching hadSignalInWindow
-        // check per mode.
+        var hasIntegration = _activeIntegrations.ContainsKey(cameraId);
+        var hasVision = _activeVision.ContainsKey(cameraId);
+        // M8 pass 6: any signal source counts for Motion — a camera relying only on its own onboard
+        // detection (no ServerMotion zone drawn at all), only a vendor integration, or only AI
+        // detection must still gate correctly, not just one with a server-side zone (object detection
+        // plan decision 9 adds hasIntegration/hasVision here, matching DecideGatedSegment's own
+        // broader check below, which already counted both). Event mode is narrower: only a *driving*
+        // EventTagRule counts, since Event mode's whole point is "record only for this specific
+        // tagged trigger," not "any activity" — an event session with no DrivesRecording=true rule
+        // contributes nothing, same as having no session at all. See DecideGatedSegment for the
+        // matching hadSignalInWindow check per mode.
         var hasSignalSource = mode == RecordingMode.Event
             ? hasEventSession && camera.EventTagRules.Any(r => r.DrivesRecording)
-            : hasMotionSession || hasEventSession;
+            : hasMotionSession || hasEventSession || hasIntegration || hasVision;
 
         if (!hasSignalSource)
         {
@@ -1231,38 +1505,46 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         }
         else // Motion
         {
-            // Checked against BOTH signal sources (M8 pass 6) — a segment is kept if *either* the
-            // server-side zone or the camera's own pushed events saw activity in the window, not
-            // just whichever one happens to be configured. For the event session specifically,
-            // HasMotionSince alone isn't enough — see CameraEventSession.IsMotionActive's doc
-            // comment: many ONVIF implementations send exactly one notification per edge (rising,
-            // then nothing again until falling), so LastMotionAtUtc goes stale relative to
-            // windowStart for a segment decided well into a long, sparsely-reported event even
-            // though motion never actually stopped. IsMotionActive has no timeout of its own — it's
-            // only false once an actual falling-edge notification closes the span — so ORing it in
-            // here is what makes recording keep being retained for as long as the camera hasn't said
-            // motion stopped, not until some arbitrary staleness window expires. M8 pass 8: a
-            // DrivesRecording=true EventTagRule is one more signal source alongside the built-in
-            // classifier and the server-side zone for Motion mode specifically — a purely-tagging
-            // rule (DrivesRecording=false) deliberately never reaches here, see
-            // AnyDrivingRuleHasMotionSince/AnyDrivingRuleActive's own doc comments.
-            // An object detection (person/vehicle/face) is one more signal in the same OR-chain: a
-            // camera reporting it can see a person is reporting activity by any reasonable reading.
-            // Being an OR term, this can only ever keep a segment that would otherwise have been
-            // discarded — never the reverse — which also fixes a camera whose firmware emits object
-            // topics but no motion ones, and which therefore discarded everything under Motion mode.
-            // A vendor plugin is one more source in the same OR chain — and on hardware that only
-            // reports objects through its own API (this fleet), it's the only one that ever sees a
-            // person at all. Still an OR term, so it can only keep footage, never discard it.
-            hasSignalSession = hasMotionSession || hasEventSession || hasIntegration;
+            var hasVision = _activeVision.TryGetValue(pending.CameraId, out var visionRecorder);
+
+            // Object detection plan decision 9: exactly one of the three generic "something moved"
+            // sources (ServerMotion/CameraEvent/Integration) counts toward hadSignalInWindow — whichever
+            // ResolvePrimaryMotionSource resolves as this camera's current primary — rather than every
+            // configured source counting (the pre-decision-9 OR-of-all-three behavior), so three
+            // low-information "something moved" signals firing on the same real event don't each
+            // independently keep/tag it. EventTagRule (AnyDrivingRuleHasMotionSince/AnyDrivingRuleActive,
+            // M8 pass 8) and AI detection (AnyDetectionSince/AnyDetectionActive on the vision recorder)
+            // are deliberately OUTSIDE that restriction and stay always-on OR terms regardless of the
+            // chosen primary — a specific named tag, or an AI-confirmed moving object, can each still
+            // keep a segment the primary source alone wouldn't have. Being OR terms throughout, none of
+            // this can ever *discard* footage that would otherwise have been kept — only the three
+            // generic sources' own relative weight changed.
+            var explicitChoice = _latestCameraConfig.TryGetValue(pending.CameraId, out var freshCamera) ? freshCamera.MotionDetectionSource : null;
+            var primarySource = ResolvePrimaryMotionSource(explicitChoice, hasIntegration, hasEventSession);
+
+            hasSignalSession = hasMotionSession || hasEventSession || hasIntegration || hasVision;
             hadSignalInWindow =
-                (hasMotionSession && motionRecorder!.Session.HasMotionSince(windowStart)) ||
-                (hasEventSession && (
+                (primarySource == MotionDetectionSource.ServerMotion && hasMotionSession && motionRecorder!.Session.HasMotionSince(windowStart)) ||
+                // CameraEvent's own plain-motion/onboard-classifier signal — see
+                // CameraEventSession.IsMotionActive's doc comment for why HasMotionSince alone isn't
+                // enough: many ONVIF implementations send exactly one notification per edge (rising,
+                // then nothing again until falling), so LastMotionAtUtc goes stale relative to
+                // windowStart for a segment decided well into a long, sparsely-reported event even
+                // though motion never actually stopped. IsMotionActive has no timeout of its own — it's
+                // only false once an actual falling-edge notification closes the span.
+                (primarySource == MotionDetectionSource.CameraEvent && hasEventSession && (
                     eventRecorder!.Session.HasMotionSince(windowStart) || eventRecorder.Session.IsMotionActive ||
-                    eventRecorder.Session.AnyDrivingRuleHasMotionSince(windowStart) || eventRecorder.Session.AnyDrivingRuleActive ||
                     eventRecorder.Session.AnyDetectionSince(windowStart) || eventRecorder.Session.AnyDetectionActive)) ||
-                (hasIntegration && (
-                    integrationRecorder!.Session.AnyDetectionSince(windowStart) || integrationRecorder.Session.AnyDetectionActive));
+                (primarySource == MotionDetectionSource.Integration && hasIntegration && (
+                    integrationRecorder!.Session.AnyDetectionSince(windowStart) || integrationRecorder.Session.AnyDetectionActive)) ||
+                // EventTagRule — always on, independent of the chosen primary.
+                (hasEventSession && (eventRecorder!.Session.AnyDrivingRuleHasMotionSince(windowStart) || eventRecorder.Session.AnyDrivingRuleActive)) ||
+                // AI detection — always on, independent of the chosen primary. AnyDetectionSince/
+                // AnyDetectionActive reflect every reported track (Moving is the only kind reported by
+                // default; an Idle-only report can only appear here when ReportIdleDetections is
+                // enabled for testing, a narrow, admin-opted-in edge case not worth a dedicated
+                // MovementState wire field just to exclude it from this OR term).
+                (hasVision && (visionRecorder!.AnyDetectionSince(windowStart) || visionRecorder.AnyDetectionActive));
         }
 
         if (ShouldDiscardSegment(hasSignalSession, hadSignalInWindow))

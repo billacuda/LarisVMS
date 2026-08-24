@@ -14,16 +14,27 @@ public record NodeRegisterResponse(Guid NodeId, string Secret, string MediaSigni
 /// field) still deserializes cleanly against a newer Web — it just never gets a skew measurement.
 /// DetectedEncoders (M17) is null on an older node build the same way, and also on a newer one that
 /// simply hasn't finished its first probe yet — see NodeWorker's own caching of the probe result.</summary>
+/// <summary>DetectedAccelerators (object detection plan decision 2) mirrors DetectedEncoders exactly
+/// — self-reported from the node's own AccelCapabilityProber, informational only (drives the Admin
+/// UI's readout in Node.DetectedAcceleratorsJson); the node always acts on its own fresh local probe,
+/// never a value round-tripped back from the server.</summary>
 public record NodeHeartbeatRequest(string? Version, long? FreeBytes = null, long? TotalBytes = null, int? LivePort = null,
-    DateTime? SentAtUtc = null, List<string>? DetectedEncoders = null);
+    DateTime? SentAtUtc = null, List<string>? DetectedEncoders = null, List<string>? DetectedAccelerators = null);
 
 /// <summary>Recorder-node auto-update: a genuinely newer NodeBuildVersion exists for this node's
 /// reported Platform (NodeVersionComparer.IsNewer), and NodeAutoUpdate.Enabled is on. DownloadUrl is
 /// an absolute URL back to this same server's /api/nodes/download/{buildId} — reusing the node's own
 /// Bearer nodeId:secret credentials, same auth as every other /api/nodes/* route (NodeAuthMiddleware).
 /// Sha256 is what LarisVMS.Node.Update.UpdateService verifies the download against before applying
-/// it; a mismatch aborts without touching the running binary.</summary>
-public record NodeUpdateInfoDto(string Version, string DownloadUrl, string Sha256, long SizeBytes);
+/// it; a mismatch aborts without touching the running binary.
+///
+/// VisionDownloadUrl/VisionSha256/VisionSizeBytes (object detection plan follow-up) are all null
+/// together when the matching NodeBuildVersion row has no Vision Service binary registered (see that
+/// entity's own doc comment) — UpdateService only attempts the second swap when all three are
+/// present. Riding the same Version as the Node exe rather than carrying its own — LarisVMS.Vision.Service
+/// is a build artifact of the same release, not independently versioned.</summary>
+public record NodeUpdateInfoDto(string Version, string DownloadUrl, string Sha256, long SizeBytes,
+    string? VisionDownloadUrl = null, string? VisionSha256 = null, long? VisionSizeBytes = null);
 
 public record NodeHeartbeatResponse(int IntervalSeconds, NodeUpdateInfoDto? UpdateAvailable = null);
 
@@ -94,7 +105,14 @@ public record NodeConfigCameraDto(Guid CameraId, string Name, string? Username, 
     string RecordingMode, int MotionPreRollSeconds, int MotionPostRollSeconds,
     string? EventsServiceUri, List<NodeConfigEventTagRuleDto> EventTagRules,
     List<NodeConfigScheduleWindowDto> ScheduleWindows,
-    string? IntegrationKey = null, string? IntegrationBaseUri = null, int SegmentSeconds = 60);
+    string? IntegrationKey = null, string? IntegrationBaseUri = null, int SegmentSeconds = 60,
+    /// <summary>Object detection plan: whether this camera's node should watch it for AI object
+    /// detection at all — see Camera.AiDetectionEnabled's own doc comment.</summary>
+    bool AiDetectionEnabled = false,
+    /// <summary>Object detection plan decision 9: Camera.MotionDetectionSource's enum name (e.g.
+    /// "ServerMotion"), or null if not yet configured — same string-wire-format-parsed-node-side
+    /// pattern RecordingMode already uses. Only meaningful when RecordingMode is "Motion".</summary>
+    string? MotionDetectionSource = null);
 /// <summary>A camera this node has leftover Segments for but is no longer assigned to record
 /// (reassigned to a different node, or deleted) — StorageManager's orphaned-folder sweep uses
 /// RetentionDays here so leftover footage still ages out on the same schedule it always would have,
@@ -119,7 +137,27 @@ public record NodeConfigOrphanedCameraDto(Guid CameraId, int? RetentionDays);
 /// silently read "disabled" — this default is never actually seen by a current build, which always
 /// gets a real resolved value from GetConfigAsync.</summary>
 public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? StorageRootPath, int WatermarkPercent,
-    string MediaSigningKey, List<NodeConfigOrphanedCameraDto> OrphanedCameras, bool AdaptiveStreamingEnabled = true);
+    string MediaSigningKey, List<NodeConfigOrphanedCameraDto> OrphanedCameras, bool AdaptiveStreamingEnabled = true,
+    /// <summary>Object detection plan decision 2: the resolved Node.AiAccelerator enum name (e.g.
+    /// "Auto", "Nvidia") — the node combines this with its own local AccelCapabilityProber probe
+    /// via AccelSelection.ChooseAccelerator to decide which LarisVMS.Vision.Service.&lt;Accel&gt;
+    /// variant (if any) to run. Defaults to "Auto" for the same reason AdaptiveStreamingEnabled
+    /// defaults true — an older, not-yet-updated node's deserialization shouldn't silently read as
+    /// something more restrictive than the server actually resolved; a current build always gets a
+    /// real value from GetConfigAsync.</summary>
+    string AiAccelerator = "Auto",
+    /// <summary>Object detection plan decision 7's ReportIdleDetections — global, not per-camera,
+    /// since "am I interested in idle objects at all, ever" reads as a deployment-wide testing
+    /// toggle rather than something that varies camera by camera. Threaded through to every
+    /// VisionStartCameraRequest NodeWorker builds.</summary>
+    bool ReportIdleDetections = false,
+    /// <summary>AI detection's own decode resolution/confidence/IoU — global rather than
+    /// per-camera for the same reason ReportIdleDetections is: these are deployment-wide detection
+    /// policy, not something today's camera setup page exposes per camera. Defaults match aitest's
+    /// own proven values (confidence 0.35, iou 0.5) and VisionSessionOptions' own decode default
+    /// (1280x720).</summary>
+    int AiDetectionWidth = 1280, int AiDetectionHeight = 720,
+    double AiConfidence = 0.35, double AiIou = 0.5);
 
 /// <summary>One completed MotionSpan, batch-reported the same way SegmentReportItem is — see
 /// NodeService.RecordMotionSpansAsync for why plain REST + EF insert is enough here despite the
@@ -136,8 +174,19 @@ public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? Stor
 /// see CameraEventClassifier.ClassifyDetection); it joins the upsert identity alongside ZoneId and
 /// EventTagRuleId so two object classes detected at the same instant stay separate spans rather than
 /// colliding on the same row.</summary>
+/// DetectedObjectCategory/DetectedObjectLabel/BestFrame* (object detection plan decisions 5 and
+/// 10) are set only for an AiDetection-sourced span. DetectedObjectCategory is the resolved
+/// category *name* (e.g. "Vehicle") — the node never assigns an Id or color; NodeService.
+/// RecordMotionSpansAsync find-or-creates the DetectedObjectCategory row and auto-picks a color
+/// only the first time a name is ever seen. BestFrameAtUtc/BestBoxX/Y/W/H/BestBoxConfidence are
+/// whatever LarisVMS.Vision.Service's MovementClassifier currently has as the best-scoring frame
+/// for this track — on a checkpointed in-progress span this can only improve on a later report
+/// (the Vision-side tracking is monotonic), so the upsert here just overwrites.</summary>
 public record MotionSpanReportItem(Guid CameraId, Guid? ZoneId, DateTime StartUtc, DateTime EndUtc, double Score,
-    Guid? EventTagRuleId = null, DetectionKind? DetectionKind = null);
+    Guid? EventTagRuleId = null, DetectionKind? DetectionKind = null,
+    string? DetectedObjectCategory = null, string? DetectedObjectLabel = null,
+    DateTime? BestFrameAtUtc = null, double? BestBoxX = null, double? BestBoxY = null,
+    double? BestBoxW = null, double? BestBoxH = null, double? BestBoxConfidence = null);
 
 /// <summary>M8 pass 6: one raw ONVIF PullPoint notification, reported the same batched way a
 /// MotionSpan or Segment is. IsMotion (see CameraEventClassifier, run on the node as each

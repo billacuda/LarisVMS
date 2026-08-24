@@ -1,0 +1,75 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <!--
+    Execution provider selection — ported from aitest's proven Accel switch (see
+    g:\Projects\aitest\src\Aitest.Vision\Aitest.Vision.csproj). YoloDotNet allows exactly ONE
+    execution provider package per build; referencing more than one causes native DLL conflicts.
+    So the provider is chosen at build time, and LarisVMS.Vision.Service is published once per
+    accelerator (see plan decision 2):
+
+        dotnet build -p:Accel=Cuda        Nvidia GPU (default, optional TensorRT)
+        dotnet build -p:Accel=DirectML    Any DX12 GPU incl. AMD/Intel
+        dotnet build -p:Accel=OpenVino    Intel iGPU/CPU, fastest on Intel
+        dotnet build -p:Accel=Cpu         No GPU
+
+    Each choice also defines an ACCEL_* symbol, consumed by Inference/EngineFactory.cs. Defaults
+    to Cpu here (unlike aitest, which defaulted to Cuda) since build-node.ps1 has no assumed GPU —
+    a site publishing for real hardware passes -p:Accel=... explicitly.
+  -->
+  <PropertyGroup Condition="'$(Accel)' == ''">
+    <Accel>Cpu</Accel>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <DefineConstants>$(DefineConstants);ACCEL_$(Accel.ToUpperInvariant())</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Never the reverse — LarisVMS.Node must not be pulled toward the GPU/ONNX Runtime native
+         dependencies this library carries (see plan decision 3). Only LarisVMS.Vision.Service
+         references this project. -->
+    <ProjectReference Include="..\LarisVMS.Media\LarisVMS.Media.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="YoloDotNet" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The ByteTrack port (ByteKalmanFilter, STrack, TrackMatching) is internal on purpose: it's
+         an implementation detail behind ByteTracker's public Update API, but its unit tests need
+         to reach the pieces directly to verify them against reference values — same reasoning
+         aitest's own Aitest.Vision.Tests project needed. -->
+    <InternalsVisibleTo Include="LarisVMS.Tests" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(Accel)' == 'Cuda'">
+    <PackageReference Include="YoloDotNet.ExecutionProvider.Cuda" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(Accel)' == 'DirectML'">
+    <PackageReference Include="YoloDotNet.ExecutionProvider.DirectML" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(Accel)' == 'OpenVino'">
+    <PackageReference Include="YoloDotNet.ExecutionProvider.OpenVino" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(Accel)' == 'Cpu'">
+    <PackageReference Include="YoloDotNet.ExecutionProvider.Cpu" />
+  </ItemGroup>
+
+  <Target Name="ValidateAccel" BeforeTargets="Build">
+    <Error Condition="'$(Accel)' != 'Cuda' AND '$(Accel)' != 'DirectML' AND '$(Accel)' != 'OpenVino' AND '$(Accel)' != 'Cpu'"
+           Text="Invalid Accel value '$(Accel)'. Expected one of: Cuda, DirectML, OpenVino, Cpu." />
+  </Target>
+
+</Project>

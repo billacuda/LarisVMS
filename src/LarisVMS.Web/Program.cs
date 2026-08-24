@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net.WebSockets;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
@@ -241,6 +242,7 @@ builder.Services.AddScoped<INodeService, NodeService>();
 builder.Services.AddScoped<INodeBuildService, NodeBuildService>();
 builder.Services.AddScoped<IViewService, ViewService>();
 builder.Services.AddScoped<ITimelineService, TimelineService>();
+builder.Services.AddSingleton<DetectedObjectCategoryColorCache>();
 builder.Services.AddScoped<IZoneService, ZoneService>();
 builder.Services.AddScoped<IEventTagRuleService, EventTagRuleService>();
 builder.Services.AddScoped<IScheduleWindowService, ScheduleWindowService>();
@@ -409,7 +411,7 @@ nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest requ
     // reported to stamp; this is the one place NodeHeartbeatRequest's fields are actually read.
     var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
     await nodeService.RecordHeartbeatAsync(node.Id, request.FreeBytes, request.TotalBytes, request.Version, request.LivePort,
-        request.SentAtUtc, DateTime.UtcNow, request.DetectedEncoders, ct);
+        request.SentAtUtc, DateTime.UtcNow, request.DetectedEncoders, request.DetectedAccelerators, ct);
 
     // ── Auto-update check ────────────────────────────────────────────────
     // Global-only gate (Admin/Settings/Nodes' NodeAutoUpdate.Enabled) — no per-node override for this
@@ -426,9 +428,15 @@ nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest requ
         if (latestBuild is not null && NodeVersionComparer.IsNewer(latestBuild.Version, request.Version))
         {
             var baseUrl = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
+            // Vision* stays null (never offered) unless this build actually has a registered Vision
+            // Service binary — see NodeBuildVersion.VisionFilePath's own doc comment for why a build
+            // can legitimately have none (a package built with -SkipNodeVision, or an older build
+            // that predates this column).
             updateAvailable = new NodeUpdateInfoDto(
                 latestBuild.Version, $"{baseUrl}/api/nodes/download/{latestBuild.Id}",
-                latestBuild.Sha256, latestBuild.SizeBytes);
+                latestBuild.Sha256, latestBuild.SizeBytes,
+                latestBuild.VisionFilePath is not null ? $"{baseUrl}/api/nodes/download/{latestBuild.Id}/vision" : null,
+                latestBuild.VisionSha256, latestBuild.VisionSizeBytes);
         }
     }
 
@@ -445,6 +453,18 @@ nodesApi.MapGet("/download/{buildId:guid}", async (Guid buildId, INodeBuildServi
     var build = await nodeBuildService.GetDownloadInfoAsync(buildId, ct);
     if (build is null || !File.Exists(build.FilePath)) return Results.NotFound();
     return Results.File(build.FilePath, "application/octet-stream", "LarisVMS.Node.exe");
+});
+
+// Companion to the download route above, for the optional Vision Service binary a build may carry
+// alongside its Node exe — see NodeBuildVersion.VisionFilePath's own doc comment. 404 both when the
+// build itself doesn't exist and when it exists but was never given a Vision binary, since a node only
+// ever requests this URL when the heartbeat response's own VisionDownloadUrl was non-null in the first
+// place — either case means there's genuinely nothing to serve.
+nodesApi.MapGet("/download/{buildId:guid}/vision", async (Guid buildId, INodeBuildService nodeBuildService, CancellationToken ct) =>
+{
+    var build = await nodeBuildService.GetDownloadInfoAsync(buildId, ct);
+    if (build?.VisionFilePath is not { } visionPath || !File.Exists(visionPath)) return Results.NotFound();
+    return Results.File(visionPath, "application/octet-stream", "LarisVMS.Vision.Service.exe");
 });
 
 nodesApi.MapGet("/config", async (HttpContext ctx, INodeService nodeService, CancellationToken ct) =>
@@ -585,6 +605,56 @@ app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICame
 
     using var browserSocket = await ctx.WebSockets.AcceptWebSocketAsync();
     await ProxyLiveViewAsync(nodeSocket, browserSocket, ct);
+}).RequireAuthorization("Cameras.View");
+
+// Object detection plan decision 6: live-view box overlay — a separate WS proxy from the video
+// stream above, same token family (viewing a camera's boxes is the same authorization boundary as
+// viewing its video). Unlike ProxyLiveViewAsync's pure byte relay, this one parses each JSON tick
+// and attaches each box's category color before forwarding — Node and Vision Service both have no
+// database access at all, so this proxy is the only tier that can.
+app.MapGet("/live/{cameraId:guid}/detections", async (HttpContext ctx, Guid cameraId, ICameraService cameraService,
+    ICameraAccessService cameraAccess, DetectedObjectCategoryColorCache colorCache, CancellationToken ct) =>
+{
+    if (!ctx.WebSockets.IsWebSocketRequest)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.View, ct);
+    if (accessible is not null && !accessible.Contains(cameraId))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+        await ctx.Response.WriteAsync("You don't have access to this camera.");
+        return;
+    }
+
+    var camera = await cameraService.GetAsync(cameraId, ct);
+    if (camera?.Node is not { LastIpAddress: { } ip, LivePort: { } port, MediaSigningKey: { } key })
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsync("This camera's node hasn't reported live-view readiness yet.");
+        return;
+    }
+
+    var token = MediaToken.Issue(cameraId, key, TimeSpan.FromSeconds(60));
+    var nodeUri = new Uri($"ws://{ip}:{port}/live/{cameraId}/detections?token={Uri.EscapeDataString(token)}");
+
+    using var nodeSocket = new ClientWebSocket();
+    nodeSocket.Options.SetRequestHeader("Authorization", $"Bearer {token}");
+    try
+    {
+        await nodeSocket.ConnectAsync(nodeUri, ct);
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
+        await ctx.Response.WriteAsync($"Could not reach recorder node: {ex.Message}");
+        return;
+    }
+
+    using var browserSocket = await ctx.WebSockets.AcceptWebSocketAsync();
+    await ProxyDetectionOverlayAsync(nodeSocket, browserSocket, colorCache, ct);
 }).RequireAuthorization("Cameras.View");
 
 // M8/M5: one-shot still frame — the zone editor's background image, same proxy shape as /live
@@ -1224,6 +1294,75 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}/latest", async (
     return await ProxyThumbnailAsync(cameraId, await timeline.GetLatestThumbnailInfoAsync(cameraId, ct), httpFactory, ct, httpContext, longLivedCache: false);
 }).RequireAuthorization();
 
+// Object detection plan decision 10: same "browser never talks to a node directly" proxy shape as
+// ProxyThumbnailAsync above, but for one AI-detection span's cropped best-frame image instead of a
+// plain frame at a given instant — see GetSnapshotImageInfoAsync's own doc comment for how the
+// underlying segment/offset/box get resolved.
+async Task<IResult> ProxySnapshotImageAsync(Guid cameraId, SnapshotImageInfo? info, IHttpClientFactory httpFactory, CancellationToken ct, HttpContext httpContext)
+{
+    if (info is null) return Results.NotFound();
+    if (info.NodeIp is null || info.NodeLivePort is null || info.NodeMediaSigningKey is null)
+    {
+        return Results.Problem(
+            "This segment's node hasn't reported live-view readiness yet (needs at least one heartbeat since being upgraded to a build with live view).",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    var client = httpFactory.CreateClient();
+    client.Timeout = TimeSpan.FromSeconds(15);
+
+    // Reuses the existing hover-thumbnail token (cameraId+filePath+offsetSeconds) — see the node-side
+    // route's own doc comment for why that's the right security boundary here too. The box/frame
+    // dimensions ride unsigned, same "quality knob, not tamper-sensitive" reasoning maxDim/q already
+    // use on the thumbnail proxy.
+    var token = MediaToken.IssueForThumbnail(cameraId, info.FilePath, info.OffsetSeconds, info.NodeMediaSigningKey, TimeSpan.FromSeconds(30));
+    var nodeUri = $"http://{info.NodeIp}:{info.NodeLivePort}/snapshot-image/{cameraId}" +
+        $"?path={Uri.EscapeDataString(info.FilePath)}&offset={info.OffsetSeconds}&token={Uri.EscapeDataString(token)}" +
+        $"&spanId={info.SpanId}" +
+        $"&x={info.BoxX.ToString(CultureInfo.InvariantCulture)}&y={info.BoxY.ToString(CultureInfo.InvariantCulture)}" +
+        $"&w={info.BoxW.ToString(CultureInfo.InvariantCulture)}&h={info.BoxH.ToString(CultureInfo.InvariantCulture)}" +
+        $"&frameW={info.FrameWidth}&frameH={info.FrameHeight}";
+
+    HttpResponseMessage nodeResponse;
+    try
+    {
+        // See MediaTokenRequest's own doc comment: also sent as ?token= above for a node that
+        // hasn't updated yet.
+        nodeResponse = await client.SendAsync(MediaTokenRequest.Create(HttpMethod.Get, nodeUri, token), HttpCompletionOption.ResponseHeadersRead, ct);
+    }
+    catch (TaskCanceledException) when (!ct.IsCancellationRequested)
+    {
+        return Results.Problem("Timed out waiting for the recorder node to start responding (its storage may be slow or unreachable).",
+            statusCode: StatusCodes.Status504GatewayTimeout);
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException)
+    {
+        return Results.Problem($"Could not reach recorder node: {ex.Message}", statusCode: StatusCodes.Status502BadGateway);
+    }
+
+    if (!nodeResponse.IsSuccessStatusCode)
+    {
+        return Results.StatusCode((int)nodeResponse.StatusCode);
+    }
+
+    // Same day-scale, private cache reasoning as ProxyThumbnailAsync's own exact-instant lookups —
+    // keyed uniquely by spanId, so a repeat view of the same card skips the network round trip.
+    httpContext.Response.Headers.CacheControl = "private, max-age=86400";
+
+    return Results.Stream(await nodeResponse.Content.ReadAsStreamAsync(ct), "image/jpeg");
+}
+
+app.MapGet("/snapshot-image/{cameraId:guid}/{spanId:long}", async (
+    Guid cameraId, long spanId, ITimelineService timeline, ICameraAccessService cameraAccess,
+    IHttpClientFactory httpFactory, CancellationToken ct, HttpContext httpContext) =>
+{
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(httpContext.User, CameraAccessActions.Playback, ct);
+    if (accessible is not null && !accessible.Contains(cameraId))
+        return Results.Problem("You don't have playback access to this camera.", statusCode: StatusCodes.Status403Forbidden);
+
+    return await ProxySnapshotImageAsync(cameraId, await timeline.GetSnapshotImageInfoAsync(cameraId, spanId, ct), httpFactory, ct, httpContext);
+}).RequireAuthorization("Playback.View");
+
 // ── Multi-camera export ──────────────────────────────────────────────────────
 // Trigger from Playback's toolbar. Async: creates the job/items and returns immediately —
 // ExportJobDispatcher (a BackgroundService) picks up Queued items on its own poll cycle and does
@@ -1439,6 +1578,68 @@ static async Task ProxyLiveViewAsync(WebSocket node, WebSocket browser, Cancella
             var result = await node.ReceiveAsync(buffer, ct);
             if (result.MessageType == WebSocketMessageType.Close) break;
             await browser.SendAsync(buffer.AsMemory(0, result.Count), result.MessageType, result.EndOfMessage, ct);
+        }
+    }
+    catch (OperationCanceledException) { }
+    catch (WebSocketException) { }
+    finally
+    {
+        if (browser.State == WebSocketState.Open)
+        {
+            try { await browser.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); } catch { }
+        }
+        if (node.State == WebSocketState.Open)
+        {
+            try { await node.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); } catch { }
+        }
+    }
+}
+
+// Object detection plan decision 6: unlike ProxyLiveViewAsync's pure byte relay, each tick here is
+// parsed, enriched with a color per box (Node/Vision Service have no database access — this proxy
+// is the only tier that can attach one), and re-serialized before being forwarded to the browser.
+// A single malformed or unparseable tick is skipped rather than tearing down the whole viewer
+// connection over it — the next poll (at most ~150ms later, per DetectionOverlayHandler's own
+// cadence) supersedes it anyway.
+static async Task ProxyDetectionOverlayAsync(WebSocket node, WebSocket browser, DetectedObjectCategoryColorCache colorCache, CancellationToken ct)
+{
+    var buffer = new byte[64 * 1024];
+    try
+    {
+        while (node.State == WebSocketState.Open && browser.State == WebSocketState.Open)
+        {
+            using var messageBuffer = new MemoryStream();
+            WebSocketReceiveResult result;
+            do
+            {
+                result = await node.ReceiveAsync(buffer, ct);
+                if (result.MessageType == WebSocketMessageType.Close) return;
+                messageBuffer.Write(buffer, 0, result.Count);
+            } while (!result.EndOfMessage);
+
+            List<VisionLiveDetectionBox> boxes;
+            try
+            {
+                boxes = System.Text.Json.JsonSerializer.Deserialize<List<VisionLiveDetectionBox>>(messageBuffer.ToArray()) ?? [];
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                continue;
+            }
+
+            var enriched = new List<object>(boxes.Count);
+            foreach (var box in boxes)
+            {
+                var colorHex = await colorCache.GetColorAsync(box.Category, ct);
+                enriched.Add(new
+                {
+                    box.TrackId, box.Category, box.Label, box.MovementState,
+                    box.X, box.Y, box.W, box.H, box.Confidence, ColorHex = colorHex
+                });
+            }
+
+            var json = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(enriched);
+            await browser.SendAsync(json, WebSocketMessageType.Text, endOfMessage: true, ct);
         }
     }
     catch (OperationCanceledException) { }

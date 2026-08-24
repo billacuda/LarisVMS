@@ -81,7 +81,7 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
         }
     }
 
-    public async Task<IActionResult> OnPostUpdateAsync(Guid id, string name, string? storageRootPath, int? retentionDaysOverride)
+    public async Task<IActionResult> OnPostUpdateAsync(Guid id, string name, string? storageRootPath, int? retentionDaysOverride, string? aiAccelerator)
     {
         try
         {
@@ -91,15 +91,19 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
             // fields here: MediaSigningKey is generated internally and never edited through this form.
             var before = (await nodeService.ListAsync()).FirstOrDefault(n => n.Id == id);
             var oldRetentionOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Retention.Days");
+            // "" (blank/Auto) resolves as null — see NodeConfigResponse.AiAccelerator's own doc
+            // comment for why Auto (not an explicit choice) is the safe default.
+            var accelerator = Enum.TryParse<AiAccelerator>(aiAccelerator, out var acc) ? acc : (AiAccelerator?)null;
 
-            await nodeService.UpdateAsync(id, name, storageRootPath);
+            await nodeService.UpdateAsync(id, name, storageRootPath, accelerator);
             await settings.SetOverrideAsync(SettingScope.Node, id, "Retention.Days",
                 retentionDaysOverride?.ToString(), User.Identity?.Name);
 
             var details = AuditDiff.Build(
                 AuditDiff.Of("Name", before?.Name, name),
                 AuditDiff.Of("Storage root", before?.StorageRootPath, storageRootPath),
-                AuditDiff.Of("Retention override", oldRetentionOverride, retentionDaysOverride?.ToString()));
+                AuditDiff.Of("Retention override", oldRetentionOverride, retentionDaysOverride?.ToString()),
+                AuditDiff.Of("AI accelerator", before?.AiAccelerator?.ToString(), accelerator?.ToString()));
 
             await LogAsync("Node.Update", details is null ? $"{name} ({id})" : $"{name} ({id}) — {details}");
         }

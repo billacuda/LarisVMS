@@ -101,6 +101,44 @@ else
     Log("INFO", $"Binary swapped: {parsed.NewBinary} -> {parsed.CurrentBinary}");
 }
 
+// Object detection plan follow-up: optional second swap, only attempted when UpdateService staged
+// one (both fields non-null — see ParsedArgs' own doc comment) AND this machine already has a
+// working Vision Service install (native onnxruntime.dll etc. + models\, both placed by
+// install-node.ps1, never by this auto-update path — it only ever swaps the one .exe). Swapping the
+// .exe onto a machine that never had those is worse than not swapping at all: a lone exe with no
+// native deps to load fails to start and crash-loops noisily under VisionServiceSupervisor's own
+// restart-on-exit logic, rather than the clear "not installed" state it's in today. Existence of the
+// *current* Vision exe is the signal this uses for "already fully installed" — a real install-node.ps1
+// run always places the exe and its dependencies together, so if the exe is there, so is everything
+// else it needs.
+//
+// Deliberately best-effort and never fatal to the overall update: a failure here is logged and left
+// for the next successful heartbeat's update offer to retry, exactly like a failed *download* of it
+// already is on the Node side — the required Node swap and the service restart below proceed
+// regardless, same "additive, never blocks recording" reasoning this whole feature follows
+// throughout. LarisVMS.Vision.Service isn't managed by the SCM the way the Node service is, so
+// there's no separate "wait for it to stop" step needed here — NodeWorker's own shutdown
+// (VisionServiceSupervisor.Stop, with its own bounded wait for the process to actually exit) already
+// ran to completion before the Node service itself could report Stopped above.
+if (!parsed.RestartOnly && parsed.NewVisionBinary is not null && parsed.CurrentVisionBinary is not null)
+{
+    if (!File.Exists(parsed.CurrentVisionBinary))
+    {
+        Log("INFO", $"Vision Service update available, but {parsed.CurrentVisionBinary} isn't installed on this " +
+            "machine yet (its native dependencies wouldn't be either) — skipping. Run install-node.ps1 once to " +
+            "install AI detection on this node; auto-update only keeps an already-installed copy current.");
+    }
+    else if (!UpdaterLogic.TrySwapBinary(parsed.NewVisionBinary, parsed.CurrentVisionBinary, out var visionSwapError))
+    {
+        Log("WARN", $"Failed to swap Vision Service binary: {visionSwapError}. AI detection stays on its previous " +
+            "binary until the next successful update — the Node service itself is unaffected and starts normally.");
+    }
+    else
+    {
+        Log("INFO", $"Vision Service binary swapped: {parsed.NewVisionBinary} -> {parsed.CurrentVisionBinary}");
+    }
+}
+
 // ── Start service ──────────────────────────────────────────────────────────
 
 if (!await StartServiceWithRetriesAsync(parsed.ServiceName))

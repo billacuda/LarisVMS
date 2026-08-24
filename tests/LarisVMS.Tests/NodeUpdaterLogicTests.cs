@@ -72,6 +72,30 @@ public class NodeUpdaterLogicTests
     }
 
     [Fact]
+    public void ParseArgsReadsTheOptionalVisionPairAlongsideTheRequiredOne()
+    {
+        var parsed = UpdaterLogic.ParseArgs([
+            "--new", @"C:\staged\LarisVMS.Node.exe", "--current", @"C:\install\LarisVMS.Node.exe",
+            "--new-vision", @"C:\staged\LarisVMS.Vision.Service.exe", "--current-vision", @"C:\install\LarisVMS.Vision.Service.exe"
+        ]);
+
+        Assert.Equal(@"C:\staged\LarisVMS.Vision.Service.exe", parsed.NewVisionBinary);
+        Assert.Equal(@"C:\install\LarisVMS.Vision.Service.exe", parsed.CurrentVisionBinary);
+        // The required pair is unaffected by the optional one riding alongside it.
+        Assert.Equal(@"C:\staged\LarisVMS.Node.exe", parsed.NewBinary);
+        Assert.Equal(@"C:\install\LarisVMS.Node.exe", parsed.CurrentBinary);
+    }
+
+    [Fact]
+    public void ParseArgsLeavesVisionPairNullWhenNotGiven()
+    {
+        var parsed = UpdaterLogic.ParseArgs(["--new", @"C:\staged\LarisVMS.Node.exe", "--current", @"C:\install\LarisVMS.Node.exe"]);
+
+        Assert.Null(parsed.NewVisionBinary);
+        Assert.Null(parsed.CurrentVisionBinary);
+    }
+
+    [Fact]
     public void TrySwapBinaryMovesNewOverCurrentAndRemovesBackup()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "LarisVMS.Tests-" + Guid.NewGuid());

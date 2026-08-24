@@ -231,4 +231,66 @@ public class StorageManagerTests : IDisposable
 
         Assert.Equal([ownThumb], found);
     }
+
+    // ── FindMatchingSnapshotImages (object detection plan decision 10) ──────
+
+    [Fact]
+    public void FindMatchingSnapshotImagesFindsEverySpanFileForAnEvictedSegmentsStem()
+    {
+        var mainDir = Path.Combine(_root, "cam-1", "main");
+        var snapshotsDir = Path.Combine(_root, "cam-1", "snapshots");
+        var mainFile = Path.Combine(mainDir, "2026", "08", "09", "14", "20260809T140000Z.mp4");
+        Directory.CreateDirectory(Path.GetDirectoryName(mainFile)!);
+        File.WriteAllText(mainFile, "data");
+
+        // Two different detected objects in the same segment produce two different owning spans,
+        // each with its own cached crop — both must be found and cleaned up together.
+        var snapshotDir = Path.Combine(snapshotsDir, "2026", "08", "09", "14");
+        Directory.CreateDirectory(snapshotDir);
+        var snapshot1 = Path.Combine(snapshotDir, "20260809T140000Z_span101.jpg");
+        var snapshot2 = Path.Combine(snapshotDir, "20260809T140000Z_span102.jpg");
+        File.WriteAllText(snapshot1, "jpg");
+        File.WriteAllText(snapshot2, "jpg");
+
+        var found = StorageManager.FindMatchingSnapshotImages(mainDir, snapshotsDir, mainFile);
+
+        Assert.Equal(2, found.Count);
+        Assert.Contains(snapshot1, found);
+        Assert.Contains(snapshot2, found);
+    }
+
+    [Fact]
+    public void FindMatchingSnapshotImagesReturnsEmptyWhenNoSnapshotsDirectoryExists()
+    {
+        var mainDir = Path.Combine(_root, "cam-1", "main");
+        var snapshotsDir = Path.Combine(_root, "cam-1", "snapshots"); // never created
+        var mainFile = Path.Combine(mainDir, "2026", "08", "09", "14", "20260809T140000Z.mp4");
+        Directory.CreateDirectory(Path.GetDirectoryName(mainFile)!);
+        File.WriteAllText(mainFile, "data");
+
+        var found = StorageManager.FindMatchingSnapshotImages(mainDir, snapshotsDir, mainFile);
+
+        Assert.Empty(found);
+    }
+
+    [Fact]
+    public void FindMatchingSnapshotImagesDoesNotMatchADifferentlyNamedNeighboringSegment()
+    {
+        var mainDir = Path.Combine(_root, "cam-1", "main");
+        var snapshotsDir = Path.Combine(_root, "cam-1", "snapshots");
+        var mainFile = Path.Combine(mainDir, "2026", "08", "09", "14", "20260809T140000Z.mp4");
+        Directory.CreateDirectory(Path.GetDirectoryName(mainFile)!);
+        File.WriteAllText(mainFile, "data");
+
+        var snapshotDir = Path.Combine(snapshotsDir, "2026", "08", "09", "14");
+        Directory.CreateDirectory(snapshotDir);
+        var ownSnapshot = Path.Combine(snapshotDir, "20260809T140000Z_span1.jpg");
+        var neighborSnapshot = Path.Combine(snapshotDir, "20260809T140001Z_span1.jpg");
+        File.WriteAllText(ownSnapshot, "jpg");
+        File.WriteAllText(neighborSnapshot, "jpg");
+
+        var found = StorageManager.FindMatchingSnapshotImages(mainDir, snapshotsDir, mainFile);
+
+        Assert.Equal([ownSnapshot], found);
+    }
 }

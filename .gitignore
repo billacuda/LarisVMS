@@ -34,6 +34,12 @@ spool/
 exports/
 data-protection-keys/
 
+# Object detection: exported .onnx models (large binaries, machine/site-specific — see
+# build-node.ps1's own doc comment) and tools/export-models/'s own Python virtual environments,
+# same convention aitest already used for both.
+models/
+tools/*/.venv/
+
 # NuGet
 *.nupkg
 *.snupkg

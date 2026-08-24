@@ -5,6 +5,117 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.157.0] - 2026-08-24
+
+### Added
+
+- **Native AI object detection.** LarisVMS now runs its own real-time YOLO/ByteTrack detection
+  pipeline per node instead of depending on onboard camera analytics or a separately-run debug
+  process (`aitest`, the standalone repo this was prototyped and validated in — now untouched,
+  read-only reference). The existing onboard-classification object detection (ONVIF PullPoint /
+  Dahua-Amcrest CGI, see 0.30.0-era entries) is unaffected and keeps working exactly as before; this
+  is a second, independent detection source layered alongside it, not a replacement.
+  - **Capture**: a new `VisionSession` (`LarisVMS.Vision`) opens a *second*, independent RTSP session
+    against a camera's Sub stream — the same established pattern `MotionSession`/`SubLiveSession`
+    already use for exactly this kind of analysis workload — decoding via a GPU-hybrid ffmpeg pipeline
+    (`-hwaccel cuda -hwaccel_output_format cuda` + `scale_cuda`, falling back to plain CPU scale on
+    other accelerators). Inference (YoloDotNet/ONNX Runtime) and tracking (a full MIT-licensed
+    ByteTrack port — Kalman filter, track matching, the works) run against its frames, with a new
+    `MovementClassifier` splitting each tracked object into Moving/Idle by centroid displacement and
+    keeping the single best-scoring frame (`confidence × normalized box area`) seen across its whole
+    lifetime for later use as a snapshot.
+  - **Runs as a sibling process, not inside `LarisVMS.Node.exe`.** A new `LarisVMS.Vision.Service`
+    executable (localhost-only control API) carries the GPU/ONNX Runtime native dependencies, so a
+    site that never enables AI detection pays nothing for it, and a bad GPU/driver interaction can
+    never take down camera recording itself — `NodeWorker`'s new `VisionServiceSupervisor` starts,
+    supervises, and restarts it as a child process, same "desired-state reconcile" shape every other
+    node-side session already uses. `LarisVMS.Node` still has **zero** reference to the GPU-dependent
+    `LarisVMS.Vision` library.
+  - **Hardware accelerator is a per-node setting** (`Admin → Nodes`: Auto / Nvidia / Intel / AMD /
+    CPU), not per-camera — a node has one physical machine's worth of hardware. A new
+    `AccelCapabilityProber` probes what's actually present at startup and reports it back on every
+    heartbeat (`Admin → Nodes`' new readout column); Auto picks the best of what's detected
+    (Nvidia > Intel > AMD priority) and never silently falls back to CPU. No usable accelerator (or
+    AI detection simply not enabled) means no `LarisVMS.Vision.Service` instance runs at all, logged
+    once — every other detection path already configured for every camera on that node is completely
+    unaffected. `LarisVMS.Vision.Service` is published once per execution provider
+    (`build-node.ps1 -Accel Cuda|DirectML|OpenVino|Cpu`, same MSBuild switch pattern `aitest` proved
+    out) since YoloDotNet only links one provider per process — a site with genuinely different
+    hardware across nodes needs a package built per accelerator.
+  - **Categories, not 80 individual colors.** Detected classes bucket into a small, auto-colored
+    catalog (`DetectedObjectCategory`: Human / Vehicle / Animal / Object today, more as new classes
+    are first seen) so the timeline doesn't turn into a wall of near-indistinguishable colors the way
+    coloring all ~80 COCO classes individually would. The specific detected label still rides
+    alongside on every snapshot/timeline entry ("Vehicle — car", not just "Vehicle") — only the
+    *category* drives the badge color. A brand-new category gets the next unused color from a curated
+    palette, same "pick a color that hasn't been used yet" shape `DetectionDisplay` already has for
+    the older onboard-classification kinds.
+  - **Live-view bounding boxes are a separate, client-side-only overlay** — a new small WebSocket
+    (`/live/{cameraId}/detections`) feeding a `<canvas>` drawn over the video element, never touching
+    recorded bytes. Moving and Idle objects have **independent** show/hide toggles (both off by
+    default), so a scene full of static objects doesn't have to compete with what's actually moving
+    unless a viewer specifically wants to see it too.
+  - **Motion-mode recording gains exactly one *primary* generic motion source.** Previously every
+    configured signal (server-side pixel zone, ONVIF camera events, a vendor integration) counted
+    independently toward a Motion-mode camera's keep/discard decision and toward tagging the
+    timeline — redundant when more than one is configured for the same camera, since they're all
+    reporting the same real event. A new per-camera `Motion detection source` setting
+    (`Server-side motion` / `Camera events` / `Vendor integration` / `AI detection`, defaulting to
+    whichever of the first three is actually configured, richest signal first, if never explicitly
+    set) narrows the three generic sources to exactly one active at a time. A named event tag rule and
+    AI detection's own object labels are deliberately **outside** this restriction — both always tag
+    the timeline and can each independently keep a segment, regardless of which source is chosen as
+    primary, the same "always-on OR term" precedent event tag rules already had. Being purely
+    additional OR terms throughout, none of this can ever discard footage that would otherwise have
+    been kept.
+  - **Snapshot images for a detected object are cropped to its bounding box** — a new, genuinely
+    separate `snapshots/` cache tier (distinct from the existing hover-thumbnail `thumbs/` cache),
+    capped at 720p, generated from whichever frame across the whole detection scored best (confidence
+    × box size), with margin added around the tight box so it doesn't read as a context-free sliver.
+    `StorageManager` deletes a segment's matching snapshot image alongside it at every eviction path
+    (retention, quota, watermark, orphaned-camera sweep) — the same "never outlives its source
+    footage" guarantee the thumbnail cache already had.
+  - **Model export tooling** (`tools/export-models/`) ported byte-for-byte from `aitest` so LarisVMS
+    never depends on that repo for its `.onnx` files — exports permissively-licensed (MIT) YOLOv9
+    weights and adapts them to load in YoloDotNet. Deliberately excludes Ultralytics YOLOv8/11/26:
+    those weights are AGPL-3.0, and this project is MIT.
+  - **Recorder-node auto-update now also keeps an already-installed `LarisVMS.Vision.Service.exe`
+    current**, not just `LarisVMS.Node.exe` itself. `deploy.ps1` registers the matching Vision binary
+    from the same `build-node.ps1` publish alongside the Node exe (`NodeBuildVersion` gains optional
+    `Vision*` columns for it — a build without one, e.g. `-SkipNodeVision`, simply offers nothing extra),
+    and `LarisVMS.NodeUpdater` swaps it in the same pass as the Node exe, guarded to only ever touch a
+    node that already has a working Vision Service install (its native DLLs and exported model are
+    placed by `install-node.ps1`, never by this download/swap path, so swapping the bare exe onto a
+    node that's never had it would just crash-loop with nothing to load) — a node's *first* Vision
+    Service install still needs one `install-node.ps1` run, same as this release's own rollout below.
+    Deliberately best-effort throughout: a Vision Service download/checksum/swap failure is logged and
+    retried next heartbeat, never blocking or failing the primary Node exe update it rides alongside.
+    ⚠️ One binary per platform row, not per node — a fleet with genuinely mixed hardware (some nodes
+    GPU-capable, some not) needs to manage the Vision Service binary on those specific machines by
+    hand rather than relying on this, since there's no per-node accelerator-variant selection in the
+    approval queue (`Admin → Node Builds` flags it explicitly).
+
+  **Unverified against real GPU hardware or an actual camera end-to-end** — every piece above builds,
+  and the pure/isolated logic (movement classification, category/color assignment, accelerator
+  selection, motion-source resolution, crop-rectangle math, the Vision Service download/checksum
+  staging and updater arg parsing) is unit tested, but the capture→inference→tracking pipeline itself,
+  the concurrent-RTSP-session count this adds on top of Main recording/Sub motion/Sub adaptive-live
+  (now up to four per camera), the snapshot crop's Main/Sub field-of-view alignment, and the Vision
+  Service auto-update path's own real Windows-Service-restart choreography all still need a real run
+  against real hardware before this is trusted the way the rest of this app's shipped features are.
+
+**Node change — `install-node.ps1` re-run needed on every recorder, once, for this release.** No
+already-installed node has ever had `LarisVMS.Vision.Service.exe` (or its native DLLs/`models/`) at
+all before this release, and auto-update's download/swap path is only ever a same-file overwrite —
+see above — so there's nothing there yet for it to keep current. `LarisVMS.Node` and
+`LarisVMS.NodeUpdater` bumped to 0.157.0 in lockstep. A recorder with no rebuilt/re-installed package
+keeps recording exactly as before — AI detection is additive and every camera's other detection paths
+are unaffected — it just won't offer AI detection until reinstalled; from the *next* release onward,
+an already-Vision-equipped node picks up a newer Vision Service exe the same automatic way it already
+picks up a newer Node exe. New `DetectedObjectCategory` table, new columns on
+`MotionSpan`/`Camera`/`Node`, and new `NodeBuildVersion` Vision* columns — database migration
+required (`deploy.ps1` applies it automatically unless run with `-SkipMigrations`).
+
 ## [0.156.1] - 2026-08-23
 
 ### Fixed

@@ -58,6 +58,7 @@ else
                     <th>Version</th>
                     <th>Platform</th>
                     <th data-no-sort>Encoders</th>
+                    <th data-no-sort>AI accelerator</th>
                     <th>Last seen</th>
                     <th data-sort-numeric>Cameras</th>
                     <th>Storage root</th>
@@ -107,6 +108,38 @@ else
                                         <span class="badge text-bg-secondary font-monospace">@enc</span>
                                     }
                                 }
+                            </td>
+                            <td style="min-width: 9rem;">
+                                @* Object detection plan decision 2: hardware accelerator is a
+                                   per-node setting, not per-camera. Auto picks the best of whatever
+                                   DetectedAcceleratorsJson (below) reports actually present on this
+                                   node; an explicit choice is only honored if that hardware is
+                                   actually detected — see NodeWorker/AccelSelection. *@
+                                <select name="aiAccelerator" class="form-select form-select-sm">
+                                    <option value="" selected="@(n.AiAccelerator is null)">Auto</option>
+                                    @foreach (var accel in Enum.GetValues<LarisVMS.Core.Enums.AiAccelerator>().Where(a => a != LarisVMS.Core.Enums.AiAccelerator.Auto))
+                                    {
+                                        <option value="@accel" selected="@(n.AiAccelerator == accel)">@accel</option>
+                                    }
+                                </select>
+                                @{
+                                    var detectedAccelerators = string.IsNullOrEmpty(n.DetectedAcceleratorsJson)
+                                        ? []
+                                        : System.Text.Json.JsonSerializer.Deserialize<List<string>>(n.DetectedAcceleratorsJson) ?? [];
+                                }
+                                <div class="mt-1">
+                                    @if (detectedAccelerators.Count == 0)
+                                    {
+                                        <span class="text-muted small" title="No successful accelerator probe reported yet — needs a heartbeat from a node running this build or later.">none reported</span>
+                                    }
+                                    else
+                                    {
+                                        foreach (var accel in detectedAccelerators)
+                                        {
+                                            <span class="badge text-bg-secondary font-monospace">@accel</span>
+                                        }
+                                    }
+                                </div>
                             </td>
                             <td data-sort-value="@(n.LastSeenAt?.Ticks ?? 0)">
                                 @if (n.LastSeenAt is { } seen)

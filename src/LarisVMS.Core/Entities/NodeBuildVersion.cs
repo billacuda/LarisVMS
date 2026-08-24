@@ -38,6 +38,34 @@ public class NodeBuildVersion
     /// upload — what LarisVMS.Node's UpdateService verifies its download against before applying it.</summary>
     public string Sha256 { get; set; } = string.Empty;
 
+    /// <summary>Object detection plan follow-up: the matching `LarisVMS.Vision.Service.exe` from the
+    /// same `build-node.ps1` publish, if this deploy built one (a plain recording-only package built
+    /// with `-SkipVision` has none) — same file-outside-the-IIS-directory storage as FilePath above,
+    /// just a sibling path on disk. Null for every build that predates this column, and for any build
+    /// that genuinely has no Vision Service binary; a node's auto-update only ever attempts the Vision
+    /// swap when all three Vision* fields are non-null. Deliberately riding the *same* row/Version as
+    /// the Node exe rather than its own independent version — LarisVMS.Vision.Service has no
+    /// `&lt;Version&gt;` of its own (see its own csproj), it's a build artifact of the same release,
+    /// always published and shipped in lockstep with LarisVMS.Node/LarisVMS.NodeUpdater.
+    ///
+    /// **One execution-provider variant per Platform row, not per node.** deploy.ps1 registers
+    /// whichever single accelerator `-NodeAccel` built (Cpu by default) — there's no per-node
+    /// selection anywhere in this auto-update path, since GetLatestForPlatformAsync only keys off
+    /// Platform. A fleet with genuinely mixed hardware (some nodes CUDA-capable, some not) and this
+    /// row registered as, say, Cuda, would offer every win-x64 node the Cuda binary regardless of
+    /// what it can actually run — a node whose own hardware can't load that provider just has AI
+    /// detection fail to start (logged, retried, recording completely unaffected — see
+    /// VisionServiceSupervisor.EnsureRunning), not a healthy fallback to a working variant. A site
+    /// with mixed hardware should leave `NodeAutoUpdate.Enabled` covering the Node exe as normal but
+    /// manage the Vision Service binary on those specific nodes by hand
+    /// (`install-node.ps1 -Accel &lt;the-one-that-machine-needs&gt;`), the same way it already would
+    /// have before this auto-update path existed at all.</summary>
+    public string? VisionFilePath { get; set; }
+
+    public long? VisionSizeBytes { get; set; }
+
+    public string? VisionSha256 { get; set; }
+
     public DateTime UploadedAt { get; set; } = DateTime.UtcNow;
 
     public string? Notes { get; set; }

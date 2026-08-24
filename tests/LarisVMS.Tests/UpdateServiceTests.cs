@@ -107,4 +107,70 @@ public class UpdateServiceTests
         Assert.False(second);
         await first;
     }
+
+    // ── TryStageVisionAsync (object detection plan follow-up) ────────────────
+    // Exercised directly, not through TryApplyAsync/ApplyWindows — see this method's own doc comment
+    // for why (ApplyWindows' real-process side effects are what the rest of this file avoids
+    // triggering). A plain HttpClient wraps the same StubHandler used above; TryStageVisionAsync
+    // needs no NodeConfig/lifetime/lifetime interaction at all, unlike the full apply path.
+
+    private static async Task<string> Sha256Async(byte[] content)
+    {
+        var hash = await System.Security.Cryptography.SHA256.HashDataAsync(new MemoryStream(content), CancellationToken.None);
+        return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
+    [Fact]
+    public async Task TryStageVisionSucceedsWhenChecksumMatches()
+    {
+        var content = "fake LarisVMS.Vision.Service.exe bytes"u8.ToArray();
+        var expectedSha = await Sha256Async(content);
+        using var http = new HttpClient(new StubHandler(content));
+        var service = new UpdateService(NewConfig(), insecureTls: false, NullLogger.Instance, new FakeLifetime());
+
+        var staged = await service.TryStageVisionAsync(http, "https://larisvms.example.test/api/nodes/download/vision", expectedSha, "0.157.0", CancellationToken.None);
+
+        Assert.True(staged);
+    }
+
+    [Fact]
+    public async Task TryStageVisionFailsOnChecksumMismatchWithoutThrowing()
+    {
+        var content = "fake LarisVMS.Vision.Service.exe bytes"u8.ToArray();
+        using var http = new HttpClient(new StubHandler(content));
+        var service = new UpdateService(NewConfig(), insecureTls: false, NullLogger.Instance, new FakeLifetime());
+
+        // Deliberately the wrong hash.
+        var staged = await service.TryStageVisionAsync(http, "https://larisvms.example.test/api/nodes/download/vision", new string('0', 64), "0.157.0", CancellationToken.None);
+
+        Assert.False(staged);
+    }
+
+    [Fact]
+    public async Task TryStageVisionFailsOnNonSuccessStatusWithoutThrowing()
+    {
+        using var http = new HttpClient(new StubHandler([], HttpStatusCode.InternalServerError));
+        var service = new UpdateService(NewConfig(), insecureTls: false, NullLogger.Instance, new FakeLifetime());
+
+        var staged = await service.TryStageVisionAsync(http, "https://larisvms.example.test/api/nodes/download/vision", new string('0', 64), "0.157.0", CancellationToken.None);
+
+        Assert.False(staged);
+    }
+
+    private sealed class ThrowingHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => throw new HttpRequestException("simulated network failure");
+    }
+
+    [Fact]
+    public async Task TryStageVisionFailsOnNetworkExceptionWithoutThrowing()
+    {
+        using var http = new HttpClient(new ThrowingHandler());
+        var service = new UpdateService(NewConfig(), insecureTls: false, NullLogger.Instance, new FakeLifetime());
+
+        var staged = await service.TryStageVisionAsync(http, "https://larisvms.example.test/api/nodes/download/vision", new string('0', 64), "0.157.0", CancellationToken.None);
+
+        Assert.False(staged);
+    }
 }

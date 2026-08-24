@@ -29,6 +29,14 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
     [BindProperty] public int? MotionPreRollSecondsOverride { get; set; }
     [BindProperty] public int? MotionPostRollSecondsOverride { get; set; }
     [BindProperty] public int? SegmentSecondsOverride { get; set; }
+    /// <summary>Object detection plan: whether this camera's node should watch it for AI object
+    /// detection — a plain Camera column, not a Settings-table override (see ICameraService.UpdateAsync's
+    /// own doc comment for why).</summary>
+    [BindProperty] public bool AiDetectionEnabled { get; set; }
+    /// <summary>Object detection plan decision 9: "" (blank) means no explicit choice — same
+    /// inherit-style convention RecordingModeOverride uses, resolved dynamically node-side by
+    /// NodeWorker.ResolvePrimaryMotionSource rather than defaulted here.</summary>
+    [BindProperty] public string MotionDetectionSourceOverride { get; set; } = "";
 
     public bool IsNew => Id is null;
 
@@ -98,6 +106,8 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
             QuotaGb = camera.QuotaBytes is { } q ? Math.Round(q / 1024m / 1024 / 1024, 2) : null;
             VideoSourceToken = camera.VideoSourceToken;
             IntegrationKey = camera.IntegrationKey;
+            AiDetectionEnabled = camera.AiDetectionEnabled;
+            MotionDetectionSourceOverride = camera.MotionDetectionSource?.ToString() ?? "";
 
             await LoadEffectiveSettingsAsync(id.Value, camera.NodeId);
             StorageUsedBytes = (await cameraService.GetStorageUsageAsync()).GetValueOrDefault(id.Value);
@@ -179,8 +189,10 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
             var before = await cameraService.GetAsync(Id.Value);
             var oldRetentionOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, Id.Value, "Retention.Days");
 
+            var motionDetectionSource = Enum.TryParse<MotionDetectionSource>(MotionDetectionSourceOverride, out var mds) ? mds : (MotionDetectionSource?)null;
+
             await cameraService.UpdateAsync(Id.Value, Name, NodeId, Username, Password, IsEnabled, quotaBytes,
-                DeviceServiceUri);
+                DeviceServiceUri, AiDetectionEnabled, motionDetectionSource);
 
             var details = AuditDiff.Build(
                 AuditDiff.Of("Name", before?.Name, Name),
@@ -189,6 +201,8 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
                 AuditDiff.Of("Enabled", before?.IsEnabled.ToString(), IsEnabled.ToString()),
                 AuditDiff.Of("Quota", QuotaText(before?.QuotaBytes), QuotaText(quotaBytes)),
                 AuditDiff.Of("Retention override", oldRetentionOverride, RetentionDaysOverride?.ToString()),
+                AuditDiff.Of("AI detection enabled", before?.AiDetectionEnabled.ToString(), AiDetectionEnabled.ToString()),
+                AuditDiff.Of("Motion detection source", before?.MotionDetectionSource?.ToString(), motionDetectionSource?.ToString()),
                 AuditDiff.SecretChanged("Username", !string.IsNullOrWhiteSpace(Username)),
                 AuditDiff.SecretChanged("Password", !string.IsNullOrWhiteSpace(Password)));
 
@@ -259,6 +273,8 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
             QuotaGb = camera.QuotaBytes is { } q ? Math.Round(q / 1024m / 1024 / 1024, 2) : null;
             VideoSourceToken = camera.VideoSourceToken;
             IntegrationKey = camera.IntegrationKey;
+            AiDetectionEnabled = camera.AiDetectionEnabled;
+            MotionDetectionSourceOverride = camera.MotionDetectionSource?.ToString() ?? "";
 
             await LoadEffectiveSettingsAsync(Id.Value, camera.NodeId);
             StorageUsedBytes = (await cameraService.GetStorageUsageAsync()).GetValueOrDefault(Id.Value);

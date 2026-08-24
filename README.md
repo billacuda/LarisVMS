@@ -15,7 +15,7 @@ work on phone, tablet, and desktop.
 
 ---
 
-## **Current version [0.154.0](CHANGELOG.md)**
+## **Current version [0.157.0](CHANGELOG.md)**
 
 ## Stack
 
@@ -76,9 +76,22 @@ analytics classify objects surface as Person / Vehicle / Face / Object, each wit
 color and an emoji badge on the live tile (🚶 🚗 🙂 📦). A detection also counts toward Motion-mode
 recording, so footage of a person is retained even when pixel-motion detection wouldn't have fired.
 These are **discrete events, not bounding boxes** — "a person was here around this time", with no
-on-screen box. Per-frame boxes need the ONVIF metadata RTP track, and probing this deployment's own
-Amcrest fleet found it carries only a motion-cell grid with no object geometry at all, so boxes are
-not achievable on this hardware regardless of how they're implemented (`probe-metadata-track.ps1`).
+on-screen box, since per-frame boxes need the ONVIF metadata RTP track and probing this deployment's
+own Amcrest fleet found it carries only a motion-cell grid with no object geometry at all
+(`probe-metadata-track.ps1`).
+
+**Native AI object detection** (`LarisVMS.Vision`/`LarisVMS.Vision.Service`) closes that gap without
+depending on camera hardware at all: each node runs its own real-time YOLO/ByteTrack detection
+pipeline against a second RTSP session on the camera's Sub stream, GPU-accelerated where available
+(per-node accelerator setting, `Admin → Nodes`: Auto/Nvidia/Intel/AMD/CPU, graceful fallback and clear
+logging when nothing's available). Detected objects draw as live, tracked **on-screen bounding boxes**
+— a client-side-only overlay, independently toggleable for Moving vs. Idle objects, never baked into
+recordings — colored by a small auto-assigned category (Human/Vehicle/Animal/Object) with the specific
+class riding alongside ("Vehicle — car"). A detected object also gets its own cropped, best-frame
+snapshot image, separate from the ordinary hover-thumbnail cache. Runs as a sibling process
+(`LarisVMS.Vision.Service`) so a site that never enables it pays nothing for the GPU/ONNX Runtime
+dependency, and a bad GPU/driver interaction can never take down recording itself. **Unverified against
+real GPU hardware or an actual camera end-to-end** — see [CHANGELOG.md](CHANGELOG.md).
 
 **Camera integration plugins** cover what ONVIF can't express. A provider declares which makes/models
 it handles, camera probing matches it automatically from the reported make and model, and the node
@@ -161,14 +174,16 @@ measured slow/stuck-loading scrub on large (24–44MB) 4K/HEVC segments. Static 
 Connecting/Backoff on real Intel/NVIDIA hardware, and the root cause wasn't found before it was
 kill-switched back to safe/off pending real diagnostic logs from a stuck attempt.
 
-Real-time on-screen bounding-box overlays remain blocked on hardware, not on this app: per-frame boxes
-need the ONVIF metadata RTP track, and every camera probed on this fleet (including a Dahua/Amcrest
-model whose vendor CGI events do carry a `BoundingBox`, not yet consumed) either carries only a
-motion-cell grid over ONVIF or hasn't had that box wired up yet. ONVIF-pushed motion zones, instant
-replay, evidence lock, smart search, a hardware-decode fallback for a browser that can't natively
-decode a camera's codec, and a dedicated mobile-UI polish pass (scoped from a real phone walkthrough,
-not guessed from the CSS) haven't started — see [CHANGELOG.md](CHANGELOG.md) for everything shipped
-and the architecture plan for the full milestone roadmap.
+Real-time on-screen bounding-box overlays now exist (native AI object detection, above) without
+depending on camera hardware at all. The *camera-onboard* path specifically is still blocked on
+hardware, unrelated to that: per-frame boxes from a camera's own analytics need the ONVIF metadata RTP
+track, and every camera probed on this fleet (including a Dahua/Amcrest model whose vendor CGI events
+do carry a `BoundingBox`, not yet consumed) either carries only a motion-cell grid over ONVIF or hasn't
+had that box wired up yet. ONVIF-pushed motion zones, instant replay, evidence lock, smart search, a
+hardware-decode fallback for a browser that can't natively decode a camera's codec, and a dedicated
+mobile-UI polish pass (scoped from a real phone walkthrough, not guessed from the CSS) haven't
+started — see [CHANGELOG.md](CHANGELOG.md) for everything shipped and the architecture plan for the
+full milestone roadmap.
 
 Recorder nodes require **FFmpeg** on the machine they run on (LGPL "shared" build recommended — see
 the plan's licensing note). Point a node at it with `--ffmpeg-path` or `LARISVMS_FFMPEG_PATH`, or put
@@ -292,7 +307,12 @@ src/
   LarisVMS.Web              Razor Pages host (IIS) + node control plane API
   LarisVMS.Node              recorder Windows Service — 24/7 recording
   LarisVMS.NodeUpdater       detached helper that swaps the node's binary during an auto-update
+  LarisVMS.Vision            AI detection capture/inference/tracking — GPU/ONNX Runtime deps live here,
+                             never referenced by LarisVMS.Node itself
+  LarisVMS.Vision.Service    sibling process LarisVMS.Node supervises as a child — the only project
+                             allowed to reference LarisVMS.Vision
 tests/LarisVMS.Tests        xUnit
+tools/export-models          Python: exports YOLO weights to ONNX for LarisVMS.Vision.Service
 ```
 
 ## Development

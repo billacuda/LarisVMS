@@ -14,6 +14,7 @@
 
     Output:
         publish\LarisVMS.Node\win\   - LarisVMS.Node.exe + LarisVMS.NodeUpdater.exe + install-node.ps1
+                                       + (unless -SkipVision) LarisVMS.Vision.Service.exe + models\
 
     LarisVMS.NodeUpdater.exe is what a node launches (as a detached process) to swap its own binary
     during a self-triggered auto-update — see LarisVMS.Node/Update/UpdateService.cs and
@@ -25,6 +26,23 @@
     standalone (as build-node.ps1 -ExtraPublishPath ...) and nothing gets registered — only
     deploy.ps1's own run does that.
 
+    -Accel picks which single execution-provider variant of LarisVMS.Vision.Service gets built into
+    this package (object detection plan decisions 2/3) — Cuda (Nvidia), DirectML (any DX12 GPU incl.
+    AMD/Intel), OpenVino (Intel iGPU/CPU), or Cpu (no GPU; the default, since it's the one variant
+    every machine can actually run). Exactly one variant is published per node package, always as the
+    same fixed filename LarisVMS.Vision.Service.exe (see that project's own csproj comment) — the
+    admin's Node.AiAccelerator setting on the server picks which physical hardware NodeWorker actually
+    tries to use, but that choice has to match whichever provider this specific machine's package was
+    actually built with; there's no way to switch providers at runtime (YoloDotNet only links one
+    execution-provider package per process). Sites with genuinely different hardware need separate
+    packages built with different -Accel values. -SkipVision omits it entirely, for a plain
+    recording-only node with no AI detection at all.
+
+    Vision Service needs an exported .onnx model to do anything — this script copies models\*.onnx
+    from the repo root (gitignored, produced by tools/export-models/) into the package if present, and
+    just warns (doesn't fail the build) if it's missing, the same "detection is additive, never a hard
+    dependency" philosophy NodeWorker itself already applies when no accelerator is available.
+
     -ExtraPublishPath optionally mirrors the same output to a second location (e.g. a network share
     a recorder machine can reach directly) so a node install/upgrade doesn't depend on manually
     copying the folder over each time.
@@ -33,14 +51,22 @@
     .\build-node.ps1
 
 .EXAMPLE
-    .\build-node.ps1 -ExtraPublishPath '\\files1\nvr$\LarisVMS-node'
+    .\build-node.ps1 -Accel Cuda -ExtraPublishPath '\\files1\nvr$\LarisVMS-node'
+
+.EXAMPLE
+    .\build-node.ps1 -SkipVision
 #>
 
 param(
     [string]$NodeProject        = (Join-Path $PSScriptRoot 'src\LarisVMS.Node\LarisVMS.Node.csproj'),
     [string]$NodeUpdaterProject = (Join-Path $PSScriptRoot 'src\LarisVMS.NodeUpdater\LarisVMS.NodeUpdater.csproj'),
+    [string]$VisionProject      = (Join-Path $PSScriptRoot 'src\LarisVMS.Vision.Service\LarisVMS.Vision.Service.csproj'),
+    [string]$ModelsPath         = (Join-Path $PSScriptRoot 'models'),
     [string]$OutputRoot         = (Join-Path $PSScriptRoot 'publish\LarisVMS.Node'),
     [string]$Configuration      = 'Release',
+    [ValidateSet('Cuda', 'DirectML', 'OpenVino', 'Cpu')]
+    [string]$Accel              = 'Cpu',
+    [switch]$SkipVision,
     [string]$ExtraPublishPath
 )
 
@@ -85,6 +111,43 @@ if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed (exit $LASTEXITCODE)." }
 Copy-Item (Join-Path $updaterTmp 'LarisVMS.NodeUpdater.exe') $winOut -Force
 Remove-Item $updaterTmp -Recurse -Force
 Write-Ok "Published"
+
+if (-not $SkipVision) {
+    Write-Step "Publishing LarisVMS.Vision.Service (win-x64, self-contained, single-file, Accel=$Accel)"
+    # Own temp folder, same reasoning as the NodeUpdater publish above — a self-contained single-file
+    # publish drops its own copy of shared runtime files, which would collide with Node's if published
+    # straight into $winOut.
+    $visionTmp = Join-Path $OutputRoot 'win-vision-tmp'
+    if (Test-Path $visionTmp) { Remove-Item $visionTmp -Recurse -Force }
+    dotnet publish $VisionProject `
+        -c $Configuration `
+        -r win-x64 `
+        --self-contained `
+        -p:PublishSingleFile=true `
+        -p:EnableCompressionInSingleFile=true `
+        -p:NoWarn=CA1416 `
+        -p:Accel=$Accel `
+        -o $visionTmp
+    if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed (exit $LASTEXITCODE)." }
+    # Everything from this publish, not just the .exe — the chosen execution provider's own native
+    # DLLs (onnxruntime, cuDNN/TensorRT for Cuda, etc.) sit alongside it, not inside the single file.
+    Copy-Item (Join-Path $visionTmp '*') $winOut -Recurse -Force
+    Remove-Item $visionTmp -Recurse -Force
+    Write-Ok "Published (Accel=$Accel)"
+
+    Write-Step "Bundling exported model(s)"
+    $modelsOut = Join-Path $winOut 'models'
+    New-Item -ItemType Directory -Path $modelsOut -Force | Out-Null
+    $onnxFiles = if (Test-Path $ModelsPath) { Get-ChildItem $ModelsPath -Filter '*.onnx' -File } else { @() }
+    if ($onnxFiles.Count -eq 0) {
+        Write-Host "    No .onnx model found under $ModelsPath — AI detection won't have anything to run until one is placed there (see tools/export-models/) and this is rebuilt." -ForegroundColor Yellow
+    } else {
+        $onnxFiles | Copy-Item -Destination $modelsOut -Force
+        Write-Ok "Bundled $($onnxFiles.Count) model file(s)"
+    }
+} else {
+    Write-Step "Skipping LarisVMS.Vision.Service (-SkipVision) — this package will be recording-only, no AI detection."
+}
 
 Copy-Item (Join-Path $PSScriptRoot 'install-node.ps1') $winOut -Force
 Write-Ok "install-node.ps1 bundled"

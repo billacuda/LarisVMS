@@ -17,14 +17,21 @@ internal static class UpdaterLogic
     /// start-again half — what the Nodes page's own "Restart service" button needs. Reusing this
     /// binary rather than having the node shell out to sc.exe itself keeps one implementation of
     /// "outlive the service, then bring it back", which is the part that has to run *outside* the
-    /// process being restarted.</summary>
-    public record ParsedArgs(string? NewBinary, string? CurrentBinary, string ServiceName, bool RestartOnly);
+    /// process being restarted.
+    ///
+    /// NewVisionBinary/CurrentVisionBinary (object detection plan follow-up) are both null together
+    /// when this update carries no Vision Service binary (UpdateService only ever passes both or
+    /// neither) — a second, optional, best-effort swap alongside the required Node one. Program.cs
+    /// never lets a Vision swap failure abort the Node swap or leave the service un-restarted, the
+    /// same "additive, never blocks recording" philosophy the rest of this feature already follows.</summary>
+    public record ParsedArgs(string? NewBinary, string? CurrentBinary, string ServiceName, bool RestartOnly,
+        string? NewVisionBinary = null, string? CurrentVisionBinary = null);
 
     /// <summary>Same "--flag value" scanning dploid.AgentUpdater's Program.cs uses inline — pulled out
     /// here only so it has something a test can call directly.</summary>
     public static ParsedArgs ParseArgs(string[] args)
     {
-        string? newBinary = null, currentBinary = null;
+        string? newBinary = null, currentBinary = null, newVisionBinary = null, currentVisionBinary = null;
         var serviceName = DefaultServiceName;
         var restartOnly = false;
 
@@ -37,12 +44,14 @@ internal static class UpdaterLogic
             {
                 case "--new" when i + 1 < args.Length: newBinary = args[++i]; break;
                 case "--current" when i + 1 < args.Length: currentBinary = args[++i]; break;
+                case "--new-vision" when i + 1 < args.Length: newVisionBinary = args[++i]; break;
+                case "--current-vision" when i + 1 < args.Length: currentVisionBinary = args[++i]; break;
                 case "--service" when i + 1 < args.Length: serviceName = args[++i]; break;
                 case "--restart-only": restartOnly = true; break;
             }
         }
 
-        return new ParsedArgs(newBinary, currentBinary, serviceName, restartOnly);
+        return new ParsedArgs(newBinary, currentBinary, serviceName, restartOnly, newVisionBinary, currentVisionBinary);
     }
 
     /// <summary>Backs up currentBinary to "{currentBinary}.bak" (if it exists), moves newBinary over

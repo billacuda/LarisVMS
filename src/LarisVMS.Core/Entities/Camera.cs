@@ -4,6 +4,21 @@ namespace LarisVMS.Core.Entities;
 
 public class Camera
 {
+    /// <summary>Object detection plan: whether this camera's node should watch it for AI object
+    /// detection at all. Independent of MotionDetectionSource below — a camera can have AI
+    /// detection enabled purely for its own always-on object tagging (decision 9) without AI ever
+    /// being the primary source that gates Motion-mode recording. Requires the owning node to have
+    /// resolved a usable accelerator (Node.AiAccelerator) — see NodeWorker.ReconcileVision.</summary>
+    public bool AiDetectionEnabled { get; set; }
+
+    /// <summary>Object detection plan decision 9: which single generic "something moved" signal
+    /// (ServerMotion/CameraEvent/Integration/AiDetection) drives this camera's Motion-mode
+    /// keep/discard decision and reports plain motion spans, when RecordingMode is Motion. Ignored
+    /// entirely outside Motion mode. Null means "not yet configured" — NodeWorker's fallback
+    /// (fail-open, same philosophy as every other "nothing configured yet" case in this app) is to
+    /// behave like Continuous rather than silently discarding everything.</summary>
+    public MotionDetectionSource? MotionDetectionSource { get; set; }
+
     public Guid Id { get; set; }
 
     /// <summary>Owning recorder node. Nullable until Nodes exist (M3) — a camera can be registered

@@ -66,6 +66,16 @@ public interface ITimelineService
     /// comment for why the Snapshots browser needs this instead of the bucketed version.</summary>
     Task<ThumbnailInfo?> GetExactThumbnailInfoAsync(Guid cameraId, DateTime atUtc, CancellationToken ct = default);
 
+    /// <summary>Object detection plan decision 10: resolves one AI-detection MotionSpan's cropped
+    /// best-frame image request — the segment covering BestFrameAtUtc (falling back to StartUtc when
+    /// absent, same as GetSnapshotsAsync's own AtUtc sampling for a classified span), plus the
+    /// span's own captured detection box and that segment's pixel dimensions. Null if spanId doesn't
+    /// exist, doesn't belong to cameraId, has no captured box (not an AI-detection span, or one whose
+    /// checkpoint never got this far), or no segment covers the resolved instant — same "narrow to
+    /// nothing rather than guess" contract GetSegmentForPlaybackAsync already uses for an
+    /// id+cameraId pairing.</summary>
+    Task<SnapshotImageInfo?> GetSnapshotImageInfoAsync(Guid cameraId, long spanId, CancellationToken ct = default);
+
     /// <summary>Dashboard's "most recent thumbnail" column: the newest completed segment's own
     /// last frame — see the implementation's own doc comment for why this is deliberately not
     /// GetThumbnailInfoAsync (bucketed/historical) or the live-RTSP snapshot endpoint (too heavy to
@@ -88,4 +98,11 @@ public interface ITimelineService
     /// lets the Snapshots page resolve "single camera" / "all cameras" / "camera group" / "view" into
     /// one shared parameter instead of four different query shapes.</summary>
     Task<SnapshotPageDto> GetSnapshotsAsync(IReadOnlyCollection<Guid>? cameraIds, DateTime? fromUtc, DateTime? toUtc, int page, int pageSize, CancellationToken ct = default, IReadOnlyCollection<string>? kinds = null);
+
+    /// <summary>Object detection plan decision 5: every currently-known DetectedObjectCategory,
+    /// ordered by name — what the Snapshots page's filter checkboxes are built from. Fetched live
+    /// (not a fixed list like DetectionDisplay.AllKinds) since the set is open-ended and grows as
+    /// new categories are first seen. Small table in practice (see DetectedObjectCategory's own doc
+    /// comment), so no paging.</summary>
+    Task<List<DetectedObjectCategoryDto>> GetDetectedObjectCategoriesAsync(CancellationToken ct = default);
 }

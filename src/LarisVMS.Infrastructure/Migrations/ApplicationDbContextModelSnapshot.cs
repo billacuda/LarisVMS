@@ -375,6 +375,9 @@ namespace LarisVMS.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<bool>("AiDetectionEnabled")
+                        .HasColumnType("bit");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
 
@@ -415,6 +418,9 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.Property<string>("Model")
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
+
+                    b.Property<int?>("MotionDetectionSource")
+                        .HasColumnType("int");
 
                     b.Property<string>("Name")
                         .IsRequired()
@@ -670,6 +676,33 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.ToTable("CameraStreams");
                 });
 
+            modelBuilder.Entity("LarisVMS.Core.Entities.DetectedObjectCategory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ColorHex")
+                        .IsRequired()
+                        .HasMaxLength(9)
+                        .HasColumnType("nvarchar(9)");
+
+                    b.Property<DateTime>("FirstSeenUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("DetectedObjectCategories");
+                });
+
             modelBuilder.Entity("LarisVMS.Core.Entities.EmailSettings", b =>
                 {
                     b.Property<Guid>("Id")
@@ -914,8 +947,33 @@ namespace LarisVMS.Infrastructure.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
 
+                    b.Property<double?>("BestBoxConfidence")
+                        .HasColumnType("float");
+
+                    b.Property<double?>("BestBoxH")
+                        .HasColumnType("float");
+
+                    b.Property<double?>("BestBoxW")
+                        .HasColumnType("float");
+
+                    b.Property<double?>("BestBoxX")
+                        .HasColumnType("float");
+
+                    b.Property<double?>("BestBoxY")
+                        .HasColumnType("float");
+
+                    b.Property<DateTime?>("BestFrameAtUtc")
+                        .HasColumnType("datetime2");
+
                     b.Property<Guid>("CameraId")
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("DetectedObjectCategoryId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("DetectedObjectLabel")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
 
                     b.Property<int?>("DetectionKind")
                         .HasColumnType("int");
@@ -942,6 +1000,8 @@ namespace LarisVMS.Infrastructure.Migrations
 
                     SqlServerKeyBuilderExtensions.IsClustered(b.HasKey("Id"), false);
 
+                    b.HasIndex("DetectedObjectCategoryId");
+
                     b.HasIndex("EventTagRuleId");
 
                     b.HasIndex("ZoneId");
@@ -959,6 +1019,9 @@ namespace LarisVMS.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<int?>("AiAccelerator")
+                        .HasColumnType("int");
+
                     b.Property<string>("ApiKeyHash")
                         .IsRequired()
                         .HasMaxLength(200)
@@ -972,6 +1035,10 @@ namespace LarisVMS.Infrastructure.Migrations
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
+
+                    b.Property<string>("DetectedAcceleratorsJson")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
 
                     b.Property<string>("DetectedEncodersJson")
                         .HasMaxLength(500)
@@ -1074,6 +1141,17 @@ namespace LarisVMS.Infrastructure.Migrations
                         .IsRequired()
                         .HasMaxLength(50)
                         .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("VisionFilePath")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("VisionSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<long?>("VisionSizeBytes")
+                        .HasColumnType("bigint");
 
                     b.HasKey("Id");
 
@@ -1704,6 +1782,11 @@ namespace LarisVMS.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.HasOne("LarisVMS.Core.Entities.DetectedObjectCategory", "DetectedObjectCategory")
+                        .WithMany()
+                        .HasForeignKey("DetectedObjectCategoryId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("LarisVMS.Core.Entities.EventTagRule", "EventTagRule")
                         .WithMany()
                         .HasForeignKey("EventTagRuleId")
@@ -1715,6 +1798,8 @@ namespace LarisVMS.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("Camera");
+
+                    b.Navigation("DetectedObjectCategory");
 
                     b.Navigation("EventTagRule");
 

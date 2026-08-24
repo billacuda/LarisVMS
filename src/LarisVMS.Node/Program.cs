@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
@@ -170,6 +171,36 @@ app.Map("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWork
 
     using var socket = await ctx.WebSockets.AcceptWebSocketAsync();
     await LiveViewerHandler.RunAsync(socket, session, liveLogger, ctx.RequestAborted);
+});
+
+// Object detection plan decision 6: live-view box overlay — a separate WS from the video stream
+// above, reusing the exact same MediaToken this camera's own /live token already grants (viewing a
+// camera's boxes is the same authorization boundary as viewing its video, not a separate one).
+app.Map("/live/{cameraId:guid}/detections", async (HttpContext ctx, Guid cameraId, NodeWorker worker) =>
+{
+    if (!ctx.WebSockets.IsWebSocketRequest)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+
+    var token = ExtractToken(ctx);
+    var currentKey = worker.MediaSigningKey;
+    if (currentKey is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
+        return;
+    }
+    if (!MediaToken.TryValidate(token, cameraId, currentKey, out var tokenError))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync(tokenError);
+        return;
+    }
+
+    using var socket = await ctx.WebSockets.AcceptWebSocketAsync();
+    await DetectionOverlayHandler.RunAsync(socket, cameraId, worker.VisionHttpClient, liveLogger, ctx.RequestAborted);
 });
 
 // M7 playback: serves exactly one segment file's raw bytes to LarisVMS.Web's proxy — never reached
@@ -417,6 +448,107 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid c
     // still-being-written, truncated file — confirmed live as the browser's broken-image icon
     // appearing right after "Loading…").
     await LarisVMS.Media.ThumbnailCapture.SaveToCacheAsync(thumbPath, bytes, CancellationToken.None);
+
+    ctx.Response.ContentType = "image/jpeg";
+    await ctx.Response.Body.WriteAsync(bytes, ctx.RequestAborted);
+});
+
+// Object detection plan decision 10: same proxy-target shape as /playback-thumbnail above (signed
+// token binds cameraId+path+offsetSeconds; directory-prefix check is the second, independent line of
+// defense) but crops to a detection box and caches under cam-{id}/snapshots/ instead of thumbs/,
+// keyed by the owning MotionSpan's own id rather than a bucketed offset — a snapshot has exactly one
+// owning span, so this is simpler and collision-free without needing an offset-bucketing scheme.
+// Reuses MediaToken's existing thumbnail token pair rather than minting a new one: the
+// security-sensitive fields (which file, which offset) are identical in shape and meaning to the
+// hover-thumbnail token's own boundary. The crop box/frame dimensions ride as unsigned query params,
+// same "a quality knob, not something that needs tamper-protection" reasoning maxDim/q already use
+// above — a tampered box only changes what crop of an already-authorized frame comes back, never
+// which file or offset is read.
+app.MapGet("/snapshot-image/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWorker worker) =>
+{
+    var token = ExtractToken(ctx);
+    var path = ctx.Request.Query["path"].ToString();
+    var currentKey = worker.MediaSigningKey;
+    if (currentKey is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
+        return;
+    }
+    if (string.IsNullOrEmpty(path) || !int.TryParse(ctx.Request.Query["offset"], out var offsetSeconds) || offsetSeconds < 0)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await ctx.Response.WriteAsync("missing or invalid path/offset");
+        return;
+    }
+    if (!MediaToken.TryValidateThumbnail(token, cameraId, path, offsetSeconds, currentKey, out var tokenError))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync(tokenError);
+        return;
+    }
+
+    if (!long.TryParse(ctx.Request.Query["spanId"], out var spanId)
+        || !double.TryParse(ctx.Request.Query["x"], NumberStyles.Float, CultureInfo.InvariantCulture, out var boxX)
+        || !double.TryParse(ctx.Request.Query["y"], NumberStyles.Float, CultureInfo.InvariantCulture, out var boxY)
+        || !double.TryParse(ctx.Request.Query["w"], NumberStyles.Float, CultureInfo.InvariantCulture, out var boxW)
+        || !double.TryParse(ctx.Request.Query["h"], NumberStyles.Float, CultureInfo.InvariantCulture, out var boxH)
+        || !int.TryParse(ctx.Request.Query["frameW"], out var frameW) || frameW <= 0
+        || !int.TryParse(ctx.Request.Query["frameH"], out var frameH) || frameH <= 0)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await ctx.Response.WriteAsync("missing or invalid spanId/box/frame dimensions");
+        return;
+    }
+
+    var storageRoot = worker.StorageRoot;
+    if (storageRoot is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
+        return;
+    }
+
+    string fullPath, mainDir, snapshotsDir;
+    try
+    {
+        fullPath = Path.GetFullPath(path);
+        mainDir = Path.GetFullPath(Path.Combine(storageRoot, $"cam-{cameraId}", "main")) + Path.DirectorySeparatorChar;
+        snapshotsDir = Path.GetFullPath(Path.Combine(storageRoot, $"cam-{cameraId}", "snapshots"));
+    }
+    catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+
+    if (!fullPath.StartsWith(mainDir, StringComparison.OrdinalIgnoreCase) || !File.Exists(fullPath))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+    }
+
+    var relativeToMain = Path.GetRelativePath(mainDir, fullPath);
+    var snapshotRelative = Path.ChangeExtension(relativeToMain, null) + $"_span{spanId}.jpg";
+    var snapshotPath = Path.Combine(snapshotsDir, snapshotRelative);
+
+    if (File.Exists(snapshotPath))
+    {
+        ctx.Response.ContentType = "image/jpeg";
+        await ctx.Response.SendFileAsync(snapshotPath, ctx.RequestAborted);
+        return;
+    }
+
+    var bytes = await worker.CaptureSnapshotImageAsync(fullPath, offsetSeconds, boxX, boxY, boxW, boxH, frameW, frameH, ctx.RequestAborted);
+    if (bytes is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
+        await ctx.Response.WriteAsync("Could not extract a cropped frame from this segment.");
+        return;
+    }
+
+    // Same atomic cache write as /playback-thumbnail above.
+    await LarisVMS.Media.ThumbnailCapture.SaveToCacheAsync(snapshotPath, bytes, CancellationToken.None);
 
     ctx.Response.ContentType = "image/jpeg";
     await ctx.Response.Body.WriteAsync(bytes, ctx.RequestAborted);
@@ -697,6 +829,24 @@ app.MapGet("/snapshot/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, N
 
     ctx.Response.ContentType = "image/jpeg";
     await ctx.Response.Body.WriteAsync(bytes, ctx.RequestAborted);
+});
+
+// Object detection plan decision 3: LarisVMS.Vision.Service's own report of one closed/checkpointed
+// AI-detection span, POSTed back here rather than through the normal Web-facing MediaToken auth
+// every other route on this port uses — Vision Service is a sibling process on the same machine,
+// not something LarisVMS.Web ever calls. The trust boundary is the OS's own loopback isolation
+// instead: the caller must be reaching this from 127.0.0.1/::1, checked explicitly since this
+// Kestrel host also listens on every interface (ListenAnyIP) for the LAN-facing routes above it.
+app.MapPost("/detections", async (HttpContext ctx, VisionDetectionReportItem item, NodeWorker worker) =>
+{
+    if (!IPAddress.IsLoopback(ctx.Connection.RemoteIpAddress ?? IPAddress.None))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+        await ctx.Response.WriteAsync("This endpoint only accepts connections from the local machine.");
+        return;
+    }
+
+    worker.ReportVisionDetection(item);
 });
 
 await app.RunAsync();

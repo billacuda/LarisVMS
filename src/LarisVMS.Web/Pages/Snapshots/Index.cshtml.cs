@@ -55,6 +55,15 @@ public class IndexModel(ITimelineService timelineService, ICameraService cameraS
     public IReadOnlyList<DetectionKind> DetectionKinds => DetectionDisplay.AllKinds;
     public const string CustomTagToken = TimelineService.CustomTagKindToken;
 
+    /// <summary>Object detection plan decision 5: the live (small) set of AI-detection categories,
+    /// fetched fresh every page load rather than a fixed list like DetectionKinds above — see
+    /// ITimelineService.GetDetectedObjectCategoriesAsync's own doc comment for why. Rendered as its
+    /// own row of filter checkboxes, alongside (not replacing) DetectionKinds — a "Vehicle" checkbox
+    /// here and one from DetectionKinds are deliberately the same filter token (see
+    /// TimelineService.GetSnapshotsAsync's kinds-filter comment), so only one checkbox for a name
+    /// that appears in both lists is rendered.</summary>
+    public List<DetectedObjectCategoryDto> DetectedObjectCategories { get; set; } = [];
+
     public bool IsKindChecked(string token) => Kinds is null || Kinds.Contains(token, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>"12s" / "3m 05s" / "1h 02m" — no existing duration formatter elsewhere in the app to
@@ -86,6 +95,7 @@ public class IndexModel(ITimelineService timelineService, ICameraService cameraS
         Kinds = kinds;
         Cameras = (await cameraService.ListAsync(ct)).OrderBy(c => c.Name).ToList();
         Groups = await cameraGroupService.GetTreeAsync(ct);
+        DetectedObjectCategories = await timelineService.GetDetectedObjectCategoriesAsync(ct);
         var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
         Views = await viewService.ListVisibleToAsync(currentUserId, ct);
 

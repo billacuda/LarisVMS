@@ -30,12 +30,31 @@ public enum ZoneKind
 /// <summary>How a MotionSpan was produced. ServerMotion is a drawn zone's own frame-diff detection;
 /// CameraEvent is the built-in ONVIF motion classifier (CameraEventClassifier's hardcoded topic
 /// markers); CustomTag (M8 pass 8) is a user-configured EventTagRule — see MotionSpan.EventTagRuleId,
-/// set only for this source.</summary>
+/// set only for this source. AiDetection (object detection plan) is LarisVMS.Vision.Service's own
+/// AI object-detection pipeline — see MotionSpan.DetectedObjectCategoryId/DetectedObjectLabel,
+/// which only this source ever populates.</summary>
 public enum MotionSource
 {
     ServerMotion = 0,
     CameraEvent = 1,
-    CustomTag = 2
+    CustomTag = 2,
+    AiDetection = 3
+}
+
+/// <summary>A Motion-mode camera's single chosen *primary* motion-detection source — see the
+/// object detection plan's decision 9. Distinct from <see cref="MotionSource"/> (which describes
+/// what produced a given already-recorded MotionSpan row): this is a per-camera admin setting that
+/// decides which of the generic "something moved" signal sources is allowed to gate a Motion-mode
+/// segment's keep/discard decision and report plain motion spans, when more than one is configured
+/// for the same camera. EventTagRule (CustomTag) and AI detection's own object-tagging are
+/// deliberately outside this choice — both always report to the timeline regardless of which
+/// primary source is selected here; see NodeWorker's gating logic for exactly how.</summary>
+public enum MotionDetectionSource
+{
+    ServerMotion = 0,
+    CameraEvent = 1,
+    Integration = 2,
+    AiDetection = 3
 }
 
 /// <summary>What a camera's own onboard analytics said it saw, when its notification identifies an

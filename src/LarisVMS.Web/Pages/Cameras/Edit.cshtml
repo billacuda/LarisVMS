@@ -195,6 +195,43 @@
         </div>
         <div class="col-6">
             <label class="form-label">
+                AI object detection
+                <button type="button" class="help-icon" data-help-target="aiDetectionHelp" tabindex="0" aria-label="Help">ℹ️</button>
+            </label>
+            <div class="form-check">
+                <input asp-for="AiDetectionEnabled" class="form-check-input" type="checkbox" />
+                <label class="form-check-label" asp-for="AiDetectionEnabled">Watch this camera for AI object detection</label>
+            </div>
+            <div class="help-text-source" id="aiDetectionHelp">
+                Which hardware accelerator actually runs detection is a per-node setting, not chosen
+                here (<a asp-page="/Admin/Nodes">manage nodes</a>). If the assigned node has none
+                available, this is logged once and every other detection path already configured for
+                this camera keeps working unaffected.
+            </div>
+        </div>
+        <div class="col-6">
+            <label class="form-label">
+                Motion detection source
+                <button type="button" class="help-icon" data-help-target="motionSourceHelp" tabindex="0" aria-label="Help">ℹ️</button>
+            </label>
+            <select asp-for="MotionDetectionSourceOverride" class="form-select">
+                <option value="">(auto — richest configured signal)</option>
+                <option value="ServerMotion">Server-side motion (pixel zone)</option>
+                <option value="CameraEvent">Camera events (ONVIF)</option>
+                <option value="Integration">Vendor integration</option>
+                <option value="AiDetection">AI detection</option>
+            </select>
+            <div class="help-text-source" id="motionSourceHelp">
+                Only matters in Motion mode, and only narrows the three generic "something moved"
+                signals (server-side zone, ONVIF camera events, vendor integration) to exactly one at
+                a time, so the timeline doesn't collect redundant overlapping entries for the same
+                event. A named event tag rule and AI detection's own object labels always tag the
+                timeline regardless of this choice. Leave on auto to prefer whichever of the three is
+                actually configured, richest signal first.
+            </div>
+        </div>
+        <div class="col-6">
+            <label class="form-label">
                 Pre-roll override (seconds)
                 <button type="button" class="help-icon" data-help-target="preRollHelp" tabindex="0" aria-label="Help">ℹ️</button>
             </label>

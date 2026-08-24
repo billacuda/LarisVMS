@@ -87,6 +87,19 @@
                 </label>
             </div>
         }
+        @* Object detection plan decision 5: AI-detection categories share the kinds-filter token
+           space with DetectionKinds above (see TimelineService.GetSnapshotsAsync's own comment) — a
+           category whose name is already one of the fixed DetectionKinds (e.g. "Vehicle", "Animal")
+           gets no second checkbox here, since ticking the one above already covers both sources. *@
+        @foreach (var category in Model.DetectedObjectCategories.Where(c => !Model.DetectionKinds.Any(k => k.ToString().Equals(c.Name, StringComparison.OrdinalIgnoreCase))))
+        {
+            <div class="form-check form-check-inline mb-0">
+                <input type="checkbox" class="form-check-input" id="kind-@category.Name" name="kinds" value="@category.Name" checked="@Model.IsKindChecked(category.Name)" />
+                <label class="form-check-label small" for="kind-@category.Name">
+                    <span class="badge" style="background-color: @category.ColorHex;">&nbsp;</span> @category.Name
+                </label>
+            </div>
+        }
     </div>
 </form>
 
@@ -108,6 +121,17 @@ else
                        page's own current filter state instead of /Playback. Bookmarks' plain-string version
                        has been live and working since M18; this sidesteps whatever the tag-helper issue was
                        rather than chasing it further. *@
+                    @* Object detection plan decision 10: an AI-detection span's image comes from
+                       /snapshot-image (cropped to the detection box, from its own best-scoring frame)
+                       instead of the plain uncropped /playback-thumbnail every other kind of span
+                       uses — GetSnapshotImageInfoAsync itself falls back to a 404 (same onerror
+                       placeholder below) if the underlying span turns out to have no captured box
+                       after all, so this is safe to route unconditionally off IsAiDetection. *@
+                    @{
+                        var imgSrc = s.IsAiDetection
+                            ? $"/snapshot-image/{s.CameraId}/{s.Id}"
+                            : $"/playback-thumbnail/{s.CameraId}?atUtc={Uri.EscapeDataString(atUtcIso)}&exact=true";
+                    }
                     <a href="/Playback?cameraId=@s.CameraId&atUtc=@Uri.EscapeDataString(atUtcIso)">
                         @* object-fit:contain, not cover — cover crops a non-16:9 source frame (portrait
                            cameras especially) to fill the box; contain always shows the whole frame,
@@ -117,7 +141,7 @@ else
                            lookup's coverage gap on a Motion-mode camera. onerror swaps in a text
                            placeholder rather than just hiding the image, so a card whose footage has
                            since aged out of retention still reads as "nothing here", not "broken". *@
-                        <img src="/playback-thumbnail/@s.CameraId?atUtc=@Uri.EscapeDataString(atUtcIso)&exact=true"
+                        <img src="@imgSrc"
                              loading="lazy" class="card-img-top" data-snapshot-thumb style="aspect-ratio: 16/9; object-fit: contain; background: var(--bs-secondary-bg);"
                              alt="Snapshot thumbnail"
                              onerror="this.style.display='none'; this.nextElementSibling.classList.remove('d-none');" />

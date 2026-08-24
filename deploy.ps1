@@ -56,6 +56,13 @@ param(
     # every clone of this repo.
     [string]$ExtraNodePublishPath = '',
     [string]$NodeCsprojPath       = (Join-Path $PSScriptRoot 'src\LarisVMS.Node\LarisVMS.Node.csproj'),
+    # Passed straight through to build-node.ps1's own -Accel/-SkipVision — see that script's own doc
+    # comment for what each execution-provider variant needs. Defaults match build-node.ps1's own
+    # default (Cpu, Vision included) so an ordinary deploy still ships AI detection capability without
+    # any extra flags; a site with GPU-equipped recorder nodes should pass -NodeAccel explicitly.
+    [ValidateSet('Cuda', 'DirectML', 'OpenVino', 'Cpu')]
+    [string]$NodeAccel            = 'Cpu',
+    [switch]$SkipNodeVision,
     [switch]$SkipMigrations,
     [switch]$SkipNodeBuild,
     [switch]$SkipNodeBuildRegistration,
@@ -251,9 +258,12 @@ Write-Ok "Published to: $PublishDir"
 if (-not $SkipNodeBuild) {
     Write-Step "Building recorder node package"
     $buildNodeScript = Join-Path $PSScriptRoot 'build-node.ps1'
-    $buildNodeArgs = @{ Configuration = $Configuration }
+    $buildNodeArgs = @{ Configuration = $Configuration; Accel = $NodeAccel }
     if (-not [string]::IsNullOrWhiteSpace($ExtraNodePublishPath)) {
         $buildNodeArgs['ExtraPublishPath'] = $ExtraNodePublishPath
+    }
+    if ($SkipNodeVision) {
+        $buildNodeArgs['SkipVision'] = $true
     }
     # No $LASTEXITCODE check needed here: build-node.ps1 (Set-StrictMode + $ErrorActionPreference
     # = 'Stop') already throws on every failure path it has, including a non-zero exit from the
@@ -345,6 +355,14 @@ try {
             $nodeExePath = Join-Path $PSScriptRoot 'publish\LarisVMS.Node\win\LarisVMS.Node.exe'
             if (-not (Test-Path $nodeExePath)) { throw "Built node exe not found: $nodeExePath" }
 
+            # Optional — a package built with -SkipNodeVision (or an older node package still sitting
+            # in publish\ from before this existed) simply has none, and every node's auto-update
+            # already treats "no Vision binary on this build's row" as "nothing to offer" rather than
+            # an error. See LarisVMS.Vision.Service.csproj's own comment for why this rides the same
+            # Version/row as the Node exe instead of its own independent version.
+            $visionExePath = Join-Path $PSScriptRoot 'publish\LarisVMS.Node\win\LarisVMS.Vision.Service.exe'
+            $hasVision = Test-Path $visionExePath
+
             Add-Type -AssemblyName System.Data
             $sqlCs = Get-SqlClientConnectionString $ConnectionString
             $conn = New-Object System.Data.SqlClient.SqlConnection($sqlCs)
@@ -373,10 +391,23 @@ try {
                     $hash = (Get-FileHash -Path $storedPath -Algorithm SHA256).Hash.ToLowerInvariant()
                     $sizeBytes = (Get-Item $storedPath).Length
 
+                    # Same file, alongside the Node exe, under its own name in the same builds folder —
+                    # NULL columns (not an empty string) when this build has no Vision Service binary,
+                    # so a node's own auto-update can tell "nothing to offer" apart from "offer this".
+                    $visionStoredPath = $null
+                    $visionHash = $null
+                    $visionSizeBytes = $null
+                    if ($hasVision) {
+                        $visionStoredPath = Join-Path $nodeBuildsRoot "$buildId.vision.exe"
+                        Copy-Item $visionExePath $visionStoredPath -Force
+                        $visionHash = (Get-FileHash -Path $visionStoredPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                        $visionSizeBytes = (Get-Item $visionStoredPath).Length
+                    }
+
                     $insertCmd = $conn.CreateCommand()
                     $insertCmd.CommandText = @'
-INSERT INTO NodeBuildVersions (Id, Version, Platform, FilePath, SizeBytes, Sha256, UploadedAt, Notes, Status, ApprovedAt, ApprovedBy)
-VALUES (@Id, @Version, @Platform, @FilePath, @SizeBytes, @Sha256, GETUTCDATE(), @Notes, 0, NULL, NULL)
+INSERT INTO NodeBuildVersions (Id, Version, Platform, FilePath, SizeBytes, Sha256, VisionFilePath, VisionSizeBytes, VisionSha256, UploadedAt, Notes, Status, ApprovedAt, ApprovedBy)
+VALUES (@Id, @Version, @Platform, @FilePath, @SizeBytes, @Sha256, @VisionFilePath, @VisionSizeBytes, @VisionSha256, GETUTCDATE(), @Notes, 0, NULL, NULL)
 '@
                     $insertCmd.Parameters.AddWithValue('@Id', $buildId) | Out-Null
                     $insertCmd.Parameters.AddWithValue('@Version', $nodeVersion) | Out-Null
@@ -384,10 +415,15 @@ VALUES (@Id, @Version, @Platform, @FilePath, @SizeBytes, @Sha256, GETUTCDATE(), 
                     $insertCmd.Parameters.AddWithValue('@FilePath', $storedPath) | Out-Null
                     $insertCmd.Parameters.AddWithValue('@SizeBytes', $sizeBytes) | Out-Null
                     $insertCmd.Parameters.AddWithValue('@Sha256', $hash) | Out-Null
+                    # AddWithValue with a bare $null does not reliably become SQL NULL — pass
+                    # [DBNull]::Value explicitly, the standard .NET pattern for this.
+                    $insertCmd.Parameters.AddWithValue('@VisionFilePath', $(if ($visionStoredPath) { $visionStoredPath } else { [DBNull]::Value })) | Out-Null
+                    $insertCmd.Parameters.AddWithValue('@VisionSizeBytes', $(if ($null -ne $visionSizeBytes) { $visionSizeBytes } else { [DBNull]::Value })) | Out-Null
+                    $insertCmd.Parameters.AddWithValue('@VisionSha256', $(if ($visionHash) { $visionHash } else { [DBNull]::Value })) | Out-Null
                     $insertCmd.Parameters.AddWithValue('@Notes', "Registered by deploy.ps1 on $(Get-Date -Format 'yyyy-MM-dd HH:mm')") | Out-Null
                     $insertCmd.ExecuteNonQuery() | Out-Null
 
-                    Write-Ok "Node build $nodeVersion ($platform) registered as Pending - approve it on Admin -> Node Builds."
+                    Write-Ok "Node build $nodeVersion ($platform) registered as Pending - approve it on Admin -> Node Builds.$(if ($hasVision) { ' (includes Vision Service)' })"
                 }
             } finally {
                 $conn.Close()

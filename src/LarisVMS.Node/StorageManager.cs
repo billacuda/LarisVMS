@@ -82,8 +82,11 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
 
             // M7 pass 2: a hover-thumbnail cache has no reason to outlive the segment it was
             // extracted from — every eviction below deletes a segment's matching thumbnail(s)
-            // alongside it rather than relying on a separate age sweep.
+            // alongside it rather than relying on a separate age sweep. Object detection plan
+            // decision 10: cached snapshot-image crops get the identical guarantee, from their own
+            // sibling directory.
             var thumbsDir = Path.Combine(storageRoot, $"cam-{camera.CameraId}", "thumbs");
+            var snapshotsDir = Path.Combine(storageRoot, $"cam-{camera.CameraId}", "snapshots");
 
             var files = EnumerateEvictable(cameraDir, now);
 
@@ -97,6 +100,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
                     deletedPaths.Add(f.FullName);
                     files.Remove(f);
                     DeleteMatchingThumbnails(cameraDir, thumbsDir, f.FullName);
+                    DeleteMatchingSnapshotImages(cameraDir, snapshotsDir, f.FullName);
                 }
             }
 
@@ -108,11 +112,13 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
                     deletedPaths.Add(f.FullName);
                     files.Remove(f);
                     DeleteMatchingThumbnails(cameraDir, thumbsDir, f.FullName);
+                    DeleteMatchingSnapshotImages(cameraDir, snapshotsDir, f.FullName);
                 }
             }
 
             PruneEmptyDirectories(cameraDir);
             if (Directory.Exists(thumbsDir)) PruneEmptyDirectories(thumbsDir);
+            if (Directory.Exists(snapshotsDir)) PruneEmptyDirectories(snapshotsDir);
         }
 
         SweepOrphanedCameraFolders(config, storageRoot, now, deletedPaths);
@@ -184,6 +190,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
                 : (int)OrphanedCameraFallbackRetention.TotalDays;
 
             var thumbsDir = Path.Combine(Path.GetDirectoryName(mainDir)!, "thumbs");
+            var snapshotsDir = Path.Combine(Path.GetDirectoryName(mainDir)!, "snapshots");
             var files = EnumerateEvictable(mainDir, now);
 
             foreach (var f in SelectRetentionEvictions(files, now, retentionDays))
@@ -192,11 +199,13 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
                 {
                     deletedPaths.Add(f.FullName);
                     DeleteMatchingThumbnails(mainDir, thumbsDir, f.FullName);
+                    DeleteMatchingSnapshotImages(mainDir, snapshotsDir, f.FullName);
                 }
             }
 
             PruneEmptyDirectories(mainDir);
             if (Directory.Exists(thumbsDir)) PruneEmptyDirectories(thumbsDir);
+            if (Directory.Exists(snapshotsDir)) PruneEmptyDirectories(snapshotsDir);
         }
     }
 
@@ -250,7 +259,9 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             {
                 deletedPaths.Add(c.File.FullName);
                 var thumbsDir = Path.Combine(storageRoot, $"cam-{c.CameraId}", "thumbs");
+                var snapshotsDir = Path.Combine(storageRoot, $"cam-{c.CameraId}", "snapshots");
                 DeleteMatchingThumbnails(c.MainDir, thumbsDir, c.File.FullName);
+                DeleteMatchingSnapshotImages(c.MainDir, snapshotsDir, c.File.FullName);
             }
         }
 
@@ -453,6 +464,26 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
     private void DeleteMatchingThumbnails(string mainDir, string thumbsDir, string mainFilePath)
     {
         foreach (var thumb in FindMatchingThumbnails(mainDir, thumbsDir, mainFilePath)) TryDelete(thumb);
+    }
+
+    /// <summary>Object detection plan decision 10: every cached snapshot-image file belonging to
+    /// mainFilePath — same derivation as FindMatchingThumbnails, but globbing "_span*.jpg" (one
+    /// MotionSpan's own id) instead of "_o*.jpg" (a bucketed time offset), since a segment can carry
+    /// more than one detected object, each with its own owning span and its own cached crop.</summary>
+    internal static List<string> FindMatchingSnapshotImages(string mainDir, string snapshotsDir, string mainFilePath)
+    {
+        if (!Directory.Exists(snapshotsDir)) return [];
+        var relative = Path.GetRelativePath(mainDir, mainFilePath);
+        var relativeDir = Path.GetDirectoryName(relative) ?? "";
+        var stem = Path.GetFileNameWithoutExtension(relative);
+        var snapshotDirForSegment = Path.Combine(snapshotsDir, relativeDir);
+        if (!Directory.Exists(snapshotDirForSegment)) return [];
+        return Directory.EnumerateFiles(snapshotDirForSegment, stem + "_span*.jpg", SearchOption.TopDirectoryOnly).ToList();
+    }
+
+    private void DeleteMatchingSnapshotImages(string mainDir, string snapshotsDir, string mainFilePath)
+    {
+        foreach (var snapshot in FindMatchingSnapshotImages(mainDir, snapshotsDir, mainFilePath)) TryDelete(snapshot);
     }
 
     internal static List<FileInfo> EnumerateEvictable(string cameraDir, DateTime now)

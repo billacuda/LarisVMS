@@ -75,5 +75,21 @@ public class Node
     /// reported yet or is running a pre-M17 build.</summary>
     public string? DetectedEncodersJson { get; set; }
 
+    /// <summary>Object detection plan decision 2: admin-editable per-node override for which AI
+    /// accelerator this node's LarisVMS.Vision.Service instance should use — the same
+    /// override-or-resolve-automatically shape StorageRootPath already has. Null/Auto means resolve
+    /// automatically from AccelCapabilityProber's own local probe (see AccelSelection); an explicit
+    /// choice is honored even if it means no Vision Service instance runs (e.g. Nvidia chosen on a
+    /// node with no NVIDIA GPU) — see NodeWorker's accelerator-resolution logic for the fallback.</summary>
+    public AiAccelerator? AiAccelerator { get; set; }
+
+    /// <summary>Object detection plan decision 2: JSON array of accelerators this node's own
+    /// AccelCapabilityProber actually detected as available — self-reported every heartbeat, purely
+    /// informational (drives the Admin UI's "here's what this node can actually see" readout), the
+    /// same shape and same reasoning as DetectedEncodersJson above. Never itself the thing a node
+    /// acts on — the node always uses its own freshly-probed local result, not a value fetched back
+    /// from the server. Null for a node that hasn't reported yet or predates this field.</summary>
+    public string? DetectedAcceleratorsJson { get; set; }
+
     public ICollection<Camera> Cameras { get; set; } = [];
 }

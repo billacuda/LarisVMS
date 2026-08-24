@@ -478,6 +478,137 @@
         };
     }
 
+    // Shared by the motion-badge rendering below and the AI-detection box overlay — badge/box
+    // colors are both ultimately admin/auto-assigned hex values (Admin → Event Colors, or
+    // DetectedObjectColorAssigner), so black text can't be assumed legible against either. Standard
+    // sRGB relative luminance against the usual 0.5 midpoint; the fallback keeps prior behavior for
+    // anything that isn't a plain 6-digit hex.
+    function readableTextColor(hex) {
+        if (typeof hex !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(hex)) return '#000';
+        var r = parseInt(hex.substr(1, 2), 16) / 255;
+        var g = parseInt(hex.substr(3, 2), 16) / 255;
+        var b = parseInt(hex.substr(5, 2), 16) / 255;
+        function channel(c) { return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
+        var luminance = 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+        return luminance > 0.5 ? '#000' : '#fff';
+    }
+
+    // Object detection plan decision 6: live-view box overlay, driven by a *separate* WebSocket
+    // from the video stream itself (/live/{cameraId}/detections, not the fMP4 socket start() above
+    // opens) — kept off the already-delicate binary fMP4 relay entirely. Two independent toggles
+    // (Moving/Idle, decision 6's own "don't clutter the screen with static objects unless you want
+    // to see them too") rather than one on/off switch; both default OFF, matching "boxes are a pure
+    // client-side toggle" — nothing is drawn, and the socket isn't even opened, until at least one
+    // is turned on by the caller.
+    //
+    // Coordinates arrive normalized (0-1) against whatever resolution AI detection actually ran at
+    // (the Sub stream) — remapped here using the exact same object-fit:contain letterbox math
+    // createFreezeOverlay's own show() already uses, since drawing onto a canvas sized to the
+    // video's *on-screen* box (not its native resolution) needs the same scale/offset either way.
+    function startDetectionOverlay(cameraId, videoEl) {
+        var canvas = document.createElement('canvas');
+        canvas.className = 'live-detection-overlay';
+        canvas.style.cssText = 'position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; display:none;';
+        var parent = videoEl.parentElement;
+        if (parent) parent.insertBefore(canvas, videoEl.nextSibling);
+
+        var socket = null;
+        var latestBoxes = [];
+        var showMoving = false;
+        var showIdle = false;
+        var stopped = false;
+        var reconnectTimer = null;
+
+        function draw() {
+            var w = videoEl.clientWidth, h = videoEl.clientHeight;
+            var nw = videoEl.videoWidth, nh = videoEl.videoHeight;
+            var ctx = canvas.getContext('2d');
+            if (w <= 0 || h <= 0 || nw <= 0 || nh <= 0) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                return;
+            }
+
+            canvas.width = w;
+            canvas.height = h;
+            var scale = Math.min(w / nw, h / nh);
+            var dw = nw * scale, dh = nh * scale;
+            var offsetX = (w - dw) / 2, offsetY = (h - dh) / 2;
+
+            ctx.clearRect(0, 0, w, h);
+
+            latestBoxes.forEach(function (box) {
+                if (box.movementState === 'Moving' && !showMoving) return;
+                if (box.movementState === 'Idle' && !showIdle) return;
+
+                var x = offsetX + box.x * dw;
+                var y = offsetY + box.y * dh;
+                var boxW = box.w * dw;
+                var boxH = box.h * dh;
+                var color = box.colorHex || '#22d3ee';
+
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 2;
+                ctx.strokeRect(x, y, boxW, boxH);
+
+                var label = box.category + ' — ' + box.label;
+                ctx.font = '12px sans-serif';
+                var textWidth = ctx.measureText(label).width;
+                var labelY = Math.max(0, y - 16);
+                ctx.fillStyle = color;
+                ctx.fillRect(x, labelY, textWidth + 8, 16);
+                ctx.fillStyle = readableTextColor(color);
+                ctx.fillText(label, x + 4, labelY + 12);
+            });
+        }
+
+        function connect() {
+            if (stopped) return;
+            var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            socket = new WebSocket(proto + '//' + location.host + '/live/' + cameraId + '/detections');
+            socket.onmessage = function (evt) {
+                try {
+                    latestBoxes = JSON.parse(evt.data) || [];
+                } catch (e) {
+                    return; // one malformed tick — next one supersedes it
+                }
+                draw();
+            };
+            socket.onclose = function () {
+                socket = null;
+                if (stopped || !(showMoving || showIdle)) return;
+                // Routine reconnect, same fixed-delay spirit as the freeze-overlay/retry story the
+                // video socket already has — this feed is lower-stakes (a missed box or two is not
+                // a broken stream), so no exponential backoff needed.
+                reconnectTimer = setTimeout(function () { reconnectTimer = null; connect(); }, 2000);
+            };
+            socket.onerror = function () { /* onclose fires next and handles reconnect */ };
+        }
+
+        function updateActiveState() {
+            var anyOn = showMoving || showIdle;
+            canvas.style.display = anyOn ? 'block' : 'none';
+            if (anyOn && !socket && !reconnectTimer) {
+                connect();
+            } else if (!anyOn) {
+                if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+                if (socket) { try { socket.close(); } catch (e) {} socket = null; }
+                latestBoxes = [];
+                draw();
+            }
+        }
+
+        return {
+            setShowMoving: function (on) { showMoving = !!on; updateActiveState(); draw(); },
+            setShowIdle: function (on) { showIdle = !!on; updateActiveState(); draw(); },
+            stop: function () {
+                stopped = true;
+                if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+                if (socket) { try { socket.close(); } catch (e) {} }
+                if (canvas.parentElement) canvas.parentElement.removeChild(canvas);
+            }
+        };
+    }
+
     // M8: polls GET /api/cameras/motion-state (a list of camera IDs with a recent motion-span
     // checkpoint — see TimelineService.GetCamerasWithActiveMotionAsync) and toggles each matching
     // tile's `.live-motion-badge`. A poll, not a push over the already-open live WebSocket — motion
@@ -551,23 +682,13 @@
             });
         }
 
-        // Badge colors are admin-configurable (Admin → Event Colors), so black text can't be assumed
-        // legible any more — someone picking a dark class color would get an unreadable badge.
-        // Standard sRGB relative luminance against the usual 0.5 midpoint; the fallback keeps the
-        // previous behavior for anything that isn't a plain 6-digit hex.
-        function readableTextColor(hex) {
-            if (typeof hex !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(hex)) return '#000';
-            var r = parseInt(hex.substr(1, 2), 16) / 255;
-            var g = parseInt(hex.substr(3, 2), 16) / 255;
-            var b = parseInt(hex.substr(5, 2), 16) / 255;
-            function channel(c) { return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
-            var luminance = 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
-            return luminance > 0.5 ? '#000' : '#fff';
-        }
-
         tick();
         setInterval(tick, intervalMs);
     }
 
-    window.larisvmsLiveView = { start: start, startMotionIndicatorPolling: startMotionIndicatorPolling };
+    window.larisvmsLiveView = {
+        start: start,
+        startMotionIndicatorPolling: startMotionIndicatorPolling,
+        startDetectionOverlay: startDetectionOverlay
+    };
 })();

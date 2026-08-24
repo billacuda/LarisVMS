@@ -4,7 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>0.155.0</Version>
+    <Version>0.157.0</Version>
     <!-- Recorder nodes are self-contained single-file per platform (see build-node.ps1),
          the same shape as dploid.Agent. -->
     <InvariantGlobalization>true</InvariantGlobalization>
@@ -33,6 +33,9 @@
          framework (Sdk.Web) — only the pieces that aren't already part of it need a reference. -->
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" />
+    <!-- AccelCapabilityProber's Win32_VideoController query (object detection plan decision 2) —
+         Windows-only, matching every other hardware-facing probe in this app. -->
+    <PackageReference Include="System.Management" />
   </ItemGroup>
 
 </Project>

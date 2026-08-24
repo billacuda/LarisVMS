@@ -24,6 +24,12 @@ public class UpdateService(NodeConfig config, bool insecureTls, ILogger log, IHo
 
     private static readonly string StagedPath = Path.Combine(UpdateDir, "LarisVMS.Node.exe");
 
+    // Object detection plan follow-up: same UpdateDir, own filename — VisionServiceSupervisor.ExeFileName
+    // is the fixed name a Vision Service binary must have on disk regardless of which execution-provider
+    // variant it was published as, so staging under that exact name is what makes the eventual
+    // TrySwapBinary a same-name overwrite rather than a rename.
+    private static readonly string StagedVisionPath = Path.Combine(UpdateDir, VisionServiceSupervisor.ExeFileName);
+
     // Published alongside LarisVMS.Node.exe by build-node.ps1 and copied into the same install
     // directory by install-node.ps1 — always sits next to the currently-running binary.
     private static readonly string UpdaterPath = Path.Combine(AppContext.BaseDirectory, "LarisVMS.NodeUpdater.exe");
@@ -122,8 +128,22 @@ public class UpdateService(NodeConfig config, bool insecureTls, ILogger log, IHo
                 return false;
             }
 
-            log.LogInformation("Checksum verified. Applying update to {Version}...", update.Version);
-            ApplyWindows();
+            log.LogInformation("Checksum verified.");
+
+            // Object detection plan follow-up: best-effort, and never gates the Node update itself —
+            // AI detection is additive throughout this whole feature, and a Vision Service download
+            // hiccup (or this build genuinely having no Vision binary registered) must not block or
+            // fail the primary node exe update, the one actually required for recording to keep
+            // working. A failure here just means the running Vision Service binary (if any) stays on
+            // its previous version until the next successful heartbeat's update offer.
+            var visionStaged = false;
+            if (update is { VisionDownloadUrl: { } visionUrl, VisionSha256: { } visionSha, VisionSizeBytes: not null })
+            {
+                visionStaged = await TryStageVisionAsync(http, visionUrl, visionSha, update.Version, ct);
+            }
+
+            log.LogInformation("Applying update to {Version}...", update.Version);
+            ApplyWindows(visionStaged);
             return true;
         }
         catch (Exception ex)
@@ -135,7 +155,52 @@ public class UpdateService(NodeConfig config, bool insecureTls, ILogger log, IHo
         }
     }
 
-    private void ApplyWindows()
+    /// <summary>Downloads and verifies the Vision Service binary the same way TryApplyAsync already
+    /// does for the Node exe, staged under its own fixed filename (StagedVisionPath). Returns false
+    /// (never throws) on any failure — download, non-2xx, or checksum mismatch — logged as a warning
+    /// rather than an error, since a missed Vision Service update is a "try again next heartbeat"
+    /// situation, not a node-health concern the way a failed Node exe update would be. Internal
+    /// (not private) so it's directly testable without going through TryApplyAsync/ApplyWindows —
+    /// same "pull out the piece a test can call directly" reasoning UpdaterLogic's own doc comment
+    /// describes, since ApplyWindows' own real-process side effects are deliberately excluded from
+    /// this test project (see UpdateServiceTests' own doc comment).</summary>
+    internal async Task<bool> TryStageVisionAsync(HttpClient http, string downloadUrl, string expectedSha256, string version, CancellationToken ct)
+    {
+        try
+        {
+            using var response = await http.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead, ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                log.LogWarning("Vision Service update download for {Version} returned {Status} — skipping this component, Node update proceeds regardless.",
+                    version, response.StatusCode);
+                return false;
+            }
+
+            await using (var fileStream = File.Create(StagedVisionPath))
+                await response.Content.CopyToAsync(fileStream, ct);
+
+            var actualSha256 = await ComputeSha256Async(StagedVisionPath, ct);
+            if (!string.Equals(actualSha256, expectedSha256, StringComparison.OrdinalIgnoreCase))
+            {
+                log.LogWarning(
+                    "Vision Service update checksum mismatch for {Version}. Expected {Expected}, got {Actual} — skipping this component, Node update proceeds regardless.",
+                    version, expectedSha256, actualSha256);
+                TryCleanStagedVision();
+                return false;
+            }
+
+            log.LogInformation("Vision Service update checksum verified.");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Vision Service update download failed — skipping this component, Node update proceeds regardless.");
+            TryCleanStagedVision();
+            return false;
+        }
+    }
+
+    private void ApplyWindows(bool visionStaged = false)
     {
         if (!File.Exists(UpdaterPath))
         {
@@ -147,12 +212,27 @@ public class UpdateService(NodeConfig config, bool insecureTls, ILogger log, IHo
         var currentBinary = Process.GetCurrentProcess().MainModule?.FileName
             ?? Path.Combine(AppContext.BaseDirectory, "LarisVMS.Node.exe");
 
+        var arguments = $"--new \"{StagedPath}\" --current \"{currentBinary}\" --service LarisVMSNode";
+        if (visionStaged)
+        {
+            // NodeUpdater itself decides whether this swap actually happens (only if
+            // currentVisionBinary already exists on disk — see its own doc comment for why): this
+            // path only ever keeps an *already-installed* Vision Service exe current, since its
+            // native dependencies (onnxruntime.dll etc.) and models\ are placed by install-node.ps1
+            // and never delivered by this download/swap path. A node that's never had Vision Service
+            // installed still needs install-node.ps1 run once for that, same as this feature's own
+            // initial release (see CHANGELOG) — this only closes the gap for keeping it current
+            // *after* that.
+            var currentVisionBinary = Path.Combine(AppContext.BaseDirectory, VisionServiceSupervisor.ExeFileName);
+            arguments += $" --new-vision \"{StagedVisionPath}\" --current-vision \"{currentVisionBinary}\"";
+        }
+
         using var updater = new Process
         {
             StartInfo = new ProcessStartInfo
             {
                 FileName = UpdaterPath,
-                Arguments = $"--new \"{StagedPath}\" --current \"{currentBinary}\" --service LarisVMSNode",
+                Arguments = arguments,
                 UseShellExecute = false,
                 CreateNoWindow = true,
             }
@@ -185,6 +265,12 @@ public class UpdateService(NodeConfig config, bool insecureTls, ILogger log, IHo
     private static void TryCleanStaged()
     {
         try { if (File.Exists(StagedPath)) File.Delete(StagedPath); }
+        catch { /* best effort */ }
+    }
+
+    private static void TryCleanStagedVision()
+    {
+        try { if (File.Exists(StagedVisionPath)) File.Delete(StagedVisionPath); }
         catch { /* best effort */ }
     }
 }

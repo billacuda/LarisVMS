@@ -1,5 +1,6 @@
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
+using LarisVMS.Core.Enums;
 
 namespace LarisVMS.Core.Interfaces;
 
@@ -26,8 +27,16 @@ public interface ICameraService
     /// device's own capability report can otherwise go stale against the new address. Group
     /// membership isn't a parameter here — see SetCameraGroupsAsync, its own separate concern since a
     /// camera can belong to any number of groups.</summary>
+    /// <summary>aiDetectionEnabled/motionDetectionSource (object detection plan decisions 2/9) are
+    /// plain Camera columns, not Settings-table overrides — unlike RecordingMode/pre-post-roll, there
+    /// is no node-/global-level "effective value" to inherit from, so they're set directly rather than
+    /// going through ISettingsResolver the way Cameras/Edit.cshtml.cs's other override fields do.
+    /// motionDetectionSource null clears any explicit choice, letting NodeWorker's own dynamic
+    /// richest-configured-signal fallback resolve it instead — see NodeWorker.ResolvePrimaryMotionSource.</summary>
     Task UpdateAsync(Guid id, string name, Guid? nodeId, string? username, string? password,
-        bool isEnabled, long? quotaBytes, string? deviceServiceUri = null, CancellationToken ct = default);
+        bool isEnabled, long? quotaBytes, string? deviceServiceUri = null,
+        bool aiDetectionEnabled = false, MotionDetectionSource? motionDetectionSource = null,
+        CancellationToken ct = default);
 
     /// <summary>Replaces a camera's entire group membership with exactly the given set — not an
     /// incremental add/remove, so a caller changing only one group's membership (e.g. Groups.cshtml's

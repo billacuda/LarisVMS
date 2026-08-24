@@ -1,5 +1,6 @@
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
+using LarisVMS.Core.Enums;
 
 namespace LarisVMS.Core.Interfaces;
 
@@ -59,7 +60,8 @@ public interface INodeService
     /// Node.DetectedEncodersJson the same coalesce-preserve way; null leaves the previous value
     /// alone rather than clearing a real prior probe result.</summary>
     Task RecordHeartbeatAsync(Guid nodeId, long? freeBytes, long? totalBytes, string? version, int? livePort,
-        DateTime? nodeSentAtUtc, DateTime serverReceivedUtc, List<string>? detectedEncoders = null, CancellationToken ct = default);
+        DateTime? nodeSentAtUtc, DateTime serverReceivedUtc, List<string>? detectedEncoders = null,
+        List<string>? detectedAccelerators = null, CancellationToken ct = default);
 
     /// <summary>Rough "days of retention remaining" per node: free bytes divided by that node's
     /// measured write rate over the last 24h. Null for a node with no free-space report yet or no
@@ -74,9 +76,11 @@ public interface INodeService
     /// rows; footage already recorded stays attached to whichever NodeId actually wrote it.</summary>
     Task ReassignCamerasAsync(IReadOnlyCollection<Guid> cameraIds, Guid? nodeId, CancellationToken ct = default);
 
-    /// <summary>Updates the node's name and per-node storage root override. A blank
-    /// storageRootPath clears the override, falling back to the global Storage.RootPath setting.</summary>
-    Task UpdateAsync(Guid nodeId, string name, string? storageRootPath, CancellationToken ct = default);
+    /// <summary>Updates the node's name, per-node storage root override, and (object detection plan
+    /// decision 2) hardware accelerator choice. A blank storageRootPath clears the override, falling
+    /// back to the global Storage.RootPath setting. aiAccelerator null resolves as Auto — see
+    /// NodeConfigResponse.AiAccelerator's own doc comment for why that's the safe default.</summary>
+    Task UpdateAsync(Guid nodeId, string name, string? storageRootPath, AiAccelerator? aiAccelerator = null, CancellationToken ct = default);
 
     /// <summary>Removes a node. Cameras assigned to it are unassigned (NodeId set null via
     /// DeleteBehavior.SetNull), not deleted — their recording just stops until reassigned.

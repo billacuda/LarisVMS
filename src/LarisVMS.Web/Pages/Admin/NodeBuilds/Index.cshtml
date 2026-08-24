@@ -10,7 +10,21 @@
     <strong>Pending</strong>. Approve one to make it the version every recorder node whose reported
     version is older downloads, verifies, and applies on its own next heartbeat — no more manually
     re-running <code>build-node.ps1</code> / <code>install-node.ps1</code> on each recorder machine.
-    Controlled globally by the <a asp-page="/Admin/Settings/Nodes">node auto-update setting</a>.
+    A build with a ✅ under <strong>Vision</strong> also carries a matching
+    <code>LarisVMS.Vision.Service.exe</code>, applied alongside the node exe in the same update —
+    but only on a node that already has AI detection installed; a node's first-ever Vision Service
+    install still needs one <code>install-node.ps1</code> run (its native DLLs and exported model
+    aren't things this download/swap path delivers, only the exe itself). Controlled globally by the
+    <a asp-page="/Admin/Settings/Nodes">node auto-update setting</a>.
+</p>
+<p class="text-muted small">
+    ⚠️ The Vision binary here is one hardware accelerator variant, whatever <code>build-node.ps1</code>
+    was run with (<code>-Accel</code>, CPU by default) — there's no per-node selection. If this fleet's
+    recorder nodes have genuinely mixed hardware (some GPU-capable, some not), approving a
+    GPU-built row would push it to every already-Vision-equipped node regardless of what it can
+    actually run; a node that can't load it simply has AI detection fail to start (logged, retried —
+    recording itself is completely unaffected). For a mixed fleet, manage the Vision Service binary on
+    those specific machines by hand instead (<code>install-node.ps1 -Accel &lt;...&gt;</code>).
 </p>
 
 @if (!string.IsNullOrEmpty(Model.ErrorMessage))
@@ -39,6 +53,7 @@ else
                     <th>Registered</th>
                     <th data-sort-numeric>Size</th>
                     <th>SHA-256</th>
+                    <th>Vision</th>
                     <th>Notes</th>
                     <th></th>
                 </tr>
@@ -52,6 +67,7 @@ else
                         <td><span title="@b.UploadedAt.ToString("u")">@b.UploadedAt.ToLocalTime().ToString("g")</span></td>
                         <td>@ByteFormat.Format(b.SizeBytes)</td>
                         <td class="font-monospace small">@b.Sha256[..12]&hellip;</td>
+                        <td>@(b.VisionFilePath is not null ? "✅" : "—")</td>
                         <td>@b.Notes</td>
                         <td class="text-end text-nowrap">
                             <form method="post" asp-page-handler="Approve" asp-route-id="@b.Id" class="d-inline">
@@ -99,6 +115,7 @@ else
                         <td><span title="@b.UploadedAt.ToString("u")">@b.UploadedAt.ToLocalTime().ToString("g")</span></td>
                         <td>@ByteFormat.Format(b.SizeBytes)</td>
                         <td class="font-monospace small">@b.Sha256[..12]&hellip;</td>
+                        <td>@(b.VisionFilePath is not null ? "✅" : "—")</td>
                         <td>
                             @if (b.Status == NodeBuildStatus.Approved)
                             {

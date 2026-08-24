@@ -60,6 +60,12 @@ public record ThumbnailInfo(string FilePath, int OffsetSeconds, string? NodeIp, 
 /// the camera's current node and having the node reject whatever doesn't live on its own disk.</summary>
 public record SegmentFileInfo(string FilePath, Guid NodeId);
 
+/// <summary>Object detection plan decision 5: one currently-known AI-detection category
+/// (auto-registered, auto-colored — see DetectedObjectCategory's own doc comment) — what the
+/// Snapshots page's filter checkboxes are built from, since this set is open-ended and can't be
+/// enumerated the fixed way DetectionDisplay.AllKinds is.</summary>
+public record DetectedObjectCategoryDto(Guid Id, string Name, string ColorHex);
+
 /// <summary>M18: one motion event rendered as a browsable "snapshot" (Pages/Snapshots) — there is no
 /// separate capture step or storage for the image itself; it's whatever GetExactThumbnailInfoAsync /
 /// /playback-thumbnail extracts from the actual recording at AtUtc, on demand, the same
@@ -79,8 +85,31 @@ public record SegmentFileInfo(string FilePath, Guid NodeId);
 ///
 /// Duration is the underlying MotionSpan's own EndUtc-StartUtc — how long the event *span* ran, not
 /// to be confused with AtUtc, which samples near its start rather than any particular fraction of
-/// this duration.</summary>
-public record SnapshotDto(long Id, Guid CameraId, string CameraName, DateTime AtUtc, TimeSpan Duration, string Label, string ColorHex, string Emoji);
+/// this duration.
+///
+/// IsAiDetection (object detection plan decision 10) is true for a span with a resolved
+/// DetectedObjectCategory — what tells the Snapshots page to point this card's image at
+/// /snapshot-image (a cropped, best-frame extraction) instead of /playback-thumbnail (a plain,
+/// uncropped frame at AtUtc). GetSnapshotImageInfoAsync itself resolves gracefully to null if the
+/// underlying span turns out to have no captured box after all, which the existing "No thumbnail
+/// available" onerror fallback already handles — so this flag only needs to be a good default, not
+/// a guarantee.</summary>
+public record SnapshotDto(long Id, Guid CameraId, string CameraName, DateTime AtUtc, TimeSpan Duration, string Label, string ColorHex, string Emoji, bool IsAiDetection = false);
+
+/// <summary>Object detection plan decision 10: what LarisVMS.Web's /snapshot-image proxy needs to
+/// request one AI-detection MotionSpan's cropped best-frame image from its owning node — same shape
+/// as ThumbnailInfo (FilePath/OffsetSeconds/node connection info) plus the normalized detection box
+/// and the segment's own pixel dimensions, both required to compute the crop rectangle node-side.
+/// FrameWidth/FrameHeight null (a segment whose resolution was never reported) means the crop can't
+/// be computed at all — GetSnapshotImageInfoAsync returns null in that case rather than this record,
+/// same "nothing to serve" resolution as a missing segment.
+///
+/// SpanId rides along so the proxy can pass it to the node as the cache-file key (see
+/// StorageManager/Program.cs's own "keyed by span id, not a bucketed offset" reasoning) without a
+/// second round trip to look it back up.</summary>
+public record SnapshotImageInfo(string FilePath, int OffsetSeconds, long SpanId,
+    double BoxX, double BoxY, double BoxW, double BoxH, int FrameWidth, int FrameHeight,
+    string? NodeIp, int? NodeLivePort, string? NodeMediaSigningKey);
 
 /// <summary>One page of SnapshotDto plus enough to render pagination — MotionSpans is a volume table
 /// (same reasoning as Segments), too large to page client-side the way a plain sortable table does

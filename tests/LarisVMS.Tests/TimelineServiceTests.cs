@@ -475,6 +475,151 @@ public class TimelineServiceTests
         Assert.Equal("key", info.NodeMediaSigningKey);
     }
 
+    // ── GetSnapshotImageInfoAsync (object detection plan decision 10) ────────
+
+    [Fact]
+    public async Task GetSnapshotImageInfoResolvesSegmentOffsetAndBoxForAnAiDetectionSpan()
+    {
+        var (db, cameraId, nodeId) = await SeedCameraAsync();
+        var segmentStart = new DateTime(2026, 8, 24, 12, 0, 0, DateTimeKind.Utc);
+        db.Segments.Add(new Segment
+        {
+            CameraId = cameraId, NodeId = nodeId, StreamRole = CameraStreamRole.Main,
+            StartUtc = segmentStart, EndUtc = segmentStart.AddSeconds(60), DurationMs = 60_000,
+            Width = 1920, Height = 1080, FilePath = "a.mp4"
+        });
+        var span = new MotionSpan
+        {
+            CameraId = cameraId, Source = MotionSource.AiDetection,
+            StartUtc = segmentStart.AddSeconds(5), EndUtc = segmentStart.AddSeconds(10), Score = 0.9,
+            BestFrameAtUtc = segmentStart.AddSeconds(8), BestBoxX = 0.3, BestBoxY = 0.4, BestBoxW = 0.2, BestBoxH = 0.25
+        };
+        db.MotionSpans.Add(span);
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var info = await service.GetSnapshotImageInfoAsync(cameraId, span.Id);
+
+        Assert.NotNull(info);
+        Assert.Equal("a.mp4", info!.FilePath);
+        Assert.Equal(8, info.OffsetSeconds); // BestFrameAtUtc is 8s into the segment
+        Assert.Equal(span.Id, info.SpanId);
+        Assert.Equal(0.3, info.BoxX);
+        Assert.Equal(0.4, info.BoxY);
+        Assert.Equal(0.2, info.BoxW);
+        Assert.Equal(0.25, info.BoxH);
+        Assert.Equal(1920, info.FrameWidth);
+        Assert.Equal(1080, info.FrameHeight);
+        Assert.Equal("10.0.0.5", info.NodeIp);
+    }
+
+    [Fact]
+    public async Task GetSnapshotImageInfoFallsBackToStartUtcWhenBestFrameAtUtcIsNull()
+    {
+        var (db, cameraId, nodeId) = await SeedCameraAsync();
+        var segmentStart = new DateTime(2026, 8, 24, 12, 0, 0, DateTimeKind.Utc);
+        db.Segments.Add(new Segment
+        {
+            CameraId = cameraId, NodeId = nodeId, StreamRole = CameraStreamRole.Main,
+            StartUtc = segmentStart, EndUtc = segmentStart.AddSeconds(60), DurationMs = 60_000,
+            Width = 1920, Height = 1080, FilePath = "a.mp4"
+        });
+        var span = new MotionSpan
+        {
+            CameraId = cameraId, Source = MotionSource.AiDetection,
+            StartUtc = segmentStart.AddSeconds(12), EndUtc = segmentStart.AddSeconds(15), Score = 0.9,
+            BestFrameAtUtc = null, BestBoxX = 0.1, BestBoxY = 0.1, BestBoxW = 0.1, BestBoxH = 0.1
+        };
+        db.MotionSpans.Add(span);
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var info = await service.GetSnapshotImageInfoAsync(cameraId, span.Id);
+
+        Assert.NotNull(info);
+        Assert.Equal(12, info!.OffsetSeconds); // falls back to StartUtc, 12s into the segment
+    }
+
+    [Fact]
+    public async Task GetSnapshotImageInfoReturnsNullWhenSpanHasNoCapturedBox()
+    {
+        var (db, cameraId, nodeId) = await SeedCameraAsync();
+        var segmentStart = new DateTime(2026, 8, 24, 12, 0, 0, DateTimeKind.Utc);
+        db.Segments.Add(new Segment
+        {
+            CameraId = cameraId, NodeId = nodeId, StreamRole = CameraStreamRole.Main,
+            StartUtc = segmentStart, EndUtc = segmentStart.AddSeconds(60), DurationMs = 60_000,
+            Width = 1920, Height = 1080, FilePath = "a.mp4"
+        });
+        // A plain (non-AI) span — no BestBox* fields ever populated.
+        var span = new MotionSpan
+        {
+            CameraId = cameraId, Source = MotionSource.ServerMotion,
+            StartUtc = segmentStart.AddSeconds(5), EndUtc = segmentStart.AddSeconds(10), Score = 0.9
+        };
+        db.MotionSpans.Add(span);
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var info = await service.GetSnapshotImageInfoAsync(cameraId, span.Id);
+
+        Assert.Null(info);
+    }
+
+    [Fact]
+    public async Task GetSnapshotImageInfoReturnsNullWhenSegmentHasNoReportedResolution()
+    {
+        var (db, cameraId, nodeId) = await SeedCameraAsync();
+        var segmentStart = new DateTime(2026, 8, 24, 12, 0, 0, DateTimeKind.Utc);
+        db.Segments.Add(new Segment
+        {
+            CameraId = cameraId, NodeId = nodeId, StreamRole = CameraStreamRole.Main,
+            StartUtc = segmentStart, EndUtc = segmentStart.AddSeconds(60), DurationMs = 60_000,
+            Width = null, Height = null, FilePath = "a.mp4"
+        });
+        var span = new MotionSpan
+        {
+            CameraId = cameraId, Source = MotionSource.AiDetection,
+            StartUtc = segmentStart.AddSeconds(5), EndUtc = segmentStart.AddSeconds(10), Score = 0.9,
+            BestFrameAtUtc = segmentStart.AddSeconds(8), BestBoxX = 0.3, BestBoxY = 0.4, BestBoxW = 0.2, BestBoxH = 0.25
+        };
+        db.MotionSpans.Add(span);
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var info = await service.GetSnapshotImageInfoAsync(cameraId, span.Id);
+
+        Assert.Null(info);
+    }
+
+    [Fact]
+    public async Task GetSnapshotImageInfoReturnsNullWhenSpanBelongsToADifferentCamera()
+    {
+        var (db, cameraId, nodeId) = await SeedCameraAsync();
+        var otherCameraId = Guid.NewGuid();
+        var segmentStart = new DateTime(2026, 8, 24, 12, 0, 0, DateTimeKind.Utc);
+        db.Segments.Add(new Segment
+        {
+            CameraId = cameraId, NodeId = nodeId, StreamRole = CameraStreamRole.Main,
+            StartUtc = segmentStart, EndUtc = segmentStart.AddSeconds(60), DurationMs = 60_000,
+            Width = 1920, Height = 1080, FilePath = "a.mp4"
+        });
+        var span = new MotionSpan
+        {
+            CameraId = cameraId, Source = MotionSource.AiDetection,
+            StartUtc = segmentStart.AddSeconds(5), EndUtc = segmentStart.AddSeconds(10), Score = 0.9,
+            BestFrameAtUtc = segmentStart.AddSeconds(8), BestBoxX = 0.3, BestBoxY = 0.4, BestBoxW = 0.2, BestBoxH = 0.25
+        };
+        db.MotionSpans.Add(span);
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        // Asking for this span under the wrong camera must not leak it.
+        var info = await service.GetSnapshotImageInfoAsync(otherCameraId, span.Id);
+
+        Assert.Null(info);
+    }
+
     // ── Query-range UTC normalization ───────────────────────────────────────
     // ASP.NET binds a "...Z" query-string value to Kind=Local (converted to the server's zone),
     // and SQL Server's datetime2 carries no offset — so without normalization every range query
@@ -1162,6 +1307,63 @@ public class TimelineServiceTests
         var page = await service.GetSnapshotsAsync(null, null, null, 1, 24, kinds: ["Vehicle"]);
 
         Assert.Empty(page.Items);
+    }
+
+    [Fact]
+    public async Task SnapshotsCombinesAiCategoryAndSpecificLabelIntoOneBadge()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var category = new DetectedObjectCategory { Id = Guid.NewGuid(), Name = "Vehicle", ColorHex = "#3366cc", FirstSeenUtc = DateTime.UtcNow };
+        db.DetectedObjectCategories.Add(category);
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.Add(new MotionSpan
+        {
+            CameraId = cameraId, Source = MotionSource.AiDetection, DetectedObjectCategoryId = category.Id,
+            DetectedObjectLabel = "car", StartUtc = start, EndUtc = start.AddSeconds(1)
+        });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
+
+        var item = Assert.Single(page.Items);
+        Assert.Equal("Vehicle — car", item.Label);
+        Assert.Equal("#3366cc", item.ColorHex);
+    }
+
+    [Fact]
+    public async Task SnapshotsKindsFilterAcceptsAiCategoryNameAsAToken()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var vehicle = new DetectedObjectCategory { Id = Guid.NewGuid(), Name = "Vehicle", ColorHex = "#3366cc", FirstSeenUtc = DateTime.UtcNow };
+        var animal = new DetectedObjectCategory { Id = Guid.NewGuid(), Name = "Animal", ColorHex = "#33cc66", FirstSeenUtc = DateTime.UtcNow };
+        db.DetectedObjectCategories.AddRange(vehicle, animal);
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.AddRange(
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.AiDetection, DetectedObjectCategoryId = vehicle.Id, DetectedObjectLabel = "car", StartUtc = start, EndUtc = start.AddSeconds(1) },
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.AiDetection, DetectedObjectCategoryId = animal.Id, DetectedObjectLabel = "dog", StartUtc = start.AddMinutes(1), EndUtc = start.AddMinutes(1).AddSeconds(1) },
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start.AddMinutes(2), EndUtc = start.AddMinutes(2).AddSeconds(1) }); // plain motion
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24, kinds: ["Vehicle"]);
+
+        Assert.Equal("Vehicle — car", Assert.Single(page.Items).Label);
+    }
+
+    [Fact]
+    public async Task GetDetectedObjectCategoriesReturnsEveryCategoryOrderedByName()
+    {
+        var db = NewDb();
+        db.DetectedObjectCategories.AddRange(
+            new DetectedObjectCategory { Id = Guid.NewGuid(), Name = "Vehicle", ColorHex = "#3366cc", FirstSeenUtc = DateTime.UtcNow },
+            new DetectedObjectCategory { Id = Guid.NewGuid(), Name = "Animal", ColorHex = "#33cc66", FirstSeenUtc = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var categories = await service.GetDetectedObjectCategoriesAsync();
+
+        Assert.Equal(["Animal", "Vehicle"], categories.Select(c => c.Name));
     }
 
     [Fact]

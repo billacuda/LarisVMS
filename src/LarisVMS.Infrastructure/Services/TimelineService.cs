@@ -65,14 +65,19 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
                 m.StartUtc,
                 m.EndUtc,
                 ColorHex = m.EventTagRule != null ? m.EventTagRule.ColorHex : null,
-                m.DetectionKind
+                m.DetectionKind,
+                // Object detection plan decision 5: same null-conditional-navigation left join as
+                // ColorHex above — a span whose category still exists projects its color; the
+                // category is never expected to be deleted (see DetectedObjectCategory's own doc
+                // comment), but the same tolerance costs nothing to keep.
+                AiCategoryColorHex = m.DetectedObjectCategory != null ? m.DetectedObjectCategory.ColorHex : null
             })
             .ToListAsync(ct);
 
         var palette = await eventColors.GetAsync(ct);
 
         return Bucket(segments.Select(s => (s.StartUtc, s.EndUtc)),
-            motionSpans.Select(m => (m.StartUtc, m.EndUtc, ResolveColor(palette, m.ColorHex, m.DetectionKind))),
+            motionSpans.Select(m => (m.StartUtc, m.EndUtc, ResolveColor(palette, m.ColorHex, m.DetectionKind, m.AiCategoryColorHex))),
             fromUtc, toUtc, bucketCount);
     }
 
@@ -111,25 +116,29 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
                 m.StartUtc,
                 m.EndUtc,
                 ColorHex = m.EventTagRule != null ? m.EventTagRule.ColorHex : null,
-                m.DetectionKind
+                m.DetectionKind,
+                AiCategoryColorHex = m.DetectedObjectCategory != null ? m.DetectedObjectCategory.ColorHex : null
             })
             .ToListAsync(ct);
 
         var palette = await eventColors.GetAsync(ct);
 
         return Bucket(segments.Select(s => (s.StartUtc, s.EndUtc)),
-            motionSpans.Select(m => (m.StartUtc, m.EndUtc, ResolveColor(palette, m.ColorHex, m.DetectionKind))),
+            motionSpans.Select(m => (m.StartUtc, m.EndUtc, ResolveColor(palette, m.ColorHex, m.DetectionKind, m.AiCategoryColorHex))),
             fromUtc, toUtc, bucketCount);
     }
 
     /// <summary>A span's timeline color. A user-configured EventTagRule's own color still wins
-    /// outright (it's an explicit choice, unlike an inferred object class); an object detection
-    /// supplies its class color next — whatever an admin picked on Admin/Event Colors, or the
-    /// built-in default for that class; anything else falls through to the plain motion/recording
-    /// scheme by returning null. Reusing the existing TagColorHex channel rather than adding a second
-    /// color field means the canvas renderer needs no new concept.</summary>
-    private static string? ResolveColor(EventPalette palette, string? tagColorHex, DetectionKind? detectionKind)
-        => tagColorHex ?? (detectionKind is { } kind ? palette.ColorFor(kind) : null);
+    /// outright (it's an explicit choice, unlike an inferred object class); a camera-native object
+    /// detection (DetectionKind) supplies its class color next — whatever an admin picked on
+    /// Admin/Event Colors, or the built-in default for that class; an AI-detection span
+    /// (object detection plan decisions 5/9 — DetectionKind stays null for these, see MotionSpan's
+    /// own doc comment) supplies its DetectedObjectCategory's own stored color next; anything else
+    /// falls through to the plain motion/recording scheme by returning null. Reusing the existing
+    /// TagColorHex channel rather than adding a second color field means the canvas renderer needs
+    /// no new concept.</summary>
+    private static string? ResolveColor(EventPalette palette, string? tagColorHex, DetectionKind? detectionKind, string? aiCategoryColorHex = null)
+        => tagColorHex ?? (detectionKind is { } kind ? palette.ColorFor(kind) : null) ?? aiCategoryColorHex;
 
     private static List<TimelineBucketDto> Bucket(
         IEnumerable<(DateTime StartUtc, DateTime EndUtc)> segments,
@@ -249,6 +258,42 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
         var offsetSeconds = Math.Clamp(rawOffsetSeconds, 0, maxOffsetSeconds);
 
         return new ThumbnailInfo(segment.FilePath, offsetSeconds, node?.LastIpAddress, node?.LivePort, node?.MediaSigningKey);
+    }
+
+    public async Task<SnapshotImageInfo?> GetSnapshotImageInfoAsync(Guid cameraId, long spanId, CancellationToken ct = default)
+    {
+        var span = await db.MotionSpans
+            .Where(m => m.Id == spanId && m.CameraId == cameraId)
+            .Select(m => new { m.StartUtc, m.BestFrameAtUtc, m.BestBoxX, m.BestBoxY, m.BestBoxW, m.BestBoxH })
+            .FirstOrDefaultAsync(ct);
+        // No captured box means either this isn't an AI-detection span, or a checkpoint never
+        // reached the vision pipeline's best-frame bookkeeping — either way, nothing to crop.
+        if (span is null || span.BestBoxX is not { } boxX || span.BestBoxY is not { } boxY ||
+            span.BestBoxW is not { } boxW || span.BestBoxH is not { } boxH)
+            return null;
+
+        var atUtc = NormalizeToUtc(span.BestFrameAtUtc ?? span.StartUtc);
+        var segment = await db.Segments
+            .Where(s => s.CameraId == cameraId && s.StartUtc <= atUtc && s.EndUtc > atUtc)
+            .Select(s => new { s.FilePath, s.NodeId, s.StartUtc, s.DurationMs, s.Width, s.Height })
+            .FirstOrDefaultAsync(ct);
+        // A segment with no reported resolution can't have its crop rectangle computed at all —
+        // same "nothing to serve" resolution as no covering segment existing in the first place.
+        if (segment is null || segment.Width is not { } frameWidth || segment.Height is not { } frameHeight)
+            return null;
+
+        var node = await db.Nodes
+            .Where(n => n.Id == segment.NodeId)
+            .Select(n => new { n.LastIpAddress, n.LivePort, n.MediaSigningKey })
+            .FirstOrDefaultAsync(ct);
+
+        // Same clamp reasoning as ResolveThumbnailInfoAsync above.
+        var rawOffsetSeconds = (int)(atUtc - segment.StartUtc).TotalSeconds;
+        var maxOffsetSeconds = Math.Max(0, segment.DurationMs / 1000 - 1);
+        var offsetSeconds = Math.Clamp(rawOffsetSeconds, 0, maxOffsetSeconds);
+
+        return new SnapshotImageInfo(segment.FilePath, offsetSeconds, spanId, boxX, boxY, boxW, boxH,
+            frameWidth, frameHeight, node?.LastIpAddress, node?.LivePort, node?.MediaSigningKey);
     }
 
     /// <summary>Dashboard's "most recent thumbnail" column: the newest *completed* segment's own
@@ -392,11 +437,22 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
             var wantMotion = kindSet.Contains("Motion");
             var wantCustomTag = kindSet.Contains(CustomTagKindToken);
             var wantedDetectionKinds = DetectionDisplay.AllKinds.Where(k => kindSet.Contains(k.ToString())).ToList();
+            // Object detection plan decision 5: DetectedObjectCategory names are also valid filter
+            // tokens, alongside "Motion"/"CustomTag"/a DetectionKind name. Deliberately NOT
+            // mutually exclusive with wantedDetectionKinds above — "Vehicle" and "Animal" are both a
+            // DetectionKind value *and* one of the small fixed AI category names by design, and a
+            // single "Vehicle" checkbox should match either source's spans, not just whichever one
+            // claimed the token first. Only the two reserved system tokens are excluded.
+            var wantedCategoryNames = kindSet
+                .Where(k => !k.Equals("Motion", StringComparison.OrdinalIgnoreCase)
+                    && !k.Equals(CustomTagKindToken, StringComparison.OrdinalIgnoreCase))
+                .ToList();
 
             query = query.Where(m =>
                 (m.EventTagRuleId != null && wantCustomTag)
                 || (m.DetectionKind != null && wantedDetectionKinds.Contains(m.DetectionKind.Value))
-                || (m.DetectionKind == null && m.EventTagRuleId == null && wantMotion));
+                || (m.DetectedObjectCategoryId != null && m.DetectedObjectCategory != null && wantedCategoryNames.Contains(m.DetectedObjectCategory.Name))
+                || (m.DetectionKind == null && m.EventTagRuleId == null && m.DetectedObjectCategoryId == null && wantMotion));
         }
 
         var total = await query.CountAsync(ct);
@@ -426,7 +482,14 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
                 m.DetectionKind,
                 ZoneName = m.Zone != null ? m.Zone.Name : null,
                 RuleName = m.EventTagRule != null ? m.EventTagRule.Name : null,
-                RuleColorHex = m.EventTagRule != null ? m.EventTagRule.ColorHex : null
+                RuleColorHex = m.EventTagRule != null ? m.EventTagRule.ColorHex : null,
+                // Object detection plan decisions 5/9: an AI-detection span (DetectionKind null,
+                // DetectedObjectCategoryId set) carries its category's own stored color plus the
+                // specific label riding alongside it (DetectedObjectLabel) — see the item-building
+                // loop below for how the two combine into one badge.
+                m.DetectedObjectLabel,
+                AiCategoryName = m.DetectedObjectCategory != null ? m.DetectedObjectCategory.Name : null,
+                AiCategoryColorHex = m.DetectedObjectCategory != null ? m.DetectedObjectCategory.ColorHex : null
             })
             .ToListAsync(ct);
 
@@ -468,6 +531,20 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
                 color = palette.ColorFor(kind);
                 emoji = DetectionDisplay.Emoji(kind);
             }
+            else if (r.AiCategoryName is not null)
+            {
+                // Object detection plan decision 5: combined "category — label" text, not just the
+                // category — a card that only said "Vehicle" would lose exactly the detail
+                // (car vs. truck vs. bus) the open-ended category system exists to preserve. No
+                // per-class emoji the way DetectionDisplay has (the label set is open-ended, not a
+                // fixed small enum) — a generic package, same fallback DetectionDisplay.Emoji itself
+                // uses for its own unclassified "Other" case.
+                label = r.DetectedObjectLabel is { } specificLabel
+                    ? $"{r.AiCategoryName} — {specificLabel}"
+                    : r.AiCategoryName;
+                color = r.AiCategoryColorHex ?? EventColors.DefaultMotion;
+                emoji = "📦";
+            }
             else
             {
                 label = r.ZoneName ?? "Motion";
@@ -494,12 +571,16 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
             // *recording's* own pre-roll (which starts Recording.MotionPreRollSeconds before StartUtc)
             // is more likely to actually catch the subject entering frame than StartUtc itself is.
             //
+            // AI detection gets the same "already visible at StartUtc" treatment as a classified
+            // DetectionKind — ByteTrack's own confirmation logic already gates span start the same way
+            // a camera's onboard classifier does, so the subject is on-frame right away here too.
+            //
             // No lower clamp on the pre-roll candidate: landing before any segment this camera actually
             // has on disk (an event moments after recording began, with less than a full pre-roll
             // buffer built up yet) resolves to no thumbnail, same "No thumbnail available" placeholder
             // any other missing-footage case already shows.
             DateTime atUtc;
-            if (r.DetectionKind is not null)
+            if (r.DetectionKind is not null || r.AiCategoryName is not null)
             {
                 var candidate = r.StartUtc + SnapshotOffsetIntoRecording;
                 atUtc = candidate > r.EndUtc ? r.EndUtc : candidate;
@@ -513,9 +594,17 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
 
             return new SnapshotDto(r.Id, r.CameraId,
                 cameraNames.TryGetValue(r.CameraId, out var name) ? name : "(deleted camera)",
-                atUtc, duration, label, color, emoji);
+                atUtc, duration, label, color, emoji, IsAiDetection: r.AiCategoryName is not null);
         }).ToList();
 
         return new SnapshotPageDto(items, totalPages, currentPage);
+    }
+
+    public async Task<List<DetectedObjectCategoryDto>> GetDetectedObjectCategoriesAsync(CancellationToken ct = default)
+    {
+        return await db.DetectedObjectCategories.AsNoTracking()
+            .OrderBy(c => c.Name)
+            .Select(c => new DetectedObjectCategoryDto(c.Id, c.Name, c.ColorHex))
+            .ToListAsync(ct);
     }
 }
