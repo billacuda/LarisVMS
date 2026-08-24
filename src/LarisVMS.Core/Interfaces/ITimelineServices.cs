@@ -81,6 +81,11 @@ public interface ITimelineService
     /// kinds is the page's own event-type filter (checkboxes: "Motion", "CustomTag", or a
     /// DetectionKind name — see TimelineService.CustomTagKindToken), a pure narrowing on top of
     /// whatever the admin-level SnapshotVisibility setting already allows. Null/empty means no
-    /// additional narrowing.</summary>
-    Task<SnapshotPageDto> GetSnapshotsAsync(Guid? cameraId, DateTime? fromUtc, DateTime? toUtc, int page, int pageSize, CancellationToken ct = default, IReadOnlyCollection<string>? kinds = null);
+    /// additional narrowing.
+    ///
+    /// cameraIds null means every camera; a non-null-but-empty collection genuinely narrows to zero
+    /// rows (same "narrow to nothing rather than silently show everything" philosophy as kinds) —
+    /// lets the Snapshots page resolve "single camera" / "all cameras" / "camera group" / "view" into
+    /// one shared parameter instead of four different query shapes.</summary>
+    Task<SnapshotPageDto> GetSnapshotsAsync(IReadOnlyCollection<Guid>? cameraIds, DateTime? fromUtc, DateTime? toUtc, int page, int pageSize, CancellationToken ct = default, IReadOnlyCollection<string>? kinds = null);
 }

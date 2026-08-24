@@ -1,10 +1,12 @@
 using System.Net.WebSockets;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Options;
 using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
@@ -23,6 +25,7 @@ using LarisVMS.Infrastructure.Repositories;
 using LarisVMS.Infrastructure.Security;
 using LarisVMS.Infrastructure.Services;
 using LarisVMS.Onvif.Soap;
+using LarisVMS.Web.Auth;
 using LarisVMS.Web.Health;
 using LarisVMS.Web.Helpers;
 using LarisVMS.Web.Middleware;
@@ -186,6 +189,26 @@ builder.Services.ConfigureApplicationCookie(options =>
         }
     };
 });
+
+// ── Entra ID sign-in (M20 pass 3) ───────────────────────────────────────────────
+// Registered unconditionally — AddIdentity() already made IdentityConstants.ApplicationScheme (the
+// cookie) the default authenticate/challenge scheme, so adding this external scheme here doesn't
+// change what an ordinary password sign-in does. Real per-request options (Authority/ClientId/
+// ClientSecret) come from EntraOidcOptionsConfigurator, not the callback below — left mostly blank
+// here since AddOpenIdConnect requires *a* configure delegate even when the real one is supplied via
+// IConfigureNamedOptions<T>. Login.cshtml's own override decides whether to actually offer the "Sign
+// in with Microsoft" button (EntraSsoSettings.IsEnabled), independent of this registration existing.
+builder.Services.AddAuthentication().AddOpenIdConnect(EntraOidcOptionsConfigurator.SchemeName, _ => { });
+// Registered as IConfigureOptions<T>, not IConfigureNamedOptions<T> — OptionsFactory<T>'s
+// constructor only takes IEnumerable<IConfigureOptions<T>> from DI, and the container resolves by
+// the exact registered service type, not by every interface the implementation happens to satisfy.
+// Registering under IConfigureNamedOptions<T> (as this line originally did) meant the factory's DI
+// resolution never found this configurator at all — Configure() silently never ran, ClientId stayed
+// at OpenIdConnectOptions' own null default, and RemoteAuthenticationOptions.Validate() then threw
+// on every single request (AuthenticationMiddleware builds every IAuthenticationRequestHandler
+// scheme, OIDC included, to check whether it owns the current request path) — confirmed live as an
+// unhandled ArgumentNullException on 'ClientId' on every page load, not just a sign-in attempt.
+builder.Services.AddSingleton<IConfigureOptions<OpenIdConnectOptions>, EntraOidcOptionsConfigurator>();
 
 // ── Authorization / RBAC ──────────────────────────────────────────────────────
 builder.Services.AddAuthorization(options =>

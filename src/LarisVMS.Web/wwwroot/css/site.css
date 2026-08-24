@@ -138,6 +138,61 @@ body {
     display: none;
 }
 
+/* M16 follow-up: on a phone (outside fullscreen — .pb-timeline-fullscreen above already owns that
+   case, :not() here keeps the two from fighting over position/background when both could apply)
+   #pbTimelineArea overlays the video grid instead of pushing #playbackTiles down, same translucent-
+   backdrop-over-bottom-of-video treatment as the fullscreen rule above, on purpose — one visual
+   language for "the timeline is floating over video" everywhere it happens. #pbLayout needs a
+   positioning context for this absolute placement; it has none of its own today (inline style only
+   sets display/flex-direction), and relative is harmless for the desktop, non-overlay case too. */
+#pbLayout {
+    position: relative;
+}
+
+.pb-timeline-mobile-overlay:not(.pb-timeline-fullscreen) {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 5;
+    padding: 0.25rem 0.75rem 0.5rem;
+    background: rgba(0, 0, 0, 0.65);
+    color: #fff;
+}
+
+.pb-timeline-mobile-overlay:not(.pb-timeline-fullscreen) label,
+.pb-timeline-mobile-overlay:not(.pb-timeline-fullscreen) .text-muted {
+    color: rgba(255, 255, 255, 0.75) !important;
+}
+
+.pb-timeline-mobile-overlay:not(.pb-timeline-fullscreen) p {
+    display: none;
+}
+
+/* Faded out after 5s of no touch/mouse activity (playback-player.js's wireMobileTimelineOverlay),
+   reappearing on the next touch/pointer move — opacity + pointer-events rather than display:none so
+   the fade itself can transition instead of popping, and so a stray listener never fires on an
+   element that's mid-fade. Governed by a per-user toggle (default on) via the same UserPreference
+   mechanism as every other Playback toggle; applies inside fullscreen too, independent of the
+   overlay-positioning rule above. */
+.pb-timeline-idle-hidden {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+}
+
+/* Taller hit target on a phone — 30px (the desktop size, set inline on the canvases) is comfortable
+   with a mouse but cramped for a thumb doing pinch-to-zoom (timeline.js already supports the
+   gesture, see its own pointer-event handling; this is purely giving it more room to work with).
+   timeline.js's own ResizeObserver redraws to whatever box size the canvas ends up with, so this
+   needs no JS change. */
+@media (max-width: 767.98px) {
+    #playbackTimeline,
+    #playbackGlobalTimeline {
+        height: 44px !important;
+    }
+}
+
 /* Playback on a short viewport — a phone in landscape, ~390px tall. #pbLayout is a fixed-height
    flex column: the toolbar and this timeline strip take their natural height and #playbackTiles
    (flex:1 1 auto) gets whatever remains. At full height that's fine; at 390px the strip's own

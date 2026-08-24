@@ -83,4 +83,9 @@ public interface ICameraGroupService
     Task<List<CameraGroup>> GetTreeAsync(CancellationToken ct = default);
     Task<CameraGroup> CreateAsync(string name, Guid? parentId, CancellationToken ct = default);
     Task DeleteAsync(Guid id, CancellationToken ct = default);
+
+    /// <summary>Every camera belonging to this group or any of its descendants (site/building/floor),
+    /// resolved via MaterializedPath the same way CameraAccessService cascades a Group-scoped grant
+    /// to its subtree. Empty if the group doesn't exist or has no cameras anywhere in its subtree.</summary>
+    Task<List<Guid>> GetCameraIdsInSubtreeAsync(Guid groupId, CancellationToken ct = default);
 }

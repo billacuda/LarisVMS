@@ -17,13 +17,38 @@
 @* data-remember-filters: these selections survive navigating away and coming back, or a refresh —
    see remember-filters.js. The Clear link below carries data-clear-filters so clearing actually
    clears rather than being restored again on the next load. *@
-<form method="get" class="row g-2 mb-3" data-remember-filters="snapshots">
-    <div class="col-md-3">
+<form method="get" class="row g-2 mb-3" data-remember-filters="snapshots" id="snapshotFilterForm">
+    <div class="col-md-2">
+        <select name="mode" id="snapshotMode" class="form-select form-select-sm">
+            <option value="single" selected="@(Model.Mode == "single")">Single camera</option>
+            <option value="all" selected="@(Model.Mode == "all")">All cameras</option>
+            <option value="group" selected="@(Model.Mode == "group")">Camera group</option>
+            <option value="view" selected="@(Model.Mode == "view")">View</option>
+        </select>
+    </div>
+    <div class="col-md-3 snapshot-mode-target" data-for-mode="single">
         <select name="cameraId" class="form-select form-select-sm">
-            <option value="">All cameras</option>
             @foreach (var c in Model.Cameras)
             {
                 <option value="@c.Id" selected="@(Model.CameraId == c.Id)">@c.Name</option>
+            }
+        </select>
+    </div>
+    <div class="col-md-3 snapshot-mode-target d-none" data-for-mode="group">
+        <select name="groupId" class="form-select form-select-sm">
+            <option value="">Select a group…</option>
+            @foreach (var g in Model.Groups)
+            {
+                <option value="@g.Id" selected="@(Model.GroupId == g.Id)">@(new string('—', Model.Depth(g))) @g.Name</option>
+            }
+        </select>
+    </div>
+    <div class="col-md-3 snapshot-mode-target d-none" data-for-mode="view">
+        <select name="viewId" class="form-select form-select-sm">
+            <option value="">Select a view…</option>
+            @foreach (var v in Model.Views)
+            {
+                <option value="@v.Id" selected="@(Model.ViewId == v.Id)">@v.Name</option>
             }
         </select>
     </div>
@@ -67,7 +92,7 @@
 
 @if (Model.Results.Items.Count == 0)
 {
-    <p class="text-muted">No motion events found@(Model.CameraId is not null || Model.From is not null || Model.To is not null ? " for this filter." : " yet.")</p>
+    <p class="text-muted">No motion events found@(Model.Mode != "all" || Model.From is not null || Model.To is not null ? " for this filter." : " yet.")</p>
 }
 else
 {
@@ -120,8 +145,24 @@ else
    Pages route-value name and silently never binds from here. *@
 <partial name="Shared/_PaginationControls" model="@(new LarisVMS.Web.Helpers.PaginationViewModel(
     Model.Results.CurrentPage, Model.Results.TotalPages,
-    p => $"?cameraId={Model.CameraId}&from={Model.From}&to={Model.To}&pageNumber={p}{kindsQuery}"))" />
+    p => $"?mode={Model.Mode}&cameraId={Model.CameraId}&groupId={Model.GroupId}&viewId={Model.ViewId}&from={Model.From}&to={Model.To}&pageNumber={p}{kindsQuery}"))" />
 
 @section Scripts {
     <script src="~/js/snapshot-load-status.js" asp-append-version="true"></script>
+    <script>
+        // Shows only the selector matching the current mode — the other two stay in the form
+        // (unselected, so they submit nothing) but hidden, same "only what's relevant is visible"
+        // shape as this page's own kinds checkboxes.
+        (function () {
+            var modeSelect = document.getElementById('snapshotMode');
+            var targets = document.querySelectorAll('.snapshot-mode-target');
+            function applyMode() {
+                targets.forEach(function (el) {
+                    el.classList.toggle('d-none', el.getAttribute('data-for-mode') !== modeSelect.value);
+                });
+            }
+            modeSelect.addEventListener('change', applyMode);
+            applyMode();
+        })();
+    </script>
 }

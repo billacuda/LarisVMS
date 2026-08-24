@@ -5,6 +5,125 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.156.1] - 2026-08-23
+
+### Fixed
+
+- **Every single page load threw `ArgumentNullException: Value cannot be null. (Parameter 'ClientId')`
+  once 0.154.0 shipped** — reported live, not just an Entra sign-in attempt: `AuthenticationMiddleware`
+  builds every registered `IAuthenticationRequestHandler` scheme's options on *every* request (to check
+  which scheme, if any, owns the current request path), which includes the "EntraID" OpenIdConnect
+  scheme regardless of whether Entra sign-in is enabled. Two compounding bugs, both fixed:
+  - `EntraOidcOptionsConfigurator` was registered as `IConfigureNamedOptions<OpenIdConnectOptions>`
+    in DI — but `OptionsFactory<T>`'s constructor only takes `IEnumerable<IConfigureOptions<T>>`, and
+    the container resolves by the exact registered service type, not by every interface the
+    implementation happens to satisfy. Registered under the wrong interface meant `Configure()` never
+    ran at all, leaving `ClientId` at `OpenIdConnectOptions`' own `null` default. Now registered as
+    `IConfigureOptions<OpenIdConnectOptions>`.
+  - Even with that fixed, an unconfigured deployment (no `EntraSsoSettings` row, or a blank ClientId)
+    would still fail validation, since the configurator fell back to an *empty* string rather than a
+    placeholder — `OpenIdConnectOptions.Validate()` requires ClientId non-empty unconditionally. Now
+    falls back to a syntactically valid placeholder GUID, same "harmless placeholder, never reached by
+    a real sign-in while unconfigured" reasoning `Authority`'s own fallback already used (Login.cshtml
+    only offers the "Sign in with Microsoft" button once `EntraSsoSettings.IsEnabled` is true).
+
+Web-only, no node change.
+
+## [0.156.0] - 2026-08-23
+
+### Fixed
+
+- **Some snapshots stalled forever on Play, spamming the console with repeated "tile stalled...
+  recovering" / "recovering... reloading" pairs.** The existing stall watchdog (added to catch a
+  seek into an instant that will never be buffered) kept reloading at the *identical* stalled
+  instant every time, looping under its own 3s cooldown rather than resolving. It now tracks
+  consecutive recoveries at the same target: after the 3rd attempt in a row it falls back once to
+  that segment's own start, and if still stuck, gives up with a permanent "Playback stalled at this
+  point — try scrubbing elsewhere." message instead of looping indefinitely. The root cause of the
+  underlying stall itself (most plausibly a node-side I/O hang on a specific segment file, or a
+  `Segment.DurationMs`/real-encoded-length drift the same class as the v0.119.0 thumbnail-502 fix)
+  is not yet confirmed — this is a bounded mitigation, not a structural fix; flagged for a future
+  pass once real reproduction logs are available.
+
+### Added
+
+- **Snapshots search: filter by single camera, all cameras, a camera group, or a saved view**
+  (previously only single-camera or all). `ITimelineService.GetSnapshotsAsync` now takes a camera-id
+  set instead of one optional id. A new `ICameraGroupService.GetCameraIdsInSubtreeAsync` resolves a
+  selected group to itself and every descendant group's cameras — the same `MaterializedPath`-prefix
+  cascade `CameraAccessService` already uses for a Group-scoped access grant — and a selected view
+  resolves via the existing `ViewLayout.CameraIds` helper plus `IViewService.GetVisibleToAsync`. No
+  `CameraAccess` scoping was added to the new modes, staying consistent with the existing
+  single-camera filter, which has never had it either.
+- **Playback timeline is taller and auto-hides on mobile.** On a phone-width viewport the timeline
+  canvases render taller (44px, up from the desktop 30px) for easier pinch-to-zoom, and the timeline
+  strip overlays the video grid instead of pushing it down — reusing the same relocate-and-overlay
+  CSS shape the existing fullscreen timeline already uses, rather than a new layout. It fades out
+  after 5 seconds of no touch/mouse activity and reappears on the next touch, governed by a new
+  "Auto-hide timeline" toggle (phone-only, default on) persisted per-user through the existing
+  `UserPreference` mechanism, so it's remembered across devices and logins.
+
+Web-only, no node change.
+
+## [0.155.0] - 2026-08-23
+
+### Fixed
+
+- **Changing an already-recording camera's ONVIF Device Service URI never took effect — the camera
+  kept recording (and live-viewing) from the old source until deleted and re-added.** Reported live:
+  pointing a camera at another camera's device and back left it permanently stuck serving the
+  *other* camera's stream. Root cause: `NodeWorker.Reconcile()`'s Main-stream branch never compared
+  a camera's current RTSP URI against the one its already-running `CameraRecorder` was started
+  with — only a Privacy-mask or segment-length change ever triggered a restart. The Sub/adaptive-
+  stream branch (`ReconcileLiveSub`) already did this correctly; the Main-stream branch now runs the
+  same signature-and-restart check, so an already-recording camera picks up a changed URL on its
+  next reconcile (~30s) instead of needing a delete-and-re-add.
+
+**LarisVMS.Node change — install-node.ps1 re-run needed on every recorder.**
+
+## [0.154.0] - 2026-08-23
+
+### Added
+
+- **M20 pass 3: "Sign in with Microsoft" (Entra ID).** Starting with Entra rather than the roadmap's
+  other identity item (LDAP sync) since this deployment already has a Microsoft Graph email provider
+  configured (M15 pass 2) — an Entra tenant and app-registration workflow already exist here; LDAP
+  assumes an on-prem Active Directory this deployment shows no sign of having.
+  - **Sign-in only, never registration.** This app disabled self-registration app-wide (M14,
+    `RegistrationDisabledMiddleware`) specifically because a self-created account gets no role and
+    there's no invite/approval step. The packaged Identity UI's default external-login callback
+    assumes the opposite — first sign-in for any identity falls through to "confirm your email to
+    finish creating an account." Two Identity pages are overridden locally (`Areas/Identity/Pages/
+    Account/Login`, `.../ExternalLogin` — Razor Pages' own page-override convention, the same
+    mechanism `_ViewStart.cshtml` already used to carry this app's layout onto the packaged pages) so
+    a first-ever Entra sign-in is matched by email against an **existing**, admin-provisioned
+    `ApplicationUser` (`Admin → Settings → Users`) and linked via ASP.NET Core Identity's own
+    `AspNetUserLogins` table — no new table needed. No match means rejected with a clear message, not
+    silently registered.
+  - New `Admin → Settings → Security` section: enable/disable, Tenant ID, Client ID, Client Secret
+    (encrypted at rest, same `SecretProtection` pattern every other credential in this app uses). The
+    "Sign in with Microsoft" button only appears once enabled — `Login.cshtml`'s own override filters
+    the external-scheme list, independent of the OIDC scheme being registered in the pipeline at all
+    times.
+  - **Takes effect immediately, no app restart** — a real ASP.NET Core options-pattern subtlety: an
+    `IConfigureNamedOptions<OpenIdConnectOptions>` reads `EntraSsoSettings` from the database at
+    sign-in time rather than once at boot, but the options pattern caches a named options instance
+    after its first resolution regardless, so on its own this would still only run once per process.
+    The Security page's own save handler explicitly evicts the cached entry
+    (`IOptionsMonitorCache<OpenIdConnectOptions>.TryRemove`) after saving, forcing the next sign-in
+    attempt to re-resolve with the freshly saved row.
+  - **Deliberately out of scope, flagged not silently skipped**: no Entra group→Role mapping (that's
+    the separate LDAP-sync roadmap item's own scope) — roles are still assigned manually on the Users
+    page, same as every account today; single-tenant only, matching the Graph email provider's own
+    shape; no account-linking UI, since first-sign-in auto-link already covers this app's actual use
+    case.
+
+**New package reference**: `Microsoft.AspNetCore.Authentication.OpenIdConnect` — despite most
+authentication handlers shipping in the ASP.NET Core shared framework, this one doesn't and needs an
+explicit `PackageReference` (added to `Directory.Packages.props`).
+
+Web-only, no node change.
+
 ## [0.153.0] - 2026-08-23
 
 ### Added

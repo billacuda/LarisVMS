@@ -50,4 +50,16 @@ public class CameraGroupService(ApplicationDbContext db) : ICameraGroupService
         db.CameraGroups.Remove(group);
         await db.SaveChangesAsync(ct);
     }
+
+    public async Task<List<Guid>> GetCameraIdsInSubtreeAsync(Guid groupId, CancellationToken ct = default)
+    {
+        var group = await db.CameraGroups.AsNoTracking().FirstOrDefaultAsync(g => g.Id == groupId, ct);
+        if (group is null) return [];
+
+        var path = group.MaterializedPath;
+        return await db.Cameras.AsNoTracking()
+            .Where(c => c.Groups.Any(g => g.MaterializedPath.StartsWith(path)))
+            .Select(c => c.Id)
+            .ToListAsync(ct);
+    }
 }

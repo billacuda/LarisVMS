@@ -72,6 +72,13 @@ else
                 <input type="checkbox" class="form-check-input" id="pbHour24" />
                 <label class="form-check-label small" for="pbHour24">24-hour clock</label>
             </div>
+            @* Only meaningful on a phone-width viewport, where the timeline overlays the video and
+               can auto-hide (see wireMobileTimelineOverlay) — hidden on desktop rather than shown as
+               an always-inert control. *@
+            <div class="form-check form-switch mb-0 d-md-none">
+                <input type="checkbox" class="form-check-input" id="pbAutoHideTimeline" />
+                <label class="form-check-label small" for="pbAutoHideTimeline">Auto-hide timeline</label>
+            </div>
         </div>
 
         @* Hidden until Export… is clicked — a plain inline form, not a modal, per the feature's own
@@ -170,6 +177,7 @@ else
                 currentTimeId: 'pbCurrentTime',
                 hour24ToggleId: 'pbHour24',
                 eventTagsToggleId: 'pbEventTags',
+                autoHideToggleId: 'pbAutoHideTimeline',
                 exportBtnId: 'pbExportBtn',
                 exportPanelId: 'pbExportPanel',
                 exportCamerasId: 'pbExportCameras',

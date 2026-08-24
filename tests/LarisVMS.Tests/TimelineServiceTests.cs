@@ -1078,7 +1078,7 @@ public class TimelineServiceTests
         await db.SaveChangesAsync();
 
         var service = new TimelineService(db, DefaultPalette);
-        var page = await service.GetSnapshotsAsync(cameraId, start.AddDays(-1), start.AddDays(1), 1, 24);
+        var page = await service.GetSnapshotsAsync([cameraId], start.AddDays(-1), start.AddDays(1), 1, 24);
 
         var s = Assert.Single(page.Items);
         Assert.Equal(cameraId, s.CameraId);

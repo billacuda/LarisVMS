@@ -769,14 +769,50 @@
         // never runs again — nothing was left to notice or recover from it before this existed.
         var lastErrorRecoveryAt = 0;
         var ERROR_RECOVERY_COOLDOWN_MS = 3000;
+        // A stall that keeps recovering at the *same* instant (within a 1s tolerance — seekSeconds
+        // is fractional, so exact equality would never match) means the recovery itself isn't
+        // working, not that one more identical retry will suddenly succeed — most plausibly a
+        // segment file the node is stuck reading rather than anything a reload fixes. Without this,
+        // recoverUnrecoverableMediaSource would loop forever at the 3s cooldown, which is exactly
+        // the "some snapshots never play, console spam forever" symptom this guards against. After
+        // MAX_SAME_TARGET_RECOVERIES consecutive same-target attempts, one nudge to this segment's
+        // own start (the one instant known to have decodable data) before giving up for good with a
+        // permanent status message, rather than retrying the identical dead instant indefinitely.
+        var MAX_SAME_TARGET_RECOVERIES = 2;
+        var lastRecoveryTargetMs = null;
+        var consecutiveSameTargetRecoveries = 0;
         function recoverUnrecoverableMediaSource(reason, targetMs, resumeAutoplay) {
             var now = Date.now();
             if (now - lastErrorRecoveryAt < ERROR_RECOVERY_COOLDOWN_MS) return;
             lastErrorRecoveryAt = now;
+
+            var sameTarget = targetMs !== null && targetMs !== undefined &&
+                lastRecoveryTargetMs !== null && Math.abs(targetMs - lastRecoveryTargetMs) < 1000;
+            consecutiveSameTargetRecoveries = sameTarget ? consecutiveSameTargetRecoveries + 1 : 1;
+            lastRecoveryTargetMs = targetMs;
+
+            if (consecutiveSameTargetRecoveries > MAX_SAME_TARGET_RECOVERIES) {
+                console.error('[playback] camera', cameraId, 'gave up recovering tile after',
+                    consecutiveSameTargetRecoveries, 'consecutive stalls near', targetMs);
+                teardown();
+                hideFreezeFrame();
+                if (statusEl) statusEl.textContent = 'Playback stalled at this point — try scrubbing elsewhere.';
+                consecutiveSameTargetRecoveries = 0;
+                lastRecoveryTargetMs = null;
+                return;
+            }
+
             console.error('[playback] recovering camera', cameraId, 'tile after', reason, '— reloading at', targetMs);
             teardown();
-            if (targetMs !== null && targetMs !== undefined) {
-                seekTo(targetMs, resumeAutoplay).catch(function () { /* logged inside seekTo's own wrapper */ });
+
+            var seekTarget = targetMs;
+            if (consecutiveSameTargetRecoveries === MAX_SAME_TARGET_RECOVERIES && targetMs !== null && targetMs !== undefined) {
+                var seg = findSegment(targetMs);
+                if (seg && seg.startUtc < targetMs) seekTarget = seg.startUtc;
+            }
+
+            if (seekTarget !== null && seekTarget !== undefined) {
+                seekTo(seekTarget, resumeAutoplay).catch(function () { /* logged inside seekTo's own wrapper */ });
             }
         }
 
@@ -886,6 +922,7 @@
     var HOUR24_KEY = 'playback.hour24';
     var EVENT_TAGS_KEY = 'playback.eventTags';
     var VIEW_KEY = 'playback.viewId';
+    var AUTO_HIDE_TIMELINE_KEY = 'playback.autoHideTimeline';
     var savePositionTimer = null;
 
     // Which View was last open — a refresh used to always land back on the bare "(choose a view)"
@@ -940,6 +977,17 @@
 
     function saveEventTagsPreference(on) {
         window.larisvmsPreferences.set(EVENT_TAGS_KEY, on);
+    }
+
+    // On by default — a phone screen has little enough room that the timeline overlaying the video
+    // and getting out of the way when untouched is the more useful default; a viewer who wants it
+    // permanently visible turns this off once and it stays off across devices/logins.
+    function loadAutoHideTimelinePreference() {
+        return window.larisvmsPreferences.get(AUTO_HIDE_TIMELINE_KEY, 'true') === 'true';
+    }
+
+    function saveAutoHideTimelinePreference(on) {
+        window.larisvmsPreferences.set(AUTO_HIDE_TIMELINE_KEY, on);
     }
 
     function escHtml(s) {
@@ -1716,6 +1764,63 @@
         window.larisvmsPreferences.whenReady().then(function () { initImpl(o); });
     }
 
+    // M16 follow-up: on a phone, #pbTimelineArea (a page-level element, not per-tile) overlays the
+    // video grid instead of pushing it down, and fades out after AUTO_HIDE_IDLE_MS of no touch/mouse
+    // activity — reusing the same relocate-and-toggle-a-CSS-class shape createTile's own
+    // moveTimelineIntoFullscreen/restoreTimeline already use for the fullscreen case (see there for
+    // why that pattern is trusted: the timeline's own ResizeObserver keeps it correctly drawn however
+    // it's positioned), rather than a DOM rewrite. Wired once here (not per-tile) since the element
+    // and its idle timer are shared across every tile on the page.
+    var MOBILE_TIMELINE_QUERY = window.matchMedia('(max-width: 767.98px), (max-width: 950px) and (max-height: 600px)');
+    var AUTO_HIDE_IDLE_MS = 5000;
+    function wireMobileTimelineOverlay(o) {
+        var timelineArea = o.timelineAreaId && document.getElementById(o.timelineAreaId);
+        if (!timelineArea) return;
+
+        var autoHideEnabled = loadAutoHideTimelinePreference();
+        var idleTimer = null;
+
+        function scheduleIdleHide() {
+            clearTimeout(idleTimer);
+            if (!autoHideEnabled || !MOBILE_TIMELINE_QUERY.matches) return;
+            idleTimer = setTimeout(function () {
+                timelineArea.classList.add('pb-timeline-idle-hidden');
+            }, AUTO_HIDE_IDLE_MS);
+        }
+
+        function showAndResetIdle() {
+            timelineArea.classList.remove('pb-timeline-idle-hidden');
+            scheduleIdleHide();
+        }
+
+        function applyOverlayState() {
+            var eligible = MOBILE_TIMELINE_QUERY.matches;
+            timelineArea.classList.toggle('pb-timeline-mobile-overlay', eligible);
+            if (!eligible || !autoHideEnabled) {
+                clearTimeout(idleTimer);
+                timelineArea.classList.remove('pb-timeline-idle-hidden');
+            } else {
+                scheduleIdleHide();
+            }
+        }
+
+        ['pointerdown', 'pointermove'].forEach(function (evt) {
+            document.addEventListener(evt, showAndResetIdle, { passive: true });
+        });
+        if (MOBILE_TIMELINE_QUERY.addEventListener) MOBILE_TIMELINE_QUERY.addEventListener('change', applyOverlayState);
+        applyOverlayState();
+
+        var autoHideToggle = o.autoHideToggleId && document.getElementById(o.autoHideToggleId);
+        if (autoHideToggle) {
+            autoHideToggle.checked = autoHideEnabled;
+            autoHideToggle.addEventListener('change', function () {
+                autoHideEnabled = autoHideToggle.checked;
+                saveAutoHideTimelinePreference(autoHideEnabled);
+                applyOverlayState();
+            });
+        }
+    }
+
     function initImpl(o) {
         opts = o;
         cameraById = {};
@@ -1809,6 +1914,8 @@
                 if (globalTimeline) globalTimeline.setShowEventTags(on);
             });
         }
+
+        wireMobileTimelineOverlay(o);
 
         wireSpeed(o.speedSelectId);
 

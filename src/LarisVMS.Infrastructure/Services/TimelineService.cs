@@ -351,12 +351,12 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
     /// Snapshots thumbnail — see GetSnapshotsAsync's own comment.</summary>
     internal static readonly TimeSpan SnapshotOffsetIntoRecording = TimeSpan.FromSeconds(1);
 
-    public async Task<SnapshotPageDto> GetSnapshotsAsync(Guid? cameraId, DateTime? fromUtc, DateTime? toUtc, int page, int pageSize, CancellationToken ct = default, IReadOnlyCollection<string>? kinds = null)
+    public async Task<SnapshotPageDto> GetSnapshotsAsync(IReadOnlyCollection<Guid>? cameraIds, DateTime? fromUtc, DateTime? toUtc, int page, int pageSize, CancellationToken ct = default, IReadOnlyCollection<string>? kinds = null)
     {
         pageSize = Math.Clamp(pageSize, 1, MaxSnapshotPageSize);
 
         var query = db.MotionSpans.AsNoTracking().AsQueryable();
-        if (cameraId is { } cid) query = query.Where(m => m.CameraId == cid);
+        if (cameraIds is not null) query = query.Where(m => cameraIds.Contains(m.CameraId));
         if (fromUtc is { } f) { f = NormalizeToUtc(f); query = query.Where(m => m.StartUtc >= f); }
         if (toUtc is { } t) { t = NormalizeToUtc(t); query = query.Where(m => m.StartUtc <= t); }
 
@@ -430,8 +430,8 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
             })
             .ToListAsync(ct);
 
-        var cameraIds = rows.Select(r => r.CameraId).Distinct().ToList();
-        var cameraNames = await db.Cameras.Where(c => cameraIds.Contains(c.Id))
+        var pageCameraIds = rows.Select(r => r.CameraId).Distinct().ToList();
+        var cameraNames = await db.Cameras.Where(c => pageCameraIds.Contains(c.Id))
             .Select(c => new { c.Id, c.Name }).ToDictionaryAsync(c => c.Id, c => c.Name, ct);
 
         // Recording.MotionPreRollSeconds per camera — resolved once per distinct camera on this page
@@ -442,7 +442,7 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
         // every existing test that doesn't care about this (default constructor param), which
         // resolves to 10 — NodeService's own hardcoded default for the same setting.
         var preRollSecondsByCameraId = new Dictionary<Guid, int>();
-        foreach (var camId in cameraIds)
+        foreach (var camId in pageCameraIds)
         {
             preRollSecondsByCameraId[camId] = settings is not null
                 ? await settings.GetAsync("Recording.MotionPreRollSeconds", 10, cameraId: camId, ct: ct)

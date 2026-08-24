@@ -665,6 +665,19 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             var effectiveZones = PrivacyMaskEnabled ? camera.Zones : [];
             var privacyEncoder = ChoosePrivacyEncoder(effectiveZones);
             var privacySignature = BuildPrivacyMaskSignature(effectiveZones, privacyEncoder);
+
+            // Recording only ever uses the Main stream — Sub/Third exist for the live wall and
+            // motion detection (M5/M8), not for what gets written to disk, per the plan's
+            // "Main / sub stream" design. Computed up front (not just inside the "start fresh"
+            // branch below) so an already-running session's RTSP URI can be compared against the
+            // camera's current one every reconcile — mirrors ReconcileLiveSub's own
+            // StreamSignature comparison for the Sub stream, which this Main-stream branch was
+            // missing: editing a camera's ONVIF Device Service URI re-probes and rewrites
+            // CameraStream.RtspUri, but without this check an already-recording camera never
+            // noticed and kept running the old ffmpeg process against the stale URL forever.
+            var mainStream = camera.Streams.FirstOrDefault(s => s.Role == "Main");
+            var rtspUri = mainStream is null ? null : InjectCredentials(mainStream.RtspUri, camera.Username, camera.Password);
+
             if (_active.TryGetValue(camera.CameraId, out var activeRecorder) && activeRecorder.PrivacyMaskSignature != privacySignature)
             {
                 _logger.LogInformation("Privacy mask configuration changed for camera {CameraId} ({Name}) — restarting recording session.", camera.CameraId, camera.Name);
@@ -678,20 +691,21 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 activeRecorder.Cts.Cancel();
                 _active.TryRemove(camera.CameraId, out _);
             }
+            else if (activeRecorder is not null && rtspUri is not null && activeRecorder.RtspUri != rtspUri)
+            {
+                _logger.LogInformation("Main stream URL changed for camera {CameraId} ({Name}) — restarting recording session.", camera.CameraId, camera.Name);
+                activeRecorder.Cts.Cancel();
+                _active.TryRemove(camera.CameraId, out _);
+            }
 
             if (!_active.ContainsKey(camera.CameraId))
             {
-                // Recording only ever uses the Main stream — Sub/Third exist for the live wall and
-                // motion detection (M5/M8), not for what gets written to disk, per the plan's
-                // "Main / sub stream" design.
-                var mainStream = camera.Streams.FirstOrDefault(s => s.Role == "Main");
                 if (mainStream is null)
                 {
                     _logger.LogWarning("Camera {CameraId} ({Name}) has no Main stream — skipping.", camera.CameraId, camera.Name);
                 }
                 else
                 {
-                    var rtspUri = InjectCredentials(mainStream.RtspUri, camera.Username, camera.Password);
                     var outputDir = Path.Combine(storageRoot, $"cam-{camera.CameraId}", "main");
 
                     var privacyMaskFilters = BuildPrivacyMaskFilters(effectiveZones);
@@ -710,7 +724,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
 
                     var cts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
                     var sessionLogger = loggerFactory.CreateLogger($"Recording[{camera.Name}]");
-                    var session = new RecordingSession(new RecordingSessionOptions(ffmpegPath, rtspUri, outputDir,
+                    var session = new RecordingSession(new RecordingSessionOptions(ffmpegPath, rtspUri!, outputDir,
                         SegmentSeconds: camera.SegmentSeconds,
                         PrivacyMaskFilters: privacyMaskFilters.Count > 0 ? privacyMaskFilters : null, VideoEncoder: privacyEncoder), sessionLogger);
                     var capturedCameraId = camera.CameraId; // an id never goes stale the way the DTO it came from does
@@ -749,7 +763,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                         .Union(onDiskNow, StringComparer.OrdinalIgnoreCase);
 
                     var runTask = session.RunAsync(cts.Token, knownPathsForCamera);
-                    _active[camera.CameraId] = new CameraRecorder(cts, runTask, session, rtspUri, privacySignature, camera.SegmentSeconds);
+                    _active[camera.CameraId] = new CameraRecorder(cts, runTask, session, rtspUri!, privacySignature, camera.SegmentSeconds);
                     _logger.LogInformation("Started recording camera {CameraId} ({Name}) -> {OutputDir}", camera.CameraId, camera.Name, outputDir);
                 }
             }

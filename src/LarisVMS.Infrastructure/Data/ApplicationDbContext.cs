@@ -41,6 +41,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<BackupHistoryEntry> BackupHistoryEntries => Set<BackupHistoryEntry>();
     public DbSet<EmailSettings> EmailSettings => Set<EmailSettings>();
+    public DbSet<EntraSsoSettings> EntraSsoSettings => Set<EntraSsoSettings>();
     public DbSet<AlertRule> AlertRules => Set<AlertRule>();
     public DbSet<AlertDelivery> AlertDeliveries => Set<AlertDelivery>();
     public DbSet<ApiKey> ApiKeys => Set<ApiKey>();
@@ -186,6 +187,15 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.GmailClientSecret).HasConversion(new EncryptedNullableStringConverter()).HasMaxLength(500);
             e.Property(x => x.GmailRefreshToken).HasConversion(new EncryptedNullableStringConverter()).HasMaxLength(500);
             e.Property(x => x.GmailEmailAddress).HasMaxLength(320);
+            e.Property(x => x.LastModifiedBy).HasMaxLength(256);
+        });
+
+        // ── EntraSsoSettings (M20 pass 3) ────────────────────────────────────
+        builder.Entity<EntraSsoSettings>(e =>
+        {
+            e.Property(x => x.TenantId).HasMaxLength(100);
+            e.Property(x => x.ClientId).HasMaxLength(100);
+            e.Property(x => x.ClientSecret).HasConversion(new EncryptedNullableStringConverter()).HasMaxLength(500);
             e.Property(x => x.LastModifiedBy).HasMaxLength(256);
         });
 

@@ -1,0 +1,9 @@
+@page
+@model LarisVMS.Web.Areas.Identity.Pages.Account.ExternalLoginModel
+@{
+    // Every real path through this page is a redirect (OnPost challenges out to the external
+    // provider; OnGetCallbackAsync redirects to either Login with an error or straight into the app on
+    // success) — there is no case where this markup is actually rendered to a browser.
+    ViewData["Title"] = "External sign-in";
+}
+<p class="text-muted">Redirecting&hellip;</p>

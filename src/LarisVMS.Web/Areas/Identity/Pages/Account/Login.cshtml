@@ -1,0 +1,48 @@
+@page
+@model LarisVMS.Web.Areas.Identity.Pages.Account.LoginModel
+@{
+    ViewData["Title"] = "Log in";
+}
+<div class="row justify-content-center">
+    <div class="col-md-5">
+        <h1 class="h3 mb-3">Log in</h1>
+
+        @if (!ViewData.ModelState.IsValid)
+        {
+            <div class="alert alert-danger" role="alert">
+                <div asp-validation-summary="All" class="mb-0"></div>
+            </div>
+        }
+
+        <form id="account" method="post">
+            <input type="hidden" asp-for="ReturnUrl" />
+            <div class="mb-3">
+                <label asp-for="Input.Email" class="form-label"></label>
+                <input asp-for="Input.Email" class="form-control" autocomplete="username" autofocus />
+                <span asp-validation-for="Input.Email" class="text-danger small"></span>
+            </div>
+            <div class="mb-3">
+                <label asp-for="Input.Password" class="form-label"></label>
+                <input asp-for="Input.Password" class="form-control" autocomplete="current-password" />
+                <span asp-validation-for="Input.Password" class="text-danger small"></span>
+            </div>
+            <div class="form-check mb-3">
+                <input class="form-check-input" asp-for="Input.RememberMe" />
+                <label class="form-check-label" asp-for="Input.RememberMe"></label>
+            </div>
+            <button type="submit" class="btn btn-primary w-100">Log in</button>
+        </form>
+
+        @if (Model.ShowEntraButton)
+        {
+            <hr class="my-4" />
+            <form method="post" asp-page="./ExternalLogin">
+                <input type="hidden" name="provider" value="@Model.EntraSchemeName" />
+                <input type="hidden" name="returnUrl" value="@Model.ReturnUrl" />
+                <button type="submit" class="btn btn-outline-secondary w-100">
+                    <span aria-hidden="true">🪟</span> Sign in with Microsoft
+                </button>
+            </form>
+        }
+    </div>
+</div>
