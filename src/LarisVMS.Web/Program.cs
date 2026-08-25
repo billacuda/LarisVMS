@@ -1604,6 +1604,15 @@ static async Task ProxyLiveViewAsync(WebSocket node, WebSocket browser, Cancella
 static async Task ProxyDetectionOverlayAsync(WebSocket node, WebSocket browser, DetectedObjectCategoryColorCache colorCache, CancellationToken ct)
 {
     var buffer = new byte[64 * 1024];
+    // The re-serialize below has to land as the camelCase this app's JS everywhere else expects
+    // (Results.Json — the framework's own default for Minimal APIs — and this app's own
+    // hand-written anonymous-object endpoints both already use it). Confirmed live as the reason no
+    // box ever drew despite the socket streaming real data every tick: plain SerializeToUtf8Bytes
+    // with no options defaults to PascalCase, live-view.js's draw() reads box.movementState/box.x/
+    // etc., and a property read against the wrong casing is silently undefined in JS — canvas draws
+    // NaN coordinates as a no-op, no exception anywhere in the chain. Built once per connection, not
+    // per tick — this loop runs at ~6.7Hz for as long as a viewer has the overlay open.
+    var camelCaseJson = new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase };
     try
     {
         while (node.State == WebSocketState.Open && browser.State == WebSocketState.Open)
@@ -1638,7 +1647,7 @@ static async Task ProxyDetectionOverlayAsync(WebSocket node, WebSocket browser, 
                 });
             }
 
-            var json = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(enriched);
+            var json = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(enriched, camelCaseJson);
             await browser.SendAsync(json, WebSocketMessageType.Text, endOfMessage: true, ct);
         }
     }

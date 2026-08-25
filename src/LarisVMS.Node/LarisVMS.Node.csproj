@@ -4,7 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>0.157.0</Version>
+    <Version>0.157.1</Version>
     <!-- Recorder nodes are self-contained single-file per platform (see build-node.ps1),
          the same shape as dploid.Agent. -->
     <InvariantGlobalization>true</InvariantGlobalization>

@@ -179,4 +179,55 @@ public class RecordingSessionKnownPathsTests : IDisposable
         Assert.Equal(path, segment.FilePath);
         Assert.Equal(creationTime, segment.StartUtc);
     }
+
+    [Fact]
+    public void EndOfOneSegmentAlwaysExactlyEqualsStartOfTheNextEvenAcrossPollsThatRaceEachOther()
+    {
+        // Reproduces the exact real-world race, confirmed live against a production Segments table:
+        // ~41% of all segment transitions in one night's recording had EndUtc(N) != StartUtc(N+1) —
+        // a false "gap" of anywhere from a couple of seconds to nearly a minute, even though the
+        // underlying video files were continuous the whole time and Playback simply couldn't find a
+        // segment covering the (nonexistent) hole between them.
+        //
+        // The race: the file that becomes segment N+1 is still header-only (below MinRealDataBytes)
+        // on the SAME poll where segment N is first noticed as closed — so segment N's end falls back
+        // to that file's raw CreationTimeUtc. Only on a LATER poll, once real data has actually grown
+        // the file past the threshold, does that same file get its own "first real data" timestamp
+        // recorded — a distinctly later moment. Without ResolveSegmentBoundary's write-through, these
+        // two independently-computed values for the exact same physical instant can — and, per the
+        // production data, routinely do — disagree.
+        var t0 = new DateTime(2026, 8, 11, 12, 0, 0, DateTimeKind.Utc);
+        var a = WriteSegmentFileWithSize("a.mp4", t0, sizeBytes: 8192); // already closed-worthy, past threshold
+        var b = WriteSegmentFileWithSize("b.mp4", t0.AddSeconds(30), sizeBytes: 500); // header-only, below threshold
+
+        var session = NewSession(_root);
+        var fired = new List<RecordingSegment>();
+        session.SegmentCompleted += fired.Add;
+        var reportedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var firstRealDataObservedUtc = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+
+        // Poll 1: b.mp4's mere existence already proves a.mp4 closed (file existence, not size, is
+        // what closes a segment — see the loop's own comment) — a.mp4 fires now. Its end resolves
+        // via the fallback path, since b.mp4 (still header-only) has no real-data entry yet; under
+        // the fix that fallback is written into the dictionary as b.mp4's own boundary too.
+        session.PollForCompletedSegments(reportedPaths, firstRealDataObservedUtc);
+        var segmentA = Assert.Single(fired);
+        Assert.Equal(a, segmentA.FilePath);
+
+        // b.mp4 grows past the threshold while still the open/last file. Under the fix, the "check
+        // last" block must decline to overwrite b.mp4's already-resolved boundary with a fresh
+        // DateTime.UtcNow — that's the whole point: once resolved (as a.mp4's end, above), it must
+        // stay resolved to that exact same value.
+        GrowFile(b, totalSizeBytes: 8192);
+        session.PollForCompletedSegments(reportedPaths, firstRealDataObservedUtc);
+        Assert.Single(fired); // still just a.mp4 — b.mp4 isn't closeable until a 3rd file exists
+
+        // c.mp4 arrives, finally proving b.mp4 is closed.
+        WriteSegmentFileWithSize("c.mp4", t0.AddSeconds(60), sizeBytes: 500);
+        session.PollForCompletedSegments(reportedPaths, firstRealDataObservedUtc);
+
+        Assert.Equal(2, fired.Count);
+        var segmentB = fired.Single(s => s.FilePath == b);
+        Assert.Equal(segmentA.EndUtc, segmentB.StartUtc); // the actual bug: these must never diverge
+    }
 }
