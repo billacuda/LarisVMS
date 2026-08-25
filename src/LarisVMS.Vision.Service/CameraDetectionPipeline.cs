@@ -69,7 +69,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     private readonly ConcurrentQueue<VisionDetectionReportItem> _pendingReports = new();
 
     public CameraDetectionPipeline(VisionStartCameraRequest request, VisionServiceOptions serviceOptions,
-        string resolvedFfmpegPath, HttpClient http, ILoggerFactory loggerFactory)
+        string resolvedFfmpegPath, string resolvedModelPath, HttpClient http, ILoggerFactory loggerFactory)
     {
         _request = request;
         _http = http;
@@ -82,7 +82,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
 
         _engine = new YoloEngine(new EngineOptions
         {
-            ModelPath = serviceOptions.ModelPath,
+            ModelPath = resolvedModelPath,
             GpuId = serviceOptions.GpuId,
             CudnnPath = serviceOptions.CudnnPath,
             EnableTensorRt = serviceOptions.EnableTensorRt,

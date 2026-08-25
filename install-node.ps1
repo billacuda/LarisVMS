@@ -87,7 +87,7 @@ function Format-ServiceArg([string]$value) {
 # ever run by LarisVMS.Node on this machine, so unconditionally stopping every ffmpeg.exe still around
 # after the service reports Stopped is both safe and reliable.
 function Stop-OrphanedFfmpeg {
-    $procs = Get-Process -Name ffmpeg -ErrorAction SilentlyContinue
+    $procs = @(Get-Process -Name ffmpeg -ErrorAction SilentlyContinue)
     if ($procs) {
         Write-Host "    Found $($procs.Count) orphaned ffmpeg process(es) still running - stopping..."
         $procs | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -101,7 +101,7 @@ function Stop-OrphanedFfmpeg {
 # SCM's stop timeout is hit before that finishes, it's left running and holding its own exe/DLLs open,
 # which fails the copy below with "being used by another process."
 function Stop-OrphanedVisionService {
-    $procs = Get-Process -Name 'LarisVMS.Vision.Service' -ErrorAction SilentlyContinue
+    $procs = @(Get-Process -Name 'LarisVMS.Vision.Service' -ErrorAction SilentlyContinue)
     if ($procs) {
         Write-Host "    Found $($procs.Count) orphaned LarisVMS.Vision.Service process(es) still running - stopping..."
         $procs | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -123,6 +123,184 @@ function Copy-ItemWithRetry([string]$Source, [string]$Destination, [int]$MaxAtte
             Write-Host "    Copy attempt $attempt/$MaxAttempts failed (file still in use) - retrying in 2s..." -ForegroundColor Yellow
             Start-Sleep -Seconds 2
         }
+    }
+}
+
+# ── AI detection native dependencies ─────────────────────────────────────────
+# LarisVMS.Vision.Service's execution provider loads native libraries that are NOT shipped in the
+# node package — the CUDA Toolkit runtime and cuDNN for a Cuda build. Nothing about installing the
+# node notices their absence on its own: the service starts fine, and the failure only appears
+# later, per camera, per reconcile tick, as an ONNX Runtime "Error loading ... which depends on
+# X.dll which is missing" buried in the Windows Application event log. Worse, the loader reports
+# exactly ONE missing DLL at a time, so discovering them by running the thing means a
+# fix-restart-retry cycle per library.
+#
+# So this checks all of them up front and, for anything missing, goes looking in the places these
+# libraries actually land — neither installs anywhere the OS loader searches by default: cuDNN via
+# `pip install nvidia-cudnn-cu12` goes to a Python environment's site-packages, and NVIDIA's own
+# cuDNN download is a zip you unpack wherever you like. When found, they're copied in beside
+# LarisVMS.Vision.Service.exe, which the loader searches first — deliberately a copy rather than a
+# PATH edit, because a Windows Service inherits its environment from services.exe at boot and would
+# not see a new PATH entry until the machine is rebooted.
+#
+# Never fatal: a node whose GPU libraries aren't set up yet still records perfectly well, and every
+# non-AI detection path is unaffected — the same "AI detection is additive" reasoning as the rest of
+# this release. Anything that can't be found is reported with where to get it.
+
+# Where the OS loader would actually find a DLL for LarisVMS.Vision.Service.exe: its own directory
+# first, then the standard system directories, then PATH. The machine PATH is read from the registry
+# in addition to this process's own copy — a shell opened before the CUDA Toolkit installer ran holds
+# a stale $env:PATH, which would otherwise produce a false "missing" for a library that is in fact
+# installed correctly.
+function Get-NativeDllSearchDirectories([string]$InstallDirectory) {
+    $dirs = [System.Collections.Generic.List[string]]::new()
+    $dirs.Add($InstallDirectory)
+    $dirs.Add([Environment]::SystemDirectory)
+    foreach ($scope in @('Process', 'Machine')) {
+        $raw = [Environment]::GetEnvironmentVariable('Path', $scope)
+        if ($raw) { foreach ($entry in $raw -split ';') { if ($entry.Trim()) { $dirs.Add($entry.Trim()) } } }
+    }
+    return $dirs
+}
+
+function Test-NativeDllAvailable([string]$DllName, $SearchDirectories) {
+    foreach ($dir in $SearchDirectories) {
+        # A malformed PATH entry (stray quotes, invalid characters) makes Join-Path throw rather than
+        # return nothing — one bad entry must not abort the whole check.
+        try {
+            if (Test-Path (Join-Path $dir $DllName)) { return $true }
+        } catch { continue }
+    }
+    return $false
+}
+
+# Directories a missing CUDA/cuDNN library plausibly lives in, newest first. Wildcards throughout:
+# the version is in the path for every one of these layouts, and pinning a specific version here
+# would mean this stops finding a perfectly good install the moment anyone upgrades. Ordered so the
+# CUDA Toolkit's own bin wins over a pip copy — the toolkit is the version-matched one when both
+# exist, and this fleet has hit a node carrying toolkit 12.8 alongside pip's CUDA 12.9 builds.
+function Get-NativeDllSourceDirectories {
+    $roots = @(
+        # CUDA Toolkit (cudart/cublas/cublasLt/cufft), and cuDNN if it was unpacked into the toolkit
+        "$env:ProgramFiles\NVIDIA GPU Computing Toolkit\CUDA\v*\bin"
+        # NVIDIA's standalone cuDNN installer/zip — bin\12.x on 9.x layouts, plain bin on older ones
+        "$env:ProgramFiles\NVIDIA\CUDNN\v*\bin\*"
+        "$env:ProgramFiles\NVIDIA\CUDNN\v*\bin"
+        # pip: nvidia-cudnn-cu12, nvidia-cublas-cu12, nvidia-cuda-runtime-cu12, nvidia-cufft-cu12.
+        # Machine-wide, per-user, and venv installs all land in a different place.
+        "$env:ProgramFiles\Python*\Lib\site-packages\nvidia\*\bin"
+        "$env:LOCALAPPDATA\Programs\Python\Python*\Lib\site-packages\nvidia\*\bin"
+        "$env:APPDATA\Python\Python*\site-packages\nvidia\*\bin"
+    )
+
+    $found = [System.Collections.Generic.List[string]]::new()
+    foreach ($root in $roots) {
+        # -Directory so a wildcard that happens to match a file can't end up treated as a directory.
+        $hits = @(Get-ChildItem $root -Directory -ErrorAction SilentlyContinue | Sort-Object FullName -Descending)
+        foreach ($hit in $hits) { $found.Add($hit.FullName) }
+    }
+    return $found
+}
+
+# Copies one missing library in from wherever it was found. cuDNN is special-cased: cudnn64_9.dll is
+# a thin dispatcher that loads cudnn_graph64_9.dll / cudnn_ops64_9.dll / cudnn_engines_*64_9.dll at
+# runtime, so copying only the DLL named in the loader error just moves the failure to the next one —
+# every cudnn*.dll from the same directory has to come along. Returns $true if the copy happened.
+function Copy-NativeDllFromSource([string]$DllName, [string]$InstallDirectory, $SourceDirectories) {
+    foreach ($dir in $SourceDirectories) {
+        $candidate = Join-Path $dir $DllName
+        if (-not (Test-Path $candidate)) { continue }
+
+        $pattern = if ($DllName -like 'cudnn*') { 'cudnn*.dll' } else { $DllName }
+        try {
+            Copy-ItemWithRetry (Join-Path $dir $pattern) $InstallDirectory
+            Write-Host "    Copied $pattern from $dir" -ForegroundColor DarkGray
+            return $true
+        } catch {
+            Write-Host "    Found $DllName in $dir but could not copy it: $($_.Exception.Message)" -ForegroundColor Yellow
+            return $false
+        }
+    }
+    return $false
+}
+
+# Which accelerator this package was built for is read from the native DLLs that actually shipped
+# next to the exe, not passed in as a parameter: build-node.ps1's -Accel choice is baked into the
+# published output (YoloDotNet links exactly one execution provider per build), and the operator
+# running this script on a recorder often isn't the person who built the package and has no reliable
+# way to know which variant they were handed.
+function Install-VisionNativeDependencies([string]$InstallDirectory) {
+    $providerDll = @{
+        'onnxruntime_providers_cuda.dll' = 'Cuda'
+        'DirectML.dll'                   = 'DirectML'
+        'openvino.dll'                   = 'OpenVino'
+    }
+    $accel = 'Cpu'
+    foreach ($dll in $providerDll.Keys) {
+        if (Test-Path (Join-Path $InstallDirectory $dll)) { $accel = $providerDll[$dll]; break }
+    }
+
+    Write-Step "Checking AI detection dependencies (package built for: $accel)"
+
+    # Only a Cuda build has system-level prerequisites. DirectML ships its own provider DLL in the
+    # package and needs nothing but a current GPU driver; OpenVINO needs an Intel driver, which this
+    # can't meaningfully probe for by file name; Cpu needs nothing at all.
+    $required = @()
+    if ($accel -eq 'Cuda') {
+        $required = @(
+            @{ Dll = 'cudart64_12.dll';    Provides = 'CUDA Toolkit 12.x' }
+            @{ Dll = 'cublas64_12.dll';    Provides = 'CUDA Toolkit 12.x' }
+            @{ Dll = 'cublasLt64_12.dll';  Provides = 'CUDA Toolkit 12.x' }
+            @{ Dll = 'cufft64_11.dll';     Provides = 'CUDA Toolkit 12.x' }
+            @{ Dll = 'cudnn64_9.dll';      Provides = 'cuDNN 9.x for CUDA 12' }
+        )
+    }
+
+    $searchDirs = Get-NativeDllSearchDirectories $InstallDirectory
+    $missing = @($required | Where-Object { -not (Test-NativeDllAvailable $_.Dll $searchDirs) })
+
+    # Only pay for the source scan (globbing several Program Files/Python trees) when something is
+    # actually missing — the common re-run case is a node that's already fully set up.
+    if ($missing.Count -gt 0) {
+        $sourceDirs = Get-NativeDllSourceDirectories
+        $stillMissing = [System.Collections.Generic.List[hashtable]]::new()
+        foreach ($item in $missing) {
+            if (-not (Copy-NativeDllFromSource $item.Dll $InstallDirectory $sourceDirs)) {
+                $stillMissing.Add($item)
+            }
+        }
+        # Re-evaluated against the install directory rather than assumed from the copy results: a
+        # cudnn*.dll copy pulls in siblings that may themselves have been on the missing list, so
+        # asking the filesystem again is both simpler and more honest than tracking that by hand.
+        $searchDirs = Get-NativeDllSearchDirectories $InstallDirectory
+        $missing = @($stillMissing | Where-Object { -not (Test-NativeDllAvailable $_.Dll $searchDirs) })
+    }
+
+    # A model is required regardless of accelerator — a node with the runtime fully working but no
+    # .onnx to load fails at exactly the same point, in exactly the same way.
+    $modelsDir = Join-Path $InstallDirectory 'models'
+    $models = @()
+    if (Test-Path $modelsDir) { $models = @(Get-ChildItem $modelsDir -Filter '*.onnx' -File -ErrorAction SilentlyContinue) }
+
+    if ($missing.Count -eq 0) {
+        $libraryNote = if ($required.Count -eq 0) { 'no extra native libraries needed' }
+                       else { "all $($required.Count) native libraries present" }
+        Write-Ok "$libraryNote, $($models.Count) model file(s)"
+    } else {
+        Write-Host "WARNING: AI detection will not run on this node - could not find $($missing.Count) native librar$(if ($missing.Count -eq 1) { 'y' } else { 'ies' }) the CUDA execution provider needs, and they are not installed anywhere this script knows to look:" -ForegroundColor Yellow
+        foreach ($item in $missing) {
+            Write-Host "    $($item.Dll)  <- $($item.Provides)" -ForegroundColor Yellow
+        }
+        Write-Host "    Recording and every non-AI detection path are unaffected." -ForegroundColor Yellow
+        Write-Host "    Install on THIS machine (not the LarisVMS web server), then re-run this script:" -ForegroundColor Yellow
+        Write-Host "      CUDA Toolkit 12.8  https://developer.nvidia.com/cuda-12-8-0-download-archive" -ForegroundColor Yellow
+        Write-Host "      cuDNN 9.x          https://developer.nvidia.com/cuda/cuda-x-libraries/cudnn" -ForegroundColor Yellow
+        Write-Host "      cuDNN via pip:     pip install --extra-index-url https://pypi.nvidia.com nvidia-cudnn-cu12" -ForegroundColor Yellow
+    }
+
+    if ($models.Count -eq 0) {
+        Write-Host "WARNING: No .onnx model found in $modelsDir - AI detection has nothing to run." -ForegroundColor Yellow
+        Write-Host "    Export one with tools\export-models\ and rebuild the package with build-node.ps1." -ForegroundColor Yellow
     }
 }
 
@@ -306,6 +484,14 @@ if ($hasVision) {
     }
 }
 Write-Ok "Files installed"
+
+# Here rather than after the service starts: this copies DLLs into $InstallDir, and the service (plus
+# the LarisVMS.Vision.Service.exe child it launches) holds those exact files open once running —
+# exactly the "being used by another process" copy failure the stop-first sequencing above exists to
+# avoid. A -SkipVision/recording-only package has no AI detection to have dependencies for.
+if ($hasVision) {
+    Install-VisionNativeDependencies $InstallDir
+}
 
 # ── register / update service ────────────────────────────────────────────────
 # Registration/heartbeat arguments are baked into the service's own command line rather than a

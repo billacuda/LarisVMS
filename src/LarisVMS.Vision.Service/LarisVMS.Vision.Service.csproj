@@ -28,4 +28,12 @@
     <ProjectReference Include="..\LarisVMS.Core\LarisVMS.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- CameraPipelineManager.ResolveModelPath is internal — an implementation detail of how this
+         process finds its model — but is pure, branchy filesystem logic that shipped broken once
+         (see its own doc comment), so its tests reach it directly rather than through a running
+         pipeline. Same arrangement LarisVMS.Vision already uses for the ByteTrack internals. -->
+    <InternalsVisibleTo Include="LarisVMS.Tests" />
+  </ItemGroup>
+
 </Project>

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using LarisVMS.Core;
@@ -53,7 +54,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     private readonly ConcurrentDictionary<Guid, byte> _warnedVisionNoAccelerator = new();
     private readonly ConcurrentDictionary<Guid, byte> _warnedVisionMissingSubStream = new();
     private readonly VisionServiceSupervisor _visionSupervisor =
-        new(AppContext.BaseDirectory, loggerFactory.CreateLogger<VisionServiceSupervisor>());
+        new(AppContext.BaseDirectory, ffmpegPath, loggerFactory.CreateLogger<VisionServiceSupervisor>());
     private readonly HttpClient _visionHttp = new() { BaseAddress = new Uri($"http://127.0.0.1:{VisionServiceSupervisor.Port}/") };
 
     /// <summary>Same client this worker's own reconcile loop uses to start/stop watching a camera —
@@ -328,6 +329,19 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         catch (OperationCanceledException) { }
         finally
         {
+            // FIRST, before any of the winding-down below. This kills a child process that holds
+            // open file handles (its own exe, onnxruntime and the CUDA/cuDNN natives beside it) and
+            // a GPU context, and everything after it is best-effort network I/O that is allowed to
+            // be slow: the flushes below run with CancellationToken.None and carry the API client's
+            // own per-call timeout, so a server that's unreachable at shutdown can push this block
+            // past the host's ShutdownTimeout. When that fires, whatever is left in this finally
+            // never runs — and this used to be the very last line, so the one step that must not be
+            // skipped was the first to be lost. Confirmed on a real node: `Stop-Service` returned
+            // with LarisVMS.Vision.Service.exe still running, which then failed a same-path DLL copy
+            // with "being used by another process". The job object in VisionServiceSupervisor is the
+            // backstop for the paths no finally block can cover at all (crash, taskkill).
+            _visionSupervisor.Stop();
+
             foreach (var recorder in _active.Values) recorder.Cts.Cancel();
             foreach (var motion in _activeMotion.Values) motion.Cts.Cancel();
             foreach (var events in _activeEvents.Values) events.Cts.Cancel();
@@ -1163,8 +1177,15 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             var response = await _visionHttp.PostAsJsonAsync($"/cameras/{request.CameraId}/start", request);
             if (!response.IsSuccessStatusCode)
             {
-                _logger.LogWarning("Failed to start AI detection for camera {CameraId}: Vision Service returned {Status}.",
-                    request.CameraId, response.StatusCode);
+                // The status code alone says nothing actionable — Vision Service puts the actual
+                // reason (a missing CUDA runtime DLL, an absent model file, ...) in the response
+                // body precisely so it lands here rather than only in that process's own logging.
+                // Truncated because this repeats every reconcile tick for as long as the underlying
+                // problem lasts, and best-effort because a body we can't read must never turn a
+                // logged warning into a thrown exception.
+                var detail = await ReadVisionErrorDetailAsync(response);
+                _logger.LogWarning("Failed to start AI detection for camera {CameraId}: Vision Service returned {Status}{Detail}",
+                    request.CameraId, response.StatusCode, detail is null ? "." : $" — {detail}");
                 _activeVision.TryRemove(request.CameraId, out _); // retry on the next reconcile tick
             }
         }
@@ -1172,6 +1193,43 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         {
             _logger.LogWarning(ex, "Failed to reach LarisVMS.Vision.Service to start watching camera {CameraId} — will retry next reconcile.", request.CameraId);
             _activeVision.TryRemove(request.CameraId, out _);
+        }
+    }
+
+    /// <summary>The human-readable reason out of a failed Vision Service /start response, or null if
+    /// there isn't one to be had. Vision Service replies with ProblemDetails (Results.Problem), whose
+    /// "detail" member carries the flattened exception message chain; anything else — a plain-text
+    /// body, an unparseable one, an empty one — falls back to the raw text so a response shape this
+    /// doesn't anticipate still surfaces *something* rather than being silently dropped. Never
+    /// throws: this only exists to enrich a log line that's already being written.</summary>
+    private static async Task<string?> ReadVisionErrorDetailAsync(HttpResponseMessage response)
+    {
+        const int maxLength = 500;
+        try
+        {
+            var body = await response.Content.ReadAsStringAsync();
+            if (string.IsNullOrWhiteSpace(body)) return null;
+
+            string text = body;
+            try
+            {
+                using var document = JsonDocument.Parse(body);
+                if (document.RootElement.ValueKind == JsonValueKind.Object
+                    && document.RootElement.TryGetProperty("detail", out var detail)
+                    && detail.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(detail.GetString()))
+                {
+                    text = detail.GetString()!;
+                }
+            }
+            catch (JsonException) { /* not JSON — fall through to the raw body below */ }
+
+            text = text.Trim();
+            return text.Length > maxLength ? text[..maxLength] + "…" : text;
+        }
+        catch
+        {
+            return null;
         }
     }
 

@@ -24,9 +24,10 @@ py -m venv .venv
 .venv\Scripts\python export.py --models yolo9-m --imgsz 640
 ```
 
-Output lands in `models/` at the repo root (gitignored — see `.gitignore`), alongside a
-`.LICENSE.txt` note per model recording its actual license/upstream, since the ONNX metadata itself
+Output lands under `models/` at the repo root (gitignored — see `.gitignore`) — specifically
+`models/weights/`, which is where libreyolo writes, next to the `.pt` it converted from. Each export
+gets a `.LICENSE.txt` note recording its actual license/upstream, since the ONNX metadata itself
 carries an `ultralytics`-prefixed architecture tag purely as a YoloDotNet compatibility shim (not a
 claim about origin or license — `onnx_compat.py`'s `rewrite_metadata` explains why that string is
-required). `build-node.ps1` bundles whatever's in `models/` alongside `LarisVMS.Vision.Service.exe`
-when packaging a node for deployment.
+required). `build-node.ps1` searches `models/` recursively for `.onnx` files and flattens whatever it
+finds into the node package alongside `LarisVMS.Vision.Service.exe`.

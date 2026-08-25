@@ -63,6 +63,19 @@
                 </div>
             </details>
         }
+        @* AI detection bounding-box overlay (live-view.js's startDetectionOverlay) — a pure
+           client-side toggle, both off by default: nothing is drawn and no /detections WebSocket
+           is opened for any tile until at least one of these is checked. *@
+        <div class="d-flex align-items-center gap-2 small" id="detectionToggleGroup" title="AI detection boxes">
+            <div class="form-check form-check-inline mb-0">
+                <input class="form-check-input" type="checkbox" id="detectionShowMoving">
+                <label class="form-check-label" for="detectionShowMoving">Moving</label>
+            </div>
+            <div class="form-check form-check-inline mb-0">
+                <input class="form-check-input" type="checkbox" id="detectionShowIdle">
+                <label class="form-check-label" for="detectionShowIdle">Idle</label>
+            </div>
+        </div>
         <button type="button" class="btn btn-sm btn-outline-secondary" id="kioskBtn" title="Toggle fullscreen kiosk mode">⛶ Fullscreen</button>
         <a class="btn btn-sm btn-outline-secondary" asp-page="Index">Back to views</a>
     </div>
@@ -88,6 +101,8 @@
             cameraPickerDetailsId: 'cameraPickerDetails',
             cameraPickerFilterId: 'cameraPickerFilter',
             cameraPickerListId: 'cameraPickerList',
+            detectionShowMovingId: 'detectionShowMoving',
+            detectionShowIdleId: 'detectionShowIdle',
             gridElId: 'viewPlayGrid',
             badgeCorner: @Html.Raw(JsonSerializer.Serialize(Model.EventBadgeCornerValue)),
             adaptiveStreamingEnabled: @Html.Raw(Model.AdaptiveStreamingEnabled ? "true" : "false"),

@@ -185,15 +185,96 @@ mobile-UI polish pass (scoped from a real phone walkthrough, not guessed from th
 started — see [CHANGELOG.md](CHANGELOG.md) for everything shipped and the architecture plan for the
 full milestone roadmap.
 
-Recorder nodes require **FFmpeg** on the machine they run on (LGPL "shared" build recommended — see
-the plan's licensing note). Point a node at it with `--ffmpeg-path` or `LARISVMS_FFMPEG_PATH`, or put
-`ffmpeg` on `PATH`. Bundling FFmpeg with node deploys is `build-node.ps1`'s job, not yet implemented.
-
 > **`web.config` currently runs `ASPNETCORE_ENVIRONMENT=Development`**, on purpose, for this
 > milestone-by-milestone development phase — it surfaces full exceptions in the browser instead of
 > the generic error page. **Switch it to `Production`** before any milestone that records real
 > footage or is reachable outside a trusted dev network; Development's error pages can leak
 > connection strings and internal file paths.
+
+## Recorder node dependencies
+
+These are installed on each **recorder node** (the machine running `LarisVMS.Node`), not on the web
+server. `install-node.ps1` does not install any of them — it only reports what's missing.
+
+### FFmpeg (required)
+
+Every node needs **FFmpeg** (LGPL "shared" build recommended — see the plan's licensing note). Point
+a node at it with `--ffmpeg-path` or `LARISVMS_FFMPEG_PATH`, or put `ffmpeg` on `PATH`. Bundling
+FFmpeg with node deploys is `build-node.ps1`'s job, not yet implemented.
+
+### AI object detection (optional)
+
+Only needed on nodes that will actually run AI object detection. A node without any of this still
+records normally and keeps every other detection path (server-side motion zones, ONVIF camera
+events, vendor integrations) working exactly as before — AI detection is additive.
+
+Two separate things have to line up: the node package must be **built** for a given accelerator, and
+that accelerator's **runtime libraries** must be installed on the node itself. YoloDotNet links
+exactly one execution provider per build, so the choice is made at publish time and cannot be
+switched at runtime:
+
+```powershell
+# Accelerator is chosen when the node package is built — BOTH default to Cpu if omitted
+.\deploy.ps1    -IISSiteName "LarisVMS" -NodeAccel Cuda
+.\build-node.ps1 -Accel Cuda      # Cuda | DirectML | OpenVino | Cpu
+```
+
+| Build | Hardware | Must be installed on the node |
+|---|---|---|
+| `Cuda` | Nvidia | CUDA Toolkit 12.x + cuDNN 9.x (see below) |
+| `DirectML` | Any DX12 GPU (AMD/Intel/Nvidia) | Nothing beyond a current GPU driver |
+| `OpenVino` | Intel iGPU/CPU | Intel GPU driver |
+| `Cpu` | None | Nothing |
+
+**Nvidia (`-Accel Cuda`)** needs the CUDA **Toolkit** installed on the node, not just a driver — the
+NuGet packages do not ship the CUDA runtime DLLs, and a node with only a driver fails at detection
+startup with `Error loading onnxruntime_providers_cuda.dll which depends on "cublasLt64_12.dll" which
+is missing`:
+
+- **[CUDA Toolkit 12.8](https://developer.nvidia.com/cuda-12-8-0-download-archive)** — provides
+  `cublasLt64_12.dll`, `cublas64_12.dll`, `cudart64_12.dll`, `cufft64_11.dll`. The installer adds its
+  `bin` directory to `PATH`; the runtime libraries alone are enough (Nsight and the Visual Studio
+  integration can be skipped).
+- **[cuDNN 9.x for CUDA 12](https://developer.nvidia.com/cuda/cuda-x-libraries/cudnn)** — needed for
+  `cudnn64_9.dll`, and not included in the CUDA Toolkit installer above. The simplest route on a
+  recorder node is pip (this needs [Python](https://www.python.org/downloads/) on the node itself):
+
+  ```powershell
+  pip install --extra-index-url https://pypi.nvidia.com nvidia-cudnn-cu12
+  ```
+
+  That drops the DLLs under the Python environment's site-packages rather than anywhere the OS
+  loader searches, so point `Vision:CudnnPath` at that folder — typically
+  `…\site-packages\nvidia\cudnn\bin`. (`python -c "import nvidia.cudnn, os;
+  print(os.path.join(os.path.dirname(nvidia.cudnn.__file__), 'bin'))"` prints the exact path.)
+  Downloading the archive from NVIDIA instead works the same way: unpack it anywhere, then either
+  point `Vision:CudnnPath` at its `bin` or put that directory on `PATH`.
+- **TensorRT 10.13.3** — optional, performance only. Off unless `Vision:EnableTensorRt` is set, which
+  also requires `Vision:TensorRtEngineCachePath`.
+
+A detection model is also required: `build-node.ps1` bundles whatever `.onnx` files are in `models/`
+at the repo root into the node package, and a node with no model can't detect anything. No model is
+committed to this repo — export one with [`tools/export-models/`](tools/export-models/), which needs
+**[Python](https://www.python.org/downloads/)** on whichever machine does the export. That's normally
+the build machine rather than a recorder node, since the exported `.onnx` travels inside the package
+(a node only needs Python of its own if cuDNN is installed there via pip, above):
+
+```powershell
+cd tools\export-models
+py -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python export.py
+```
+
+Only permissively-licensed weights are exported — Ultralytics YOLOv8/11/26 are deliberately excluded,
+since their weights are AGPL-3.0 and this project is MIT.
+
+> **A node's *first* AI detection install needs a manual `install-node.ps1` run.** Recorder
+> auto-update only replaces binaries that are already present, so it will keep an existing
+> `LarisVMS.Vision.Service.exe` current but never place one that was never there.
+
+Whether the accelerator was actually resolved is visible per node at `Admin → Nodes`, and a startup
+failure names its own cause in the node's log at `C:\ProgramData\LarisVMS\logs\node-*.log`.
 
 ## Quick start
 

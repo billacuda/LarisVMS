@@ -138,7 +138,13 @@ if (-not $SkipVision) {
     Write-Step "Bundling exported model(s)"
     $modelsOut = Join-Path $winOut 'models'
     New-Item -ItemType Directory -Path $modelsOut -Force | Out-Null
-    $onnxFiles = if (Test-Path $ModelsPath) { Get-ChildItem $ModelsPath -Filter '*.onnx' -File } else { @() }
+    # -Recurse because the exporter does not write straight into models\: tools/export-models drives
+    # libreyolo, which puts its output under models\weights\ alongside the .pt it converted from. A
+    # non-recursive search found nothing there and reported "No .onnx model found" for a perfectly
+    # good export, which then shipped a package with an empty models\ folder — a node that installs
+    # cleanly and fails every detection start with "File doesn't exist". Flattened into the package's
+    # own models\ folder below regardless of how deep it was found.
+    $onnxFiles = @(if (Test-Path $ModelsPath) { Get-ChildItem $ModelsPath -Filter '*.onnx' -File -Recurse } else { @() })
     if ($onnxFiles.Count -eq 0) {
         Write-Host "    No .onnx model found under $ModelsPath — AI detection won't have anything to run until one is placed there (see tools/export-models/) and this is rebuilt." -ForegroundColor Yellow
     } else {

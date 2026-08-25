@@ -69,6 +69,8 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
         QuotaBytes = c.QuotaBytes,
         LensType = c.LensType,
         DewarpConfigJson = c.DewarpConfigJson,
+        AiDetectionEnabled = c.AiDetectionEnabled,
+        MotionDetectionSource = c.MotionDetectionSource,
         IsEnabled = c.IsEnabled,
         CreatedAt = c.CreatedAt,
         LastProbedAt = c.LastProbedAt,

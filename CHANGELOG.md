@@ -116,6 +116,91 @@ picks up a newer Node exe. New `DetectedObjectCategory` table, new columns on
 `MotionSpan`/`Camera`/`Node`, and new `NodeBuildVersion` Vision* columns — database migration
 required (`deploy.ps1` applies it automatically unless run with `-SkipMigrations`).
 
+### Fixed
+
+- `build-node.ps1`'s model-bundling step threw `The property 'Count' cannot be found on this object`
+  under `Set-StrictMode -Version Latest` whenever exactly one `.onnx` file matched — `Get-ChildItem`
+  unwraps a single-item result to a bare `FileInfo` instead of an array, and strict mode turns the
+  resulting missing-`.Count` into a terminating error rather than `$null`. Wrapped the result in `@()`
+  to keep it an array regardless of match count.
+- `install-node.ps1` hit the same `Set-StrictMode`/`.Count` bug as `build-node.ps1` above, in
+  `Stop-OrphanedFfmpeg` and `Stop-OrphanedVisionService` — `Get-Process` unwraps to a bare `Process`
+  instead of an array when exactly one orphaned process matches, and `.Count` doesn't exist on it
+  under strict mode. Same fix, wrapped in `@()`.
+- Live-view Moving/Idle AI-detection bounding-box overlay (`live-view.js`'s `startDetectionOverlay`,
+  shipped earlier in this same release) was never actually wired up — no checkbox existed anywhere on
+  `Views/Play`, and nothing ever called it. Added a Moving/Idle checkbox pair to the Play toolbar and
+  wired `view-play.js` to start one overlay per tile and apply both toggles to every tile at once.
+  Both toggles persist per-user via the existing server-backed preferences store (not localStorage),
+  the same as playback-player.js's own toggles — they follow the viewer across devices/logins rather
+  than resetting on every page load.
+- **`LarisVMS.Vision.Service` couldn't find ffmpeg.** `VisionServiceSupervisor` never told the child
+  process where it lives — `VisionServiceOptions.FfmpegPath` was left unset, so
+  `FfmpegPathResolver.Resolve(null)` fell back to a bare `"ffmpeg"` relying on `PATH`, which this
+  service (normally LocalSystem) doesn't have. `LarisVMS.Node` itself always knows the real path
+  (`--ffmpeg-path`, `LARISVMS_FFMPEG_PATH`, or its own PATH probe, resolved once at its own startup)
+  and now passes it straight through via `Vision__FfmpegPath`, so the two processes can't disagree
+  about which ffmpeg they're each running.
+- **`build-node.ps1` never bundled an exported model.** It searched `models/` non-recursively, but
+  `tools/export-models` drives libreyolo, which writes to `models/weights/` next to the `.pt` it
+  converted from — so a perfectly good export was reported as "No .onnx model found" and the package
+  shipped with an empty `models/` folder. Now searched recursively and flattened into the package.
+  `tools/export-models/README.md` corrected too: it claimed output lands in `models/` directly.
+- **AI detection could never find its model on any node.** `VisionServiceOptions.ModelPath` defaulted
+  to the literal filename `models/model.onnx`, but nothing in this project produces that name —
+  `tools/export-models` emits the upstream weight name (`yolo9-t.onnx`, `yolo9-s.onnx`) and
+  `build-node.ps1` bundles whatever `.onnx` files exist verbatim. So a correctly built, correctly
+  installed package with a correctly configured GPU still failed every start with ONNX Runtime's
+  `Load model from models/model.onnx failed. File doesn't exist`. Vision Service now discovers the
+  bundled model: an explicitly configured path that exists still wins, otherwise it uses what was
+  actually bundled in that directory. More than one bundled model is the normal case rather than an
+  error (export.py's own default set is two), so it picks deterministically by name and logs which,
+  instead of refusing to start; none at all now fails with a message naming the directory and
+  pointing at the exporter.
+- **Stopping the node service left `LarisVMS.Vision.Service.exe` running.** `NodeWorker`'s shutdown
+  stopped the Vision Service child as the *last* step of its `finally` block — behind awaiting every
+  recording/motion/event/integration session and four `CancellationToken.None` server flushes, each
+  carrying the API client's own timeout. A slow or unreachable server at shutdown pushed that past
+  the host's `ShutdownTimeout`, and when that fired the remaining cleanup never ran, so the one step
+  that must not be skipped was the first one lost. The orphan then held its own exe and the
+  CUDA/cuDNN natives beside it open, failing the next in-place upgrade with "being used by another
+  process". Stopping the child is now the first thing the `finally` does, and the child is
+  additionally placed in a Windows job object with `KILL_ON_JOB_CLOSE` so the OS terminates it
+  whenever the node process goes away — covering the paths no shutdown code can reach at all
+  (`ShutdownTimeout` expiry, a crash, `taskkill`, the SCM giving up on a hung stop).
+- `install-node.ps1` now checks the AI-detection native dependencies at install time and, where it
+  can, fixes them: it reads which accelerator the package was actually built for from the provider
+  DLL beside the exe, verifies each required CUDA/cuDNN library resolves the way the OS loader would
+  (install directory, system directories, and the machine `PATH` from the registry rather than a
+  possibly-stale `$env:PATH`), and copies anything missing in from where these libraries actually
+  land — a pip `nvidia-*` site-packages `bin`, NVIDIA's own cuDNN layout, or the CUDA Toolkit's
+  `bin`. cuDNN copies bring the whole `cudnn*.dll` set, since `cudnn64_9.dll` is a dispatcher that
+  loads its siblings at runtime and copying only the DLL named in a loader error just moves the
+  failure to the next one. Copying beside the exe rather than editing `PATH` is deliberate: a
+  Windows Service inherits its environment from `services.exe` at boot and would not see a new
+  `PATH` entry until the machine is rebooted. Anything genuinely absent is reported with where to
+  get it, and a missing `.onnx` model is called out too. Never fatal — a node without GPU libraries
+  still records normally.
+- A `LarisVMS.Vision.Service` startup failure was undiagnosable from the node's own log, which said
+  only `Vision Service returned InternalServerError` once per reconcile tick while the actual reason
+  existed nowhere but the Windows Application event log. Vision Service's `/start` now catches the
+  failure and returns the flattened exception message chain as ProblemDetails, and `NodeWorker` reads
+  that body into its warning — so a machine-level setup problem (a missing CUDA runtime DLL, an
+  absent `.onnx` model, a GPU the driver won't hand out) names itself in `node-*.log` directly.
+  Found via a recorder that was missing `cublasLt64_12.dll`: the CUDA Toolkit runtime has to be
+  installed on any node running a `-Accel Cuda` build, since neither the NuGet packages nor
+  `install-node.ps1` provide it. README gains a "Recorder node dependencies" section covering this —
+  what each `-Accel` variant needs installed on the node, and that both `deploy.ps1 -NodeAccel` and
+  `build-node.ps1 -Accel` silently default to `Cpu`.
+- `Cameras/Edit`'s "Watch this camera for AI object detection" checkbox and "Motion detection source"
+  dropdown always reset to unchecked/auto on the next page load, even though the save itself worked —
+  `CameraService`'s hand-rolled `ProjectWithoutCredentials` projection (used by every `GetAsync`/
+  `ListAsync` read) explicitly lists which `Camera` columns to carry over, and the two columns this
+  release added were never added to that list, so every read silently came back with the type's
+  default (`false`/`null`) regardless of what was actually stored. The Node-side config path reads
+  `Camera` directly and was unaffected — recorders had the correct value the whole time, only the web
+  UI's own display of it was wrong.
+
 ## [0.156.1] - 2026-08-23
 
 ### Fixed

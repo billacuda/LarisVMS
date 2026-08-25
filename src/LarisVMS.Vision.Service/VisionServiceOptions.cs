@@ -16,9 +16,14 @@ public sealed class VisionServiceOptions
     /// talk to each other on the same machine.</summary>
     public int Port { get; set; } = 5990;
 
-    /// <summary>Path to the .onnx model file, absolute or relative to the content root. One model
-    /// serves every camera this instance watches — see CameraDetectionPipeline's own doc comment
-    /// for why each camera still gets its own loaded Yolo instance despite sharing one file.</summary>
+    /// <summary>Path to the .onnx model file, absolute or relative to the application directory. One
+    /// model serves every camera this instance watches — see CameraDetectionPipeline's own doc
+    /// comment for why each camera still gets its own loaded Yolo instance despite sharing one file.
+    ///
+    /// Left unset, the default below does NOT have to exist: CameraPipelineManager.ResolveModelPath
+    /// falls back to whatever .onnx was actually bundled in that directory, which is the normal case
+    /// (build-node.ps1 bundles the exporter's own file names, never "model.onnx"). Set this only to
+    /// pin a specific model when more than one is bundled.</summary>
     public string ModelPath { get; set; } = "models/model.onnx";
 
     /// <summary>Resolved ffmpeg executable for VisionSession's own capture process. Defaults to

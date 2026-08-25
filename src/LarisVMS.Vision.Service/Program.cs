@@ -19,12 +19,28 @@ var app = builder.Build();
 
 app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
 
-app.MapPost("/cameras/{cameraId:guid}/start", async (Guid cameraId, VisionStartCameraRequest request, CameraPipelineManager manager) =>
+app.MapPost("/cameras/{cameraId:guid}/start", async (Guid cameraId, VisionStartCameraRequest request,
+    CameraPipelineManager manager, ILogger<Program> logger) =>
 {
     if (cameraId != request.CameraId) return Results.BadRequest(new { error = "cameraId route value must match the request body's CameraId." });
 
-    await manager.StartOrReplaceAsync(request);
-    return Results.Ok();
+    // Caught and echoed back rather than left to bubble into a bare 500: starting a pipeline builds
+    // the YoloEngine, which is where a machine-level setup problem actually surfaces (a missing CUDA
+    // runtime DLL, an unreadable/absent .onnx model, a GPU the driver won't hand out). Without this,
+    // Node can only log "returned InternalServerError" and the real reason is buried in this
+    // process's own logging — confirmed the hard way by a node missing cublasLt64_12.dll, where the
+    // one line that explained it only existed in the Windows Application event log.
+    try
+    {
+        await manager.StartOrReplaceAsync(request);
+        return Results.Ok();
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to start the detection pipeline for camera {CameraId}.", cameraId);
+        return Results.Problem(detail: Describe(ex), statusCode: StatusCodes.Status500InternalServerError,
+            title: "Failed to start the detection pipeline.");
+    }
 });
 
 app.MapPost("/cameras/{cameraId:guid}/stop", async (Guid cameraId, CameraPipelineManager manager) =>
@@ -43,3 +59,17 @@ app.MapGet("/cameras/{cameraId:guid}/detections", (Guid cameraId, CameraPipeline
 });
 
 app.Run();
+
+/// <summary>Flattens an exception chain to its messages only — no stack trace. What makes these
+/// failures diagnosable is almost always the innermost message (ONNX Runtime's own "which depends on
+/// X.dll which is missing" text, for instance), and this crosses a process boundary into Node's log,
+/// where a full stack trace per reconcile tick would be noise rather than signal.</summary>
+static string Describe(Exception ex)
+{
+    var messages = new List<string>();
+    for (Exception? current = ex; current is not null; current = current.InnerException)
+    {
+        if (!messages.Contains(current.Message)) messages.Add(current.Message);
+    }
+    return string.Join(" -> ", messages);
+}

@@ -39,6 +39,8 @@ data-protection-keys/
 # same convention aitest already used for both.
 models/
 tools/*/.venv/
+__pycache__/
+*.pyc
 
 # NuGet
 *.nupkg

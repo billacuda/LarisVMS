@@ -7,6 +7,11 @@ window.larisvmsViewPlay = (function () {
     'use strict';
 
     var CELL_HEIGHT = 60; // matches the editor's GridStack cellHeight, for a consistent look
+    // Server-backed (window.larisvmsPreferences), same per-user/cross-device persistence as
+    // playback-player.js's own HOUR24_KEY/EVENT_TAGS_KEY toggles — not localStorage, so it follows
+    // the viewer to another browser or device rather than resetting there.
+    var DETECTION_SHOW_MOVING_KEY = 'liveDetectionShowMoving';
+    var DETECTION_SHOW_IDLE_KEY = 'liveDetectionShowIdle';
     var phoneQuery = window.matchMedia('(max-width: 767.98px)');
     // A phone held sideways is wider than the phone breakpoint but only ~400px tall, so it used to
     // fall through to the desktop grid — 12 columns squeezed into ~840px (≈70px each) while rows
@@ -38,6 +43,12 @@ window.larisvmsViewPlay = (function () {
     var mobileTwoColumn = false;
     var cameraById = {};
     var stopFns = {};
+    // AI detection box overlay (live-view.js's startDetectionOverlay) — one instance per cell,
+    // keyed by cell.id same as stopFns/cellControllers. Both start false ("off by default" per the
+    // 0.157.0 plan); wireDetectionToggles flips these and re-applies to every active overlay.
+    var detectionOverlays = {};
+    var showMovingDetections = false;
+    var showIdleDetections = false;
 
     // Playback-toggle is single-cell-at-a-time, same as the flat Live grid this was ported from —
     // switching a second cell into playback mode reverts whichever cell was previously toggled back
@@ -381,9 +392,20 @@ window.larisvmsViewPlay = (function () {
 
         cellControllers[cell.id] = { exitPlaybackModeIfActive: exitPlaybackModeIfActive };
 
+        // Independent of live/playback mode — stays mounted over whichever <video> is showing so a
+        // tile toggled into playback doesn't silently lose its boxes. Starts at whatever the
+        // toolbar checkboxes are currently set to, not always-off, so a cell added later (a mode
+        // switch re-render, or the derived phone stack) matches every already-visible tile.
+        var detectionOverlay = window.larisvmsLiveView.startDetectionOverlay(cameraId, video);
+        detectionOverlay.setShowMoving(showMovingDetections);
+        detectionOverlay.setShowIdle(showIdleDetections);
+        detectionOverlays[cell.id] = detectionOverlay;
+
         stopFns[cell.id] = function () {
             if (liveStop) liveStop();
             if (pbPlayer) pbPlayer.teardown();
+            detectionOverlay.stop();
+            delete detectionOverlays[cell.id];
         };
         startLive();
     }
@@ -660,6 +682,46 @@ window.larisvmsViewPlay = (function () {
         });
     }
 
+    // Toolbar Moving/Idle checkboxes — one pair for the whole grid, not per tile: applies to every
+    // currently-rendered cell's overlay at once via detectionOverlays, and every future cell picks
+    // up the current state too (see startCellVideo).
+    function wireDetectionToggles(o) {
+        var movingCb = o.detectionShowMovingId && document.getElementById(o.detectionShowMovingId);
+        var idleCb = o.detectionShowIdleId && document.getElementById(o.detectionShowIdleId);
+        if (!movingCb || !idleCb) return;
+
+        function apply() {
+            Object.keys(detectionOverlays).forEach(function (id) {
+                detectionOverlays[id].setShowMoving(showMovingDetections);
+                detectionOverlays[id].setShowIdle(showIdleDetections);
+            });
+        }
+        movingCb.addEventListener('change', function () {
+            showMovingDetections = movingCb.checked;
+            window.larisvmsPreferences.set(DETECTION_SHOW_MOVING_KEY, showMovingDetections);
+            apply();
+        });
+        idleCb.addEventListener('change', function () {
+            showIdleDetections = idleCb.checked;
+            window.larisvmsPreferences.set(DETECTION_SHOW_IDLE_KEY, showIdleDetections);
+            apply();
+        });
+
+        // Preferences load asynchronously (one GET on page load, shared across every script on the
+        // page — see user-preferences.js's own doc comment); render() has already run by the time
+        // this resolves, and every tile so far started with both overlays off (the synchronous
+        // default). Once the saved value is known, flip the checkboxes and re-apply to whatever
+        // tiles already exist — any tile created afterward already reads the now-updated globals
+        // directly in startCellVideo.
+        window.larisvmsPreferences.whenReady().then(function () {
+            showMovingDetections = window.larisvmsPreferences.get(DETECTION_SHOW_MOVING_KEY, 'false') === 'true';
+            showIdleDetections = window.larisvmsPreferences.get(DETECTION_SHOW_IDLE_KEY, 'false') === 'true';
+            movingCb.checked = showMovingDetections;
+            idleCb.checked = showIdleDetections;
+            apply();
+        });
+    }
+
     function wireKiosk(kioskBtnId, navElId, toolbarElId) {
         var btn = document.getElementById(kioskBtnId);
         if (!btn) return;
@@ -780,6 +842,7 @@ window.larisvmsViewPlay = (function () {
 
         wireKiosk(o.kioskBtnId, o.navElId, o.toolbarElId);
         wireCameraPicker(o);
+        wireDetectionToggles(o);
         if (o.isTour) wireTour(o.tourViewIds, o.tourIndex, o.tourIntervalSeconds);
     }
 
