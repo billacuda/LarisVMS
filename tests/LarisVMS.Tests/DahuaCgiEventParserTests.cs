@@ -105,12 +105,12 @@ public class DahuaCgiEventParserTests
     }
 
     [Theory]
-    [InlineData("SmartMotionHuman", DetectionKind.Person)]
-    [InlineData("HumanDetect", DetectionKind.Person)]
+    [InlineData("SmartMotionHuman", DetectionKind.Human)]
+    [InlineData("HumanDetect", DetectionKind.Human)]
     [InlineData("SmartMotionVehicle", DetectionKind.Vehicle)]
     [InlineData("FaceDetection", DetectionKind.Face)]
     [InlineData("CrossLineDetection", DetectionKind.Other)]
-    [InlineData("smartmotionhuman", DetectionKind.Person)] // case-insensitive
+    [InlineData("smartmotionhuman", DetectionKind.Human)] // case-insensitive
     public void MapsVendorCodesToWhatWasSeen(string code, DetectionKind expected)
     {
         Assert.Equal(expected, DahuaCgiEventParser.Classify(code));

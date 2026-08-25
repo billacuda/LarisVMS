@@ -64,7 +64,20 @@ public class IndexModel(ITimelineService timelineService, ICameraService cameraS
     /// that appears in both lists is rendered.</summary>
     public List<DetectedObjectCategoryDto> DetectedObjectCategories { get; set; } = [];
 
+    /// <summary>Every distinct (category, specific label) pair ever observed, for nesting under
+    /// each category node in the filter tree — see DetectedObjectLabelDto's own doc comment for why
+    /// this is a live query rather than a fixed list.</summary>
+    public List<DetectedObjectLabelDto> DetectedObjectLabels { get; set; } = [];
+
     public bool IsKindChecked(string token) => Kinds is null || Kinds.Contains(token, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Null/empty means nothing excluded (every leaf checked) — unlike Kinds, this needs no
+    /// "never touched" vs "touched, everything unchecked" distinction, since an empty exclusion set
+    /// already means "show everything" either way.</summary>
+    public string[]? ExcludedLabels { get; set; }
+
+    public bool IsLabelChecked(string category, string label) =>
+        ExcludedLabels is null || !ExcludedLabels.Contains($"{category}:{label}", StringComparer.OrdinalIgnoreCase);
 
     /// <summary>"12s" / "3m 05s" / "1h 02m" — no existing duration formatter elsewhere in the app to
     /// reuse; kept to two units at most, since a motion event's own span is never long enough for
@@ -85,7 +98,7 @@ public class IndexModel(ITimelineService timelineService, ICameraService cameraS
     // fix is simply not colliding with that reserved name, here and in Logs/AuditLogs.cshtml.cs
     // (same latent bug, same fix, ported once this was found).
     public async Task OnGetAsync(Guid? cameraId, string? mode, Guid? groupId, Guid? viewId,
-        string? from, string? to, int pageNumber, string[]? kinds, CancellationToken ct)
+        string? from, string? to, int pageNumber, string[]? kinds, string[]? excludedLabels, CancellationToken ct)
     {
         CameraId = cameraId;
         GroupId = groupId;
@@ -93,9 +106,11 @@ public class IndexModel(ITimelineService timelineService, ICameraService cameraS
         From = from;
         To = to;
         Kinds = kinds;
+        ExcludedLabels = excludedLabels;
         Cameras = (await cameraService.ListAsync(ct)).OrderBy(c => c.Name).ToList();
         Groups = await cameraGroupService.GetTreeAsync(ct);
         DetectedObjectCategories = await timelineService.GetDetectedObjectCategoriesAsync(ct);
+        DetectedObjectLabels = await timelineService.GetDetectedObjectLabelsAsync(ct);
         var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
         Views = await viewService.ListVisibleToAsync(currentUserId, ct);
 
@@ -118,7 +133,7 @@ public class IndexModel(ITimelineService timelineService, ICameraService cameraS
         var fromUtc = LocalDateFilter.StartOfDayUtc(from);
         var toUtc = LocalDateFilter.EndOfDayUtc(to);
 
-        Results = await timelineService.GetSnapshotsAsync(cameraIds, fromUtc, toUtc, pageNumber < 1 ? 1 : pageNumber, PageSize, ct, kinds);
+        Results = await timelineService.GetSnapshotsAsync(cameraIds, fromUtc, toUtc, pageNumber < 1 ? 1 : pageNumber, PageSize, ct, kinds, excludedLabels);
     }
 
     private async Task<List<Guid>> ResolveViewCameraIdsAsync(string userId, Guid viewId, CancellationToken ct)

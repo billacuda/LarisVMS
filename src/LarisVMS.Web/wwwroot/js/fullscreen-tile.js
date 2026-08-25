@@ -28,13 +28,16 @@ window.larisvmsFullscreenTile = (function () {
         var minScale = opts.minScale || 1;
         var maxScale = opts.maxScale || 4;
         var scale = 1, panX = 0, panY = 0;
+        var transformCss = '';
 
         function apply() {
-            videoEl.style.transform = 'scale(' + scale + ') translate(' + panX + 'px, ' + panY + 'px)';
+            transformCss = 'scale(' + scale + ') translate(' + panX + 'px, ' + panY + 'px)';
+            videoEl.style.transform = transformCss;
         }
 
         function resetZoom() {
             scale = 1; panX = 0; panY = 0;
+            transformCss = '';
             videoEl.style.transform = '';
             videoEl.style.cursor = '';
             endDrag();
@@ -186,7 +189,13 @@ window.larisvmsFullscreenTile = (function () {
 
         return {
             isFullscreen: isFs,
-            exitFullscreen: function () { if (isFs()) document.exitFullscreen().catch(function () { /* ignore */ }); }
+            exitFullscreen: function () { if (isFs()) document.exitFullscreen().catch(function () { /* ignore */ }); },
+            // The exact CSS transform string currently applied to videoEl (empty when not zoomed/
+            // panned) — a caller drawing an overlay meant to track the video's own content (the
+            // AI-detection bounding-box canvas in live-view.js) applies this same string to its own
+            // element rather than reimplementing the scale/translate math, so the two can never
+            // drift out of sync with each other.
+            getTransformCss: function () { return transformCss; }
         };
     }
 

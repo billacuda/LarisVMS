@@ -66,6 +66,13 @@ public record SegmentFileInfo(string FilePath, Guid NodeId);
 /// enumerated the fixed way DetectionDisplay.AllKinds is.</summary>
 public record DetectedObjectCategoryDto(Guid Id, string Name, string ColorHex);
 
+/// <summary>One (category, specific label) pair actually observed at least once — what the
+/// Snapshots page's filter tree nests under each category. Deliberately queried fresh, not a fixed
+/// list: which labels exist depends entirely on which detection model produced them (today's COCO
+/// vocabulary vs. a future Objects365-trained one), so this can only ever reflect what's really in
+/// the database, never a hardcoded taxonomy.</summary>
+public record DetectedObjectLabelDto(string CategoryName, string Label);
+
 /// <summary>M18: one motion event rendered as a browsable "snapshot" (Pages/Snapshots) — there is no
 /// separate capture step or storage for the image itself; it's whatever GetExactThumbnailInfoAsync /
 /// /playback-thumbnail extracts from the actual recording at AtUtc, on demand, the same

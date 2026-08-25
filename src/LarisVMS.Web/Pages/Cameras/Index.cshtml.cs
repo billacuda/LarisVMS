@@ -15,6 +15,10 @@ public class IndexModel(ICameraService cameraService, INodeService nodeService, 
     public List<Node> Nodes { get; set; } = [];
     public Dictionary<Guid, long> StorageUsedBytes { get; set; } = [];
     public Dictionary<Guid, int> EffectiveRetentionDays { get; set; } = [];
+    /// <summary>Which stream AI detection actually watches for a camera that has it enabled — the
+    /// "can't tell which streams are being used for detection" gap this fills. Only populated for
+    /// AiDetectionEnabled cameras; a disabled one has nothing meaningful to show here.</summary>
+    public Dictionary<Guid, string> EffectiveAiDetectionStreamRole { get; set; } = [];
     public Dictionary<Guid, List<Guid>> StaleSegmentNodeIds { get; set; } = [];
 
     public async Task OnGetAsync()
@@ -32,7 +36,11 @@ public class IndexModel(ICameraService cameraService, INodeService nodeService, 
         StaleSegmentNodeIds = await cameraService.GetStaleSegmentNodeIdsAsync();
 
         foreach (var c in Cameras)
+        {
             EffectiveRetentionDays[c.Id] = await settings.GetAsync("Retention.Days", 30, cameraId: c.Id, nodeId: c.NodeId);
+            if (c.AiDetectionEnabled)
+                EffectiveAiDetectionStreamRole[c.Id] = await settings.GetAsync("AiDetection.StreamRole", "Sub", cameraId: c.Id, nodeId: c.NodeId);
+        }
     }
 
     public async Task<IActionResult> OnPostProbeAsync(Guid id)

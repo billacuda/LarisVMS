@@ -13,9 +13,9 @@ public class CameraEventDetectionClassifierTests
         => pairs.ToDictionary(p => p.Key, p => p.Value);
 
     [Theory]
-    [InlineData("tns1:RuleEngine/PeopleDetector/People", DetectionKind.Person)]
-    [InlineData("tns1:RuleEngine/MyRuleDetector/PersonDetector", DetectionKind.Person)]
-    [InlineData("tns1:RuleEngine/FieldDetector/HumanShapeDetect", DetectionKind.Person)]
+    [InlineData("tns1:RuleEngine/PeopleDetector/People", DetectionKind.Human)]
+    [InlineData("tns1:RuleEngine/MyRuleDetector/PersonDetector", DetectionKind.Human)]
+    [InlineData("tns1:RuleEngine/FieldDetector/HumanShapeDetect", DetectionKind.Human)]
     [InlineData("tns1:RuleEngine/VehicleDetector/Vehicle", DetectionKind.Vehicle)]
     [InlineData("tns1:RuleEngine/CarDetector/Car", DetectionKind.Vehicle)]
     [InlineData("tns1:RuleEngine/FaceDetector/Face", DetectionKind.Face)]
@@ -41,7 +41,7 @@ public class CameraEventDetectionClassifierTests
     [Fact]
     public void MatchesTopicsCaseInsensitively()
     {
-        Assert.Equal(DetectionKind.Person, CameraEventClassifier.DetectionTopicKind("tns1:ruleengine/peopledetector/people"));
+        Assert.Equal(DetectionKind.Human, CameraEventClassifier.DetectionTopicKind("tns1:ruleengine/peopledetector/people"));
     }
 
     [Fact]

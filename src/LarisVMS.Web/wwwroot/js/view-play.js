@@ -396,7 +396,7 @@ window.larisvmsViewPlay = (function () {
         // tile toggled into playback doesn't silently lose its boxes. Starts at whatever the
         // toolbar checkboxes are currently set to, not always-off, so a cell added later (a mode
         // switch re-render, or the derived phone stack) matches every already-visible tile.
-        var detectionOverlay = window.larisvmsLiveView.startDetectionOverlay(cameraId, video);
+        var detectionOverlay = window.larisvmsLiveView.startDetectionOverlay(cameraId, video, fsHandle);
         detectionOverlay.setShowMoving(showMovingDetections);
         detectionOverlay.setShowIdle(showIdleDetections);
         detectionOverlays[cell.id] = detectionOverlay;

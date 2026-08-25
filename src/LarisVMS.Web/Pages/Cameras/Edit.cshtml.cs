@@ -37,6 +37,10 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
     /// inherit-style convention RecordingModeOverride uses, resolved dynamically node-side by
     /// NodeWorker.ResolvePrimaryMotionSource rather than defaulted here.</summary>
     [BindProperty] public string MotionDetectionSourceOverride { get; set; } = "";
+    [BindProperty] public double? ConfidenceOverride { get; set; }
+    [BindProperty] public double? IouOverride { get; set; }
+    /// <summary>"" (blank) means inherit — same convention as RecordingModeOverride.</summary>
+    [BindProperty] public string AiDetectionStreamRoleOverride { get; set; } = "";
 
     public bool IsNew => Id is null;
 
@@ -57,6 +61,9 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
     public int EffectiveMotionPreRollSeconds { get; set; }
     public int EffectiveMotionPostRollSeconds { get; set; }
     public int EffectiveSegmentSeconds { get; set; }
+    public double EffectiveConfidence { get; set; }
+    public double EffectiveIou { get; set; }
+    public string EffectiveAiDetectionStreamRole { get; set; } = "Sub";
     /// <summary>Whether this camera has at least one enabled ServerMotion zone — Motion mode does
     /// nothing without one (NodeWorker falls back to recording everything, logging a warning) so
     /// the Edit page can surface that up front instead of the operator discovering it in node logs.</summary>
@@ -147,6 +154,17 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
         SegmentSecondsOverride = int.TryParse(ownSegmentSecondsOverride, out var segmentSeconds) ? segmentSeconds : null;
         EffectiveSegmentSeconds = await settings.GetAsync("Recording.SegmentSeconds", 60, cameraId: cameraId, nodeId: nodeId);
 
+        var ownConfidenceOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "Detection.Confidence");
+        ConfidenceOverride = double.TryParse(ownConfidenceOverride, out var confidence) ? confidence : null;
+        EffectiveConfidence = await settings.GetAsync("Detection.Confidence", 0.35, cameraId: cameraId, nodeId: nodeId);
+
+        var ownIouOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "Detection.Iou");
+        IouOverride = double.TryParse(ownIouOverride, out var iou) ? iou : null;
+        EffectiveIou = await settings.GetAsync("Detection.Iou", 0.5, cameraId: cameraId, nodeId: nodeId);
+
+        AiDetectionStreamRoleOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "AiDetection.StreamRole") ?? "";
+        EffectiveAiDetectionStreamRole = await settings.GetAsync("AiDetection.StreamRole", "Sub", cameraId: cameraId, nodeId: nodeId);
+
         var zones = await zoneService.ListAsync(cameraId);
         HasServerMotionZone = zones.Any(z => z.Kind == ZoneKind.ServerMotion && z.IsEnabled);
 
@@ -219,6 +237,16 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
             var clampedSegmentSecondsOverride = SegmentSecondsOverride is { } s ? Math.Clamp(s, 5, 300) : (int?)null;
             await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Recording.SegmentSeconds",
                 clampedSegmentSecondsOverride?.ToString(), User.Identity?.Name);
+
+            // Same 0-1 clamp Admin/Settings/Detection applies to the global default.
+            var clampedConfidenceOverride = ConfidenceOverride is { } conf ? Math.Clamp(conf, 0, 1) : (double?)null;
+            await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Detection.Confidence",
+                clampedConfidenceOverride?.ToString("0.####"), User.Identity?.Name);
+            var clampedIouOverride = IouOverride is { } io ? Math.Clamp(io, 0, 1) : (double?)null;
+            await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Detection.Iou",
+                clampedIouOverride?.ToString("0.####"), User.Identity?.Name);
+            await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "AiDetection.StreamRole",
+                string.IsNullOrEmpty(AiDetectionStreamRoleOverride) ? null : AiDetectionStreamRoleOverride, User.Identity?.Name);
             return RedirectToPage("Index");
         }
         catch (Exception ex)

@@ -96,8 +96,15 @@ public interface ITimelineService
     /// cameraIds null means every camera; a non-null-but-empty collection genuinely narrows to zero
     /// rows (same "narrow to nothing rather than silently show everything" philosophy as kinds) —
     /// lets the Snapshots page resolve "single camera" / "all cameras" / "camera group" / "view" into
-    /// one shared parameter instead of four different query shapes.</summary>
-    Task<SnapshotPageDto> GetSnapshotsAsync(IReadOnlyCollection<Guid>? cameraIds, DateTime? fromUtc, DateTime? toUtc, int page, int pageSize, CancellationToken ct = default, IReadOnlyCollection<string>? kinds = null);
+    /// one shared parameter instead of four different query shapes.
+    ///
+    /// excludedLabels narrows further, one level below kinds: a "{category}:{label}" token (e.g.
+    /// "Vehicle:truck") excludes just that specific label while its category (and sibling labels)
+    /// stay included, even when the category itself is fully wanted per kinds. Independent of kinds
+    /// rather than folded into it — unlike kinds (null = everything, matching pre-existing behavior),
+    /// an empty/null excludedLabels already means "nothing excluded," so no special null-handling is
+    /// needed for "everything checked by default."</summary>
+    Task<SnapshotPageDto> GetSnapshotsAsync(IReadOnlyCollection<Guid>? cameraIds, DateTime? fromUtc, DateTime? toUtc, int page, int pageSize, CancellationToken ct = default, IReadOnlyCollection<string>? kinds = null, IReadOnlyCollection<string>? excludedLabels = null);
 
     /// <summary>Object detection plan decision 5: every currently-known DetectedObjectCategory,
     /// ordered by name — what the Snapshots page's filter checkboxes are built from. Fetched live
@@ -105,4 +112,10 @@ public interface ITimelineService
     /// new categories are first seen. Small table in practice (see DetectedObjectCategory's own doc
     /// comment), so no paging.</summary>
     Task<List<DetectedObjectCategoryDto>> GetDetectedObjectCategoriesAsync(CancellationToken ct = default);
+
+    /// <summary>Every distinct (category, specific label) pair actually observed at least once —
+    /// what the Snapshots page's filter tree nests under each category node. See
+    /// DetectedObjectLabelDto's own doc comment for why this has to be a live query, not a fixed
+    /// list.</summary>
+    Task<List<DetectedObjectLabelDto>> GetDetectedObjectLabelsAsync(CancellationToken ct = default);
 }

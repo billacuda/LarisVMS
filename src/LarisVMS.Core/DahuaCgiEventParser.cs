@@ -47,9 +47,9 @@ public static class DahuaCgiEventParser
     /// silently dropped, exactly like an unrecognized ONVIF topic.</summary>
     private static readonly (string Code, DetectionKind Kind)[] CodeMap =
     [
-        ("SmartMotionHuman", DetectionKind.Person),
-        ("HumanDetect", DetectionKind.Person),
-        ("HumanTrait", DetectionKind.Person),
+        ("SmartMotionHuman", DetectionKind.Human),
+        ("HumanDetect", DetectionKind.Human),
+        ("HumanTrait", DetectionKind.Human),
         ("SmartMotionVehicle", DetectionKind.Vehicle),
         ("VehicleDetect", DetectionKind.Vehicle),
         ("TrafficJunction", DetectionKind.Vehicle),
@@ -145,7 +145,7 @@ public static class DahuaCgiEventParser
     public static DetectionKind? ClassifyObjectType(string? objectType) =>
         objectType?.Trim().ToLowerInvariant() switch
         {
-            "human" or "person" or "pedestrian" => DetectionKind.Person,
+            "human" or "person" or "pedestrian" => DetectionKind.Human,
             "vehicle" or "car" or "motor" or "nonmotor" => DetectionKind.Vehicle,
             // Dahua's face events report HumanFace; kept mapping to Face rather than Person so a
             // face event stays distinguishable from a whole-body detection, matching FaceDetection's

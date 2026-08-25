@@ -34,7 +34,7 @@ public class DahuaCgiEventSessionTests
         session.HandleLine("Code=SmartMotionHuman;action=Stop;index=0", T0.AddSeconds(12));
 
         var (kind, span) = Assert.Single(spans);
-        Assert.Equal(DetectionKind.Person, kind);
+        Assert.Equal(DetectionKind.Human, kind);
         Assert.Equal(T0, span.StartUtc);
         Assert.Equal(T0.AddSeconds(12), span.EndUtc);
         Assert.False(session.AnyDetectionActive);
@@ -120,7 +120,7 @@ public class DahuaCgiEventSessionTests
         foreach (var line in RealIntrusionEventLines("Stop")) session.HandleLine(line, T0.AddSeconds(3));
 
         var (kind, span) = Assert.Single(spans);
-        Assert.Equal(DetectionKind.Person, kind);
+        Assert.Equal(DetectionKind.Human, kind);
         Assert.Equal(T0, span.StartUtc);
         Assert.Equal(T0.AddSeconds(3), span.EndUtc);
     }
@@ -141,7 +141,7 @@ public class DahuaCgiEventSessionTests
         foreach (var line in RealIntrusionEventLines("Stop")) session.HandleLine(line, T0.AddSeconds(3));
 
         var (kind, _) = Assert.Single(spans);
-        Assert.Equal(DetectionKind.Person, kind);
+        Assert.Equal(DetectionKind.Human, kind);
     }
 
     [Fact]
@@ -155,7 +155,7 @@ public class DahuaCgiEventSessionTests
         foreach (var line in IntrusionEventLines("Stop", "Human")) session.HandleLine(line, T0.AddSeconds(6));
 
         var (kind, _) = Assert.Single(spans);
-        Assert.Equal(DetectionKind.Person, kind);
+        Assert.Equal(DetectionKind.Human, kind);
     }
 
     [Fact]
@@ -200,7 +200,7 @@ public class DahuaCgiEventSessionTests
         foreach (var line in IntrusionEventLines("Stop", "Human")) session.HandleLine(line, T0.AddSeconds(8));
 
         var (kind, span) = Assert.Single(spans);
-        Assert.Equal(DetectionKind.Person, kind);
+        Assert.Equal(DetectionKind.Human, kind);
         Assert.Equal(T0.AddSeconds(8), span.EndUtc);
     }
 
@@ -299,7 +299,7 @@ public class DahuaCgiEventSessionTests
         var inProgress = session.CurrentInProgressDetectionSpans(T0.AddMinutes(2)).ToList();
 
         var (kind, span) = Assert.Single(inProgress);
-        Assert.Equal(DetectionKind.Person, kind);
+        Assert.Equal(DetectionKind.Human, kind);
         Assert.Equal(T0, span.StartUtc);
     }
 
@@ -315,7 +315,7 @@ public class DahuaCgiEventSessionTests
         session.FlushOpenSpans(T0.AddSeconds(20)); // connection dropped here
 
         var (kind, span) = Assert.Single(spans);
-        Assert.Equal(DetectionKind.Person, kind);
+        Assert.Equal(DetectionKind.Human, kind);
         Assert.Equal(T0, span.StartUtc);
         Assert.Equal(T0.AddSeconds(20), span.EndUtc);
         Assert.False(session.AnyDetectionActive);

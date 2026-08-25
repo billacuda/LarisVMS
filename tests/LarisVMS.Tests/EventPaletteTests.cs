@@ -28,7 +28,7 @@ public class EventPaletteTests
         Assert.Equal("#222222", palette.RecordingColor);
         Assert.Equal("#333333", palette.ColorFor(DetectionKind.Animal));
         // Untouched classes still track their own defaults rather than inheriting anything.
-        Assert.Equal(DetectionDisplay.ColorHex(DetectionKind.Person), palette.ColorFor(DetectionKind.Person));
+        Assert.Equal(DetectionDisplay.ColorHex(DetectionKind.Human), palette.ColorFor(DetectionKind.Human));
     }
 
     [Fact]

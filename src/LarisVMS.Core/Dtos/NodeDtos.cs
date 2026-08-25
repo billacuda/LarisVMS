@@ -112,7 +112,18 @@ public record NodeConfigCameraDto(Guid CameraId, string Name, string? Username, 
     /// <summary>Object detection plan decision 9: Camera.MotionDetectionSource's enum name (e.g.
     /// "ServerMotion"), or null if not yet configured — same string-wire-format-parsed-node-side
     /// pattern RecordingMode already uses. Only meaningful when RecordingMode is "Motion".</summary>
-    string? MotionDetectionSource = null);
+    string? MotionDetectionSource = null,
+    /// <summary>AI detection's own confidence/IoU thresholds — per-camera (Camera &rarr; Node &rarr;
+    /// Global, same chain RetentionDays/RecordingMode already resolve through), not global-only:
+    /// a camera prone to a specific misdetection (see the driveway truck/car "best frame" bug this
+    /// was added alongside) may need its own threshold tuned independently of the deployment-wide
+    /// default. Defaults match aitest's own proven values.</summary>
+    double AiConfidence = 0.35, double AiIou = 0.5,
+    /// <summary>Which of this camera's streams AI detection actually watches — "Main" or "Sub",
+    /// same Camera &rarr; Node &rarr; Global override chain, global default "Sub" (preserves the
+    /// behavior from before this was configurable at all: NodeWorker.ReconcileVision used to
+    /// hardcode the "Sub" stream unconditionally).</summary>
+    string AiDetectionStreamRole = "Sub");
 /// <summary>A camera this node has leftover Segments for but is no longer assigned to record
 /// (reassigned to a different node, or deleted) — StorageManager's orphaned-folder sweep uses
 /// RetentionDays here so leftover footage still ages out on the same schedule it always would have,
@@ -151,13 +162,20 @@ public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? Stor
     /// toggle rather than something that varies camera by camera. Threaded through to every
     /// VisionStartCameraRequest NodeWorker builds.</summary>
     bool ReportIdleDetections = false,
-    /// <summary>AI detection's own decode resolution/confidence/IoU — global rather than
-    /// per-camera for the same reason ReportIdleDetections is: these are deployment-wide detection
-    /// policy, not something today's camera setup page exposes per camera. Defaults match aitest's
-    /// own proven values (confidence 0.35, iou 0.5) and VisionSessionOptions' own decode default
-    /// (1280x720).</summary>
+    /// <summary>AI detection's own decode resolution — global rather than per-camera for the same
+    /// reason ReportIdleDetections is: a deployment-wide detection policy, not something today's
+    /// camera setup page exposes per camera. Defaults match VisionSessionOptions' own decode
+    /// default (1280x720). Confidence/IoU used to live here too but are now per-camera fields on
+    /// NodeConfigCameraDto instead — see that record's own doc comment for why.</summary>
     int AiDetectionWidth = 1280, int AiDetectionHeight = 720,
-    double AiConfidence = 0.35, double AiIou = 0.5);
+    /// <summary>How long a label's hysteresis waits after motion stops before actually closing the
+    /// span (MotionHysteresis's endAfter) — global, same reasoning as the other Detection.* fields
+    /// above. Was hardcoded to zero, which closed a span on the very first quiet frame; a single
+    /// missed/occluded detection, or a track briefly classified Idle before resuming Moving, then
+    /// reopened as a brand-new span/snapshot instead of continuing the same one. A real grace period
+    /// absorbs that flicker while still finalizing the snapshot once the object is genuinely gone or
+    /// has settled into Idle for good.</summary>
+    int AiIdleTimeoutSeconds = 10);
 
 /// <summary>One completed MotionSpan, batch-reported the same way SegmentReportItem is — see
 /// NodeService.RecordMotionSpansAsync for why plain REST + EF insert is enough here despite the

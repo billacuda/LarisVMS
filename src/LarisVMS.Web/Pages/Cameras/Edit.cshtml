@@ -211,6 +211,68 @@
         </div>
         <div class="col-6">
             <label class="form-label">
+                Detection stream override
+                <button type="button" class="help-icon" data-help-target="aiStreamRoleHelp" tabindex="0" aria-label="Help">ℹ️</button>
+            </label>
+            <select asp-for="AiDetectionStreamRoleOverride" class="form-select">
+                <option value="">(inherit — currently @Model.EffectiveAiDetectionStreamRole)</option>
+                <option value="Sub">Sub</option>
+                <option value="Main">Main</option>
+            </select>
+            <div class="help-text-source" id="aiStreamRoleHelp">
+                Which of this camera's streams AI detection watches. Global default is set on
+                <a asp-page="/Admin/Settings/Detection">AI Detection settings</a>.
+            </div>
+        </div>
+        <div class="col-6">
+            <label class="form-label">
+                Confidence threshold override
+                <button type="button" class="help-icon" data-help-target="aiConfidenceHelp" tabindex="0" aria-label="Help">ℹ️</button>
+            </label>
+            <div class="d-flex align-items-center gap-2">
+                <div class="form-check form-check-inline mb-0">
+                    <input type="checkbox" class="form-check-input" id="confidenceOverrideToggle"
+                           checked="@(Model.ConfidenceOverride.HasValue)"
+                           onchange="document.getElementById('confidenceOverrideSlider').disabled = !this.checked;" />
+                    <label class="form-check-label small" for="confidenceOverrideToggle">Override</label>
+                </div>
+                <input type="range" name="ConfidenceOverride" id="confidenceOverrideSlider" min="0" max="1" step="0.05" class="form-range"
+                       value="@((Model.ConfidenceOverride ?? Model.EffectiveConfidence).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))"
+                       disabled="@(!Model.ConfidenceOverride.HasValue)"
+                       oninput="this.nextElementSibling.textContent = Math.round(this.value * 100);" />
+                <output class="text-muted small" style="min-width: 2.5em;">@Math.Round((Model.ConfidenceOverride ?? Model.EffectiveConfidence) * 100)</output>
+            </div>
+            <div class="help-text-source" id="aiConfidenceHelp">
+                Minimum detection score for this camera specifically — e.g. a camera prone to
+                misdetecting a stationary object may need a higher threshold. Unchecked "Override"
+                inherits the node's/global setting from <a asp-page="/Admin/Settings/Detection">AI Detection settings</a>.
+            </div>
+        </div>
+        <div class="col-6">
+            <label class="form-label">
+                IoU threshold override
+                <button type="button" class="help-icon" data-help-target="aiIouHelp" tabindex="0" aria-label="Help">ℹ️</button>
+            </label>
+            <div class="d-flex align-items-center gap-2">
+                <div class="form-check form-check-inline mb-0">
+                    <input type="checkbox" class="form-check-input" id="iouOverrideToggle"
+                           checked="@(Model.IouOverride.HasValue)"
+                           onchange="document.getElementById('iouOverrideSlider').disabled = !this.checked;" />
+                    <label class="form-check-label small" for="iouOverrideToggle">Override</label>
+                </div>
+                <input type="range" name="IouOverride" id="iouOverrideSlider" min="0" max="1" step="0.05" class="form-range"
+                       value="@((Model.IouOverride ?? Model.EffectiveIou).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))"
+                       disabled="@(!Model.IouOverride.HasValue)"
+                       oninput="this.nextElementSibling.textContent = Math.round(this.value * 100);" />
+                <output class="text-muted small" style="min-width: 2.5em;">@Math.Round((Model.IouOverride ?? Model.EffectiveIou) * 100)</output>
+            </div>
+            <div class="help-text-source" id="aiIouHelp">
+                Overlap threshold for merging duplicate boxes, for this camera specifically. Unchecked
+                "Override" inherits the node's/global setting from <a asp-page="/Admin/Settings/Detection">AI Detection settings</a>.
+            </div>
+        </div>
+        <div class="col-6">
+            <label class="form-label">
                 Motion detection source
                 <button type="button" class="help-icon" data-help-target="motionSourceHelp" tabindex="0" aria-label="Help">ℹ️</button>
             </label>

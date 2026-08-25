@@ -70,10 +70,12 @@ public enum MotionDetectionSource
 /// not where it was. Per-frame coordinates ride the metadata RTP track, which this app doesn't
 /// consume (see the CHANGELOG's note on bounding boxes).</summary>
 /// Values are persisted as integers on MotionSpan.DetectionKind, so existing numbers must never be
-/// reused or renumbered — new classes are only ever appended.
+/// reused or renumbered — new classes are only ever appended. (The member below was renamed from
+/// Person to Human to unify it with the AI-detection pipeline's own CocoCategoryMap.Human category
+/// name/filter token — see DetectionDisplay's own doc comment — but its persisted value stays 0.)
 public enum DetectionKind
 {
-    Person = 0,
+    Human = 0,
     Vehicle = 1,
     Face = 2,
 
@@ -103,7 +105,7 @@ public static class DetectionDisplay
     /// numeric values, which exist only for storage.</summary>
     public static IReadOnlyList<DetectionKind> AllKinds { get; } =
     [
-        DetectionKind.Person,
+        DetectionKind.Human,
         DetectionKind.Vehicle,
         DetectionKind.Face,
         DetectionKind.Animal,
@@ -117,7 +119,7 @@ public static class DetectionDisplay
     /// as ordinary motion.</summary>
     public static string ColorHex(DetectionKind kind) => kind switch
     {
-        DetectionKind.Person => "#ff9f43",
+        DetectionKind.Human => "#ff9f43",
         DetectionKind.Vehicle => "#a78bfa",
         DetectionKind.Face => "#f472b6",
         DetectionKind.Animal => "#fbbf24",
@@ -128,7 +130,7 @@ public static class DetectionDisplay
 
     public static string Label(DetectionKind kind) => kind switch
     {
-        DetectionKind.Person => "Person",
+        DetectionKind.Human => "Human",
         DetectionKind.Vehicle => "Vehicle",
         DetectionKind.Face => "Face",
         DetectionKind.Animal => "Animal",
@@ -142,7 +144,9 @@ public static class DetectionDisplay
     /// magnifier reads as an action (search) rather than a thing.</summary>
     public static string Emoji(DetectionKind kind) => kind switch
     {
-        DetectionKind.Person => "🚶",
+        // Matches CocoCategoryMap.Emoji(CocoCategoryMap.Human) — same emoji for the same concept
+        // now that this class and the AI pipeline's category share the "Human" name/filter token.
+        DetectionKind.Human => "🚶",
         DetectionKind.Vehicle => "🚗",
         DetectionKind.Face => "🙂",
         DetectionKind.Animal => "🐾",

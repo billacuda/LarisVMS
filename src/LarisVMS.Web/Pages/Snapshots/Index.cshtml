@@ -2,10 +2,11 @@
 @model LarisVMS.Web.Pages.Snapshots.IndexModel
 @{
     ViewData["Title"] = "Snapshots";
-    // Reused by the pagination links below so paging preserves whatever the kinds filter is
-    // currently set to — null (never touched) means no suffix at all, matching Kinds' own
-    // "absent = no additional narrowing" default.
+    // Reused by the pagination links below so paging preserves whatever the kinds/excludedLabels
+    // filters are currently set to — null (never touched) means no suffix at all, matching each
+    // one's own "absent = no additional narrowing" default.
     var kindsQuery = Model.Kinds is null ? "" : string.Concat(Model.Kinds.Select(k => "&kinds=" + Uri.EscapeDataString(k)));
+    var excludedLabelsQuery = Model.ExcludedLabels is null ? "" : string.Concat(Model.ExcludedLabels.Select(l => "&excludedLabels=" + Uri.EscapeDataString(l)));
 }
 <h1>Snapshots <span id="snapshotLoadStatus" class="badge bg-secondary ms-2 d-none fw-normal"></span></h1>
 <p class="text-muted">
@@ -64,51 +65,87 @@
     <div class="col-md-1">
         <a href="/Snapshots" class="btn btn-sm btn-outline-secondary w-100" data-clear-filters>Clear</a>
     </div>
-
-    @* Only checkboxes actually posted change anything (an unchecked box submits nothing at all), so
-       every one starts checked unless the URL already names a narrower set — see IsKindChecked's own
-       comment for why that's the right default for both a fresh visit and a Filter re-submit. *@
-    <div class="col-12 d-flex flex-wrap gap-3 mt-1">
-        <div class="form-check form-check-inline mb-0">
-            <input type="checkbox" class="form-check-input" id="kind-motion" name="kinds" value="Motion" checked="@Model.IsKindChecked("Motion")" />
-            <label class="form-check-label small" for="kind-motion">🌀 Motion</label>
-        </div>
-        <div class="form-check form-check-inline mb-0">
-            <input type="checkbox" class="form-check-input" id="kind-customtag" name="kinds" value="@IndexModel.CustomTagToken" checked="@Model.IsKindChecked(IndexModel.CustomTagToken)" />
-            <label class="form-check-label small" for="kind-customtag">🏷️ Custom tags</label>
-        </div>
-        @foreach (var kind in Model.DetectionKinds)
-        {
-            var name = kind.ToString();
-            <div class="form-check form-check-inline mb-0">
-                <input type="checkbox" class="form-check-input" id="kind-@name" name="kinds" value="@name" checked="@Model.IsKindChecked(name)" />
-                <label class="form-check-label small" for="kind-@name">
-                    @LarisVMS.Core.Enums.DetectionDisplay.Emoji(kind) @LarisVMS.Core.Enums.DetectionDisplay.Label(kind)
-                </label>
-            </div>
-        }
-        @* Object detection plan decision 5: AI-detection categories share the kinds-filter token
-           space with DetectionKinds above (see TimelineService.GetSnapshotsAsync's own comment) — a
-           category whose name is already one of the fixed DetectionKinds (e.g. "Vehicle", "Animal")
-           gets no second checkbox here, since ticking the one above already covers both sources. *@
-        @foreach (var category in Model.DetectedObjectCategories.Where(c => !Model.DetectionKinds.Any(k => k.ToString().Equals(c.Name, StringComparison.OrdinalIgnoreCase))))
-        {
-            <div class="form-check form-check-inline mb-0">
-                <input type="checkbox" class="form-check-input" id="kind-@category.Name" name="kinds" value="@category.Name" checked="@Model.IsKindChecked(category.Name)" />
-                <label class="form-check-label small" for="kind-@category.Name">
-                    <span class="badge" style="background-color: @category.ColorHex;">&nbsp;</span> @category.Name
-                </label>
-            </div>
-        }
-    </div>
 </form>
 
-@if (Model.Results.Items.Count == 0)
-{
-    <p class="text-muted">No motion events found@(Model.Mode != "all" || Model.From is not null || Model.To is not null ? " for this filter." : " yet.")</p>
+@{
+    // Unified top-level filter-tree nodes: DetectionKinds ∪ AI-detection categories, deduped by
+    // name — the same "Vehicle"/"Animal"/"Human" shared-token dedup TimelineService.GetSnapshotsAsync's
+    // own kinds-filter comment describes, now driving the tree instead of two separate checkbox rows.
+    var topLevelKinds = Model.DetectionKinds
+        .Select(k => (Name: k.ToString(), Emoji: (string?)LarisVMS.Core.Enums.DetectionDisplay.Emoji(k), ColorHex: (string?)null))
+        .ToList();
+    var topLevelCategoriesOnly = Model.DetectedObjectCategories
+        .Where(c => !topLevelKinds.Any(k => k.Name.Equals(c.Name, StringComparison.OrdinalIgnoreCase)))
+        .Select(c => (Name: c.Name, Emoji: (string?)null, ColorHex: (string?)c.ColorHex));
+    var topLevelNodes = topLevelKinds.Concat(topLevelCategoriesOnly).ToList();
 }
-else
-{
+<div class="d-flex flex-column flex-lg-row gap-3">
+    @* Collapsible filter tree — everything checked by default (see IsKindChecked/IsLabelChecked),
+       unchecking a whole category excludes everything under it (the existing Kinds behavior),
+       unchecking one specific label under a category excludes just that label. Checkbox states here
+       feed snapshotFilterForm via the name="kinds" attribute (category/kind nodes, submitted
+       natively) and, for specific labels, via the hidden excludedLabels inputs the script below
+       builds right before submit — see that script's own comment for why labels need this instead
+       of a plain checked-box name/value pair. *@
+    <aside class="snapshot-filter-tree" style="min-width: 15rem; max-width: 18rem;">
+        <div class="d-flex flex-column gap-1">
+            <div class="form-check mb-0">
+                <input type="checkbox" class="form-check-input" id="kind-motion" name="kinds" value="Motion" checked="@Model.IsKindChecked("Motion")" form="snapshotFilterForm" />
+                <label class="form-check-label small" for="kind-motion">🌀 Motion</label>
+            </div>
+            <div class="form-check mb-0">
+                <input type="checkbox" class="form-check-input" id="kind-customtag" name="kinds" value="@IndexModel.CustomTagToken" checked="@Model.IsKindChecked(IndexModel.CustomTagToken)" form="snapshotFilterForm" />
+                <label class="form-check-label small" for="kind-customtag">🏷️ Custom tags</label>
+            </div>
+            @foreach (var node in topLevelNodes)
+            {
+                var children = Model.DetectedObjectLabels.Where(l => l.CategoryName.Equals(node.Name, StringComparison.OrdinalIgnoreCase)).ToList();
+                if (children.Count == 0)
+                {
+                    <div class="form-check mb-0">
+                        <input type="checkbox" class="form-check-input" id="kind-@node.Name" name="kinds" value="@node.Name" checked="@Model.IsKindChecked(node.Name)" form="snapshotFilterForm" />
+                        <label class="form-check-label small" for="kind-@node.Name">
+                            @if (node.Emoji is { } emoji) { @emoji }
+                            else if (node.ColorHex is { } color) { <span class="badge" style="background-color: @color;">&nbsp;</span> }
+                            @node.Name
+                        </label>
+                    </div>
+                }
+                else
+                {
+                    <details open class="snapshot-filter-tree-node">
+                        <summary class="d-flex align-items-center gap-1">
+                            <input type="checkbox" class="form-check-input snapshot-tree-parent" id="kind-@node.Name" name="kinds" value="@node.Name"
+                                   checked="@Model.IsKindChecked(node.Name)" form="snapshotFilterForm" data-children-of="@node.Name" onclick="event.stopPropagation();" />
+                            <label class="form-check-label small" for="kind-@node.Name" onclick="event.stopPropagation();">
+                                @if (node.ColorHex is { } color2) { <span class="badge" style="background-color: @color2;">&nbsp;</span> }
+                                @node.Name
+                            </label>
+                        </summary>
+                        <div class="ms-4 d-flex flex-column gap-1 mt-1">
+                            @foreach (var child in children)
+                            {
+                                var token = $"{node.Name}:{child.Label}";
+                                <div class="form-check mb-0">
+                                    <input type="checkbox" class="form-check-input snapshot-tree-child" id="label-@token" data-label-token="@token"
+                                           data-parent-name="@node.Name" checked="@Model.IsLabelChecked(node.Name, child.Label)" />
+                                    <label class="form-check-label small" for="label-@token">@Char.ToUpperInvariant(child.Label[0])@child.Label[1..]</label>
+                                </div>
+                            }
+                        </div>
+                    </details>
+                }
+            }
+        </div>
+    </aside>
+
+    <div class="flex-grow-1">
+    @if (Model.Results.Items.Count == 0)
+    {
+        <p class="text-muted">No motion events found@(Model.Mode != "all" || Model.From is not null || Model.To is not null ? " for this filter." : " yet.")</p>
+    }
+    else
+    {
     <div class="row row-cols-1 row-cols-sm-2 row-cols-md-3 row-cols-lg-4 g-3">
         @foreach (var s in Model.Results.Items)
         {
@@ -163,13 +200,15 @@ else
             </div>
         }
     </div>
-}
+    }
 
-@* pageNumber, not page — see IndexModel.OnGetAsync's own comment for why "page" is a reserved Razor
-   Pages route-value name and silently never binds from here. *@
-<partial name="Shared/_PaginationControls" model="@(new LarisVMS.Web.Helpers.PaginationViewModel(
-    Model.Results.CurrentPage, Model.Results.TotalPages,
-    p => $"?mode={Model.Mode}&cameraId={Model.CameraId}&groupId={Model.GroupId}&viewId={Model.ViewId}&from={Model.From}&to={Model.To}&pageNumber={p}{kindsQuery}"))" />
+    @* pageNumber, not page — see IndexModel.OnGetAsync's own comment for why "page" is a reserved
+       Razor Pages route-value name and silently never binds from here. *@
+    <partial name="Shared/_PaginationControls" model="@(new LarisVMS.Web.Helpers.PaginationViewModel(
+        Model.Results.CurrentPage, Model.Results.TotalPages,
+        p => $"?mode={Model.Mode}&cameraId={Model.CameraId}&groupId={Model.GroupId}&viewId={Model.ViewId}&from={Model.From}&to={Model.To}&pageNumber={p}{kindsQuery}{excludedLabelsQuery}"))" />
+    </div>
+</div>
 
 @section Scripts {
     <script src="~/js/snapshot-load-status.js" asp-append-version="true"></script>
@@ -187,6 +226,55 @@ else
             }
             modeSelect.addEventListener('change', applyMode);
             applyMode();
+        })();
+
+        // Filter tree: standard checkbox-tree parent/child sync, plus building the excludedLabels
+        // hidden inputs the form actually submits. Child (label) checkboxes deliberately have no
+        // `name` of their own — a plain checked-box name/value pair only ever submits *checked*
+        // items, but the server wants the opposite (which specific labels are UNchecked/excluded),
+        // and inverting the checkbox's own visual meaning (checked = excluded) would read backwards
+        // against every other checkbox on this page. So children stay checked = included for display,
+        // and this script converts "which ones ended up unchecked" into excludedLabels inputs right
+        // before the form actually submits.
+        (function () {
+            var form = document.getElementById('snapshotFilterForm');
+            if (!form) return;
+
+            function childrenOf(parentName) {
+                return Array.prototype.slice.call(
+                    document.querySelectorAll('.snapshot-tree-child[data-parent-name="' + CSS.escape(parentName) + '"]'));
+            }
+
+            // Parent checkbox change -> every child follows it.
+            document.querySelectorAll('.snapshot-tree-parent').forEach(function (parent) {
+                parent.addEventListener('change', function () {
+                    childrenOf(parent.dataset.childrenOf).forEach(function (child) { child.checked = parent.checked; });
+                });
+            });
+
+            // Child checkbox change -> parent reflects all-checked / all-unchecked / mixed.
+            document.querySelectorAll('.snapshot-tree-child').forEach(function (child) {
+                child.addEventListener('change', function () {
+                    var parent = document.querySelector('.snapshot-tree-parent[data-children-of="' + CSS.escape(child.dataset.parentName) + '"]');
+                    if (!parent) return;
+                    var siblings = childrenOf(child.dataset.parentName);
+                    var checkedCount = siblings.filter(function (s) { return s.checked; }).length;
+                    parent.checked = checkedCount > 0;
+                    parent.indeterminate = checkedCount > 0 && checkedCount < siblings.length;
+                });
+            });
+
+            form.addEventListener('submit', function () {
+                form.querySelectorAll('input[name="excludedLabels"]').forEach(function (el) { el.remove(); });
+                document.querySelectorAll('.snapshot-tree-child').forEach(function (child) {
+                    if (child.checked) return;
+                    var hidden = document.createElement('input');
+                    hidden.type = 'hidden';
+                    hidden.name = 'excludedLabels';
+                    hidden.value = child.dataset.labelToken;
+                    form.appendChild(hidden);
+                });
+            });
         })();
     </script>
 }

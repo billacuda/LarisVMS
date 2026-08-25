@@ -1114,7 +1114,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// usable accelerator resolved, or the Vision Service process isn't currently running —
     /// Reconcile's own EnsureRunning/Stop call, made once per cycle before this per-camera loop
     /// runs, already logs the "why" for the process-level cases; this only warns for the
-    /// per-camera-specific ones (no accelerator, no Sub stream).</summary>
+    /// per-camera-specific ones (no accelerator, no stream matching the configured role).</summary>
     private void ReconcileVision(NodeConfigCameraDto camera, NodeConfigResponse config)
     {
         if (!camera.AiDetectionEnabled || _resolvedAccelerator is null || !_visionSupervisor.IsRunning)
@@ -1131,27 +1131,32 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             return;
         }
 
-        var subStream = camera.Streams.FirstOrDefault(s => s.Role == "Sub");
-        if (subStream is null)
+        // Which stream feeds detection is itself configurable now (AiDetection.StreamRole, global +
+        // per-camera override) — used to be unconditionally "Sub". Falls back to "Sub" for any
+        // unrecognized value, matching the behavior from before this was configurable at all.
+        var watchRole = camera.AiDetectionStreamRole == "Main" ? "Main" : "Sub";
+        var watchStream = camera.Streams.FirstOrDefault(s => s.Role == watchRole);
+        if (watchStream is null)
         {
             if (_warnedVisionMissingSubStream.TryAdd(camera.CameraId, 0))
             {
-                _logger.LogWarning("Camera {CameraId} ({Name}) has AI detection enabled but no Sub stream to watch it on.",
-                    camera.CameraId, camera.Name);
+                _logger.LogWarning("Camera {CameraId} ({Name}) has AI detection enabled but no {Role} stream to watch it on.",
+                    camera.CameraId, camera.Name, watchRole);
             }
             return;
         }
 
-        var subRtspUri = InjectCredentials(subStream.RtspUri, camera.Username, camera.Password);
-        var signature = string.Join('|', subRtspUri, config.AiDetectionWidth, config.AiDetectionHeight,
-            config.AiConfidence, config.AiIou, config.ReportIdleDetections, _resolvedAccelerator);
+        var watchRtspUri = InjectCredentials(watchStream.RtspUri, camera.Username, camera.Password);
+        var signature = string.Join('|', watchRtspUri, config.AiDetectionWidth, config.AiDetectionHeight,
+            camera.AiConfidence, camera.AiIou, config.ReportIdleDetections, config.AiIdleTimeoutSeconds,
+            watchRole, _resolvedAccelerator);
 
         if (_activeVision.TryGetValue(camera.CameraId, out var existing) && existing.ConfigSignature == signature) return; // already watching, unchanged
 
         var request = new VisionStartCameraRequest(
-            camera.CameraId, subRtspUri, config.AiDetectionWidth, config.AiDetectionHeight,
-            AccelToFfmpegHwaccel(_resolvedAccelerator.Value), config.AiConfidence, config.AiIou,
-            config.ReportIdleDetections, $"http://127.0.0.1:{livePort}");
+            camera.CameraId, watchRtspUri, config.AiDetectionWidth, config.AiDetectionHeight,
+            AccelToFfmpegHwaccel(_resolvedAccelerator.Value), camera.AiConfidence, camera.AiIou,
+            config.ReportIdleDetections, config.AiIdleTimeoutSeconds, $"http://127.0.0.1:{livePort}");
 
         _activeVision[camera.CameraId] = new CameraVisionRecorder(signature);
         _ = StartVisionWatchAsync(request);

@@ -41,10 +41,10 @@ public static class CameraEventClassifier
     /// CameraEvents log exactly as before, so an unrecognized topic is never a regression.
     private static readonly (string Marker, DetectionKind Kind)[] DetectionTopicMarkers =
     [
-        ("PeopleDetector", DetectionKind.Person),
-        ("PersonDetector", DetectionKind.Person),
-        ("HumanDetector", DetectionKind.Person),
-        ("HumanShapeDetect", DetectionKind.Person),   // Amcrest/Dahua
+        ("PeopleDetector", DetectionKind.Human),
+        ("PersonDetector", DetectionKind.Human),
+        ("HumanDetector", DetectionKind.Human),
+        ("HumanShapeDetect", DetectionKind.Human),   // Amcrest/Dahua
         ("VehicleDetector", DetectionKind.Vehicle),
         ("CarDetector", DetectionKind.Vehicle),
         ("TrafficDetector", DetectionKind.Vehicle),

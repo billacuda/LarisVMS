@@ -493,6 +493,72 @@
         return luminance > 0.5 ? '#000' : '#fff';
     }
 
+    // AI-category emoji, mirroring LarisVMS.Core.CocoCategoryMap.Emoji so the live badge shows the
+    // same icon the Snapshots page does — duplicated here rather than fetched, since it's a fixed
+    // 4-entry map and the whole point of this path is per-frame speed with no round trip.
+    var AI_CATEGORY_EMOJI = { Human: '🚶', Vehicle: '🚗', Animal: '🐾' };
+    function aiCategoryEmoji(category) { return AI_CATEGORY_EMOJI[category] || '📦'; }
+    function capitalizeFirst(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+
+    // Two independent sources feed one tile's badge row: camera-native DetectionKind badges
+    // (lastDbDetectionsByCamera, refreshed on startMotionIndicatorPolling's own interval — that
+    // source has no per-frame position/movement data at all, only "was this class seen recently")
+    // and AI-category badges (aiMovingDetectionsByCamera, refreshed live over startDetectionOverlay's
+    // own WebSocket — see that function for why this has to be the live per-frame Moving/Idle state
+    // rather than a DB query: no "is this specific track moving right now" flag is ever persisted).
+    // Either source updating re-renders the same combined row via renderDetectionBadges below.
+    var lastDbDetectionsByCamera = {};
+    var aiMovingDetectionsByCamera = {};
+
+    function refreshBadgesForCamera(cameraId) {
+        document.querySelectorAll('[data-camera-tile]').forEach(function (tile) {
+            if (tile.dataset.cameraTile === cameraId) renderDetectionBadges(tile);
+        });
+    }
+
+    // Rebuilt only when the combined signature actually changes, since the AI side can update every
+    // frame — blindly replacing innerHTML that often would restart CSS transitions and fight any
+    // text selection inside the tile.
+    function renderDetectionBadges(tile) {
+        var container = tile.querySelector('.live-detection-badges');
+        if (!container) return;
+        var cameraId = tile.dataset.cameraTile;
+        var dbDetections = lastDbDetectionsByCamera[cameraId] || [];
+        var aiDetections = aiMovingDetectionsByCamera[cameraId] || [];
+
+        var signature = dbDetections.map(function (d) { return d.kind; }).join(',') +
+            '|' + aiDetections.map(function (d) { return d.label; }).join(',');
+        if (container.dataset.signature === signature) return;
+        container.dataset.signature = signature;
+
+        container.innerHTML = '';
+        // One badge per class, never a summary — a camera seeing a person and a vehicle at the same
+        // time has to show both. Spacing comes from the container's own flex gap.
+        dbDetections.forEach(function (detection) {
+            var badge = document.createElement('span');
+            badge.className = 'badge';
+            badge.style.backgroundColor = detection.colorHex;
+            badge.style.color = readableTextColor(detection.colorHex);
+            badge.title = detection.label + ' detected by the camera';
+            badge.textContent = detection.emoji + ' ' + detection.label;
+            container.appendChild(badge);
+        });
+        // AI badges only ever show currently-moving objects (idle/stationary ones don't badge) and
+        // one per unique specific label — two moving vehicles of different kinds (a car and a truck)
+        // both get their own badge rather than collapsing into one "Vehicle" badge.
+        aiDetections.forEach(function (detection) {
+            var color = detection.colorHex || '#22d3ee';
+            var label = capitalizeFirst(detection.label);
+            var badge = document.createElement('span');
+            badge.className = 'badge';
+            badge.style.backgroundColor = color;
+            badge.style.color = readableTextColor(color);
+            badge.title = label + ' is currently moving';
+            badge.textContent = aiCategoryEmoji(detection.category) + ' ' + label;
+            container.appendChild(badge);
+        });
+    }
+
     // Object detection plan decision 6: live-view box overlay, driven by a *separate* WebSocket
     // from the video stream itself (/live/{cameraId}/detections, not the fMP4 socket start() above
     // opens) — kept off the already-delicate binary fMP4 relay entirely. Two independent toggles
@@ -505,7 +571,16 @@
     // (the Sub stream) — remapped here using the exact same object-fit:contain letterbox math
     // createFreezeOverlay's own show() already uses, since drawing onto a canvas sized to the
     // video's *on-screen* box (not its native resolution) needs the same scale/offset either way.
-    function startDetectionOverlay(cameraId, videoEl) {
+    //
+    // `fsHandle` (optional — fullscreen-tile.js's wire() return value for this same tile) is how
+    // this overlay stays in lockstep with zoom/pan: that module applies a CSS transform directly to
+    // videoEl while zoomed/panned in fullscreen, which visually moves the video's content without
+    // changing videoEl's own layout box — this canvas is a plain untransformed sibling with an
+    // identical box, so without also applying that transform its boxes stay fixed at their
+    // pre-zoom/pre-pan screen position while the video slides/scales underneath them. Applying the
+    // exact same transform string (rather than re-deriving scale/panX/panY here) means the two can
+    // never drift out of sync with each other.
+    function startDetectionOverlay(cameraId, videoEl, fsHandle) {
         var canvas = document.createElement('canvas');
         canvas.className = 'live-detection-overlay';
         canvas.style.cssText = 'position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; display:none;';
@@ -520,6 +595,8 @@
         var reconnectTimer = null;
 
         function draw() {
+            canvas.style.transform = (fsHandle && fsHandle.isFullscreen()) ? fsHandle.getTransformCss() : '';
+
             var w = videoEl.clientWidth, h = videoEl.clientHeight;
             var nw = videoEl.videoWidth, nh = videoEl.videoHeight;
             var ctx = canvas.getContext('2d');
@@ -561,6 +638,29 @@
             });
         }
 
+        // Derives this camera's "currently moving" AI badges straight from the same per-frame boxes
+        // draw() uses, independent of the showMoving/showIdle *drawing* toggles below — those only
+        // control what gets painted on the canvas, not what genuinely counts as moving right now.
+        // One entry per unique specific label (a moving car and a moving truck both badge), never
+        // Idle ones — see the module-scope aiMovingDetectionsByCamera doc comment for why this has
+        // to be live per-frame state rather than a database query.
+        function updateAiBadgeState() {
+            var seen = {};
+            var list = [];
+            latestBoxes.forEach(function (box) {
+                if (box.movementState !== 'Moving' || seen[box.label]) return;
+                seen[box.label] = true;
+                list.push({ label: box.label, category: box.category, colorHex: box.colorHex });
+            });
+            aiMovingDetectionsByCamera[cameraId] = list;
+            refreshBadgesForCamera(cameraId);
+        }
+
+        function clearAiBadgeState() {
+            delete aiMovingDetectionsByCamera[cameraId];
+            refreshBadgesForCamera(cameraId);
+        }
+
         function connect() {
             if (stopped) return;
             var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -572,6 +672,7 @@
                     return; // one malformed tick — next one supersedes it
                 }
                 draw();
+                updateAiBadgeState();
             };
             socket.onclose = function () {
                 socket = null;
@@ -594,6 +695,7 @@
                 if (socket) { try { socket.close(); } catch (e) {} socket = null; }
                 latestBoxes = [];
                 draw();
+                clearAiBadgeState();
             }
         }
 
@@ -605,6 +707,7 @@
                 if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
                 if (socket) { try { socket.close(); } catch (e) {} }
                 if (canvas.parentElement) canvas.parentElement.removeChild(canvas);
+                clearAiBadgeState();
             }
         };
     }
@@ -621,8 +724,8 @@
         async function tick() {
             // Both signals on the same tick, in parallel — they're read together to decide one
             // tile's badges, and a detection is strictly more informative than the plain motion it
-            // usually accompanies (see renderDetections, which suppresses the generic badge when a
-            // classified one is showing).
+            // usually accompanies (see renderDetectionBadges, which suppresses the generic badge
+            // when a classified one is showing).
             var activeIds = [];
             var detectionStates = [];
             try {
@@ -639,46 +742,18 @@
             }
             var activeSet = {};
             activeIds.forEach(function (id) { activeSet[id] = true; });
-            var detectionsByCamera = {};
-            detectionStates.forEach(function (state) { detectionsByCamera[state.cameraId] = state.detections; });
+            detectionStates.forEach(function (state) { lastDbDetectionsByCamera[state.cameraId] = state.detections; });
 
             document.querySelectorAll('[data-camera-tile]').forEach(function (tile) {
                 var cameraId = tile.dataset.cameraTile;
-                var detections = detectionsByCamera[cameraId] || [];
-                renderDetections(tile, detections);
+                var detections = lastDbDetectionsByCamera[cameraId] || [];
+                renderDetectionBadges(tile);
 
                 var badge = tile.querySelector('.live-motion-badge');
                 if (!badge) return;
                 // A classified detection replaces the generic badge rather than stacking with it —
-                // "🚶 Person" already implies motion, and showing both just crowds a small tile.
+                // "🚶 Human" already implies motion, and showing both just crowds a small tile.
                 badge.classList.toggle('d-none', !activeSet[cameraId] || detections.length > 0);
-            });
-        }
-
-        // Badges are rebuilt from the server's own display fields (label/emoji/color resolved by
-        // DetectionDisplay) rather than mapped client-side, so the classes this app knows about live
-        // in exactly one place. Rebuilt only when the set actually changes, since this runs on a
-        // timer and blindly replacing innerHTML every tick would restart CSS transitions and fight
-        // any text selection inside the tile.
-        function renderDetections(tile, detections) {
-            var container = tile.querySelector('.live-detection-badges');
-            if (!container) return;
-
-            var signature = detections.map(function (d) { return d.kind; }).join(',');
-            if (container.dataset.signature === signature) return;
-            container.dataset.signature = signature;
-
-            container.innerHTML = '';
-            // One badge per class, never a summary — a camera seeing a person and a vehicle at the
-            // same time has to show both. Spacing comes from the container's own flex gap.
-            detections.forEach(function (detection) {
-                var badge = document.createElement('span');
-                badge.className = 'badge';
-                badge.style.backgroundColor = detection.colorHex;
-                badge.style.color = readableTextColor(detection.colorHex);
-                badge.title = detection.label + ' detected by the camera';
-                badge.textContent = detection.emoji + ' ' + detection.label;
-                container.appendChild(badge);
             });
         }
 

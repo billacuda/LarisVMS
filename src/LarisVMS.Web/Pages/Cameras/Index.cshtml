@@ -109,6 +109,11 @@ else
                                 var staleNames = string.Join(", ", staleNodeIds.Select(id => Model.Nodes.FirstOrDefault(n => n.Id == id)?.Name ?? "a deleted node"));
                                 <span class="ms-1" title="Has recordings still on @staleNames — no longer this camera's assigned node">⚠️</span>
                             }
+                            @if (c.AiDetectionEnabled)
+                            {
+                                var streamRole = Model.EffectiveAiDetectionStreamRole.GetValueOrDefault(c.Id, "Sub");
+                                <span class="badge text-bg-light border ms-1" title="AI object detection is watching this camera's @streamRole stream">🤖 @streamRole</span>
+                            }
                         </td>
                         <td>@c.Host</td>
                         <td>

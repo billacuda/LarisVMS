@@ -104,13 +104,13 @@ public class NodeServiceCameraEventTests
 
         await service.RecordMotionSpansAsync(nodeId, [
             new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(5), 1.0),
-            new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(5), 1.0, null, DetectionKind.Person)
+            new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(5), 1.0, null, DetectionKind.Human)
         ]);
 
         var rows = await db.MotionSpans.Where(m => m.CameraId == cameraId).ToListAsync();
         Assert.Equal(2, rows.Count);
         Assert.Single(rows, r => r.DetectionKind is null);
-        Assert.Single(rows, r => r.DetectionKind == DetectionKind.Person);
+        Assert.Single(rows, r => r.DetectionKind == DetectionKind.Human);
         // A detection still arrives over the camera-event channel — the class is the extra axis,
         // not a replacement for Source.
         Assert.All(rows, r => Assert.Equal(MotionSource.CameraEvent, r.Source));
@@ -123,7 +123,7 @@ public class NodeServiceCameraEventTests
         var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
 
         await service.RecordMotionSpansAsync(nodeId, [
-            new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(5), 1.0, null, DetectionKind.Person),
+            new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(5), 1.0, null, DetectionKind.Human),
             new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(5), 1.0, null, DetectionKind.Vehicle)
         ]);
 
@@ -138,12 +138,12 @@ public class NodeServiceCameraEventTests
         var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
 
         await service.RecordMotionSpansAsync(nodeId,
-            [new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(5), 1.0, null, DetectionKind.Person)]);
+            [new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(5), 1.0, null, DetectionKind.Human)]);
         await service.RecordMotionSpansAsync(nodeId,
-            [new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(30), 1.0, null, DetectionKind.Person)]);
+            [new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(30), 1.0, null, DetectionKind.Human)]);
 
         var row = await db.MotionSpans.SingleAsync(m => m.CameraId == cameraId);
         Assert.Equal(start.AddSeconds(30), row.EndUtc);
-        Assert.Equal(DetectionKind.Person, row.DetectionKind);
+        Assert.Equal(DetectionKind.Human, row.DetectionKind);
     }
 }

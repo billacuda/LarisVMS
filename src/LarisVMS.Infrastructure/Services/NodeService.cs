@@ -120,8 +120,10 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         var reportIdleDetections = await settings.GetAsync("Detection.ReportIdleDetections", false, ct: ct);
         var aiDetectionWidth = await settings.GetAsync("Detection.Width", 1280, ct: ct);
         var aiDetectionHeight = await settings.GetAsync("Detection.Height", 720, ct: ct);
-        var aiConfidence = await settings.GetAsync("Detection.Confidence", 0.35, ct: ct);
-        var aiIou = await settings.GetAsync("Detection.Iou", 0.5, ct: ct);
+        var aiIdleTimeoutSeconds = await settings.GetAsync("Detection.IdleTimeoutSeconds", 10, ct: ct);
+        // Confidence/IoU/stream-role are resolved per camera below (Camera -> Node -> Global,
+        // same chain RetentionDays/RecordingMode already use) — not read once globally here like
+        // the settings above, since a specific camera can need its own threshold or stream choice.
 
         var cameraIds = cameras.Select(c => c.Id).ToList();
         // M18: Privacy joins ServerMotion/Ignore here — RecordingSession's own privacy-mask burn-in
@@ -164,6 +166,9 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             // setting (bounding worst-case seek latency) while still looking "set".
             var segmentSeconds = Math.Clamp(
                 await settings.GetAsync("Recording.SegmentSeconds", 60, cameraId: c.Id, nodeId: nodeId, ct: ct), 5, 300);
+            var aiConfidence = await settings.GetAsync("Detection.Confidence", 0.35, cameraId: c.Id, nodeId: nodeId, ct: ct);
+            var aiIou = await settings.GetAsync("Detection.Iou", 0.5, cameraId: c.Id, nodeId: nodeId, ct: ct);
+            var aiDetectionStreamRole = await settings.GetAsync("AiDetection.StreamRole", "Sub", cameraId: c.Id, nodeId: nodeId, ct: ct);
             cameraDtos.Add(new NodeConfigCameraDto(
                 c.Id, c.Name, c.Username, c.Password,
                 c.Streams.Where(s => s.IsEnabled).Select(s => new NodeConfigStreamDto(
@@ -179,7 +184,8 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
                 // asking the node to start something it can't resolve.
                 CameraIntegrations.ByKey(c.IntegrationKey)?.Key,
                 ResolveIntegrationBaseUri(c), segmentSeconds,
-                c.AiDetectionEnabled, c.MotionDetectionSource?.ToString()));
+                c.AiDetectionEnabled, c.MotionDetectionSource?.ToString(),
+                aiConfidence, aiIou, aiDetectionStreamRole));
         }
 
         // Cameras this node has leftover Segments for but doesn't currently record — reassigned to a
@@ -206,7 +212,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
 
         return new NodeConfigResponse(cameraDtos, storageRoot, watermarkPercent, mediaSigningKey, orphanedCameraDtos,
             adaptiveStreamingEnabled, (aiAccelerator ?? AiAccelerator.Auto).ToString(),
-            reportIdleDetections, aiDetectionWidth, aiDetectionHeight, aiConfidence, aiIou);
+            reportIdleDetections, aiDetectionWidth, aiDetectionHeight, aiIdleTimeoutSeconds);
     }
 
     /// <summary>Pulls the Events service's own XAddr out of the capability prober's raw category map

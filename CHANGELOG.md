@@ -5,6 +5,83 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Login was broken site-wide: the password field rendered as plain text and every sign-in attempt
+  failed with HTTP 400**, identically across every browser/device. Root cause: `Areas/Identity/Pages/`
+  has its own `_ViewStart.cshtml` (routes the login page through this app's shared layout) but no
+  `_ViewImports.cshtml` — and Razor's tag-helper registration is picked up by walking up the directory
+  tree from the page itself, which never reaches `Pages/_ViewImports.cshtml` since `Areas/Identity/Pages/`
+  isn't a descendant of `Pages/`. Without `@addTagHelper` active, `asp-for="Input.Password"` never
+  rendered `type="password"` (plain `<input>` defaults to text), and the form's antiforgery hidden
+  input — normally auto-injected by the FormTagHelper — never appeared, so every POST failed
+  antiforgery validation. Added the missing `Areas/Identity/Pages/_ViewImports.cshtml`.
+
+- AI-detection snapshots reported duplicate spans for a single continuous sighting of the same
+  object. `CameraDetectionPipeline`'s per-label `MotionHysteresis` was constructed with `endAfter:
+  TimeSpan.Zero`, so a single missed/occluded detection frame — or a track dipping into `Idle` for
+  even a moment before resuming `Moving` — closed the span immediately, and the very next detection
+  opened a brand-new one. Added a real grace period (`Detection.IdleTimeoutSeconds`, default 10s,
+  global setting) so brief flicker no longer fragments one sighting into several snapshots, while a
+  genuinely idle/departed object still finalizes its span once the grace period elapses.
+- AI-detection "best frame" snapshot cropping could pick the wrong object when multiple detections
+  shared a label — e.g. a snapshot for a car driving past a driveway showing the parked truck
+  already in frame instead of the car, because the truck's larger, more stable box out-scored the
+  car's on every frame. `CameraDetectionPipeline` now only lets a detection compete for "best frame"
+  while it's actually contributing to the reported span (`Moving`, not `Idle`), and tracks a
+  separate "oversized" candidate pool (boxes covering more than 80% of the frame) that's only used
+  as a fallback when no normal-sized candidate exists at all — so a genuine close-up (a face filling
+  the frame) still gets captured correctly.
+- Every AI-detected snapshot showed the same generic 📦 emoji regardless of category (Human, Vehicle,
+  Animal, Object) — `TimelineService.GetSnapshotsAsync`'s AI-category branch hardcoded the emoji
+  literal instead of looking it up per category. Added `CocoCategoryMap.Emoji`, mirroring the
+  per-class lookup the camera-native `DetectionDisplay.Emoji` already had.
+- AI-detection bounding boxes didn't track zoom/pan on a fullscreened live tile — the box overlay is
+  a plain `<canvas>` sibling of the `<video>` element, and zoom/pan is applied as a CSS transform
+  directly on the video itself, so the boxes stayed fixed at their pre-zoom screen position while the
+  video content scaled/slid underneath them. `fullscreen-tile.js` now exposes the exact transform
+  string it applies to the video, and the overlay canvas applies the identical string to itself on
+  every redraw, so the two can never drift out of sync with each other.
+- Live-view tiles never showed a badge for AI-detected objects at all — the badge-polling query only
+  ever looked at camera-native `DetectionKind` spans. Badges for AI categories are now derived
+  client-side from the same live per-frame WebSocket stream already used to draw detection boxes
+  (`live-view.js`), since only that live state — not anything persisted in the database — actually
+  knows whether a specific track is moving right now. Shows one badge per unique specific label
+  currently moving (a moving car and a moving truck both badge separately), never for idle/stationary
+  objects.
+
+### Changed
+
+- Unified the two separate "a person was detected" vocabularies: camera-native detections
+  (`DetectionKind.Person`, from onboard ONVIF/CGI analytics) and the AI pipeline's own `Human`
+  category never shared a filter token before, so the Snapshots page showed two separate "person"
+  checkboxes for what is conceptually one thing. Renamed the enum member to `DetectionKind.Human`
+  (its persisted value is unchanged) so it now shares the same name/filter token/emoji as the AI
+  category's `Human`, the same way `Vehicle`/`Animal` already do — the two checkboxes collapse into
+  one automatically via the Snapshots page's existing dedupe-by-name rendering.
+
+### Added
+
+- AI detection's confidence/IoU thresholds and which stream it watches (Main/Sub) are now real
+  settings, editable on a new AI Detection tab (`Admin/Settings/Detection`) with the same
+  global-default + per-camera-override pattern Recording settings already use. Confidence/IoU were
+  previously deployment-wide only, with no admin UI to change them at all (`NodeService` read them
+  from a `Setting` row nothing ever wrote); which stream feeds detection used to be unconditionally
+  hardcoded to Sub in `NodeWorker.ReconcileVision`, with no way to change it.
+- The camera list now shows which cameras have AI detection enabled and which stream it's watching
+  (`🤖 Sub`/`🤖 Main` next to the camera name) — previously only visible by opening each camera's own
+  Edit page one at a time.
+
+- The Snapshots page filter is now a collapsible tree in a left-side sidebar next to the snapshot
+  grid, instead of a flat row of checkboxes above it. Each AI-detection category (Vehicle, Animal,
+  ...) that has more than one specific label actually seen expands to show a checkbox per label (car,
+  truck, bicycle, ...) — unchecking a whole category still excludes everything under it as before,
+  and unchecking one specific label now excludes just that label while its siblings stay included.
+  The tree is populated live from what's actually in the database, not a fixed list, since which
+  categories/labels exist depends entirely on which detection model produced them.
+
 ## [0.157.1] - 2026-08-25
 
 ### Fixed

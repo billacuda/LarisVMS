@@ -396,7 +396,7 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
     /// Snapshots thumbnail — see GetSnapshotsAsync's own comment.</summary>
     internal static readonly TimeSpan SnapshotOffsetIntoRecording = TimeSpan.FromSeconds(1);
 
-    public async Task<SnapshotPageDto> GetSnapshotsAsync(IReadOnlyCollection<Guid>? cameraIds, DateTime? fromUtc, DateTime? toUtc, int page, int pageSize, CancellationToken ct = default, IReadOnlyCollection<string>? kinds = null)
+    public async Task<SnapshotPageDto> GetSnapshotsAsync(IReadOnlyCollection<Guid>? cameraIds, DateTime? fromUtc, DateTime? toUtc, int page, int pageSize, CancellationToken ct = default, IReadOnlyCollection<string>? kinds = null, IReadOnlyCollection<string>? excludedLabels = null)
     {
         pageSize = Math.Clamp(pageSize, 1, MaxSnapshotPageSize);
 
@@ -427,7 +427,7 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
         }
 
         // Page-level filter (Pages/Snapshots' own toolbar) — a pure narrowing on top of whatever the
-        // admin-level filter above already allows, so a viewer can browse just "Person" for a moment
+        // admin-level filter above already allows, so a viewer can browse just "Human" for a moment
         // without touching the system-wide setting. Null/empty means no additional narrowing (every
         // checkbox ticked, or the filter never touched) — same "missing = show everything" default
         // as the admin setting.
@@ -453,6 +453,17 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
                 || (m.DetectionKind != null && wantedDetectionKinds.Contains(m.DetectionKind.Value))
                 || (m.DetectedObjectCategoryId != null && m.DetectedObjectCategory != null && wantedCategoryNames.Contains(m.DetectedObjectCategory.Name))
                 || (m.DetectionKind == null && m.EventTagRuleId == null && m.DetectedObjectCategoryId == null && wantMotion));
+        }
+
+        // Filter-tree narrowing, one level below kinds: excludes a specific "{category}:{label}"
+        // pair (e.g. "Vehicle:truck") while its category and sibling labels stay included — a
+        // camera-native DetectionKind span has no specific label at all, so it's never touched here.
+        if (excludedLabels is { Count: > 0 })
+        {
+            var excludedSet = excludedLabels.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            query = query.Where(m =>
+                m.DetectedObjectCategory == null || m.DetectedObjectLabel == null
+                || !excludedSet.Contains(m.DetectedObjectCategory.Name + ":" + m.DetectedObjectLabel));
         }
 
         var total = await query.CountAsync(ct);
@@ -535,15 +546,12 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
             {
                 // Object detection plan decision 5: combined "category — label" text, not just the
                 // category — a card that only said "Vehicle" would lose exactly the detail
-                // (car vs. truck vs. bus) the open-ended category system exists to preserve. No
-                // per-class emoji the way DetectionDisplay has (the label set is open-ended, not a
-                // fixed small enum) — a generic package, same fallback DetectionDisplay.Emoji itself
-                // uses for its own unclassified "Other" case.
+                // (car vs. truck vs. bus) the open-ended category system exists to preserve.
                 label = r.DetectedObjectLabel is { } specificLabel
                     ? $"{r.AiCategoryName} — {specificLabel}"
                     : r.AiCategoryName;
                 color = r.AiCategoryColorHex ?? EventColors.DefaultMotion;
-                emoji = "📦";
+                emoji = CocoCategoryMap.Emoji(r.AiCategoryName);
             }
             else
             {
@@ -605,6 +613,17 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
         return await db.DetectedObjectCategories.AsNoTracking()
             .OrderBy(c => c.Name)
             .Select(c => new DetectedObjectCategoryDto(c.Id, c.Name, c.ColorHex))
+            .ToListAsync(ct);
+    }
+
+    public async Task<List<DetectedObjectLabelDto>> GetDetectedObjectLabelsAsync(CancellationToken ct = default)
+    {
+        return await db.MotionSpans.AsNoTracking()
+            .Where(m => m.DetectedObjectCategory != null && m.DetectedObjectLabel != null)
+            .Select(m => new { CategoryName = m.DetectedObjectCategory!.Name, Label = m.DetectedObjectLabel! })
+            .Distinct()
+            .OrderBy(x => x.CategoryName).ThenBy(x => x.Label)
+            .Select(x => new DetectedObjectLabelDto(x.CategoryName, x.Label))
             .ToListAsync(ct);
     }
 }

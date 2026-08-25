@@ -49,4 +49,17 @@ public static class CocoCategoryMap
         if (AnimalClasses.Contains(cocoClassName)) return Animal;
         return Object;
     }
+
+    /// <summary>Emoji marker for one of these four category names, matching this app's
+    /// emoji-as-icons convention (see DetectionDisplay.Emoji, the equivalent for the camera-native
+    /// DetectionKind side). Object is the genuine catch-all, same fallback DetectionDisplay itself
+    /// uses for its own unclassified "Other" case — never returns anything else for an unrecognized
+    /// name, since Resolve above never produces one.</summary>
+    public static string Emoji(string categoryName) => categoryName switch
+    {
+        Human => "🚶",
+        Vehicle => "🚗",
+        Animal => "🐾",
+        _ => "📦"
+    };
 }

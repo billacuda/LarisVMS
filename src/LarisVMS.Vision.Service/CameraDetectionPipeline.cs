@@ -55,7 +55,10 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     // track. Only ever touched from the single inference loop below, so plain (not concurrent)
     // collections are safe.
     private readonly Dictionary<string, MotionHysteresis> _hysteresisByLabel = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, (BestFrame Frame, double Score)> _bestFrameByLabel = new(StringComparer.OrdinalIgnoreCase);
+
+    // Pulled out as its own pure/testable class — see LabelBestFrameTracker's own doc comment for
+    // why "best frame" needs two tiers per label rather than one.
+    private readonly LabelBestFrameTracker _bestFrames = new();
 
     // Read by the control API's GET /cameras/{id}/detections handler on a request thread, written
     // by the inference loop — a plain volatile reference swap (never mutated in place) is enough:
@@ -155,11 +158,21 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
                 var observation = _movement.Observe(trackId, detection.BoundingBox, detection.Confidence,
                     frame.Width, frame.Height, now);
 
-                UpdateBestFrameForLabel(label, detection, frame.Width, frame.Height, now);
-
                 // Idle tracks never open/extend a span unless ReportIdleDetections is on — decision
                 // 7's "not interested in static objects" default. A Moving track always does.
                 var motionPresent = observation.State == MovementState.Moving || _request.ReportIdleDetections;
+
+                // Only a detection that's actually contributing to this span gets to compete for
+                // "best frame" — otherwise a parked/idle object sharing this label (a driveway's
+                // own stationary truck, say) can win over the thing that's actually driving the
+                // reported span (a car passing through), since it's bigger, better-lit, and more
+                // stable every single frame. Computed after motionPresent so a non-contributing
+                // detection is skipped entirely, not just deprioritized.
+                if (motionPresent)
+                {
+                    UpdateBestFrameForLabel(label, detection, frame.Width, frame.Height, now);
+                }
+
                 var hysteresis = GetOrCreateHysteresis(label);
                 if (hysteresis.Observe(now, motionPresent, detection.Confidence) is { } closed)
                 {
@@ -201,36 +214,47 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         var w = box.Width / (double)frameWidth;
         var h = box.Height / (double)frameHeight;
         var normalizedArea = Math.Clamp(w * h, 0.0, 1.0);
-        var score = MovementClassifier.Score(detection.Confidence, normalizedArea);
-
-        if (!_bestFrameByLabel.TryGetValue(label, out var current) || score > current.Score)
-        {
-            _bestFrameByLabel[label] = (new BestFrame(nowUtc, x, y, w, h, detection.Confidence), score);
-        }
+        var frame = new BestFrame(nowUtc, x, y, w, h, detection.Confidence);
+        _bestFrames.Observe(label, frame, normalizedArea, detection.Confidence);
     }
 
     private MotionHysteresis GetOrCreateHysteresis(string label)
     {
         if (!_hysteresisByLabel.TryGetValue(label, out var hysteresis))
         {
-            // Zero debounce on both edges, the same choice DahuaCgiEventSession makes: ByteTrack's
-            // own two-stage association plus its "confirmed only after a second corroborating
-            // frame" activation rule already provide the "is this real" gating a startAfter/endAfter
-            // debounce exists for elsewhere (raw per-frame pixel motion has no such confirmation of
-            // its own).
-            hysteresis = new MotionHysteresis(startAfter: TimeSpan.Zero, endAfter: TimeSpan.Zero);
+            // Zero startAfter: ByteTrack's own two-stage association plus its "confirmed only after
+            // a second corroborating frame" activation rule already provide the "is this real"
+            // gating a startAfter debounce exists for elsewhere. endAfter is NOT zero, unlike that —
+            // a zero grace period closed a label's span on the very first quiet frame, so a single
+            // missed/occluded detection (or a track dipping into Idle for a moment before resuming
+            // Moving) reopened a brand-new span/snapshot instead of continuing the one already in
+            // progress. IdleTimeoutSeconds gives real slack to absorb that flicker while still
+            // finalizing the snapshot once the object is genuinely gone or has settled into Idle.
+            hysteresis = new MotionHysteresis(startAfter: TimeSpan.Zero, endAfter: TimeSpan.FromSeconds(_request.IdleTimeoutSeconds));
             _hysteresisByLabel[label] = hysteresis;
         }
         return hysteresis;
     }
 
-    private void EnqueueReport(MotionSpanResult span, string label, string category)
+    /// <summary>Reports one span. <paramref name="spanClosed"/> is true when the span has genuinely
+    /// ended (hysteresis just closed it, or a shutdown Flush forced it) versus a mid-span checkpoint
+    /// of one still in progress — only a real close resets this label's best-frame candidates, so a
+    /// checkpoint doesn't throw away bookkeeping the span itself is still going to need.</summary>
+    private void EnqueueReport(MotionSpanResult span, string label, string category, bool spanClosed = true)
     {
-        var best = _bestFrameByLabel.TryGetValue(label, out var b) ? b.Frame : (BestFrame?)null;
+        // Prefer the normal-sized candidate; an oversized one (see LabelBestFrameTracker's own doc
+        // comment) only stands in when nothing normal-sized was ever seen for this span — e.g. a
+        // face filling the frame close-up with nothing smaller in view.
+        var best = _bestFrames.GetBest(label);
         _pendingReports.Enqueue(new VisionDetectionReportItem(
             _request.CameraId, span.StartUtc, span.EndUtc, span.PeakScore,
             category, label,
             best?.AtUtc, best?.X, best?.Y, best?.W, best?.H, best?.Confidence));
+
+        // A closed span is done contributing best-frame candidates — reset so a later, separate
+        // span for this same label runs its own fresh contest instead of being handed a stale
+        // sighting (a truck that won weeks ago) that could otherwise never lose to a real detection.
+        if (spanClosed) _bestFrames.Reset(label);
     }
 
     private async Task CheckpointLoopAsync(CancellationToken ct)
@@ -245,7 +269,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             {
                 if (hysteresis.CurrentInProgressSpan(now, CheckpointRecency) is { } span)
                 {
-                    EnqueueReport(span, label, CocoCategoryMap.Resolve(label));
+                    EnqueueReport(span, label, CocoCategoryMap.Resolve(label), spanClosed: false);
                 }
             }
         }

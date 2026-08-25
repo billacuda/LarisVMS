@@ -1,0 +1,91 @@
+@page
+@model LarisVMS.Web.Pages.Admin.Settings.DetectionModel
+@{
+    ViewData["Title"] = "AI detection settings";
+}
+<h1>Settings</h1>
+<partial name="_SettingsTabs" model="@("Detection")" />
+
+@if (!string.IsNullOrEmpty(Model.SavedMessage))
+{
+    <div class="alert alert-success">@Model.SavedMessage</div>
+}
+
+<form method="post" class="row g-3" style="max-width: 560px;">
+    <div class="col-6">
+        <label class="form-label">
+            Confidence threshold
+            <button type="button" class="help-icon" data-help-target="confidenceHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <div class="d-flex align-items-center gap-2">
+            <input asp-for="Confidence" type="range" min="0" max="1" step="0.05" class="form-range"
+                   oninput="this.nextElementSibling.textContent = Math.round(this.value * 100);" />
+            <output class="text-muted small" style="min-width: 2.5em;">@Math.Round(Model.Confidence * 100)</output>
+        </div>
+        <div class="help-text-source" id="confidenceHelp">
+            Minimum score a detection needs to be reported at all. Lower catches more real objects but
+            also more false positives; higher misses fainter/partial detections. A per-camera override
+            is available on that camera's own Edit page.
+        </div>
+    </div>
+    <div class="col-6">
+        <label class="form-label">
+            IoU threshold
+            <button type="button" class="help-icon" data-help-target="iouHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <div class="d-flex align-items-center gap-2">
+            <input asp-for="Iou" type="range" min="0" max="1" step="0.05" class="form-range"
+                   oninput="this.nextElementSibling.textContent = Math.round(this.value * 100);" />
+            <output class="text-muted small" style="min-width: 2.5em;">@Math.Round(Model.Iou * 100)</output>
+        </div>
+        <div class="help-text-source" id="iouHelp">
+            Overlap threshold used to merge duplicate boxes for the same object. A per-camera override
+            is available on that camera's own Edit page.
+        </div>
+    </div>
+
+    <div class="col-12">
+        <label class="form-label">
+            Detection stream
+            <button type="button" class="help-icon" data-help-target="streamRoleHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <select asp-for="StreamRole" class="form-select">
+            <option value="Sub">Sub</option>
+            <option value="Main">Main</option>
+        </select>
+        <div class="help-text-source" id="streamRoleHelp">
+            Which of a camera's streams AI detection actually watches — Sub (lower resolution, lighter
+            load) by default. A per-camera override is available on that camera's own Edit page.
+        </div>
+    </div>
+
+    <div class="col-12">
+        <label class="form-label">
+            Idle timeout (seconds)
+            <button type="button" class="help-icon" data-help-target="idleTimeoutHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <input asp-for="IdleTimeoutSeconds" type="number" min="0" class="form-control" required />
+        <div class="help-text-source" id="idleTimeoutHelp">
+            How long a detected object can go unseen (or sit idle) before its snapshot is finalized and
+            a later re-detection starts a new one. Too short fragments one continuous sighting into
+            several snapshots; too long delays finalizing a snapshot after the object is actually gone.
+        </div>
+    </div>
+
+    <div class="col-12 form-check">
+        <input asp-for="ReportIdleDetections" type="checkbox" class="form-check-input" />
+        <label asp-for="ReportIdleDetections" class="form-check-label">
+            Report idle (stationary) objects
+            <button type="button" class="help-icon" data-help-target="reportIdleHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <div class="help-text-source" id="reportIdleHelp">
+            Off by default — a track that stops moving no longer keeps its snapshot open, so a parked
+            vehicle or a person standing still doesn't get reported at all once it settles. Turn this on
+            to also report objects that are present but not moving.
+        </div>
+    </div>
+
+    <div class="col-12">
+        <button type="submit" class="btn btn-primary"><span aria-hidden="true">💾</span> Save</button>
+    </div>
+</form>

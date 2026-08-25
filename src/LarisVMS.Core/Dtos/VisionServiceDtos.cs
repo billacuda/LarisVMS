@@ -38,6 +38,10 @@ public record VisionStartCameraRequest(
     /// (GET /cameras/{id}/detections), which always includes every currently-tracked object
     /// regardless of this setting — see decision 6's Moving/Idle live-overlay toggles.</summary>
     bool ReportIdleDetections,
+    /// <summary>How long (MotionHysteresis's endAfter) a label's span stays open after motion stops
+    /// before actually closing — see NodeConfigResponse.AiIdleTimeoutSeconds's own doc comment for
+    /// why this needs to be non-zero.</summary>
+    int IdleTimeoutSeconds,
     /// <summary>Where this Vision Service instance should POST closed/checkpointed detection spans
     /// back to, e.g. "http://127.0.0.1:{nodePort}" — Node's own localhost-only control port. Told
     /// to Vision Service rather than assumed/hardcoded so neither side has a second place to keep a

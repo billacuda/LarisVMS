@@ -74,12 +74,12 @@ public class TimelineServiceTests
             StartUtc = start,
             EndUtc = start.AddSeconds(30),
             Source = MotionSource.CameraEvent,
-            DetectionKind = DetectionKind.Person
+            DetectionKind = DetectionKind.Human
         });
         await db.SaveChangesAsync();
 
         var custom = new StubEventColors(new EventPalette(null, null,
-            new Dictionary<DetectionKind, string> { [DetectionKind.Person] = "#123456" }));
+            new Dictionary<DetectionKind, string> { [DetectionKind.Human] = "#123456" }));
         var service = new TimelineService(db, custom);
 
         var buckets = await service.GetBucketsAsync(cameraId, start, start.AddMinutes(1), 2);
@@ -116,7 +116,7 @@ public class TimelineServiceTests
         using var db = NewDb();
         var cameraId = Guid.NewGuid();
         var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
-        foreach (var kind in new[] { DetectionKind.Person, DetectionKind.Vehicle })
+        foreach (var kind in new[] { DetectionKind.Human, DetectionKind.Vehicle })
         {
             db.MotionSpans.Add(new MotionSpan
             {
@@ -133,7 +133,7 @@ public class TimelineServiceTests
         var buckets = await service.GetBucketsAsync(cameraId, start, start.AddMinutes(1), 2);
 
         Assert.Equal(2, buckets[0].TagColorHexes!.Count);
-        Assert.Contains(DetectionDisplay.ColorHex(DetectionKind.Person), buckets[0].TagColorHexes!);
+        Assert.Contains(DetectionDisplay.ColorHex(DetectionKind.Human), buckets[0].TagColorHexes!);
         Assert.Contains(DetectionDisplay.ColorHex(DetectionKind.Vehicle), buckets[0].TagColorHexes!);
         // The single-color field stays populated so anything reading one color still renders.
         Assert.Equal(buckets[0].TagColorHexes![0], buckets[0].TagColorHex);
@@ -176,7 +176,7 @@ public class TimelineServiceTests
                 StartUtc = start.AddSeconds(i),
                 EndUtc = start.AddSeconds(20 + i),
                 Source = MotionSource.CameraEvent,
-                DetectionKind = DetectionKind.Person
+                DetectionKind = DetectionKind.Human
             });
         }
         await db.SaveChangesAsync();
@@ -196,7 +196,7 @@ public class TimelineServiceTests
         using var db = NewDb();
         var cameraId = Guid.NewGuid();
         var now = DateTime.UtcNow;
-        foreach (var kind in new[] { DetectionKind.Person, DetectionKind.Vehicle, DetectionKind.Animal })
+        foreach (var kind in new[] { DetectionKind.Human, DetectionKind.Vehicle, DetectionKind.Animal })
         {
             db.MotionSpans.Add(new MotionSpan
             {
@@ -215,7 +215,7 @@ public class TimelineServiceTests
         var state = Assert.Single(states);
         Assert.Equal(3, state.Detections.Count);
         Assert.Equal(
-            new[] { "Person", "Vehicle", "Animal" }.OrderBy(s => s),
+            new[] { "Human", "Vehicle", "Animal" }.OrderBy(s => s),
             state.Detections.Select(d => d.Kind).OrderBy(s => s));
         // Each badge carries its own display fields, so two classes can never render identically.
         Assert.Equal(3, state.Detections.Select(d => d.Emoji).Distinct().Count());
@@ -238,7 +238,7 @@ public class TimelineServiceTests
                 StartUtc = now.AddSeconds(-30 + i),
                 EndUtc = now.AddSeconds(-10 + i),
                 Source = MotionSource.CameraEvent,
-                DetectionKind = DetectionKind.Person
+                DetectionKind = DetectionKind.Human
             });
         }
         await db.SaveChangesAsync();
@@ -259,7 +259,7 @@ public class TimelineServiceTests
         db.MotionSpans.Add(new MotionSpan
         {
             CameraId = cameraA, StartUtc = now.AddSeconds(-20), EndUtc = now,
-            Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Person
+            Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human
         });
         db.MotionSpans.Add(new MotionSpan
         {
@@ -272,7 +272,7 @@ public class TimelineServiceTests
         var states = await service.GetActiveDetectionsAsync();
 
         Assert.Equal(2, states.Count);
-        Assert.Equal("Person", Assert.Single(states.Single(s => s.CameraId == cameraA).Detections).Kind);
+        Assert.Equal("Human", Assert.Single(states.Single(s => s.CameraId == cameraA).Detections).Kind);
         Assert.Equal("Vehicle", Assert.Single(states.Single(s => s.CameraId == cameraB).Detections).Kind);
     }
 
@@ -1094,7 +1094,7 @@ public class TimelineServiceTests
         var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
         db.MotionSpans.Add(new MotionSpan
         {
-            CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Person,
+            CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human,
             StartUtc = start, EndUtc = start.AddMilliseconds(400), Score = 1.0
         });
         await db.SaveChangesAsync();
@@ -1114,18 +1114,18 @@ public class TimelineServiceTests
         var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
         db.MotionSpans.Add(new MotionSpan
         {
-            CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Person,
+            CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human,
             StartUtc = start, EndUtc = start.AddSeconds(30), Score = 1.0
         });
         await db.SaveChangesAsync();
 
         var custom = new StubEventColors(new EventPalette(null, null,
-            new Dictionary<DetectionKind, string> { [DetectionKind.Person] = "#123456" }));
+            new Dictionary<DetectionKind, string> { [DetectionKind.Human] = "#123456" }));
         var service = new TimelineService(db, custom);
         var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
 
         var s = Assert.Single(page.Items);
-        Assert.Equal("Person", s.Label);
+        Assert.Equal("Human", s.Label);
         Assert.Equal("#123456", s.ColorHex);
         Assert.Equal("🚶", s.Emoji);
     }
@@ -1258,15 +1258,15 @@ public class TimelineServiceTests
         db.EventTagRules.Add(rule);
         db.MotionSpans.AddRange(
             new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start, EndUtc = start.AddSeconds(1) }, // plain motion
-            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Person, StartUtc = start.AddMinutes(1), EndUtc = start.AddMinutes(1).AddSeconds(1) },
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human, StartUtc = start.AddMinutes(1), EndUtc = start.AddMinutes(1).AddSeconds(1) },
             new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Vehicle, StartUtc = start.AddMinutes(2), EndUtc = start.AddMinutes(2).AddSeconds(1) },
             new MotionSpan { CameraId = cameraId, Source = MotionSource.CustomTag, EventTagRuleId = rule.Id, StartUtc = start.AddMinutes(3), EndUtc = start.AddMinutes(3).AddSeconds(1) });
         await db.SaveChangesAsync();
 
         var service = new TimelineService(db, DefaultPalette);
-        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24, kinds: ["Person"]);
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24, kinds: ["Human"]);
 
-        Assert.Equal("Person", Assert.Single(page.Items).Label);
+        Assert.Equal("Human", Assert.Single(page.Items).Label);
     }
 
     [Fact]
@@ -1282,7 +1282,7 @@ public class TimelineServiceTests
         db.EventTagRules.Add(rule);
         db.MotionSpans.AddRange(
             new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start, EndUtc = start.AddSeconds(1) },
-            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Person, StartUtc = start.AddMinutes(1), EndUtc = start.AddMinutes(1).AddSeconds(1) },
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human, StartUtc = start.AddMinutes(1), EndUtc = start.AddMinutes(1).AddSeconds(1) },
             new MotionSpan { CameraId = cameraId, Source = MotionSource.CustomTag, EventTagRuleId = rule.Id, StartUtc = start.AddMinutes(3), EndUtc = start.AddMinutes(3).AddSeconds(1) });
         await db.SaveChangesAsync();
 
@@ -1290,7 +1290,7 @@ public class TimelineServiceTests
         var page = await service.GetSnapshotsAsync(null, null, null, 1, 24, kinds: ["Motion", TimelineService.CustomTagKindToken]);
 
         Assert.Equal(2, page.Items.Count);
-        Assert.DoesNotContain(page.Items, i => i.Label == "Person");
+        Assert.DoesNotContain(page.Items, i => i.Label == "Human");
     }
 
     [Fact]
@@ -1364,6 +1364,68 @@ public class TimelineServiceTests
         var categories = await service.GetDetectedObjectCategoriesAsync();
 
         Assert.Equal(["Animal", "Vehicle"], categories.Select(c => c.Name));
+    }
+
+    [Fact]
+    public async Task ExcludedLabelsFiltersOutOnlyTheSpecificLabelKeepingSiblingsIncluded()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var vehicle = new DetectedObjectCategory { Id = Guid.NewGuid(), Name = "Vehicle", ColorHex = "#3366cc", FirstSeenUtc = DateTime.UtcNow };
+        db.DetectedObjectCategories.Add(vehicle);
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.AddRange(
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.AiDetection, DetectedObjectCategoryId = vehicle.Id, DetectedObjectLabel = "car", StartUtc = start, EndUtc = start.AddSeconds(1) },
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.AiDetection, DetectedObjectCategoryId = vehicle.Id, DetectedObjectLabel = "truck", StartUtc = start.AddMinutes(1), EndUtc = start.AddMinutes(1).AddSeconds(1) });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24, excludedLabels: ["Vehicle:truck"]);
+
+        Assert.Equal("Vehicle — car", Assert.Single(page.Items).Label);
+    }
+
+    [Fact]
+    public async Task ExcludedLabelsDoesNotAffectCameraNativeSpansWithNoSpecificLabel()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.Add(new MotionSpan
+        {
+            CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human,
+            StartUtc = start, EndUtc = start.AddSeconds(1)
+        });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24, excludedLabels: ["Vehicle:truck"]);
+
+        Assert.Single(page.Items);
+    }
+
+    [Fact]
+    public async Task GetDetectedObjectLabelsReturnsDistinctPairsOrderedByCategoryThenLabel()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var vehicle = new DetectedObjectCategory { Id = Guid.NewGuid(), Name = "Vehicle", ColorHex = "#3366cc", FirstSeenUtc = DateTime.UtcNow };
+        var animal = new DetectedObjectCategory { Id = Guid.NewGuid(), Name = "Animal", ColorHex = "#33cc66", FirstSeenUtc = DateTime.UtcNow };
+        db.DetectedObjectCategories.AddRange(vehicle, animal);
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.AddRange(
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.AiDetection, DetectedObjectCategoryId = vehicle.Id, DetectedObjectLabel = "truck", StartUtc = start, EndUtc = start.AddSeconds(1) },
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.AiDetection, DetectedObjectCategoryId = vehicle.Id, DetectedObjectLabel = "car", StartUtc = start.AddMinutes(1), EndUtc = start.AddMinutes(1).AddSeconds(1) },
+            // A repeat of the same (category, label) pair — must not produce a duplicate entry.
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.AiDetection, DetectedObjectCategoryId = vehicle.Id, DetectedObjectLabel = "car", StartUtc = start.AddMinutes(2), EndUtc = start.AddMinutes(2).AddSeconds(1) },
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.AiDetection, DetectedObjectCategoryId = animal.Id, DetectedObjectLabel = "dog", StartUtc = start.AddMinutes(3), EndUtc = start.AddMinutes(3).AddSeconds(1) },
+            // No specific label at all — must be excluded, not surfaced as a null-labeled node.
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human, StartUtc = start.AddMinutes(4), EndUtc = start.AddMinutes(4).AddSeconds(1) });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var labels = await service.GetDetectedObjectLabelsAsync();
+
+        Assert.Equal(
+            [("Animal", "dog"), ("Vehicle", "car"), ("Vehicle", "truck")],
+            labels.Select(l => (l.CategoryName, l.Label)));
     }
 
     [Fact]
