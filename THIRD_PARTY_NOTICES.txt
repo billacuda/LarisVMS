@@ -1,0 +1,87 @@
+THIRD PARTY NOTICES
+===================
+
+This file covers the third-party components that came in with native AI object detection
+(LarisVMS.Vision / LarisVMS.Vision.Service). LarisVMS is MIT licensed; this is not yet a complete
+notice for every dependency the wider application uses (ASP.NET Core, EF Core, Bootstrap, GridStack,
+etc. — each carries its own standard OSS license via NuGet/npm, not separately re-stated here).
+
+
+RUNTIME DEPENDENCIES
+--------------------
+
+YoloDotNet 4.2.0 (+ YoloDotNet.ExecutionProvider.* 1.x)
+    MIT
+    https://github.com/NickSwardh/YoloDotNet
+    Copyright (c) Niklas Swärd
+
+    NOTE: the NuGet package declares MIT, and 96 of its 100 source files carry
+    an SPDX MIT header. Four files are marked GPL-3.0-or-later:
+        YoloDotNet/Video/FrameRate.cs
+        YoloDotNet/Video/VideoOptions.cs
+        YoloDotNet/Video/Services/Processor.cs
+        YoloDotNet/Video/Services/FrameSaveService.cs
+    All four belong to the library's built-in video pipeline, which LarisVMS.Vision does not use —
+    Capture/VisionSession.cs replaces it entirely, the same way aitest's own FrameReader did (this
+    project's own capture pipeline was ported from that reference implementation — see below). The
+    package-level MIT declaration is what is relied upon here. This inconsistency has been noted
+    upstream.
+
+Microsoft.ML.OnnxRuntime (Gpu / DirectML / OpenVino variants)
+    MIT
+    https://github.com/microsoft/onnxruntime
+    Copyright (c) Microsoft Corporation
+    Pulled in transitively by whichever YoloDotNet.ExecutionProvider.* package LarisVMS.Vision.Service
+    was published against (build-node.ps1 -Accel).
+
+SkiaSharp
+    MIT
+    https://github.com/mono/SkiaSharp
+    Copyright (c) Microsoft Corporation
+    Pulled in transitively by YoloDotNet; used directly in LarisVMS.Vision for detection box geometry.
+
+
+VENDORED SOURCE
+---------------
+
+ByteTrack — src/LarisVMS.Vision/Tracking/
+    MIT
+    https://github.com/FoundationVision/ByteTrack
+    Copyright (c) 2021 Yifu Zhang
+
+    The multi-object tracker in Tracking/ is a C# port of the reference implementation, primarily
+    deploy/TensorRT/cpp/src/BYTETracker.cpp and kalmanFilter.cpp. Each ported file retains upstream
+    attribution in its header. The linear assignment step calls YoloDotNet's public LAPJV.Solve
+    rather than porting the reference lapjv.cpp. Ported into this repo from `aitest`
+    (g:\Projects\aitest, this project's own standalone prototyping/validation repo, itself MIT
+    licensed) — same code, same attribution, carried forward unchanged.
+
+
+EXTERNAL TOOLS (invoked as subprocesses, not linked)
+----------------------------------------------------
+
+FFmpeg
+    Invoked as a separate process over a pipe; no FFmpeg code is linked into this project, so its
+    license does not propagate here. See the README's own note on the LGPL "shared" build.
+    https://ffmpeg.org
+
+LibreYOLO
+    MIT — https://github.com/LibreYOLO/libreyolo
+    Used only by tools/export-models/export.py to produce ONNX files. Not a runtime dependency.
+
+
+MODEL WEIGHTS
+-------------
+
+Not distributed in this repository; downloaded by the export script. Licenses are carried alongside
+each exported model in models/ (gitignored — see tools/export-models/export.py's own
+write_license).
+
+YOLO9 (LibreYOLO9{t,s,m,c})
+    MIT — upstream MultimediaTechLab/YOLO (Kin-Yiu Wong & Hao-Tang Tsui)
+    The only family tools/export-models/export.py's DEFAULT_MODELS actually exports.
+
+COCO-trained (80 classes). Per LibreYOLO's weights/LICENSE_NOTICE.txt, weight licenses vary by
+family and not all families are permissive — only YOLO9 above is used here, and that is deliberate
+(RT-DETR is deliberately excluded — see export.py's own doc comment for the numerical-verification
+reason, not a licensing one; RT-DETR's own upstream weights are Apache-2.0 regardless).
