@@ -27,18 +27,30 @@ YoloDotNet 4.2.0 (+ YoloDotNet.ExecutionProvider.* 1.x)
     package-level MIT declaration is what is relied upon here. This inconsistency has been noted
     upstream.
 
+    STILL A RUNTIME DEPENDENCY, EVEN THOUGH ITS OWN DECODERS AREN'T USED ANY MORE: the D-FINE
+    integration (see below) bypasses YoloDotNet's model-specific decoding entirely — DFineEngine
+    runs Microsoft.ML.OnnxRuntime directly — but this package remains referenced for (1) the
+    YoloDotNet.ExecutionProvider.* packages, still the delivery vehicle for the correct native ONNX
+    Runtime build per accelerator (build-node.ps1 -Accel), (2) its ObjectDetection/LabelModel/
+    IDetection types, which DFineDecoder constructs directly so ByteTracker/MovementClassifier/
+    CameraDetectionPipeline never needed to change, and (3) its public LAPJV.Solve, which the
+    ByteTrack port below calls directly.
+
 Microsoft.ML.OnnxRuntime (Gpu / DirectML / OpenVino variants)
     MIT
     https://github.com/microsoft/onnxruntime
     Copyright (c) Microsoft Corporation
     Pulled in transitively by whichever YoloDotNet.ExecutionProvider.* package LarisVMS.Vision.Service
-    was published against (build-node.ps1 -Accel).
+    was published against (build-node.ps1 -Accel) — and, since the D-FINE integration, also used
+    directly (Inference/OrtSessionFactory.cs, Inference/DFineEngine.cs) rather than only through
+    YoloDotNet's own IExecutionProvider wrapper.
 
 SkiaSharp
     MIT
     https://github.com/mono/SkiaSharp
     Copyright (c) Microsoft Corporation
-    Pulled in transitively by YoloDotNet; used directly in LarisVMS.Vision for detection box geometry.
+    Pulled in transitively by YoloDotNet; used directly in LarisVMS.Vision for detection box geometry
+    and, since the D-FINE integration, for DFineEngine's own frame preprocessing (resize/pixel pack).
 
 
 VENDORED SOURCE
@@ -65,23 +77,36 @@ FFmpeg
     license does not propagate here. See the README's own note on the LGPL "shared" build.
     https://ffmpeg.org
 
-LibreYOLO
-    MIT — https://github.com/LibreYOLO/libreyolo
-    Used only by tools/export-models/export.py to produce ONNX files. Not a runtime dependency.
+huggingface-hub (Python)
+    Apache-2.0 — https://github.com/huggingface/huggingface_hub
+    Used only by tools/export-models/fetch_dfine.py to download ONNX files. Not a runtime
+    dependency of the shipped application.
 
 
 MODEL WEIGHTS
 -------------
 
-Not distributed in this repository; downloaded by the export script. Licenses are carried alongside
-each exported model in models/ (gitignored — see tools/export-models/export.py's own
+Not distributed in this repository; downloaded by tools/export-models/fetch_dfine.py. Licenses are
+carried alongside each fetched model in models/ (gitignored — see fetch_dfine.py's own
 write_license).
 
-YOLO9 (LibreYOLO9{t,s,m,c})
-    MIT — upstream MultimediaTechLab/YOLO (Kin-Yiu Wong & Hao-Tang Tsui)
-    The only family tools/export-models/export.py's DEFAULT_MODELS actually exports.
+D-FINE (small — obj2coco and obj365 variants)
+    Apache-2.0 — https://github.com/Peterande/D-FINE (Yansong Peng et al.)
+    ONNX weights redistributed via onnx-community on Hugging Face
+    (onnx-community/dfine_s_obj2coco-ONNX, onnx-community/dfine_s_obj365-ONNX), themselves derived
+    from ustc-community/dfine-small-obj2coco and ustc-community/dfine-small-obj365 — both
+    Apache-2.0, same upstream project. Replaced YOLOv9/LibreYOLO (see git history) as the default
+    detection model: license-clean (Apache-2.0 end to end, unlike YOLOv9's non-permissive weight
+    lineage) and DETR-style (no per-frame NMS, and — per user-reported CPU/GPU utilization —
+    noticeably lighter on the CPU than YoloDotNet's own YOLO-family decode+NMS path).
 
-COCO-trained (80 classes). Per LibreYOLO's weights/LICENSE_NOTICE.txt, weight licenses vary by
-family and not all families are permissive — only YOLO9 above is used here, and that is deliberate
-(RT-DETR is deliberately excluded — see export.py's own doc comment for the numerical-verification
-reason, not a licensing one; RT-DETR's own upstream weights are Apache-2.0 regardless).
+    Objects365 dataset note (obj365 variant only): the Objects365 annotations are CC BY 4.0, but
+    the underlying source images are distributed under the Flickr Terms of Use and are NOT
+    redistributable. This project ships only the derived D-FINE model weights (a trained neural
+    network, not the training images or annotations themselves) — no Objects365 image or
+    annotation data is included anywhere in this repository or its release artifacts.
+    See https://www.objects365.org/download.html.
+
+    RF-DETR and YOLOX are reserved model-family options (DetectionModelFamily enum, rendered
+    disabled in the admin picker) with no weights fetched or shipped yet — see the model-swap
+    plan's deferred scope for why.

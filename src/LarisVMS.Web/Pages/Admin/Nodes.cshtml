@@ -59,6 +59,7 @@ else
                     <th>Platform</th>
                     <th data-no-sort>Encoders</th>
                     <th data-no-sort>AI accelerator</th>
+                    <th data-no-sort>Detection model</th>
                     <th>Last seen</th>
                     <th data-sort-numeric>Cameras</th>
                     <th>Storage root</th>
@@ -140,6 +141,26 @@ else
                                         }
                                     }
                                 </div>
+                            </td>
+                            <td style="min-width: 9rem;">
+                                @* Node-scoped override (Detection.ModelFamily/Detection.DFineWeights)
+                                   — see NodeConfigResponse.DetectionModelFamily's own doc comment for
+                                   why this is per-node, not per-camera. Global default is set on
+                                   Admin/Settings/Detection. *@
+                                <select name="modelFamilyOverride" class="form-select form-select-sm">
+                                    <option value="" selected="@(string.IsNullOrEmpty(Model.ModelFamilyOverride.GetValueOrDefault(n.Id)))">
+                                        (inherit — currently @Model.EffectiveModelFamily.GetValueOrDefault(n.Id, "Auto"))
+                                    </option>
+                                    <option value="Auto" selected="@(Model.ModelFamilyOverride.GetValueOrDefault(n.Id) == "Auto")">Auto</option>
+                                    <option value="DFine" selected="@(Model.ModelFamilyOverride.GetValueOrDefault(n.Id) == "DFine")">D-FINE</option>
+                                    <option value="RfDetr" disabled>RF-DETR (not yet available)</option>
+                                    <option value="YoloX" disabled>YOLOX (not yet available)</option>
+                                </select>
+                                <select name="dfineWeightsOverride" class="form-select form-select-sm mt-1">
+                                    <option value="" selected="@(string.IsNullOrEmpty(Model.DFineWeightsOverride.GetValueOrDefault(n.Id)))">(inherit)</option>
+                                    <option value="Obj2Coco" selected="@(Model.DFineWeightsOverride.GetValueOrDefault(n.Id) == "Obj2Coco")">Obj2Coco</option>
+                                    <option value="Obj365" selected="@(Model.DFineWeightsOverride.GetValueOrDefault(n.Id) == "Obj365")">Obj365</option>
+                                </select>
                             </td>
                             <td data-sort-value="@(n.LastSeenAt?.Ticks ?? 0)">
                                 @if (n.LastSeenAt is { } seen)

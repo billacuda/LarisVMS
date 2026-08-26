@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using LarisVMS.Core.Dtos;
+using LarisVMS.Core.Enums;
 using LarisVMS.Media;
+using LarisVMS.Vision.Inference;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -24,11 +26,15 @@ public sealed class CameraPipelineManager : IAsyncDisposable
 
     private readonly ConcurrentDictionary<Guid, CameraDetectionPipeline> _pipelines = new();
 
-    // Resolved on first use rather than in the constructor: this throws when there's no model to
-    // load, and DI resolves this singleton *before* the /start handler body runs — an exception here
-    // would escape that handler's own try/catch and come back as a bare 500 with none of the detail
-    // that catch exists to report.
-    private string? _resolvedModelPath;
+    // Keyed by "{family}|{dfineWeights}" and resolved lazily on first use per key, same reasoning as
+    // the single-model _resolvedModelPath field this replaced: resolution throws when there's no
+    // model to load, and DI resolves this singleton *before* the /start handler body runs — an
+    // exception here would escape that handler's own try/catch and come back as a bare 500 with
+    // none of the detail that catch exists to report. A dictionary rather than one cached string
+    // because a node's own DetectionModelFamily setting can change between reconciles (a new
+    // camera's /start request could arrive with a different resolved family than an already-running
+    // one was started with).
+    private readonly ConcurrentDictionary<string, string> _resolvedModelPathsByKey = new();
 
     public CameraPipelineManager(IOptions<VisionServiceOptions> options, IHttpClientFactory httpClientFactory,
         ILoggerFactory loggerFactory, ILogger<CameraPipelineManager> logger)
@@ -49,30 +55,31 @@ public sealed class CameraPipelineManager : IAsyncDisposable
             await existing.DisposeAsync();
         }
 
-        _resolvedModelPath ??= ResolveModelPath(_options.ModelPath, _logger);
+        var family = Enum.Parse<DetectionModelFamily>(request.ModelFamily);
+        var dfineWeights = Enum.Parse<DFineWeights>(request.DFineWeights);
+        var modelKey = $"{family}|{dfineWeights}";
+        var resolvedModelPath = _resolvedModelPathsByKey.GetOrAdd(modelKey,
+            _ => ResolveModelPath(_options.ModelPath, family, dfineWeights, _logger));
 
         var http = _httpClientFactory.CreateClient(nameof(CameraDetectionPipeline));
-        var pipeline = new CameraDetectionPipeline(request, _options, _ffmpegPath, _resolvedModelPath, http, _loggerFactory);
+        var pipeline = new CameraDetectionPipeline(request, _options, _ffmpegPath, resolvedModelPath, family, dfineWeights, http, _loggerFactory);
         _pipelines[request.CameraId] = pipeline;
         _logger.LogInformation("Started watching camera {CameraId} ({Width}x{Height}, hwaccel: {Hwaccel}).",
             request.CameraId, request.Width, request.Height, request.HardwareAcceleration ?? "none");
     }
 
     /// <summary>
-    /// Picks the .onnx file to load. <see cref="VisionServiceOptions.ModelPath"/>'s default names a
-    /// specific file (<c>models/model.onnx</c>), but nothing in this project ever produces that name:
-    /// tools/export-models emits the upstream weight name (<c>yolo9-t.onnx</c>, <c>yolo9-s.onnx</c>,
-    /// ...) and build-node.ps1 bundles whatever .onnx files exist verbatim, so the default could
-    /// never match a real package and AI detection failed on every node with "File doesn't exist"
-    /// regardless of how correctly everything else was set up.
-    ///
-    /// So a configured path that exists still wins outright — an operator naming a specific model
-    /// keeps getting exactly that one — but otherwise this falls back to discovering what was
-    /// actually bundled, which is what makes a default install work with no configuration at all.
-    /// Multiple models is the *normal* case rather than an error (export.py's own default set is two
-    /// of them), so it picks deterministically by name and says which, instead of refusing to start.
+    /// Picks the .onnx file to load for a resolved (family, weights) selection. <see
+    /// cref="VisionServiceOptions.ModelPath"/>'s default names a specific file
+    /// (<c>models/model.onnx</c>), but nothing in this project ever produces that name — so a
+    /// configured path that exists still wins outright (an operator naming a specific model keeps
+    /// getting exactly that one), but otherwise this looks for the exact filename
+    /// DetectionModelCatalog expects for the resolved selection
+    /// (tools/export-models/fetch_dfine.py's own output), falling back to an alphabetical glob only
+    /// as a last resort for a stale/hand-placed file — the tier that let YOLOv9 keep silently
+    /// running after this integration replaced it, back when the glob was the *only* lookup.
     /// </summary>
-    internal static string ResolveModelPath(string configuredPath, ILogger logger)
+    internal static string ResolveModelPath(string configuredPath, DetectionModelFamily family, DFineWeights dfineWeights, ILogger logger)
     {
         // Relative to the app's own directory, not the current working directory: this is a fact
         // about where the package's files live, and the process is launched by NodeWorker's
@@ -87,8 +94,17 @@ public sealed class CameraPipelineManager : IAsyncDisposable
         if (directory is null || !Directory.Exists(directory))
         {
             throw new FileNotFoundException(
-                $"No detection model directory at '{directory ?? configuredPath}'. Export a model with " +
-                "tools/export-models/ and rebuild the node package with build-node.ps1 so it gets bundled.");
+                $"No detection model directory at '{directory ?? configuredPath}'. Fetch a model with " +
+                "tools/export-models/fetch_dfine.py and rebuild the node package with build-node.ps1 so it " +
+                "gets bundled.");
+        }
+
+        var wantedFileName = DetectionModelCatalog.GetFileName(family, dfineWeights);
+        var wantedPath = Path.Combine(directory, wantedFileName);
+        if (File.Exists(wantedPath))
+        {
+            logger.LogInformation("Using detection model {ModelPath} for {Family}/{Weights}.", wantedPath, family, dfineWeights);
+            return wantedPath;
         }
 
         var candidates = Directory.GetFiles(directory, "*.onnx");
@@ -96,19 +112,18 @@ public sealed class CameraPipelineManager : IAsyncDisposable
         if (candidates.Length == 0)
         {
             throw new FileNotFoundException(
-                $"No .onnx model found in '{directory}'. Export one with tools/export-models/ and rebuild " +
-                "the node package with build-node.ps1 so it gets bundled.");
+                $"No detection model found in '{directory}' — expected '{wantedFileName}' for the configured " +
+                $"{family}/{dfineWeights} selection. Fetch it with tools/export-models/fetch_dfine.py and " +
+                "rebuild the node package with build-node.ps1 so it gets bundled.");
         }
 
         var chosen = candidates[0];
-        if (candidates.Length > 1)
-        {
-            logger.LogWarning(
-                "{Count} models are bundled ({Models}) — using {Chosen}. Set Vision:ModelPath to choose a " +
-                "different one.", candidates.Length,
-                string.Join(", ", candidates.Select(Path.GetFileName)), Path.GetFileName(chosen));
-        }
-        logger.LogInformation("Using detection model {ModelPath}.", chosen);
+        logger.LogWarning(
+            "Expected model '{Wanted}' for the configured {Family}/{Weights} selection was not found in " +
+            "'{Directory}' — falling back to the alphabetically-first bundled .onnx ({Chosen}) out of " +
+            "{Count} found ({Models}). This is likely a stale or incomplete package — re-run fetch_dfine.py " +
+            "and rebuild.", wantedFileName, family, dfineWeights, directory, Path.GetFileName(chosen),
+            candidates.Length, string.Join(", ", candidates.Select(Path.GetFileName)));
         return chosen;
     }
 

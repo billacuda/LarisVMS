@@ -64,6 +64,10 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     public HttpClient VisionHttpClient => _visionHttp;
     private IReadOnlyList<AiAccelerator> _detectedAccelerators = [];
     private AiAccelerator? _resolvedAccelerator;
+    private DetectionModelFamily _resolvedDetectionModelFamily = DetectionModelFamily.DFine;
+    // Node-wide (not per-camera) — set once the first time DetectionModelSelection.Choose actually
+    // substitutes D-FINE for an unimplemented family, so the log isn't repeated every reconcile.
+    private bool _warnedDetectionModelFallback;
 
     // M8 pass 2: each camera's SegmentCompleted handler (see HandleSegmentCompleted) fires from
     // that camera's own RecordingSession.RunAsync task, so multiple cameras can call in
@@ -721,6 +725,23 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             ? parsedAccel : AiAccelerator.Auto;
         _resolvedAccelerator = AccelSelection.Choose(desiredAccelerator, _detectedAccelerators);
 
+        // Same per-reconcile re-evaluation as the accelerator above. Node-scoped, not per-camera —
+        // see NodeConfigResponse.DetectionModelFamily's own doc comment for why.
+        var desiredModelFamily = Enum.TryParse<DetectionModelFamily>(config.DetectionModelFamily, ignoreCase: true, out var parsedFamily)
+            ? parsedFamily : DetectionModelFamily.Auto;
+        var accelForModelSelection = _resolvedAccelerator ?? AiAccelerator.Cpu;
+        var idealModelFamily = desiredModelFamily == DetectionModelFamily.Auto
+            ? (accelForModelSelection == AiAccelerator.Nvidia ? DetectionModelFamily.DFine : DetectionModelFamily.YoloX)
+            : desiredModelFamily;
+        _resolvedDetectionModelFamily = DetectionModelSelection.Choose(desiredModelFamily, accelForModelSelection);
+        if (idealModelFamily != _resolvedDetectionModelFamily && !_warnedDetectionModelFallback)
+        {
+            _warnedDetectionModelFallback = true;
+            _logger.LogWarning(
+                "Detection model family {Ideal} is not yet implemented — falling back to {Fallback} for every " +
+                "camera on this node until it ships.", idealModelFamily, _resolvedDetectionModelFamily);
+        }
+
         var anyCameraWantsAiDetection = config.Cameras.Any(c => c.AiDetectionEnabled);
         if (anyCameraWantsAiDetection && _resolvedAccelerator is not null)
         {
@@ -1149,14 +1170,15 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         var watchRtspUri = InjectCredentials(watchStream.RtspUri, camera.Username, camera.Password);
         var signature = string.Join('|', watchRtspUri, config.AiDetectionWidth, config.AiDetectionHeight,
             camera.AiConfidence, camera.AiIou, config.ReportIdleDetections, config.AiIdleTimeoutSeconds,
-            watchRole, _resolvedAccelerator);
+            watchRole, _resolvedAccelerator, _resolvedDetectionModelFamily, config.DFineWeights);
 
         if (_activeVision.TryGetValue(camera.CameraId, out var existing) && existing.ConfigSignature == signature) return; // already watching, unchanged
 
         var request = new VisionStartCameraRequest(
             camera.CameraId, watchRtspUri, config.AiDetectionWidth, config.AiDetectionHeight,
             AccelToFfmpegHwaccel(_resolvedAccelerator.Value), camera.AiConfidence, camera.AiIou,
-            config.ReportIdleDetections, config.AiIdleTimeoutSeconds, $"http://127.0.0.1:{livePort}");
+            config.ReportIdleDetections, config.AiIdleTimeoutSeconds,
+            _resolvedDetectionModelFamily.ToString(), config.DFineWeights, $"http://127.0.0.1:{livePort}");
 
         _activeVision[camera.CameraId] = new CameraVisionRecorder(signature);
         _ = StartVisionWatchAsync(request);

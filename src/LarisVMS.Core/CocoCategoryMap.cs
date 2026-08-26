@@ -10,10 +10,14 @@ namespace LarisVMS.Core;
 /// Infrastructure (which never needs to re-derive it, but could reference it too without pulling in
 /// any GPU/ONNX Runtime dependency).
 ///
-/// A fixed lookup table, not something that grows: COCO's 80 classes are a known, stable
-/// vocabulary. An unrecognized name (a future non-COCO model, a typo somewhere upstream) falls
-/// through to "Object" rather than throwing or returning null — see DetectedObjectCategory's own
-/// doc comment for why an unmapped class landing in the catch-all is the correct, safe default.
+/// Originally "a fixed lookup table, not something that grows: COCO's 80 classes are a known,
+/// stable vocabulary" — no longer strictly true since the D-FINE integration added an Objects365
+/// vocabulary option (DFineWeights.Obj365, 365 classes) alongside COCO's 80, but the name and
+/// 4-bucket shape stayed: both vocabularies still resolve into the same Human/Vehicle/Animal/Object
+/// buckets, just from a larger combined word list. An unrecognized name (a genuinely new model, a
+/// typo somewhere upstream) falls through to "Object" rather than throwing or returning null — see
+/// DetectedObjectCategory's own doc comment for why an unmapped class landing in the catch-all is
+/// the correct, safe default.
 /// </summary>
 public static class CocoCategoryMap
 {
@@ -22,19 +26,38 @@ public static class CocoCategoryMap
     public const string Animal = "Animal";
     public const string Object = "Object";
 
+    // "person" (COCO/obj2coco) and "Person" (Objects365) are the same word under the
+    // case-insensitive comparer below — only one entry is needed.
     private static readonly HashSet<string> HumanClasses = new(StringComparer.OrdinalIgnoreCase)
     {
         "person",
     };
 
+    // COCO/obj2coco and Objects365 combined — the same flat lookup regardless of which model
+    // produced the raw string, since Resolve doesn't know (or need to know) which vocabulary it's
+    // seeing. "motorbike"/"aeroplane" are D-FINE's own COCO legacy PASCAL-VOC-era spellings (see
+    // DFineLabels' own doc comment) — without them, a motorbike or aeroplane detection silently
+    // fell through to the "Object" catch-all instead of "Vehicle".
     private static readonly HashSet<string> VehicleClasses = new(StringComparer.OrdinalIgnoreCase)
     {
-        "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
+        // COCO / obj2coco
+        "bicycle", "car", "motorcycle", "motorbike", "airplane", "aeroplane", "bus", "train", "truck", "boat",
+        // Objects365
+        "SUV", "Van", "Heavy Truck", "Pickup Truck", "Motorcycle", "Tricycle", "Scooter",
+        "Helicopter", "Hot-air balloon", "Sailboat", "Ship", "Ambulance", "Fire Truck",
+        "Sports Car", "Formula 1", "Rickshaw", "Carriage", "Machinery Vehicle", "Trolley",
+        "Hoverboard",
     };
 
     private static readonly HashSet<string> AnimalClasses = new(StringComparer.OrdinalIgnoreCase)
     {
+        // COCO / obj2coco
         "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe",
+        // Objects365
+        "Lion", "Monkey", "Rabbit", "Pig", "Donkey", "Camel", "Yak", "Antelope", "Deer",
+        "Wild Bird", "Duck", "Goose", "Chicken", "Parrot", "Pigeon", "Penguin", "Seal",
+        "Dolphin", "Other Fish", "Goldfish", "Jellyfish", "Crab", "Lobster", "Shrimp",
+        "Scallop", "Oyster", "Swan",
     };
 
     /// <summary>Resolves a raw class name to Human/Vehicle/Animal/Object. Never throws, never

@@ -191,7 +191,12 @@
                         <span class="badge" style="background-color: @s.ColorHex;">@s.Emoji @s.Label</span>
                         <span class="badge bg-secondary" title="How long this event lasted">@IndexModel.FormatDuration(s.Duration)</span>
                         <div class="small text-muted mt-1">@s.CameraName</div>
-                        <div class="small text-muted" title="@s.AtUtc.ToString("u")">@s.AtUtc.ToLocalTime().ToString("g")</div>
+                        @* "G" (long time), not "g" (short time) — includes seconds, which matters
+                           here specifically for lining up exactly when a snapshot's frame was
+                           grabbed against the live view / recording, given the known Sub-detection
+                           vs Main-recording timing gap (see SnapshotImageCapture's own doc comment
+                           on DefaultMarginFraction). *@
+                        <div class="small text-muted" title="@s.AtUtc.ToString("u")">@s.AtUtc.ToLocalTime().ToString("G")</div>
                     </div>
                     <div class="card-footer py-1 px-2 text-end">
                         <a class="btn btn-sm btn-outline-primary" href="/Playback?cameraId=@s.CameraId&atUtc=@Uri.EscapeDataString(atUtcIso)">▶ Play</a>

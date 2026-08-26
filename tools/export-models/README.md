@@ -1,13 +1,17 @@
-# Model export tooling
+# Model fetch tooling
 
-Exports permissively-licensed YOLO detection weights to ONNX and adapts them to load in
-[YoloDotNet](https://github.com/NickSwardh/YoloDotNet) — the inference library `LarisVMS.Vision`
-wraps. Ported unchanged from `aitest` (the standalone reference/debug repo this feature was
-prototyped in) so LarisVMS never depends on that repo for its `.onnx` files — see `export.py` and
-`onnx_compat.py`'s own doc comments for exactly what each adaptation does and why.
+Fetches D-FINE detection weights (Apache-2.0, [Peterande/D-FINE](https://github.com/Peterande/D-FINE))
+as ready-to-run ONNX from Hugging Face — `LarisVMS.Vision`'s `DFineEngine`/`DFineDecoder` run this
+output directly via `Microsoft.ML.OnnxRuntime`, with no export or graph-adaptation step needed (see
+`fetch_dfine.py` and `DFineEngine`'s own doc comments for why — this used to adapt YOLOv9 weights to
+impersonate an Ultralytics architecture for YoloDotNet's own decoder; that whole approach is gone).
 
-Only families whose *weights* are permissively licensed are exported. Ultralytics YOLOv8/11/26 are
-deliberately absent: their weights are AGPL-3.0, and this project is MIT.
+Two weight variants are fetched by default, both the "small" (10.7M param) size:
+
+- `obj2coco` — trained on Objects365 then fine-tuned on COCO's 80-class vocabulary. Default.
+- `obj365` — trained directly on Objects365's own 366-class vocabulary (365 real classes + a
+  padding slot). Richer, but needs `DetectionCategoryMap`'s broader Objects365 coverage to resolve
+  correctly.
 
 ## Setup
 
@@ -19,15 +23,16 @@ py -m venv .venv
 ## Run
 
 ```
-.venv\Scripts\python export.py                # default set (yolo9-t, yolo9-s)
-.venv\Scripts\python export.py --models yolo9-t yolo9-s
-.venv\Scripts\python export.py --models yolo9-m --imgsz 640
+.venv\Scripts\python fetch_dfine.py                # both default variants
+.venv\Scripts\python fetch_dfine.py --weights obj365
 ```
 
-Output lands under `models/` at the repo root (gitignored — see `.gitignore`) — specifically
-`models/weights/`, which is where libreyolo writes, next to the `.pt` it converted from. Each export
-gets a `.LICENSE.txt` note recording its actual license/upstream, since the ONNX metadata itself
-carries an `ultralytics`-prefixed architecture tag purely as a YoloDotNet compatibility shim (not a
-claim about origin or license — `onnx_compat.py`'s `rewrite_metadata` explains why that string is
-required). `build-node.ps1` searches `models/` recursively for `.onnx` files and flattens whatever it
-finds into the node package alongside `LarisVMS.Vision.Service.exe`.
+Output lands directly under `models/` at the repo root (gitignored — see `.gitignore`) as
+`dfine_s_obj2coco.onnx` / `dfine_s_obj365.onnx` — exact filenames `DetectionModelCatalog`
+(`LarisVMS.Vision/Inference/DetectionModelCatalog.cs`) expects, since every `onnx-community`
+source repo names its own export the generic `onnx/model.onnx`. Each fetch gets a `.LICENSE.txt`
+note recording its real license/upstream/revision, plus (for `obj365`) an explicit note that only
+the derived model weights are redistributed here — never the Objects365 dataset's own source
+images, which are under the Flickr Terms of Use, not Objects365's own CC BY 4.0 annotation license.
+`build-node.ps1` searches `models/` recursively for `.onnx` files and flattens whatever it finds
+into the node package alongside `LarisVMS.Vision.Service.exe`.

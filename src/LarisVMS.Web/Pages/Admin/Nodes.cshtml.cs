@@ -28,6 +28,13 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
     public Dictionary<Guid, int> CameraCountByNode { get; set; } = [];
     public Dictionary<Guid, int> EffectiveRetentionDays { get; set; } = [];
     public Dictionary<Guid, int?> RetentionOverride { get; set; } = [];
+    /// <summary>"" (blank) means inherit the global default — same convention RetentionOverride's
+    /// own blank-means-null uses, just expressed as a select option instead of a blank number
+    /// input. See NodeConfigResponse.DetectionModelFamily's own doc comment for why this is a
+    /// per-node override, not per-camera.</summary>
+    public Dictionary<Guid, string> ModelFamilyOverride { get; set; } = [];
+    public Dictionary<Guid, string> DFineWeightsOverride { get; set; } = [];
+    public Dictionary<Guid, string> EffectiveModelFamily { get; set; } = [];
     public Dictionary<Guid, double?> DaysRemaining { get; set; } = [];
     public Dictionary<Guid, int> StaleCameraCountByNode { get; set; } = [];
     public Dictionary<Guid, List<StaleCameraRow>> StaleCamerasByNode { get; set; } = [];
@@ -78,10 +85,15 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
             EffectiveRetentionDays[n.Id] = await settings.GetAsync("Retention.Days", 30, nodeId: n.Id);
             var ownOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Retention.Days");
             RetentionOverride[n.Id] = int.TryParse(ownOverride, out var days) ? days : null;
+
+            ModelFamilyOverride[n.Id] = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.ModelFamily") ?? "";
+            DFineWeightsOverride[n.Id] = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.DFineWeights") ?? "";
+            EffectiveModelFamily[n.Id] = await settings.GetAsync("Detection.ModelFamily", "Auto", nodeId: n.Id);
         }
     }
 
-    public async Task<IActionResult> OnPostUpdateAsync(Guid id, string name, string? storageRootPath, int? retentionDaysOverride, string? aiAccelerator)
+    public async Task<IActionResult> OnPostUpdateAsync(Guid id, string name, string? storageRootPath, int? retentionDaysOverride,
+        string? aiAccelerator, string? modelFamilyOverride, string? dfineWeightsOverride)
     {
         try
         {
@@ -91,6 +103,8 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
             // fields here: MediaSigningKey is generated internally and never edited through this form.
             var before = (await nodeService.ListAsync()).FirstOrDefault(n => n.Id == id);
             var oldRetentionOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Retention.Days");
+            var oldModelFamilyOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.ModelFamily");
+            var oldDFineWeightsOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.DFineWeights");
             // "" (blank/Auto) resolves as null — see NodeConfigResponse.AiAccelerator's own doc
             // comment for why Auto (not an explicit choice) is the safe default.
             var accelerator = Enum.TryParse<AiAccelerator>(aiAccelerator, out var acc) ? acc : (AiAccelerator?)null;
@@ -98,12 +112,18 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
             await nodeService.UpdateAsync(id, name, storageRootPath, accelerator);
             await settings.SetOverrideAsync(SettingScope.Node, id, "Retention.Days",
                 retentionDaysOverride?.ToString(), User.Identity?.Name);
+            await settings.SetOverrideAsync(SettingScope.Node, id, "Detection.ModelFamily",
+                string.IsNullOrEmpty(modelFamilyOverride) ? null : modelFamilyOverride, User.Identity?.Name);
+            await settings.SetOverrideAsync(SettingScope.Node, id, "Detection.DFineWeights",
+                string.IsNullOrEmpty(dfineWeightsOverride) ? null : dfineWeightsOverride, User.Identity?.Name);
 
             var details = AuditDiff.Build(
                 AuditDiff.Of("Name", before?.Name, name),
                 AuditDiff.Of("Storage root", before?.StorageRootPath, storageRootPath),
                 AuditDiff.Of("Retention override", oldRetentionOverride, retentionDaysOverride?.ToString()),
-                AuditDiff.Of("AI accelerator", before?.AiAccelerator?.ToString(), accelerator?.ToString()));
+                AuditDiff.Of("AI accelerator", before?.AiAccelerator?.ToString(), accelerator?.ToString()),
+                AuditDiff.Of("Detection model override", oldModelFamilyOverride, modelFamilyOverride),
+                AuditDiff.Of("D-FINE weights override", oldDFineWeightsOverride, dfineWeightsOverride));
 
             await LogAsync("Node.Update", details is null ? $"{name} ({id})" : $"{name} ({id}) — {details}");
         }

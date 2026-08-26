@@ -42,7 +42,19 @@
         return null;
     }
 
-    function createTile(cameraId, videoEl, statusEl, codecHint, hasAudio) {
+    // isPlayingIntent (optional): callback returning whether the *page* currently intends this tile
+    // to be playing, used by recoverUnrecoverableMediaSource instead of trusting videoEl.paused —
+    // see that function's own comment for why the element's momentary paused state during a reload
+    // silently disagreed with intent and dropped autoplay. Falls back to !videoEl.paused when
+    // omitted, which is view-play.js's own mini-playback: its state and its seekTo request always
+    // agree already (see the bottom of this file), so it needs no page-level intent to defer to.
+    //
+    // onPermanentStall (optional): called when recovery gives up for good on this tile (see
+    // MAX_SAME_TARGET_RECOVERIES below) — lets a caller with a page-level "playing" toggle (the
+    // Play/Pause button and its label) bring that back in sync with the tile it just stopped trying
+    // to resume, rather than leaving the button reading "Pause" over a tile that isn't going to play
+    // again without a fresh scrub.
+    function createTile(cameraId, videoEl, statusEl, codecHint, hasAudio, isPlayingIntent, onPermanentStall) {
         var segments = []; // [{id, startUtc, endUtc}] as epoch ms, sorted by startUtc
         var currentSegmentId = null;
         // Media-timeline value corresponding to the loaded segment's wall-clock start. Usually 0,
@@ -739,6 +751,12 @@
             return seg ? seg.startUtc + (videoEl.currentTime - currentSegmentTimeOrigin) * 1000 : null;
         }
 
+        // See isPlayingIntent's own comment on createTile for why this exists instead of reading
+        // videoEl.paused directly at the two recovery call sites below.
+        function shouldResumeAutoplay() {
+            return typeof isPlayingIntent === 'function' ? isPlayingIntent() : !videoEl.paused;
+        }
+
         // Once videoEl.error is set (a decode hiccup, not necessarily anything wrong with the file
         // itself — confirmed live from rapid scrubbing), the *only* way to clear it is videoEl.load(),
         // which is also what detaches the current MediaSource for good. Until that happens, every
@@ -799,6 +817,10 @@
                 if (statusEl) statusEl.textContent = 'Playback stalled at this point — try scrubbing elsewhere.';
                 consecutiveSameTargetRecoveries = 0;
                 lastRecoveryTargetMs = null;
+                // The tile is now genuinely stopped (teardown() paused it and cleared its source) —
+                // tell the page so any page-level "playing" toggle/button comes back in sync, rather
+                // than leaving it claiming Pause over a tile that won't resume without a fresh scrub.
+                if (typeof onPermanentStall === 'function') onPermanentStall();
                 return;
             }
 
@@ -818,7 +840,7 @@
 
         videoEl.addEventListener('error', function () {
             if (!currentSegmentId) return; // nothing loaded yet, or already superseded — not our error to fix
-            recoverUnrecoverableMediaSource('a video decode error', computeCurrentWallClockMs(), !videoEl.paused);
+            recoverUnrecoverableMediaSource('a video decode error', computeCurrentWallClockMs(), shouldResumeAutoplay());
         });
 
         // Each tile auto-advances to whatever's next *for this camera*, independent of any sibling
@@ -848,7 +870,7 @@
             stallTimer = setTimeout(function () {
                 stallTimer = null;
                 console.warn('[playback] camera', cameraId, 'tile stalled waiting for', lastSeekTargetMs, '— recovering');
-                recoverUnrecoverableMediaSource('a stalled seek', lastSeekTargetMs, !videoEl.paused);
+                recoverUnrecoverableMediaSource('a stalled seek', lastSeekTargetMs, shouldResumeAutoplay());
             }, STALL_TIMEOUT_MS);
         });
         videoEl.addEventListener('playing', clearStallTimer);
@@ -866,6 +888,11 @@
                 });
             },
             currentWallClockMs: computeCurrentWallClockMs,
+            // Whether this tile has ever had a segment attached — see applySpeed's own comment for
+            // why calling play() on a source-less <video> is worse than a harmless no-op: on a
+            // HAVE_NOTHING element it fires 'waiting', arming the stall watchdog for a load that
+            // hasn't even started yet.
+            hasSource: function () { return !!currentSegmentId; },
             // A same-segment nudge, not a full seek: no fetch, no segment lookup, just moving
             // currentTime within whatever's already loaded — for correcting small drift between
             // tiles during ongoing playback (see the page glue's resyncDriftingTiles), not for
@@ -1556,7 +1583,8 @@
             el.addEventListener('click', function () { selectPrimary(cell.cameraId); });
             tilesEl.appendChild(el);
 
-            var player = window.larisvmsPlaybackPlayer.createTile(cell.cameraId, videoEl, statusEl, cam.codec, cam.hasAudio);
+            var player = window.larisvmsPlaybackPlayer.createTile(cell.cameraId, videoEl, statusEl, cam.codec, cam.hasAudio,
+                function () { return playing; }, function () { setPlaying(false); });
             tiles[cell.cameraId] = { player: player, videoEl: videoEl, statusEl: statusEl };
         });
 
@@ -1637,7 +1665,17 @@
                 // the rate and re-applies it on every future segment load too. Confirmed live: 8x
                 // "reset to normal speed after a few seconds" was exactly this, ~60s/8x apart.
                 tile.player.setPlaybackRate(speedRate);
-                if (playing) tile.videoEl.play().catch(function () { /* autoplay policy — user can press play again */ });
+                // Guarded on hasSource(): calling play() on a <video> with no source yet (the
+                // resolveDeepLink path calls setPlaying(true) — see below — before the first
+                // seekAll/loadSegment has attached anything) doesn't just no-op: per spec it still
+                // makes the element "potentially playing" at readyState HAVE_NOTHING, which fires a
+                // 'waiting' event and arms the stall watchdog for a load that hasn't even started.
+                // That watchdog then fires ~3s later on an in-flight (not stalled) fetch and recovers
+                // with the wrong autoplay intent — confirmed live as "click a snapshot, it lands
+                // paused, and needs a Pause-then-Play click to actually start". Once loadSegment
+                // attaches a real source, tryStartPlaybackOnce/appendWholeSegment call videoEl.play()
+                // themselves — this guard only ever skips a call that would have been a no-op anyway.
+                if (playing && tile.player.hasSource()) tile.videoEl.play().catch(function () { /* autoplay policy — user can press play again */ });
                 else tile.videoEl.pause();
             }
         });

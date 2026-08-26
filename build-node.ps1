@@ -38,10 +38,11 @@
     packages built with different -Accel values. -SkipVision omits it entirely, for a plain
     recording-only node with no AI detection at all.
 
-    Vision Service needs an exported .onnx model to do anything — this script copies models\*.onnx
-    from the repo root (gitignored, produced by tools/export-models/) into the package if present, and
-    just warns (doesn't fail the build) if it's missing, the same "detection is additive, never a hard
-    dependency" philosophy NodeWorker itself already applies when no accelerator is available.
+    Vision Service needs a fetched .onnx model to do anything — this script copies models\*.onnx
+    from the repo root (gitignored, produced by tools/export-models/fetch_dfine.py) into the package
+    if present, and just warns (doesn't fail the build) if it's missing, the same "detection is
+    additive, never a hard dependency" philosophy NodeWorker itself already applies when no
+    accelerator is available.
 
     -ExtraPublishPath optionally mirrors the same output to a second location (e.g. a network share
     a recorder machine can reach directly) so a node install/upgrade doesn't depend on manually
@@ -138,12 +139,10 @@ if (-not $SkipVision) {
     Write-Step "Bundling exported model(s)"
     $modelsOut = Join-Path $winOut 'models'
     New-Item -ItemType Directory -Path $modelsOut -Force | Out-Null
-    # -Recurse because the exporter does not write straight into models\: tools/export-models drives
-    # libreyolo, which puts its output under models\weights\ alongside the .pt it converted from. A
-    # non-recursive search found nothing there and reported "No .onnx model found" for a perfectly
-    # good export, which then shipped a package with an empty models\ folder — a node that installs
-    # cleanly and fails every detection start with "File doesn't exist". Flattened into the package's
-    # own models\ folder below regardless of how deep it was found.
+    # -Recurse kept even though fetch_dfine.py now writes flat into models\ directly (a stale/
+    # hand-placed model nested in a subfolder should still be found rather than silently ignored,
+    # and this cost nothing when the older exporter did nest its own output under models\weights\).
+    # Flattened into the package's own models\ folder below regardless of how deep it was found.
     $onnxFiles = @(if (Test-Path $ModelsPath) { Get-ChildItem $ModelsPath -Filter '*.onnx' -File -Recurse } else { @() })
     if ($onnxFiles.Count -eq 0) {
         Write-Host "    No .onnx model found under $ModelsPath — AI detection won't have anything to run until one is placed there (see tools/export-models/) and this is rebuilt." -ForegroundColor Yellow

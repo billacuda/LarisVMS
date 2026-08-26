@@ -168,6 +168,16 @@ public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? Stor
     /// default (1280x720). Confidence/IoU used to live here too but are now per-camera fields on
     /// NodeConfigCameraDto instead — see that record's own doc comment for why.</summary>
     int AiDetectionWidth = 1280, int AiDetectionHeight = 720,
+    /// <summary>Detection.ModelFamily's enum name (e.g. "Auto", "DFine") — node-scoped like
+    /// AiAccelerator (Setting + SettingOverride(Scope.Node)), not per-camera: one Vision Service
+    /// process serves every camera on a node from the same loaded model, so which model family it
+    /// uses is inherently a per-node choice, not a per-camera one the way Confidence/Iou are.
+    /// NodeWorker resolves "Auto" against this node's own accelerator via
+    /// DetectionModelSelection.Choose before it ever reaches VisionStartCameraRequest.</summary>
+    string DetectionModelFamily = "Auto",
+    /// <summary>Detection.DFineWeights' enum name (e.g. "Obj2Coco") — same node-scoped resolution
+    /// as DetectionModelFamily, only meaningful when that resolves to "DFine".</summary>
+    string DFineWeights = "Obj2Coco",
     /// <summary>How long a label's hysteresis waits after motion stops before actually closing the
     /// span (MotionHysteresis's endAfter) — global, same reasoning as the other Detection.* fields
     /// above. Was hardcoded to zero, which closed a span on the very first quiet frame; a single

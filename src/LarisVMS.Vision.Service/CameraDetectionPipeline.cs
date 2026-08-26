@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net.Http.Json;
 using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
+using LarisVMS.Core.Enums;
 using LarisVMS.Media;
 using LarisVMS.Vision.Capture;
 using LarisVMS.Vision.Detection;
@@ -13,16 +14,15 @@ namespace LarisVMS.Vision.Service;
 
 /// <summary>
 /// Owns one camera's whole detection pipeline: capture (VisionSession, decision 1) → inference
-/// (YoloEngine) → tracking (ByteTracker) → movement classification + best-frame tracking
-/// (MovementClassifier, decisions 7/10) → per-label debouncing (MotionHysteresis, the same class
-/// DahuaCgiEventSession already uses, decision 7's own "same shape" call-out) → reporting back to
-/// Node (decision 3).
+/// (IDetectionEngine — DFineEngine today, see DetectionEngineFactory) → tracking (ByteTracker) →
+/// movement classification + best-frame tracking (MovementClassifier, decisions 7/10) → per-label
+/// debouncing (MotionHysteresis, the same class DahuaCgiEventSession already uses, decision 7's own
+/// "same shape" call-out) → reporting back to Node (decision 3).
 ///
-/// One YoloEngine per camera, not shared across cameras watched by the same process: YoloDotNet's
-/// Yolo holds pinned buffers reused across calls and is explicitly not thread-safe (see YoloEngine's
-/// own doc comment) — aitest's own CameraPipeline already established "one loaded model instance
-/// per camera pipeline" as the correct ownership model, even though every camera loads the same
-/// underlying .onnx file independently.
+/// One IDetectionEngine per camera, not shared across cameras watched by the same process — same
+/// "not thread-safe, one instance per camera pipeline" ownership model the deleted YoloEngine
+/// already established (DFineEngine's own InferenceSession isn't safe for concurrent Run calls
+/// either), even though every camera loads the same underlying .onnx file independently.
 ///
 /// Per-label rather than per-track hysteresis/reporting: multiple simultaneous instances of the
 /// same class (two cars in frame at once) collapse into one reported span for that label, the same
@@ -43,7 +43,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     private readonly VisionStartCameraRequest _request;
     private readonly VisionSession _session;
     private readonly LatestFrameSlot _slot;
-    private readonly YoloEngine _engine;
+    private readonly IDetectionEngine _engine;
     private readonly ByteTracker _tracker = new();
     private readonly MovementClassifier _movement = new();
     private readonly HttpClient _http;
@@ -72,7 +72,8 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     private readonly ConcurrentQueue<VisionDetectionReportItem> _pendingReports = new();
 
     public CameraDetectionPipeline(VisionStartCameraRequest request, VisionServiceOptions serviceOptions,
-        string resolvedFfmpegPath, string resolvedModelPath, HttpClient http, ILoggerFactory loggerFactory)
+        string resolvedFfmpegPath, string resolvedModelPath, DetectionModelFamily modelFamily, DFineWeights dfineWeights,
+        HttpClient http, ILoggerFactory loggerFactory)
     {
         _request = request;
         _http = http;
@@ -83,7 +84,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             new VisionSessionOptions(resolvedFfmpegPath, request.RtspUri, request.Width, request.Height, request.HardwareAcceleration),
             _slot, loggerFactory.CreateLogger<VisionSession>());
 
-        _engine = new YoloEngine(new EngineOptions
+        _engine = DetectionEngineFactory.Create(modelFamily, dfineWeights, new EngineOptions
         {
             ModelPath = resolvedModelPath,
             GpuId = serviceOptions.GpuId,
@@ -93,7 +94,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             TensorRtEngineCachePath = serviceOptions.TensorRtEngineCachePath,
             TensorRtLibPath = serviceOptions.TensorRtLibPath,
             OpenVinoDeviceType = serviceOptions.OpenVinoDeviceType,
-        }, loggerFactory.CreateLogger<YoloEngine>());
+        }, loggerFactory);
 
         _runTask = RunAsync(_cts.Token);
     }

@@ -1,92 +1,21 @@
 using Microsoft.Extensions.Logging;
-using YoloDotNet.Models.Interfaces;
-
-#if ACCEL_CUDA
-using YoloDotNet.ExecutionProvider.Cuda;
-using YoloDotNet.ExecutionProvider.Cuda.TensorRT;
-#elif ACCEL_DIRECTML
-using YoloDotNet.ExecutionProvider.DirectML;
-#elif ACCEL_OPENVINO
-using YoloDotNet.ExecutionProvider.OpenVino;
-#else
-using YoloDotNet.ExecutionProvider.Cpu;
-#endif
 
 namespace LarisVMS.Vision.Inference;
 
 /// <summary>
-/// Builds the <see cref="IExecutionProvider"/> for whichever accelerator this build was compiled
-/// for (see Accel in LarisVMS.Vision.csproj). This is the only file in the project with conditional
-/// compilation -- everything else is written once against YoloDotNet's model-agnostic API and
-/// doesn't need to know which provider is underneath.
-///
-/// Referencing more than one YoloDotNet.ExecutionProvider.* package in the same build causes
-/// native DLL conflicts, which is why the choice is a compile-time symbol rather than a runtime
-/// branch: it's structurally impossible to end up with two providers linked in at once. This is
-/// also why LarisVMS.Vision.Service is published once per accelerator (see the detection plan's
-/// decision 2) rather than trying to switch providers inside one running process.
-///
-/// Ported near-verbatim from aitest (g:\Projects\aitest\src\Aitest.Vision\Inference\EngineFactory.cs).
+/// Was the YoloDotNet execution-provider builder (see git history) — with YoloEngine deleted (the
+/// D-FINE integration bypasses YoloDotNet's own decoders entirely, see DFineEngine's doc comment),
+/// nothing constructs a YoloDotNet IExecutionProvider anymore. Kept only for <see
+/// cref="PrependToPath"/>, which OrtSessionFactory's own CUDA/TensorRT setup still needs — the
+/// reasoning below is unrelated to YoloDotNet and applies identically to any ONNX Runtime CUDA
+/// execution provider, whichever engine constructs it.
 /// </summary>
 public static class EngineFactory
 {
-    public static IExecutionProvider Create(EngineOptions options, ILogger logger)
-    {
-        ArgumentNullException.ThrowIfNull(options);
-        ArgumentNullException.ThrowIfNull(logger);
-
-#if ACCEL_CUDA
-        PrependToPath(options.CudnnPath, "cudnn64_9.dll", "cuDNN", logger);
-
-        TensorRt? trtConfig = null;
-        if (options.EnableTensorRt)
-        {
-            PrependToPath(options.TensorRtLibPath, "nvinfer_10.dll", "TensorRT", logger);
-
-            if (string.IsNullOrWhiteSpace(options.TensorRtEngineCachePath))
-            {
-                throw new InvalidOperationException(
-                    "EnableTensorRt requires TensorRtEngineCachePath -- without a cache, every " +
-                    "process start rebuilds the engine from scratch, which can take minutes.");
-            }
-
-            var precision = Enum.Parse<TrtPrecision>(options.TensorRtPrecision, ignoreCase: true);
-
-            trtConfig = new TensorRt
-            {
-                Precision = precision,
-                EngineCachePath = options.TensorRtEngineCachePath,
-                EngineCachePrefix = "larisvms-vision",
-            };
-
-            logger.LogInformation(
-                "CUDA execution provider: gpuId={GpuId}, TensorRT enabled ({Precision}, cache={CachePath}).",
-                options.GpuId, precision, options.TensorRtEngineCachePath);
-        }
-        else
-        {
-            logger.LogInformation("CUDA execution provider: gpuId={GpuId}, TensorRT disabled.", options.GpuId);
-        }
-
-        return new CudaExecutionProvider(options.ModelPath, options.GpuId, trtConfig);
-#elif ACCEL_DIRECTML
-        logger.LogInformation("DirectML execution provider: gpuId={GpuId}.", options.GpuId);
-        return new DirectMLExecutionProvider(options.ModelPath, options.GpuId);
-#elif ACCEL_OPENVINO
-        logger.LogInformation("OpenVINO execution provider: device={Device}.", options.OpenVinoDeviceType);
-        return new OpenVinoExecutionProvider(options.ModelPath, new OpenVino
-        {
-            DeviceType = options.OpenVinoDeviceType,
-        });
-#else
-        logger.LogInformation("CPU execution provider.");
-        return new CpuExecutionProvider(options.ModelPath);
-#endif
-    }
-
 #if ACCEL_CUDA
     private static readonly HashSet<string> _appliedPaths = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Lock _pathLock = new();
+#endif
 
     /// <summary>
     /// Prepends a directory to the process PATH, if configured. Must run before the CUDA execution
@@ -106,8 +35,9 @@ public static class EngineFactory
     /// exception to catch -- the warning here is the only signal before an operator notices the
     /// app is unexpectedly slow.
     /// </summary>
-    private static void PrependToPath(string? directory, string expectedDll, string label, ILogger logger)
+    internal static void PrependToPath(string? directory, string expectedDll, string label, ILogger logger)
     {
+#if ACCEL_CUDA
         if (string.IsNullOrWhiteSpace(directory))
         {
             return;
@@ -136,6 +66,9 @@ public static class EngineFactory
                 logger.LogInformation("Prepended '{Path}' to PATH for {Label}.", directory, label);
             }
         }
-    }
+#else
+        // Inert outside a CUDA build -- no other accelerator needs a PATH mutation for its native
+        // libraries (DirectML/OpenVINO/CPU all resolve theirs the normal way).
 #endif
+    }
 }

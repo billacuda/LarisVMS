@@ -232,15 +232,13 @@
             <div class="d-flex align-items-center gap-2">
                 <div class="form-check form-check-inline mb-0">
                     <input type="checkbox" class="form-check-input" id="confidenceOverrideToggle"
-                           checked="@(Model.ConfidenceOverride.HasValue)"
-                           onchange="document.getElementById('confidenceOverrideSlider').disabled = !this.checked;" />
+                           checked="@(Model.ConfidenceOverride.HasValue)" />
                     <label class="form-check-label small" for="confidenceOverrideToggle">Override</label>
                 </div>
                 <input type="range" name="ConfidenceOverride" id="confidenceOverrideSlider" min="0" max="1" step="0.05" class="form-range"
                        value="@((Model.ConfidenceOverride ?? Model.EffectiveConfidence).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))"
-                       disabled="@(!Model.ConfidenceOverride.HasValue)"
-                       oninput="this.nextElementSibling.textContent = Math.round(this.value * 100);" />
-                <output class="text-muted small" style="min-width: 2.5em;">@Math.Round((Model.ConfidenceOverride ?? Model.EffectiveConfidence) * 100)</output>
+                       disabled="@(!Model.ConfidenceOverride.HasValue)" />
+                <output class="text-muted small" style="min-width: 2.5em;" id="confidenceOverrideReadout">@Math.Round((Model.ConfidenceOverride ?? Model.EffectiveConfidence) * 100)</output>
             </div>
             <div class="help-text-source" id="aiConfidenceHelp">
                 Minimum detection score for this camera specifically — e.g. a camera prone to
@@ -256,15 +254,13 @@
             <div class="d-flex align-items-center gap-2">
                 <div class="form-check form-check-inline mb-0">
                     <input type="checkbox" class="form-check-input" id="iouOverrideToggle"
-                           checked="@(Model.IouOverride.HasValue)"
-                           onchange="document.getElementById('iouOverrideSlider').disabled = !this.checked;" />
+                           checked="@(Model.IouOverride.HasValue)" />
                     <label class="form-check-label small" for="iouOverrideToggle">Override</label>
                 </div>
                 <input type="range" name="IouOverride" id="iouOverrideSlider" min="0" max="1" step="0.05" class="form-range"
                        value="@((Model.IouOverride ?? Model.EffectiveIou).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))"
-                       disabled="@(!Model.IouOverride.HasValue)"
-                       oninput="this.nextElementSibling.textContent = Math.round(this.value * 100);" />
-                <output class="text-muted small" style="min-width: 2.5em;">@Math.Round((Model.IouOverride ?? Model.EffectiveIou) * 100)</output>
+                       disabled="@(!Model.IouOverride.HasValue)" />
+                <output class="text-muted small" style="min-width: 2.5em;" id="iouOverrideReadout">@Math.Round((Model.IouOverride ?? Model.EffectiveIou) * 100)</output>
             </div>
             <div class="help-text-source" id="aiIouHelp">
                 Overlap threshold for merging duplicate boxes, for this camera specifically. Unchecked
@@ -449,4 +445,36 @@ else if (Model.VideoSourceToken is { } channelToken)
             </tbody>
         </table>
     }
+}
+
+@section Scripts {
+    <script>
+        // Confidence/IoU override slider readouts, wired explicitly by id rather than the previous
+        // oninput="this.nextElementSibling..." adjacency coupling and the checkbox's own inline
+        // onchange — that read as structurally correct on paper but didn't update while dragging in
+        // practice. Explicit ids sidestep whatever the adjacency assumption was actually getting
+        // wrong, and initializing from the slider's own value below (rather than trusting the two to
+        // already agree) rules out the readout and the slider ever silently disagreeing.
+        (function () {
+            function wireOverride(toggleId, rangeId, readoutId) {
+                var toggle = document.getElementById(toggleId);
+                var range = document.getElementById(rangeId);
+                var readout = document.getElementById(readoutId);
+                if (!toggle || !range || !readout) return;
+                function sync() { readout.textContent = Math.round(range.value * 100); }
+                range.addEventListener('input', sync);
+                toggle.addEventListener('change', function () {
+                    range.disabled = !toggle.checked;
+                    // A disabled <input type="range"> fires no 'input' events at all, so re-enabling
+                    // it could otherwise leave the readout showing whatever it last synced to
+                    // (possibly the inherited value shown while disabled) rather than the slider's
+                    // actual current position.
+                    sync();
+                });
+                sync(); // in case the slider's own value differs from what was rendered server-side
+            }
+            wireOverride('confidenceOverrideToggle', 'confidenceOverrideSlider', 'confidenceOverrideReadout');
+            wireOverride('iouOverrideToggle', 'iouOverrideSlider', 'iouOverrideReadout');
+        })();
+    </script>
 }

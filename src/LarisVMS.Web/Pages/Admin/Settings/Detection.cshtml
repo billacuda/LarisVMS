@@ -18,9 +18,8 @@
             <button type="button" class="help-icon" data-help-target="confidenceHelp" tabindex="0" aria-label="Help">ℹ️</button>
         </label>
         <div class="d-flex align-items-center gap-2">
-            <input asp-for="Confidence" type="range" min="0" max="1" step="0.05" class="form-range"
-                   oninput="this.nextElementSibling.textContent = Math.round(this.value * 100);" />
-            <output class="text-muted small" style="min-width: 2.5em;">@Math.Round(Model.Confidence * 100)</output>
+            <input asp-for="Confidence" type="range" min="0" max="1" step="0.05" class="form-range" id="confidenceRange" />
+            <output class="text-muted small" style="min-width: 2.5em;" id="confidenceReadout">@Math.Round(Model.Confidence * 100)</output>
         </div>
         <div class="help-text-source" id="confidenceHelp">
             Minimum score a detection needs to be reported at all. Lower catches more real objects but
@@ -34,13 +33,48 @@
             <button type="button" class="help-icon" data-help-target="iouHelp" tabindex="0" aria-label="Help">ℹ️</button>
         </label>
         <div class="d-flex align-items-center gap-2">
-            <input asp-for="Iou" type="range" min="0" max="1" step="0.05" class="form-range"
-                   oninput="this.nextElementSibling.textContent = Math.round(this.value * 100);" />
-            <output class="text-muted small" style="min-width: 2.5em;">@Math.Round(Model.Iou * 100)</output>
+            <input asp-for="Iou" type="range" min="0" max="1" step="0.05" class="form-range" id="iouRange" />
+            <output class="text-muted small" style="min-width: 2.5em;" id="iouReadout">@Math.Round(Model.Iou * 100)</output>
         </div>
         <div class="help-text-source" id="iouHelp">
             Overlap threshold used to merge duplicate boxes for the same object. A per-camera override
             is available on that camera's own Edit page.
+        </div>
+    </div>
+
+    <div class="col-12">
+        <label class="form-label">
+            Detection model
+            <button type="button" class="help-icon" data-help-target="modelFamilyHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <select asp-for="ModelFamily" class="form-select">
+            <option value="Auto">Auto (Nvidia → D-FINE, everything else → D-FINE for now)</option>
+            <option value="DFine">D-FINE</option>
+            <option value="RfDetr" disabled>RF-DETR (not yet available)</option>
+            <option value="YoloX" disabled>YOLOX (not yet available)</option>
+        </select>
+        <div class="help-text-source" id="modelFamilyHelp">
+            Which detection model architecture actually runs inference. RF-DETR and YOLOX are
+            reserved for a future release — Auto's own Intel/AMD/CPU default would normally be
+            YOLOX, but falls back to D-FINE until it ships, so every node keeps detecting either
+            way. This is a per-node setting, not per-camera: one detection process serves every
+            camera on a node from the same loaded model — a per-node override is available on that
+            node's own page (<a asp-page="/Admin/Nodes">manage nodes</a>).
+        </div>
+    </div>
+    <div class="col-12">
+        <label class="form-label">
+            D-FINE weights
+            <button type="button" class="help-icon" data-help-target="dfineWeightsHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <select asp-for="DFineWeights" class="form-select">
+            <option value="Obj2Coco">Obj2Coco — 80 COCO classes (default)</option>
+            <option value="Obj365">Obj365 — 365 Objects365 classes (richer vocabulary)</option>
+        </select>
+        <div class="help-text-source" id="dfineWeightsHelp">
+            Only meaningful when the detection model above resolves to D-FINE. Obj365 recognizes a
+            much wider range of specific object types at the cost of a larger, more specific
+            vocabulary — see the Snapshots page's own filter tree once it's in use.
         </div>
     </div>
 
@@ -89,3 +123,26 @@
         <button type="submit" class="btn btn-primary"><span aria-hidden="true">💾</span> Save</button>
     </div>
 </form>
+
+@section Scripts {
+    <script>
+        // Confidence/IoU slider readouts, wired explicitly by id rather than the previous
+        // oninput="this.nextElementSibling..." adjacency coupling — that read as structurally
+        // correct on paper (input immediately followed by its own <output>) but didn't update while
+        // dragging in practice. Explicit ids sidestep whatever the adjacency assumption was actually
+        // getting wrong, and initializing from the slider's own value below (rather than trusting
+        // the two to already agree) rules out the readout and the slider ever silently disagreeing.
+        (function () {
+            function wireSlider(rangeId, readoutId) {
+                var range = document.getElementById(rangeId);
+                var readout = document.getElementById(readoutId);
+                if (!range || !readout) return;
+                function sync() { readout.textContent = Math.round(range.value * 100); }
+                range.addEventListener('input', sync);
+                sync(); // in case the slider's own value differs from what was rendered server-side
+            }
+            wireSlider('confidenceRange', 'confidenceReadout');
+            wireSlider('iouRange', 'iouReadout');
+        })();
+    </script>
+}

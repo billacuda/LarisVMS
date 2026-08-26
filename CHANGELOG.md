@@ -5,7 +5,66 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.158.0] - 2026-08-26
+
+### Fixed (post-D-FINE follow-up, confirmed against real hardware)
+
+- **`LarisVMS.Vision.Service` CPU usage went up, not down, after the D-FINE switch** — the opposite
+  of the expected effect (DETR-style detection has no per-frame NMS, unlike YOLO). Root cause:
+  `DFineDecoder` was computing `Sigmoid` (`Math.Exp`) unconditionally for every query×class
+  combination every frame (300×80=24,000 calls for the default model, ~110,000 for the Obj365
+  variant), and `DFineEngine`'s preprocessing used `SKBitmap.Pixels` (a full per-pixel color-space
+  conversion) plus the tensor's generic multi-dimensional indexer, both avoidable per-frame costs.
+  Fixed by pre-filtering candidates in logit-space before ever calling `Exp` (sigmoid is monotonic,
+  so this is a cheap comparison with identical results) and by reading raw pixel bytes directly into
+  the tensor's own flat buffer instead.
+- **AI-detection snapshot crops sometimes missed the detected object entirely** (an empty region
+  where it would have been) once D-FINE's tighter, more accurate boxes shipped. Root cause: the
+  crop margin (`SnapshotImageCapture.DefaultMarginFraction`) was purely relative to the detected
+  box's own size — reasonable with YOLOv9's looser boxes, but D-FINE's tighter ones leave far less
+  absolute pixel slack to absorb the pre-existing timing gap between Sub-stream detection (where the
+  box was computed) and the Main-stream recording (which the crop is actually taken from) — the same
+  gap visible on the *live* detection overlay running slightly ahead of the video it's drawn over.
+  Increased the margin and added a floor relative to the *frame's* own dimensions (not just the
+  box's), so a small/distant object's tiny box still gets meaningful absolute slack instead of
+  scaling down to near-zero alongside it.
+- Snapshots page cards now show seconds in their displayed timestamp (was minutes-only) — useful for
+  lining up exactly when a snapshot's frame was grabbed against the live view or recording, given
+  the timing gap noted above.
+
+### Changed
+
+- **Replaced YOLOv9 with D-FINE as the default AI detection model.** YOLOv9's weight license isn't
+  permissive enough for this project; D-FINE (Apache-2.0, end to end) is. Rather than adapt D-FINE
+  to impersonate a YOLO architecture for YoloDotNet's own decoder (the same graph-surgery trick
+  YOLOv9 needed, and the approach already rejected for RT-DETR in this codebase), `DFineEngine`/
+  `DFineDecoder` run D-FINE's real ONNX output directly via `Microsoft.ML.OnnxRuntime` — verified
+  end-to-end against a real model run (manually replicating the exact preprocessing/decode math
+  against the classic COCO "two cats + remote controls" test image correctly recovered both cats,
+  the couch, and both remotes, with clean non-duplicated boxes and no NMS needed) before any
+  production code was written. `YoloEngine.cs` is deleted; `YoloDotNet` itself stays as a dependency
+  only for its `ObjectDetection`/`LabelModel` types (so `ByteTracker`/`MovementClassifier`/
+  `CameraDetectionPipeline` needed no changes) and for its per-accelerator native ONNX Runtime
+  packaging. D-FINE is also DETR-style (300 queries, no per-frame NMS) rather than YOLO's dense
+  anchor-grid decode+NMS, which — beyond the licensing fix — is expected to noticeably reduce the
+  CPU load the previous pipeline was putting on the host while leaving the GPU underused; the
+  first real-hardware run should confirm this.
+- Detection model selection is now a real, user-facing choice — Admin → Settings → AI Detection
+  (`Detection.ModelFamily`/`Detection.DFineWeights`, global default + per-node override on Admin →
+  Nodes, since one Vision Service process serves every camera on a node from the same loaded
+  model). Two D-FINE weight variants are selectable: `Obj2Coco` (80 COCO classes, default) and
+  `Obj365` (365 Objects365 classes, a much richer vocabulary). RF-DETR and YOLOX are reserved
+  picker slots (rendered disabled) for a future release — Auto's own Intel/AMD/CPU default would
+  normally pick YOLOX, but falls back to D-FINE until it actually ships, so a non-Nvidia node keeps
+  detecting rather than silently going dark.
+- `tools/export-models/export.py`/`onnx_compat.py` (YOLOv9-specific export/graph-adaptation) are
+  replaced by `tools/export-models/fetch_dfine.py` — a plain, pinned-revision download from
+  Hugging Face, no export/adaptation step at all since D-FINE's own published ONNX already matches
+  what `DFineEngine` expects.
+- `CocoCategoryMap`'s `Vehicle`/`Animal` word lists now also cover Objects365's much larger
+  vocabulary (`SUV`, `Wild Bird`, `Rickshaw`, ...), and D-FINE's own legacy PASCAL-VOC-era COCO
+  spellings (`motorbike`, `aeroplane`) — previously absent, so a motorbike or aeroplane detection
+  silently fell through to the generic "Object" category instead of "Vehicle".
 
 ### Fixed
 
@@ -51,6 +110,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   knows whether a specific track is moving right now. Shows one badge per unique specific label
   currently moving (a moving car and a moving truck both badge separately), never for idle/stationary
   objects.
+- **Clicking a snapshot (or any other autoplay deep link) landed on a paused tile that needed a
+  Pause-then-Play click before video actually started.** Root cause, in `playback-player.js`:
+  `resolveDeepLink` set the page's "playing" state to true before any tile had a source attached,
+  which drove `applySpeed` to call `videoEl.play()` on a source-less `<video>` — per spec that's not
+  a no-op, it makes the element "potentially playing" at `readyState = HAVE_NOTHING` and fires a
+  `waiting` event, arming the 3-second stall watchdog for a load that hadn't even started. The real
+  segment fetch (routinely longer than 3s for a cold/large 4K segment) then tripped that watchdog's
+  recovery path, which read `!videoEl.paused` — false, since `teardown()` had legitimately paused the
+  element for the reload — as "don't resume autoplay", stranding the tile paused while the toolbar
+  still read "Pause". Fixed two ways: `applySpeed` no longer calls `play()` on a tile with no segment
+  attached yet (the one call that was arming the watchdog spuriously), and recovery now asks each
+  tile whether the *page* currently intends it to be playing instead of trusting the element's
+  momentary paused state during a reload — the give-up path (after repeated recovery failures at the
+  same target) also resets the page's Play/Pause button to match, rather than leaving it stuck
+  showing "Pause" over a tile that stopped trying to resume.
 
 ### Changed
 
@@ -69,7 +143,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   global-default + per-camera-override pattern Recording settings already use. Confidence/IoU were
   previously deployment-wide only, with no admin UI to change them at all (`NodeService` read them
   from a `Setting` row nothing ever wrote); which stream feeds detection used to be unconditionally
-  hardcoded to Sub in `NodeWorker.ReconcileVision`, with no way to change it.
+  hardcoded to Sub in `NodeWorker.ReconcileVision`, with no way to change it. Confidence/IoU are
+  entered as sliders (5% steps, 50% centered) rather than free-text boxes, with a live readout next
+  to each that tracks the drag as it happens.
 - The camera list now shows which cameras have AI detection enabled and which stream it's watching
   (`🤖 Sub`/`🤖 Main` next to the camera name) — previously only visible by opening each camera's own
   Edit page one at a time.

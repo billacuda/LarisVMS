@@ -1,14 +1,15 @@
+using LarisVMS.Core.Enums;
 using LarisVMS.Vision.Service;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LarisVMS.Tests;
 
 /// <summary>
-/// Covers CameraPipelineManager.ResolveModelPath — the fallback that lets a node find whatever .onnx
-/// was actually bundled instead of requiring one specific filename. The shipped default
-/// (models/model.onnx) named a file nothing in this project ever produces, so every node failed to
-/// start detection with "File doesn't exist" no matter how correctly it was otherwise set up; these
-/// pin the discovery behavior that replaced it.
+/// Covers CameraPipelineManager.ResolveModelPath — three tiers: an explicitly configured file that
+/// exists always wins, then the exact filename DetectionModelCatalog expects for the resolved
+/// (family, weights) selection, then an alphabetical glob fallback for a stale/hand-placed file
+/// (the tier that let YOLOv9 keep silently running after this integration replaced it, back when
+/// the glob was the *only* lookup).
 /// </summary>
 public class ModelPathResolutionTests : IDisposable
 {
@@ -21,8 +22,9 @@ public class ModelPathResolutionTests : IDisposable
         return dir;
     }
 
-    private static string Resolve(string configuredPath) =>
-        CameraPipelineManager.ResolveModelPath(configuredPath, NullLogger.Instance);
+    private static string Resolve(string configuredPath, DetectionModelFamily family = DetectionModelFamily.DFine,
+        DFineWeights dfineWeights = DFineWeights.Obj2Coco) =>
+        CameraPipelineManager.ResolveModelPath(configuredPath, family, dfineWeights, NullLogger.Instance);
 
     public void Dispose()
     {
@@ -36,61 +38,77 @@ public class ModelPathResolutionTests : IDisposable
         var dir = NewModelsDirectory();
         var configured = Path.Combine(dir, "model.onnx");
         File.WriteAllText(configured, "");
-        // A second file that would win the alphabetical fallback, proving the explicit path is not
-        // merely being rediscovered by chance.
-        File.WriteAllText(Path.Combine(dir, "aaa.onnx"), "");
+        // A second file that would win both the catalog lookup and the alphabetical fallback,
+        // proving the explicit path is not merely being rediscovered by chance.
+        File.WriteAllText(Path.Combine(dir, "dfine_s_obj2coco.onnx"), "");
 
         Assert.Equal(configured, Resolve(configured));
     }
 
     [Fact]
-    public void FallsBackToTheOnlyBundledModelWhenTheConfiguredNameDoesNotExist()
+    public void UsesTheExactCatalogFilenameWhenBundled()
     {
-        // The exact production failure: the default names model.onnx, the package contains the
-        // exporter's own filename instead.
+        // The exact production failure this tier exists for: the configured name doesn't exist, but
+        // fetch_dfine.py's own output filename does.
         var dir = NewModelsDirectory();
-        var bundled = Path.Combine(dir, "yolo9-t.onnx");
+        var bundled = Path.Combine(dir, "dfine_s_obj2coco.onnx");
         File.WriteAllText(bundled, "");
 
         Assert.Equal(bundled, Resolve(Path.Combine(dir, "model.onnx")));
     }
 
     [Fact]
-    public void PicksDeterministicallyByNameWhenSeveralModelsAreBundled()
+    public void PicksTheCatalogFilenameMatchingTheResolvedWeightsVariantEvenWhenAlphabeticallySecond()
     {
-        // export.py's default set is two models, so this is the ordinary case, not an error.
+        // "obj2coco" sorts before "obj365" — proving this is a real catalog lookup, not secretly
+        // still just the alphabetical fallback with extra steps.
         var dir = NewModelsDirectory();
-        foreach (var name in new[] { "yolo9-t.onnx", "yolo9-s.onnx", "yolo9-m.onnx" })
+        var obj2coco = Path.Combine(dir, "dfine_s_obj2coco.onnx");
+        var obj365 = Path.Combine(dir, "dfine_s_obj365.onnx");
+        File.WriteAllText(obj2coco, "");
+        File.WriteAllText(obj365, "");
+
+        Assert.Equal(obj365, Resolve(Path.Combine(dir, "model.onnx"), dfineWeights: DFineWeights.Obj365));
+        Assert.Equal(obj2coco, Resolve(Path.Combine(dir, "model.onnx"), dfineWeights: DFineWeights.Obj2Coco));
+    }
+
+    [Fact]
+    public void FallsBackToAlphabeticalGlobWhenTheExpectedCatalogFileIsMissing()
+    {
+        // A stale/hand-placed model with the wrong name — the last-resort tier, not the normal path.
+        var dir = NewModelsDirectory();
+        foreach (var name in new[] { "custom-a.onnx", "custom-b.onnx" })
             File.WriteAllText(Path.Combine(dir, name), "");
 
         var first = Resolve(Path.Combine(dir, "model.onnx"));
         var again = Resolve(Path.Combine(dir, "model.onnx"));
 
-        Assert.Equal(Path.Combine(dir, "yolo9-m.onnx"), first);
+        Assert.Equal(Path.Combine(dir, "custom-a.onnx"), first);
         Assert.Equal(first, again); // stable across calls — a node must not switch models on restart
     }
 
     [Fact]
     public void IgnoresNonOnnxFilesInTheModelsDirectory()
     {
-        // build-node.ps1 also drops a .LICENSE.txt beside each exported model.
+        // build-node.ps1 also drops a .LICENSE.txt beside each fetched model.
         var dir = NewModelsDirectory();
-        File.WriteAllText(Path.Combine(dir, "yolo9-t.onnx.LICENSE.txt"), "");
+        File.WriteAllText(Path.Combine(dir, "dfine_s_obj2coco.onnx.LICENSE.txt"), "");
         File.WriteAllText(Path.Combine(dir, "readme.md"), "");
-        var bundled = Path.Combine(dir, "yolo9-t.onnx");
+        var bundled = Path.Combine(dir, "dfine_s_obj2coco.onnx");
         File.WriteAllText(bundled, "");
 
         Assert.Equal(bundled, Resolve(Path.Combine(dir, "model.onnx")));
     }
 
     [Fact]
-    public void ThrowsNamingTheDirectoryWhenNoModelIsBundled()
+    public void ThrowsNamingTheExpectedFileWhenNoModelIsBundled()
     {
         var dir = NewModelsDirectory();
 
         var ex = Assert.Throws<FileNotFoundException>(() => Resolve(Path.Combine(dir, "model.onnx")));
         Assert.Contains(dir, ex.Message);
-        Assert.Contains("export-models", ex.Message);
+        Assert.Contains("dfine_s_obj2coco.onnx", ex.Message);
+        Assert.Contains("fetch_dfine", ex.Message);
     }
 
     [Fact]
@@ -99,7 +117,7 @@ public class ModelPathResolutionTests : IDisposable
         var missing = Path.Combine(_root, "nonexistent", "model.onnx");
 
         var ex = Assert.Throws<FileNotFoundException>(() => Resolve(missing));
-        Assert.Contains("export-models", ex.Message);
+        Assert.Contains("fetch_dfine", ex.Message);
     }
 
     [Fact]

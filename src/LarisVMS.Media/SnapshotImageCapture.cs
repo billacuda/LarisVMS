@@ -30,22 +30,40 @@ public static class SnapshotImageCapture
 
     /// <summary>Fraction of the box's own width/height added as margin on every side before cropping —
     /// a razor-tight crop on just the reported box reads as an odd, context-free sliver; a little
-    /// surrounding scene makes it obvious what's actually in frame. A proposed starting default (see
-    /// the plan's own open-questions section), not tuned against real detections yet.</summary>
-    public const double DefaultMarginFraction = 0.15;
+    /// surrounding scene makes it obvious what's actually in frame. Tuned up from an initial 0.15
+    /// once this shipped against real cameras: the best-frame box's own timestamp (Vision Service's
+    /// wall-clock processing time on the Sub stream) doesn't correspond exactly to the same instant
+    /// in the recorded Main-stream segment this crops from — Sub-stream detection latency and
+    /// Main-stream decode/network latency aren't identical, so a moving object can have shifted
+    /// slightly by the time the crop is actually taken (confirmed live: the same lag is visible on
+    /// the *live* detection overlay, which runs boxes slightly ahead of the video it's drawn over).
+    /// A box-relative-only margin masked this well enough with YOLOv9's looser boxes; D-FINE's
+    /// tighter, more accurate ones leave much less absolute slack at the same fraction. See
+    /// <see cref="DefaultMinFrameMarginFraction"/> for the other half of this fix.</summary>
+    public const double DefaultMarginFraction = 0.3;
+
+    /// <summary>A floor on the margin, as a fraction of the *frame's* own dimensions rather than the
+    /// box's — a small/distant object's own box can be tiny, and <see cref="DefaultMarginFraction"/>
+    /// alone would then add almost no absolute pixels of slack, which is backwards: the position
+    /// drift the margin exists to absorb (see that constant's own doc comment) doesn't shrink just
+    /// because the detected object's box happened to be small. Whichever of the two margins is
+    /// larger wins, per axis.</summary>
+    public const double DefaultMinFrameMarginFraction = 0.05;
 
     /// <summary>Computes the pixel crop rectangle for a normalized (0-1) detection box against a
-    /// frameWidth x frameHeight source frame, expanding by marginFraction on every side and clamping
-    /// to frame bounds. Pure and unit-tested directly, same reasoning as ThumbnailCapture's own
-    /// process-invocation/pure-logic split elsewhere in this codebase. Never returns a rectangle
+    /// frameWidth x frameHeight source frame, expanding by whichever of marginFraction (relative to
+    /// the box) or minFrameMarginFraction (relative to the frame) is larger on every side, and
+    /// clamping to frame bounds. Pure and unit-tested directly, same reasoning as ThumbnailCapture's
+    /// own process-invocation/pure-logic split elsewhere in this codebase. Never returns a rectangle
     /// narrower/shorter than 2px (ffmpeg's crop filter requires a positive size) — a degenerate
     /// (near-zero) reported box still produces something croppable rather than a filter error.</summary>
     internal static (int X, int Y, int W, int H) ComputeCropRect(
         double boxX, double boxY, double boxW, double boxH,
-        int frameWidth, int frameHeight, double marginFraction = DefaultMarginFraction)
+        int frameWidth, int frameHeight, double marginFraction = DefaultMarginFraction,
+        double minFrameMarginFraction = DefaultMinFrameMarginFraction)
     {
-        var marginX = boxW * marginFraction;
-        var marginY = boxH * marginFraction;
+        var marginX = Math.Max(boxW * marginFraction, minFrameMarginFraction);
+        var marginY = Math.Max(boxH * marginFraction, minFrameMarginFraction);
 
         var x0 = Math.Clamp(boxX - marginX, 0, 1);
         var y0 = Math.Clamp(boxY - marginY, 0, 1);

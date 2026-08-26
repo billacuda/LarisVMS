@@ -1,7 +1,4 @@
-# Pinned to the versions this exporter was last verified against (see export.py/onnx_compat.py's
-# own doc comments for what each dependency is used for). onnxruntime/onnxsim/torch/torchvision are
-# libreyolo's own transitive dependencies, not imported directly here, but pip needs them resolvable
-# to install libreyolo at all.
-libreyolo==1.5.0
-onnx==1.22.0
-numpy==2.5.2
+# Pinned to the versions fetch_dfine.py was last verified against. No torch/onnx/onnxsim here —
+# unlike the old export.py (see git history), this is a plain download, not an export step, so it
+# needs nothing beyond the Hugging Face Hub client.
+huggingface-hub==1.28.0

@@ -121,6 +121,11 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         var aiDetectionWidth = await settings.GetAsync("Detection.Width", 1280, ct: ct);
         var aiDetectionHeight = await settings.GetAsync("Detection.Height", 720, ct: ct);
         var aiIdleTimeoutSeconds = await settings.GetAsync("Detection.IdleTimeoutSeconds", 10, ct: ct);
+        // Node-scoped (Global -> Node, no per-camera override) — one Vision Service process serves
+        // every camera on a node from the same loaded model, see NodeConfigResponse.DetectionModelFamily's
+        // own doc comment for why that makes this a per-node choice rather than a per-camera one.
+        var detectionModelFamily = await settings.GetAsync("Detection.ModelFamily", "Auto", nodeId: nodeId, ct: ct);
+        var dfineWeights = await settings.GetAsync("Detection.DFineWeights", "Obj2Coco", nodeId: nodeId, ct: ct);
         // Confidence/IoU/stream-role are resolved per camera below (Camera -> Node -> Global,
         // same chain RetentionDays/RecordingMode already use) — not read once globally here like
         // the settings above, since a specific camera can need its own threshold or stream choice.
@@ -212,7 +217,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
 
         return new NodeConfigResponse(cameraDtos, storageRoot, watermarkPercent, mediaSigningKey, orphanedCameraDtos,
             adaptiveStreamingEnabled, (aiAccelerator ?? AiAccelerator.Auto).ToString(),
-            reportIdleDetections, aiDetectionWidth, aiDetectionHeight, aiIdleTimeoutSeconds);
+            reportIdleDetections, aiDetectionWidth, aiDetectionHeight, detectionModelFamily, dfineWeights, aiIdleTimeoutSeconds);
     }
 
     /// <summary>Pulls the Events service's own XAddr out of the capability prober's raw category map

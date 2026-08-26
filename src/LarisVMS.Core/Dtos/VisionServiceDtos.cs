@@ -42,6 +42,15 @@ public record VisionStartCameraRequest(
     /// before actually closing — see NodeConfigResponse.AiIdleTimeoutSeconds's own doc comment for
     /// why this needs to be non-zero.</summary>
     int IdleTimeoutSeconds,
+    /// <summary>The DetectionModelFamily enum name (e.g. "DFine") this camera's pipeline should
+    /// load — always already resolved to a concrete family by the time it reaches here (Node's own
+    /// DetectionModelSelection.Choose runs Auto/accelerator resolution before this request is
+    /// built; Vision Service never sees "Auto").</summary>
+    string ModelFamily,
+    /// <summary>The DFineWeights enum name (e.g. "Obj2Coco") — only meaningful when ModelFamily is
+    /// "DFine", carried unconditionally the same way HardwareAcceleration is always present even
+    /// though only some accelerators use every one of its fields.</summary>
+    string DFineWeights,
     /// <summary>Where this Vision Service instance should POST closed/checkpointed detection spans
     /// back to, e.g. "http://127.0.0.1:{nodePort}" — Node's own localhost-only control port. Told
     /// to Vision Service rather than assumed/hardcoded so neither side has a second place to keep a
