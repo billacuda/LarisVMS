@@ -22,16 +22,28 @@ public record MotionSessionOptions(
     int Fps = 5,
     /// <summary>Per-pixel grayscale delta (0-255) that counts as "changed" — see MotionDetector.Score.</summary>
     byte PixelDeltaThreshold = 25,
-    int StalledThresholdSeconds = 30)
+    int StalledThresholdSeconds = 30,
+    /// <summary>ffmpeg -hwaccel value, e.g. "cuda" — pass 0 of the detection/hardware-acceleration
+    /// overhaul. Before this, every ServerMotion camera ran a continuous *software* video decode of
+    /// its Sub stream regardless of the node's resolved accelerator — the single largest CPU cost in
+    /// the whole detection stack, measured directly against VisionSession's own already-GPU-decoded
+    /// pipeline and RecordingSession's/SubLiveSession's `-c copy` (near-zero). Only "cuda" changes
+    /// anything here, same restriction as VisionSession.StartFfmpeg's own doc comment: scale_cuda's
+    /// GPU-hybrid decode+scale is the only hwaccel/filter pairing verified end to end in this
+    /// codebase. Any other value (or null) keeps today's plain software `scale=W:H,format=gray` path
+    /// unchanged — Intel/AMD come later.</summary>
+    string? HardwareAcceleration = null)
 {
     public TimeSpan StartAfter { get; init; } = TimeSpan.FromSeconds(1);
     public TimeSpan EndAfter { get; init; } = TimeSpan.FromSeconds(3);
 }
 
 /// <summary>
-/// Supervises one ffmpeg process reading a camera's substream as a fixed-size grayscale rawvideo
-/// pipe, diffing consecutive frames per zone (MotionDetector), and turning threshold crossings into
-/// discrete spans (MotionHysteresis) — one hysteresis instance per zone, since each zone's motion
+/// Supervises one ffmpeg process reading a camera's substream as a fixed-size rawvideo pipe (plain
+/// software-decoded grayscale, or GPU-decoded nv12 — see MotionSessionOptions.HardwareAcceleration
+/// and _yPlaneSize's own comment for why both feed MotionDetector.Score identically), diffing
+/// consecutive frames per zone (MotionDetector), and turning threshold crossings into discrete spans
+/// (MotionHysteresis) — one hysteresis instance per zone, since each zone's motion
 /// state is independent. Deliberately not tee'd with recording or live view: it opens its own RTSP
 /// session against the Sub stream, the first real consumer of Sub in this codebase (Main is
 /// recording-only; Sub was reserved for the live wall and motion by the plan, but M5 never actually
@@ -52,7 +64,32 @@ public sealed class MotionSession(MotionSessionOptions options, IReadOnlyList<Mo
     /// enqueuing for report — this class stays camera-agnostic, same as RecordingSession.</summary>
     public event Action<Guid /*zoneId*/, MotionSpanResult>? MotionSpanCompleted;
 
-    private readonly int _frameSize = options.Width * options.Height;
+    // The Y (luma) plane is always Width*Height bytes and is grayscale by construction — both the
+    // plain software path (format=gray, one byte/pixel already) and the CUDA path (nv12's Y plane,
+    // read as-is) hand MotionDetector.Score exactly the same shape of data, so no format-specific
+    // branch exists anywhere below this line. Whether the CUDA path is active only affects how many
+    // *extra* bytes ffmpeg puts on the wire per frame (nv12's interleaved UV chroma plane, half the Y
+    // plane's size for 4:2:0) — see ComputeCaptureFrameSize.
+    private readonly int _yPlaneSize = options.Width * options.Height;
+    private readonly int _frameSize = ComputeCaptureFrameSize(options);
+
+    /// <summary>Only "cuda" gets the GPU-hybrid decode path — see MotionSessionOptions
+    /// .HardwareAcceleration's own doc comment for why every other value stays on plain software
+    /// decode for now.</summary>
+    internal static bool UsesNv12(string? hardwareAcceleration) =>
+        string.Equals(hardwareAcceleration, "cuda", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Bytes ffmpeg actually puts on the pipe per frame: just the Y plane for today's
+    /// software `format=gray` path, or a full nv12 frame (Y plane + half-size interleaved UV plane,
+    /// 4:2:0 chroma subsampling) for the CUDA path — nv12 is a whole-frame format, so the chroma
+    /// bytes arrive whether this class wants them or not; they're read and immediately discarded by
+    /// ReadFramesAsync rather than fed to MotionDetector.Score. internal for direct testing, same
+    /// reasoning as RecordingSession.BuildTeeOutputs/BuildCodecArgs's own pure-method extraction.</summary>
+    internal static int ComputeCaptureFrameSize(MotionSessionOptions options)
+    {
+        var yPlaneSize = options.Width * options.Height;
+        return UsesNv12(options.HardwareAcceleration) ? yPlaneSize + yPlaneSize / 2 : yPlaneSize;
+    }
 
     // A field (built once, for the instance's whole lifetime) rather than a RunAsync-local, so
     // HasMotionSince/GetInProgressSpans can be queried from outside RunAsync's own async context at
@@ -206,10 +243,18 @@ public sealed class MotionSession(MotionSessionOptions options, IReadOnlyList<Mo
 
             if (havePrevious)
             {
+                // Score only the Y (luma) plane — the whole frame for the software path (it's all
+                // there is), or just the leading Width*Height bytes of a larger nv12 capture buffer
+                // on the CUDA path, silently dropping the interleaved UV chroma plane that follows it.
+                // See _yPlaneSize's own field comment for why this needs no per-format branch beyond
+                // the slice bounds themselves.
+                var previousY = previous.AsSpan(0, _yPlaneSize);
+                var currentY = current.AsSpan(0, _yPlaneSize);
+
                 var now = DateTime.UtcNow;
                 foreach (var zone in zones)
                 {
-                    var score = MotionDetector.Score(previous, current, zone.Mask, options.PixelDeltaThreshold);
+                    var score = MotionDetector.Score(previousY, currentY, zone.Mask, options.PixelDeltaThreshold);
                     var motionPresent = score >= zone.Sensitivity;
                     var result = hysteresis[zone.ZoneId].Observe(now, motionPresent, score);
                     if (result is not null) MotionSpanCompleted?.Invoke(zone.ZoneId, result);
@@ -249,21 +294,57 @@ public sealed class MotionSession(MotionSessionOptions options, IReadOnlyList<Mo
             CreateNoWindow = true
         };
 
-        string[] args =
+        foreach (var a in BuildFfmpegArgs(options)) psi.ArgumentList.Add(a);
+
+        var process = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null.");
+        return process;
+    }
+
+    /// <summary>Pure argument construction — internal for direct testing rather than only exercised
+    /// through a spawned ffmpeg process, same reasoning as RecordingSession's own
+    /// BuildDecodeArgs/BuildCodecArgs/BuildTeeOutputs split.
+    ///
+    /// The CUDA branch mirrors VisionSession.StartFfmpeg's own GPU-hybrid decode+scale exactly
+    /// (`-hwaccel cuda -hwaccel_output_format cuda` keeps the decoded frame in GPU memory so
+    /// scale_cuda actually runs on the GPU, then `hwdownload` brings only the already-downscaled
+    /// frame back to host memory) — see that method's doc comment for why nv12 is the confirmed-
+    /// working intermediate format (scale_cuda's documented bgra/gray output options exist in its
+    /// filter schema but aren't actually implemented by the filter kernel). Deliberately NOT
+    /// `format=gray` on this path: asking scale_cuda for a single-plane grayscale output is exactly
+    /// the kind of unverified pairing this codebase has already been burned by once (privacy-mask
+    /// burn-in's hwaccel-decode-plus-CPU-filter failure) — nv12 is proven, and MotionSession only
+    /// ever needs its Y plane anyway (see _yPlaneSize's own comment), so there is no accuracy cost to
+    /// carrying the unused chroma plane instead of asking ffmpeg to drop it for us.
+    ///
+    /// Every other HardwareAcceleration value (including null) is untouched from before this pass —
+    /// Intel/AMD keep today's plain software decode until an equivalent verified pairing exists for
+    /// them.</summary>
+    internal static IReadOnlyList<string> BuildFfmpegArgs(MotionSessionOptions options)
+    {
+        List<string> args =
         [
             "-nostdin",
             "-rtsp_transport", "tcp",
             "-timeout", "5000000",
-            "-i", options.RtspUri,
-            "-vf", $"fps={options.Fps},scale={options.Width}:{options.Height},format=gray",
-            "-f", "rawvideo",
-            "-pix_fmt", "gray",
-            "pipe:1"
         ];
-        foreach (var a in args) psi.ArgumentList.Add(a);
 
-        var process = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null.");
-        return process;
+        if (UsesNv12(options.HardwareAcceleration))
+        {
+            args.AddRange(["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]);
+            args.AddRange(["-i", options.RtspUri]);
+            args.AddRange(["-vf",
+                $"fps={options.Fps},scale_cuda=w={options.Width}:h={options.Height}:format=nv12,hwdownload,format=nv12"]);
+            args.AddRange(["-fps_mode", "passthrough"]); // see VisionSession.StartFfmpeg's own comment on r_frame_rate duplication
+            args.AddRange(["-f", "rawvideo", "-pix_fmt", "nv12", "pipe:1"]);
+        }
+        else
+        {
+            args.AddRange(["-i", options.RtspUri]);
+            args.AddRange(["-vf", $"fps={options.Fps},scale={options.Width}:{options.Height},format=gray"]);
+            args.AddRange(["-f", "rawvideo", "-pix_fmt", "gray", "pipe:1"]);
+        }
+
+        return args;
     }
 
     private async Task DrainStderrAsync(Process process, CancellationToken ct)

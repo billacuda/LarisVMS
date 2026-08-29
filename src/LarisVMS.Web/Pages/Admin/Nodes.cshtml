@@ -161,6 +161,15 @@ else
                                     <option value="Obj2Coco" selected="@(Model.DFineWeightsOverride.GetValueOrDefault(n.Id) == "Obj2Coco")">Obj2Coco</option>
                                     <option value="Obj365" selected="@(Model.DFineWeightsOverride.GetValueOrDefault(n.Id) == "Obj365")">Obj365</option>
                                 </select>
+                                @* Detection/hardware-acceleration overhaul, pass 1 — same per-node
+                                   override shape as the two selects above. *@
+                                <select name="aspectModeOverride" class="form-select form-select-sm mt-1">
+                                    <option value="" selected="@(string.IsNullOrEmpty(Model.AspectModeOverride.GetValueOrDefault(n.Id)))">
+                                        (inherit — currently @Model.EffectiveAspectMode.GetValueOrDefault(n.Id, "Letterbox"))
+                                    </option>
+                                    <option value="Letterbox" selected="@(Model.AspectModeOverride.GetValueOrDefault(n.Id) == "Letterbox")">Letterbox</option>
+                                    <option value="Stretch" selected="@(Model.AspectModeOverride.GetValueOrDefault(n.Id) == "Stretch")">Stretch</option>
+                                </select>
                             </td>
                             <td data-sort-value="@(n.LastSeenAt?.Ticks ?? 0)">
                                 @if (n.LastSeenAt is { } seen)

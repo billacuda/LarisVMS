@@ -251,6 +251,13 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.VideoSourceToken).HasMaxLength(200);
             // ICameraIntegrationProvider.Key — a short stable slug like "dahua-cgi", not free text.
             e.Property(x => x.IntegrationKey).HasMaxLength(100);
+            // Detection/hardware-acceleration overhaul, pass 0: explicit DB-level default, not left
+            // to EF's own convention (which would otherwise backfill every *existing* camera's new
+            // column with bool's CLR default, false) — this field's whole point is "every camera
+            // keeps today's behavior on upgrade," which requires every already-existing row to land
+            // on true, not just new Camera objects going forward (those already get true from the
+            // entity's own property initializer regardless of this).
+            e.Property(x => x.ServerMotionEnabled).HasDefaultValue(true);
             e.HasOne(x => x.Node).WithMany(n => n.Cameras)
                 .HasForeignKey(x => x.NodeId).OnDelete(DeleteBehavior.SetNull);
             e.HasIndex(x => x.Name);

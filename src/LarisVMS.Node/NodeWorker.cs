@@ -1066,17 +1066,31 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         // new ground, flagged as such in MotionSession's own doc comment.
         var subStream = camera.Streams.FirstOrDefault(s => s.Role == "Sub");
 
-        if (serverMotionZones.Count == 0 || subStream is null)
+        if (!ShouldRunServerMotion(camera.ServerMotionEnabled, serverMotionZones.Count, subStream is not null))
         {
             if (_activeMotion.TryRemove(camera.CameraId, out var stopped))
             {
-                _logger.LogInformation("Camera {CameraId} ({Name}) has no enabled ServerMotion zone with a Sub stream — stopping motion session.", camera.CameraId, camera.Name);
+                _logger.LogInformation(
+                    camera.ServerMotionEnabled
+                        ? "Camera {CameraId} ({Name}) has no enabled ServerMotion zone with a Sub stream — stopping motion session."
+                        : "Camera {CameraId} ({Name}) has ServerMotion disabled — stopping motion session.",
+                    camera.CameraId, camera.Name);
                 stopped.Cts.Cancel();
             }
             return;
         }
 
-        var signature = BuildZoneConfigSignature(camera.Zones);
+        // Pass 0 of the detection/hardware-acceleration overhaul: MotionSession's own decode is now
+        // hwaccel-aware (see MotionSessionOptions.HardwareAcceleration's doc comment for why this was
+        // the single largest CPU cost in the whole detection stack). _resolvedAccelerator is
+        // re-evaluated every reconcile, same as ReconcileVision's own use of it, so it belongs in the
+        // restart signature below — otherwise a node that only just detected/gained a usable
+        // accelerator would keep an already-running session on software decode until it happened to
+        // restart for an unrelated reason (the exact class of stale-config bug this codebase was
+        // already caught by once, in v0.29.0).
+        var motionHwaccel = _resolvedAccelerator is { } accel ? AccelToFfmpegHwaccel(accel) : null;
+
+        var signature = BuildZoneConfigSignature(camera.Zones) + "|" + motionHwaccel;
         if (_activeMotion.TryGetValue(camera.CameraId, out var existing))
         {
             if (existing.ZoneConfigSignature == signature) return; // unchanged — leave it running
@@ -1085,8 +1099,12 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             _logger.LogInformation("Zone configuration changed for camera {CameraId} ({Name}) — restarting motion session.", camera.CameraId, camera.Name);
         }
 
-        var subRtspUri = InjectCredentials(subStream.RtspUri, camera.Username, camera.Password);
-        var motionOptions = new MotionSessionOptions(ffmpegPath, subRtspUri);
+        // ShouldRunServerMotion's hasSubStream argument is subStream is not null, and it already
+        // returned true above (or this method returned already) — the compiler can't carry that
+        // correlation through a pure helper call the way it does a direct `is null` check, so this
+        // is a real invariant, not an unchecked assumption.
+        var subRtspUri = InjectCredentials(subStream!.RtspUri, camera.Username, camera.Password);
+        var motionOptions = new MotionSessionOptions(ffmpegPath, subRtspUri, HardwareAcceleration: motionHwaccel);
 
         // Ignore zones are combined once into a single exclusion mask (their union), then subtracted
         // from every ServerMotion zone's own mask — a pixel inside any Ignore zone never counts
@@ -1121,6 +1139,12 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         _activeMotion[camera.CameraId] = new CameraMotionRecorder(motionCts, motionRunTask, motionSession, signature);
         _logger.LogInformation("Started motion detection for camera {CameraId} ({Name}), {ZoneCount} zone(s).", camera.CameraId, camera.Name, serverMotionZones.Count);
     }
+
+    /// <summary>Detection/hardware-acceleration overhaul, pass 0 — see Camera.ServerMotionEnabled's
+    /// own doc comment for why this toggle exists alongside the pre-existing "is there anything to
+    /// watch" check. Pure and unit-tested directly, same reasoning as ShouldDiscardSegment above.</summary>
+    internal static bool ShouldRunServerMotion(bool serverMotionEnabled, int serverMotionZoneCount, bool hasSubStream) =>
+        serverMotionEnabled && serverMotionZoneCount > 0 && hasSubStream;
 
     // Content-equality signature, not a hash — the strings involved are small (a handful of zones
     // per camera at most) and readable in a debugger, so there's no reason to hash away that.
@@ -1168,17 +1192,27 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         }
 
         var watchRtspUri = InjectCredentials(watchStream.RtspUri, camera.Username, camera.Password);
-        var signature = string.Join('|', watchRtspUri, config.AiDetectionWidth, config.AiDetectionHeight,
+
+        // Pass 1 of the detection/hardware-acceleration overhaul: this camera's own real stream
+        // dimensions (ffmpeg-probed ground truth — RecordingSession.TryParseVideoStreamLine),
+        // replacing the old global config.AiDetectionWidth/Height every camera used to share
+        // regardless of its own aspect ratio. Falls back to 1280x720 only if this stream has never
+        // actually been probed yet.
+        var sourceWidth = watchStream.Width ?? 1280;
+        var sourceHeight = watchStream.Height ?? 720;
+
+        var signature = string.Join('|', watchRtspUri, sourceWidth, sourceHeight, config.AspectMode,
             camera.AiConfidence, camera.AiIou, config.ReportIdleDetections, config.AiIdleTimeoutSeconds,
             watchRole, _resolvedAccelerator, _resolvedDetectionModelFamily, config.DFineWeights);
 
         if (_activeVision.TryGetValue(camera.CameraId, out var existing) && existing.ConfigSignature == signature) return; // already watching, unchanged
 
         var request = new VisionStartCameraRequest(
-            camera.CameraId, watchRtspUri, config.AiDetectionWidth, config.AiDetectionHeight,
+            camera.CameraId, watchRtspUri, sourceWidth, sourceHeight,
             AccelToFfmpegHwaccel(_resolvedAccelerator.Value), camera.AiConfidence, camera.AiIou,
             config.ReportIdleDetections, config.AiIdleTimeoutSeconds,
-            _resolvedDetectionModelFamily.ToString(), config.DFineWeights, $"http://127.0.0.1:{livePort}");
+            _resolvedDetectionModelFamily.ToString(), config.DFineWeights, $"http://127.0.0.1:{livePort}",
+            config.AspectMode);
 
         _activeVision[camera.CameraId] = new CameraVisionRecorder(signature);
         _ = StartVisionWatchAsync(request);

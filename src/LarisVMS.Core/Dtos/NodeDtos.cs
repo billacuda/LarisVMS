@@ -123,7 +123,11 @@ public record NodeConfigCameraDto(Guid CameraId, string Name, string? Username, 
     /// same Camera &rarr; Node &rarr; Global override chain, global default "Sub" (preserves the
     /// behavior from before this was configurable at all: NodeWorker.ReconcileVision used to
     /// hardcode the "Sub" stream unconditionally).</summary>
-    string AiDetectionStreamRole = "Sub");
+    string AiDetectionStreamRole = "Sub",
+    /// <summary>Detection/hardware-acceleration overhaul, pass 0 — see Camera.ServerMotionEnabled's
+    /// own doc comment. Plain per-camera bool, not resolved through the Camera &rarr; Node &rarr;
+    /// Global settings chain, same shape as AiDetectionEnabled above.</summary>
+    bool ServerMotionEnabled = true);
 /// <summary>A camera this node has leftover Segments for but is no longer assigned to record
 /// (reassigned to a different node, or deleted) — StorageManager's orphaned-folder sweep uses
 /// RetentionDays here so leftover footage still ages out on the same schedule it always would have,
@@ -162,12 +166,13 @@ public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? Stor
     /// toggle rather than something that varies camera by camera. Threaded through to every
     /// VisionStartCameraRequest NodeWorker builds.</summary>
     bool ReportIdleDetections = false,
-    /// <summary>AI detection's own decode resolution — global rather than per-camera for the same
-    /// reason ReportIdleDetections is: a deployment-wide detection policy, not something today's
-    /// camera setup page exposes per camera. Defaults match VisionSessionOptions' own decode
-    /// default (1280x720). Confidence/IoU used to live here too but are now per-camera fields on
-    /// NodeConfigCameraDto instead — see that record's own doc comment for why.</summary>
-    int AiDetectionWidth = 1280, int AiDetectionHeight = 720,
+    /// <summary>Detection.AspectMode's enum name (e.g. "Letterbox") — node-scoped like
+    /// DetectionModelFamily below: one choice governs how every camera on a node fits its own aspect
+    /// ratio into D-FINE's square input. Retires the old AiDetectionWidth/AiDetectionHeight (a single
+    /// global decode resolution shared by every camera regardless of shape, detection/hardware-
+    /// acceleration overhaul pass 1) — decode resolution is now derived per camera from its own real
+    /// Sub-stream dimensions (NodeConfigStreamDto.Width/Height) instead.</summary>
+    string AspectMode = "Letterbox",
     /// <summary>Detection.ModelFamily's enum name (e.g. "Auto", "DFine") — node-scoped like
     /// AiAccelerator (Setting + SettingOverride(Scope.Node)), not per-camera: one Vision Service
     /// process serves every camera on a node from the same loaded model, so which model family it

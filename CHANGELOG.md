@@ -5,6 +5,92 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.160.0] - 2026-08-29
+
+### Changed
+
+- **AI detection now fits each camera's own real aspect ratio into D-FINE's square input, instead of
+  decoding every camera to one fixed global resolution and stretching whatever came out into a
+  square regardless of shape.** Pass 1 of the detection/hardware-acceleration overhaul. A new
+  `InferenceProfile` (per camera) computes the network-input geometry from that camera's real
+  Sub-stream dimensions (the ffmpeg-probed ground truth, `CameraStream.Width/Height` — see
+  `RecordingSession.TryParseVideoStreamLine`'s own reasoning for why that beats ONVIF's advertised
+  value) and the deployment's chosen aspect mode:
+  - **Letterbox** (new default): preserves the camera's own aspect ratio, padding with black bars to
+    fill the square — a portrait or panoramic camera keeps correct proportions instead of being
+    squashed. `VisionSession`'s own ffmpeg filter chain now does the aspect-preserving scale and pad
+    directly (a plain, always-CPU `pad` filter — deliberately not attempted inside `scale_cuda`'s own
+    GPU filter chain, an unverified pairing this codebase has already been burned by once with
+    privacy-mask burn-in), so the captured frame arrives pre-sized and pre-letterboxed.
+  - **Stretch**: today's pre-existing behavior (independent per-axis scale, no padding), kept so the
+    change is bisectable.
+  - A third mode, **AspectMatched**, is reserved for a possible future pass but not implemented —
+    requesting it throws.
+- **`SKBitmap.Resize` is gone from the AI-detection hot path.** Before this, `VisionSession` always
+  decoded to a fixed 1280x720 and `DFineEngine.Preprocess` did a second, separate non-aspect-
+  preserving resize down to D-FINE's 640x640 input. Now `VisionSession`'s ffmpeg filter chain decodes
+  directly to the exact network input size (stretched or letterboxed, per the mode above), so
+  `Preprocess` only ever packs pixels — a real CPU reduction on top of pass 0's motion-decode fix,
+  measured per detection-enabled camera rather than per ServerMotion camera.
+- New per-node setting, "Aspect fitting" (`Detection.AspectMode`, global default on
+  `Admin → Settings → Detection`, per-node override on `Admin → Nodes`, same shape as the existing
+  detection-model picker) — Letterbox or Stretch.
+- **Retired the global `Detection.Width`/`Detection.Height` settings** (a single decode resolution
+  every camera shared regardless of its own shape) — decode resolution is now always derived
+  per-camera from its own real stream dimensions. Nothing to migrate: these were never exposed in the
+  admin UI, so no stored value needs reconciling.
+- Live-detection overlay boxes (`live-view.js`) now line up correctly on non-16:9 cameras — their
+  coordinates are normalized against the camera's own real aspect ratio rather than the old fixed
+  global decode resolution, which visibly drifted the more a camera's shape differed from 16:9.
+
+### Notes
+
+- Node change — rebuild and re-run `install-node.ps1` on every recorder to pick up the letterbox/
+  stretch decode path and the new setting.
+- No schema migration needed — `Detection.AspectMode` is a `Setting`/`SettingOverride` row, not a new
+  column. A version-bump migration (`AppVersions` insert only) still needs generating:
+  `dotnet ef migrations add BumpVersion0_160_0 --project src/LarisVMS.Infrastructure --startup-project src/LarisVMS.Web`
+  (this produces an empty scaffold since there's no pending model change — add the
+  `INSERT INTO AppVersions`/`DELETE FROM AppVersions` SQL to its `Up()`/`Down()` by hand, matching
+  every other BumpVersion migration in this file's history) — not generated as part of this change,
+  same standing reason as pass 0's migration.
+
+## [0.159.0] - 2026-08-29
+
+### Changed
+
+- **Server-side motion detection (`MotionSession`) now runs on the same NVDEC/CUDA decode path AI
+  detection already uses, on nodes with an Nvidia accelerator resolved.** Pass 0 of the detection/
+  hardware-acceleration overhaul: this was the single largest CPU cost in the whole detection stack
+  — every camera with a ServerMotion zone ran a continuous *software* video decode of its Sub stream
+  regardless of the node's accelerator, unlike recording and live view (`-c copy`, near-zero) or AI
+  detection (already GPU-decoded). The CUDA path decodes and scales on the GPU (`scale_cuda` +
+  `hwdownload`, the same pairing `VisionSession` already proved end to end) and reads the resulting
+  nv12 frame's Y (luma) plane directly — no format-specific code downstream, since a plain grayscale
+  frame and nv12's Y plane are byte-identical in shape. Any other accelerator (or none) keeps
+  today's plain software decode unchanged; Intel/AMD hwaccel decode for this session is future work.
+- **New per-camera "Run server-side pixel motion detection" toggle** (`Cameras/Edit`, default **on**
+  — no behavior change on upgrade). Added specifically because `MotionDetectionSource` only chooses
+  which signal *gates Motion-mode recording*; it was never a switch for whether `MotionSession` runs
+  at all. Before this toggle, a camera whose chosen source was AI detection (or another source) still
+  paid for a full Sub-stream decode purely to keep tagging the timeline with plain motion as a
+  fallback in case something triggered motion without an object being detected — genuinely useful,
+  but not something every camera needs. Turning it off now stops that session (and its decode cost)
+  outright; leaving it on keeps exactly today's behavior.
+
+### Notes
+
+- Node change — rebuild and re-run `install-node.ps1` on every recorder to pick up the CUDA motion
+  decode path and the new toggle.
+- **Migration still needed**: `Camera.ServerMotionEnabled` (new column) requires
+  `dotnet ef migrations add AddCameraServerMotionEnabled --project src/LarisVMS.Infrastructure --startup-project src/LarisVMS.Web`,
+  run before `dotnet ef database update`/deploy — not generated as part of this change (this
+  environment doesn't run `dotnet` commands; see the standing project convention on that).
+  `ApplicationDbContext` already configures `HasDefaultValue(true)` for the new column, so the
+  generated migration should show `defaultValue: true` on its `AddColumn` call — worth a quick look
+  at the generated file before applying, since every existing camera needs to land on `true` (no
+  behavior change on upgrade) rather than bool's usual `false` default.
+
 ## [0.158.0] - 2026-08-26
 
 ### Fixed (post-D-FINE follow-up, confirmed against real hardware)

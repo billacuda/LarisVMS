@@ -77,6 +77,24 @@
             vocabulary — see the Snapshots page's own filter tree once it's in use.
         </div>
     </div>
+    <div class="col-12">
+        <label class="form-label">
+            Aspect fitting
+            <button type="button" class="help-icon" data-help-target="aspectModeHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <select asp-for="AspectMode" class="form-select">
+            <option value="Letterbox">Letterbox — preserve aspect ratio, pad with black bars (default)</option>
+            <option value="Stretch">Stretch — squash to fill the model's square input</option>
+        </select>
+        <div class="help-text-source" id="aspectModeHelp">
+            How a camera's own real aspect ratio fits into the detection model's square input.
+            Letterbox keeps the model seeing correct proportions for a portrait or panoramic
+            camera, at the cost of some black bar padding; Stretch distorts a non-square camera's
+            geometry to fill the square exactly (this app's behavior before this setting existed).
+            This is a per-node setting, not per-camera — a per-node override is available on that
+            node's own page (<a asp-page="/Admin/Nodes">manage nodes</a>).
+        </div>
+    </div>
 
     <div class="col-12">
         <label class="form-label">

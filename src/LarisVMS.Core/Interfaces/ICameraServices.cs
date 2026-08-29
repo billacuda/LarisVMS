@@ -36,6 +36,11 @@ public interface ICameraService
     Task UpdateAsync(Guid id, string name, Guid? nodeId, string? username, string? password,
         bool isEnabled, long? quotaBytes, string? deviceServiceUri = null,
         bool aiDetectionEnabled = false, MotionDetectionSource? motionDetectionSource = null,
+        // Detection/hardware-acceleration overhaul, pass 0 — see Camera.ServerMotionEnabled's own
+        // doc comment. Defaults true, matching the entity's own default, so any other caller of this
+        // method (a scratch script, a future API) that doesn't pass it keeps every camera's current
+        // behavior rather than silently disabling ServerMotion.
+        bool serverMotionEnabled = true,
         CancellationToken ct = default);
 
     /// <summary>Replaces a camera's entire group membership with exactly the given set — not an

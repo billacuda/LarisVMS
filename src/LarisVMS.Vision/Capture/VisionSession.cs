@@ -174,16 +174,40 @@ public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot 
             CreateNoWindow = true
         };
 
-        // GPU-hybrid decode+scale, CUDA only — the only pairing verified end-to-end against real
-        // cameras (in aitest): decode and the first stage of pixel-format conversion happen on the
-        // GPU (scale_cuda -> nv12), and only the already-downscaled frame's final nv12->bgra
-        // conversion finishes on the CPU. scale_cuda's own documented format=bgra option exists in
-        // its filter schema but is not actually implemented by the filter's kernel — requesting it
-        // fails at runtime ("Could not open encoder... Invalid argument"), discovered by testing
-        // against a live stream rather than trusting the documented option list; nv12 is the
-        // confirmed-working output format. Any other -hwaccel value (or none) still requests
-        // hardware decode from ffmpeg where given, but falls back to a plain CPU scale filter —
-        // no other hwaccel+GPU-filter pairing has been verified for this pipeline.
+        foreach (var a in BuildFfmpegArgs(options)) psi.ArgumentList.Add(a);
+
+        logger.LogInformation("Starting vision ffmpeg for {RtspUri} at {Width}x{Height} (hwaccel: {Hwaccel}).",
+            RedactCredentials(options.RtspUri), options.Width, options.Height, options.HardwareAcceleration ?? "none");
+
+        var process = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null.");
+        return process;
+    }
+
+    /// <summary>Pure argument construction — internal for direct testing rather than only exercised
+    /// through a spawned ffmpeg process, same reasoning as RecordingSession's own
+    /// BuildDecodeArgs/BuildCodecArgs/BuildTeeOutputs split and MotionSession.BuildFfmpegArgs.
+    ///
+    /// GPU-hybrid decode+scale, CUDA only — the only pairing verified end-to-end against real
+    /// cameras (in aitest): decode and the first stage of pixel-format conversion happen on the
+    /// GPU (scale_cuda -> nv12), and only the already-downscaled frame's final nv12->bgra
+    /// conversion finishes on the CPU. scale_cuda's own documented format=bgra option exists in
+    /// its filter schema but is not actually implemented by the filter's kernel — requesting it
+    /// fails at runtime ("Could not open encoder... Invalid argument"), discovered by testing
+    /// against a live stream rather than trusting the documented option list; nv12 is the
+    /// confirmed-working output format. Any other -hwaccel value (or none) still requests
+    /// hardware decode from ffmpeg where given, but falls back to a plain CPU scale filter —
+    /// no other hwaccel+GPU-filter pairing has been verified for this pipeline.
+    ///
+    /// Pass 1 of the detection/hardware-acceleration overhaul: when options.Letterbox is set, a
+    /// `pad=` filter step is inserted after the aspect-preserving scale — plain, always-CPU, and
+    /// deliberately NOT attempted as part of scale_cuda's own GPU filter chain the way the scale
+    /// itself is. scale_cuda's own option list has already been proven partly aspirational once
+    /// (the format=bgra case above) — a hand-rolled GPU letterbox pad is exactly the kind of
+    /// unverified pairing that bit privacy-mask burn-in (hwaccel decode + a CPU-only filter broke
+    /// outright, v0.112.0). Padding is a fixed, small border write, not a per-pixel resize, so
+    /// paying it on the CPU costs far less than the risk of an unverified GPU pairing.</summary>
+    internal static IReadOnlyList<string> BuildFfmpegArgs(VisionSessionOptions options)
+    {
         var useGpuScale = string.Equals(options.HardwareAcceleration, "cuda", StringComparison.OrdinalIgnoreCase);
 
         var args = new List<string> { "-nostdin", "-rtsp_transport", "tcp", "-timeout", "5000000" };
@@ -203,15 +227,22 @@ public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot 
         args.Add("-i"); args.Add(options.RtspUri);
         args.Add("-an");
 
+        var scaleWidth = options.Letterbox?.ScaledWidth ?? options.Width;
+        var scaleHeight = options.Letterbox?.ScaledHeight ?? options.Height;
+        var padFilter = options.Letterbox is { } lb
+            ? string.Create(CultureInfo.InvariantCulture,
+                $",pad={options.Width}:{options.Height}:{lb.PadLeft}:{lb.PadTop}:color=black")
+            : "";
+
         if (useGpuScale)
         {
             args.Add("-vf"); args.Add(string.Create(CultureInfo.InvariantCulture,
-                $"scale_cuda=w={options.Width}:h={options.Height}:format=nv12,hwdownload,format=nv12"));
+                $"scale_cuda=w={scaleWidth}:h={scaleHeight}:format=nv12,hwdownload,format=nv12{padFilter}"));
         }
         else
         {
             args.Add("-vf"); args.Add(string.Create(CultureInfo.InvariantCulture,
-                $"scale={options.Width}:{options.Height}"));
+                $"scale={scaleWidth}:{scaleHeight}{padFilter}"));
         }
 
         // Emit each decoded frame exactly once. Without this, ffmpeg converts the output to a
@@ -225,13 +256,7 @@ public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot 
         args.Add("-f"); args.Add("rawvideo");
         args.Add("-");
 
-        foreach (var a in args) psi.ArgumentList.Add(a);
-
-        logger.LogInformation("Starting vision ffmpeg for {RtspUri} at {Width}x{Height} (hwaccel: {Hwaccel}).",
-            RedactCredentials(options.RtspUri), options.Width, options.Height, options.HardwareAcceleration ?? "none");
-
-        var process = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null.");
-        return process;
+        return args;
     }
 
     private async Task DrainStderrAsync(Process process, CancellationToken ct)

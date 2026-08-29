@@ -34,11 +34,24 @@ public static class DFineDecoder
     ///
     /// No NMS: D-FINE is DETR-style (one query per real object, not a dense per-pixel anchor grid),
     /// so unlike YOLO's raw output this never needs suppression to collapse duplicate boxes.
+    ///
+    /// <paramref name="profile"/> replaces the old (frameWidth, frameHeight) pair — pass 1 of the
+    /// detection/hardware-acceleration overhaul. Before this, `boxes`' normalized 0-1 coordinates
+    /// were multiplied directly by the *captured frame's* own pixel dimensions, which only produced
+    /// a correct box because the old pipeline always stretched non-aspect-preserving into the
+    /// network's square, so a plain per-axis scale undid it exactly. Letterbox mode's padding breaks
+    /// that shortcut — a box must first be un-padded and un-scaled through the profile's own inverse
+    /// transform (MapBoxToSource) before it means anything in the source frame's own aspect ratio.
+    /// BoundingBox below is therefore reported in <see cref="InferenceProfile.SourceWidth"/> x
+    /// <see cref="InferenceProfile.SourceHeight"/> pixel space now, not the captured frame's own
+    /// (network) dimensions — every caller normalizing it back to 0-1 must divide by the profile's
+    /// SourceWidth/SourceHeight, not frame.Width/frame.Height (see CameraDetectionPipeline's own
+    /// updated normalization for where this matters).
     /// </summary>
     public static List<ObjectDetection> Decode(
         ReadOnlySpan<float> logits, ReadOnlySpan<float> boxes,
         int numQueries, int numClasses, IReadOnlyList<string> labels,
-        double confidenceThreshold, int frameWidth, int frameHeight, int maxDetections = 100)
+        double confidenceThreshold, InferenceProfile profile, int maxDetections = 100)
     {
         if (logits.Length != numQueries * numClasses)
             throw new ArgumentException($"logits length {logits.Length} != numQueries*numClasses ({numQueries}*{numClasses}).", nameof(logits));
@@ -91,17 +104,21 @@ public static class DFineDecoder
             var w = boxes[boxStart + 2];
             var h = boxes[boxStart + 3];
 
-            var x0 = (cx - w / 2f) * frameWidth;
-            var y0 = (cy - h / 2f) * frameHeight;
-            var x1 = (cx + w / 2f) * frameWidth;
-            var y1 = (cy + h / 2f) * frameHeight;
+            // Normalized (0-1) *source*-frame coordinates — see this method's own doc comment for
+            // why this can no longer be a plain per-axis multiply by the captured frame's dimensions.
+            var (nx0, ny0, nx1, ny1) = profile.MapBoxToSource(cx, cy, w, h);
+            var x0 = nx0 * profile.SourceWidth;
+            var y0 = ny0 * profile.SourceHeight;
+            var x1 = nx1 * profile.SourceWidth;
+            var y1 = ny1 * profile.SourceHeight;
 
-            // Clamp to frame bounds — a box near the edge of a query's own field can extend
-            // slightly past it, and nothing downstream expects a negative or out-of-frame SKRectI.
-            var left = (int)Math.Round(Math.Clamp(x0, 0, frameWidth));
-            var top = (int)Math.Round(Math.Clamp(y0, 0, frameHeight));
-            var right = (int)Math.Round(Math.Clamp(x1, 0, frameWidth));
-            var bottom = (int)Math.Round(Math.Clamp(y1, 0, frameHeight));
+            // Clamp to source-frame bounds — a box near the edge of a query's own field can extend
+            // slightly past it (or, under Letterbox, land partly in a pad bar), and nothing
+            // downstream expects a negative or out-of-frame SKRectI.
+            var left = (int)Math.Round(Math.Clamp(x0, 0, profile.SourceWidth));
+            var top = (int)Math.Round(Math.Clamp(y0, 0, profile.SourceHeight));
+            var right = (int)Math.Round(Math.Clamp(x1, 0, profile.SourceWidth));
+            var bottom = (int)Math.Round(Math.Clamp(y1, 0, profile.SourceHeight));
             if (right <= left || bottom <= top) continue; // degenerate box — nothing to report.
 
             results.Add(new ObjectDetection

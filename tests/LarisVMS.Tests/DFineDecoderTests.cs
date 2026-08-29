@@ -1,3 +1,4 @@
+using LarisVMS.Core.Enums;
 using LarisVMS.Vision.Inference;
 
 namespace LarisVMS.Tests;
@@ -7,10 +8,19 @@ namespace LarisVMS.Tests;
 /// cxcywh→xyxy math is verified independently against a real model run (see the class's own doc
 /// comment), so these pin the exact arithmetic and edge-case handling rather than re-verifying
 /// model behavior.
+///
+/// All profiles here use AspectMode.Stretch, which is mathematically an identity on the *normalized*
+/// coordinate a box maps to regardless of the chosen network size (no pad, so InferenceProfile's own
+/// scale cancels out exactly) — so these keep the exact same expected pixel values pre-pass-1's
+/// InferenceProfile refactor had, just built through the new Decode(..., InferenceProfile) signature.
+/// InferenceProfileTests covers the Letterbox-specific math this file deliberately doesn't exercise.
 /// </summary>
 public class DFineDecoderTests
 {
     private static readonly string[] Labels = ["cat", "dog", "None"];
+
+    private static InferenceProfile Stretch(int sourceWidth, int sourceHeight) =>
+        InferenceProfile.Create(sourceWidth, sourceHeight, AspectMode.Stretch);
 
     // sigmoid(4) ≈ 0.982, sigmoid(-4) ≈ 0.018 — comfortably above/below any threshold used below.
     private const float HighLogit = 4f;
@@ -25,7 +35,7 @@ public class DFineDecoderTests
         float[] boxes = [0.5f, 0.5f, 0.4f, 0.2f];
 
         var results = DFineDecoder.Decode(logits, boxes, numQueries: 1, numClasses: 3, Labels,
-            confidenceThreshold: 0.5, frameWidth: 100, frameHeight: 200);
+            confidenceThreshold: 0.5, Stretch(100, 200));
 
         var d = Assert.Single(results);
         Assert.Equal("cat", d.Label.Name);
@@ -44,7 +54,7 @@ public class DFineDecoderTests
         float[] boxes = [0.5f, 0.5f, 0.2f, 0.2f];
 
         var results = DFineDecoder.Decode(logits, boxes, numQueries: 1, numClasses: 3, Labels,
-            confidenceThreshold: 0.5, frameWidth: 100, frameHeight: 100);
+            confidenceThreshold: 0.5, Stretch(100, 100));
 
         Assert.Empty(results);
     }
@@ -58,7 +68,7 @@ public class DFineDecoderTests
         float[] boxes = [0.5f, 0.5f, 0.2f, 0.2f];
 
         var results = DFineDecoder.Decode(logits, boxes, numQueries: 1, numClasses: 3, Labels,
-            confidenceThreshold: 0.5, frameWidth: 100, frameHeight: 100);
+            confidenceThreshold: 0.5, Stretch(100, 100));
 
         Assert.Empty(results);
     }
@@ -71,7 +81,7 @@ public class DFineDecoderTests
         float[] boxes = [2.0f, 0.5f, 0.1f, 0.1f];
 
         var results = DFineDecoder.Decode(logits, boxes, numQueries: 1, numClasses: 3, Labels,
-            confidenceThreshold: 0.5, frameWidth: 100, frameHeight: 100);
+            confidenceThreshold: 0.5, Stretch(100, 100));
 
         Assert.Empty(results);
     }
@@ -84,7 +94,7 @@ public class DFineDecoderTests
         float[] boxes = [0.3f, 0.3f, 0.1f, 0.1f, 0.7f, 0.7f, 0.1f, 0.1f];
 
         var results = DFineDecoder.Decode(logits, boxes, numQueries: 2, numClasses: 3, Labels,
-            confidenceThreshold: 0.5, frameWidth: 100, frameHeight: 100);
+            confidenceThreshold: 0.5, Stretch(100, 100));
 
         Assert.Equal(2, results.Count);
         Assert.True(results[0].Confidence >= results[1].Confidence);
@@ -97,7 +107,7 @@ public class DFineDecoderTests
         float[] boxes = [0.5f, 0.5f, 0.2f, 0.2f];
 
         Assert.Throws<ArgumentException>(() =>
-            DFineDecoder.Decode(logits, boxes, numQueries: 1, numClasses: 3, Labels, 0.5, 100, 100));
+            DFineDecoder.Decode(logits, boxes, numQueries: 1, numClasses: 3, Labels, 0.5, Stretch(100, 100)));
     }
 
     [Fact]
@@ -107,7 +117,7 @@ public class DFineDecoderTests
         float[] boxes = [0.5f, 0.5f, 0.2f, 0.2f];
 
         Assert.Throws<ArgumentException>(() =>
-            DFineDecoder.Decode(logits, boxes, numQueries: 1, numClasses: 3, ["only-one-label"], 0.5, 100, 100));
+            DFineDecoder.Decode(logits, boxes, numQueries: 1, numClasses: 3, ["only-one-label"], 0.5, Stretch(100, 100)));
     }
 
     [Fact]
@@ -118,7 +128,7 @@ public class DFineDecoderTests
         float[] boxes = [0.2f, 0.2f, 0.1f, 0.1f, 0.5f, 0.5f, 0.1f, 0.1f, 0.8f, 0.8f, 0.1f, 0.1f];
 
         var results = DFineDecoder.Decode(logits, boxes, numQueries: 3, numClasses: 3, Labels,
-            confidenceThreshold: 0.5, frameWidth: 100, frameHeight: 100, maxDetections: 2);
+            confidenceThreshold: 0.5, Stretch(100, 100), maxDetections: 2);
 
         Assert.Equal(2, results.Count);
     }

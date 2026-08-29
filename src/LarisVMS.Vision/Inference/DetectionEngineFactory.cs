@@ -12,14 +12,15 @@ namespace LarisVMS.Vision.Inference;
 public static class DetectionEngineFactory
 {
     public static IDetectionEngine Create(DetectionModelFamily family, DFineWeights dfineWeights,
-        EngineOptions options, ILoggerFactory loggerFactory)
+        EngineOptions options, InferenceProfile profile, ILoggerFactory loggerFactory)
     {
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(loggerFactory);
 
         return family switch
         {
-            DetectionModelFamily.DFine => new DFineEngine(options, DetectionModelCatalog.GetDFineLabels(dfineWeights),
+            DetectionModelFamily.DFine => new DFineEngine(options, profile, DetectionModelCatalog.GetDFineLabels(dfineWeights),
                 loggerFactory.CreateLogger<DFineEngine>()),
             DetectionModelFamily.RfDetr => throw new NotSupportedException(
                 "RF-DETR is not yet implemented — deferred scope, see the model-swap plan."),

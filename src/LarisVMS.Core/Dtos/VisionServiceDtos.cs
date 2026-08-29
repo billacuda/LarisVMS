@@ -24,6 +24,16 @@ public record VisionStartCameraRequest(
     /// <summary>The camera's Sub stream RTSP URI, already credential-injected — the same shape
     /// ReconcileMotion/ReconcileLiveSub already build for MotionSession/SubLiveSession.</summary>
     string RtspUri,
+    /// <summary>Detection/hardware-acceleration overhaul, pass 1: this camera's own real Sub-stream
+    /// resolution (from CameraStream.Width/Height, the ffmpeg-probed ground truth — see
+    /// RecordingSession.TryParseVideoStreamLine's own doc comment for why that beats ONVIF's
+    /// advertised value), falling back to 1280x720 if not yet probed. Before this pass these were a
+    /// single fixed *decode target* shared by every camera regardless of its own aspect ratio
+    /// (NodeConfigResponse.AiDetectionWidth/Height, now retired) — squashing a portrait or panoramic
+    /// camera into whatever that global resolution's own aspect happened to be, before D-FINE's own
+    /// 640x640 stretch squashed it a second time. Now purely an input to
+    /// LarisVMS.Vision.Inference.InferenceProfile, which derives the actual ffmpeg decode target
+    /// (always exactly its own NetworkWidth/NetworkHeight) from these plus AspectMode below.</summary>
     int Width,
     int Height,
     /// <summary>ffmpeg -hwaccel value for VisionSession's own GPU-hybrid decode, e.g. "cuda" — see
@@ -55,7 +65,15 @@ public record VisionStartCameraRequest(
     /// back to, e.g. "http://127.0.0.1:{nodePort}" — Node's own localhost-only control port. Told
     /// to Vision Service rather than assumed/hardcoded so neither side has a second place to keep a
     /// port number in sync.</summary>
-    string NodeCallbackBaseUrl);
+    string NodeCallbackBaseUrl,
+    /// <summary>Detection/hardware-acceleration overhaul, pass 1: the AspectMode enum name (e.g.
+    /// "Letterbox") — node-scoped like ModelFamily/DFineWeights (Setting + SettingOverride(Scope.Node),
+    /// resolved on NodeConfigResponse.AspectMode before this request is built), not per-camera: one
+    /// choice governs how every camera on a node fits its own aspect into D-FINE's square input.
+    /// Defaults to "Letterbox" so an older, not-yet-updated node build's deserialization (were this
+    /// ever read node-side, which it isn't — Vision Service parses it directly) lands on the safer of
+    /// the two implemented values rather than today's stretch-and-distort behavior.</summary>
+    string AspectMode = "Letterbox");
 
 /// <summary>Node -&gt; Vision Service: stop watching a camera (disabled, reassigned, or the node is
 /// shutting down this camera's session).</summary>

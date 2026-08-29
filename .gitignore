@@ -58,3 +58,4 @@ project.fragment.lock.json
 .DS_Store
 Thumbs.db
 Desktop.ini
+.aider*

@@ -567,10 +567,15 @@
     // client-side toggle" — nothing is drawn, and the socket isn't even opened, until at least one
     // is turned on by the caller.
     //
-    // Coordinates arrive normalized (0-1) against whatever resolution AI detection actually ran at
-    // (the Sub stream) — remapped here using the exact same object-fit:contain letterbox math
-    // createFreezeOverlay's own show() already uses, since drawing onto a canvas sized to the
-    // video's *on-screen* box (not its native resolution) needs the same scale/offset either way.
+    // Coordinates arrive normalized (0-1) against the camera's own real aspect ratio (detection/
+    // hardware-acceleration overhaul pass 1 — InferenceProfile.MapBoxToSource undoes whatever
+    // decode-resolution/letterbox transform AI detection actually used internally, so nothing here
+    // needs to know that ran on the Sub stream at some other resolution/aspect at all) — remapped
+    // here using the exact same object-fit:contain letterbox math createFreezeOverlay's own show()
+    // already uses, since drawing onto a canvas sized to the video's *on-screen* box (not its native
+    // resolution) needs the same scale/offset either way. Before pass 1, a non-16:9 camera's boxes
+    // were normalized against a fixed global decode resolution unrelated to the camera's own shape,
+    // so they visibly drifted off the real video the more its aspect ratio differed from 16:9.
     //
     // `fsHandle` (optional — fullscreen-tile.js's wire() return value for this same tile) is how
     // this overlay stays in lockstep with zoom/pan: that module applies a CSS transform directly to

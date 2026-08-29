@@ -22,25 +22,31 @@ namespace LarisVMS.Vision.Inference;
 /// that turns "support a new model family" into "add a Decode method" instead.
 ///
 /// Preprocessing matches D-FINE's own published Hugging Face/Optimum preprocessor config exactly
-/// (verified directly against a real model run — see DFineDecoder's own doc comment): resize to
-/// 640x640 as a plain stretch (no letterbox padding — do_pad is false), rescale by 1/255, and no
-/// ImageNet mean/std normalization at all (do_normalize is false, despite the config listing mean/
-/// std values). Getting any of these wrong produces plausible-looking but numerically wrong
-/// detections, not an obvious failure.
+/// (verified directly against a real model run — see DFineDecoder's own doc comment) for rescale
+/// (1/255) and normalization (none — do_normalize is false, despite the config listing mean/std
+/// values). Getting either wrong produces plausible-looking but numerically wrong detections, not an
+/// obvious failure.
+///
+/// Resize/pad is no longer this class's own concern as of pass 1 of the detection/hardware-
+/// acceleration overhaul: VisionSession's own ffmpeg filter chain now produces the captured frame
+/// already at the exact network size <see cref="InferenceProfile"/> calls for (a plain stretch for
+/// AspectMode.Stretch, matching HF's own do_pad=false config exactly; a real letterbox pad for
+/// AspectMode.Letterbox) — so Preprocess below only ever packs pixels, never resizes.
 /// </summary>
 public sealed class DFineEngine : IDetectionEngine
 {
-    private const int InputSize = 640;
-
     private readonly InferenceSession _session;
+    private readonly InferenceProfile _profile;
     private readonly IReadOnlyList<string> _labels;
     private readonly ILogger<DFineEngine> _logger;
     private bool _loggedFirstInference;
 
-    public DFineEngine(EngineOptions options, IReadOnlyList<string> labels, ILogger<DFineEngine> logger)
+    public DFineEngine(EngineOptions options, InferenceProfile profile, IReadOnlyList<string> labels, ILogger<DFineEngine> logger)
     {
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(labels);
+        _profile = profile;
         _labels = labels;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
@@ -79,7 +85,7 @@ public sealed class DFineEngine : IDetectionEngine
         var numClasses = logitsTensor.Dimensions[2];
 
         var results = DFineDecoder.Decode(logitsTensor.ToArray(), boxesTensor.ToArray(), numQueries, numClasses,
-            _labels, confidence, frame.Width, frame.Height);
+            _labels, confidence, _profile);
 
         stopwatch.Stop();
         LastInferenceMilliseconds = stopwatch.Elapsed.TotalMilliseconds;
@@ -100,9 +106,13 @@ public sealed class DFineEngine : IDetectionEngine
         return results;
     }
 
-    /// <summary>Stretch-resizes to 640x640 (no aspect-ratio preservation, no padding — matches
-    /// D-FINE's own preprocessor exactly) and packs RGB (alpha dropped) into a [1,3,640,640]
-    /// float32 NCHW buffer, scaled to 0-1 with no further normalization.
+    /// <summary>Packs RGB (alpha dropped) into a [1,3,NetworkHeight,NetworkWidth] float32 NCHW buffer,
+    /// scaled to 0-1 with no further normalization (matches D-FINE's own preprocessor exactly — see
+    /// this class's own doc comment). No resize: as of pass 1, <paramref name="frame"/> is guaranteed
+    /// to already be exactly _profile.NetworkWidth x NetworkHeight — VisionSession's own ffmpeg filter
+    /// chain produces it pre-sized (stretched or letterboxed, per AspectMode), which is what let
+    /// SKBitmap.Resize disappear from this hot path entirely (a real, measured CPU win beyond the fix
+    /// already shipped in 0.158.0 — see this class's git history for that one).
     ///
     /// Reads raw BGRA8888 bytes via GetPixelSpan and writes straight into the tensor's own flat
     /// buffer, rather than SKBitmap.Pixels (a per-pixel SKColor[] conversion — a real, measured
@@ -110,20 +120,22 @@ public sealed class DFineEngine : IDetectionEngine
     /// decode itself being lighter than YOLO's — see DFineDecoder's own doc comment for the other
     /// half of that fix) or the tensor's generic multi-dimensional indexer (recomputes
     /// strides per element; the flat Buffer.Span with precomputed channel offsets does not).</summary>
-    private static DenseTensor<float> Preprocess(SKBitmap frame)
+    private DenseTensor<float> Preprocess(SKBitmap frame)
     {
-        using var resized = frame.Resize(
-            new SKImageInfo(InputSize, InputSize, SKColorType.Bgra8888, SKAlphaType.Opaque),
-            new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None))
-            ?? throw new InvalidOperationException("SKBitmap.Resize failed.");
+        if (frame.Width != _profile.NetworkWidth || frame.Height != _profile.NetworkHeight)
+        {
+            throw new InvalidOperationException(
+                $"Captured frame is {frame.Width}x{frame.Height}, expected {_profile.NetworkWidth}x{_profile.NetworkHeight} " +
+                "— VisionSession's ffmpeg filter chain and this engine's InferenceProfile have disagreed about the decode target.");
+        }
 
-        var tensor = new DenseTensor<float>([1, 3, InputSize, InputSize]);
+        var pixelCount = _profile.NetworkWidth * _profile.NetworkHeight;
+        var tensor = new DenseTensor<float>([1, 3, _profile.NetworkHeight, _profile.NetworkWidth]);
         var tensorSpan = tensor.Buffer.Span; // flat, row-major: [R plane][G plane][B plane], each H*W
 
-        var pixelBytes = resized.GetPixelSpan(); // raw Bgra8888, row-major, 4 bytes/pixel: B,G,R,A
-        const int pixelCount = InputSize * InputSize;
-        const int gPlane = pixelCount;
-        const int bPlane = pixelCount * 2;
+        var pixelBytes = frame.GetPixelSpan(); // raw Bgra8888, row-major, 4 bytes/pixel: B,G,R,A
+        var gPlane = pixelCount;
+        var bPlane = pixelCount * 2;
 
         for (var i = 0; i < pixelCount; i++)
         {

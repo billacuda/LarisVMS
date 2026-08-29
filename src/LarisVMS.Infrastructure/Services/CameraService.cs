@@ -71,6 +71,7 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
         DewarpConfigJson = c.DewarpConfigJson,
         AiDetectionEnabled = c.AiDetectionEnabled,
         MotionDetectionSource = c.MotionDetectionSource,
+        ServerMotionEnabled = c.ServerMotionEnabled,
         IsEnabled = c.IsEnabled,
         CreatedAt = c.CreatedAt,
         LastProbedAt = c.LastProbedAt,
@@ -127,6 +128,7 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
     public async Task UpdateAsync(Guid id, string name, Guid? nodeId, string? username, string? password,
         bool isEnabled, long? quotaBytes, string? deviceServiceUri = null,
         bool aiDetectionEnabled = false, MotionDetectionSource? motionDetectionSource = null,
+        bool serverMotionEnabled = true,
         CancellationToken ct = default)
     {
         var camera = await db.Cameras.FirstOrDefaultAsync(c => c.Id == id, ct)
@@ -138,6 +140,7 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
         camera.QuotaBytes = quotaBytes;
         camera.AiDetectionEnabled = aiDetectionEnabled;
         camera.MotionDetectionSource = motionDetectionSource;
+        camera.ServerMotionEnabled = serverMotionEnabled;
         // Blank fields leave the stored credential alone — the edit form never round-trips the
         // decrypted password back to the browser, so an empty submission must mean "unchanged",
         // not "clear it".

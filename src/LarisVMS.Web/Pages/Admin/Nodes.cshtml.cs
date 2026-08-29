@@ -35,6 +35,10 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
     public Dictionary<Guid, string> ModelFamilyOverride { get; set; } = [];
     public Dictionary<Guid, string> DFineWeightsOverride { get; set; } = [];
     public Dictionary<Guid, string> EffectiveModelFamily { get; set; } = [];
+    /// <summary>Detection/hardware-acceleration overhaul, pass 1 — same per-node override shape as
+    /// ModelFamilyOverride above.</summary>
+    public Dictionary<Guid, string> AspectModeOverride { get; set; } = [];
+    public Dictionary<Guid, string> EffectiveAspectMode { get; set; } = [];
     public Dictionary<Guid, double?> DaysRemaining { get; set; } = [];
     public Dictionary<Guid, int> StaleCameraCountByNode { get; set; } = [];
     public Dictionary<Guid, List<StaleCameraRow>> StaleCamerasByNode { get; set; } = [];
@@ -89,11 +93,13 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
             ModelFamilyOverride[n.Id] = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.ModelFamily") ?? "";
             DFineWeightsOverride[n.Id] = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.DFineWeights") ?? "";
             EffectiveModelFamily[n.Id] = await settings.GetAsync("Detection.ModelFamily", "Auto", nodeId: n.Id);
+            AspectModeOverride[n.Id] = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.AspectMode") ?? "";
+            EffectiveAspectMode[n.Id] = await settings.GetAsync("Detection.AspectMode", "Letterbox", nodeId: n.Id);
         }
     }
 
     public async Task<IActionResult> OnPostUpdateAsync(Guid id, string name, string? storageRootPath, int? retentionDaysOverride,
-        string? aiAccelerator, string? modelFamilyOverride, string? dfineWeightsOverride)
+        string? aiAccelerator, string? modelFamilyOverride, string? dfineWeightsOverride, string? aspectModeOverride)
     {
         try
         {
@@ -105,6 +111,7 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
             var oldRetentionOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Retention.Days");
             var oldModelFamilyOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.ModelFamily");
             var oldDFineWeightsOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.DFineWeights");
+            var oldAspectModeOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.AspectMode");
             // "" (blank/Auto) resolves as null — see NodeConfigResponse.AiAccelerator's own doc
             // comment for why Auto (not an explicit choice) is the safe default.
             var accelerator = Enum.TryParse<AiAccelerator>(aiAccelerator, out var acc) ? acc : (AiAccelerator?)null;
@@ -116,6 +123,8 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
                 string.IsNullOrEmpty(modelFamilyOverride) ? null : modelFamilyOverride, User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Node, id, "Detection.DFineWeights",
                 string.IsNullOrEmpty(dfineWeightsOverride) ? null : dfineWeightsOverride, User.Identity?.Name);
+            await settings.SetOverrideAsync(SettingScope.Node, id, "Detection.AspectMode",
+                string.IsNullOrEmpty(aspectModeOverride) ? null : aspectModeOverride, User.Identity?.Name);
 
             var details = AuditDiff.Build(
                 AuditDiff.Of("Name", before?.Name, name),
@@ -123,7 +132,8 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
                 AuditDiff.Of("Retention override", oldRetentionOverride, retentionDaysOverride?.ToString()),
                 AuditDiff.Of("AI accelerator", before?.AiAccelerator?.ToString(), accelerator?.ToString()),
                 AuditDiff.Of("Detection model override", oldModelFamilyOverride, modelFamilyOverride),
-                AuditDiff.Of("D-FINE weights override", oldDFineWeightsOverride, dfineWeightsOverride));
+                AuditDiff.Of("D-FINE weights override", oldDFineWeightsOverride, dfineWeightsOverride),
+                AuditDiff.Of("Aspect fitting override", oldAspectModeOverride, aspectModeOverride));
 
             await LogAsync("Node.Update", details is null ? $"{name} ({id})" : $"{name} ({id}) — {details}");
         }

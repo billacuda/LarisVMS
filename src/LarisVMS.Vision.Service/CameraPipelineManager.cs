@@ -57,12 +57,13 @@ public sealed class CameraPipelineManager : IAsyncDisposable
 
         var family = Enum.Parse<DetectionModelFamily>(request.ModelFamily);
         var dfineWeights = Enum.Parse<DFineWeights>(request.DFineWeights);
+        var aspectMode = Enum.Parse<AspectMode>(request.AspectMode);
         var modelKey = $"{family}|{dfineWeights}";
         var resolvedModelPath = _resolvedModelPathsByKey.GetOrAdd(modelKey,
             _ => ResolveModelPath(_options.ModelPath, family, dfineWeights, _logger));
 
         var http = _httpClientFactory.CreateClient(nameof(CameraDetectionPipeline));
-        var pipeline = new CameraDetectionPipeline(request, _options, _ffmpegPath, resolvedModelPath, family, dfineWeights, http, _loggerFactory);
+        var pipeline = new CameraDetectionPipeline(request, _options, _ffmpegPath, resolvedModelPath, family, dfineWeights, aspectMode, http, _loggerFactory);
         _pipelines[request.CameraId] = pipeline;
         _logger.LogInformation("Started watching camera {CameraId} ({Width}x{Height}, hwaccel: {Hwaccel}).",
             request.CameraId, request.Width, request.Height, request.HardwareAcceleration ?? "none");

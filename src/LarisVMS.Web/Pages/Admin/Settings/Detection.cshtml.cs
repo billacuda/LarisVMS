@@ -24,6 +24,11 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
     /// are real choices right now; RF-DETR/YOLOX render disabled in the picker (deferred scope).</summary>
     [BindProperty] public string ModelFamily { get; set; } = "Auto";
     [BindProperty] public string DFineWeights { get; set; } = "Obj2Coco";
+    /// <summary>Detection/hardware-acceleration overhaul, pass 1 — node-scoped like ModelFamily
+    /// above (Admin/Nodes carries the per-node override), not this page's other global-default
+    /// fields' Camera-override sibling. Only "Letterbox"/"Stretch" are implemented; AspectMatched
+    /// is reserved for a future pass and never offered here.</summary>
+    [BindProperty] public string AspectMode { get; set; } = "Letterbox";
 
     public string? SavedMessage { get; set; }
 
@@ -36,6 +41,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         IdleTimeoutSeconds = await settings.GetAsync("Detection.IdleTimeoutSeconds", 10);
         ModelFamily = await settings.GetAsync("Detection.ModelFamily", "Auto");
         DFineWeights = await settings.GetAsync("Detection.DFineWeights", "Obj2Coco");
+        AspectMode = await settings.GetAsync("Detection.AspectMode", "Letterbox");
     }
 
     public async Task<IActionResult> OnPostAsync()
@@ -49,6 +55,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         var oldIdleTimeoutSeconds = await settings.GetAsync("Detection.IdleTimeoutSeconds", 10);
         var oldModelFamily = await settings.GetAsync("Detection.ModelFamily", "Auto");
         var oldDFineWeights = await settings.GetAsync("Detection.DFineWeights", "Obj2Coco");
+        var oldAspectMode = await settings.GetAsync("Detection.AspectMode", "Letterbox");
 
         // Confidence/IoU are genuinely 0-1 fractions everywhere downstream (YOLO-family thresholds) —
         // clamped here so a stray out-of-range value typed into the form can't reach NodeService/the
@@ -66,6 +73,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         // throw for either), so ModelFamily can only ever actually be "Auto" or "DFine" here.
         await settings.SetGlobalAsync("Detection.ModelFamily", ModelFamily, by);
         await settings.SetGlobalAsync("Detection.DFineWeights", DFineWeights, by);
+        await settings.SetGlobalAsync("Detection.AspectMode", AspectMode, by);
 
         var details = AuditDiff.Build(
             AuditDiff.Of("Detection.Confidence", oldConfidence.ToString("0.####"), Confidence.ToString("0.####")),
@@ -74,7 +82,8 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
             AuditDiff.Of("Detection.ReportIdleDetections", oldReportIdleDetections.ToString(), ReportIdleDetections.ToString()),
             AuditDiff.Of("Detection.IdleTimeoutSeconds", oldIdleTimeoutSeconds.ToString(), IdleTimeoutSeconds.ToString()),
             AuditDiff.Of("Detection.ModelFamily", oldModelFamily, ModelFamily),
-            AuditDiff.Of("Detection.DFineWeights", oldDFineWeights, DFineWeights));
+            AuditDiff.Of("Detection.DFineWeights", oldDFineWeights, DFineWeights),
+            AuditDiff.Of("Detection.AspectMode", oldAspectMode, AspectMode));
 
         await auditService.LogAsync("Settings.Update",
             User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, by,

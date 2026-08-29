@@ -19,6 +19,19 @@ public class Camera
     /// behave like Continuous rather than silently discarding everything.</summary>
     public MotionDetectionSource? MotionDetectionSource { get; set; }
 
+    /// <summary>Detection/hardware-acceleration overhaul, pass 0: whether NodeWorker runs a
+    /// ServerMotion session for this camera at all, independent of MotionDetectionSource above.
+    /// MotionDetectionSource only decides which source *gates Motion-mode recording* when several
+    /// are configured — before this field existed, ServerMotion still ran and consumed CPU even when
+    /// AiDetection (or another source) was the chosen gate, purely to keep tagging the timeline with
+    /// plain motion as a fallback in case something triggered motion without AI detecting an object.
+    /// That fallback is genuinely useful (RecordingMode != Motion always shows it; even in Motion
+    /// mode with a different primary source, ShouldReportGenericMotion previously suppressed the
+    /// *report* but the frame-diff itself still ran) — so this defaults to true, preserving every
+    /// camera's current behavior on upgrade. Set false to stop the session outright and free the CPU
+    /// it costs, on a camera where the fallback isn't wanted.</summary>
+    public bool ServerMotionEnabled { get; set; } = true;
+
     public Guid Id { get; set; }
 
     /// <summary>Owning recorder node. Nullable until Nodes exist (M3) — a camera can be registered

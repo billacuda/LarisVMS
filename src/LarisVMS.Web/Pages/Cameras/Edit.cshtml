@@ -290,6 +290,24 @@
         </div>
         <div class="col-6">
             <label class="form-label">
+                Server-side motion detection
+                <button type="button" class="help-icon" data-help-target="serverMotionHelp" tabindex="0" aria-label="Help">ℹ️</button>
+            </label>
+            <div class="form-check">
+                <input asp-for="ServerMotionEnabled" class="form-check-input" type="checkbox" />
+                <label class="form-check-label" asp-for="ServerMotionEnabled">Run server-side pixel motion detection on this camera</label>
+            </div>
+            <div class="help-text-source" id="serverMotionHelp">
+                Independent of the motion detection source above — that setting only chooses which
+                signal <em>gates recording</em> in Motion mode, not whether server-side motion runs at
+                all. Leave this on to keep tagging the timeline with plain motion as a fallback even
+                when AI detection (or another source) is the chosen gate — useful in case something
+                triggers motion without an object being detected. Turn it off to stop the CPU cost of
+                this camera's motion decode entirely, if you don't need the fallback.
+            </div>
+        </div>
+        <div class="col-6">
+            <label class="form-label">
                 Pre-roll override (seconds)
                 <button type="button" class="help-icon" data-help-target="preRollHelp" tabindex="0" aria-label="Help">ℹ️</button>
             </label>

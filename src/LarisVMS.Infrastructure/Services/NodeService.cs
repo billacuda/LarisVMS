@@ -118,12 +118,15 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         // same way WatermarkPercent/AdaptiveStreamingEnabled already are — see NodeConfigResponse's
         // own doc comments for why these are deployment-wide rather than per-camera settings.
         var reportIdleDetections = await settings.GetAsync("Detection.ReportIdleDetections", false, ct: ct);
-        var aiDetectionWidth = await settings.GetAsync("Detection.Width", 1280, ct: ct);
-        var aiDetectionHeight = await settings.GetAsync("Detection.Height", 720, ct: ct);
         var aiIdleTimeoutSeconds = await settings.GetAsync("Detection.IdleTimeoutSeconds", 10, ct: ct);
         // Node-scoped (Global -> Node, no per-camera override) — one Vision Service process serves
         // every camera on a node from the same loaded model, see NodeConfigResponse.DetectionModelFamily's
         // own doc comment for why that makes this a per-node choice rather than a per-camera one.
+        // AspectMode joins it here for pass 1 of the detection/hardware-acceleration overhaul,
+        // replacing the old global Detection.Width/Detection.Height settings (a single decode
+        // resolution shared by every camera) — decode resolution is now derived per camera from its
+        // own real Sub-stream dimensions instead (NodeConfigStreamDto.Width/Height, below).
+        var aspectMode = await settings.GetAsync("Detection.AspectMode", "Letterbox", nodeId: nodeId, ct: ct);
         var detectionModelFamily = await settings.GetAsync("Detection.ModelFamily", "Auto", nodeId: nodeId, ct: ct);
         var dfineWeights = await settings.GetAsync("Detection.DFineWeights", "Obj2Coco", nodeId: nodeId, ct: ct);
         // Confidence/IoU/stream-role are resolved per camera below (Camera -> Node -> Global,
@@ -190,7 +193,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
                 CameraIntegrations.ByKey(c.IntegrationKey)?.Key,
                 ResolveIntegrationBaseUri(c), segmentSeconds,
                 c.AiDetectionEnabled, c.MotionDetectionSource?.ToString(),
-                aiConfidence, aiIou, aiDetectionStreamRole));
+                aiConfidence, aiIou, aiDetectionStreamRole, c.ServerMotionEnabled));
         }
 
         // Cameras this node has leftover Segments for but doesn't currently record — reassigned to a
@@ -217,7 +220,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
 
         return new NodeConfigResponse(cameraDtos, storageRoot, watermarkPercent, mediaSigningKey, orphanedCameraDtos,
             adaptiveStreamingEnabled, (aiAccelerator ?? AiAccelerator.Auto).ToString(),
-            reportIdleDetections, aiDetectionWidth, aiDetectionHeight, detectionModelFamily, dfineWeights, aiIdleTimeoutSeconds);
+            reportIdleDetections, aspectMode, detectionModelFamily, dfineWeights, aiIdleTimeoutSeconds);
     }
 
     /// <summary>Pulls the Events service's own XAddr out of the capability prober's raw category map

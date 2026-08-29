@@ -41,6 +41,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     private static readonly TimeSpan ReportFlushInterval = TimeSpan.FromSeconds(2);
 
     private readonly VisionStartCameraRequest _request;
+    private readonly InferenceProfile _profile;
     private readonly VisionSession _session;
     private readonly LatestFrameSlot _slot;
     private readonly IDetectionEngine _engine;
@@ -73,15 +74,26 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
 
     public CameraDetectionPipeline(VisionStartCameraRequest request, VisionServiceOptions serviceOptions,
         string resolvedFfmpegPath, string resolvedModelPath, DetectionModelFamily modelFamily, DFineWeights dfineWeights,
-        HttpClient http, ILoggerFactory loggerFactory)
+        AspectMode aspectMode, HttpClient http, ILoggerFactory loggerFactory)
     {
         _request = request;
         _http = http;
         _logger = loggerFactory.CreateLogger($"Vision[{request.CameraId}]");
 
-        _slot = new LatestFrameSlot(request.Width, request.Height);
+        // Detection/hardware-acceleration overhaul, pass 1: request.Width/Height are now this
+        // camera's own source aspect ratio, not a decode target — InferenceProfile derives the
+        // actual network decode size (and, for Letterbox, the pre-pad scale+pad geometry) from them.
+        // Built once here and shared by both VisionSession (ffmpeg's own filter target) and the
+        // detection engine (box decode) so the two can never disagree about the transform.
+        _profile = InferenceProfile.Create(request.Width, request.Height, aspectMode);
+
+        _slot = new LatestFrameSlot(_profile.NetworkWidth, _profile.NetworkHeight);
         _session = new VisionSession(
-            new VisionSessionOptions(resolvedFfmpegPath, request.RtspUri, request.Width, request.Height, request.HardwareAcceleration),
+            new VisionSessionOptions(resolvedFfmpegPath, request.RtspUri, _profile.NetworkWidth, _profile.NetworkHeight,
+                request.HardwareAcceleration,
+                Letterbox: aspectMode == AspectMode.Letterbox
+                    ? new LetterboxGeometry(_profile.ScaledWidth, _profile.ScaledHeight, _profile.PadLeft, _profile.PadTop)
+                    : null),
             _slot, loggerFactory.CreateLogger<VisionSession>());
 
         _engine = DetectionEngineFactory.Create(modelFamily, dfineWeights, new EngineOptions
@@ -94,7 +106,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             TensorRtEngineCachePath = serviceOptions.TensorRtEngineCachePath,
             TensorRtLibPath = serviceOptions.TensorRtLibPath,
             OpenVinoDeviceType = serviceOptions.OpenVinoDeviceType,
-        }, loggerFactory);
+        }, _profile, loggerFactory);
 
         _runTask = RunAsync(_cts.Token);
     }
@@ -156,8 +168,13 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
                 var category = CocoCategoryMap.Resolve(label);
                 seenLabels.Add(label);
 
+                // _profile.SourceWidth/SourceHeight, not frame.Width/frame.Height — as of pass 1,
+                // detection.BoundingBox is reported in the profile's own source-pixel space (see
+                // DFineDecoder.Decode's own doc comment), which only equals the captured frame's
+                // dimensions when AspectMode is Stretch. Normalizing against the wrong one would
+                // silently misplace every box on a Letterbox camera.
                 var observation = _movement.Observe(trackId, detection.BoundingBox, detection.Confidence,
-                    frame.Width, frame.Height, now);
+                    _profile.SourceWidth, _profile.SourceHeight, now);
 
                 // Idle tracks never open/extend a span unless ReportIdleDetections is on — decision
                 // 7's "not interested in static objects" default. A Moving track always does.
@@ -171,7 +188,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
                 // detection is skipped entirely, not just deprioritized.
                 if (motionPresent)
                 {
-                    UpdateBestFrameForLabel(label, detection, frame.Width, frame.Height, now);
+                    UpdateBestFrameForLabel(label, detection, _profile.SourceWidth, _profile.SourceHeight, now);
                 }
 
                 var hysteresis = GetOrCreateHysteresis(label);
@@ -182,10 +199,10 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
 
                 liveBoxes.Add(new VisionLiveDetectionBox(
                     trackId, category, label, observation.State.ToString(),
-                    detection.BoundingBox.Left / (double)frame.Width,
-                    detection.BoundingBox.Top / (double)frame.Height,
-                    detection.BoundingBox.Width / (double)frame.Width,
-                    detection.BoundingBox.Height / (double)frame.Height,
+                    detection.BoundingBox.Left / (double)_profile.SourceWidth,
+                    detection.BoundingBox.Top / (double)_profile.SourceHeight,
+                    detection.BoundingBox.Width / (double)_profile.SourceWidth,
+                    detection.BoundingBox.Height / (double)_profile.SourceHeight,
                     detection.Confidence));
             }
 
