@@ -100,6 +100,57 @@ public class StorageManagerTests : IDisposable
     }
 
     [Fact]
+    public void EnumerateSnapshotFilesFindsEveryCameraSSnapshotCropsAcrossTheStorageRoot()
+    {
+        WriteFile("cam-1/snapshots/2026/08/16/seg_span1.jpg", 10, DateTime.UtcNow);
+        WriteFile("cam-2/snapshots/2026/08/16/seg_span2.jpg", 10, DateTime.UtcNow);
+        // Not a snapshot crop — must be ignored.
+        WriteFile("cam-1/main/2026/08/16/seg.mp4", 10, DateTime.UtcNow);
+        WriteFile("cam-1/thumbs/2026/08/16/seg_o00.jpg", 10, DateTime.UtcNow);
+
+        var files = StorageManager.EnumerateSnapshotFiles(_root);
+
+        Assert.Equal(2, files.Count);
+        Assert.Contains(files, f => f.EndsWith("seg_span1.jpg"));
+        Assert.Contains(files, f => f.EndsWith("seg_span2.jpg"));
+    }
+
+    [Fact]
+    public void EnumerateSnapshotFilesReturnsEmptyForAMissingStorageRoot()
+    {
+        var files = StorageManager.EnumerateSnapshotFiles(Path.Combine(_root, "does-not-exist"));
+        Assert.Empty(files);
+    }
+
+    [Fact]
+    public void SelectOrphanedSnapshotFilesKeepsOnlyFilesWithNoMatchingSpanId()
+    {
+        var known = WriteFile("cam-1/snapshots/seg_span1.jpg", 10, DateTime.UtcNow);
+        var orphaned = WriteFile("cam-1/snapshots/seg_span2.jpg", 10, DateTime.UtcNow);
+        var unparsable = WriteFile("cam-1/snapshots/not-a-span-file.jpg", 10, DateTime.UtcNow);
+
+        var result = StorageManager.SelectOrphanedSnapshotFiles([known, orphaned, unparsable], new HashSet<long> { 1 });
+
+        Assert.Equal([orphaned], result);
+    }
+
+    [Fact]
+    public void SelectOrphanedSnapshotFilesDoesNotWipeEveryFileWhenTheKnownSetIsEmpty()
+    {
+        // A fetch failure surfacing as an empty response, rather than throwing, must not read as
+        // "every file is orphaned" — this is exactly what ReconcileSnapshotsAsync's
+        // IsImplausibleMissingCount guard exists to catch before any deletion happens; this test only
+        // confirms the pure selection itself behaves predictably (everything IS selected — the guard
+        // against acting on it lives in ReconcileSnapshotsAsync, not here).
+        var a = WriteFile("cam-1/snapshots/seg_span1.jpg", 10, DateTime.UtcNow);
+        var b = WriteFile("cam-1/snapshots/seg_span2.jpg", 10, DateTime.UtcNow);
+
+        var result = StorageManager.SelectOrphanedSnapshotFiles([a, b], []);
+
+        Assert.Equal(2, result.Count);
+    }
+
+    [Fact]
     public void PruneEmptyDirectoriesRemovesEmptyLeavesButKeepsAncestorsOfNonEmptyOnes()
     {
         // Two hour folders share the same day/month/year ancestor — only the empty leaf should go;

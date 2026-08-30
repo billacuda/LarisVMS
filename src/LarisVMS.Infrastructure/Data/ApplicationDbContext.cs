@@ -331,6 +331,12 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             // catches the resulting constraint violation and skips the duplicate rather than losing
             // the rest of the batch.
             e.HasIndex(x => x.FilePath).IsUnique();
+            // Pass 2c: TimelineService.GetSnapshotsAsync's footage-overlap guard needs "does a
+            // segment for this camera end after some threshold" — the clustered (CameraId, StartUtc)
+            // index alone forces a large scan of a camera's whole segment history per row to answer
+            // that (confirmed live: a query timeout under real data volume). This index lets that
+            // check seek straight to the tail of a camera's segment history instead.
+            e.HasIndex(x => new { x.CameraId, x.EndUtc });
         });
 
         // ── NodeBuildVersion ─────────────────────────────────────────────────

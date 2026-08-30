@@ -264,6 +264,9 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
     public async Task<List<string>> ListSegmentFilePathsAsync(Guid nodeId, CancellationToken ct = default)
         => await db.Segments.AsNoTracking().Where(s => s.NodeId == nodeId).Select(s => s.FilePath).ToListAsync(ct);
 
+    public async Task<List<long>> ListMotionSpanIdsAsync(Guid nodeId, CancellationToken ct = default)
+        => await db.MotionSpans.AsNoTracking().Where(m => m.Camera.NodeId == nodeId).Select(m => m.Id).ToListAsync(ct);
+
     /// <summary>Pure so it's unit-testable without a database — same "isolate the arithmetic from the
     /// I/O" shape as TimelineService.NormalizeToUtc. Null input (an older node build not sending
     /// SentAtUtc yet) means "no measurement this heartbeat," not "zero skew."</summary>

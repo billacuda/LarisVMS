@@ -363,7 +363,7 @@ app.MapGet("/playback-segment/{cameraId:guid}", async (HttpContext ctx, Guid cam
 // on-disk cache checked first. The cache path is derived only from the already-validated fullPath
 // (substituting the "main" segment of the path for "thumbs") and the token-bound offsetSeconds —
 // never from anything else the client sends, so it can't be spoofed into naming an arbitrary file.
-app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWorker worker) =>
+app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWorker worker, ILogger<Program> logger) =>
 {
     var token = ExtractToken(ctx);
     var path = ctx.Request.Query["path"].ToString();
@@ -418,8 +418,20 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid c
         return;
     }
 
-    if (!fullPath.StartsWith(mainDir, StringComparison.OrdinalIgnoreCase) || !File.Exists(fullPath))
+    // Diagnostic-only logging (no behavior change): a card whose Playback link plays fine but whose
+    // thumbnail 404s/502s has no other way to tell which of these three causes fired, since none of
+    // them previously logged anything at all.
+    if (!fullPath.StartsWith(mainDir, StringComparison.OrdinalIgnoreCase))
     {
+        logger.LogWarning(
+            "Playback-thumbnail 404: requested path {FullPath} does not start with this node's current main directory {MainDir} (StorageRoot={StorageRoot}) — likely a Segment.FilePath recorded under a since-changed storage root.",
+            fullPath, mainDir, storageRoot);
+        ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+    }
+    if (!File.Exists(fullPath))
+    {
+        logger.LogWarning("Playback-thumbnail 404: segment file {FullPath} does not exist on disk despite a Segment row pointing at it.", fullPath);
         ctx.Response.StatusCode = StatusCodes.Status404NotFound;
         return;
     }
@@ -438,6 +450,7 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid c
     var bytes = await worker.CaptureThumbnailAsync(fullPath, offsetSeconds, ctx.RequestAborted, maxDimension, quality);
     if (bytes is null)
     {
+        logger.LogWarning("Playback-thumbnail 502: ffmpeg produced no frame for {FullPath} at offset {OffsetSeconds}s (timeout, corrupt segment, or offset beyond content).", fullPath, offsetSeconds);
         ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
         await ctx.Response.WriteAsync("Could not extract a frame from this segment.");
         return;
@@ -464,7 +477,7 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid c
 // same "a quality knob, not something that needs tamper-protection" reasoning maxDim/q already use
 // above — a tampered box only changes what crop of an already-authorized frame comes back, never
 // which file or offset is read.
-app.MapGet("/snapshot-image/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWorker worker) =>
+app.MapGet("/snapshot-image/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWorker worker, ILogger<Program> logger) =>
 {
     var token = ExtractToken(ctx);
     var path = ctx.Request.Query["path"].ToString();
@@ -522,8 +535,18 @@ app.MapGet("/snapshot-image/{cameraId:guid}", async (HttpContext ctx, Guid camer
         return;
     }
 
-    if (!fullPath.StartsWith(mainDir, StringComparison.OrdinalIgnoreCase) || !File.Exists(fullPath))
+    // Diagnostic-only logging (no behavior change) — see /playback-thumbnail's own identical comment.
+    if (!fullPath.StartsWith(mainDir, StringComparison.OrdinalIgnoreCase))
     {
+        logger.LogWarning(
+            "Snapshot-image 404 for span {SpanId}: requested path {FullPath} does not start with this node's current main directory {MainDir} (StorageRoot={StorageRoot}) — likely a Segment.FilePath recorded under a since-changed storage root.",
+            spanId, fullPath, mainDir, storageRoot);
+        ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+    }
+    if (!File.Exists(fullPath))
+    {
+        logger.LogWarning("Snapshot-image 404 for span {SpanId}: segment file {FullPath} does not exist on disk despite a Segment row pointing at it.", spanId, fullPath);
         ctx.Response.StatusCode = StatusCodes.Status404NotFound;
         return;
     }
@@ -542,6 +565,9 @@ app.MapGet("/snapshot-image/{cameraId:guid}", async (HttpContext ctx, Guid camer
     var bytes = await worker.CaptureSnapshotImageAsync(fullPath, offsetSeconds, boxX, boxY, boxW, boxH, frameW, frameH, ctx.RequestAborted);
     if (bytes is null)
     {
+        logger.LogWarning(
+            "Snapshot-image 502 for span {SpanId}: ffmpeg produced no cropped frame for {FullPath} at offset {OffsetSeconds}s, box ({BoxX},{BoxY},{BoxW},{BoxH}) against frame {FrameW}x{FrameH} (timeout, corrupt segment, offset beyond content, or a crop rectangle that fell outside the frame).",
+            spanId, fullPath, offsetSeconds, boxX, boxY, boxW, boxH, frameW, frameH);
         ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
         await ctx.Response.WriteAsync("Could not extract a cropped frame from this segment.");
         return;

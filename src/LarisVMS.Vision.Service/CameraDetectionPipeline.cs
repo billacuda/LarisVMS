@@ -61,6 +61,12 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     // why "best frame" needs two tiers per label rather than one.
     private readonly LabelBestFrameTracker _bestFrames = new();
 
+    // Object detection plan pass 2a: turns D-FINE's flickering per-frame label into one stable label
+    // per track before it reaches hysteresis/best-frame/reporting — see TrackLabelArbiter's own doc
+    // comment for why a single physical object shouldn't fragment into several spans/snapshots just
+    // because the classifier's per-frame guess changes.
+    private readonly TrackLabelArbiter _labelArbiter = new();
+
     // Read by the control API's GET /cameras/{id}/detections handler on a request thread, written
     // by the inference loop — a plain volatile reference swap (never mutated in place) is enough:
     // a reader either sees the previous frame's snapshot or the new one, never a half-built list.
@@ -155,7 +161,9 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             // but every detection ByteTracker.Update actually returns has already had a real track
             // id written into it (see ByteTracker.Update's own final step) — the null-filter here is
             // defensive, not an expected case.
-            _movement.Prune(tracked.Where(d => d.Id.HasValue).Select(d => d.Id!.Value).ToHashSet());
+            var activeTrackIds = tracked.Where(d => d.Id.HasValue).Select(d => d.Id!.Value).ToHashSet();
+            _movement.Prune(activeTrackIds);
+            _labelArbiter.Prune(activeTrackIds);
 
             var seenLabels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var liveBoxes = new List<VisionLiveDetectionBox>(tracked.Count);
@@ -164,7 +172,14 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             {
                 if (detection.Id is not { } trackId) continue;
 
-                var label = detection.Label?.Name ?? "object";
+                // rawLabel/rawCategory are what the live overlay shows — the viewer should keep
+                // seeing what the model actually said this instant. Everything that feeds a span
+                // (hysteresis, best-frame tracking, reporting) uses the arbiter's stable label
+                // instead, so a track's flickering per-frame guess can't fragment into several
+                // independent snapshots — see TrackLabelArbiter's own doc comment.
+                var rawLabel = detection.Label?.Name ?? "object";
+                var rawCategory = CocoCategoryMap.Resolve(rawLabel);
+                var label = _labelArbiter.Resolve(trackId, rawLabel, detection.Confidence);
                 var category = CocoCategoryMap.Resolve(label);
                 seenLabels.Add(label);
 
@@ -198,7 +213,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
                 }
 
                 liveBoxes.Add(new VisionLiveDetectionBox(
-                    trackId, category, label, observation.State.ToString(),
+                    trackId, rawCategory, rawLabel, observation.State.ToString(),
                     detection.BoundingBox.Left / (double)_profile.SourceWidth,
                     detection.BoundingBox.Top / (double)_profile.SourceHeight,
                     detection.BoundingBox.Width / (double)_profile.SourceWidth,

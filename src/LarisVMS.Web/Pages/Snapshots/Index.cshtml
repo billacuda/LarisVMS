@@ -11,8 +11,9 @@
 <h1>Snapshots <span id="snapshotLoadStatus" class="badge bg-secondary ms-2 d-none fw-normal"></span></h1>
 <p class="text-muted">
     Every motion event, browsable as a thumbnail — zones, camera-pushed motion, custom tags, and
-    detected objects all appear here. Each thumbnail is pulled live from the recording itself, so a
-    card with no image means that moment's footage has since aged out of retention.
+    detected objects all appear here. Each thumbnail is pulled live from the recording itself, and a
+    card disappears once its own footage ages out of retention, so what's shown here can always be
+    played back.
 </p>
 
 @* data-remember-filters: these selections survive navigating away and coming back, or a refresh —
@@ -150,6 +151,11 @@
         @foreach (var s in Model.Results.Items)
         {
             var atUtcIso = s.AtUtc.ToString("o");
+            // Pass 2b: Playback deep-links use PlayFromUtc (pre-roll-earlier than StartUtc) so the
+            // viewer actually catches the subject entering frame, while the thumbnail image itself
+            // stays on atUtc's own sample point below — see SnapshotDto's doc comment for why the two
+            // must not be unified.
+            var playFromUtcIso = s.PlayFromUtc.ToString("o");
             <div class="col">
                 <div class="card h-100" style="border-color: @s.ColorHex;">
                     @* Plain hand-written href, not asp-page/asp-route-* — matches Bookmarks/Index.cshtml's
@@ -169,7 +175,7 @@
                             ? $"/snapshot-image/{s.CameraId}/{s.Id}"
                             : $"/playback-thumbnail/{s.CameraId}?atUtc={Uri.EscapeDataString(atUtcIso)}&exact=true";
                     }
-                    <a href="/Playback?cameraId=@s.CameraId&atUtc=@Uri.EscapeDataString(atUtcIso)">
+                    <a href="/Playback?cameraId=@s.CameraId&atUtc=@Uri.EscapeDataString(playFromUtcIso)">
                         @* object-fit:contain, not cover — cover crops a non-16:9 source frame (portrait
                            cameras especially) to fill the box; contain always shows the whole frame,
                            letterboxed instead of cropped. exact=true resolves this instant precisely
@@ -199,7 +205,7 @@
                         <div class="small text-muted" title="@s.AtUtc.ToString("u")">@s.AtUtc.ToLocalTime().ToString("G")</div>
                     </div>
                     <div class="card-footer py-1 px-2 text-end">
-                        <a class="btn btn-sm btn-outline-primary" href="/Playback?cameraId=@s.CameraId&atUtc=@Uri.EscapeDataString(atUtcIso)">▶ Play</a>
+                        <a class="btn btn-sm btn-outline-primary" href="/Playback?cameraId=@s.CameraId&atUtc=@Uri.EscapeDataString(playFromUtcIso)">▶ Play</a>
                     </div>
                 </div>
             </div>

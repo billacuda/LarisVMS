@@ -290,6 +290,7 @@ builder.Services.AddHostedService<AuditLogRetentionService>();
 builder.Services.AddHostedService<CameraReprobeService>();
 builder.Services.AddHostedService<AlertEvaluatorService>();
 builder.Services.AddHostedService<BookmarkRetentionService>();
+builder.Services.AddHostedService<MotionSpanRetentionService>();
 builder.Services.AddHostedService<RoleAssignmentExpirySweepService>();
 
 // ── ONVIF HTTP client ────────────────────────────────────────────────────────
@@ -487,6 +488,16 @@ nodesApi.MapGet("/segments/paths", async (HttpContext ctx, INodeService nodeServ
 {
     var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
     return Results.Json(await nodeService.ListSegmentFilePathsAsync(node.Id, ct));
+});
+
+// Pass 2c: feeds StorageManager's own snapshot-reconciliation sweep, mirroring the shape of
+// /segments/paths above — the node diffs this against its own cam-{id}/snapshots/ cache files to
+// self-heal any crop image whose owning MotionSpan row has since been deleted independently (by
+// MotionSpanRetentionService), not just as a side effect of that segment being evicted.
+nodesApi.MapGet("/snapshots/span-ids", async (HttpContext ctx, INodeService nodeService, CancellationToken ct) =>
+{
+    var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
+    return Results.Json(await nodeService.ListMotionSpanIdsAsync(node.Id, ct));
 });
 
 nodesApi.MapPost("/segments/delete", async (HttpContext ctx, SegmentDeleteRequest request, INodeService nodeService, CancellationToken ct) =>
@@ -1315,20 +1326,40 @@ async Task<IResult> ProxySnapshotImageAsync(Guid cameraId, SnapshotImageInfo? in
     // route's own doc comment for why that's the right security boundary here too. The box/frame
     // dimensions ride unsigned, same "quality knob, not tamper-sensitive" reasoning maxDim/q already
     // use on the thumbnail proxy.
-    var token = MediaToken.IssueForThumbnail(cameraId, info.FilePath, info.OffsetSeconds, info.NodeMediaSigningKey, TimeSpan.FromSeconds(30));
-    var nodeUri = $"http://{info.NodeIp}:{info.NodeLivePort}/snapshot-image/{cameraId}" +
-        $"?path={Uri.EscapeDataString(info.FilePath)}&offset={info.OffsetSeconds}&token={Uri.EscapeDataString(token)}" +
-        $"&spanId={info.SpanId}" +
-        $"&x={info.BoxX.ToString(CultureInfo.InvariantCulture)}&y={info.BoxY.ToString(CultureInfo.InvariantCulture)}" +
-        $"&w={info.BoxW.ToString(CultureInfo.InvariantCulture)}&h={info.BoxH.ToString(CultureInfo.InvariantCulture)}" +
-        $"&frameW={info.FrameWidth}&frameH={info.FrameHeight}";
+    Task<HttpResponseMessage> RequestAsync(int offsetSeconds)
+    {
+        var token = MediaToken.IssueForThumbnail(cameraId, info.FilePath, offsetSeconds, info.NodeMediaSigningKey!, TimeSpan.FromSeconds(30));
+        var nodeUri = $"http://{info.NodeIp}:{info.NodeLivePort}/snapshot-image/{cameraId}" +
+            $"?path={Uri.EscapeDataString(info.FilePath)}&offset={offsetSeconds}&token={Uri.EscapeDataString(token)}" +
+            $"&spanId={info.SpanId}" +
+            $"&x={info.BoxX.ToString(CultureInfo.InvariantCulture)}&y={info.BoxY.ToString(CultureInfo.InvariantCulture)}" +
+            $"&w={info.BoxW.ToString(CultureInfo.InvariantCulture)}&h={info.BoxH.ToString(CultureInfo.InvariantCulture)}" +
+            $"&frameW={info.FrameWidth}&frameH={info.FrameHeight}";
+        // See MediaTokenRequest's own doc comment: also sent as ?token= above for a node that
+        // hasn't updated yet.
+        return client.SendAsync(MediaTokenRequest.Create(HttpMethod.Get, nodeUri, token), HttpCompletionOption.ResponseHeadersRead, ct);
+    }
 
     HttpResponseMessage nodeResponse;
     try
     {
-        // See MediaTokenRequest's own doc comment: also sent as ?token= above for a node that
-        // hasn't updated yet.
-        nodeResponse = await client.SendAsync(MediaTokenRequest.Create(HttpMethod.Get, nodeUri, token), HttpCompletionOption.ResponseHeadersRead, ct);
+        nodeResponse = await RequestAsync(info.OffsetSeconds);
+
+        // Same drift ProxyThumbnailAsync's own identical retry already documents: Segment.DurationMs
+        // is wall-clock derived (NodeService.RecordSegmentsAsync), not a re-measurement of the file's
+        // actual encoded duration, and GetSnapshotImageInfoAsync's offset is clamped against that
+        // same possibly-inflated value — so it can still land past the real content, especially for a
+        // best-frame instant near a short/truncated segment's believed end. Confirmed live: two
+        // AI-detection spans 502'd on every load, offset unclamped against the real file each time,
+        // while every other span on the same page succeeded. Retrying once at offset 0 on the same
+        // segment/box trades exact-instant precision for a guaranteed hit, only on this already-failed
+        // path — the box coordinates are unaffected, so the crop position is still correct, just from
+        // an earlier frame in the same recording.
+        if (nodeResponse.StatusCode == (System.Net.HttpStatusCode)StatusCodes.Status502BadGateway && info.OffsetSeconds != 0)
+        {
+            nodeResponse.Dispose();
+            nodeResponse = await RequestAsync(0);
+        }
     }
     catch (TaskCanceledException) when (!ct.IsCancellationRequested)
     {

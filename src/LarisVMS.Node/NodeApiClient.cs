@@ -67,6 +67,13 @@ public class NodeApiClient
         return (await response.Content.ReadFromJsonAsync<List<string>>(ct))!;
     }
 
+    public async Task<List<long>> GetMotionSpanIdsAsync(CancellationToken ct)
+    {
+        var response = await _http.GetAsync("api/nodes/snapshots/span-ids", ct);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<List<long>>(ct))!;
+    }
+
     public async Task ReportStreamInfoAsync(List<StreamInfoReportItem> items, CancellationToken ct)
     {
         if (items.Count == 0) return;

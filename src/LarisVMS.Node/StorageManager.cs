@@ -33,6 +33,11 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
     private static readonly TimeSpan ReconcileInterval = TimeSpan.FromHours(1);
     private DateTime? _lastReconciledAtUtc;
 
+    // Pass 2c: same slow cadence and independent gate as _lastReconciledAtUtc above, but its own
+    // timestamp and its own try/catch in SweepAsync, so a segment-reconcile failure never blocks
+    // snapshot cleanup or vice versa.
+    private DateTime? _lastSnapshotsReconciledAtUtc;
+
     // Files this deleted from disk but hasn't yet successfully told the web tier about — carried
     // over to the next sweep's report attempt on failure. Without this, a deletion report that
     // fails (a network blip, the web tier restarting mid-sweep) permanently orphans the Segment
@@ -139,6 +144,18 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             // Only stamped on success — a failed fetch (network blip, web tier restarting) should
             // retry on the next 5-minute sweep, not wait a full extra hour for the next scheduled one.
             if (await ReconcileAsync(config, storageRoot, deletedPaths, ct)) _lastReconciledAtUtc = now;
+        }
+
+        if (_lastSnapshotsReconciledAtUtc is null || now - _lastSnapshotsReconciledAtUtc >= ReconcileInterval)
+        {
+            try
+            {
+                if (await ReconcileSnapshotsAsync(storageRoot, ct)) _lastSnapshotsReconciledAtUtc = now;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogWarning(ex, "Snapshot reconciliation sweep failed — will retry next cycle.");
+            }
         }
 
         // Anything left over from a prior sweep's failed report rides along with this sweep's own
@@ -414,6 +431,99 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
     /// directory the same way EnumerateEvictable is, without a network round trip.</summary>
     internal static List<string> SelectMissingPaths(IEnumerable<string> knownPaths)
         => knownPaths.Where(p => !File.Exists(p)).ToList();
+
+    // Pass 2c: {segment-stem}_span{spanId}.jpg — the same naming convention Program.cs's own
+    // snapshot-cache writer uses.
+    private static readonly System.Text.RegularExpressions.Regex SnapshotSpanIdPattern =
+        new(@"_span(\d+)\.jpg$", System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>Pass 2c: self-heals cached snapshot-crop files whose owning MotionSpan row was
+    /// deleted independently of the segment it was cropped from (MotionSpanRetentionService's own
+    /// 6-hour sweep), rather than as a side effect of that segment's own eviction — which
+    /// DeleteMatchingSnapshotImages above already handles. Mirrors ReconcileAsync's guard shape:
+    /// prove storage is reachable, re-check after a delay before trusting the result, then refuse a
+    /// mass deletion that looks more like a fault than real cleanup. Unlike ReconcileAsync, what's
+    /// "missing" here comes from an API response (the still-valid span ids), not a File.Exists probe
+    /// that can itself flap — so the re-check re-verifies storage health, not the orphan set.</summary>
+    private async Task<bool> ReconcileSnapshotsAsync(string storageRoot, CancellationToken ct)
+    {
+        HashSet<long> knownSpanIds;
+        try
+        {
+            knownSpanIds = (await api.GetMotionSpanIdsAsync(ct)).ToHashSet();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Snapshot reconciliation sweep could not fetch this node's known motion-span ids — will retry next sweep.");
+            return false;
+        }
+
+        if (!StorageHealth.CanReachStorage(storageRoot))
+        {
+            logger.LogWarning(
+                "Snapshot reconciliation sweep skipped — storage root {StorageRoot} did not pass a read/write probe. Will retry next sweep.",
+                storageRoot);
+            return false;
+        }
+
+        var allFiles = EnumerateSnapshotFiles(storageRoot);
+        var orphaned = SelectOrphanedSnapshotFiles(allFiles, knownSpanIds);
+        if (orphaned.Count == 0) return true;
+
+        try { await Task.Delay(TimeSpan.FromSeconds(5), ct); }
+        catch (OperationCanceledException) { return false; }
+
+        if (!StorageHealth.CanReachStorage(storageRoot))
+        {
+            logger.LogWarning(
+                "Snapshot reconciliation sweep abandoned — storage stopped responding while re-verifying {Count} candidate(s). Will retry next sweep.",
+                orphaned.Count);
+            return false;
+        }
+
+        if (StorageHealth.IsImplausibleMissingCount(orphaned.Count, allFiles.Count))
+        {
+            logger.LogError(
+                "Snapshot reconciliation sweep refusing to delete {Count} of {Total} cached snapshot file(s) — that proportion indicates a fault (e.g. an empty span-id response), not real orphans. Nothing has been deleted; this will resolve itself on a later sweep.",
+                orphaned.Count, allFiles.Count);
+            return false;
+        }
+
+        logger.LogInformation(
+            "Snapshot reconciliation sweep found {Count} cached snapshot file(s) (of {Total} checked) with no matching MotionSpan row — deleting.",
+            orphaned.Count, allFiles.Count);
+        foreach (var file in orphaned) TryDelete(file);
+
+        return true;
+    }
+
+    /// <summary>Pure so it's unit-testable against a real temp directory without a network round
+    /// trip — every cached snapshot-crop file under every camera's own snapshots/ folder.</summary>
+    internal static List<string> EnumerateSnapshotFiles(string storageRoot)
+        => Directory.Exists(storageRoot)
+            ? Directory.EnumerateDirectories(storageRoot, "cam-*", SearchOption.TopDirectoryOnly)
+                .Select(camDir => Path.Combine(camDir, "snapshots"))
+                .Where(Directory.Exists)
+                .SelectMany(snapshotsDir => Directory.EnumerateFiles(snapshotsDir, "*_span*.jpg", SearchOption.AllDirectories))
+                .ToList()
+            : [];
+
+    /// <summary>Which of these cached snapshot files has no MotionSpan row behind it any more —
+    /// parses the trailing "_span{id}.jpg" each file is named with (Program.cs's own writer) and
+    /// keeps only the ones whose id isn't in <paramref name="knownSpanIds"/>. A filename that
+    /// doesn't parse is left alone, never deleted — it isn't this convention's file to judge.</summary>
+    internal static List<string> SelectOrphanedSnapshotFiles(IEnumerable<string> files, HashSet<long> knownSpanIds)
+    {
+        var result = new List<string>();
+        foreach (var file in files)
+        {
+            var match = SnapshotSpanIdPattern.Match(file);
+            if (!match.Success) continue;
+            if (!long.TryParse(match.Groups[1].Value, out var spanId)) continue;
+            if (!knownSpanIds.Contains(spanId)) result.Add(file);
+        }
+        return result;
+    }
 
     /// <summary>Which of this camera's on-disk files the web tier has no row for — the pure half of
     /// <see cref="ImportOrphanedSegmentsAsync"/>, extracted for the same reason every other decision in

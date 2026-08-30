@@ -209,6 +209,11 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
+            // Logged as its own distinct case: a bare "capture returned null" at the call site is
+            // indistinguishable from a genuine ffmpeg failure otherwise, which is exactly what made a
+            // gate-contention burst (see OnDemandSnapshotGate's own doc comment for a confirmed live
+            // case of this on the sibling gate) look like a data/geometry bug instead of a busy gate.
+            _logger.LogWarning("On-demand thumbnail capture for {FilePath} at offset {OffsetSeconds}s gave up after {Timeout}s waiting for a free OnDemandThumbnailGate slot.", filePath, offsetSeconds, 3);
             return null; // gate stayed full for 3s straight — treat like any other capture failure
         }
         try
@@ -239,11 +244,22 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         }
     }
 
-    // Object detection plan decision 10: its own small gate, mirroring OnDemandThumbnailGate above —
+    // Object detection plan decision 10: its own gate, mirroring OnDemandThumbnailGate above —
     // separate from it (not shared) for the same reason the thumbnail on-demand/background gates are
     // kept apart: a burst of snapshot-image requests shouldn't be able to starve an ordinary hover
     // preview, or vice versa.
-    private static readonly SemaphoreSlim OnDemandSnapshotGate = new(2, 2);
+    //
+    // Sized (and timed out) very differently from OnDemandThumbnailGate despite the "mirrors it"
+    // framing above, because the two have genuinely different traffic shapes: a hover hits this gate
+    // one request at a time as the viewer's mouse moves, where an old request really is stale by the
+    // time a slot frees up (the 3s give-up is right there). The Snapshots page instead requests up to
+    // a full page's worth of AI-detection cards (24) in one burst on load — every one of them still
+    // wants its image, none are stale — and a single capture measured live at 3.5-4.4s. At the
+    // original size(2)/3s, only the first couple of a 24-card burst could ever get a slot in time;
+    // every other card 502'd — confirmed live, and it looked like a data/geometry bug (a fixed set of
+    // spans always failing) purely because the same handful kept losing the race on every reload.
+    private static readonly SemaphoreSlim OnDemandSnapshotGate = new(6, 6);
+    private static readonly TimeSpan OnDemandSnapshotGateTimeout = TimeSpan.FromSeconds(30);
 
     /// <summary>Object detection plan decision 10: extracts one cropped JPEG frame from an
     /// already-recorded segment file for an AI-detection MotionSpan's best-frame image — same
@@ -254,18 +270,22 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         double boxX, double boxY, double boxW, double boxH, int frameWidth, int frameHeight, CancellationToken ct)
     {
         using var gateCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        gateCts.CancelAfter(TimeSpan.FromSeconds(3));
+        gateCts.CancelAfter(OnDemandSnapshotGateTimeout);
         try
         {
             await OnDemandSnapshotGate.WaitAsync(gateCts.Token);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return null; // gate stayed full for 3s straight — treat like any other capture failure
+            // See CaptureThumbnailAsync's identical log for why this is worth distinguishing from a
+            // genuine ffmpeg failure — this exact gate at its old size(2)/3s is the confirmed live
+            // cause of what looked like a handful of AI-detection spans always failing to crop.
+            _logger.LogWarning("On-demand snapshot-image capture for {FilePath} at offset {OffsetSeconds}s gave up after {Timeout}s waiting for a free OnDemandSnapshotGate slot.", filePath, offsetSeconds, OnDemandSnapshotGateTimeout.TotalSeconds);
+            return null; // gate stayed full for the whole timeout — treat like any other capture failure
         }
         try
         {
-            return await SnapshotImageCapture.CaptureAsync(ffmpegPath, filePath, offsetSeconds, boxX, boxY, boxW, boxH, frameWidth, frameHeight, ct);
+            return await SnapshotImageCapture.CaptureAsync(ffmpegPath, filePath, offsetSeconds, boxX, boxY, boxW, boxH, frameWidth, frameHeight, ct, logger: _logger);
         }
         finally
         {

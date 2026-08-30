@@ -46,6 +46,13 @@ public interface INodeService
     /// only runs on an hours-long cadence, not every reconcile.</summary>
     Task<List<string>> ListSegmentFilePathsAsync(Guid nodeId, CancellationToken ct = default);
 
+    /// <summary>Every MotionSpan id this node's cameras currently have a row for (pass 2c) — used by
+    /// StorageManager's own snapshot-reconciliation sweep to find cached crop image files whose owning
+    /// row was deleted independently (MotionSpanRetentionService), not just as a side effect of the
+    /// segment it was cropped from being evicted. Joins through Camera.NodeId — MotionSpan itself
+    /// carries no NodeId of its own, unlike Segment.</summary>
+    Task<List<long>> ListMotionSpanIdsAsync(Guid nodeId, CancellationToken ct = default);
+
     /// <summary>Applies real resolution/codec parsed from the node's own ffmpeg output to the
     /// matching CameraStream row(s) — only for cameras this node currently owns, so a stale report
     /// from a node a camera has since been reassigned away from can't overwrite it.</summary>

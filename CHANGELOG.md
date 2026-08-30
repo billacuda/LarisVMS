@@ -5,6 +5,195 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.161.6] - 2026-08-30
+
+### Fixed
+
+- **The last 2 of 24 Snapshots cards that still 502'd after 0.161.5** (confirmed live to fail in
+  under a second — not gate contention, a genuine per-span capture failure). `Segment.DurationMs` is
+  derived from wall-clock `EndUtc - StartUtc` (`NodeService.RecordSegmentsAsync`), not a
+  re-measurement of the file's actual encoded duration, and `GetSnapshotImageInfoAsync`'s offset is
+  clamped against that same possibly-inflated value — so a best-frame instant near a short/truncated
+  segment's believed end can still land past the file's real content. This exact class of drift was
+  already identified and fixed once, for `/playback-thumbnail`'s sibling lookup, with a retry at
+  offset 0 on a `502` — `/snapshot-image`'s proxy never got the same fix. `ProxySnapshotImageAsync`
+  now retries once at offset 0 on the same segment/crop box, trading exact-instant precision (which
+  frame within the recording) for a guaranteed hit, same as the thumbnail path already does.
+- **Diagnostic follow-up**: `SnapshotImageCapture.CaptureAsync` now logs ffmpeg's own stderr output
+  (not just "produced no bytes") when a capture still fails after the retry, so any future case is
+  diagnosable directly from the node's log instead of by elimination.
+
+### Notes
+
+- Web + Node change — rebuild/redeploy the web app and re-run `install-node.ps1` (or let auto-update
+  pick up the node build) for the new logging.
+
+## [0.161.5] - 2026-08-30
+
+### Fixed
+
+- **Found via 0.161.4's new logging**: the "No thumbnail available" cards from that release were
+  concurrency, not data — a handful of AI-detection Snapshots cards timed out with a `502` on every
+  load, and it looked exactly like a sticky, deterministic bug because the *same* cards kept losing
+  the same race on every reload. The Snapshots page requests up to a full page (24) of AI-detection
+  crops in one burst; `LarisVMS.Node`'s `/snapshot-image` capture was gated to **2 concurrent ffmpeg
+  captures with a 3-second give-up**, inherited unchanged from the hover-scrub-preview gate it was
+  modeled on. A single capture measured live at 3.5-4.4 seconds, so at most the first couple of a
+  24-card burst could ever get a slot before the 3s window closed — every other card 502'd, logged
+  (as of 0.161.4) as "ffmpeg produced no cropped frame," which is misleading: ffmpeg was never even
+  invoked for those, they just never got a turn. The hover-scrub case this gate was designed for has
+  a fundamentally different shape — one request at a time, and a request that can't get served
+  quickly really is stale — which doesn't apply to a static page where every one of 24 requested
+  cards still wants its image. `OnDemandSnapshotGate` (used only by Snapshots-page AI-detection
+  crops, nothing else) is now sized 6 concurrent with a 30s timeout instead of 2/3s. The sibling
+  `OnDemandThumbnailGate` (shared with live hover-scrub, where the original 2/3s reasoning still
+  applies) is unchanged. Both gates' give-up paths now log which one timed out and after how long, so
+  this class of failure is never silently indistinguishable from a real ffmpeg failure again.
+
+### Notes
+
+- Node change — rebuild and re-run `install-node.ps1` (or let auto-update pick it up).
+
+## [0.161.4] - 2026-08-30
+
+### Added
+
+- **Diagnostic logging for a separate, still-open issue**: some Snapshots cards show "No thumbnail
+  available" even though their footage plays fine via Playback, and reloading doesn't fix it — a
+  sticky, per-card failure distinct from the footage-coverage guard fixed in 0.161.0-0.161.3.
+  `LarisVMS.Node`'s `/playback-thumbnail` and `/snapshot-image` routes previously returned a bare
+  404/502 with no log line at all on every failure path, so there was no way to tell which of several
+  possible causes was actually firing. Both routes now log a warning identifying which case occurred:
+  the requested segment path not matching the node's *current* storage root (e.g. after a per-node
+  storage root override was changed, since `Segment.FilePath` is baked in at record time and never
+  rewritten), the segment file genuinely missing from disk despite its `Segment` row, or ffmpeg
+  producing no frame (timeout, corrupt segment, an offset/crop past the file's actual content). No
+  behavior change — purely additive logging to narrow down the real cause from the node's own log the
+  next time a card fails this way.
+
+### Notes
+
+- Node change — rebuild and re-run `install-node.ps1` (or let auto-update pick it up) to get the new
+  log lines.
+
+## [0.161.3] - 2026-08-30
+
+### Fixed
+
+- **The Snapshots page still timed out (`SqlException: Execution Timeout Expired`) after 0.161.2's
+  index.** The index was not the real problem. Pass 2c's footage-coverage test is an *interval-overlap*
+  test (`segment.StartUtc < span.EndUtc AND segment.EndUtc > span's play-from point`), and a B-tree
+  index can only seek on one range boundary — the other side is always a residual scan. Expressed as a
+  correlated subquery it therefore runs per candidate row, and `CountAsync` makes "candidate" mean
+  every `MotionSpan` the page's filters allow (tens of thousands) against a `Segments` table holding a
+  row per minute per camera. No index makes that shape fast; three successive attempts to fix it by
+  rewriting the query (0.161.0 through 0.161.2) each failed live for a different reason.
+  **The coverage check now runs after pagination, over just the (at most 24) rows actually being
+  rendered**, where every predicate is a constant and each check is an ordinary index seek. Same
+  visible behavior — cards whose footage is gone, including spans that fall inside a genuine recording
+  gap, still don't appear — and it now uses each camera's own resolved pre-roll rather than one global
+  value.
+- Deliberate trade-off, documented in the code: the page's total/page count is computed *without* the
+  coverage filter, so a page can render fewer than 24 cards and the count can slightly overstate.
+  Making the count exact requires the coverage test back inside the counted query, which is precisely
+  the thing that cannot be made fast. An approximate count is worth a page that loads.
+
+### Notes
+
+- Web-only fix (`TimelineService.cs`) — no Node change, no schema change. 0.161.2's
+  `IX_Segments_CameraId_EndUtc` index is kept: it did not fix the timeout on its own, but it does make
+  the new per-row coverage seeks (`CameraId` + `EndUtc >`) efficient, and it is a non-clustered index
+  on a table written once per completed recording segment, so it costs effectively nothing.
+
+## [0.161.2] - 2026-08-30
+
+### Fixed
+
+- **Attempted fix for the Snapshots page timing out on every load
+  (`SqlException: Execution Timeout Expired`)**, reported live immediately after 0.161.1: added a
+  `(CameraId, EndUtc)` index on `Segment`, on the theory that the correlated overlap check was scanning
+  for want of an index on `EndUtc`. **This did not fix it** — see 0.161.3 for the actual cause (the
+  overlap predicate is a range-on-both-sides test that no B-tree can fully seek, evaluated per row by
+  `CountAsync`). The index itself is kept, since it does make 0.161.3's bounded per-row checks
+  efficient.
+
+### Notes
+
+- Schema migration: new non-clustered index `IX_Segments_CameraId_EndUtc`. Building it may take a
+  moment on a `Segments` table with a large history — expect the migration step of the next deploy to
+  pause briefly rather than complete instantly.
+
+## [0.161.1] - 2026-08-30
+
+### Fixed
+
+- **The Snapshots page threw an unhandled exception on every load** (`InvalidOperationException:
+  ... could not be translated`), reported live immediately after deploying 0.161.0. Pass 2c's
+  new query-time footage guard (`GetSnapshotsAsync`) used a shape SQL Server's EF Core provider
+  can't translate — first a correlated `Any()` combined with a `Min()` subquery in one `Where`
+  predicate, then (after a first attempted fix) a `Join` against a `GroupBy` followed by
+  `DateTime`-minus-`TimeSpan` arithmetic on the joined column, which also failed to translate.
+  Rewritten (this release) as a single, plain correlated `Any()` (`EXISTS`) testing for an
+  actually-overlapping segment — the simplest shape that reliably translates on every provider.
+  **This version timed out live under real data volume** (missing supporting index) — fixed in
+  0.161.2 by adding the index, not by changing this query again.
+- **Many plain-motion/zone Snapshots cards still showed "No thumbnail available" even once the page
+  loaded**, reported live in the same session — unrelated to anything Pass 3 addresses (that pass
+  is about AI-detection crop quality, not plain-motion thumbnail lookup). The guard's first working
+  version only checked "is this span newer than the camera's *overall* earliest remaining segment,"
+  which is a real gap, not just an approximation: a span can be newer than a camera's oldest
+  surviving footage while its own specific instant still falls inside a genuine recording gap (a
+  node restart, a dropped RTSP connection) with nothing actually covering it. This release's `Any()`
+  guard is what actually fixes this correctly (once 0.161.2's index makes it fast enough to ship).
+
+### Notes
+
+- Web-only fix (`TimelineService.cs`) — no Node change, no schema change.
+
+## [0.161.0] - 2026-08-29
+
+### Fixed
+
+- **One moving object could produce several snapshots.** D-FINE's per-frame class guess can flicker
+  for a single physical object (a cat crossing frame read as cat → dog → cow → horse), and the
+  detection pipeline's hysteresis/best-frame/reporting state was keyed by that raw per-frame label —
+  each label flickered through opened its own independent span and its own snapshot. Pass 2a of the
+  detection/hardware-acceleration overhaul. New `TrackLabelArbiter` resolves each ByteTrack track id
+  to one stable label (the highest peak-confidence label seen for that track, with a confidence
+  margin a challenger must clear to take over) before hysteresis/best-frame tracking/reporting ever
+  see it — the live detection overlay keeps showing the model's raw, unarbitrated per-frame guess.
+- **Clicking a Snapshots card dropped the viewer in at the exact detection instant, with no lead-in**
+  — the object had often already entered frame during the recording's own pre-roll, but Playback
+  started at the moment it was confirmed. Pass 2b. `SnapshotDto` gains `PlayFromUtc`
+  (`StartUtc` minus the camera's configured pre-roll, applied uniformly across every span kind),
+  separate from the existing `AtUtc` (the thumbnail's own sample point, whose AI/classified branch is
+  deliberately pre-roll-less — reverting that once was a confirmed live regression, so it is
+  untouched). Both Playback links on the Snapshots page now use `PlayFromUtc`; the thumbnail image
+  itself still uses `AtUtc`.
+- **A `MotionSpan` row lived forever even after its footage aged out of retention**, leaving a
+  permanent "No thumbnail available" placeholder card. Pass 2c. New `MotionSpanRetentionService`
+  mirrors `BookmarkRetentionService`'s own "entries expire with the footage they point at" pattern
+  (6-hour cadence, same staleness rule — compared against `PlayFromUtc`, not `StartUtc`, since the
+  pre-roll lead-in is part of what the card promises to play) but batches via keyset pagination
+  rather than loading the whole table, since `MotionSpans` runs far higher-volume than `Bookmarks`.
+  `GetSnapshotsAsync` also gained a query-time guard hiding an aged-out span immediately, rather than
+  waiting for the next sweep. A new node-authenticated `GET /api/nodes/snapshots/span-ids` plus a
+  `StorageManager` reconciliation sweep (mirroring the existing segment-reconciliation pattern, with
+  the same reachability-probe/re-check/implausible-mass-deletion guards) self-heals any cached
+  snapshot crop file left behind once its owning row is gone.
+
+### Notes
+
+- Node change (pass 2a is Vision Service, 2c's reconciliation sweep is `LarisVMS.Node`) — rebuild and
+  re-run `install-node.ps1` on every recorder.
+- No schema migration needed — pass 2c adds no new columns, only a new background sweep and a new
+  read-only endpoint. A version-bump migration (`AppVersions` insert only) still needs generating:
+  `dotnet ef migrations add BumpVersion0_161_0 --project src/LarisVMS.Infrastructure --startup-project src/LarisVMS.Web`
+  (empty scaffold since there's no pending model change — add the `INSERT INTO AppVersions`/
+  `DELETE FROM AppVersions` SQL to its `Up()`/`Down()` by hand, matching every other BumpVersion
+  migration in this file's history) — not generated as part of this change, same standing reason as
+  earlier passes' migrations.
+
 ## [0.160.0] - 2026-08-29
 
 ### Changed

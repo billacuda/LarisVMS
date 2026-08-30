@@ -405,6 +405,9 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
         if (fromUtc is { } f) { f = NormalizeToUtc(f); query = query.Where(m => m.StartUtc >= f); }
         if (toUtc is { } t) { t = NormalizeToUtc(t); query = query.Where(m => m.StartUtc <= t); }
 
+        // Pass 2c's footage-coverage guard is deliberately NOT part of this query — see the
+        // "does footage still cover this span" block further down, after pagination, for why.
+
         // Admin-configurable "which event types cameras support" filter (see SnapshotVisibility) —
         // a custom EventTagRule span is never excluded here, since each rule already carries its own
         // IsEnabled toggle; only plain motion (no class, no rule) and each DetectionKind are gated.
@@ -523,6 +526,45 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
                 : 10;
         }
 
+        // Pass 2c: a card that can't be played back is noise — hide a span with no footage actually
+        // covering it, so a "No thumbnail available" placeholder never appears in the first place
+        // (MotionSpanRetentionService's 6-hour sweep then reclaims the row itself; this is what makes
+        // the page correct immediately, not just eventually).
+        //
+        // Checked HERE, per rendered row, rather than as a predicate on the paged query above — three
+        // successive attempts to express it as one query all failed live, and the reason is
+        // structural, not a matter of finding better LINQ:
+        //   * `Any()` combined with `Min()` in one Where predicate, and a `Join` against a `GroupBy`
+        //     with DateTime-minus-TimeSpan arithmetic, both threw "could not be translated".
+        //   * A correlated `Segments.Any(overlap test)` translated fine but timed out, even after
+        //     adding a (CameraId, EndUtc) index. Coverage is an *interval-overlap* test
+        //     (segment.StartUtc < span.EndUtc AND segment.EndUtc > span's play-from point), and a
+        //     B-tree can only seek on one range boundary — the other side is always a residual scan.
+        //     As a correlated subquery that runs per candidate row, and CountAsync makes "candidate"
+        //     mean every MotionSpan the filters allow (tens of thousands) against a Segments table
+        //     with a segment per minute per camera. No index makes that shape fast.
+        // Against at most one page of already-materialized rows, the same test is bounded and every
+        // predicate is a constant, so each check is an ordinary index seek. It also gets to use each
+        // camera's own resolved pre-roll rather than a single global value.
+        //
+        // Trade-off, deliberate: `total`/`totalPages` above are computed WITHOUT this filter, so a
+        // page can render fewer than pageSize cards and the count can overstate slightly. Making the
+        // count exact would require the coverage test back inside the query — the exact thing that
+        // cannot be made fast. An approximate count is worth a page that loads.
+        var coveredSpanIds = new HashSet<long>();
+        foreach (var r in rows)
+        {
+            var cameraId = r.CameraId;
+            var spanEndUtc = r.EndUtc;
+            var playFromUtc = r.StartUtc.AddSeconds(-preRollSecondsByCameraId.GetValueOrDefault(r.CameraId, 10));
+            if (await db.Segments.AnyAsync(s => s.CameraId == cameraId
+                && s.StartUtc < spanEndUtc && s.EndUtc > playFromUtc, ct))
+            {
+                coveredSpanIds.Add(r.Id);
+            }
+        }
+        rows = rows.Where(r => coveredSpanIds.Contains(r.Id)).ToList();
+
         var palette = await eventColors.GetAsync(ct);
 
         // Same label/color precedence as ResolveColor above (custom tag > detected class > plain
@@ -600,9 +642,21 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
                 atUtc = candidate > r.EndUtc ? r.EndUtc : candidate;
             }
 
+            // PlayFromUtc (pass 2b): where Playback should actually start, as opposed to atUtc's
+            // thumbnail sample point above. One rule for every span kind — start at the beginning of
+            // whatever pre-roll actually put on disk — rather than atUtc's two-branch split, since
+            // there's no "already visible" regression risk here the way there was for the thumbnail
+            // (see SnapshotDto's own doc comment). No upper clamp needed: StartUtc minus a pre-roll is
+            // always <= StartUtc <= EndUtc. No lower clamp either, for the same reason atUtc's own
+            // branch above tolerates one: an event moments after recording began has no full pre-roll
+            // buffer yet, and Playback already handles a deep-link instant with nothing behind it the
+            // same way scrubbing into any gap does.
+            var playFromPreRollSeconds = preRollSecondsByCameraId.GetValueOrDefault(r.CameraId, 10);
+            var playFromUtc = r.StartUtc - TimeSpan.FromSeconds(playFromPreRollSeconds);
+
             return new SnapshotDto(r.Id, r.CameraId,
                 cameraNames.TryGetValue(r.CameraId, out var name) ? name : "(deleted camera)",
-                atUtc, duration, label, color, emoji, IsAiDetection: r.AiCategoryName is not null);
+                atUtc, playFromUtc, duration, label, color, emoji, IsAiDetection: r.AiCategoryName is not null);
         }).ToList();
 
         return new SnapshotPageDto(items, totalPages, currentPage);

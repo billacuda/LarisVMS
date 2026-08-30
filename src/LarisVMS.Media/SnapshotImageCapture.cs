@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 
 namespace LarisVMS.Media;
 
@@ -89,10 +90,13 @@ public static class SnapshotImageCapture
     /// <summary>Returns JPEG bytes, or null if ffmpeg produced nothing (corrupt/truncated segment,
     /// offset beyond the file's actual content, timeout, or a crop rectangle ffmpeg otherwise
     /// rejects) — callers turn that into a 502 rather than this class deciding what an HTTP failure
-    /// should look like, same convention ThumbnailCapture.CaptureAsync already uses.</summary>
+    /// should look like, same convention ThumbnailCapture.CaptureAsync already uses. On a null result,
+    /// logs ffmpeg's own stderr (if any logger is supplied) — the empty-output case alone doesn't say
+    /// *why* ffmpeg produced nothing, and every failure reason this doc comment lists produces its own
+    /// distinct ffmpeg error text.</summary>
     public static async Task<byte[]?> CaptureAsync(string ffmpegPath, string filePath, int offsetSeconds,
         double boxX, double boxY, double boxW, double boxH, int frameWidth, int frameHeight,
-        CancellationToken ct, TimeSpan? timeout = null)
+        CancellationToken ct, TimeSpan? timeout = null, ILogger? logger = null)
     {
         var (cropX, cropY, cropW, cropH) = ComputeCropRect(boxX, boxY, boxW, boxH, frameWidth, frameHeight);
 
@@ -138,6 +142,7 @@ public static class SnapshotImageCapture
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             TryKill(process);
+            logger?.LogWarning("Snapshot-image capture for {FilePath} at offset {OffsetSeconds}s timed out.", filePath, offsetSeconds);
             return null;
         }
         finally
@@ -147,7 +152,11 @@ public static class SnapshotImageCapture
             await stderrDrain;
         }
 
-        return bytes.Length > 0 ? bytes : null;
+        if (bytes.Length > 0) return bytes;
+
+        logger?.LogWarning("Snapshot-image capture for {FilePath} at offset {OffsetSeconds}s (crop={CropW}:{CropH}:{CropX}:{CropY}) produced no bytes. ffmpeg stderr: {Stderr}",
+            filePath, offsetSeconds, cropW, cropH, cropX, cropY, (await stderrDrain).Trim());
+        return null;
     }
 
     private static void TryKill(Process process)

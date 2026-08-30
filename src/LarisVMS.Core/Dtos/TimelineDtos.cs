@@ -100,8 +100,15 @@ public record DetectedObjectLabelDto(string CategoryName, string Label);
 /// uncropped frame at AtUtc). GetSnapshotImageInfoAsync itself resolves gracefully to null if the
 /// underlying span turns out to have no captured box after all, which the existing "No thumbnail
 /// available" onerror fallback already handles — so this flag only needs to be a good default, not
-/// a guarantee.</summary>
-public record SnapshotDto(long Id, Guid CameraId, string CameraName, DateTime AtUtc, TimeSpan Duration, string Label, string ColorHex, string Emoji, bool IsAiDetection = false);
+/// a guarantee.
+///
+/// PlayFromUtc (pass 2b) is deliberately separate from AtUtc: AtUtc is the thumbnail's own sample
+/// point (its AI/classified branch is intentionally StartUtc + 1s with no pre-roll — see
+/// GetSnapshotsAsync's own comment for why that must never be unified with a pre-roll-based value),
+/// while PlayFromUtc is pre-roll-earlier than StartUtc uniformly across every span kind, so clicking
+/// into Playback actually catches the subject entering frame instead of dropping the viewer in at
+/// the exact detection instant.</summary>
+public record SnapshotDto(long Id, Guid CameraId, string CameraName, DateTime AtUtc, DateTime PlayFromUtc, TimeSpan Duration, string Label, string ColorHex, string Emoji, bool IsAiDetection = false);
 
 /// <summary>Object detection plan decision 10: what LarisVMS.Web's /snapshot-image proxy needs to
 /// request one AI-detection MotionSpan's cropped best-frame image from its owning node — same shape
