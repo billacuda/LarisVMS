@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using LarisVMS.Core;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Logging;
 using LarisVMS.Web.Helpers;
 using LarisVMS.Web.Services;
 
@@ -18,6 +19,12 @@ public class LogsModel(ISettingsResolver settings, IAuditService auditService, I
 {
     [BindProperty] public int LogRetentionDays { get; set; } = LogsRetentionService.DefaultRetentionDays;
     [BindProperty] public int AuditLogRetentionDays { get; set; } = AuditLogRetentionService.DefaultRetentionDays;
+    /// <summary>Deployment-wide minimum log level — applied to this Web tier, every node, and every
+    /// node's Vision Service, all without a restart. Framework request-pipeline noise stays at
+    /// Warning regardless. "Information" is the default.</summary>
+    [BindProperty] public string LogLevel { get; set; } = "Information";
+
+    public string[] LogLevelOptions => LogLevels.Selectable;
 
     public string LogPath { get; set; } = string.Empty;
     public string? ConfiguredLogPathOverride { get; set; }
@@ -28,6 +35,7 @@ public class LogsModel(ISettingsResolver settings, IAuditService auditService, I
     {
         LogRetentionDays = await settings.GetAsync(LogsRetentionService.RetentionDaysKey, LogsRetentionService.DefaultRetentionDays);
         AuditLogRetentionDays = await settings.GetAsync(AuditLogRetentionService.RetentionDaysKey, AuditLogRetentionService.DefaultRetentionDays);
+        LogLevel = await settings.GetAsync("Logging.Level", "Information");
         LogPath = LogPaths.AppLogsDirectory(configuration);
         ConfiguredLogPathOverride = configuration[LogPaths.ConfigKey];
     }
@@ -38,17 +46,26 @@ public class LogsModel(ISettingsResolver settings, IAuditService auditService, I
 
         var oldLogRetention = await settings.GetAsync(LogsRetentionService.RetentionDaysKey, LogsRetentionService.DefaultRetentionDays);
         var oldAuditRetention = await settings.GetAsync(AuditLogRetentionService.RetentionDaysKey, AuditLogRetentionService.DefaultRetentionDays);
+        var oldLogLevel = await settings.GetAsync("Logging.Level", "Information");
 
         var newLogRetention = Math.Max(0, LogRetentionDays);
         var newAuditRetention = Math.Max(0, AuditLogRetentionDays);
+        var newLogLevel = LogLevels.Selectable.Contains(LogLevel, StringComparer.OrdinalIgnoreCase) ? LogLevel : "Information";
         await settings.SetGlobalAsync(LogsRetentionService.RetentionDaysKey, newLogRetention.ToString(), by);
         await settings.SetGlobalAsync(AuditLogRetentionService.RetentionDaysKey, newAuditRetention.ToString(), by);
+        await settings.SetGlobalAsync("Logging.Level", newLogLevel, by);
         LogRetentionDays = newLogRetention;
         AuditLogRetentionDays = newAuditRetention;
+        LogLevel = newLogLevel;
+
+        // Web tier follows immediately; nodes + their vision services pick it up on their next
+        // reconcile (~30s) and apply it without a restart.
+        WebLogLevel.Apply(newLogLevel);
 
         var details = AuditDiff.Build(
             AuditDiff.Of(LogsRetentionService.RetentionDaysKey, oldLogRetention.ToString(), newLogRetention.ToString()),
-            AuditDiff.Of(AuditLogRetentionService.RetentionDaysKey, oldAuditRetention.ToString(), newAuditRetention.ToString()));
+            AuditDiff.Of(AuditLogRetentionService.RetentionDaysKey, oldAuditRetention.ToString(), newAuditRetention.ToString()),
+            AuditDiff.Of("Logging.Level", oldLogLevel, newLogLevel));
 
         await auditService.LogAsync("Settings.Update",
             User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, by,

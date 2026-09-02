@@ -141,6 +141,25 @@ public class InferenceProfileTests
         Assert.Equal(sy1, ry1, precision: 9);
     }
 
+    [Theory]
+    [InlineData(1280, 720, 1920, 1080)] // 16:9
+    [InlineData(704, 576, 1408, 1152)]  // 11:9
+    [InlineData(1280, 1024, 640, 512)]  // 5:4
+    public void LetterboxGeometryDependsOnlyOnTheAspectRatioNotTheAbsoluteSize(int aw, int ah, int bw, int bh)
+    {
+        // Pass F builds the engine's profile from the (capped) capture dimensions rather than the raw
+        // Sub-stream dimensions. That is only safe because the letterbox scale + pad are a function of
+        // the aspect ratio alone — two same-ratio sources must produce byte-identical geometry.
+        var a = InferenceProfile.Create(aw, ah, AspectMode.Letterbox);
+        var b = InferenceProfile.Create(bw, bh, AspectMode.Letterbox);
+
+        Assert.Equal(a.ScaledWidth, b.ScaledWidth);
+        Assert.Equal(a.ScaledHeight, b.ScaledHeight);
+        Assert.Equal(a.PadLeft, b.PadLeft);
+        Assert.Equal(a.PadTop, b.PadTop);
+        Assert.Equal(a.ContentRect, b.ContentRect);
+    }
+
     [Fact]
     public void StretchRoundTripsABoxBackToItsOriginalSourcePosition()
     {

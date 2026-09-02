@@ -108,7 +108,20 @@ public record DetectedObjectLabelDto(string CategoryName, string Label);
 /// while PlayFromUtc is pre-roll-earlier than StartUtc uniformly across every span kind, so clicking
 /// into Playback actually catches the subject entering frame instead of dropping the viewer in at
 /// the exact detection instant.</summary>
-public record SnapshotDto(long Id, Guid CameraId, string CameraName, DateTime AtUtc, DateTime PlayFromUtc, TimeSpan Duration, string Label, string ColorHex, string Emoji, bool IsAiDetection = false);
+/// <summary>Pass G3: one badge on a snapshot card. A card usually has exactly one (its scalar
+/// Label/ColorHex/Emoji, the primary), but AI-detection spans that overlap in time on the same camera
+/// (a person and a dog in frame together — separate per-label spans, one cropped-from-the-same-frame
+/// snapshot) collapse into one card that carries every label.</summary>
+public record SnapshotBadgeDto(string Label, string ColorHex, string Emoji);
+
+/// <summary>Id is the primary span (the one whose /snapshot-image the card requests); SpanIds is
+/// every span the card represents (the primary plus any it grouped in). Badges is every label; the
+/// scalar Label/ColorHex/Emoji stay as the primary so existing consumers are untouched.</summary>
+public record SnapshotDto(long Id, Guid CameraId, string CameraName, DateTime AtUtc, DateTime PlayFromUtc, TimeSpan Duration, string Label, string ColorHex, string Emoji, bool IsAiDetection = false)
+{
+    public IReadOnlyList<SnapshotBadgeDto> Badges { get; init; } = [];
+    public IReadOnlyList<long> SpanIds { get; init; } = [];
+}
 
 /// <summary>Object detection plan decision 10: what LarisVMS.Web's /snapshot-image proxy needs to
 /// request one AI-detection MotionSpan's cropped best-frame image from its owning node — same shape
@@ -123,7 +136,17 @@ public record SnapshotDto(long Id, Guid CameraId, string CameraName, DateTime At
 /// second round trip to look it back up.</summary>
 public record SnapshotImageInfo(string FilePath, int OffsetSeconds, long SpanId,
     double BoxX, double BoxY, double BoxW, double BoxH, int FrameWidth, int FrameHeight,
-    string? NodeIp, int? NodeLivePort, string? NodeMediaSigningKey);
+    string? NodeIp, int? NodeLivePort, string? NodeMediaSigningKey,
+    /// <summary>The best-frame instant as whole milliseconds into the segment — the sub-second
+    /// precision the crop's <c>-ss</c> seek needs (OffsetSeconds, kept for the signed thumbnail
+    /// token's bucket identity, truncates to a whole second and can miss a fast-moving object by
+    /// most of a frame). Rides unsigned, same "changes only which frame within an already-authorized
+    /// ~1s window, never which file" reasoning the box coords already use.</summary>
+    long OffsetMs = 0,
+    /// <summary>The best-frame instant as UTC ticks — lets the node check for a pre-cropped eager
+    /// snapshot (written by the high-res re-detection path, keyed by this exact instant) before
+    /// falling back to an ffmpeg crop of the recorded segment. 0 when there's no best-frame time.</summary>
+    long BestFrameTicksUtc = 0);
 
 /// <summary>One page of SnapshotDto plus enough to render pagination — MotionSpans is a volume table
 /// (same reasoning as Segments), too large to page client-side the way a plain sortable table does

@@ -151,13 +151,24 @@ else
                                     <option value="" selected="@(string.IsNullOrEmpty(Model.ModelFamilyOverride.GetValueOrDefault(n.Id)))">
                                         (inherit — currently @Model.EffectiveModelFamily.GetValueOrDefault(n.Id, "Auto"))
                                     </option>
-                                    <option value="Auto" selected="@(Model.ModelFamilyOverride.GetValueOrDefault(n.Id) == "Auto")">Auto</option>
+                                    <option value="Auto" selected="@(Model.ModelFamilyOverride.GetValueOrDefault(n.Id) == "Auto")">Auto (YOLOX)</option>
+                                    <option value="YoloX" selected="@(Model.ModelFamilyOverride.GetValueOrDefault(n.Id) == "YoloX")">YOLOX</option>
                                     <option value="DFine" selected="@(Model.ModelFamilyOverride.GetValueOrDefault(n.Id) == "DFine")">D-FINE</option>
                                     <option value="RfDetr" disabled>RF-DETR (not yet available)</option>
-                                    <option value="YoloX" disabled>YOLOX (not yet available)</option>
                                 </select>
+                                @{ var yls = Model.YoloXSizeOverride.GetValueOrDefault(n.Id); }
+                                <select name="yoloXSizeOverride" class="form-select form-select-sm mt-1" title="YOLOX model size (only used when the family resolves to YOLOX)">
+                                    <option value="" selected="@(string.IsNullOrEmpty(yls))">(inherit YOLOX size)</option>
+                                    @foreach (var s in new[] { "Nano", "Tiny", "S", "M", "L", "X" })
+                                    {
+                                        <option value="@s" selected="@(yls == s)">YOLOX-@s</option>
+                                    }
+                                </select>
+                                <input type="number" name="maxFpsOverride" class="form-control form-control-sm mt-1" min="0" max="60"
+                                       placeholder="max fps (inherit)" title="Max detection frames/sec for this node — blank inherits the global setting"
+                                       value="@(Model.MaxFpsOverride.GetValueOrDefault(n.Id)?.ToString())" />
                                 <select name="dfineWeightsOverride" class="form-select form-select-sm mt-1">
-                                    <option value="" selected="@(string.IsNullOrEmpty(Model.DFineWeightsOverride.GetValueOrDefault(n.Id)))">(inherit)</option>
+                                    <option value="" selected="@(string.IsNullOrEmpty(Model.DFineWeightsOverride.GetValueOrDefault(n.Id)))">(inherit D-FINE weights)</option>
                                     <option value="Obj2Coco" selected="@(Model.DFineWeightsOverride.GetValueOrDefault(n.Id) == "Obj2Coco")">Obj2Coco</option>
                                     <option value="Obj365" selected="@(Model.DFineWeightsOverride.GetValueOrDefault(n.Id) == "Obj365")">Obj365</option>
                                 </select>

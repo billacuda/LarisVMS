@@ -14,6 +14,27 @@
 <form method="post" class="row g-3" style="max-width: 640px;">
     <div class="col-12">
         <label class="form-label">
+            Minimum log level
+            <button type="button" class="help-icon" data-help-target="logLevelHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <select asp-for="LogLevel" class="form-select">
+            @foreach (var level in Model.LogLevelOptions)
+            {
+                <option value="@level">@level</option>
+            }
+        </select>
+        <div class="help-text-source" id="logLevelHelp">
+            The lowest level written to the log files, everywhere: this server, every recorder node,
+            and every node's detection service. <strong>Information</strong> is the default;
+            <strong>Debug</strong> or <strong>Trace</strong> turn on the detailed per-frame /
+            per-request diagnostics for troubleshooting, at the cost of much larger log files.
+            Framework request-pipeline chatter stays quiet regardless. Takes effect without a restart
+            — this server immediately, nodes on their next check-in (about 30 seconds).
+        </div>
+    </div>
+
+    <div class="col-12">
+        <label class="form-label">
             Application (system) log retention (days)
             <button type="button" class="help-icon" data-help-target="sysLogHelp" tabindex="0" aria-label="Help">ℹ️</button>
         </label>

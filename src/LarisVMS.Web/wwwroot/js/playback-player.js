@@ -1407,6 +1407,47 @@
         if (globalTimeline) globalTimeline.setCenter(playheadMs);
     }
 
+    // Single-camera playback (one tile) has nothing for the merged "all cameras" strip to add over
+    // the per-camera one — hide it and its now-redundant "Selected camera" label to give the video
+    // grid back that vertical space. The globalTimeline instance is left running (still kept in
+    // lockstep via setRange/setCenter like always), so re-showing it for a multi-camera view is
+    // just un-hiding plus a reload() to pick up the new camera set's coverage.
+    function applyTimelineLayoutForCount(cameraCount) {
+        var single = cameraCount === 1;
+        var selLabel = document.getElementById('pbSelectedCameraLabel');
+        if (selLabel) selLabel.classList.toggle('d-none', single);
+        var wrap = document.getElementById('pbGlobalTimelineWrap');
+        if (wrap) {
+            var wasHidden = wrap.classList.contains('d-none');
+            wrap.classList.toggle('d-none', single);
+            if (!single && wasHidden && globalTimeline) globalTimeline.reload();
+        }
+    }
+
+    // ── "Catching up" badge (catchup-badge.js) ──────────────────────────────
+    // Shown on a tile while it's running faster than 1x: the stepped >8x fast-forward, or a one-off
+    // drift resync (flashed briefly). live-view.js drives its own 1.5x catch-up badge separately.
+    var catchupFlashTimers = {};
+    function tileFrameEl(id) {
+        var t = document.querySelector('[data-playback-tile="' + id + '"]');
+        return t ? t.querySelector('.pb-tile-frame') : null;
+    }
+    function showCatchupBadge(id, text) {
+        clearTimeout(catchupFlashTimers[id]); // don't let a pending flash-hide clear a persistent badge
+        if (window.larisvmsCatchupBadge) window.larisvmsCatchupBadge.show(tileFrameEl(id), text);
+    }
+    function hideCatchupBadge(id) {
+        clearTimeout(catchupFlashTimers[id]);
+        if (window.larisvmsCatchupBadge) window.larisvmsCatchupBadge.hide(tileFrameEl(id));
+    }
+    function flashCatchupBadge(id) {
+        showCatchupBadge(id, '');
+        clearTimeout(catchupFlashTimers[id]);
+        catchupFlashTimers[id] = setTimeout(function () {
+            if (window.larisvmsCatchupBadge) window.larisvmsCatchupBadge.hide(tileFrameEl(id));
+        }, 1500);
+    }
+
     // Makes cameraId drive the per-camera timeline instead of whichever camera was first in the
     // view's reading order. Re-highlights every tile's border/star rather than a full rebuild —
     // cheap and doesn't interrupt anything already playing.
@@ -1590,6 +1631,10 @@
 
         var playBtn = document.getElementById(opts.playPauseBtnId);
         if (playBtn) playBtn.disabled = cells.length === 0;
+        var jumpNowBtn = opts.jumpNowBtnId && document.getElementById(opts.jumpNowBtnId);
+        if (jumpNowBtn) jumpNowBtn.disabled = cells.length === 0;
+
+        applyTimelineLayoutForCount(cells.length);
 
         if (skipInitialSeek) {
             applySpeed(); // freshly created <video> elements default to playbackRate 1 regardless of the selected speed
@@ -1657,7 +1702,10 @@
             var tile = tiles[id];
             if (stepping) {
                 tile.videoEl.pause();
+                if (playing) showCatchupBadge(id, speedRate + '×');
+                else hideCatchupBadge(id);
             } else {
+                hideCatchupBadge(id);
                 // Routed through the player, not a direct videoEl.playbackRate assignment — a plain
                 // assignment doesn't survive the next segment transition (every one calls
                 // videoEl.load(), which resets it), so a fast-forward rate used to quietly fall back
@@ -1770,6 +1818,7 @@
             if (current === null) return;
             if (Math.abs(current - playheadMs) > DRIFT_THRESHOLD_MS) {
                 tile.player.resyncTo(playheadMs);
+                flashCatchupBadge(id);
             }
         });
     }
@@ -1959,6 +2008,18 @@
 
         var playBtn = document.getElementById(o.playPauseBtnId);
         if (playBtn) playBtn.addEventListener('click', togglePlay);
+
+        // Jump every tile back to the current wall-clock time. timeline.js already clamps the
+        // playhead to Date.now() and draws the "now" marker, so this just seeks there and reloads
+        // both strips for the recentered range.
+        var jumpNowBtn = o.jumpNowBtnId && document.getElementById(o.jumpNowBtnId);
+        if (jumpNowBtn) {
+            jumpNowBtn.addEventListener('click', function () {
+                seekAll(Date.now(), playing);
+                if (timeline) timeline.reload();
+                if (globalTimeline) globalTimeline.reload();
+            });
+        }
 
         if (o.currentTimeId) wireCurrentTimeEdit(o.currentTimeId);
         wireArrowKeyNudge();

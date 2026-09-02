@@ -53,7 +53,7 @@ public class ThumbnailBackfillService(NodeApiClient api, NodeWorker worker, stri
             {
                 caughtUp = await BackfillOnceAsync(ct);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (!ct.IsCancellationRequested)
             {
                 logger.LogError(ex, "Thumbnail backfill pass failed — will retry.");
                 caughtUp = false;

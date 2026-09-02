@@ -8,34 +8,79 @@
     <a class="btn btn-outline-secondary" asp-page="Edit" asp-route-id="@Model.CameraId">Back to camera</a>
 </div>
 
-<p class="text-muted small">
-    Draw a <strong>Motion</strong> zone to watch for motion, or an <strong>Ignore</strong> zone to
-    exclude part of the frame from it (a tree branch, a public sidewalk at the edge). Pixels inside
-    an Ignore zone never count toward motion in any Motion zone on this camera, even where they
-    overlap. <strong>Camera-side motion</strong> and <strong>Privacy</strong> zones can be drawn and
-    saved here too, but neither one does anything yet — pushing a zone to the camera itself, and
-    burning a privacy mask into the video, are both on hold (Privacy specifically: a real,
-    not-yet-diagnosed bug breaks a masked camera's recording entirely, so it's deliberately switched
-    off rather than left enabled and broken).
-</p>
+<div class="d-flex align-items-center gap-3 mb-3">
+    <div class="btn-group" role="group" aria-label="Active motion region method">
+        <button type="button" id="modeToggleGrid" class="btn btn-outline-primary">Grid</button>
+        <button type="button" id="modeTogglePolygon" class="btn btn-outline-primary">Polygon zones</button>
+    </div>
+    <span class="text-muted small">
+        Only one method drives motion detection at a time — switching activates it immediately.
+        Neither method's saved configuration is lost when the other is active.
+    </span>
+</div>
+
+<div id="gridPane">
+    <p class="text-muted small">
+        Click a cell to mask it out of motion detection — watching cells light up amber as things
+        actually move helps you find the ones worth excluding (a swaying branch, a flickering light).
+    </p>
+</div>
+<div id="polygonPane" style="display: none;">
+    <p class="text-muted small">
+        Draw a <strong>Motion</strong> zone to watch for motion, or an <strong>Ignore</strong> zone to
+        exclude part of the frame from it (a tree branch, a public sidewalk at the edge). Pixels inside
+        an Ignore zone never count toward motion in any Motion zone on this camera, even where they
+        overlap. <strong>Camera-side motion</strong> and <strong>Privacy</strong> zones can be drawn and
+        saved here too, but neither one does anything yet — pushing a zone to the camera itself, and
+        burning a privacy mask into the video, are both on hold (Privacy specifically: a real,
+        not-yet-diagnosed bug breaks a masked camera's recording entirely, so it's deliberately switched
+        off rather than left enabled and broken).
+    </p>
+</div>
 
 <div class="row g-3">
     <div class="col-lg-8">
         <div class="border rounded bg-body-tertiary position-relative" style="aspect-ratio: 16/9; overflow: hidden;">
-            <canvas id="zoneCanvas" style="width: 100%; height: 100%; cursor: crosshair;"></canvas>
+            <video id="zoneLiveVideo" style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:contain;" muted playsinline></video>
+            <canvas id="zoneCanvas" style="position:absolute; top:0; left:0; width: 100%; height: 100%; cursor: crosshair;"></canvas>
         </div>
-        <div class="d-flex gap-2 mt-2">
+
+        <div id="gridControls" class="mt-2">
+            <div class="d-flex align-items-center gap-3 flex-wrap">
+                <div>
+                    <label class="form-label small mb-0">Grid size</label>
+                    <select id="gridSizeSelect" class="form-select form-select-sm">
+                        <option value="16">16 &times; 16 (coarse)</option>
+                        <option value="32" selected>32 &times; 32 (default)</option>
+                        <option value="64">64 &times; 64 (fine)</option>
+                    </select>
+                </div>
+                <div class="flex-grow-1" style="min-width: 200px;">
+                    <label class="form-label small mb-0">Sensitivity: <span id="gridSensitivityValue">3%</span></label>
+                    <input type="range" id="gridSensitivity" class="form-range" min="1" max="90" value="3" />
+                </div>
+                <button type="button" id="gridSaveBtn" class="btn btn-primary btn-sm" disabled>Save</button>
+                <span id="gridStatus" class="text-muted small"></span>
+            </div>
+            <p class="text-muted small mt-1">
+                Changing the grid size clears the current mask. Masked (red) cells never count toward
+                motion; amber means motion is currently over threshold there; no fill means quiet.
+                Click cells (and adjust the controls above) freely, then <strong>Save</strong> when done.
+            </p>
+        </div>
+
+        <div id="polygonControls" class="d-flex gap-2 mt-2" style="display: none;">
             <button type="button" id="zoneDrawBtn" class="btn btn-primary btn-sm">Draw new zone</button>
             <button type="button" id="zoneCancelDrawBtn" class="btn btn-outline-secondary btn-sm" style="display: none;">Cancel drawing</button>
             <button type="button" id="zoneUndoPointBtn" class="btn btn-outline-secondary btn-sm" style="display: none;">Undo last point</button>
             <span id="zoneStatus" class="text-muted small align-self-center"></span>
         </div>
-        <p class="text-muted small mt-1">
+        <p id="polygonHint" class="text-muted small mt-1" style="display: none;">
             Click to place each corner (needs at least 3). Click the first point again, or
             double-click, to close the shape.
         </p>
     </div>
-    <div class="col-lg-4">
+    <div class="col-lg-4" id="polygonSidebar" style="display: none;">
         <div id="zoneListPanel">
             <p class="text-muted small">Loading zones…</p>
         </div>
@@ -86,12 +131,31 @@
 </div>
 
 @section Scripts {
+    <script src="~/js/live-view.js" asp-append-version="true"></script>
     <script src="~/js/zones-editor.js" asp-append-version="true"></script>
     <script>
         window.larisvmsZonesEditor.init({
             cameraId: '@Model.CameraId',
             snapshotUrl: '/api/cameras/@Model.CameraId/snapshot',
+            videoId: 'zoneLiveVideo',
+            codecHint: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Codec)),
+            hasAudio: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.HasAudio)),
             canvasId: 'zoneCanvas',
+
+            modeToggleGridId: 'modeToggleGrid',
+            modeTogglePolygonId: 'modeTogglePolygon',
+            gridPaneId: 'gridPane',
+            polygonPaneId: 'polygonPane',
+            gridControlsId: 'gridControls',
+            polygonControlsId: 'polygonControls',
+            polygonHintId: 'polygonHint',
+            polygonSidebarId: 'polygonSidebar',
+            gridSizeSelectId: 'gridSizeSelect',
+            gridSensitivityId: 'gridSensitivity',
+            gridSensitivityValueId: 'gridSensitivityValue',
+            gridSaveBtnId: 'gridSaveBtn',
+            gridStatusId: 'gridStatus',
+
             drawBtnId: 'zoneDrawBtn',
             cancelDrawBtnId: 'zoneCancelDrawBtn',
             undoPointBtnId: 'zoneUndoPointBtn',

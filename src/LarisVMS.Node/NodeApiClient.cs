@@ -9,22 +9,48 @@ public class NodeApiClient
 {
     private readonly HttpClient _http;
 
+    // A second client with a much longer timeout for the one large transfer the node pulls from the
+    // server: a YOLOX detection model (yolox_x.onnx is ~100 MB+), fetched once per size and cached.
+    private readonly HttpClient _downloadHttp;
+
     public NodeApiClient(string serverUrl, bool acceptAnyCertificate)
     {
-        var handler = new HttpClientHandler();
-        if (acceptAnyCertificate)
+        HttpClientHandler MakeHandler()
         {
-            // Same rationale as CameraService's "onvif" HttpClient: a self-hosted LarisVMS.Web behind
-            // a self-signed cert on a LAN is a normal deployment shape, not a misconfiguration, and
-            // there is no CA a home/small-business install would realistically have.
-            handler.ServerCertificateCustomValidationCallback = (_, _, _, _) => true;
+            var h = new HttpClientHandler();
+            if (acceptAnyCertificate)
+            {
+                // Same rationale as CameraService's "onvif" HttpClient: a self-hosted LarisVMS.Web
+                // behind a self-signed cert on a LAN is a normal deployment shape, not a
+                // misconfiguration, and there is no CA a home/small-business install would have.
+                h.ServerCertificateCustomValidationCallback = (_, _, _, _) => true;
+            }
+            return h;
         }
-        _http = new HttpClient(handler) { BaseAddress = new Uri(serverUrl.TrimEnd('/') + "/"), Timeout = TimeSpan.FromSeconds(15) };
+
+        var baseAddress = new Uri(serverUrl.TrimEnd('/') + "/");
+        _http = new HttpClient(MakeHandler()) { BaseAddress = baseAddress, Timeout = TimeSpan.FromSeconds(15) };
+        _downloadHttp = new HttpClient(MakeHandler()) { BaseAddress = baseAddress, Timeout = TimeSpan.FromMinutes(10) };
     }
 
     public void SetCredentials(Guid nodeId, string secret)
-        => _http.DefaultRequestHeaders.Authorization =
-            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", $"{nodeId}:{secret}");
+    {
+        var auth = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", $"{nodeId}:{secret}");
+        _http.DefaultRequestHeaders.Authorization = auth;
+        _downloadHttp.DefaultRequestHeaders.Authorization = auth;
+    }
+
+    /// <summary>Streams a bundled/cached detection model file from the server (YOLOX models aren't
+    /// shipped in the node package). The server serves it from its own detection-models cache,
+    /// fetching once from the pinned upstream on a miss.</summary>
+    public async Task<Stream> OpenDetectionModelStreamAsync(string family, string variant, CancellationToken ct)
+    {
+        var response = await _downloadHttp.GetAsync(
+            $"api/nodes/detection-model/{Uri.EscapeDataString(family)}/{Uri.EscapeDataString(variant)}",
+            HttpCompletionOption.ResponseHeadersRead, ct);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStreamAsync(ct);
+    }
 
     public async Task<NodeRegisterResponse> RegisterAsync(NodeRegisterRequest request, CancellationToken ct)
     {

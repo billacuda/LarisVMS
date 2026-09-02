@@ -73,11 +73,57 @@ public record VisionStartCameraRequest(
     /// Defaults to "Letterbox" so an older, not-yet-updated node build's deserialization (were this
     /// ever read node-side, which it isn't — Vision Service parses it directly) lands on the safer of
     /// the two implemented values rather than today's stretch-and-distort behavior.</summary>
-    string AspectMode = "Letterbox");
+    string AspectMode = "Letterbox",
+    /// <summary>Detection/hardware-acceleration overhaul, pass 3b: opt-in (default off, deliberately
+    /// — meaningfully more CPU/GPU work than the continuous Sub-stream pipeline alone) motion-guided
+    /// native-scale re-detection against the Main stream. Global -> Node resolved setting, same
+    /// scoping as AspectMode/ModelFamily above (one Vision Service process per node, so this is a
+    /// per-node choice, not per-camera).</summary>
+    bool EnableHighResReDetection = false,
+    /// <summary>This camera's own real Main-stream resolution (CameraStream.Width/Height for the
+    /// Main role, the same ffmpeg-probed-ground-truth source Width/Height above already uses for the
+    /// Sub stream) — null until RecordingSession has actually probed it. Only meaningful when
+    /// EnableHighResReDetection is true; CameraDetectionPipeline's own high-res loop stays
+    /// permanently disabled for a camera until both are known.</summary>
+    int? MainStreamWidth = null,
+    int? MainStreamHeight = null,
+    /// <summary>Detection.EnableVisionDebugImages — diagnostic-only, node-scoped like AspectMode
+    /// above. When true, CameraDetectionPipeline writes one cropped JPEG per high-res re-detection
+    /// trigger to logs\vision-debug\. Off by default; SaveDebugImage is a no-op unless this is set.</summary>
+    bool EnableVisionDebugImages = false,
+    /// <summary>Detection.GpuPreprocessing (pass 4a) — node-scoped. When true, ffmpeg emits packed
+    /// nv12 and DFineEngine merges an nv12→normalized-tensor head into the model so colour conversion
+    /// + normalize run on the accelerator instead of a CPU pixel loop. Vendor-neutral. Off by default.
+    /// Ignored for a YOLOX pipeline (no YOLOX preprocess head yet — CameraDetectionPipeline forces
+    /// BGRA frames + CPU pack).</summary>
+    bool GpuPreprocessing = false,
+    /// <summary>The YoloXSize enum name (Nano/Tiny/S/M/L/X) — only meaningful when ModelFamily is
+    /// "YoloX"; selects which ONNX the Vision Service fetches (via the node's model proxy) and its
+    /// square network input size (416 for Nano/Tiny, 640 otherwise). Appended so NodeWorker's
+    /// positional construction stays stable; defaults "S".</summary>
+    string YoloXSize = "S",
+    /// <summary>Already-resolved <c>fps=</c> value for VisionSession's ffmpeg filter chain — Node
+    /// computes it from Detection.MaxFps and the Sub stream's own probed rate, sending 0 whenever the
+    /// stream is already at or below the cap (so a slow camera is never frame-*duplicated* up to the
+    /// target). 0 = no fps filter.</summary>
+    int DecodeFpsCap = 0,
+    /// <summary>Detection.HiResSnapshots (Pass F) — node-scoped, opt-in, off by default. When true the
+    /// Vision Service decodes the Sub stream at up to its native resolution (long edge capped to
+    /// SnapshotImageCapture.MaxDimension) instead of the detector's network input size, downscales a
+    /// copy per frame for inference, and crops the eager AI-detection snapshot from the larger buffer
+    /// — sharper only where the Sub stream's own resolution exceeds the network size. Small extra CPU
+    /// + memory per camera, no extra GPU. Forces GpuPreprocessing off for the camera while on (the
+    /// merged nv12 head can't consume a capture-sized frame). Appended last so positional
+    /// construction stays stable.</summary>
+    bool HiResSnapshots = false);
 
 /// <summary>Node -&gt; Vision Service: stop watching a camera (disabled, reassigned, or the node is
 /// shutting down this camera's session).</summary>
 public record VisionStopCameraRequest(Guid CameraId);
+
+/// <summary>Node -&gt; Vision Service (POST /log-level): the deployment-wide minimum log level, pushed
+/// whenever the Logging.Level setting changes so the sibling process follows it without a restart.</summary>
+public record LogLevelRequest(string Level);
 
 /// <summary>Vision Service -&gt; Node (POST /detections): one closed or checkpointed AI-detection
 /// span. Deliberately shaped to map directly onto MotionSpanReportItem's own AI-detection fields —
@@ -101,6 +147,15 @@ public record VisionDetectionReportItem(
     double? BestBoxW,
     double? BestBoxH,
     double? BestBoxConfidence);
+
+/// <summary>Vision Service -&gt; Node (POST /detections/crop): a snapshot image cropped from the
+/// exact Main-stream frame a high-res re-detection ran against — the same frame the vision-debug
+/// images come from, so it lines up with the detected object far better than a whole-second seek
+/// into the recorded segment can. Node stages it by <see cref="AtUtc"/> ticks under
+/// <c>cam-{id}/snapshots/hires/</c>; the /snapshot-image route promotes it into the span-keyed
+/// snapshot cache on first view (so retention governs it like any other snapshot). Best-effort —
+/// a lost crop just means that span falls back to the segment-seek crop.</summary>
+public record VisionDetectionCropItem(Guid CameraId, DateTime AtUtc, byte[] Jpeg);
 
 /// <summary>Node -&gt; Vision Service (GET /cameras/{cameraId}/detections) response: the live,
 /// current-instant snapshot for the live-view box overlay (decision 6) — every object Vision

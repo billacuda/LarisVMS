@@ -34,6 +34,8 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
     /// per-node override, not per-camera.</summary>
     public Dictionary<Guid, string> ModelFamilyOverride { get; set; } = [];
     public Dictionary<Guid, string> DFineWeightsOverride { get; set; } = [];
+    public Dictionary<Guid, string> YoloXSizeOverride { get; set; } = [];
+    public Dictionary<Guid, int?> MaxFpsOverride { get; set; } = [];
     public Dictionary<Guid, string> EffectiveModelFamily { get; set; } = [];
     /// <summary>Detection/hardware-acceleration overhaul, pass 1 — same per-node override shape as
     /// ModelFamilyOverride above.</summary>
@@ -92,6 +94,9 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
 
             ModelFamilyOverride[n.Id] = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.ModelFamily") ?? "";
             DFineWeightsOverride[n.Id] = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.DFineWeights") ?? "";
+            YoloXSizeOverride[n.Id] = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.YoloXSize") ?? "";
+            var maxFpsOwn = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.MaxFps");
+            MaxFpsOverride[n.Id] = int.TryParse(maxFpsOwn, out var mf) ? mf : null;
             EffectiveModelFamily[n.Id] = await settings.GetAsync("Detection.ModelFamily", "Auto", nodeId: n.Id);
             AspectModeOverride[n.Id] = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.AspectMode") ?? "";
             EffectiveAspectMode[n.Id] = await settings.GetAsync("Detection.AspectMode", "Letterbox", nodeId: n.Id);
@@ -99,7 +104,8 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
     }
 
     public async Task<IActionResult> OnPostUpdateAsync(Guid id, string name, string? storageRootPath, int? retentionDaysOverride,
-        string? aiAccelerator, string? modelFamilyOverride, string? dfineWeightsOverride, string? aspectModeOverride)
+        string? aiAccelerator, string? modelFamilyOverride, string? dfineWeightsOverride, string? yoloXSizeOverride,
+        int? maxFpsOverride, string? aspectModeOverride)
     {
         try
         {
@@ -111,6 +117,8 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
             var oldRetentionOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Retention.Days");
             var oldModelFamilyOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.ModelFamily");
             var oldDFineWeightsOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.DFineWeights");
+            var oldYoloXSizeOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.YoloXSize");
+            var oldMaxFpsOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.MaxFps");
             var oldAspectModeOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.AspectMode");
             // "" (blank/Auto) resolves as null — see NodeConfigResponse.AiAccelerator's own doc
             // comment for why Auto (not an explicit choice) is the safe default.
@@ -123,6 +131,10 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
                 string.IsNullOrEmpty(modelFamilyOverride) ? null : modelFamilyOverride, User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Node, id, "Detection.DFineWeights",
                 string.IsNullOrEmpty(dfineWeightsOverride) ? null : dfineWeightsOverride, User.Identity?.Name);
+            await settings.SetOverrideAsync(SettingScope.Node, id, "Detection.YoloXSize",
+                string.IsNullOrEmpty(yoloXSizeOverride) ? null : yoloXSizeOverride, User.Identity?.Name);
+            await settings.SetOverrideAsync(SettingScope.Node, id, "Detection.MaxFps",
+                maxFpsOverride?.ToString(), User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Node, id, "Detection.AspectMode",
                 string.IsNullOrEmpty(aspectModeOverride) ? null : aspectModeOverride, User.Identity?.Name);
 
@@ -133,6 +145,8 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
                 AuditDiff.Of("AI accelerator", before?.AiAccelerator?.ToString(), accelerator?.ToString()),
                 AuditDiff.Of("Detection model override", oldModelFamilyOverride, modelFamilyOverride),
                 AuditDiff.Of("D-FINE weights override", oldDFineWeightsOverride, dfineWeightsOverride),
+                AuditDiff.Of("YOLOX size override", oldYoloXSizeOverride, yoloXSizeOverride),
+                AuditDiff.Of("Max detection fps override", oldMaxFpsOverride, maxFpsOverride?.ToString()),
                 AuditDiff.Of("Aspect fitting override", oldAspectModeOverride, aspectModeOverride));
 
             await LogAsync("Node.Update", details is null ? $"{name} ({id})" : $"{name} ({id}) — {details}");

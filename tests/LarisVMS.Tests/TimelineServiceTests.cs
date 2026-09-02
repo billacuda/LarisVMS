@@ -1449,6 +1449,48 @@ public class TimelineServiceTests
     }
 
     [Fact]
+    public async Task SnapshotsGroupOverlappingAiSpansOnOneCameraIntoASingleMultiBadgeCard()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync(withSnapshotCoverage: true);
+        var human = new DetectedObjectCategory { Id = Guid.NewGuid(), Name = "Human", ColorHex = "#aa0000", FirstSeenUtc = DateTime.UtcNow };
+        var animal = new DetectedObjectCategory { Id = Guid.NewGuid(), Name = "Animal", ColorHex = "#00aa00", FirstSeenUtc = DateTime.UtcNow };
+        db.DetectedObjectCategories.AddRange(human, animal);
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.AddRange(
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.AiDetection, DetectedObjectCategoryId = human.Id, DetectedObjectLabel = "person", StartUtc = start, EndUtc = start.AddSeconds(20), BestBoxConfidence = 0.7 },
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.AiDetection, DetectedObjectCategoryId = animal.Id, DetectedObjectLabel = "dog", StartUtc = start.AddSeconds(5), EndUtc = start.AddSeconds(18), BestBoxConfidence = 0.9 });
+        await db.SaveChangesAsync();
+
+        var page = await new TimelineService(db, DefaultPalette).GetSnapshotsAsync(null, null, null, 1, 24);
+
+        var card = Assert.Single(page.Items);
+        Assert.Equal(2, card.Badges.Count);
+        Assert.Contains(card.Badges, b => b.Label == "Human — person");
+        Assert.Contains(card.Badges, b => b.Label == "Animal — dog");
+        // Primary = higher best-box confidence (the dog span) — that's the id the card's image uses.
+        Assert.Equal("Animal — dog", card.Label);
+        Assert.Equal(2, card.SpanIds.Count);
+    }
+
+    [Fact]
+    public async Task SnapshotsDoNotGroupAiSpansThatAreSeparatedInTime()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync(withSnapshotCoverage: true);
+        var human = new DetectedObjectCategory { Id = Guid.NewGuid(), Name = "Human", ColorHex = "#aa0000", FirstSeenUtc = DateTime.UtcNow };
+        var vehicle = new DetectedObjectCategory { Id = Guid.NewGuid(), Name = "Vehicle", ColorHex = "#0000aa", FirstSeenUtc = DateTime.UtcNow };
+        db.DetectedObjectCategories.AddRange(human, vehicle);
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.AddRange(
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.AiDetection, DetectedObjectCategoryId = human.Id, DetectedObjectLabel = "person", StartUtc = start, EndUtc = start.AddSeconds(10) },
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.AiDetection, DetectedObjectCategoryId = vehicle.Id, DetectedObjectLabel = "car", StartUtc = start.AddSeconds(40), EndUtc = start.AddSeconds(55) });
+        await db.SaveChangesAsync();
+
+        var page = await new TimelineService(db, DefaultPalette).GetSnapshotsAsync(null, null, null, 1, 24);
+
+        Assert.Equal(2, page.Items.Count);
+    }
+
+    [Fact]
     public async Task SnapshotsKindsFilterAcceptsAiCategoryNameAsAToken()
     {
         var (db, cameraId, _) = await SeedCameraAsync(withSnapshotCoverage: true);
@@ -1466,6 +1508,61 @@ public class TimelineServiceTests
         var page = await service.GetSnapshotsAsync(null, null, null, 1, 24, kinds: ["Vehicle"]);
 
         Assert.Equal("Vehicle — car", Assert.Single(page.Items).Label);
+    }
+
+    [Fact]
+    public async Task SnapshotsHidesACameraNativeSpanWhenAnOverlappingAiDetectionOfTheSameCategoryExists()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync(withSnapshotCoverage: true);
+        var human = new DetectedObjectCategory { Id = Guid.NewGuid(), Name = "Human", ColorHex = "#abcdef", FirstSeenUtc = DateTime.UtcNow };
+        db.DetectedObjectCategories.Add(human);
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.AddRange(
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human,
+                StartUtc = start, EndUtc = start.AddSeconds(6) },
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.AiDetection, DetectedObjectCategoryId = human.Id,
+                DetectedObjectLabel = "person", StartUtc = start.AddSeconds(2), EndUtc = start.AddSeconds(8) });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
+
+        Assert.True(Assert.Single(page.Items).IsAiDetection); // the camera-native "Human" span is suppressed
+    }
+
+    [Fact]
+    public async Task SnapshotsKeepsACameraNativeSpanWhenNoOverlappingAiDetectionExists()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync(withSnapshotCoverage: true);
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.Add(new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent,
+            DetectionKind = DetectionKind.Human, StartUtc = start, EndUtc = start.AddSeconds(6) });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
+
+        Assert.Single(page.Items);
+    }
+
+    [Fact]
+    public async Task SnapshotsKeepsACameraNativeSpanWhenTheOverlappingAiDetectionIsADifferentCategory()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync(withSnapshotCoverage: true);
+        var animal = new DetectedObjectCategory { Id = Guid.NewGuid(), Name = "Animal", ColorHex = "#33cc66", FirstSeenUtc = DateTime.UtcNow };
+        db.DetectedObjectCategories.Add(animal);
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.AddRange(
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Vehicle,
+                StartUtc = start, EndUtc = start.AddSeconds(6) },
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.AiDetection, DetectedObjectCategoryId = animal.Id,
+                DetectedObjectLabel = "dog", StartUtc = start.AddSeconds(2), EndUtc = start.AddSeconds(8) });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
+
+        Assert.Equal(2, page.Items.Count); // Vehicle (camera-native) and Animal (AI) are unrelated
     }
 
     [Fact]

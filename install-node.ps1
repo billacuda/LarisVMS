@@ -15,9 +15,13 @@
     re-registration, so re-running this script is safe.
 
     Re-running against an already-installed node (upgrade) stops the existing service rather than
-    deleting and recreating it, and reuses the ffmpeg already copied into $InstallDir\ffmpeg from a
-    previous run instead of re-resolving it from PATH/winget/-FfmpegPath every time — pass
-    -FfmpegPath explicitly only when you actually want to replace ffmpeg itself.
+    deleting and recreating it.
+
+    ffmpeg is NOT bundled or copied anywhere by this script. Install it first — recommended:
+    `winget install ffmpeg --scope machine` — and the node discovers it on PATH or under the WinGet
+    package store at every startup (so an ffmpeg upgrade is picked up with no re-install here). This
+    script only preflight-checks that it's present; pass -FfmpegPath to point at a copy that neither
+    PATH nor the WinGet store would surface.
 
     Storage access: if the storage root is a network share (\\server\share\...), the account the
     service runs as needs read/write access to it. The default LocalSystem account can still work
@@ -52,8 +56,13 @@ param(
     [string]$InstallDir        = 'C:\Program Files\LarisVMS\Node',
     [string]$ServiceName       = 'LarisVMSNode',
     [string]$ServiceDisplay    = 'LarisVMS Node',
+    # Optional override. ffmpeg is not bundled — install it (recommended:
+    # `winget install ffmpeg --scope machine`) and both this script and the node's own
+    # FfmpegPathResolver discover it on PATH or under the WinGet package store. Pass this only to
+    # point at a copy neither would find; when set it is baked into the service command line as
+    # --ffmpeg-path, otherwise the node re-discovers at every startup (so an ffmpeg upgrade needs no
+    # re-install here).
     [string]$FfmpegPath        = '',
-    [switch]$InstallFfmpeg,
     [string]$StorageRoot       = '',
     [switch]$InsecureTls,
     [pscredential]$ServiceCredential,
@@ -304,50 +313,30 @@ function Install-VisionNativeDependencies([string]$InstallDirectory) {
     }
 }
 
-# Installs an ffmpeg package via winget.exe directly and returns the path ffmpeg.exe landed at.
-# Deliberately does NOT go through any PowerShell module layer (Microsoft.WinGet.Client,
-# Install-WinGetPackage, etc.): confirmed across attempts on a real recorder machine, that layer is
-# unreliable in an Administrator/non-interactive session in ways that differ by machine —
-# Repair-WinGetPackageManager missing on one version, Install-Module refusing to clobber
-# already-present cmdlets on another, and a third-party "Cobalt" module shadowing the same cmdlet
-# names with its own broken winget.exe lookup on this specific one. Locating winget.exe by its own
-# well-known install path and invoking it directly sidesteps all of that — no module, no cmdlet
-# resolution, just the binary.
-function Resolve-WingetExe {
-    $onPath = Get-Command winget -ErrorAction SilentlyContinue
-    if ($onPath) { return $onPath.Source }
-
-    # An Administrator/service-installation session frequently doesn't have the WindowsApps execution
-    # alias directory on PATH even though App Installer (and winget.exe itself) is present — this is
-    # the same probe dploid's deploy.ps1 uses for exactly that reason.
-    $viaWindowsApps = Get-ChildItem "$env:ProgramFiles\WindowsApps\Microsoft.DesktopAppInstaller_*\winget.exe" `
-        -ErrorAction SilentlyContinue |
-        Sort-Object FullName -Descending |
-        Select-Object -First 1 -ExpandProperty FullName
-    if ($viaWindowsApps) { return $viaWindowsApps }
-
-    return $null
-}
-
-function Install-FfmpegPackage([string]$PackageId) {
-    $wingetExe = Resolve-WingetExe
-    if (-not $wingetExe) {
-        throw "winget.exe could not be located (checked PATH and WindowsApps). Install 'App Installer' " +
-              "from the Microsoft Store, or download ffmpeg manually and re-run with -FfmpegPath <path>."
+# Locates an ffmpeg install without installing anything — mirrors LarisVMS.Media.FfmpegPathResolver
+# so this script's preflight and the running node agree: an explicit path wins, then `ffmpeg` on
+# PATH, then the newest ffmpeg.exe under a WinGet package folder (machine scope first, then
+# per-user). Returns $null when nothing turns up.
+function Find-Ffmpeg([string]$Explicit) {
+    if (-not [string]::IsNullOrWhiteSpace($Explicit)) {
+        if (-not (Test-Path $Explicit)) { throw "Specified -FfmpegPath does not exist: $Explicit" }
+        return (Resolve-Path $Explicit).Path
     }
 
-    Write-Host "    Installing $PackageId via $wingetExe..."
-    & $wingetExe install --id $PackageId -e --accept-source-agreements --accept-package-agreements
-    if ($LASTEXITCODE -ne 0) { throw "winget install of $PackageId failed (exit $LASTEXITCODE)." }
+    $onPath = Get-Command ffmpeg.exe -ErrorAction SilentlyContinue
+    if ($onPath) { return $onPath.Source }
 
-    # winget installs a portable/zip-style package like this one per-user
-    # (%LOCALAPPDATA%\Microsoft\WinGet\Packages\...) regardless of how it was invoked — there is no
-    # reliable machine-wide scope for it — so the file has to be located by search rather than
-    # assumed on PATH.
-    $exe = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Filter 'ffmpeg.exe' -Recurse -ErrorAction SilentlyContinue |
-        Select-Object -First 1 -ExpandProperty FullName
-    if (-not $exe) { throw "$PackageId installed but ffmpeg.exe could not be located under %LOCALAPPDATA%\Microsoft\WinGet\Packages." }
-    return $exe
+    foreach ($root in @((Join-Path $env:ProgramFiles 'WinGet\Packages'),
+                        (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'))) {
+        if (-not (Test-Path $root)) { continue }
+        $hit = Get-ChildItem -Path $root -Filter 'ffmpeg.exe' -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'ffmpeg' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+        if ($hit) { return $hit }
+    }
+
+    return $null
 }
 
 # ── pre-flight ────────────────────────────────────────────────────────────────
@@ -388,7 +377,6 @@ if (-not $hasVision) {
 # it — less disruptive to anything referencing the service (monitoring, Event Viewer history) and
 # there's no reason deleting it was ever necessary for this.
 
-$ffmpegInstallDir = Join-Path $InstallDir 'ffmpeg'
 $isUpgrade = $false
 $existingSvc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($existingSvc) {
@@ -403,62 +391,28 @@ if ($existingSvc) {
     Stop-OrphanedVisionService
 }
 
-# ── resolve ffmpeg ───────────────────────────────────────────────────────────
-# Not bundled with the node package — every LAN typically already standardizes on one build/version,
-# and downloading it here (rather than checking one into source control) keeps the published node
-# package small. The LGPL "shared" build (not a GPL build) is what the plan's licensing note calls
-# for; BtbN.FFmpeg.LGPL.Shared on winget matches that.
+# ── verify ffmpeg is installed ───────────────────────────────────────────────
+# Not bundled or copied anywhere by this script. The operator installs ffmpeg
+# (`winget install ffmpeg --scope machine`), and the node's own FfmpegPathResolver re-discovers it
+# on PATH or under the WinGet package store at every startup — so an ffmpeg upgrade is picked up
+# with no re-run here. This is only a fail-fast preflight; --ffmpeg-path is baked into the service
+# command line further down only when -FfmpegPath was passed explicitly.
 
-Write-Step "Resolving ffmpeg"
-$alreadyInstalledFfmpeg = Join-Path $ffmpegInstallDir 'ffmpeg.exe'
-$resolvedFfmpeg = $null
-$reusingInstalledFfmpeg = $false
+Write-Step "Checking for ffmpeg"
+$resolvedFfmpeg = Find-Ffmpeg $FfmpegPath
+if (-not $resolvedFfmpeg) {
+    throw @"
+ffmpeg was not found (checked PATH and the WinGet package store).
+Install it, then re-run this script:
 
-if (-not [string]::IsNullOrWhiteSpace($FfmpegPath)) {
-    if (-not (Test-Path $FfmpegPath)) { throw "Specified -FfmpegPath does not exist: $FfmpegPath" }
-    $resolvedFfmpeg = $FfmpegPath
-    Write-Ok "Using: $resolvedFfmpeg"
-} elseif (Test-Path $alreadyInstalledFfmpeg) {
-    # Upgrade path: a previous run of this script already copied ffmpeg into this node's own
-    # install dir — reuse it rather than re-resolving from PATH/winget every time this script is
-    # re-run just to pick up a new LarisVMS.Node.exe build. Pass -FfmpegPath explicitly to replace it.
-    $resolvedFfmpeg = $alreadyInstalledFfmpeg
-    $reusingInstalledFfmpeg = $true
-    Write-Ok "Reusing already-installed ffmpeg: $resolvedFfmpeg"
-} else {
-    $onPath = Get-Command ffmpeg -ErrorAction SilentlyContinue
-    if ($onPath) {
-        $resolvedFfmpeg = $onPath.Source
-        Write-Ok "Found on PATH: $resolvedFfmpeg"
-    } elseif ($InstallFfmpeg) {
-        $resolvedFfmpeg = Install-FfmpegPackage -PackageId 'BtbN.FFmpeg.LGPL.Shared'
-        Write-Ok "Installed: $resolvedFfmpeg"
-    } else {
-        throw "ffmpeg not found on PATH. Pass -FfmpegPath <path to ffmpeg.exe>, or -InstallFfmpeg to fetch " +
-              "the LGPL shared build (BtbN.FFmpeg.LGPL.Shared) via winget automatically."
-    }
+    winget install ffmpeg --scope machine
+
+Or pass -FfmpegPath 'C:\path\to\ffmpeg.exe' to point at an existing copy.
+"@
 }
-
-if ($reusingInstalledFfmpeg) {
-    $FfmpegPath = $alreadyInstalledFfmpeg
-} else {
-    # Copied into the node's own install directory regardless of where it was found — a shared
-    # build resolved from PATH, a manually-supplied -FfmpegPath, or a winget install under the
-    # *installing user's* %LOCALAPPDATA% are all locations the Windows Service (running as
-    # LocalSystem or a dedicated service account, never as whoever happened to run this script) has
-    # no guarantee of being able to read. $InstallDir is machine-wide (Program Files), so copying
-    # there once, up front, sidesteps that permission gap entirely.
-    Write-Step "Copying ffmpeg into $ffmpegInstallDir"
-    New-Item -ItemType Directory -Path $ffmpegInstallDir -Force | Out-Null
-    # A "shared" ffmpeg build's exe depends on sibling DLLs (avcodec-*.dll etc.) in the same folder —
-    # copy everything alongside it, not just ffmpeg.exe. Retried: on an upgrade this overwrites the
-    # previous install's files, and Stop-OrphanedFfmpeg above closes most but not necessarily every
-    # instance of the handle-release race that can leave one still transiently locked.
-    Copy-ItemWithRetry (Join-Path (Split-Path $resolvedFfmpeg -Parent) '*') $ffmpegInstallDir
-    $FfmpegPath = Join-Path $ffmpegInstallDir 'ffmpeg.exe'
-    if (-not (Test-Path $FfmpegPath)) { throw "Copy completed but ffmpeg.exe is not at the expected path: $FfmpegPath" }
-    Write-Ok "ffmpeg ready at $FfmpegPath"
-}
+& $resolvedFfmpeg -version *> $null
+if ($LASTEXITCODE -ne 0) { throw "ffmpeg was found at '$resolvedFfmpeg' but 'ffmpeg -version' failed (exit $LASTEXITCODE)." }
+Write-Ok "Found: $resolvedFfmpeg"
 
 # ── install files ─────────────────────────────────────────────────────────────
 
@@ -502,7 +456,11 @@ if ($hasVision) {
 # path is safe and won't re-register a second node.
 
 $exePath = Join-Path $InstallDir 'LarisVMS.Node.exe'
-$argParts = @('--server-url', $ServerUrl, '--registration-key', $RegistrationKey, '--ffmpeg-path', $FfmpegPath, '--live-port', $LivePort)
+# --ffmpeg-path is passed only when -FfmpegPath was given explicitly; otherwise the node's own
+# FfmpegPathResolver discovers ffmpeg (PATH / WinGet package store) at every startup, so an ffmpeg
+# upgrade needs no re-run of this script.
+$argParts = @('--server-url', $ServerUrl, '--registration-key', $RegistrationKey, '--live-port', $LivePort)
+if (-not [string]::IsNullOrWhiteSpace($FfmpegPath)) { $argParts += @('--ffmpeg-path', $resolvedFfmpeg) }
 if ($StorageRoot) { $argParts += @('--storage-root', $StorageRoot) }
 if ($InsecureTls) { $argParts += '--insecure-tls' }
 

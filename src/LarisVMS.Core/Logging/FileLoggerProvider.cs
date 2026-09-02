@@ -2,6 +2,19 @@ using Microsoft.Extensions.Logging;
 
 namespace LarisVMS.Core.Logging;
 
+/// <summary>The log levels an operator can pick from the Admin &gt; Settings &gt; Logs dropdown, and
+/// the one place a stored/pushed level string is turned back into a <see cref="LogLevel"/>.</summary>
+public static class LogLevels
+{
+    public static readonly string[] Selectable = ["Trace", "Debug", "Information", "Warning", "Error"];
+
+    /// <summary>Parses a stored/config level string; anything unrecognised → Information.</summary>
+    public static LogLevel Parse(string? value) =>
+        Enum.TryParse<LogLevel>(value, ignoreCase: true, out var level) && level != LogLevel.None
+            ? level
+            : LogLevel.Information;
+}
+
 /// <summary>M11: minimal rolling-file ILoggerProvider — both LarisVMS.Web (IIS-hosted) and
 /// LarisVMS.Node (a Windows Service) rely on Generic Host's console-only default today, which is
 /// invisible once neither runs attached to a terminal (Node in particular: a Windows Service has no
@@ -17,9 +30,15 @@ public sealed class FileLoggerProvider(string directory, string filePrefix, LogL
     private string? _openDate;
     private StreamWriter? _writer;
 
+    /// <summary>The minimum level written to file. Settable at runtime so the node/vision service can
+    /// follow the deployment-wide `Logging.Level` setting without a restart (M20 pass 4). A plain
+    /// volatile field is enough — a level change taking effect one log call late is fine.</summary>
+    private volatile LogLevel _minLevel = minLevel;
+    public LogLevel MinLevel { get => _minLevel; set => _minLevel = value; }
+
     public ILogger CreateLogger(string categoryName) => new FileLogger(this, categoryName);
 
-    internal bool IsEnabled(LogLevel level) => level >= minLevel;
+    internal bool IsEnabled(LogLevel level) => level >= _minLevel;
 
     internal void Write(string line)
     {

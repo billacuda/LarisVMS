@@ -74,7 +74,8 @@ EXTERNAL TOOLS (invoked as subprocesses, not linked)
 
 FFmpeg
     Invoked as a separate process over a pipe; no FFmpeg code is linked into this project, so its
-    license does not propagate here. See the README's own note on the LGPL "shared" build.
+    license does not propagate here (a GPL build is fine). Not bundled — installed per recorder
+    node; see the README's "FFmpeg (required)" section.
     https://ffmpeg.org
 
 huggingface-hub (Python)

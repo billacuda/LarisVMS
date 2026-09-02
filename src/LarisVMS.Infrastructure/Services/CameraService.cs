@@ -72,6 +72,16 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
         AiDetectionEnabled = c.AiDetectionEnabled,
         MotionDetectionSource = c.MotionDetectionSource,
         ServerMotionEnabled = c.ServerMotionEnabled,
+        // Pass 3c-2: missed here when these columns were added — this hand-written projection means
+        // a field EF should just copy has to be listed explicitly, and skipping one doesn't fail
+        // loudly: the resulting Camera object silently gets that property's plain C# default instead
+        // of ever reading the real stored value, for every single caller of GetAsync (confirmed live
+        // as the cause of both "grid cells don't survive a refresh" and "always reopens in Grid mode"
+        // — the save itself was fine, GetAsync's own projection just never read it back).
+        MotionRegionMode = c.MotionRegionMode,
+        MotionGridSize = c.MotionGridSize,
+        MotionGridMask = c.MotionGridMask,
+        MotionGridSensitivity = c.MotionGridSensitivity,
         IsEnabled = c.IsEnabled,
         CreatedAt = c.CreatedAt,
         LastProbedAt = c.LastProbedAt,
@@ -225,6 +235,25 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
     public async Task ToggleEnabledAsync(Guid id, CancellationToken ct = default)
         => await db.Cameras.Where(c => c.Id == id)
             .ExecuteUpdateAsync(u => u.SetProperty(c => c.IsEnabled, c => !c.IsEnabled), ct);
+
+    /// <summary>Pass 3c-2: switches which of the two mutually exclusive region methods is active —
+    /// never touches Zone rows or MotionGridMask, exactly the "never delete the inactive method's
+    /// configuration" guarantee the plan calls for. NodeWorker.ReconcileMotion's own restart
+    /// signature already includes the mode, so a running session picks this up on its next
+    /// reconcile with no other action needed.</summary>
+    public async Task SetMotionRegionModeAsync(Guid cameraId, MotionRegionMode mode, CancellationToken ct = default)
+        => await db.Cameras.Where(c => c.Id == cameraId)
+            .ExecuteUpdateAsync(u => u.SetProperty(c => c.MotionRegionMode, mode), ct);
+
+    /// <summary>Pass 3c-2: saves Grid mode's own size/mask/sensitivity together — a size change
+    /// always arrives paired with a cleared mask (the editor's own "changing size clears it"
+    /// warning), so there's no separate "resize" operation to keep in sync with this one.</summary>
+    public async Task SaveMotionGridAsync(Guid cameraId, int gridSize, string? mask, double sensitivity, CancellationToken ct = default)
+        => await db.Cameras.Where(c => c.Id == cameraId)
+            .ExecuteUpdateAsync(u => u
+                .SetProperty(c => c.MotionGridSize, gridSize)
+                .SetProperty(c => c.MotionGridMask, mask)
+                .SetProperty(c => c.MotionGridSensitivity, sensitivity), ct);
 
     public async Task<Dictionary<Guid, List<Guid>>> GetStaleSegmentNodeIdsAsync(CancellationToken ct = default)
     {

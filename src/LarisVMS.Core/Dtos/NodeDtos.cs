@@ -39,7 +39,11 @@ public record NodeUpdateInfoDto(string Version, string DownloadUrl, string Sha25
 public record NodeHeartbeatResponse(int IntervalSeconds, NodeUpdateInfoDto? UpdateAvailable = null);
 
 public record NodeConfigStreamDto(Guid StreamId, string Role, string RtspUri,
-    string? Codec, int? Width, int? Height, bool HasAudio);
+    string? Codec, int? Width, int? Height, bool HasAudio,
+    /// <summary>The stream's probed frame rate (CameraStream.Fps), or null if not probed yet — used
+    /// only to decide whether Detection.MaxFps's fps= filter would actually cap (vs pointlessly
+    /// duplicating a stream that's already at or below the target).</summary>
+    int? Fps = null);
 
 /// <summary>M8/M18: ServerMotion, Ignore, and (as of M18) Privacy zones are sent here — CameraMotion
 /// is the one left out, since nothing pushes it to a device yet (that push happens from LarisVMS.Web
@@ -127,7 +131,22 @@ public record NodeConfigCameraDto(Guid CameraId, string Name, string? Username, 
     /// <summary>Detection/hardware-acceleration overhaul, pass 0 — see Camera.ServerMotionEnabled's
     /// own doc comment. Plain per-camera bool, not resolved through the Camera &rarr; Node &rarr;
     /// Global settings chain, same shape as AiDetectionEnabled above.</summary>
-    bool ServerMotionEnabled = true);
+    bool ServerMotionEnabled = true,
+    /// <summary>Detection/hardware-acceleration overhaul pass 3c-2: Camera.MotionRegionMode's enum
+    /// name ("Polygon" or "Grid") — same string-wire-format-parsed-node-side pattern
+    /// MotionDetectionSource above already uses. Defaults "Polygon" (today's exact behavior) so an
+    /// older, not-yet-updated node's deserialization never silently reads as Grid.</summary>
+    string MotionRegionMode = "Polygon",
+    /// <summary>Camera.MotionGridSize — only meaningful when MotionRegionMode is "Grid".</summary>
+    int MotionGridSize = 32,
+    /// <summary>Camera.MotionGridMask — only meaningful when MotionRegionMode is "Grid". Null/empty
+    /// means nothing is masked (watch the whole frame), same as an absent value always has.</summary>
+    string? MotionGridMask = null,
+    /// <summary>Camera.MotionGridSensitivity — the Grid-mode equivalent of a ServerMotion zone's own
+    /// Sensitivity, needed because Grid mode's single aggregate region (see NodeWorker.ReconcileMotion)
+    /// still has to compare its own score against *something* to decide when a span opens. Same
+    /// 0.03 default Zone.Sensitivity itself uses.</summary>
+    double MotionGridSensitivity = 0.03);
 /// <summary>A camera this node has leftover Segments for but is no longer assigned to record
 /// (reassigned to a different node, or deleted) — StorageManager's orphaned-folder sweep uses
 /// RetentionDays here so leftover footage still ages out on the same schedule it always would have,
@@ -190,7 +209,48 @@ public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? Stor
     /// reopened as a brand-new span/snapshot instead of continuing the same one. A real grace period
     /// absorbs that flicker while still finalizing the snapshot once the object is genuinely gone or
     /// has settled into Idle for good.</summary>
-    int AiIdleTimeoutSeconds = 10);
+    int AiIdleTimeoutSeconds = 10,
+    /// <summary>Detection/hardware-acceleration overhaul, pass 3b: Detection.EnableHighResReDetection,
+    /// resolved Global -> Node like AspectMode/DetectionModelFamily above — one Vision Service process
+    /// per node, so whether it runs motion-guided native-scale Main-stream re-detection at all is a
+    /// per-node choice. Defaults false (opt-in) for the same "don't silently add CPU/GPU load an
+    /// older, not-yet-updated node build's deserialization would answer" reasoning ReportIdleDetections
+    /// already documents above.</summary>
+    bool EnableHighResReDetection = false,
+    /// <summary>Detection.EnableVisionDebugImages — diagnostic-only, resolved Global -&gt; Node like
+    /// EnableHighResReDetection above. When true, Vision Service writes one cropped JPEG per
+    /// re-detection trigger to logs\vision-debug\ for diagnosing snapshot box alignment. Defaults
+    /// false (opt-in) — an install that wants it keeps a global Setting row = 'true'.</summary>
+    bool EnableVisionDebugImages = false,
+    /// <summary>Detection.GpuPreprocessing (pass 4a) — resolved Global -&gt; Node. When true the
+    /// Vision Service moves per-frame colour conversion + normalize off the CPU onto the accelerator
+    /// (an ONNX preprocessing head + nv12 ffmpeg output). Vendor-neutral, opt-in, defaults false.</summary>
+    bool GpuPreprocessing = false,
+    /// <summary>Logging.Level — the deployment-wide minimum log level, applied to this node's own
+    /// file logger and pushed on to its Vision Service. One of Trace/Debug/Information/Warning/Error;
+    /// anything unparseable falls back to Information. Framework request-pipeline noise stays floored
+    /// at Warning regardless.</summary>
+    string LogLevel = "Information",
+    /// <summary>Detection.YoloXSize's enum name (Nano/Tiny/S/M/L/X) — node-scoped like
+    /// DetectionModelFamily/DFineWeights, only meaningful when the family resolves to "YoloX". Picks
+    /// which YOLOX ONNX the node fetches from the server (YOLOX models aren't bundled) and its
+    /// network input size. Appended last so the positional constructor calls (NodeService) stay
+    /// stable; defaults "S".</summary>
+    string YoloXSize = "S",
+    /// <summary>Detection.MaxFps — the ceiling on how many frames per second per camera reach the
+    /// detection model. The Vision Service's ffmpeg still decodes the Sub stream in real time, but an
+    /// `fps=` filter drops the rest before inference, so the GPU idles between frames instead of
+    /// running flat out. Node-scoped. 0 = no cap (decode-rate). Default 10 — plenty for NVR object
+    /// tracking, and where the live overlay poll already tops out.</summary>
+    int MaxDetectionFps = 10,
+    /// <summary>Detection.HiResSnapshots (Pass F) — resolved Global -&gt; Node like the other
+    /// Detection.* flags. When true the Vision Service decodes each Sub stream at up to its native
+    /// resolution (long edge capped to SnapshotImageCapture.MaxDimension) and crops the eager
+    /// AI-detection snapshot from that larger frame instead of the detector's network buffer —
+    /// sharper only where the Sub stream itself is bigger than the network size. Opt-in, defaults
+    /// false; forces GpuPreprocessing off per camera while on. Appended last so NodeService's
+    /// positional construction stays stable.</summary>
+    bool HiResSnapshots = false);
 
 /// <summary>One completed MotionSpan, batch-reported the same way SegmentReportItem is — see
 /// NodeService.RecordMotionSpansAsync for why plain REST + EF insert is enough here despite the

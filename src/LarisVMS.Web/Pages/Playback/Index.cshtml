@@ -44,6 +44,7 @@ else
                 }
             </select>
             <button type="button" class="btn btn-sm btn-outline-secondary" id="pbPlayPause" disabled>▶ Play</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="pbJumpNow" title="Jump every camera to the current time" disabled><span aria-hidden="true">⏭</span> Now</button>
             <label class="form-label small mb-0" for="pbSpeed">Speed</label>
             <select id="pbSpeed" class="form-select form-select-sm" style="max-width: 6rem;">
                 <option value="0.03125">1/32×</option>
@@ -123,12 +124,17 @@ else
         <div id="playbackTiles" style="flex:1 1 auto; min-height:0;"></div>
 
         <div id="pbTimelineArea" style="flex:0 0 auto;" class="pt-1">
-            <label class="form-label small mb-0">Selected camera</label>
+            @* "Selected camera" only needs saying while the "All cameras" strip below is also
+               showing. For single-camera playback (one tile) playback-player.js hides both this
+               label and #pbGlobalTimelineWrap to give the video grid back that vertical space. *@
+            <label id="pbSelectedCameraLabel" class="form-label small mb-0">Selected camera</label>
             <canvas id="playbackTimeline" style="width: 100%; height: 30px; cursor: pointer; touch-action: none; display: block;"></canvas>
             <div id="pbCurrentTime" class="text-muted small mb-1 text-center"></div>
 
-            <label class="form-label small mb-0">All cameras (recording on any camera)</label>
-            <canvas id="playbackGlobalTimeline" style="width: 100%; height: 30px; cursor: pointer; touch-action: none; display: block;"></canvas>
+            <div id="pbGlobalTimelineWrap">
+                <label class="form-label small mb-0">All cameras (recording on any camera)</label>
+                <canvas id="playbackGlobalTimeline" style="width: 100%; height: 30px; cursor: pointer; touch-action: none; display: block;"></canvas>
+            </div>
 
             <p class="text-muted small mt-1 mb-0">
                 Scroll either timeline to zoom (weeks down to seconds), drag to pan, click to jump
@@ -146,6 +152,7 @@ else
     <script src="~/js/audio-controls.js" asp-append-version="true"></script>
     <script src="~/js/timeline.js" asp-append-version="true"></script>
     <script src="~/js/fullscreen-tile.js" asp-append-version="true"></script>
+    <script src="~/js/catchup-badge.js" asp-append-version="true"></script>
     <script src="~/js/playback-player.js" asp-append-version="true"></script>
     <script>
         (function () {
@@ -173,6 +180,7 @@ else
                 globalTimelineCanvasId: 'playbackGlobalTimeline',
                 timelineAreaId: 'pbTimelineArea',
                 playPauseBtnId: 'pbPlayPause',
+                jumpNowBtnId: 'pbJumpNow',
                 speedSelectId: 'pbSpeed',
                 currentTimeId: 'pbCurrentTime',
                 hour24ToggleId: 'pbHour24',

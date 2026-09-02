@@ -41,8 +41,19 @@ var builder = WebApplication.CreateBuilder(args);
 // into the same ".\logs" directory IIS already proves writable by running under this exact app pool
 // identity, with an "app-" prefix so its daily files never collide with IIS's own "stdout_*" ones.
 // LogsRetentionService (registered below) sweeps files older than its retention window.
-builder.Logging.AddProvider(new FileLoggerProvider(
-    LogPaths.AppLogsDirectory(builder.Configuration), "app", LogLevel.Information));
+var webFileLogger = new FileLoggerProvider(
+    LogPaths.AppLogsDirectory(builder.Configuration), "app", LogLevel.Information);
+LarisVMS.Web.Services.WebLogLevel.Provider = webFileLogger;
+builder.Logging.AddProvider(webFileLogger);
+// Framework request-pipeline noise, the Hosting.Lifetime startup banner, and EF Core's per-statement
+// SQL echo (the Logs page's "Executed DbCommand" flood) — hidden while the deployment-wide log level
+// is Information or higher, back at Debug/Trace. Same treatment as the node/vision service. (Kestrel
+// isn't in play under IIS in-process, but the filters are harmless and keep parity.)
+var frameworkLogFilter = FrameworkLogFilter.HiddenUnlessDebug(webFileLogger);
+builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting", frameworkLogFilter);
+builder.Logging.AddFilter("Microsoft.AspNetCore.Routing", frameworkLogFilter);
+builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", frameworkLogFilter);
+builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", frameworkLogFilter);
 
 // ── Configuration ────────────────────────────────────────────────────────────
 // Holds only what the app needs before the database can be read: the connection string and
@@ -243,6 +254,7 @@ builder.Services.AddScoped<INodeBuildService, NodeBuildService>();
 builder.Services.AddScoped<IViewService, ViewService>();
 builder.Services.AddScoped<ITimelineService, TimelineService>();
 builder.Services.AddSingleton<DetectedObjectCategoryColorCache>();
+builder.Services.AddSingleton<LarisVMS.Web.Services.DetectionModelDistributor>();
 builder.Services.AddScoped<IZoneService, ZoneService>();
 builder.Services.AddScoped<IEventTagRuleService, EventTagRuleService>();
 builder.Services.AddScoped<IScheduleWindowService, ScheduleWindowService>();
@@ -292,6 +304,7 @@ builder.Services.AddHostedService<AlertEvaluatorService>();
 builder.Services.AddHostedService<BookmarkRetentionService>();
 builder.Services.AddHostedService<MotionSpanRetentionService>();
 builder.Services.AddHostedService<RoleAssignmentExpirySweepService>();
+builder.Services.AddHostedService<LarisVMS.Web.Services.WebLogLevelInitializer>();
 
 // ── ONVIF HTTP client ────────────────────────────────────────────────────────
 // CameraService takes a Func<HttpClient> rather than IHttpClientFactory directly so
@@ -472,6 +485,27 @@ nodesApi.MapGet("/config", async (HttpContext ctx, INodeService nodeService, Can
 {
     var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
     return Results.Json(await nodeService.GetConfigAsync(node.Id, ct));
+});
+
+// A detection model .onnx a node doesn't have bundled (YOLOX — D-FINE ships in the package). Served
+// from the server's own detection-models cache, fetched once from the pinned upstream on a miss.
+// Bearer-authenticated like the rest of /api/nodes/*; any authenticated node may fetch any model.
+nodesApi.MapGet("/detection-model/{family}/{variant}", async (
+    string family, string variant, LarisVMS.Web.Services.DetectionModelDistributor distributor, CancellationToken ct) =>
+{
+    if (!distributor.IsKnown(family, variant)) return Results.NotFound();
+    try
+    {
+        var stream = await distributor.OpenAsync(family, variant, ct);
+        return stream is null ? Results.NotFound() : Results.Stream(stream, "application/octet-stream");
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException)
+    {
+        return Results.Problem(
+            $"Could not obtain the {family}/{variant} detection model. The server needs one-time outbound access to " +
+            $"the pinned model host, or the file seeded into its detection-models cache directory. ({ex.Message})",
+            statusCode: StatusCodes.Status502BadGateway);
+    }
 });
 
 nodesApi.MapPost("/segments", async (HttpContext ctx, List<SegmentReportItem> segments, INodeService nodeService, CancellationToken ct) =>
@@ -668,6 +702,57 @@ app.MapGet("/live/{cameraId:guid}/detections", async (HttpContext ctx, Guid came
     await ProxyDetectionOverlayAsync(nodeSocket, browserSocket, colorCache, ct);
 }).RequireAuthorization("Cameras.View");
 
+// Object detection plan pass 3c-1: live per-zone motion score wash — same two-hop shape as the
+// detections overlay above, but Cameras.Edit/Configure rather than .View, matching this same page's
+// own /api/cameras/{id}/snapshot endpoint below: this data only has a purpose within zone editing.
+// Unlike that overlay, Node already has everything the browser needs (a raw score plus the zone id
+// the editor already has loaded from /api/cameras/{id}/zones) — no per-tick DB augmentation, so this
+// is a pure relay rather than a parse-and-reattach proxy.
+app.MapGet("/live/{cameraId:guid}/motion-zones", async (HttpContext ctx, Guid cameraId, ICameraService cameraService,
+    ICameraAccessService cameraAccess, CancellationToken ct) =>
+{
+    if (!ctx.WebSockets.IsWebSocketRequest)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Configure, ct);
+    if (accessible is not null && !accessible.Contains(cameraId))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+        await ctx.Response.WriteAsync("You don't have configuration access to this camera.");
+        return;
+    }
+
+    var camera = await cameraService.GetAsync(cameraId, ct);
+    if (camera?.Node is not { LastIpAddress: { } ip, LivePort: { } port, MediaSigningKey: { } key })
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsync("This camera's node hasn't reported live-view readiness yet.");
+        return;
+    }
+
+    var token = MediaToken.Issue(cameraId, key, TimeSpan.FromSeconds(60));
+    var nodeUri = new Uri($"ws://{ip}:{port}/live/{cameraId}/motion-zones?token={Uri.EscapeDataString(token)}");
+
+    using var nodeSocket = new ClientWebSocket();
+    nodeSocket.Options.SetRequestHeader("Authorization", $"Bearer {token}");
+    try
+    {
+        await nodeSocket.ConnectAsync(nodeUri, ct);
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
+        await ctx.Response.WriteAsync($"Could not reach recorder node: {ex.Message}");
+        return;
+    }
+
+    using var browserSocket = await ctx.WebSockets.AcceptWebSocketAsync();
+    await ProxyMotionZoneScoresAsync(nodeSocket, browserSocket, ct);
+}).RequireAuthorization("Cameras.Edit");
+
 // M8/M5: one-shot still frame — the zone editor's background image, same proxy shape as /live
 // above but a plain HTTP GET instead of a WebSocket (mirrors /playback-segment's shape more than
 // /live's, but reuses /live's token family since this authorizes a viewer for the camera's media
@@ -819,13 +904,13 @@ ptzApi.MapPost("/stop", async (HttpContext ctx, Guid cameraId,
 var zonesApi = app.MapGroup("/api/cameras/{cameraId:guid}/zones").RequireAuthorization("Cameras.Edit");
 
 zonesApi.MapGet("", async (Guid cameraId, IZoneService zones, CancellationToken ct) =>
-    Results.Json(await zones.ListAsync(cameraId, ct)));
+    Results.Json((await zones.ListAsync(cameraId, ct)).Select(ToZoneDto)));
 
 zonesApi.MapPost("", async (Guid cameraId, SaveZoneRequest request, IZoneService zones, CancellationToken ct) =>
 {
     if (!Enum.TryParse<ZoneKind>(request.Kind, out var kind)) return Results.BadRequest("Invalid zone kind.");
     var zone = await zones.CreateAsync(cameraId, request.Name, kind, request.PolygonJson, request.Sensitivity, ct);
-    return Results.Json(zone);
+    return Results.Json(ToZoneDto(zone));
 });
 
 // Not nested under {cameraId} — an update/delete only needs the zone's own id, and nesting it would
@@ -843,6 +928,40 @@ zoneApi.MapPut("", async (Guid id, SaveZoneRequest request, IZoneService zones, 
 zoneApi.MapDelete("", async (Guid id, IZoneService zones, CancellationToken ct) =>
 {
     await zones.DeleteAsync(id, ct);
+    return Results.Ok();
+});
+
+// See ZoneDto's own doc comment: Kind must be projected to its string name explicitly — the entity
+// itself has no [JsonConverter] and this app has no global JsonStringEnumConverter, so returning a
+// Zone directly (as these endpoints did before this fix) silently serialized Kind as a bare integer.
+static ZoneDto ToZoneDto(Zone z) => new(z.Id, z.CameraId, z.Name, z.Kind.ToString(), z.PolygonJson, z.Sensitivity, z.IsEnabled);
+
+// ── Motion region: Polygon/Grid mode + grid mask (pass 3c-2) ────────────────────
+// Cameras.Edit throughout, same gate as Zones/snapshot above — switching the active masking method
+// or editing the grid mask is camera configuration. Read by both the Zones and MotionGrid editors
+// (each needs to know whether it's the currently active method, to show its own "not active" banner).
+var motionRegionApi = app.MapGroup("/api/cameras/{cameraId:guid}/motion-region").RequireAuthorization("Cameras.Edit");
+
+motionRegionApi.MapGet("", async (Guid cameraId, ICameraService cameraService, CancellationToken ct) =>
+{
+    var camera = await cameraService.GetAsync(cameraId, ct);
+    if (camera is null) return Results.NotFound();
+    return Results.Json(new MotionRegionDto(camera.MotionRegionMode.ToString(), camera.MotionGridSize, camera.MotionGridMask, camera.MotionGridSensitivity));
+});
+
+motionRegionApi.MapPut("/mode", async (Guid cameraId, SetMotionRegionModeRequest request, ICameraService cameraService, CancellationToken ct) =>
+{
+    if (!Enum.TryParse<MotionRegionMode>(request.Mode, out var mode)) return Results.BadRequest("Invalid mode.");
+    await cameraService.SetMotionRegionModeAsync(cameraId, mode, ct);
+    return Results.Ok();
+});
+
+motionRegionApi.MapPut("/grid", async (Guid cameraId, SaveMotionGridRequest request, ICameraService cameraService, CancellationToken ct) =>
+{
+    // 16/32/64 only — a client sending anything else is a bug worth surfacing, not silently clamping.
+    if (request.GridSize is not (16 or 32 or 64)) return Results.BadRequest("Grid size must be 16, 32, or 64.");
+    if (request.Sensitivity is < 0 or > 1) return Results.BadRequest("Sensitivity must be between 0 and 1.");
+    await cameraService.SaveMotionGridAsync(cameraId, request.GridSize, request.Mask, request.Sensitivity, ct);
     return Results.Ok();
 });
 
@@ -1326,12 +1445,12 @@ async Task<IResult> ProxySnapshotImageAsync(Guid cameraId, SnapshotImageInfo? in
     // route's own doc comment for why that's the right security boundary here too. The box/frame
     // dimensions ride unsigned, same "quality knob, not tamper-sensitive" reasoning maxDim/q already
     // use on the thumbnail proxy.
-    Task<HttpResponseMessage> RequestAsync(int offsetSeconds)
+    Task<HttpResponseMessage> RequestAsync(int offsetSeconds, long offsetMs, long bestFrameTicks)
     {
         var token = MediaToken.IssueForThumbnail(cameraId, info.FilePath, offsetSeconds, info.NodeMediaSigningKey!, TimeSpan.FromSeconds(30));
         var nodeUri = $"http://{info.NodeIp}:{info.NodeLivePort}/snapshot-image/{cameraId}" +
-            $"?path={Uri.EscapeDataString(info.FilePath)}&offset={offsetSeconds}&token={Uri.EscapeDataString(token)}" +
-            $"&spanId={info.SpanId}" +
+            $"?path={Uri.EscapeDataString(info.FilePath)}&offset={offsetSeconds}&offsetMs={offsetMs}&token={Uri.EscapeDataString(token)}" +
+            $"&spanId={info.SpanId}&bestFrameTicks={bestFrameTicks}" +
             $"&x={info.BoxX.ToString(CultureInfo.InvariantCulture)}&y={info.BoxY.ToString(CultureInfo.InvariantCulture)}" +
             $"&w={info.BoxW.ToString(CultureInfo.InvariantCulture)}&h={info.BoxH.ToString(CultureInfo.InvariantCulture)}" +
             $"&frameW={info.FrameWidth}&frameH={info.FrameHeight}";
@@ -1343,7 +1462,7 @@ async Task<IResult> ProxySnapshotImageAsync(Guid cameraId, SnapshotImageInfo? in
     HttpResponseMessage nodeResponse;
     try
     {
-        nodeResponse = await RequestAsync(info.OffsetSeconds);
+        nodeResponse = await RequestAsync(info.OffsetSeconds, info.OffsetMs, info.BestFrameTicksUtc);
 
         // Same drift ProxyThumbnailAsync's own identical retry already documents: Segment.DurationMs
         // is wall-clock derived (NodeService.RecordSegmentsAsync), not a re-measurement of the file's
@@ -1358,7 +1477,21 @@ async Task<IResult> ProxySnapshotImageAsync(Guid cameraId, SnapshotImageInfo? in
         if (nodeResponse.StatusCode == (System.Net.HttpStatusCode)StatusCodes.Status502BadGateway && info.OffsetSeconds != 0)
         {
             nodeResponse.Dispose();
-            nodeResponse = await RequestAsync(0);
+            // Retry from the segment's start; keep bestFrameTicks so a pre-cropped eager snapshot is
+            // still preferred (it doesn't depend on the segment seek at all).
+            nodeResponse = await RequestAsync(0, 0, info.BestFrameTicksUtc);
+
+            // No longer silent: this substitutes the segment's FIRST frame for the detection instant,
+            // so the crop box is right but the object in it may not be — a real, if rare, source of
+            // "the snapshot doesn't show what was detected". X-Snapshot-Approximate lets a caller
+            // (or a curl) see it happened; the card can't read a response header off an <img>.
+            if (nodeResponse.IsSuccessStatusCode)
+            {
+                app.Logger.LogWarning(
+                    "Snapshot for span {SpanId} (camera {CameraId}) fell back to the segment's first frame after a 502 at offset {OffsetSeconds}s — the crop position is correct but it is from the wrong instant.",
+                    info.SpanId, cameraId, info.OffsetSeconds);
+                httpContext.Response.Headers["X-Snapshot-Approximate"] = "true";
+            }
         }
     }
     catch (TaskCanceledException) when (!ct.IsCancellationRequested)
@@ -1680,6 +1813,43 @@ static async Task ProxyDetectionOverlayAsync(WebSocket node, WebSocket browser, 
 
             var json = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(enriched, camelCaseJson);
             await browser.SendAsync(json, WebSocketMessageType.Text, endOfMessage: true, ct);
+        }
+    }
+    catch (OperationCanceledException) { }
+    catch (WebSocketException) { }
+    finally
+    {
+        if (browser.State == WebSocketState.Open)
+        {
+            try { await browser.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); } catch { }
+        }
+        if (node.State == WebSocketState.Open)
+        {
+            try { await node.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); } catch { }
+        }
+    }
+}
+
+// Object detection plan pass 3c-1: a plain relay, unlike ProxyDetectionOverlayAsync above — Node
+// already serializes camelCase (MotionZoneOverlayHandler's own CamelCaseJson) and the payload needs
+// no DB augmentation, so there is nothing for this tier to parse or rebuild per tick.
+static async Task ProxyMotionZoneScoresAsync(WebSocket node, WebSocket browser, CancellationToken ct)
+{
+    var buffer = new byte[16 * 1024];
+    try
+    {
+        while (node.State == WebSocketState.Open && browser.State == WebSocketState.Open)
+        {
+            using var messageBuffer = new MemoryStream();
+            WebSocketReceiveResult result;
+            do
+            {
+                result = await node.ReceiveAsync(buffer, ct);
+                if (result.MessageType == WebSocketMessageType.Close) return;
+                messageBuffer.Write(buffer, 0, result.Count);
+            } while (!result.EndOfMessage);
+
+            await browser.SendAsync(messageBuffer.ToArray(), WebSocketMessageType.Text, endOfMessage: true, ct);
         }
     }
     catch (OperationCanceledException) { }

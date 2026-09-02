@@ -7,17 +7,14 @@ namespace LarisVMS.Core.Enums;
 /// than per-camera: one Vision Service process serves every camera on a node from the same loaded
 /// model, so which model family that process uses is inherently a per-node choice.
 ///
-/// RfDetr and YoloX are declared now (the picker slot the model-swap scoping asked for) but have no
-/// working decoder yet — DetectionEngineFactory throws a clear "not yet implemented" for either
-/// rather than silently falling back, and DetectionModelSelection.Choose's Auto path never resolves
-/// to them until they're built. Adding real support later is "implement a decoder + un-disable an
-/// admin-picker option," not an enum/schema migration.
+/// YoloX is the Auto default on every accelerator. DFine stays fully supported but opt-in. RfDetr is
+/// still declared-only — DetectionEngineFactory throws "not yet implemented" and
+/// DetectionModelSelection.Choose falls it back to DFine. Adding RF-DETR later is "implement a
+/// decoder + un-disable an admin-picker option," not an enum/schema migration.
 /// </summary>
 public enum DetectionModelFamily
 {
-    /// <summary>Nvidia -&gt; DFine, everything else -&gt; DFine too for now (YoloX, the eventual
-    /// Intel/CPU default, isn't implemented yet — see DetectionModelSelection.Choose's own doc
-    /// comment for the fallback this implies).</summary>
+    /// <summary>Resolves to YoloX regardless of accelerator (see DetectionModelSelection.Choose).</summary>
     Auto = 0,
     DFine = 1,
     RfDetr = 2,

@@ -1,4 +1,3 @@
-using SkiaSharp;
 using YoloDotNet.Models;
 
 namespace LarisVMS.Vision.Inference;
@@ -20,11 +19,13 @@ public interface IDetectionEngine : IDisposable
     double? LastInferenceMilliseconds { get; }
 
     /// <summary>
-    /// Runs detection on one frame. <paramref name="iou"/> is meaningful only for a model family
-    /// whose raw output needs non-maximum suppression (a dense per-pixel anchor grid, e.g. a future
-    /// YOLOX engine) — inert on a DETR-style engine like <see cref="DFineEngine"/>, which never
-    /// produces duplicate boxes to begin with. Implementations that ignore it must say so in their
-    /// own doc comment rather than leaving it a silent no-op.
+    /// Runs detection on one raw frame buffer already at the engine's network input size. The
+    /// buffer is either BGRA8888 (<c>W*H*4</c> bytes) or, when the engine was built with
+    /// <see cref="EngineOptions.GpuPreprocessing"/>, packed nv12 (<c>W*H*3/2</c> bytes: H rows of Y
+    /// then H/2 rows of interleaved UV) — the implementation knows which from its own construction.
+    /// <paramref name="iou"/> is meaningful only for a model family whose raw output needs
+    /// non-maximum suppression (a dense per-pixel anchor grid, e.g. a future YOLOX engine) — inert on
+    /// a DETR-style engine like <see cref="DFineEngine"/>. Implementations that ignore it must say so.
     /// </summary>
-    List<ObjectDetection> Detect(SKBitmap frame, double confidence, double iou, SKRectI? roi = null);
+    List<ObjectDetection> Detect(byte[] frame, double confidence, double iou);
 }

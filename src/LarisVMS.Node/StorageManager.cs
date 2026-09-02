@@ -61,7 +61,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             {
                 await SweepAsync(ct);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (!ct.IsCancellationRequested)
             {
                 logger.LogError(ex, "Storage sweep failed — will retry next cycle.");
             }
@@ -121,6 +121,14 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
                 }
             }
 
+            // Pass G: the eager-crop staging files (snapshots/hires/{ticks}.jpg). Copied into the
+            // span-keyed cache on first view but deliberately left in place (a second span sharing
+            // that instant still needs to promote it), so nothing else ages them out. A staged file
+            // has done its job within days of being written — after that a late first-view just
+            // falls back to the segment-seek crop.
+            foreach (var staged in SelectExpiredStagedCrops(snapshotsDir, now, camera.RetentionDays))
+                if (TryDelete(staged)) deletedPaths.Add(staged);
+
             PruneEmptyDirectories(cameraDir);
             if (Directory.Exists(thumbsDir)) PruneEmptyDirectories(thumbsDir);
             if (Directory.Exists(snapshotsDir)) PruneEmptyDirectories(snapshotsDir);
@@ -152,7 +160,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             {
                 if (await ReconcileSnapshotsAsync(storageRoot, ct)) _lastSnapshotsReconciledAtUtc = now;
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (!ct.IsCancellationRequested)
             {
                 logger.LogWarning(ex, "Snapshot reconciliation sweep failed — will retry next cycle.");
             }
@@ -170,7 +178,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             {
                 await api.DeleteSegmentsAsync(deletedPaths, ct);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (!ct.IsCancellationRequested)
             {
                 // The files are already gone from disk regardless of whether this succeeds — only
                 // the *report* is being retried, not the deletion itself.
@@ -361,7 +369,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
         {
             knownPaths = await api.GetSegmentFilePathsAsync(ct);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (!ct.IsCancellationRequested)
         {
             logger.LogWarning(ex, "Reconciliation sweep could not fetch this node's known segment paths — will retry next sweep.");
             return false;
@@ -452,7 +460,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
         {
             knownSpanIds = (await api.GetMotionSpanIdsAsync(ct)).ToHashSet();
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (!ct.IsCancellationRequested)
         {
             logger.LogWarning(ex, "Snapshot reconciliation sweep could not fetch this node's known motion-span ids — will retry next sweep.");
             return false;
@@ -495,6 +503,28 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
         foreach (var file in orphaned) TryDelete(file);
 
         return true;
+    }
+
+    /// <summary>Pass G: staged eager-crop files (<c>snapshots/hires/{ticks}.jpg</c>) older than a
+    /// few days — bounded at the camera's own retention window, capped at 7 days. Tick-named, so a
+    /// filename that doesn't parse as a positive Int64 is left alone. Pure/testable like the other
+    /// selectors here.</summary>
+    internal static List<string> SelectExpiredStagedCrops(string snapshotsDir, DateTime now, int? retentionDays)
+    {
+        var hiresDir = Path.Combine(snapshotsDir, "hires");
+        if (!Directory.Exists(hiresDir)) return [];
+
+        var maxAgeDays = retentionDays is > 0 ? Math.Min(retentionDays.Value, 7) : 7;
+        var cutoff = now.AddDays(-maxAgeDays);
+
+        var result = new List<string>();
+        foreach (var file in Directory.EnumerateFiles(hiresDir, "*.jpg", SearchOption.TopDirectoryOnly))
+        {
+            if (!long.TryParse(Path.GetFileNameWithoutExtension(file), out var ticks) || ticks <= 0 || ticks > DateTime.MaxValue.Ticks)
+                continue;
+            if (new DateTime(ticks, DateTimeKind.Utc) < cutoff) result.Add(file);
+        }
+        return result;
     }
 
     /// <summary>Pure so it's unit-testable against a real temp directory without a network round
@@ -657,18 +687,27 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
     // sweeping this on its own local schedule even when it can't reach the web tier to read a setting.
     private static readonly TimeSpan LogRetention = TimeSpan.FromDays(14);
 
+    // "vision-*.log" added alongside "node-*.log" once LarisVMS.Vision.Service gained its own
+    // FileLoggerProvider (detection/hardware-acceleration overhaul pass 3b) — same shared logs
+    // directory, same retention window, so a sibling process's log doesn't accumulate forever just
+    // because this sweep only ever knew about Node's own file prefix.
+    private static readonly string[] LogFilePatterns = ["node-*.log", "vision-*.log"];
+
     private void SweepLogsDirectory(DateTime now)
     {
         var logsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "logs");
         if (!Directory.Exists(logsDir)) return;
 
-        foreach (var path in Directory.EnumerateFiles(logsDir, "node-*.log", SearchOption.TopDirectoryOnly))
+        foreach (var pattern in LogFilePatterns)
         {
-            FileInfo info;
-            try { info = new FileInfo(path); }
-            catch (IOException) { continue; }
+            foreach (var path in Directory.EnumerateFiles(logsDir, pattern, SearchOption.TopDirectoryOnly))
+            {
+                FileInfo info;
+                try { info = new FileInfo(path); }
+                catch (IOException) { continue; }
 
-            if (now - info.LastWriteTimeUtc > LogRetention) TryDelete(path);
+                if (now - info.LastWriteTimeUtc > LogRetention) TryDelete(path);
+            }
         }
     }
 

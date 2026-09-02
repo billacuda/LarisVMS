@@ -58,7 +58,7 @@ public static class SnapshotImageCapture
     /// own process-invocation/pure-logic split elsewhere in this codebase. Never returns a rectangle
     /// narrower/shorter than 2px (ffmpeg's crop filter requires a positive size) — a degenerate
     /// (near-zero) reported box still produces something croppable rather than a filter error.</summary>
-    internal static (int X, int Y, int W, int H) ComputeCropRect(
+    public static (int X, int Y, int W, int H) ComputeCropRect(
         double boxX, double boxY, double boxW, double boxH,
         int frameWidth, int frameHeight, double marginFraction = DefaultMarginFraction,
         double minFrameMarginFraction = DefaultMinFrameMarginFraction)
@@ -94,11 +94,15 @@ public static class SnapshotImageCapture
     /// logs ffmpeg's own stderr (if any logger is supplied) — the empty-output case alone doesn't say
     /// *why* ffmpeg produced nothing, and every failure reason this doc comment lists produces its own
     /// distinct ffmpeg error text.</summary>
-    public static async Task<byte[]?> CaptureAsync(string ffmpegPath, string filePath, int offsetSeconds,
+    public static async Task<byte[]?> CaptureAsync(string ffmpegPath, string filePath, double offsetSeconds,
         double boxX, double boxY, double boxW, double boxH, int frameWidth, int frameHeight,
         CancellationToken ct, TimeSpan? timeout = null, ILogger? logger = null)
     {
         var (cropX, cropY, cropW, cropH) = ComputeCropRect(boxX, boxY, boxW, boxH, frameWidth, frameHeight);
+        // Whole-second -ss truncated a fast-moving object out of a tight crop; a fractional value
+        // (ffmpeg accepts decimals on the input-side seek) keeps the frame within a few ms of the
+        // detection instant. Clamped at 0 defensively.
+        var ssValue = Math.Max(0, offsetSeconds).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
 
         var psi = new ProcessStartInfo
         {
@@ -113,7 +117,7 @@ public static class SnapshotImageCapture
         string[] args =
         [
             "-nostdin",
-            "-ss", offsetSeconds.ToString(),
+            "-ss", ssValue,
             "-i", filePath,
             "-frames:v", "1",
             "-vf", $"crop={cropW}:{cropH}:{cropX}:{cropY},scale={MaxDimension}:{MaxDimension}:force_original_aspect_ratio=decrease",

@@ -287,13 +287,21 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
             .Select(n => new { n.LastIpAddress, n.LivePort, n.MediaSigningKey })
             .FirstOrDefaultAsync(ct);
 
-        // Same clamp reasoning as ResolveThumbnailInfoAsync above.
-        var rawOffsetSeconds = (int)(atUtc - segment.StartUtc).TotalSeconds;
-        var maxOffsetSeconds = Math.Max(0, segment.DurationMs / 1000 - 1);
-        var offsetSeconds = Math.Clamp(rawOffsetSeconds, 0, maxOffsetSeconds);
+        // Same clamp reasoning as ResolveThumbnailInfoAsync above — but keep whole-millisecond
+        // precision for the crop's own seek (the integer-second value is only kept for the signed
+        // thumbnail token's bucket identity; truncating the seek to a whole second can miss a
+        // fast-moving object by most of a frame, one of the two causes of the Snapshots page not
+        // lining up with what was detected).
+        var rawOffsetMs = (long)(atUtc - segment.StartUtc).TotalMilliseconds;
+        var maxOffsetMs = Math.Max(0, (long)segment.DurationMs - 1);
+        var offsetMs = Math.Clamp(rawOffsetMs, 0, maxOffsetMs);
+        var offsetSeconds = (int)(offsetMs / 1000);
+
+        var bestFrameTicks = span.BestFrameAtUtc is { } bf ? NormalizeToUtc(bf).Ticks : 0;
 
         return new SnapshotImageInfo(segment.FilePath, offsetSeconds, spanId, boxX, boxY, boxW, boxH,
-            frameWidth, frameHeight, node?.LastIpAddress, node?.LivePort, node?.MediaSigningKey);
+            frameWidth, frameHeight, node?.LastIpAddress, node?.LivePort, node?.MediaSigningKey,
+            offsetMs, bestFrameTicks);
     }
 
     /// <summary>Dashboard's "most recent thumbnail" column: the newest *completed* segment's own
@@ -502,6 +510,7 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
                 // specific label riding alongside it (DetectedObjectLabel) — see the item-building
                 // loop below for how the two combine into one badge.
                 m.DetectedObjectLabel,
+                m.BestBoxConfidence,
                 AiCategoryName = m.DetectedObjectCategory != null ? m.DetectedObjectCategory.Name : null,
                 AiCategoryColorHex = m.DetectedObjectCategory != null ? m.DetectedObjectCategory.ColorHex : null
             })
@@ -552,25 +561,110 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
         // count exact would require the coverage test back inside the query — the exact thing that
         // cannot be made fast. An approximate count is worth a page that loads.
         var coveredSpanIds = new HashSet<long>();
+        // Cross-source dedup (B3): a camera's own analytics reports an object as a DetectionKind span
+        // (no label, no crop); LarisVMS AI detection reports the same object as a DetectedObjectCategory
+        // span (with a real best-frame crop). When an overlapping AI span of a compatible category
+        // exists on the same camera, hide the camera-native one — the AI card is strictly better.
+        // Checked HERE, per already-materialized row, for exactly the reason the coverage test above
+        // is: a correlated subquery on MotionSpans inside the paged query (and, worse, inside
+        // CountAsync) is the one shape that cannot be made fast on this table. Same deliberate
+        // trade-off — total/totalPages can overstate by a few; the timeline still shows both spans.
+        var suppressedSpanIds = new HashSet<long>();
         foreach (var r in rows)
         {
             var cameraId = r.CameraId;
             var spanEndUtc = r.EndUtc;
+            var spanStartUtc = r.StartUtc;
             var playFromUtc = r.StartUtc.AddSeconds(-preRollSecondsByCameraId.GetValueOrDefault(r.CameraId, 10));
             if (await db.Segments.AnyAsync(s => s.CameraId == cameraId
                 && s.StartUtc < spanEndUtc && s.EndUtc > playFromUtc, ct))
             {
                 coveredSpanIds.Add(r.Id);
             }
+
+            var supersedingCategory = r.DetectionKind switch
+            {
+                DetectionKind.Human or DetectionKind.Face => "Human",
+                DetectionKind.Vehicle => "Vehicle",
+                DetectionKind.Animal => "Animal",
+                _ => null
+            };
+            if (supersedingCategory is not null && await db.MotionSpans.AnyAsync(ai =>
+                    ai.CameraId == cameraId && ai.DetectedObjectCategoryId != null
+                    && ai.DetectedObjectCategory!.Name == supersedingCategory
+                    && ai.StartUtc <= spanEndUtc && ai.EndUtc >= spanStartUtc, ct))
+            {
+                suppressedSpanIds.Add(r.Id);
+            }
         }
-        rows = rows.Where(r => coveredSpanIds.Contains(r.Id)).ToList();
+        rows = rows.Where(r => coveredSpanIds.Contains(r.Id) && !suppressedSpanIds.Contains(r.Id)).ToList();
 
         var palette = await eventColors.GetAsync(ct);
+
+        // Pass G3: collapse AI-detection spans that overlap in time on the same camera into one card
+        // — a person and a dog crossing frame together are separate per-label spans (the per-label
+        // grain is deliberate everywhere upstream) but, via the Vision Service's same-frame crop, one
+        // snapshot. Grouped within this already-materialized page only; a rare cross-page split just
+        // shows two cards, exactly the pre-G3 behavior. Non-AI spans never group.
+        var groupPrimaryByRowId = new Dictionary<long, long>();
+        var groupMemberIdsByPrimary = new Dictionary<long, List<long>>();
+        {
+            var aiRows = rows.Where(r => r.AiCategoryName is not null).ToList();
+            var assigned = new HashSet<long>();
+            foreach (var seed in aiRows)
+            {
+                if (!assigned.Add(seed.Id)) continue;
+                var members = new List<long> { seed.Id };
+                var winStart = seed.StartUtc;
+                var winEnd = seed.EndUtc;
+                bool grew = true;
+                while (grew)
+                {
+                    grew = false;
+                    foreach (var cand in aiRows)
+                    {
+                        if (assigned.Contains(cand.Id) || cand.CameraId != seed.CameraId) continue;
+                        // Actual interval overlap (1s edge tolerance) — a person then a car 25s later
+                        // must stay two cards; only genuinely-together objects merge.
+                        if (cand.StartUtc <= winEnd.AddSeconds(1) && cand.EndUtc >= winStart.AddSeconds(-1))
+                        {
+                            members.Add(cand.Id);
+                            assigned.Add(cand.Id);
+                            if (cand.StartUtc < winStart) winStart = cand.StartUtc;
+                            if (cand.EndUtc > winEnd) winEnd = cand.EndUtc;
+                            grew = true;
+                        }
+                    }
+                }
+
+                // Primary = highest best-box confidence (best crop), tie-broken to the most recent
+                // start (already the DESC order). Its id is what the card's /snapshot-image requests
+                // — and since G1 gives grouped spans a shared BestFrameAtUtc, any member's id resolves
+                // to the same union crop anyway.
+                var primary = members
+                    .OrderByDescending(id => aiRows.First(r => r.Id == id).BestBoxConfidence ?? -1)
+                    .ThenByDescending(id => aiRows.First(r => r.Id == id).StartUtc)
+                    .First();
+                foreach (var id in members) groupPrimaryByRowId[id] = primary;
+                groupMemberIdsByPrimary[primary] = members;
+            }
+        }
+
+        (string Label, string Color, string Emoji) AiBadge(long rowId)
+        {
+            var row = rows.First(x => x.Id == rowId);
+            var lbl = row.DetectedObjectLabel is { } sl ? $"{row.AiCategoryName} — {sl}" : row.AiCategoryName!;
+            return (lbl, row.AiCategoryColorHex ?? EventColors.DefaultMotion, CocoCategoryMap.Emoji(row.AiCategoryName!));
+        }
 
         // Same label/color precedence as ResolveColor above (custom tag > detected class > plain
         // motion), plus an emoji and a human label neither bucket coloring nor ResolveColor needed.
         var items = rows.Select(r =>
         {
+            // G3: a non-primary member of an AI group renders no card of its own.
+            if (r.AiCategoryName is not null && groupPrimaryByRowId.TryGetValue(r.Id, out var gp) && gp != r.Id)
+                return (SnapshotDto?)null;
+
             string label, color, emoji;
             if (r.EventTagRuleId is not null)
             {
@@ -654,10 +748,33 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
             var playFromPreRollSeconds = preRollSecondsByCameraId.GetValueOrDefault(r.CameraId, 10);
             var playFromUtc = r.StartUtc - TimeSpan.FromSeconds(playFromPreRollSeconds);
 
-            return new SnapshotDto(r.Id, r.CameraId,
+            // G3: a grouped AI primary carries every member's badge; everything else is a single
+            // badge matching its own scalar fields. SpanIds lets the card key any group member.
+            IReadOnlyList<SnapshotBadgeDto> badges;
+            IReadOnlyList<long> spanIds;
+            if (r.AiCategoryName is not null && groupMemberIdsByPrimary.TryGetValue(r.Id, out var memberIds) && memberIds.Count > 1)
+            {
+                badges = memberIds
+                    .Select(AiBadge)
+                    .DistinctBy(b => b.Label)
+                    .Select(b => new SnapshotBadgeDto(b.Label, b.Color, b.Emoji))
+                    .ToList();
+                spanIds = memberIds;
+            }
+            else
+            {
+                badges = [new SnapshotBadgeDto(label, color, emoji)];
+                spanIds = [r.Id];
+            }
+
+            return (SnapshotDto?)new SnapshotDto(r.Id, r.CameraId,
                 cameraNames.TryGetValue(r.CameraId, out var name) ? name : "(deleted camera)",
-                atUtc, playFromUtc, duration, label, color, emoji, IsAiDetection: r.AiCategoryName is not null);
-        }).ToList();
+                atUtc, playFromUtc, duration, label, color, emoji, IsAiDetection: r.AiCategoryName is not null)
+            {
+                Badges = badges,
+                SpanIds = spanIds,
+            };
+        }).Where(x => x is not null).Select(x => x!).ToList();
 
         return new SnapshotPageDto(items, totalPages, currentPage);
     }

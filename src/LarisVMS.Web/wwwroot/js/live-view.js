@@ -206,6 +206,16 @@
             videoEl.addEventListener(type, handler);
         }
 
+        // "Catching up" badge (catchup-badge.js), shown while this tile is running at
+        // CATCHUP_PLAYBACK_RATE to close a drift gap. The tile's positioned container is the
+        // video's parent — same element createFreezeOverlay overlays onto.
+        function showCatchupBadge() {
+            if (window.larisvmsCatchupBadge) window.larisvmsCatchupBadge.show(videoEl.parentElement, CATCHUP_PLAYBACK_RATE + '×');
+        }
+        function hideCatchupBadge() {
+            if (window.larisvmsCatchupBadge) window.larisvmsCatchupBadge.hide(videoEl.parentElement);
+        }
+
         function endSession() {
             if (ended) return;
             ended = true;
@@ -221,6 +231,7 @@
             }
             elementListeners = [];
             videoEl.playbackRate = 1;
+            hideCatchupBadge();
             onEnded();
         }
 
@@ -405,6 +416,7 @@
                     // to recover correctly.
                     console.log('[live-view] ' + drift.toFixed(1) + 's behind live edge — too far to catch up, restarting session');
                     videoEl.playbackRate = 1;
+                    hideCatchupBadge();
                     closed = true;
                     if (socket) { try { socket.close(); } catch (e2) {} }
                     endSession();
@@ -412,9 +424,11 @@
                     if (videoEl.playbackRate !== CATCHUP_PLAYBACK_RATE) {
                         console.log('[live-view] catching up to live edge (' + drift.toFixed(1) + 's behind)');
                         videoEl.playbackRate = CATCHUP_PLAYBACK_RATE;
+                        showCatchupBadge();
                     }
                 } else if (drift < CATCHUP_STOP_THRESHOLD_SECONDS && videoEl.playbackRate !== 1) {
                     videoEl.playbackRate = 1;
+                    hideCatchupBadge();
                 }
             }, DRIFT_CHECK_INTERVAL_MS);
             sourceBuffer.addEventListener('error', function (e) {

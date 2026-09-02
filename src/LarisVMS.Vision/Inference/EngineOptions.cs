@@ -54,4 +54,11 @@ public sealed class EngineOptions
 
     /// <summary>OpenVINO target device, e.g. "GPU" for an Intel iGPU or "CPU". Ignored outside an OpenVINO build.</summary>
     public string OpenVinoDeviceType { get; init; } = "GPU";
+
+    /// <summary>Pass 4a: when set, an nv12 -&gt; normalized-RGB-tensor preprocessing head is merged
+    /// into the model at load (<see cref="OnnxPreprocessHead"/>), so colour conversion + normalize
+    /// run on the accelerator instead of a CPU pixel loop. The continuous-detection frame then flows
+    /// as raw nv12 bytes rather than a decoded BGRA <c>SKBitmap</c>. Vendor-neutral — the head runs
+    /// on whatever execution provider this build uses. Off by default.</summary>
+    public bool GpuPreprocessing { get; init; }
 }

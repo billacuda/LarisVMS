@@ -29,6 +29,33 @@ public class StorageManagerTests : IDisposable
     }
 
     [Fact]
+    public void SelectExpiredStagedCropsDropsOldTickNamedFilesAndLeavesRecentOrUnparseableOnes()
+    {
+        var now = new DateTime(2026, 9, 1, 12, 0, 0, DateTimeKind.Utc);
+        var snapshotsDir = Path.Combine(_root, "cam-x", "snapshots");
+        var oldTicks = now.AddDays(-9).Ticks;
+        var recentTicks = now.AddDays(-2).Ticks;
+        var old = WriteFile($"cam-x/snapshots/hires/{oldTicks}.jpg", 10, now.AddDays(-9));
+        WriteFile($"cam-x/snapshots/hires/{recentTicks}.jpg", 10, now.AddDays(-2));
+        WriteFile("cam-x/snapshots/hires/not-a-tick.jpg", 10, now.AddDays(-30));
+
+        var expired = StorageManager.SelectExpiredStagedCrops(snapshotsDir, now, retentionDays: 30);
+
+        Assert.Equal([old], expired); // 7-day cap: 9 days old goes, 2 days stays, unparseable is left alone
+    }
+
+    [Fact]
+    public void SelectExpiredStagedCropsUsesTheShorterOfRetentionAndSevenDays()
+    {
+        var now = new DateTime(2026, 9, 1, 12, 0, 0, DateTimeKind.Utc);
+        var snapshotsDir = Path.Combine(_root, "cam-y", "snapshots");
+        var threeDaysOld = WriteFile($"cam-y/snapshots/hires/{now.AddDays(-3).Ticks}.jpg", 10, now.AddDays(-3));
+
+        Assert.Empty(StorageManager.SelectExpiredStagedCrops(snapshotsDir, now, retentionDays: 30));
+        Assert.Equal([threeDaysOld], StorageManager.SelectExpiredStagedCrops(snapshotsDir, now, retentionDays: 2));
+    }
+
+    [Fact]
     public void EnumerateEvictableExcludesFilesYoungerThanTheSafetyMargin()
     {
         var now = DateTime.UtcNow;

@@ -8,6 +8,7 @@
 //
 // Ported verbatim from aitest (g:\Projects\aitest\src\Aitest.Vision\Tracking\ByteTracker.cs).
 
+using LarisVMS.Core.Enums;
 using SkiaSharp;
 using YoloDotNet.Models.Interfaces;
 
@@ -15,6 +16,25 @@ namespace LarisVMS.Vision.Tracking;
 
 public sealed class ByteTrackOptions
 {
+    /// <summary>Per-detection-family tracker tuning. The stock values below are ByteTrack's own paper
+    /// defaults, which were calibrated against YOLOX's objectness×class score — so YOLOX gets them
+    /// unchanged. D-FINE (DETR class-probability scores) has run on these same values since its
+    /// integration and keeps them here too; this factory is the seam to diverge the two if a family
+    /// turns out to need it, without touching the one <c>new ByteTracker(...)</c> call site again.</summary>
+    public static ByteTrackOptions ForFamily(DetectionModelFamily family) => family switch
+    {
+        // Explicit rather than `new ByteTrackOptions()` so a change to the field defaults can't
+        // silently move YOLOX's tracker off the paper values.
+        DetectionModelFamily.YoloX => new ByteTrackOptions
+        {
+            TrackThreshold = 0.5f,
+            HighThreshold = 0.6f,
+            MatchThreshold = 0.8f,
+            FuseScore = true,
+        },
+        _ => new ByteTrackOptions(),
+    };
+
     /// <summary>Detections at or above this score enter the first association pass.</summary>
     public float TrackThreshold { get; init; } = 0.5f;
 

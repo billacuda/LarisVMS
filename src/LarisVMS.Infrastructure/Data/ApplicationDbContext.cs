@@ -403,6 +403,14 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.DetectedObjectLabel).HasMaxLength(100);
             e.HasKey(x => x.Id).IsClustered(false);
             e.HasIndex(x => new { x.CameraId, x.StartUtc }).IsClustered();
+            // Makes the check-then-insert in NodeService.RecordMotionSpansAsync race-safe for
+            // AI-detection spans: two report batches racing the "does this (camera, label, start)
+            // already exist" lookup can otherwise both insert, producing duplicate Snapshots cards.
+            // Filtered to AI-detection rows only (DetectedObjectLabel is the discriminator) — every
+            // other span source keys its identity differently and this triple isn't unique for them.
+            e.HasIndex(x => new { x.CameraId, x.DetectedObjectLabel, x.StartUtc })
+                .IsUnique()
+                .HasFilter("[DetectedObjectLabel] IS NOT NULL");
         });
 
         // ── CameraEvent (M8 pass 6) ─────────────────────────────────────────────

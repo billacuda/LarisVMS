@@ -422,6 +422,18 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.Property<int?>("MotionDetectionSource")
                         .HasColumnType("int");
 
+                    b.Property<string>("MotionGridMask")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<double>("MotionGridSensitivity")
+                        .HasColumnType("float");
+
+                    b.Property<int>("MotionGridSize")
+                        .HasColumnType("int");
+
+                    b.Property<int>("MotionRegionMode")
+                        .HasColumnType("int");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(200)
@@ -1014,6 +1026,10 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.HasIndex("CameraId", "StartUtc");
 
                     SqlServerIndexBuilderExtensions.IsClustered(b.HasIndex("CameraId", "StartUtc"));
+
+                    b.HasIndex("CameraId", "DetectedObjectLabel", "StartUtc")
+                        .IsUnique()
+                        .HasFilter("[DetectedObjectLabel] IS NOT NULL");
 
                     b.ToTable("MotionSpans");
                 });

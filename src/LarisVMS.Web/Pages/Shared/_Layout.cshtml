@@ -233,6 +233,8 @@
     @* Same "inert unless a page opts in" reasoning — a page with no .help-icon elements just finds
        nothing to wire up. *@
     <script src="~/js/help-popover.js" asp-append-version="true"></script>
+    @* Same again — inert with no button[data-secret-toggle] on the page. *@
+    <script src="~/js/secret-reveal.js" asp-append-version="true"></script>
     @await RenderSectionAsync("Scripts", required: false)
 </body>
 </html>

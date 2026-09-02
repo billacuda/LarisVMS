@@ -41,6 +41,19 @@
   <ItemGroup>
     <PackageReference Include="YoloDotNet" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <!-- ONNX IR types for OnnxPreprocessHead (pass 4a). Grpc.Tools is build-only (compiles the
+         vendored onnx-ml.proto to C#); no gRPC runtime is pulled in. -->
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Tools">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- onnx-ml.proto is proto2 / LITE_RUNTIME (Apache-2.0, vendored from the onnx package).
+         GrpcServices="None" => generate the message types only, no service stubs. -->
+    <Protobuf Include="Onnx\onnx-ml.proto" ProtoRoot="Onnx" GrpcServices="None" CompileOutputs="true" />
   </ItemGroup>
 
   <ItemGroup>

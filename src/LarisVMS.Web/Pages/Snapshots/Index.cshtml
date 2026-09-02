@@ -7,6 +7,11 @@
     // one's own "absent = no additional narrowing" default.
     var kindsQuery = Model.Kinds is null ? "" : string.Concat(Model.Kinds.Select(k => "&kinds=" + Uri.EscapeDataString(k)));
     var excludedLabelsQuery = Model.ExcludedLabels is null ? "" : string.Concat(Model.ExcludedLabels.Select(l => "&excludedLabels=" + Uri.EscapeDataString(l)));
+
+    // pageNumber, not page — see IndexModel.OnGetAsync's own comment for why "page" is a reserved
+    // Razor Pages route-value name and silently never binds from here. Built once, rendered both
+    // above and below the grid so paging is reachable wherever the user is scrolled.
+    Func<int, string> snapshotPageUrl = p => $"?mode={Model.Mode}&cameraId={Model.CameraId}&groupId={Model.GroupId}&viewId={Model.ViewId}&from={Model.From}&to={Model.To}&pageNumber={p}{kindsQuery}{excludedLabelsQuery}";
 }
 <h1>Snapshots <span id="snapshotLoadStatus" class="badge bg-secondary ms-2 d-none fw-normal"></span></h1>
 <p class="text-muted">
@@ -116,6 +121,7 @@
                 {
                     <details open class="snapshot-filter-tree-node">
                         <summary class="d-flex align-items-center gap-1">
+                            <span class="snapshot-tree-caret" aria-hidden="true">▸</span>
                             <input type="checkbox" class="form-check-input snapshot-tree-parent" id="kind-@node.Name" name="kinds" value="@node.Name"
                                    checked="@Model.IsKindChecked(node.Name)" form="snapshotFilterForm" data-children-of="@node.Name" onclick="event.stopPropagation();" />
                             <label class="form-check-label small" for="kind-@node.Name" onclick="event.stopPropagation();">
@@ -123,7 +129,7 @@
                                 @node.Name
                             </label>
                         </summary>
-                        <div class="ms-4 d-flex flex-column gap-1 mt-1">
+                        <div class="snapshot-tree-children d-flex flex-column gap-1 mt-1">
                             @foreach (var child in children)
                             {
                                 var token = $"{node.Name}:{child.Label}";
@@ -147,6 +153,8 @@
     }
     else
     {
+    <partial name="Shared/_PaginationControls" model="@(new LarisVMS.Web.Helpers.PaginationViewModel(
+        Model.Results.CurrentPage, Model.Results.TotalPages, snapshotPageUrl, CssClass: "mb-3", AriaLabel: "Pagination (top)"))" />
     <div class="row row-cols-1 row-cols-sm-2 row-cols-md-3 row-cols-lg-4 g-3">
         @foreach (var s in Model.Results.Items)
         {
@@ -194,7 +202,13 @@
                         </div>
                     </a>
                     <div class="card-body py-2 px-2">
-                        <span class="badge" style="background-color: @s.ColorHex;">@s.Emoji @s.Label</span>
+                        @* One badge normally; several when overlapping AI-detection spans on one
+                           camera were grouped into this card (a person and a dog in the same frame).
+                           TimelineService always fills Badges with at least the primary. *@
+                        @foreach (var badge in s.Badges)
+                        {
+                            <span class="badge" style="background-color: @badge.ColorHex;">@badge.Emoji @badge.Label</span>
+                        }
                         <span class="badge bg-secondary" title="How long this event lasted">@IndexModel.FormatDuration(s.Duration)</span>
                         <div class="small text-muted mt-1">@s.CameraName</div>
                         @* "G" (long time), not "g" (short time) — includes seconds, which matters
@@ -213,11 +227,8 @@
     </div>
     }
 
-    @* pageNumber, not page — see IndexModel.OnGetAsync's own comment for why "page" is a reserved
-       Razor Pages route-value name and silently never binds from here. *@
     <partial name="Shared/_PaginationControls" model="@(new LarisVMS.Web.Helpers.PaginationViewModel(
-        Model.Results.CurrentPage, Model.Results.TotalPages,
-        p => $"?mode={Model.Mode}&cameraId={Model.CameraId}&groupId={Model.GroupId}&viewId={Model.ViewId}&from={Model.From}&to={Model.To}&pageNumber={p}{kindsQuery}{excludedLabelsQuery}"))" />
+        Model.Results.CurrentPage, Model.Results.TotalPages, snapshotPageUrl))" />
     </div>
 </div>
 

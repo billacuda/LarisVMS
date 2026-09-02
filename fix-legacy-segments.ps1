@@ -188,9 +188,10 @@ function Install-Ffmpeg([string]$DestinationDir) {
     return $exe
 }
 
-# Resolution order: an explicit path, then the recorder node's own bundled copy (which is why this
-# usually needs no setup at all when run from a node), then PATH, then a download if allowed. This
-# is a shared build, so ffmpeg.exe is always used where it sits — its sibling avcodec-*.dll etc.
+# Resolution order: an explicit path, then `ffmpeg` on PATH, then the newest ffmpeg.exe under a
+# WinGet package folder (`winget install ffmpeg --scope machine`), then a recorder node's old
+# copied-in ffmpeg (pre-0.171 install-node.ps1 left one under Node\ffmpeg\), then a download if
+# allowed. A shared build's ffmpeg.exe is always used where it sits — its sibling avcodec-*.dll etc.
 # have to stay alongside it.
 function Resolve-Ffmpeg {
     if (-not [string]::IsNullOrWhiteSpace($FfmpegPath)) {
@@ -198,18 +199,27 @@ function Resolve-Ffmpeg {
         return $FfmpegPath
     }
 
-    $bundled = 'C:\Program Files\LarisVMS\Node\ffmpeg\ffmpeg.exe'
-    if (Test-Path -LiteralPath $bundled) { return $bundled }
-
     $onPath = Get-Command ffmpeg -ErrorAction SilentlyContinue
     if ($onPath) { return $onPath.Source }
+
+    foreach ($root in @((Join-Path $env:ProgramFiles 'WinGet\Packages'),
+                        (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'))) {
+        if (-not (Test-Path -LiteralPath $root)) { continue }
+        $hit = Get-ChildItem -Path $root -Filter 'ffmpeg.exe' -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'ffmpeg' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+        if ($hit) { return $hit }
+    }
+
+    $legacyNodeCopy = 'C:\Program Files\LarisVMS\Node\ffmpeg\ffmpeg.exe'
+    if (Test-Path -LiteralPath $legacyNodeCopy) { return $legacyNodeCopy }
 
     if ($InstallFfmpeg) { return (Install-Ffmpeg -DestinationDir $FfmpegInstallDir) }
 
     throw @"
 No ffmpeg found. Any one of these fixes it:
-  * Run this from a recorder node instead — -StorageRoot accepts a UNC path, and the node already
-    has a suitable ffmpeg bundled, so nothing needs installing on the file server.
+  * Install ffmpeg: winget install ffmpeg --scope machine
   * Pass -FfmpegPath <path to ffmpeg.exe>.
   * Pass -InstallFfmpeg to download the LGPL shared build automatically (no winget required).
 "@

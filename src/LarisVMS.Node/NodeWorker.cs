@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Enums;
+using LarisVMS.Core.Logging;
 using LarisVMS.Media;
 using LarisVMS.Node.Update;
 using LarisVMS.Onvif.Clients;
@@ -14,14 +15,19 @@ namespace LarisVMS.Node;
 
 public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackStorageRoot, int livePort,
     NodeConfig registration, ILoggerFactory loggerFactory, OnvifEventsClient onvifEventsClient,
-    UpdateService updateService) : BackgroundService
+    UpdateService updateService, FileLoggerProvider fileLogger) : BackgroundService
 {
     private readonly ILogger<NodeWorker> _logger = loggerFactory.CreateLogger<NodeWorker>();
+    private string _appliedLogLevel = "Information";
 
     // Concurrent, not a plain Dictionary: written only from the reconcile loop, but read from
     // Program.cs's /live WebSocket endpoint (M5) on ASP.NET Core's own request threads — a live
     // viewer looking up a camera's active RecordingSession is a genuine concurrent reader.
     private readonly ConcurrentDictionary<Guid, CameraRecorder> _active = new();
+
+    // Pass 3a: one ring buffer per actively-recording camera, sharing that camera's own RecordingSession
+    // lifetime — created/removed alongside _active's own entry for the same camera, never independently.
+    private readonly ConcurrentDictionary<Guid, MainFrameRingBuffer> _ringBuffers = new();
     private readonly ConcurrentQueue<SegmentReportItem> _pendingSegments = new();
     private readonly ConcurrentQueue<StreamInfoReportItem> _pendingStreamInfo = new();
 
@@ -130,6 +136,13 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// to attach a viewer to the right session's tee'd live fanout.</summary>
     public RecordingSession? TryGetSession(Guid cameraId) => _active.TryGetValue(cameraId, out var r) ? r.Session : null;
 
+    /// <summary>Pass 3a: the init segment plus whichever recently-buffered Main-stream fragment is
+    /// closest to <paramref name="atUtc"/>, for the loopback-only /internal/main-frame route — null if
+    /// this camera isn't actively recording, or nothing in its ring buffer's short window covers that
+    /// instant.</summary>
+    public (byte[] InitSegment, byte[] Fragment)? TryGetMainFrameSnapshot(Guid cameraId, DateTime atUtc)
+        => _ringBuffers.TryGetValue(cameraId, out var ring) ? ring.TryGet(atUtc) : null;
+
     // M18 follow-up: the /playback-segment route's partial-fetch fragment index (see
     // Program.cs) — keyed on full file path since a completed segment file never changes, so its
     // index never goes stale. Crude bulk-clear-on-overflow bound rather than a real LRU, same
@@ -173,6 +186,12 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// stream, not assigned here, session hasn't started yet) identically, since the /live endpoint's
     /// only reaction to any of them is the same: fall back to Main.</summary>
     public ILiveSource? TryGetLiveSubSession(Guid cameraId) => _activeLiveSub.TryGetValue(cameraId, out var r) ? r.Session : null;
+
+    /// <summary>Object detection plan pass 3c-1: the currently-running MotionSession for a camera, if
+    /// ServerMotion is active on it — null covers "not this node," "not currently recording," and
+    /// "this camera's motion source isn't ServerMotion" identically, since MotionZoneOverlayHandler's
+    /// only reaction to any of them is the same: report no scores for this tick.</summary>
+    public MotionSession? TryGetMotionSession(Guid cameraId) => _activeMotion.TryGetValue(cameraId, out var r) ? r.Session : null;
 
     /// <summary>Opens a short-lived RTSP session against the camera's Main stream and grabs one
     /// frame — null if the camera isn't assigned to this node (nothing to grab from) or the grab
@@ -266,7 +285,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// "no camera-assignment check" reasoning as CaptureThumbnailAsync (the /snapshot-image route's
     /// own directory-prefix validation already confirms filePath belongs to this node before this is
     /// ever called).</summary>
-    public async Task<byte[]?> CaptureSnapshotImageAsync(string filePath, int offsetSeconds,
+    public async Task<byte[]?> CaptureSnapshotImageAsync(string filePath, double offsetSeconds,
         double boxX, double boxY, double boxW, double boxH, int frameWidth, int frameHeight, CancellationToken ct)
     {
         using var gateCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -280,7 +299,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             // See CaptureThumbnailAsync's identical log for why this is worth distinguishing from a
             // genuine ffmpeg failure — this exact gate at its old size(2)/3s is the confirmed live
             // cause of what looked like a handful of AI-detection spans always failing to crop.
-            _logger.LogWarning("On-demand snapshot-image capture for {FilePath} at offset {OffsetSeconds}s gave up after {Timeout}s waiting for a free OnDemandSnapshotGate slot.", filePath, offsetSeconds, OnDemandSnapshotGateTimeout.TotalSeconds);
+            _logger.LogWarning("On-demand snapshot-image capture for {FilePath} at offset {OffsetSeconds:0.###}s gave up after {Timeout}s waiting for a free OnDemandSnapshotGate slot.", filePath, offsetSeconds, OnDemandSnapshotGateTimeout.TotalSeconds);
             return null; // gate stayed full for the whole timeout — treat like any other capture failure
         }
         try
@@ -321,7 +340,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             _knownSegmentPaths = new HashSet<string>(await api.GetSegmentFilePathsAsync(stoppingToken), StringComparer.OrdinalIgnoreCase);
             _logger.LogInformation("Fetched {Count} already-known segment path(s) before starting recording.", _knownSegmentPaths.Count);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
         {
             _logger.LogWarning(ex, "Could not fetch this node's already-known segment paths at startup — a RecordingSession started this run will treat its own on-disk history as unreported, same as before this safeguard existed.");
             _knownSegmentPaths = [];
@@ -711,6 +730,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         {
             _logger.LogInformation("Camera {CameraId} no longer assigned to this node — stopping.", cameraId);
             if (_active.TryRemove(cameraId, out var recorder)) recorder.Cts.Cancel();
+            _ringBuffers.TryRemove(cameraId, out _);
         }
 
         foreach (var cameraId in _activeMotion.Keys.Except(desired.Keys).ToList())
@@ -750,9 +770,8 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         var desiredModelFamily = Enum.TryParse<DetectionModelFamily>(config.DetectionModelFamily, ignoreCase: true, out var parsedFamily)
             ? parsedFamily : DetectionModelFamily.Auto;
         var accelForModelSelection = _resolvedAccelerator ?? AiAccelerator.Cpu;
-        var idealModelFamily = desiredModelFamily == DetectionModelFamily.Auto
-            ? (accelForModelSelection == AiAccelerator.Nvidia ? DetectionModelFamily.DFine : DetectionModelFamily.YoloX)
-            : desiredModelFamily;
+        // Auto → YOLOX on every accelerator now; the only remaining fallback is RF-DETR (no decoder).
+        var idealModelFamily = desiredModelFamily == DetectionModelFamily.Auto ? DetectionModelFamily.YoloX : desiredModelFamily;
         _resolvedDetectionModelFamily = DetectionModelSelection.Choose(desiredModelFamily, accelForModelSelection);
         if (idealModelFamily != _resolvedDetectionModelFamily && !_warnedDetectionModelFallback)
         {
@@ -761,6 +780,8 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 "Detection model family {Ideal} is not yet implemented — falling back to {Fallback} for every " +
                 "camera on this node until it ships.", idealModelFamily, _resolvedDetectionModelFamily);
         }
+
+        ApplyLogLevel(config.LogLevel);
 
         var anyCameraWantsAiDetection = config.Cameras.Any(c => c.AiDetectionEnabled);
         if (anyCameraWantsAiDetection && _resolvedAccelerator is not null)
@@ -837,6 +858,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 _logger.LogInformation("Privacy mask configuration changed for camera {CameraId} ({Name}) — restarting recording session.", camera.CameraId, camera.Name);
                 activeRecorder.Cts.Cancel();
                 _active.TryRemove(camera.CameraId, out _);
+                _ringBuffers.TryRemove(camera.CameraId, out _);
             }
             else if (activeRecorder is not null && activeRecorder.SegmentSeconds != camera.SegmentSeconds)
             {
@@ -844,12 +866,14 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                     camera.CameraId, camera.Name, activeRecorder.SegmentSeconds, camera.SegmentSeconds);
                 activeRecorder.Cts.Cancel();
                 _active.TryRemove(camera.CameraId, out _);
+                _ringBuffers.TryRemove(camera.CameraId, out _);
             }
             else if (activeRecorder is not null && rtspUri is not null && activeRecorder.RtspUri != rtspUri)
             {
                 _logger.LogInformation("Main stream URL changed for camera {CameraId} ({Name}) — restarting recording session.", camera.CameraId, camera.Name);
                 activeRecorder.Cts.Cancel();
                 _active.TryRemove(camera.CameraId, out _);
+                _ringBuffers.TryRemove(camera.CameraId, out _);
             }
 
             if (!_active.ContainsKey(camera.CameraId))
@@ -893,6 +917,14 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                     session.StreamAudioDetected += audio => _pendingStreamInfo.Enqueue(new StreamInfoReportItem(
                         camera.CameraId, "Main", Width: null, Height: null, Codec: null,
                         AudioCodec: audio.Codec, AudioSampleRateHz: audio.SampleRateHz));
+
+                    // Pass 3a: a sibling subscriber to the same live-tee fanout LiveViewerHandler
+                    // already reads from, buffering rather than forwarding to a viewer. Passes the
+                    // session's own current LiveInitSegment on every tick (not captured once) so a
+                    // restart mid-lifetime is detected — see MainFrameRingBuffer's own doc comment.
+                    var ringBuffer = new MainFrameRingBuffer();
+                    session.LiveFragmentReceived += fragment => ringBuffer.OnFragment(session.LiveInitSegment, fragment, DateTime.UtcNow);
+                    _ringBuffers[camera.CameraId] = ringBuffer;
 
                     // See _knownSegmentPaths' own doc comment — this is the fix for the confirmed
                     // mass-discard bug. OrdinalIgnoreCase prefix match since outputDir itself is
@@ -1078,23 +1110,39 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// recording above — a camera can be recording fine with no motion session at all (no
     /// ServerMotion zone configured, or no Sub stream), and an already-recording camera still needs
     /// its zone config checked every reconcile even though _active already has an entry for it.</summary>
+    // Detection/hardware-acceleration overhaul pass 3c-2: the sentinel MotionZoneMask.ZoneId used
+    // for Grid mode's single aggregate region (the whole frame minus masked cells) — never a real
+    // Zone row's id, and never reported as-is: the MotionSpanCompleted subscriber below always
+    // rewrites it to null before enqueueing, matching a camera-pushed span's own "no zone" shape
+    // (already a supported upsert key per NodeService.RecordMotionSpansAsync).
+    private static readonly Guid GridRegionZoneId = Guid.Empty;
+
     private void ReconcileMotion(NodeConfigCameraDto camera, CancellationToken stoppingToken)
     {
+        var isGridMode = string.Equals(camera.MotionRegionMode, nameof(MotionRegionMode.Grid), StringComparison.OrdinalIgnoreCase);
         var serverMotionZones = camera.Zones.Where(z => z.Kind == nameof(ZoneKind.ServerMotion)).ToList();
         // The first real consumer of Sub in this codebase — Main is recording-only and Live's
         // auto-switch-to-Sub (plan §M5) was never actually implemented, so this path is genuinely
         // new ground, flagged as such in MotionSession's own doc comment.
         var subStream = camera.Streams.FirstOrDefault(s => s.Role == "Sub");
 
-        if (!ShouldRunServerMotion(camera.ServerMotionEnabled, serverMotionZones.Count, subStream is not null))
+        // Grid mode's own "is there anything to watch" check (at least one unmasked cell) replaces
+        // Polygon mode's "at least one enabled ServerMotion zone" — reusing ShouldRunServerMotion's
+        // existing int>0 gate rather than giving it a second parameter, since either answer is really
+        // just "yes, this region isn't empty."
+        var hasAnythingToWatch = isGridMode
+            ? MotionGrid.HasAnyUnmaskedCell(camera.MotionGridMask, camera.MotionGridSize)
+            : serverMotionZones.Count > 0;
+
+        if (!ShouldRunServerMotion(camera.ServerMotionEnabled, hasAnythingToWatch ? 1 : 0, subStream is not null))
         {
             if (_activeMotion.TryRemove(camera.CameraId, out var stopped))
             {
                 _logger.LogInformation(
                     camera.ServerMotionEnabled
-                        ? "Camera {CameraId} ({Name}) has no enabled ServerMotion zone with a Sub stream — stopping motion session."
+                        ? "Camera {CameraId} ({Name}) has nothing to watch in {Mode} mode (with a Sub stream) — stopping motion session."
                         : "Camera {CameraId} ({Name}) has ServerMotion disabled — stopping motion session.",
-                    camera.CameraId, camera.Name);
+                    camera.CameraId, camera.Name, camera.MotionRegionMode);
                 stopped.Cts.Cancel();
             }
             return;
@@ -1110,13 +1158,20 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         // already caught by once, in v0.29.0).
         var motionHwaccel = _resolvedAccelerator is { } accel ? AccelToFfmpegHwaccel(accel) : null;
 
-        var signature = BuildZoneConfigSignature(camera.Zones) + "|" + motionHwaccel;
+        // Pass 3c-2: only whichever method is actually active belongs in the restart signature —
+        // Zone rows changing while Grid mode is active (or vice versa) must not restart a session
+        // that isn't using them, but the mode itself, and the grid's own size/mask/sensitivity while
+        // active, must (per the plan's own "mode and mask must be in the session restart signature").
+        var regionSignature = isGridMode
+            ? $"Grid:{camera.MotionGridSize}:{camera.MotionGridMask}:{camera.MotionGridSensitivity}"
+            : $"Polygon:{BuildZoneConfigSignature(camera.Zones)}";
+        var signature = regionSignature + "|" + motionHwaccel;
         if (_activeMotion.TryGetValue(camera.CameraId, out var existing))
         {
             if (existing.ZoneConfigSignature == signature) return; // unchanged — leave it running
             existing.Cts.Cancel();
             _activeMotion.TryRemove(camera.CameraId, out _);
-            _logger.LogInformation("Zone configuration changed for camera {CameraId} ({Name}) — restarting motion session.", camera.CameraId, camera.Name);
+            _logger.LogInformation("Motion region configuration changed for camera {CameraId} ({Name}) — restarting motion session.", camera.CameraId, camera.Name);
         }
 
         // ShouldRunServerMotion's hasSubStream argument is subStream is not null, and it already
@@ -1126,38 +1181,56 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         var subRtspUri = InjectCredentials(subStream!.RtspUri, camera.Username, camera.Password);
         var motionOptions = new MotionSessionOptions(ffmpegPath, subRtspUri, HardwareAcceleration: motionHwaccel);
 
-        // Ignore zones are combined once into a single exclusion mask (their union), then subtracted
-        // from every ServerMotion zone's own mask — a pixel inside any Ignore zone never counts
-        // toward motion for any zone on this camera, not just one it happens to overlap most.
-        bool[]? ignoreMask = null;
-        foreach (var z in camera.Zones.Where(z => z.Kind == nameof(ZoneKind.Ignore)))
+        List<MotionZoneMask> zoneMasks;
+        int? gridSizeForSession = null;
+        if (isGridMode)
         {
-            var rasterized = ZoneRasterizer.Rasterize(ZoneRasterizer.ParsePolygon(z.PolygonJson), motionOptions.Width, motionOptions.Height);
-            ignoreMask = ignoreMask is null ? rasterized : ZoneRasterizer.Union(ignoreMask, rasterized);
+            // Grid mode replaces Polygon/Ignore entirely as far as MotionSession is concerned — a
+            // single region (the whole frame minus masked cells) flowing through the exact same
+            // MotionZoneMask/MotionHysteresis mechanism a lone ServerMotion zone would. Existing Zone
+            // rows on this camera are left untouched (per the plan's own "never delete the inactive
+            // method's configuration") but simply don't feed MotionSession while Grid mode is active.
+            var gridMask = MotionGrid.Rasterize(camera.MotionGridMask, camera.MotionGridSize, motionOptions.Width, motionOptions.Height);
+            zoneMasks = [new MotionZoneMask(GridRegionZoneId, gridMask, camera.MotionGridSensitivity)];
+            gridSizeForSession = camera.MotionGridSize;
         }
-
-        var zoneMasks = serverMotionZones.Select(z =>
+        else
         {
-            var raw = ZoneRasterizer.Rasterize(ZoneRasterizer.ParsePolygon(z.PolygonJson), motionOptions.Width, motionOptions.Height);
-            var mask = ignoreMask is null ? raw : ZoneRasterizer.Subtract(raw, ignoreMask);
-            return new MotionZoneMask(z.ZoneId, mask, z.Sensitivity);
-        }).ToList();
+            // Ignore zones are combined once into a single exclusion mask (their union), then
+            // subtracted from every ServerMotion zone's own mask — a pixel inside any Ignore zone
+            // never counts toward motion for any zone on this camera, not just one it happens to
+            // overlap most.
+            bool[]? ignoreMask = null;
+            foreach (var z in camera.Zones.Where(z => z.Kind == nameof(ZoneKind.Ignore)))
+            {
+                var rasterized = ZoneRasterizer.Rasterize(ZoneRasterizer.ParsePolygon(z.PolygonJson), motionOptions.Width, motionOptions.Height);
+                ignoreMask = ignoreMask is null ? rasterized : ZoneRasterizer.Union(ignoreMask, rasterized);
+            }
+
+            zoneMasks = serverMotionZones.Select(z =>
+            {
+                var raw = ZoneRasterizer.Rasterize(ZoneRasterizer.ParsePolygon(z.PolygonJson), motionOptions.Width, motionOptions.Height);
+                var mask = ignoreMask is null ? raw : ZoneRasterizer.Subtract(raw, ignoreMask);
+                return new MotionZoneMask(z.ZoneId, mask, z.Sensitivity);
+            }).ToList();
+        }
 
         var motionCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         var motionLogger = loggerFactory.CreateLogger($"Motion[{camera.Name}]");
-        var motionSession = new MotionSession(motionOptions, zoneMasks, motionLogger);
+        var motionSession = new MotionSession(motionOptions, zoneMasks, motionLogger, gridSizeForSession);
         // Object detection plan decision 9: this is ServerMotion, one of the three generic
         // "something moved" sources restricted to whichever one is the camera's chosen primary in
-        // Motion mode — see ShouldReportGenericMotion's own doc comment.
+        // Motion mode — see ShouldReportGenericMotion's own doc comment. Grid mode's own span always
+        // reports ZoneId = null — GridRegionZoneId is an internal sentinel only, never a real zone.
         motionSession.MotionSpanCompleted += (zoneId, result) =>
         {
             if (ShouldReportGenericMotion(camera.CameraId, MotionDetectionSource.ServerMotion))
-                _pendingMotionSpans.Enqueue(new MotionSpanReportItem(camera.CameraId, zoneId, result.StartUtc, result.EndUtc, result.PeakScore));
+                _pendingMotionSpans.Enqueue(new MotionSpanReportItem(camera.CameraId, isGridMode ? null : zoneId, result.StartUtc, result.EndUtc, result.PeakScore));
         };
 
         var motionRunTask = motionSession.RunAsync(motionCts.Token);
         _activeMotion[camera.CameraId] = new CameraMotionRecorder(motionCts, motionRunTask, motionSession, signature);
-        _logger.LogInformation("Started motion detection for camera {CameraId} ({Name}), {ZoneCount} zone(s).", camera.CameraId, camera.Name, serverMotionZones.Count);
+        _logger.LogInformation("Started motion detection for camera {CameraId} ({Name}), mode {Mode}.", camera.CameraId, camera.Name, camera.MotionRegionMode);
     }
 
     /// <summary>Detection/hardware-acceleration overhaul, pass 0 — see Camera.ServerMotionEnabled's
@@ -1170,6 +1243,20 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     // per camera at most) and readable in a debugger, so there's no reason to hash away that.
     private static string BuildZoneConfigSignature(List<NodeConfigZoneDto> zones) =>
         string.Join('|', zones.OrderBy(z => z.ZoneId).Select(z => $"{z.ZoneId}:{z.Kind}:{z.Sensitivity}:{z.PolygonJson}"));
+
+    /// <summary>Applies the deployment-wide Logging.Level to this node's own file logger and, if the
+    /// Vision Service is up, pushes it there too — both take effect without a restart. Called every
+    /// reconcile; only acts (and logs) when the resolved level actually changed.</summary>
+    private void ApplyLogLevel(string level)
+    {
+        if (string.Equals(level, _appliedLogLevel, StringComparison.OrdinalIgnoreCase)) return;
+        _appliedLogLevel = level;
+
+        var parsed = LogLevels.Parse(level);
+        fileLogger.MinLevel = parsed;
+        _visionSupervisor.SetLogLevel(level);
+        _logger.LogInformation("Log level set to {Level} (from the deployment-wide Logging.Level setting).", parsed);
+    }
 
     /// <summary>Starts/replaces/stops this camera's AI detection watch via LarisVMS.Vision.Service's
     /// own control API (object detection plan decisions 2/3/7) — independent of
@@ -1221,9 +1308,24 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         var sourceWidth = watchStream.Width ?? 1280;
         var sourceHeight = watchStream.Height ?? 720;
 
+        // Detection frame-rate cap: only apply an fps= filter when the probed Sub rate is genuinely
+        // above the ceiling — an unknown or already-low rate is left alone so ffmpeg never duplicates
+        // frames up to the target (which would *add* inference work).
+        var decodeFpsCap = config.MaxDetectionFps > 0 && watchStream.Fps is { } fps && fps > config.MaxDetectionFps
+            ? config.MaxDetectionFps
+            : 0;
+
+        // Pass 3b: independent of watchStream/watchRole above — high-res re-detection always targets
+        // the Main stream specifically, regardless of which stream feeds the continuous pipeline.
+        // Null until RecordingSession has actually probed it (see VisionStartCameraRequest.
+        // MainStreamWidth/Height's own doc comment for what that means downstream).
+        var mainStream = camera.Streams.FirstOrDefault(s => s.Role == "Main");
+
         var signature = string.Join('|', watchRtspUri, sourceWidth, sourceHeight, config.AspectMode,
             camera.AiConfidence, camera.AiIou, config.ReportIdleDetections, config.AiIdleTimeoutSeconds,
-            watchRole, _resolvedAccelerator, _resolvedDetectionModelFamily, config.DFineWeights);
+            watchRole, _resolvedAccelerator, _resolvedDetectionModelFamily, config.DFineWeights, config.YoloXSize,
+            decodeFpsCap, config.EnableHighResReDetection, mainStream?.Width, mainStream?.Height,
+            config.EnableVisionDebugImages, config.GpuPreprocessing, config.HiResSnapshots);
 
         if (_activeVision.TryGetValue(camera.CameraId, out var existing) && existing.ConfigSignature == signature) return; // already watching, unchanged
 
@@ -1232,7 +1334,9 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             AccelToFfmpegHwaccel(_resolvedAccelerator.Value), camera.AiConfidence, camera.AiIou,
             config.ReportIdleDetections, config.AiIdleTimeoutSeconds,
             _resolvedDetectionModelFamily.ToString(), config.DFineWeights, $"http://127.0.0.1:{livePort}",
-            config.AspectMode);
+            config.AspectMode, config.EnableHighResReDetection, mainStream?.Width, mainStream?.Height,
+            config.EnableVisionDebugImages, config.GpuPreprocessing, config.YoloXSize, decodeFpsCap,
+            config.HiResSnapshots);
 
         _activeVision[camera.CameraId] = new CameraVisionRecorder(signature);
         _ = StartVisionWatchAsync(request);

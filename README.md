@@ -15,7 +15,7 @@ work on phone, tablet, and desktop.
 
 ---
 
-## **Current version [0.161.6](CHANGELOG.md)**
+## **Current version [0.171.0](CHANGELOG.md)**
 
 ## Stack
 
@@ -24,7 +24,7 @@ work on phone, tablet, and desktop.
 - Bootstrap 5 + GridStack, vendored locally (`wwwroot/lib/`), no build step and no CDN dependency
 - IIS InProcess hosting for the web app; recording runs in a separate Windows Service ("node") so it
   survives IIS app pool recycles — see the architecture plan for why
-- FFmpeg (bundled, LGPL build) for RTSP ingest, recording, and transcode fallback
+- FFmpeg (installed per node, not bundled — `winget install ffmpeg`) for RTSP ingest, recording, and transcode fallback
 
 ## Status
 
@@ -198,9 +198,18 @@ server. `install-node.ps1` does not install any of them — it only reports what
 
 ### FFmpeg (required)
 
-Every node needs **FFmpeg** (LGPL "shared" build recommended — see the plan's licensing note). Point
-a node at it with `--ffmpeg-path` or `LARISVMS_FFMPEG_PATH`, or put `ffmpeg` on `PATH`. Bundling
-FFmpeg with node deploys is `build-node.ps1`'s job, not yet implemented.
+Every node needs **FFmpeg** — not bundled. Install it on each recorder node:
+
+```
+winget install ffmpeg --scope machine
+```
+
+The node discovers it automatically at every startup: an explicit `--ffmpeg-path` /
+`LARISVMS_FFMPEG_PATH` wins, then `ffmpeg` on `PATH`, then the newest `ffmpeg.exe` under the WinGet
+package store (`C:\Program Files\WinGet\Packages\…`). An ffmpeg upgrade is picked up with no
+re-install. `install-node.ps1` preflight-checks that it's present and aborts with instructions if
+not. FFmpeg is invoked as a separate process, so its license does not propagate (see
+`THIRD_PARTY_NOTICES.txt`).
 
 ### AI object detection (optional)
 

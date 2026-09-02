@@ -5,6 +5,655 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.171.0] - 2026-09-01
+
+### Added
+
+- **A detection frame-rate cap** (Admin > Settings > Detection > "Max detection frame rate", default
+  10, per-node overridable). The recorder still decodes each camera's Sub stream in real time, but an
+  `fps=` filter drops the surplus before inference — so on a busy node the GPU idles between frames
+  instead of running flat out, which is what was causing thermal throttling with the larger YOLOX
+  sizes. No effect on a camera whose Sub stream is already at or below the cap.
+- **YOLOX is the default detection engine.** It is fully-convolutional (no letterboxing needed), runs
+  well on low-power and non-Nvidia GPUs, uses an Nvidia GPU fully where present, and ByteTrack was
+  designed against it. `Auto` now resolves to YOLOX on every accelerator; D-FINE stays fully
+  supported but opt-in (Admin > Settings > Detection). A per-node **YOLOX model size** picker
+  (Nano / Tiny / S / M / L / X) matches the model to a node's hardware, global default plus per-node
+  override on Admin > Nodes. YOLOX models are not bundled in the node package — a node fetches the
+  size it needs from the server on first use and caches it; the server fetches once from a pinned
+  upstream (overridable via `DetectionModels:yolox:<size>` configuration) or serves a file seeded
+  into its `detection-models/` cache directory. `tools/export-models/fetch_yolox.py` produces those
+  files.
+- **Playback: a "Now" button** jumps every camera back to the current time in one click.
+- **A "catching up" badge** — a recycle icon with the catch-up speed — appears on a live or playback
+  tile whose video is running faster than 1x to close a gap: live drift catch-up at 1.5x, playback
+  stepped fast-forward, or a playback drift resync.
+- **Snapshots: pagination above the grid as well as below**, so paging is reachable wherever the
+  page is scrolled.
+- **High-resolution snapshots** (Admin > Settings > Detection > "High-resolution snapshots", per-node,
+  off by default). The AI-detection snapshot is normally cropped from the reduced-size frame the
+  detector runs on. With this on, the recorder decodes the camera's Sub stream at up to its native
+  resolution (long edge capped at 1280) and crops the snapshot from that larger frame instead, while
+  the detector keeps running at its usual size. It only sharpens snapshots on cameras whose Sub
+  stream is itself larger than the detector input — on a small Sub stream it is a no-op. Costs a
+  little extra CPU and memory per camera, no extra GPU, and cannot be combined with GPU frame
+  preprocessing (switched off per camera while this is on).
+
+### Fixed
+
+- **AI-detection snapshots are now cropped from the exact frame the model detected the object on**,
+  not resolved by seeking a timestamp into recorded footage. The first frame a new object starts
+  moving, the Vision Service crops a JPEG straight from that frame — covering every object moving in
+  it — and makes it that event's snapshot. The box came from those pixels, so the object cannot have
+  moved off the crop (the recurring "snapshot doesn't show what was detected" complaint). At the
+  detection buffer's size that's a ~150–300 px image; the optional "High-resolution snapshots" setting
+  (above) crops from a larger frame where the Sub stream allows. The recorded-segment seek stays as
+  the fallback when the crop is missing.
+- **Snapshots: overlapping detections on one camera are one card.** A person and a dog crossing frame
+  together used to be two cards each cropped to one animal; they now collapse into a single card
+  showing that one shared snapshot with a badge per object.
+- **AI-detection snapshots were consistently taken a fraction of a second too late.** The detection
+  instant was `DateTime.UtcNow` read *after* the frame had waited for an inference slot and the model
+  had run — so every snapshot's timestamp trailed the moment its boxes actually described, and the
+  crop landed where the object *had been*. The frame now carries the instant the reader captured it,
+  used as the detection time throughout.
+- **A snapshot that 502'd on its exact-instant seek used to silently fall back to the recording
+  segment's first frame** — right crop box, wrong moment. It still falls back (a stale image beats a
+  broken thumbnail), but now logs a warning naming the span and sets an `X-Snapshot-Approximate`
+  response header.
+
+### Changed
+
+- **Admin > Settings > Nodes: the registration key is masked** behind an eye toggle that reveals it
+  until the page is refreshed; generating a new key reveals it automatically.
+- **Snapshots: the object filter tree gained expand/collapse carets and guide lines** connecting each
+  category to its labels, in place of the browser's default disclosure marker.
+- **Framework log noise is now hidden at Information rather than pinned at Warning.** The
+  `Microsoft.AspNetCore` request-pipeline lines, the `Microsoft.Hosting.Lifetime` startup banner, the
+  `HttpClient` play-by-play, and — on the server — Entity Framework Core's per-statement SQL echo
+  (the Logs page's "Executed DbCommand" flood) are filtered out while the deployment-wide log level
+  is Information or higher, and come back at Debug or Trace. Applies to the server, every recorder
+  node, and every node's detection service.
+- **FFmpeg is no longer bundled or copied into the node install.** Install it per node
+  (`winget install ffmpeg --scope machine`); the node discovers it on `PATH` or under the WinGet
+  package store at every startup, so an ffmpeg upgrade needs no re-install. `install-node.ps1`
+  preflight-checks that it is present and drops its `-InstallFfmpeg` switch; `-FfmpegPath` stays as an
+  explicit override.
+- **Playback: single-camera playback hides the "All cameras" timeline** and its now-redundant
+  "Selected camera" label, giving that vertical space back to the video. The merged timeline returns
+  for multi-camera views.
+- Dropdowns are now only as wide as their widest option instead of stretching to fill their row.
+
+### Notes
+
+- Recorder node / detection-service change (log filtering, ffmpeg discovery, snapshot capture
+  instant) — rebuild and deploy the node package and **re-run `install-node.ps1` on each recorder
+  node**; ffmpeg must be installed there first (`winget install ffmpeg --scope machine`).
+- **YOLOX default:** an install left on the default `Detection.ModelFamily = Auto` switches from
+  D-FINE to YOLOX on upgrade — every accelerator, Nvidia included. An install with an explicit
+  `DFine` setting is unaffected. The server needs one-time outbound access to the pinned YOLOX model
+  host (or the `yolox_*.onnx` files seeded into its `detection-models/` cache); nodes fetch only
+  from the server. D-FINE model files stay bundled in the node package as before.
+
+## [0.170.0] - 2026-08-31
+
+### Changed
+
+- **High-resolution re-detection now does its pixel work on the accelerator, not the CPU.** On a
+  multi-camera node this path — which decodes the full Main-stream keyframe, tiles it, and runs the
+  model over each tile every time a new object is tracked — was the detection service's real CPU
+  cost (0.169.x's per-frame preprocessing work turned out to be minor next to it). The rework:
+  - `MainFrameDecoder` decodes to packed nv12 (`W*H*3/2` bytes) instead of BGRA (`W*H*4`), via
+    NVDEC + `scale_cuda`/`hwdownload` where the node has CUDA — no 19 MB frame downloaded to host,
+    no software 4K decode.
+  - Tiles are carved out of the nv12 buffer with plain byte copies; the whole-frame SAHI pass is a
+    single small CPU letterbox-resize (~1 ms). No more SkiaSharp scaling or cropping of a full
+    frame.
+  - The nv12 → RGB → normalize step runs in the ONNX preprocessing head on the accelerator (the
+    same head 0.169.0 added for the continuous path), so the per-pixel CPU normalize loop is gone
+    from this path too.
+  - With GPU preprocessing on, the detection engine now holds **one** `InferenceSession` per camera
+    instead of two — fixing the ~2× model-weights VRAM and ~1.2 GB host RAM that 0.169.0 introduced.
+  Behaviour is unchanged: the same tiles and whole-frame pass, the same NMS, the same re-detected
+  box and eager snapshot crop. High-res re-detection stays opt-in and off by default.
+- The detection service's framework logging (`Microsoft.AspNetCore` request-pipeline lines — six per
+  camera-status poll, several times a second — and the `HttpClient` request play-by-play) is now
+  filtered to Warning; it was drowning the vision log. The node's own Kestrel request logging gets
+  the same treatment.
+
+### Added
+
+- **A deployment-wide log level** — Admin > Settings > Logs > "Minimum log level"
+  (Trace / Debug / Information / Warning / Error, default Information). It applies to this server,
+  every recorder node, and every node's detection service, and takes effect **without a restart**:
+  the server immediately, nodes on their next check-in (~30 s), which also push it to their Vision
+  Service over a new loopback `/log-level` endpoint. Framework request-pipeline chatter stays at
+  Warning regardless. Set it to Debug/Trace to get the detailed per-frame diagnostics back when
+  troubleshooting.
+
+### Notes
+
+- Recorder node / detection-service change — rebuild and deploy the node package; nodes auto-update
+  on their next heartbeat.
+- Migration `BumpVersion0_170_0` — `AppVersions` row only, no table changes.
+- New, still-untested-on-GPU: `scale_cuda`/`hwdownload` on a piped fMP4 fragment. Fails safe — if
+  NVDEC can't decode a fragment, that trigger produces nothing and the Sub-stream best frame stays.
+
+## [0.169.1] - 2026-08-31
+
+### Changed
+
+- **The Main-stream keyframe decode in high-resolution re-detection now runs on NVDEC** (`-hwaccel
+  cuda`) where the node has CUDA. Profiling on a real multi-camera node showed the high-res
+  re-detection path — not the per-frame preprocessing 0.169.0 targeted — is what actually pegs the
+  CPU: per trigger it software-decodes the full 3–4K Main-stream keyframe, Skia-scales and tiles it,
+  and CPU-preprocesses the batch, thousands of times an hour. The software HEVC decode of a 4K frame
+  was the biggest single piece of that. A fuller GPU rework of the tiling and batch preprocessing is
+  planned separately.
+- The per-trigger high-res detection dump drops from Information to Debug, and the `HttpClient`
+  request logging (four lines per Node callback) is filtered to Warning — both were flooding the
+  vision log on a busy camera. Turn the Vision Service's log level up to get them back.
+
+### Notes
+
+- Recorder node / detection-service change — rebuild and deploy the node package; nodes auto-update
+  on their next heartbeat.
+- Migration `BumpVersion0_169_1` also backfills the `AppVersions` row for 0.169.0 (which shipped
+  without its own version-bump migration).
+
+## [0.169.0] - 2026-08-30
+
+### Added
+
+- **GPU frame preprocessing** (Admin > Settings > Detection, node-scoped, off by default). The
+  per-frame colour conversion (YUV → RGB) and normalization that AI detection does before every
+  inference used to run as a CPU pixel loop — roughly 1.2 million float writes per frame, plus
+  ffmpeg's own `swscale` YUV→BGRA conversion. This setting moves both onto the accelerator: a small
+  preprocessing head (standard ONNX ops) is merged into the detection model at load, so ONNX Runtime
+  schedules it on the same execution provider as the model — CUDA, DirectML or OpenVINO. ffmpeg then
+  emits packed nv12 straight through with no `swscale` step, and the detection frame flows as raw
+  bytes rather than a decoded bitmap (also removing an `SKBitmap` allocation and copy per frame).
+  Vendor-neutral by construction — the same head runs on NVIDIA, AMD and Intel hardware with no
+  vendor-specific code. Toggling the setting restarts each camera's detection pipeline. Aimed at
+  lowering CPU load on nodes running several cameras.
+
+### Changed
+
+- The detection frame handoff (`LatestFrameSlot`) and the detection-engine input contract now carry
+  a raw frame buffer instead of a Skia bitmap. The high-resolution re-detection path (pass 3b) is
+  unchanged — it still preprocesses its tiles on the CPU against a plain model session, so with GPU
+  preprocessing on, the Vision Service holds two sessions over the same model file (one head-merged,
+  one plain).
+
+### Notes
+
+- Recorder node and detection-service change — rebuild and deploy the node package; nodes auto-update
+  on their next heartbeat (no `install-node.ps1` re-run).
+- Schema migration `BumpVersion0_169_0` — AppVersions row only, no table changes. No `Setting` seed:
+  the feature is opt-in and off is the right default for every install.
+- New build/runtime dependencies, all permissive: `Google.Protobuf` (BSD-3-Clause) and a vendored,
+  build-compiled `onnx-ml.proto` (Apache-2.0) for editing the model graph; `Grpc.Tools` (Apache-2.0)
+  is build-only and pulls in no gRPC runtime.
+- Colour matrix is BT.601 limited range (the near-universal case for camera sub-streams at ≤720p).
+  A stream that declares BT.709 or full range would want the six coefficients in
+  `OnnxPreprocessHead` adjusted — verify against a reference frame when enabling on a new node.
+
+## [0.168.0] - 2026-08-30
+
+### Added
+
+- **Vision debug images are now a toggle** under Admin > Settings > Detection, with a button to
+  purge the images already written to every recorder node's `logs\vision-debug\` folder. The
+  setting is node-scoped and defaults off for new installs; existing installs keep it on (a global
+  `Setting` row is seeded by this release's migration) so the current diagnostic workflow is
+  uninterrupted. `SaveDebugImage` in the detection pipeline is now a no-op unless the setting is on.
+
+### Changed
+
+- **Snapshot images are cropped from the exact detection frame when high-resolution re-detection is
+  enabled.** The re-detection pass already decodes the precise Main-stream frame it re-runs
+  inference against (the same frame the vision-debug images come from); it now also crops the
+  snapshot from that frame — using the *re-detected* box, not the possibly-stale trigger centroid —
+  and ships it to the node. The node stages it and promotes it into the normal span-keyed snapshot
+  cache the first time the card is viewed, so retention and the orphaned-snapshot sweep govern it
+  exactly like every other snapshot; it is never pruned before its footage. Spans with no
+  re-detection result fall back to the recorded-segment crop, which now seeks with millisecond
+  precision instead of truncating to a whole second (the other cause of a snapshot not lining up
+  with a moving object).
+- `MainFrameDecoder` forces its ffmpeg output to the requested dimensions, so a fragment whose real
+  resolution has drifted from the probed Main-stream size produces a correctly-framed (at worst
+  slightly rescaled) frame instead of a sheared one — which is why a few re-detection crops missed
+  their object entirely.
+- A high-resolution re-detection trigger that has waited more than 3 seconds behind the process-wide
+  concurrency gate is now dropped rather than run against a stale instant.
+
+### Fixed
+
+- **Duplicate Snapshots cards for a single object.** Tracker-ID churn, a per-frame label flip
+  (car/truck), a brief occlusion, or a detection-service restart each closed one sighting and
+  opened a new span a few seconds later, surfacing as several near-identical cards. The server now
+  coalesces AI detections of the same object and camera whose spans start within one idle-timeout
+  gap of each other into a single span. A filtered unique index on
+  `(CameraId, DetectedObjectLabel, StartUtc)` makes the underlying insert race-safe; this release's
+  migration removes any exact-duplicate rows already in the table before creating it.
+- **The same object reported by both a camera's own analytics and LarisVMS AI detection** produced
+  two Snapshots cards. A camera-native Human/Vehicle/Animal span is now hidden from Snapshots when
+  an overlapping LarisVMS AI detection of the same category exists for that camera (the AI span
+  carries the real cropped image). The timeline still shows both.
+
+### Notes
+
+- Recorder node and detection-service change — the node package must be rebuilt and deployed. Nodes
+  auto-update on their next heartbeat; no `install-node.ps1` re-run is needed (no service-identity
+  change).
+- Schema migration `SnapshotAlignmentAndDedup_0_168_0`: the filtered unique index, the
+  `Detection.EnableVisionDebugImages` setting seed, and a one-time cleanup of exact-duplicate
+  AI-detection spans. `deploy.ps1` applies it automatically.
+
+## [0.167.3] - 2026-08-30
+
+### Fixed
+
+- **Grid mode's mask, size, sensitivity, and active-mode choice never survived a page refresh** —
+  reported live as two symptoms ("cells don't save" and "always reopens in Grid mode") with one real
+  cause: `CameraService.GetAsync` builds its `Camera` result through a hand-written field-by-field
+  projection (`ProjectWithoutCredentials`, there specifically to keep encrypted credential columns out
+  of the query entirely), and it was never updated when `MotionRegionMode`/`MotionGridSize`/
+  `MotionGridMask`/`MotionGridSensitivity` were added. Skipping a field there doesn't fail loudly — the
+  resulting object just silently gets that property's plain C# default instead of its real stored
+  value, for every caller of `GetAsync`, including the Zones page's own `GET /motion-region` endpoint.
+  The actual `Save` button was working correctly the whole time; nothing ever read the saved values
+  back. Fixed by adding the four missing fields to the projection.
+
+### Notes
+
+- Web-tier change only.
+- No schema migration needed.
+- `NodeService.GetConfigAsync` (what the node itself uses to actually run Grid-mode detection) was
+  never affected — it loads the full `Camera` entity via `.Include(...)`, not this same projection, so
+  Grid mode itself was detecting motion correctly the whole time; only the editor's own read-back was
+  broken.
+
+## [0.167.2] - 2026-08-30
+
+### Added
+
+- **Drag-select for the Grid editor's cells**, instead of one click per cell — masking a real area on
+  a 64x64 grid (4096 cells) one click at a time didn't scale. Pressing down on a cell decides the
+  direction for the whole drag from that cell's own current state (unmasked → painting masked, masked
+  → painting unmasked); every other cell the pointer crosses while the button stays down is set to
+  that same target state, not toggled individually, so re-crossing a cell mid-drag can't flip it back
+  the other way. A plain click with no movement still works as a single-cell toggle, unchanged.
+
+### Notes
+
+- Web-tier (client-side only) change.
+- No schema migration needed.
+
+## [0.167.1] - 2026-08-30
+
+### Changed
+
+- **Merged the Grid and Polygon zone editors onto one Zones page**, per direct feedback that two
+  separate pages for two mutually-exclusive methods didn't make sense. A single toggle now switches
+  which editor is shown *and* immediately activates that method in the same click — no separate
+  "make this active" step, and no separate "this isn't the active method" banner, since the toggle's
+  own visual state already shows that. The `MotionGrid` page is gone; `zones-editor.js` now owns both
+  editors, sharing the same canvas and live video underneath.
+- **Grid cell edits now have an actual Save step.** Clicking cells (and changing the size or
+  sensitivity) only updates local state and marks it unsaved, exactly like the polygon zone form
+  already works — nothing reaches the server until Save is clicked. Previously every click saved
+  immediately with no visible confirmation, which read as if nothing had happened.
+- **New cameras now default to Grid mode** (previously Polygon) — simpler to get started with than
+  drawing polygons. Existing cameras are unaffected: the schema migration that introduced Grid mode
+  already backfilled every existing row to Polygon explicitly, so nothing here changes what an
+  already-configured camera is currently watching.
+
+### Notes
+
+- Web-tier change only.
+- No schema migration needed — this only changes an in-memory default for newly-created cameras, not
+  the database column's own backfilled value.
+
+## [0.167.0] - 2026-08-30
+
+### Added
+
+- **The Grid editor UI for pass 3c-2** — completes the checkpoint 0.166.0 shipped the backend for.
+  New `Pages/Cameras/MotionGrid` (linked from `Cameras/Index`'s row actions, alongside Zones and Event
+  tags): live video with a click-to-mask cell grid drawn over it, a 16/32/64 size selector (changing
+  size clears the mask, with a confirmation), and a sensitivity slider matching a Polygon zone's own.
+  Cells wash amber when their live score is over threshold, red when masked, and get no fill at all
+  when quiet — only their grid line — so the video underneath stays readable. A "Make this the active
+  method" control switches `Camera.MotionRegionMode`; both the Zones and MotionGrid editors now show a
+  banner when they aren't the currently active method, so a camera's other, saved-but-inactive
+  configuration is never mistaken for what's actually running.
+- New endpoints: `GET/PUT /api/cameras/{id}/motion-region` (mode) and
+  `PUT /api/cameras/{id}/motion-region/grid` (size/mask/sensitivity), `Cameras.Edit`-gated like every
+  other zone-editor endpoint.
+- This completes pass 3c-2 and, with it, the full planned pass 3 checkpoint sequence (3a, 3b, 3d,
+  3c-1, 3c-2).
+
+### Notes
+
+- Web-tier change only — no Node/Vision Service behavior changes in this piece (0.166.0 already
+  shipped the Node-side Grid-mode detection logic this UI now drives).
+- No schema migration needed (the columns shipped in 0.166.0's `AddMotionGridColumns`).
+- To verify: open Motion grid on a camera with a real tree/wind problem, mask the offending cells,
+  click "Make this the active method," and confirm `MotionSpans` for that camera stop firing from
+  those cells — then switch back to Polygon and confirm the original zones are untouched and still
+  scoring.
+
+## [0.166.0] - 2026-08-30
+
+### Added
+
+- **Backend for pass 3c-2 (Grid mode) of the detection/hardware-acceleration overhaul** — the
+  alternative to hand-drawn polygon zones, and the primary motion-tuning mechanism on nodes with no
+  GPU accelerator (where ServerMotion frame-diff is the *only* detection mechanism running at all).
+  No editor UI yet in this change (that's the next, separate checkpoint) — this ships the plumbing a
+  UI needs to actually do something:
+  - New `Camera.MotionRegionMode` (`Polygon` default | `Grid`), `MotionGridSize` (16/32/64, default
+    32), `MotionGridMask` (a base64 cell bitset), and `MotionGridSensitivity` (the grid's own
+    equivalent of a zone's Sensitivity — needed since its single aggregate region still has to compare
+    against *something* before opening a span). Switching modes never touches the inactive method's
+    own configuration — every `Zone` row survives a switch to Grid, and the grid mask survives a
+    switch back to Polygon.
+  - New `MotionGrid` (Media): a pure bitset mask plus a single-pass per-cell scorer, reusing
+    `ZoneRasterizer`'s exact `bool[width*height]` mask shape so `MotionSession`/`MotionDetector.Score`
+    need no knowledge of which mode produced a mask — one masking mechanism, two editors, never two
+    mechanisms that can disagree. Per-cell scoring is a single O(width*height) pass regardless of grid
+    size, not one `MotionDetector.Score` call per cell (which would rescan the whole frame for each
+    cell's own handful of pixels).
+  - `NodeWorker.ReconcileMotion` now branches on region mode: Grid mode feeds `MotionSession` one
+    aggregate region (the whole frame minus masked cells) instead of a zone-per-ServerMotion-zone
+    list, reports spans with `ZoneId = null` (already a supported shape — camera-pushed motion spans
+    already do this), and a fully-masked grid stops the session the same way zero enabled zones
+    already does for Polygon mode. Mode, grid size, mask, and sensitivity are all in the session
+    restart signature, so a live change actually takes effect rather than waiting for an unrelated
+    restart.
+  - `/live/{cameraId}/motion-zones` now wraps its payload (`{zones, cellScores}` instead of 3c-1's
+    bare array) so Grid mode's live per-cell scores can ride the same message instead of a second
+    socket — `zones-editor.js` updated to unwrap the new shape; a Polygon-mode camera's own zone wash
+    is unaffected.
+
+### Notes
+
+- Requires a database migration (`AddMotionGridColumns`) — new nullable/defaulted columns only, no
+  data loss, existing cameras default to `Polygon` mode (today's exact behavior) on upgrade.
+- Still to come: the actual Grid editor page (click-to-mask canvas over live video, a size selector,
+  a `Cameras/Index` row-action link, and "mode not active" banners on both editors) — nothing in this
+  release lets an operator actually switch a camera into Grid mode yet.
+
+## [0.165.1] - 2026-08-30
+
+### Fixed
+
+- **Zone `Kind` silently serialized as a bare integer, not its name, over `/api/cameras/{id}/zones`
+  and zone creation** — the `Zone` entity has no `[JsonConverter]` on `ZoneKind` and this app registers
+  no global `JsonStringEnumConverter`, so returning the entity directly (as these endpoints always
+  have) sent `kind: 0` instead of `kind: "ServerMotion"`. Confirmed live as two separate-looking bugs
+  with one real cause: `zones-editor.js`'s `KIND_COLORS`/`KIND_LABELS` lookups and its zone-edit form's
+  Kind `<select>` are all keyed by the string name, so every zone silently rendered with whichever
+  color `0`/`undefined` happened to fall back to (ServerMotion's own amber — an Ignore zone never
+  actually showed its intended red), and re-opening any non-ServerMotion zone's edit form never
+  selected the right option, always defaulting back to ServerMotion. New `ZoneDto` (Core) fixes this at
+  the response boundary, the same `Kind`-as-string convention `SaveZoneRequest` already uses for the
+  request side.
+- **0.165.0's live per-zone wash was never fully transparent even at rest**, which masked whether the
+  live score feed was actually reaching the browser at all — a continuous ratio-based fade (this
+  session's own deviation from the original plan's spec) looked identical whether scores were flowing
+  or the socket had never connected. Switched to the plan's actual spec: no fill below a zone's own
+  Sensitivity, a fixed muted yellow at or above it. A zone that now stays fully invisible at rest and
+  visibly lights up on real motion confirms the feed is live; one that never lights up at all points at
+  `ServerMotionEnabled` not being on for that camera, or the socket not connecting — not at this code.
+
+### Notes
+
+- Web-tier change only — no Node/Vision Service rebuild needed, though the version stays in lockstep
+  as usual.
+- No schema migration needed.
+- Still not built: `Camera.MotionRegionMode`'s `Polygon`/`Grid` toggle and the cell-grid mask editor
+  the original plan describes as a separate item (3c-2) — today's Zones editor only ever supports the
+  polygon method. Flagged live as missing; it's a real, larger follow-up checkpoint, not a bug in what
+  shipped as 3c-1.
+
+## [0.165.0] - 2026-08-30
+
+### Added
+
+- **Checkpoint 4 (3c-1) of the detection/hardware-acceleration overhaul: the Zones editor now shows
+  real live video with each Motion zone washed by its own live motion score**, instead of one static
+  snapshot with fixed-opacity polygons. `MotionSession` now tracks every zone's most recent per-frame
+  score (`GetCurrentZoneScores`); a new `/live/{cameraId}/motion-zones` WebSocket (Node, poll-driven
+  off that snapshot, same "never block the hot loop" shape as the existing AI-detection overlay) and
+  a matching Web-tier proxy relay it to the browser. `zones-editor.js` now starts real live video
+  (reusing `live-view.js`'s existing MSE player) behind its existing polygon canvas, falling back to
+  today's static snapshot until the first live frame arrives — or permanently, on a camera that can't
+  stream live at all. Each ServerMotion zone's fill opacity now rises and falls continuously with its
+  live score relative to its own Sensitivity, so tuning a zone against real trees moving is visible in
+  real time; Ignore/CameraMotion/Privacy zones (which have no live score of their own) keep today's
+  fixed look unchanged.
+- New `MotionZoneScoreDto` (Core) and `MotionZoneOverlayHandler` (Node) — no per-tick augmentation
+  needed here (unlike the AI-detection overlay), since the Zones editor already has each zone's own
+  Sensitivity/Kind/enabled state loaded from `/api/cameras/{id}/zones`; the Web-tier proxy for this
+  one is a plain relay.
+
+### Notes
+
+- Rebuild/redeploy `LarisVMS.Node` (JS/Razor changes ship with the Web app as usual; no Vision Service
+  change this time).
+- No schema migration needed.
+- This completes the planned pass 3 checkpoint sequence (3a -> 3b -> 3d -> 3c-1).
+
+## [0.164.0] - 2026-08-30
+
+### Added
+
+- **Checkpoint 3d of the detection/hardware-acceleration overhaul: pass 3b's high-res re-detection
+  result now actually feeds the snapshot a viewer sees**, instead of only being logged. Turned out not
+  to need a new eager-write file cache at all — the reported detection box was already normalized
+  (0-1) and persisted per span (`MotionSpan.BestBoxX/Y/W/H`), with the existing `/snapshot-image` route
+  already cropping lazily from the recorded Main-stream segment at request time. So the box competing
+  for that spot just needed a better candidate: `ProcessHighResTriggerAsync`'s merged, native-scale
+  result is now matched (by overlap, not by label — a native-scale re-detection can genuinely disagree
+  with the stabilized label on what an object *is*, as already confirmed live on a cat) against the
+  track that triggered it, and fed into the same `LabelBestFrameTracker` competition the continuous
+  Sub-stream pass already uses. No match (the object moved on before the result came back) leaves
+  today's coarser candidate in place — a wash, never a regression.
+- Applied from inside the continuous inference loop's own thread, not from the high-res task directly
+  — `LabelBestFrameTracker` is documented single-owner/not-thread-safe, so the result is queued
+  (`_pendingHighResResults`) and drained each frame, discarding anything whose track has since
+  disappeared (a stale result winning a since-started, unrelated span for the same label would be
+  worse than just not applying it).
+- `Nms.FindBestMatch` (new, unit-tested): finds the best-overlapping candidate in a result set against
+  a target box, or null if nothing overlaps at all.
+
+### Notes
+
+- Vision Service change only — rebuild/redeploy `LarisVMS.Vision.Service`.
+- No schema migration needed.
+- Next up: checkpoint 3c-1 (live per-zone motion wash on the Zones editor).
+
+## [0.163.4] - 2026-08-30
+
+### Fixed
+
+- **Nothing bounded how many high-res re-detection triggers (pass 3b) could run at once across
+  cameras** — each trigger spawns its own ffmpeg process against the Main-stream ring buffer plus a
+  batched inference call, and every camera's detection pipeline drains its own trigger queue
+  independently. A busy moment on several cameras at the same time (or a cluttered scene producing
+  many separate tracks in quick succession) could pile up that many concurrent ffmpeg decodes with
+  nothing to throttle them, which is a very plausible cause of node CPU pegging reported live —
+  and, via degraded frame processing feeding back into tracker ID churn, of duplicated/fragmented
+  snapshot events for what should be one continuous real-world object (label flips like the same
+  vehicle alternating between "car" and "truck" across different track IDs bypass the per-track
+  `TrackLabelArbiter`'s stabilization, since each new track id starts that arbiter fresh). Added a
+  single process-wide gate (`CameraPipelineManager`'s own `SemaphoreSlim`, shared into every camera's
+  `CameraDetectionPipeline`) so only one high-res re-detection operation runs at a time, regardless of
+  how many cameras trigger simultaneously. There's no snapshot latency cost to serializing this yet —
+  this pass only logs its merged result; checkpoint 3d (not yet built) is what will actually persist
+  it, at which point this limit may need revisiting.
+- Confirmed via debug images (enabled by 0.163.3): the whole-frame + native-tile box math is placing
+  boxes correctly — a moving cat got a tight, correctly-positioned bounding box, just an inaccurate
+  label (car/truck/bird), which is ordinary object-detection model behavior on a small/atypical
+  subject at native scale, not a pipeline bug.
+
+### Notes
+
+- Vision Service change only — rebuild/redeploy `LarisVMS.Vision.Service` (or let auto-update pick it
+  up alongside Node).
+- No schema migration needed.
+- If CPU and duplicate-snapshot symptoms persist after this ships, that would point away from
+  cross-camera concurrency and toward something else (e.g. the continuous Sub-stream pipeline's own
+  CPU cost, which is what the master plan's pass 4 — a separate, much larger piece of work — targets;
+  pass 4 does not touch this trigger path at all, so it wouldn't fix this specific gap either way).
+
+## [0.163.3] - 2026-08-30
+
+### Fixed
+
+- **0.163.2's own debug image dump silently failed to write anything, and gave no indication why** —
+  the exact mistake 0.163.1 had just fixed for Vision Service's own visibility generally, repeated
+  locally: the failure was logged at `LogDebug`, which sits below Vision Service's own
+  `FileLoggerProvider` `Information` minimum, so if the JPEG write was failing, the reason was
+  invisible. Bumped to `LogWarning`. Also bumped the "could not reach this node's main-frame buffer"
+  failure path in the same method for the same reason — a genuine network-level failure to reach the
+  ring buffer is worth seeing, not just the common/expected 404 case (which is intentionally still
+  silent).
+- **Good news surfacing while chasing this**: live confirmation that pass 3b's whole-frame pass
+  correctly identified a real moving car, matching what was actually driving through frame at the
+  time — alongside the earlier confirmed match on a stationary "bus" that turned out to genuinely be
+  the reporting camera's own view of a parked fifth-wheel trailer. What looked like an implausible
+  pile of detections earlier was very likely a busy real scene (several parked vehicles plus the
+  moving one), not corrupted decode — the debug images (once this fix reveals why they weren't
+  writing) will confirm box alignment precisely.
+
+### Notes
+
+- Vision Service change only — rebuild/redeploy `LarisVMS.Vision.Service` (or let auto-update pick it
+  up alongside Node).
+- No schema migration needed.
+
+## [0.163.2] - 2026-08-30
+
+### Fixed
+
+- **The Node process crashed entirely (not just one background task) after an ordinary HTTPS timeout
+  talking to the web tier** — reported live. `StorageManager`, `NodeWorker`, and
+  `ThumbnailBackfillService` (all `BackgroundService`s) caught failures with
+  `catch (Exception ex) when (ex is not OperationCanceledException)`, intending to let a genuine
+  shutdown-triggered cancellation pass through uncaught while still catching real failures. But
+  `HttpClient.Timeout` also throws a `TaskCanceledException` — which *is* an `OperationCanceledException`
+  — so every one of those filters excluded an ordinary network timeout from being caught at all,
+  letting it propagate out of `ExecuteAsync` and trigger the Generic Host's default
+  `BackgroundServiceExceptionBehavior.StopHost`, tearing down the whole node over a transient SSL
+  connection drop. Fixed at all 7 affected call sites by checking `!ct.IsCancellationRequested`
+  instead of the exception's static type — the same correct idiom already used elsewhere in this
+  exact codebase (`MainFrameDecoder`, `SnapshotImageCapture`, `ThumbnailCapture`), just not
+  consistently in these three files. Three lower-severity occurrences of the identical pattern
+  remain in `DetectionOverlayHandler.cs`/`ExportRunner.cs`/`CameraEventSession.cs` — none of those
+  run inside a `BackgroundService`, so a failure there can't take down the whole process the same
+  way, but the underlying reasoning is the same and they're worth the same fix eventually.
+
+### Added
+
+- **Temporary diagnostic**: pass 3b's high-res re-detection now dumps the decoded Main-stream frame,
+  the letterboxed whole-frame bitmap, and every native tile crop as JPEGs under
+  `%ProgramData%\LarisVMS\logs\vision-debug\`, one set per trigger — added to visually confirm
+  reported boxes actually line up with real objects in the scene (rather than trusting labels/
+  coordinates alone), given `MainFrameDecoder`'s ffmpeg-fed-via-a-pipe decode is the one genuinely
+  new, never-tested-on-real-hardware piece in this whole pass. Not meant to stay past verifying this
+  checkpoint — no retention sweep covers this folder, so it will need to be cleared manually or
+  removed in code once no longer needed.
+
+### Notes
+
+- Node + Web Service change — rebuild/redeploy `LarisVMS.Node` and `LarisVMS.Vision.Service`.
+- No schema migration needed.
+
+## [0.163.1] - 2026-08-30
+
+### Fixed
+
+- **`LarisVMS.Vision.Service` has never had its own log file — reported live while trying to verify
+  0.163.0's high-res re-detection.** Its console output is captured by
+  `VisionServiceSupervisor.DrainOutputAsync` and re-logged into the Node process's own logger, but
+  always at `Debug` severity regardless of the line's real level, while Node's own file logger is
+  configured at an `Information` minimum — so every line Vision Service ever produced, including this
+  pass's own "High-res re-detection..." diagnostics, was silently dropped before reaching any log
+  file. Not something 0.163.0 introduced; this made a pre-existing gap impossible to miss. Vision
+  Service now has its own `FileLoggerProvider` (the same shared class Node already uses, just with an
+  `Information` minimum and a `vision-` file prefix), writing into the same shared logs directory as
+  Node's own log. `StorageManager`'s 14-day log-retention sweep now covers `vision-*.log` files too,
+  not just `node-*.log`.
+
+### Notes
+
+- Node change — rebuild and re-run `install-node.ps1` (or let auto-update pick it up).
+- No schema migration needed.
+
+## [0.163.0] - 2026-08-30
+
+### Added
+
+- **Motion-guided native-scale re-detection (pass 3b of the detection/hardware-acceleration
+  overhaul)** — new opt-in (off by default) "High-resolution re-detection" toggle on
+  `Admin → Settings → Detection`. When on, the first frame a newly-tracked object starts moving,
+  its pipeline fetches the corresponding instant from pass 3a's Main-stream ring buffer, decodes it
+  once, and runs one batched detection pass over the whole frame (letterboxed) plus native-scale
+  640×640 tiles placed at the track's own centroid (SAHI-style) — merged with a new greedy NMS
+  (nothing like it existed anywhere in `LarisVMS.Vision` before this; D-FINE's own single-pass output
+  never produces duplicates, which stops being true the moment two separate passes can see the same
+  object). Catches small/distant objects a squashed lower-resolution frame misses, and finds a large
+  one whole instead of clipped into tile fragments. New `TileLayout`/`Nms` (pure, unit-tested),
+  `DFineEngine.DetectBatch` (batches N same-sized images into one ONNX forward pass), and
+  `MainFrameDecoder` (the one new ffmpeg-fed-via-a-pipe code path in this pass — decodes a Main-stream
+  frame from ring-buffer bytes; not the same risk class as the deferred pass 4b's raw-NVDEC work,
+  since this hands ffmpeg's own mp4 demuxer a standard fragmented-MP4 byte stream and lets it handle
+  codec framing itself).
+- **This checkpoint stops at logging the merged, corrected result** (camera, track, label, confidence,
+  which pass — whole-frame or which tile — produced the winning box, and the Main-stream pixel
+  coordinates) rather than wiring it into a snapshot file yet. Today's cache file naming keys by a
+  `MotionSpan` id that doesn't exist yet at this point in the pipeline — that's a real design decision
+  (a leading candidate is keying by `(CameraId, StartUtc)` instead, both already known and stable the
+  instant a span opens) left to the next checkpoint (pass 3d), deliberately, rather than guessed at
+  here.
+
+### Notes
+
+- Node change — rebuild and re-run `install-node.ps1` (or let auto-update pick it up). Enable the new
+  toggle on one node first; watch that node's Vision Service log for the new
+  "High-res re-detection..." lines to confirm it's actually finding both a near and a distant object
+  in the same panoramic frame, per this pass's own verification ask.
+- No schema migration needed — the new toggle is a `Setting` row (`Detection.EnableHighResReDetection`),
+  not a new column, same as `Detection.AspectMode` before it.
+
+## [0.162.0] - 2026-08-30
+
+### Added
+
+- **Main-stream fragment ring buffer (pass 3a of the detection/hardware-acceleration overhaul)** — the
+  first piece of replacing today's lazy, after-the-fact snapshot cropping (which seeks into an
+  already-written segment file, and is the underlying reason a `Segment.DurationMs`-vs-real-duration
+  drift could 502 a snapshot, worked around in v0.161.6) with eager capture from the high-res Main
+  stream at the moment of detection. New `MainFrameRingBuffer` subscribes to `RecordingSession`'s
+  existing live-tee fanout (the same fragments `LiveViewerHandler` already relays to browser live
+  viewers) and keeps a short (10s / 32MB per camera) in-memory window of recent, independently
+  decodable fMP4 fragments — no new RTSP session, no change to `RecordingSession`'s ffmpeg arguments.
+  New loopback-only node route `GET /internal/main-frame/{cameraId}?atUtc=...` hands the buffered
+  bytes to `LarisVMS.Vision.Service` on request; the node itself never decodes anything, keeping it
+  GPU/ONNX-free per the standing architecture constraint.
+- This checkpoint only buffers and serves bytes — nothing decodes or uses them yet. That's pass 3b
+  (motion-guided native-scale re-detection), the next checkpoint in this arc.
+
+### Notes
+
+- Node change — rebuild and re-run `install-node.ps1` (or let auto-update pick it up).
+- No schema migration needed — this adds no columns, only an in-memory buffer and a new endpoint.
+
 ## [0.161.6] - 2026-08-30
 
 ### Fixed

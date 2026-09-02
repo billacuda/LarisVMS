@@ -35,7 +35,10 @@ public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot 
     public DateTime? LastFrameAt { get; private set; }
     public string? LastError { get; private set; }
 
-    private readonly int _frameSize = checked(options.Width * options.Height * 4); // BGRA
+    // nv12 = Y plane (W*H) + interleaved UV (W*H/2); BGRA = 4 bytes/pixel.
+    private readonly int _frameSize = options.Nv12Output
+        ? checked(options.Width * options.Height * 3 / 2)
+        : checked(options.Width * options.Height * 4);
 
     public async Task RunAsync(CancellationToken ct)
     {
@@ -118,10 +121,11 @@ public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot 
             {
                 if (!await ReadExactAsync(stdout, buffer, _frameSize, ct)) return; // pipe closed — process exiting
 
-                LastFrameAt = DateTime.UtcNow;
+                var capturedAt = DateTime.UtcNow;
+                LastFrameAt = capturedAt;
                 if (State != StreamRecordingState.Recording) State = StreamRecordingState.Recording;
 
-                PublishFrame(buffer);
+                PublishFrame(buffer, capturedAt);
             }
         }
         finally
@@ -130,19 +134,9 @@ public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot 
         }
     }
 
-    private void PublishFrame(byte[] buffer)
+    private void PublishFrame(byte[] buffer, DateTime capturedAt)
     {
-        slot.Publish(bitmap =>
-        {
-            unsafe
-            {
-                fixed (byte* ptr = buffer)
-                {
-                    // SetPixels copies from the pointer into the bitmap's own storage.
-                    bitmap.SetPixels((nint)ptr);
-                }
-            }
-        });
+        slot.Publish(capturedAt, dst => Array.Copy(buffer, dst, _frameSize));
     }
 
     // Stream.ReadAsync can return a short read even for a live pipe (no guarantee of filling the
@@ -233,16 +227,22 @@ public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot 
             ? string.Create(CultureInfo.InvariantCulture,
                 $",pad={options.Width}:{options.Height}:{lb.PadLeft}:{lb.PadTop}:color=black")
             : "";
+        // Frame-rate cap last in the chain (on CPU frames — post-hwdownload for the GPU path) so it
+        // only ever runs on frames that survived. Node guarantees FpsCap is below the stream's real
+        // rate, so this only drops, never duplicates.
+        var fpsFilter = options.FpsCap > 0
+            ? string.Create(CultureInfo.InvariantCulture, $",fps={options.FpsCap}")
+            : "";
 
         if (useGpuScale)
         {
             args.Add("-vf"); args.Add(string.Create(CultureInfo.InvariantCulture,
-                $"scale_cuda=w={scaleWidth}:h={scaleHeight}:format=nv12,hwdownload,format=nv12{padFilter}"));
+                $"scale_cuda=w={scaleWidth}:h={scaleHeight}:format=nv12,hwdownload,format=nv12{padFilter}{fpsFilter}"));
         }
         else
         {
             args.Add("-vf"); args.Add(string.Create(CultureInfo.InvariantCulture,
-                $"scale={scaleWidth}:{scaleHeight}{padFilter}"));
+                $"scale={scaleWidth}:{scaleHeight}{padFilter}{fpsFilter}"));
         }
 
         // Emit each decoded frame exactly once. Without this, ffmpeg converts the output to a
@@ -252,7 +252,9 @@ public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot 
         // five times without this flag.
         args.Add("-fps_mode"); args.Add("passthrough");
 
-        args.Add("-pix_fmt"); args.Add("bgra");
+        // Pass 4a: nv12 straight through when the engine has the GPU preprocessing head — no
+        // swscale colour conversion on the CPU at all. Otherwise BGRA, as before.
+        args.Add("-pix_fmt"); args.Add(options.Nv12Output ? "nv12" : "bgra");
         args.Add("-f"); args.Add("rawvideo");
         args.Add("-");
 

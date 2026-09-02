@@ -55,7 +55,11 @@
             <button type="button" class="help-icon" data-help-target="regKeyHelp" tabindex="0" aria-label="Help">ℹ️</button>
         </label>
         <div class="input-group">
-            <input asp-for="RegistrationKey" class="form-control font-monospace" id="registrationKeyInput" />
+            <input asp-for="RegistrationKey" type="password" class="form-control font-monospace" id="registrationKeyInput" />
+            <button type="button" class="btn btn-outline-secondary" data-secret-toggle="registrationKeyInput"
+                    data-secret-label="registration key" aria-pressed="false" aria-label="Show registration key">
+                <span aria-hidden="true" data-secret-glyph>👁️</span>
+            </button>
             <button type="button" class="btn btn-outline-secondary" id="regenerateKeyBtn">Generate new key</button>
         </div>
         <div class="help-text-source" id="regKeyHelp">
@@ -84,6 +88,8 @@
                 input.value = Array.prototype.map.call(bytes, function (b) {
                     return b.toString(16).padStart(2, '0');
                 }).join('').toUpperCase();
+                // Reveal the freshly generated key so the user can read/copy what they just made.
+                input.dispatchEvent(new Event('secret-reveal:show'));
             });
         })();
     </script>

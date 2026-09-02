@@ -132,4 +132,20 @@ public sealed class InferenceProfile
 
         return (sx0, sy0, sx1, sy1);
     }
+
+    /// <summary>Forward transform (the inverse of <see cref="MapBoxToSource"/>): a box in normalized
+    /// (0-1) source-frame coordinates → integer xyxy pixels in the network-input buffer — i.e. where
+    /// that box actually sits in the frame the detection engine received. Used to crop a snapshot
+    /// straight out of that buffer (pass G). Clamped to the buffer, and (for Letterbox) to the real
+    /// content rectangle so a margin can't pull pad bars into the crop.</summary>
+    public (int X0, int Y0, int X1, int Y1) NormalizedSourceToNetworkPixels(double x0, double y0, double x1, double y1)
+    {
+        int Cx(double v) => (int)Math.Round(Math.Clamp(v * ScaledWidth + PadLeft, PadLeft, PadLeft + ScaledWidth));
+        int Cy(double v) => (int)Math.Round(Math.Clamp(v * ScaledHeight + PadTop, PadTop, PadTop + ScaledHeight));
+        return (Cx(x0), Cy(y0), Cx(x1), Cy(y1));
+    }
+
+    /// <summary>The real image rectangle inside the network buffer — the whole buffer for Stretch,
+    /// the letterboxed content region (excluding pad bars) otherwise.</summary>
+    public SkiaSharp.SKRectI ContentRect => new(PadLeft, PadTop, PadLeft + ScaledWidth, PadTop + ScaledHeight);
 }

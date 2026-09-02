@@ -30,6 +30,25 @@ public static class DFineLabels
         "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush",
     ];
 
+    /// <summary>YOLOX's COCO-80 table, index-matched to the class columns of its `[1,N,85]` output
+    /// (index 0 = "person", ..., index 79 = "toothbrush"). Same 80 classes as <see cref="Obj2Coco"/>
+    /// but with the modern COCO spellings YOLOX/Ultralytics use ("motorcycle" not "motorbike",
+    /// "airplane", "couch", "potted plant", "dining table", "tv") — CocoCategoryMap resolves both
+    /// spelling sets, but keeping YOLOX's own vocabulary here avoids relying on that.</summary>
+    public static readonly IReadOnlyList<string> YoloXCoco =
+    [
+        "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
+        "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat",
+        "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "backpack",
+        "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball",
+        "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket",
+        "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
+        "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair",
+        "couch", "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse",
+        "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator",
+        "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush",
+    ];
+
     /// <summary>D-FINE's obj365 variant: 366 entries, index-matched to the model's own `logits`
     /// output. Index 0 is "None" — a padding/background slot, never a real detected class; the
     /// decoder must filter it out rather than mapping it to a category.</summary>

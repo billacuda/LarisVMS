@@ -12,7 +12,7 @@ namespace LarisVMS.Vision.Inference;
 /// </summary>
 public static class DetectionModelCatalog
 {
-    public static string GetFileName(DetectionModelFamily family, DFineWeights dfineWeights) => family switch
+    public static string GetFileName(DetectionModelFamily family, DFineWeights dfineWeights, YoloXSize yoloXSize) => family switch
     {
         DetectionModelFamily.DFine => dfineWeights switch
         {
@@ -20,11 +20,23 @@ public static class DetectionModelCatalog
             DFineWeights.Obj365 => "dfine_s_obj365.onnx",
             _ => throw new ArgumentOutOfRangeException(nameof(dfineWeights), dfineWeights, null),
         },
+        DetectionModelFamily.YoloX => GetYoloXFileName(yoloXSize),
         DetectionModelFamily.RfDetr => throw new NotSupportedException(
             "RF-DETR is not yet implemented — deferred scope, see the model-swap plan."),
-        DetectionModelFamily.YoloX => throw new NotSupportedException(
-            "YOLOX is not yet implemented — deferred scope, see the model-swap plan."),
         _ => throw new ArgumentOutOfRangeException(nameof(family), family, null),
+    };
+
+    /// <summary>Filenames tools/export-models/fetch_yolox.py writes, and that the server's model
+    /// cache / node fetch use — one decode-baked ONNX per size.</summary>
+    public static string GetYoloXFileName(YoloXSize size) => size switch
+    {
+        YoloXSize.Nano => "yolox_nano.onnx",
+        YoloXSize.Tiny => "yolox_tiny.onnx",
+        YoloXSize.S => "yolox_s.onnx",
+        YoloXSize.M => "yolox_m.onnx",
+        YoloXSize.L => "yolox_l.onnx",
+        YoloXSize.X => "yolox_x.onnx",
+        _ => throw new ArgumentOutOfRangeException(nameof(size), size, null),
     };
 
     /// <summary>The label table index-matching a D-FINE variant's own `logits` output — see
@@ -35,4 +47,13 @@ public static class DetectionModelCatalog
         DFineWeights.Obj365 => DFineLabels.Obj365,
         _ => throw new ArgumentOutOfRangeException(nameof(dfineWeights), dfineWeights, null),
     };
+
+    /// <summary>YOLOX is COCO-80 for every size — see <see cref="DFineLabels.YoloXCoco"/>.</summary>
+    public static IReadOnlyList<string> GetYoloXLabels() => DFineLabels.YoloXCoco;
+
+    /// <summary>The square network input size Megvii ships each size at (Nano/Tiny at 416, the rest
+    /// at 640 — both multiples of 32). This is the <c>networkSize</c> for
+    /// <see cref="InferenceProfile.Create"/> and the long-edge target for AspectFit (pass F). Must
+    /// match the pinned ONNX export's fixed input dims — <see cref="YoloXEngine"/> validates it.</summary>
+    public static int GetYoloXNetworkSize(YoloXSize size) => size is YoloXSize.Nano or YoloXSize.Tiny ? 416 : 640;
 }

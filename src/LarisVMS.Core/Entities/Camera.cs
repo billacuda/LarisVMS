@@ -32,6 +32,46 @@ public class Camera
     /// it costs, on a camera where the fallback isn't wanted.</summary>
     public bool ServerMotionEnabled { get; set; } = true;
 
+    /// <summary>Detection/hardware-acceleration overhaul pass 3c-2: which of the two mutually
+    /// exclusive ways of answering "which pixels count as motion" is currently active — Polygon
+    /// (Zone rows) or Grid (MotionGridSize/MotionGridMask below). Switching never deletes the
+    /// inactive method's own configuration — every Zone row survives a switch to Grid, and
+    /// MotionGridMask survives a switch back to Polygon — so a camera can have both set up and flip
+    /// between them losslessly. Only ServerMotion/Ignore zones are affected; Privacy and CameraMotion
+    /// zones keep working identically in either mode (see NodeWorker.ReconcileMotion's own doc
+    /// comment for exactly how the two masking mechanisms combine).
+    ///
+    /// Defaults Grid (the user's own explicit call — simpler to get started with than drawing
+    /// polygons) for a brand-new camera only. This default has no effect on an existing camera: the
+    /// AddMotionGridColumns migration that introduced this column already backfilled every existing
+    /// row to Polygon explicitly, preserving whatever zones it already had configured rather than
+    /// silently switching a live camera to an empty, fully-unmasked grid.</summary>
+    public MotionRegionMode MotionRegionMode { get; set; } = MotionRegionMode.Grid;
+
+    /// <summary>Grid mode's own cell count per side (16/32/64 — enforced at the application layer,
+    /// not the schema). Cells divide the frame evenly, so they're non-square on a non-square frame;
+    /// see MotionGrid's own doc comment for the exact pixel-to-cell mapping. 32, not 16, is the
+    /// default: on a typical outdoor camera a 16-cell grid gives cells coarse enough that one
+    /// overhanging branch forces masking a much wider area (e.g. the driveway beneath it) than
+    /// actually needed.</summary>
+    public int MotionGridSize { get; set; } = 32;
+
+    /// <summary>Base64-encoded bitset, MotionGridSize*MotionGridSize bits (row-major, cell (row,col)
+    /// at bit row*MotionGridSize+col) — a set bit means that cell is masked (excluded from motion,
+    /// the Grid-mode equivalent of an Ignore zone). Null/empty means nothing is masked (watch the
+    /// whole frame) — see MotionGrid.Rasterize. Resized (and cleared) whenever MotionGridSize
+    /// changes; changing size deliberately does not attempt to remap an existing mask onto a
+    /// different cell count.</summary>
+    public string? MotionGridMask { get; set; }
+
+    /// <summary>Grid mode's own equivalent of a ServerMotion zone's Sensitivity — needed because
+    /// Grid mode's single aggregate region (see NodeWorker.ReconcileMotion) still needs a threshold
+    /// to compare its own frame score against before opening a span, the same way every Polygon zone
+    /// already does with its own Sensitivity. Same 0.03 default Zone.Sensitivity itself uses, for the
+    /// same reason (see Zone.Sensitivity's own doc comment for the real-camera-frame measurement
+    /// behind that number).</summary>
+    public double MotionGridSensitivity { get; set; } = 0.03;
+
     public Guid Id { get; set; }
 
     /// <summary>Owning recorder node. Nullable until Nodes exist (M3) — a camera can be registered

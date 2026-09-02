@@ -36,6 +36,15 @@ public sealed class CameraPipelineManager : IAsyncDisposable
     // one was started with).
     private readonly ConcurrentDictionary<string, string> _resolvedModelPathsByKey = new();
 
+    // One gate per model key so a slow first-use YOLOX model fetch (Vision Service -> Node -> server)
+    // doesn't run twice when two cameras' /start calls race for the same size.
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _modelResolveGates = new();
+
+    // Pass 3b: shared across every camera's pipeline so at most one high-res re-detection (ffmpeg
+    // decode + batched inference) runs at a time process-wide — see CameraDetectionPipeline's own
+    // _highResGate doc comment for why this needs to be cross-camera, not per-pipeline.
+    private readonly SemaphoreSlim _highResGate = new(1, 1);
+
     public CameraPipelineManager(IOptions<VisionServiceOptions> options, IHttpClientFactory httpClientFactory,
         ILoggerFactory loggerFactory, ILogger<CameraPipelineManager> logger)
     {
@@ -57,13 +66,13 @@ public sealed class CameraPipelineManager : IAsyncDisposable
 
         var family = Enum.Parse<DetectionModelFamily>(request.ModelFamily);
         var dfineWeights = Enum.Parse<DFineWeights>(request.DFineWeights);
+        var yoloXSize = Enum.Parse<YoloXSize>(request.YoloXSize);
         var aspectMode = Enum.Parse<AspectMode>(request.AspectMode);
-        var modelKey = $"{family}|{dfineWeights}";
-        var resolvedModelPath = _resolvedModelPathsByKey.GetOrAdd(modelKey,
-            _ => ResolveModelPath(_options.ModelPath, family, dfineWeights, _logger));
-
+        var modelKey = $"{family}|{dfineWeights}|{yoloXSize}";
         var http = _httpClientFactory.CreateClient(nameof(CameraDetectionPipeline));
-        var pipeline = new CameraDetectionPipeline(request, _options, _ffmpegPath, resolvedModelPath, family, dfineWeights, aspectMode, http, _loggerFactory);
+        var resolvedModelPath = await ResolveModelPathCachedAsync(modelKey, family, dfineWeights, yoloXSize, request.NodeCallbackBaseUrl, http);
+
+        var pipeline = new CameraDetectionPipeline(request, _options, _ffmpegPath, resolvedModelPath, family, dfineWeights, yoloXSize, aspectMode, http, _loggerFactory, _highResGate);
         _pipelines[request.CameraId] = pipeline;
         _logger.LogInformation("Started watching camera {CameraId} ({Width}x{Height}, hwaccel: {Hwaccel}).",
             request.CameraId, request.Width, request.Height, request.HardwareAcceleration ?? "none");
@@ -80,7 +89,101 @@ public sealed class CameraPipelineManager : IAsyncDisposable
     /// as a last resort for a stale/hand-placed file — the tier that let YOLOv9 keep silently
     /// running after this integration replaced it, back when the glob was the *only* lookup.
     /// </summary>
-    internal static string ResolveModelPath(string configuredPath, DetectionModelFamily family, DFineWeights dfineWeights, ILogger logger)
+    private async Task<string> ResolveModelPathCachedAsync(string modelKey, DetectionModelFamily family,
+        DFineWeights dfineWeights, YoloXSize yoloXSize, string nodeCallbackBaseUrl, HttpClient http)
+    {
+        if (_resolvedModelPathsByKey.TryGetValue(modelKey, out var cached)) return cached;
+
+        var gate = _modelResolveGates.GetOrAdd(modelKey, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync();
+        try
+        {
+            if (_resolvedModelPathsByKey.TryGetValue(modelKey, out cached)) return cached;
+
+            var resolved = family == DetectionModelFamily.YoloX
+                ? await ResolveYoloXModelPathAsync(yoloXSize, nodeCallbackBaseUrl, http)
+                : ResolveModelPath(_options.ModelPath, family, dfineWeights, yoloXSize, _logger);
+
+            _resolvedModelPathsByKey[modelKey] = resolved;
+            return resolved;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private static string ModelsDirectory(string configuredPath)
+    {
+        var configured = Path.IsPathRooted(configuredPath)
+            ? configuredPath
+            : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, configuredPath));
+        return Path.GetDirectoryName(configured)
+            ?? throw new InvalidOperationException($"Configured model path '{configuredPath}' has no directory.");
+    }
+
+    /// <summary>YOLOX models aren't bundled (unlike D-FINE) — one is fetched from the server via the
+    /// Node's own loopback proxy on first use and cached in the models directory alongside the
+    /// bundled D-FINE files. A fetch failure throws so the /start handler reports it (the camera
+    /// stays unwatched) rather than the pipeline crashing later on a missing file.</summary>
+    private async Task<string> ResolveYoloXModelPathAsync(YoloXSize size, string nodeCallbackBaseUrl, HttpClient http)
+    {
+        var dir = ModelsDirectory(_options.ModelPath);
+        Directory.CreateDirectory(dir);
+        var fileName = DetectionModelCatalog.GetYoloXFileName(size);
+        var path = Path.Combine(dir, fileName);
+        if (File.Exists(path) && new FileInfo(path).Length > 0)
+        {
+            _logger.LogInformation("Using cached YOLOX model {ModelPath}.", path);
+            return path;
+        }
+
+        var url = $"{nodeCallbackBaseUrl.TrimEnd('/')}/internal/detection-model/yolox/{size.ToString().ToLowerInvariant()}";
+        _logger.LogInformation("YOLOX-{Size} model not cached — fetching it from the server via {Url}.", size, url);
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"Could not obtain the YOLOX-{size} model from the server (via the node's model proxy at {url}). " +
+                "The server needs one-time outbound access to the pinned model host, or the model seeded into its " +
+                "detection-models cache directory.", ex);
+        }
+
+        if (!response.IsSuccessStatusCode)
+        {
+            response.Dispose();
+            throw new InvalidOperationException(
+                $"The node's model proxy returned {(int)response.StatusCode} for YOLOX-{size} at {url}. " +
+                "Seed the server's detection-models cache or check its outbound access to the pinned model host.");
+        }
+
+        var tmp = path + ".tmp";
+        try
+        {
+            await using (var src = await response.Content.ReadAsStreamAsync())
+            await using (var dst = File.Create(tmp))
+                await src.CopyToAsync(dst);
+
+            if (new FileInfo(tmp).Length == 0) throw new InvalidOperationException("downloaded an empty file");
+            File.Move(tmp, path, overwrite: true);
+        }
+        finally
+        {
+            response.Dispose();
+            if (File.Exists(tmp)) { try { File.Delete(tmp); } catch { /* best effort */ } }
+        }
+
+        _logger.LogInformation("Fetched and cached YOLOX-{Size} model to {ModelPath} ({Bytes} bytes).",
+            size, path, new FileInfo(path).Length);
+        return path;
+    }
+
+    internal static string ResolveModelPath(string configuredPath, DetectionModelFamily family, DFineWeights dfineWeights, YoloXSize yoloXSize, ILogger logger)
     {
         // Relative to the app's own directory, not the current working directory: this is a fact
         // about where the package's files live, and the process is launched by NodeWorker's
@@ -100,7 +203,7 @@ public sealed class CameraPipelineManager : IAsyncDisposable
                 "gets bundled.");
         }
 
-        var wantedFileName = DetectionModelCatalog.GetFileName(family, dfineWeights);
+        var wantedFileName = DetectionModelCatalog.GetFileName(family, dfineWeights, yoloXSize);
         var wantedPath = Path.Combine(directory, wantedFileName);
         if (File.Exists(wantedPath))
         {

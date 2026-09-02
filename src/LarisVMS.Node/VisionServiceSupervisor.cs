@@ -29,6 +29,11 @@ public sealed class VisionServiceSupervisor(string nodeInstallDirectory, string 
     private Process? _process;
     private bool _warnedMissingExe;
 
+    // Deployment-wide Logging.Level (M20 pass 4). Passed as an env var when the child starts and
+    // pushed to the already-running child (its own /log-level endpoint) when it changes.
+    private string _logLevel = "Information";
+    private readonly HttpClient _http = new() { BaseAddress = new Uri($"http://127.0.0.1:{Port}/"), Timeout = TimeSpan.FromSeconds(5) };
+
     // Windows job object holding the child, created once and deliberately never closed for the
     // lifetime of this process. Every process in a job configured with KILL_ON_JOB_CLOSE is
     // terminated by the OS when the last handle to that job closes — and the handle this field holds
@@ -91,10 +96,11 @@ public sealed class VisionServiceSupervisor(string nodeInstallDirectory, string 
         // a bare "ffmpeg", relying on PATH — which this service, normally running as LocalSystem,
         // does not have (confirmed live: "Win32Exception: cannot find the file specified" starting
         // VisionSession's own ffmpeg). Node already resolved a real path at its own startup (its
-        // --ffmpeg-path arg, LARISVMS_FFMPEG_PATH, or a PATH probe run once as this same account) —
-        // passed straight through rather than making the child re-derive it, so the two processes can
-        // never disagree about which ffmpeg they're each running.
+        // --ffmpeg-path arg, LARISVMS_FFMPEG_PATH, or FfmpegPathResolver's PATH / WinGet-package
+        // discovery run once as this same account) — passed straight through rather than making the
+        // child re-derive it, so the two processes can never disagree about which ffmpeg they run.
         psi.EnvironmentVariables["Vision__FfmpegPath"] = ffmpegPath;
+        psi.EnvironmentVariables["Vision__LogLevel"] = _logLevel;
 
         var process = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null.");
         AssignToKillOnCloseJob(process);
@@ -103,6 +109,30 @@ public sealed class VisionServiceSupervisor(string nodeInstallDirectory, string 
 
         _process = process;
         logger.LogInformation("Started LarisVMS.Vision.Service (PID {Pid}) on port {Port}.", process.Id, Port);
+    }
+
+    /// <summary>Sets the log level a future child starts with, and — if one is running now — pushes
+    /// it to that child's own <c>/log-level</c> endpoint (best effort; a failed push just means the
+    /// child keeps its old level until the next restart).</summary>
+    public void SetLogLevel(string level)
+    {
+        _logLevel = level;
+        if (!IsRunning) return;
+        _ = PushLogLevelAsync(level);
+    }
+
+    private async Task PushLogLevelAsync(string level)
+    {
+        try
+        {
+            using var content = new StringContent($"{{\"level\":\"{level}\"}}", System.Text.Encoding.UTF8, "application/json");
+            var response = await _http.PostAsync("log-level", content);
+            response.EnsureSuccessStatusCode();
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Could not push the log level to LarisVMS.Vision.Service — it will pick it up on its next restart.");
+        }
     }
 
     public void Stop()

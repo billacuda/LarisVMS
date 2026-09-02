@@ -6,6 +6,12 @@ obj/
 *.userosscache
 *.sln.docstates
 
+# Test run outputs — `dotnet test` / VSTest write these, and a hung run drops a
+# multi-hundred-MB process crash dump here that GitHub then rejects on push.
+[Tt]est[Rr]esults/
+*.trx
+*.dmp
+
 # Visual Studio
 .vs/
 *.rsuser

@@ -62,11 +62,13 @@ var ffmpegPath = FfmpegPathResolver.Resolve(
     GetArg(args, "--ffmpeg-path") ?? Environment.GetEnvironmentVariable("LARISVMS_FFMPEG_PATH"));
 if (!await FfmpegPathResolver.IsRunnableAsync(ffmpegPath))
 {
-    Console.Error.WriteLine($"ffmpeg could not be run at '{ffmpegPath}'. Set --ffmpeg-path or LARISVMS_FFMPEG_PATH, " +
-        "or install ffmpeg and ensure it's on PATH.");
+    Console.Error.WriteLine($"ffmpeg could not be run at '{ffmpegPath}'. Install it with " +
+        "'winget install ffmpeg --scope machine' (or any other means), then re-run — the node " +
+        "auto-discovers a PATH or WinGet install. Override with --ffmpeg-path or LARISVMS_FFMPEG_PATH.");
     Environment.Exit(1);
     return;
 }
+Console.WriteLine($"Using ffmpeg: {ffmpegPath}");
 
 var fallbackStorageRoot = GetArg(args, "--storage-root") ?? Environment.GetEnvironmentVariable("LARISVMS_STORAGE_ROOT")
     ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "recordings");
@@ -98,9 +100,17 @@ var builder = WebApplication.CreateBuilder(args);
 // diagnose a node after the fact. Sibling of node.config's own %ProgramData%\LarisVMS\ (NodeConfigStore),
 // already proven writable by this same service account. StorageManager.SweepLogsDirectory (fixed
 // 14-day window) is this tier's retention sweep, run alongside its other periodic disk cleanup.
-builder.Logging.AddProvider(new FileLoggerProvider(
+var nodeFileLogger = new FileLoggerProvider(
     Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "logs"),
-    "node", LogLevel.Information));
+    "node", LogLevel.Information);
+builder.Logging.AddProvider(nodeFileLogger);
+// Kestrel/routing/result request-pipeline noise — the node's own LAN-facing media routes and its
+// localhost control channel both log "Request starting / Executing endpoint / ... / Request
+// finished" per hit, and Hosting.Lifetime prints a three-line startup banner. Hidden while the
+// deployment-wide log level is Information or higher; drop it to Debug/Trace to get them back.
+var frameworkLogFilter = FrameworkLogFilter.HiddenUnlessDebug(nodeFileLogger);
+builder.Logging.AddFilter("Microsoft.AspNetCore", frameworkLogFilter);
+builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", frameworkLogFilter);
 builder.WebHost.ConfigureKestrel(o => o.ListenAnyIP(livePort));
 builder.Services.AddWindowsService(o => o.ServiceName = "LarisVMS Node");
 builder.Services.AddSingleton(apiClient);
@@ -109,7 +119,7 @@ builder.Services.AddSingleton(sp => new UpdateService(
     sp.GetRequiredService<IHostApplicationLifetime>()));
 builder.Services.AddSingleton(sp => new NodeWorker(
     apiClient, ffmpegPath, fallbackStorageRoot, livePort, config, sp.GetRequiredService<ILoggerFactory>(), onvifEventsClient,
-    sp.GetRequiredService<UpdateService>()));
+    sp.GetRequiredService<UpdateService>(), nodeFileLogger));
 builder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<NodeWorker>());
 builder.Services.AddSingleton<IHostedService>(sp => new StorageManager(
     apiClient, fallbackStorageRoot, sp.GetRequiredService<ILoggerFactory>().CreateLogger<StorageManager>()));
@@ -201,6 +211,37 @@ app.Map("/live/{cameraId:guid}/detections", async (HttpContext ctx, Guid cameraI
 
     using var socket = await ctx.WebSockets.AcceptWebSocketAsync();
     await DetectionOverlayHandler.RunAsync(socket, cameraId, worker.VisionHttpClient, liveLogger, ctx.RequestAborted);
+});
+
+// Object detection plan pass 3c-1: live per-zone motion score wash on the Zones editor — reuses the
+// same /live token family as the two routes above (Node has no separate notion of "can edit zones,"
+// that's the Web tier's own Cameras.Edit gate one layer out; this token only proves "some authorized
+// viewer of this camera's media requested this").
+app.Map("/live/{cameraId:guid}/motion-zones", async (HttpContext ctx, Guid cameraId, NodeWorker worker) =>
+{
+    if (!ctx.WebSockets.IsWebSocketRequest)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+
+    var token = ExtractToken(ctx);
+    var currentKey = worker.MediaSigningKey;
+    if (currentKey is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
+        return;
+    }
+    if (!MediaToken.TryValidate(token, cameraId, currentKey, out var tokenError))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync(tokenError);
+        return;
+    }
+
+    using var socket = await ctx.WebSockets.AcceptWebSocketAsync();
+    await MotionZoneOverlayHandler.RunAsync(socket, cameraId, worker, liveLogger, ctx.RequestAborted);
 });
 
 // M7 playback: serves exactly one segment file's raw bytes to LarisVMS.Web's proxy — never reached
@@ -514,6 +555,15 @@ app.MapGet("/snapshot-image/{cameraId:guid}", async (HttpContext ctx, Guid camer
         return;
     }
 
+    // Optional, unsigned — same "changes only which frame within an already-authorized ~1s window"
+    // reasoning the box params use. offsetMs gives the crop seek sub-second precision the
+    // whole-second token value can't; bestFrameTicks lets us serve a pre-cropped eager snapshot
+    // (written by the high-res re-detection path) instead of re-cropping the recorded segment.
+    // Both absent = an older Web tier: fall back to offsetSeconds and skip the eager-crop lookup.
+    var offsetMs = long.TryParse(ctx.Request.Query["offsetMs"], out var parsedMs) && parsedMs >= 0
+        ? parsedMs : offsetSeconds * 1000L;
+    long.TryParse(ctx.Request.Query["bestFrameTicks"], out var bestFrameTicks);
+
     var storageRoot = worker.StorageRoot;
     if (storageRoot is null)
     {
@@ -562,12 +612,42 @@ app.MapGet("/snapshot-image/{cameraId:guid}", async (HttpContext ctx, Guid camer
         return;
     }
 
-    var bytes = await worker.CaptureSnapshotImageAsync(fullPath, offsetSeconds, boxX, boxY, boxW, boxH, frameW, frameH, ctx.RequestAborted);
+    // Eager crop cropped from the exact frame the detection ran on (the high-res Main-stream frame,
+    // or — pass G — this camera's own Sub-stream detection frame), so it lines up with the object
+    // far better than a whole-second seek into the recorded segment can. Copied (not moved) into the
+    // canonical span-keyed snapshot cache on first view so retention + the orphaned-snapshot sweep
+    // govern that copy like every other snapshot; the staging file is left in place so a second span
+    // sharing the same instant (a person and a dog in one frame) can promote it too, and
+    // StorageManager.SelectExpiredStagedCrops ages the stagers out after a few days.
+    if (bestFrameTicks > 0)
+    {
+        var stagedPath = Path.Combine(snapshotsDir, "hires", $"{bestFrameTicks}.jpg");
+        if (File.Exists(stagedPath))
+        {
+            try
+            {
+                var staged = await File.ReadAllBytesAsync(stagedPath, ctx.RequestAborted);
+                if (staged.Length > 0)
+                {
+                    await LarisVMS.Media.ThumbnailCapture.SaveToCacheAsync(snapshotPath, staged, CancellationToken.None);
+                    ctx.Response.ContentType = "image/jpeg";
+                    await ctx.Response.Body.WriteAsync(staged, ctx.RequestAborted);
+                    return;
+                }
+            }
+            catch (IOException ex)
+            {
+                logger.LogWarning(ex, "Snapshot-image: eager crop {StagedPath} for span {SpanId} could not be read — falling back to a segment crop.", stagedPath, spanId);
+            }
+        }
+    }
+
+    var bytes = await worker.CaptureSnapshotImageAsync(fullPath, offsetMs / 1000.0, boxX, boxY, boxW, boxH, frameW, frameH, ctx.RequestAborted);
     if (bytes is null)
     {
         logger.LogWarning(
-            "Snapshot-image 502 for span {SpanId}: ffmpeg produced no cropped frame for {FullPath} at offset {OffsetSeconds}s, box ({BoxX},{BoxY},{BoxW},{BoxH}) against frame {FrameW}x{FrameH} (timeout, corrupt segment, offset beyond content, or a crop rectangle that fell outside the frame).",
-            spanId, fullPath, offsetSeconds, boxX, boxY, boxW, boxH, frameW, frameH);
+            "Snapshot-image 502 for span {SpanId}: ffmpeg produced no cropped frame for {FullPath} at offset {OffsetMs}ms, box ({BoxX},{BoxY},{BoxW},{BoxH}) against frame {FrameW}x{FrameH} (timeout, corrupt segment, offset beyond content, or a crop rectangle that fell outside the frame).",
+            spanId, fullPath, offsetMs, boxX, boxY, boxW, boxH, frameW, frameH);
         ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
         await ctx.Response.WriteAsync("Could not extract a cropped frame from this segment.");
         return;
@@ -614,6 +694,43 @@ app.MapPost("/restart", async (HttpContext ctx, NodeWorker worker, LarisVMS.Node
     }
 
     await ctx.Response.WriteAsync("Restarting.");
+});
+
+// Purge vision-debug images — POSTed by LarisVMS.Web's Admin/Settings/Detection "Purge debug
+// images" button. Same signed-token shape as /restart, scoped to the action name. Deletes every
+// *.jpg the detection service left under logs\vision-debug\ (best-effort — a file locked/removed
+// mid-sweep is skipped, not fatal) and responds with the count deleted as plain text.
+app.MapPost("/purge-vision-debug", async (HttpContext ctx, NodeWorker worker) =>
+{
+    var token = ExtractToken(ctx);
+    var currentKey = worker.MediaSigningKey;
+    if (currentKey is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
+        return;
+    }
+    if (!MediaToken.TryValidateNodeControl(token, "purge-vision-debug", currentKey, out var tokenError))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync(tokenError);
+        return;
+    }
+
+    var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+        "LarisVMS", "logs", "vision-debug");
+    var deleted = 0;
+    if (Directory.Exists(dir))
+    {
+        foreach (var file in Directory.EnumerateFiles(dir, "*.jpg"))
+        {
+            try { File.Delete(file); deleted++; }
+            catch (IOException) { /* locked or already gone — skip */ }
+            catch (UnauthorizedAccessException) { /* skip */ }
+        }
+    }
+
+    await ctx.Response.WriteAsync(deleted.ToString());
 });
 
 // Export trigger — POSTed by LarisVMS.Web's ExportJobDispatcher, never reached by a browser
@@ -873,6 +990,98 @@ app.MapPost("/detections", async (HttpContext ctx, VisionDetectionReportItem ite
     }
 
     worker.ReportVisionDetection(item);
+});
+
+// A1 of the snapshot-alignment work: LarisVMS.Vision.Service ships a snapshot cropped from the
+// exact Main-stream frame a high-res re-detection ran against. Same loopback-only trust boundary as
+// /detections above. Staged by best-frame ticks under cam-{id}/snapshots/hires/ — the
+// /snapshot-image route promotes it into the span-keyed cache (retention-governed) on first view.
+app.MapPost("/detections/crop", async (HttpContext ctx, VisionDetectionCropItem item, NodeWorker worker, ILogger<Program> logger) =>
+{
+    if (!IPAddress.IsLoopback(ctx.Connection.RemoteIpAddress ?? IPAddress.None))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+        await ctx.Response.WriteAsync("This endpoint only accepts connections from the local machine.");
+        return;
+    }
+
+    var storageRoot = worker.StorageRoot;
+    if (storageRoot is null) { ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable; return; }
+    if (item.Jpeg is not { Length: > 0 }) { ctx.Response.StatusCode = StatusCodes.Status400BadRequest; return; }
+
+    try
+    {
+        var dir = Path.Combine(storageRoot, $"cam-{item.CameraId}", "snapshots", "hires");
+        Directory.CreateDirectory(dir);
+        var tmp = Path.Combine(dir, $"{item.AtUtc.Ticks}.jpg.tmp");
+        var final = Path.Combine(dir, $"{item.AtUtc.Ticks}.jpg");
+        await File.WriteAllBytesAsync(tmp, item.Jpeg, ctx.RequestAborted);
+        File.Move(tmp, final, overwrite: true);
+        ctx.Response.StatusCode = StatusCodes.Status204NoContent;
+    }
+    catch (IOException ex)
+    {
+        logger.LogWarning(ex, "Could not stage an eager snapshot crop for camera {CameraId} — that span will fall back to a segment-seek crop.", item.CameraId);
+        ctx.Response.StatusCode = StatusCodes.Status500InternalServerError;
+    }
+});
+
+// Pass 3a: LarisVMS.Vision.Service fetches a recent Main-stream instant to decode and re-detect
+// against at full resolution, instead of the lazy seek-into-an-already-written-segment approach that
+// caused the Segment.DurationMs-vs-real-duration drift bug fixed in v0.161.6. Same loopback-only trust
+// boundary as /detections above — this is a sibling-process call, never something LarisVMS.Web makes.
+// Response body is deliberately just bytes, no segment-path/offset metadata: that can always be
+// resolved later the normal way (TimelineService's existing segment+offset lookup) once this instant's
+// segment closes and is reported, so Node doesn't need a DB-backed concern bolted onto it here.
+app.MapGet("/internal/main-frame/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, DateTime atUtc, NodeWorker worker) =>
+{
+    if (!IPAddress.IsLoopback(ctx.Connection.RemoteIpAddress ?? IPAddress.None))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+        await ctx.Response.WriteAsync("This endpoint only accepts connections from the local machine.");
+        return;
+    }
+
+    var snapshot = worker.TryGetMainFrameSnapshot(cameraId, atUtc);
+    if (snapshot is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+    }
+
+    // Fixed framing, no multipart complexity needed — always exactly two parts in a fixed order:
+    // a 4-byte little-endian init-segment length, the init segment itself, then the fragment.
+    var (initSegment, fragment) = snapshot.Value;
+    ctx.Response.ContentType = "application/octet-stream";
+    var lengthPrefix = BitConverter.GetBytes(initSegment.Length);
+    await ctx.Response.Body.WriteAsync(lengthPrefix, ctx.RequestAborted);
+    await ctx.Response.Body.WriteAsync(initSegment, ctx.RequestAborted);
+    await ctx.Response.Body.WriteAsync(fragment, ctx.RequestAborted);
+});
+
+// Loopback-only proxy so the sibling Vision Service can fetch a detection model it doesn't have
+// cached without needing the server URL or node credentials of its own — the node passes the
+// request through on its authenticated channel. Only YOLOX models go this way (D-FINE is bundled).
+app.MapGet("/internal/detection-model/{family}/{variant}", async (HttpContext ctx, string family, string variant, NodeApiClient api) =>
+{
+    if (!IPAddress.IsLoopback(ctx.Connection.RemoteIpAddress ?? IPAddress.None))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+        await ctx.Response.WriteAsync("This endpoint only accepts connections from the local machine.");
+        return;
+    }
+
+    try
+    {
+        await using var upstream = await api.OpenDetectionModelStreamAsync(family, variant, ctx.RequestAborted);
+        ctx.Response.ContentType = "application/octet-stream";
+        await upstream.CopyToAsync(ctx.Response.Body, ctx.RequestAborted);
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
+        await ctx.Response.WriteAsync($"Could not obtain the {family}/{variant} model from the server: {ex.Message}");
+    }
 });
 
 await app.RunAsync();

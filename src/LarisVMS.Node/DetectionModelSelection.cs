@@ -10,23 +10,18 @@ namespace LarisVMS.Node;
 /// </summary>
 public static class DetectionModelSelection
 {
-    /// <summary>Auto's own hardware-based default: Nvidia gets D-FINE (GPU-friendly, DETR-style —
-    /// see the model-swap plan's own reasoning), everything else gets YOLOX. RF-DETR is never an
-    /// Auto default — it's a selectable alternative only.</summary>
+    /// <summary>Auto resolves to YOLOX on every accelerator — it runs well on low-power and
+    /// non-Nvidia GPUs, uses an Nvidia GPU fully where present (same ONNX Runtime EP path D-FINE
+    /// uses), needs no letterbox, and ByteTrack was designed against it. D-FINE stays selectable but
+    /// is opt-in only. <paramref name="accelerator"/> no longer influences the choice; kept on the
+    /// signature for callers and for a future family that might key off it.</summary>
     public static DetectionModelFamily Choose(DetectionModelFamily desired, AiAccelerator accelerator)
     {
-        var resolved = desired == DetectionModelFamily.Auto
-            ? (accelerator == AiAccelerator.Nvidia ? DetectionModelFamily.DFine : DetectionModelFamily.YoloX)
-            : desired;
+        _ = accelerator;
+        var resolved = desired == DetectionModelFamily.Auto ? DetectionModelFamily.YoloX : desired;
 
-        // RF-DETR and YOLOX have no working decoder yet (DetectionEngineFactory would throw
-        // constructing either) — fall back to D-FINE, the one family actually implemented, so a
-        // node keeps detecting instead of crashing its Vision Service pipeline. The admin picker
-        // already renders both disabled, so this only ever matters for Auto's own Intel/AMD/CPU
-        // default (which would otherwise pick YOLOX) or a stale/manually-set setting value. Remove
-        // this fallback once either family actually ships.
-        return resolved is DetectionModelFamily.RfDetr or DetectionModelFamily.YoloX
-            ? DetectionModelFamily.DFine
-            : resolved;
+        // RF-DETR still has no decoder (DetectionEngineFactory would throw). YOLOX ships now, so it
+        // is no longer in this fallback. Remove RF-DETR too once it lands.
+        return resolved is DetectionModelFamily.RfDetr ? DetectionModelFamily.DFine : resolved;
     }
 }

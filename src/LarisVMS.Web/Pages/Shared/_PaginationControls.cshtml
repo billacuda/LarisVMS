@@ -11,7 +11,7 @@
 }
 @if (Model.TotalPages > 1)
 {
-    <nav class="mt-3" aria-label="Pagination">
+    <nav class="@Model.CssClass" aria-label="@Model.AriaLabel">
         <ul class="pagination pagination-sm flex-wrap mb-0">
             <li class="page-item @(atFirst ? "disabled" : "")">
                 <a class="page-link" href="@(atFirst ? "#" : Model.PageUrl(1))" title="First page" aria-label="First page">«</a>

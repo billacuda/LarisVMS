@@ -79,6 +79,14 @@ public interface ICameraService
     /// the fast path for "stop this one camera without opening Edit" on Cameras/Index.</summary>
     Task ToggleEnabledAsync(Guid id, CancellationToken ct = default);
 
+    /// <summary>Detection/hardware-acceleration overhaul pass 3c-2: switches a camera's active
+    /// region method (Polygon/Grid) — see Camera.MotionRegionMode's own doc comment for why this
+    /// never touches either method's own saved configuration.</summary>
+    Task SetMotionRegionModeAsync(Guid cameraId, MotionRegionMode mode, CancellationToken ct = default);
+
+    /// <summary>Pass 3c-2: saves Grid mode's size/mask/sensitivity together.</summary>
+    Task SaveMotionGridAsync(Guid cameraId, int gridSize, string? mask, double sensitivity, CancellationToken ct = default);
+
     /// <summary>Cameras with Segment rows recorded under a NodeId other than their current
     /// Camera.NodeId — footage still sitting on a node the camera is no longer assigned to. Keyed
     /// by CameraId, each value is the distinct set of stale NodeIds that footage sits on. A live

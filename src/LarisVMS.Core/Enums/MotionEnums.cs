@@ -27,6 +27,15 @@ public enum ZoneKind
     Ignore = 3
 }
 
+/// <summary>Detection/hardware-acceleration overhaul pass 3c-2: which of the two mutually exclusive
+/// ways of choosing which pixels count as motion is active for a camera — see
+/// Camera.MotionRegionMode's own doc comment.</summary>
+public enum MotionRegionMode
+{
+    Polygon = 0,
+    Grid = 1
+}
+
 /// <summary>How a MotionSpan was produced. ServerMotion is a drawn zone's own frame-diff detection;
 /// CameraEvent is the built-in ONVIF motion classifier (CameraEventClassifier's hardcoded topic
 /// markers); CustomTag (M8 pass 8) is a user-configured EventTagRule — see MotionSpan.EventTagRuleId,

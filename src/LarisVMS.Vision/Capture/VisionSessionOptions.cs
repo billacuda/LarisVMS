@@ -15,11 +15,15 @@ public readonly record struct LetterboxGeometry(int ScaledWidth, int ScaledHeigh
 public sealed record VisionSessionOptions(
     string FfmpegPath,
     string RtspUri,
-    /// <summary>The captured frame's own dimensions — as of pass 1, always the detection engine's
-    /// network input size (InferenceProfile.NetworkWidth/NetworkHeight), so ffmpeg emits frames
-    /// already at the exact tensor input size and DFineEngine.Preprocess never resizes. Before this
-    /// pass this was a fixed global decode resolution (1280x720) unrelated to the model's own 640x640
-    /// input, with a separate SKBitmap.Resize bridging the two.</summary>
+    /// <summary>The captured frame's own dimensions. As of pass 1 this is normally the detection
+    /// engine's network input size (InferenceProfile.NetworkWidth/NetworkHeight), so ffmpeg emits
+    /// frames already at the exact tensor input size and the engine's Preprocess never resizes.
+    /// Before that pass it was a fixed global decode resolution (1280x720) unrelated to the model's
+    /// own input, with a separate SKBitmap.Resize bridging the two. Pass F (Detection.HiResSnapshots)
+    /// re-introduces that split deliberately for opt-in cameras: these dims can then exceed the
+    /// network size (the Sub stream at up to native resolution), CameraDetectionPipeline downscales
+    /// each frame into the network buffer itself (BgraOps.LetterboxResize), and the eager snapshot
+    /// crop is taken from this larger buffer.</summary>
     int Width = 640,
     int Height = 640,
     /// <summary>ffmpeg -hwaccel value, e.g. "cuda". Null decodes on the CPU. Only "cuda" gets the
@@ -30,5 +34,15 @@ public sealed record VisionSessionOptions(
     /// <summary>Non-null only for AspectMode.Letterbox — see LetterboxGeometry's own doc comment.
     /// Null for Stretch, whose plain scale=Width:Height filter needs no separate pre-pad step.</summary>
     LetterboxGeometry? Letterbox = null,
+    /// <summary>Pass 4a: emit packed nv12 (<c>-pix_fmt nv12</c>, <c>W*H*3/2</c> bytes/frame) instead
+    /// of BGRA. Set when the detection engine has the GPU preprocessing head merged in — ffmpeg then
+    /// does no <c>swscale</c> colour conversion at all; the nv12→RGB step happens on the accelerator
+    /// inside ONNX Runtime. The <c>scale_cuda</c>/<c>pad</c> filter chain is unchanged.</summary>
+    bool Nv12Output = false,
+    /// <summary>When &gt; 0, an <c>fps=N</c> filter is appended to the chain so the model sees at most
+    /// N frames/sec — the ffmpeg process still decodes the Sub stream in real time, it just drops the
+    /// surplus before they reach inference. Node only sends a value here when the stream's own rate
+    /// is genuinely higher (never causing frame duplication). 0 = no filter.</summary>
+    int FpsCap = 0,
     int StalledThresholdSeconds = 30,
     int PollIntervalSeconds = 5);

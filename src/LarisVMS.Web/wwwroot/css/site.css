@@ -257,3 +257,66 @@ body {
 .help-text-source {
     display: none;
 }
+
+/* Bootstrap's .form-select is display:block; width:100% — a lone <select> in a toolbar or filter
+   bar stretches across the whole row, and even in a Settings form it fills its grid column however
+   short its options are. Size it to its widest option instead; max-width keeps a long option (a
+   camera name, say) from overflowing its container. Multi/size selects keep the block behavior. */
+.form-select:not([multiple]):not([size]) {
+    width: auto;
+    max-width: 100%;
+}
+
+/* "Catching up" badge (catchup-badge.js) — shown on a live or playback tile while its video runs
+   faster than 1x to close a gap (live drift catch-up at 1.5x, playback stepped fast-forward or a
+   drift resync). Amber so it reads as a transient state rather than an error; pinned top-center by
+   the utility classes in the markup to stay clear of the corner badges (motion/detection top-left,
+   digital-zoom top-right) and the hover controls along the bottom. */
+.catchup-badge {
+    z-index: 4;
+    background: rgba(255, 193, 7, 0.9);
+    color: #000;
+    font-weight: 600;
+    pointer-events: none;
+}
+
+/* Snapshots page filter tree (Pages/Snapshots/Index.cshtml) — a 2-level <details> tree
+   (category -> specific label). Suppress the browser's default disclosure marker the same way
+   .column-picker does, and drive an explicit caret that rotates on [open] — same rotating-caret
+   convention as .group-collapse-icon (Cameras/Groups) and .role-caret (Permissions/Roles). */
+.snapshot-filter-tree-node > summary {
+    list-style: none;
+    cursor: pointer;
+}
+.snapshot-filter-tree-node > summary::-webkit-details-marker {
+    display: none;
+}
+.snapshot-tree-caret {
+    display: inline-block;
+    transition: transform .15s ease-in-out;
+    color: var(--bs-secondary-color);
+    font-size: .8em;
+}
+.snapshot-filter-tree-node[open] > summary .snapshot-tree-caret {
+    transform: rotate(90deg);
+}
+
+/* Guide lines from a category down to its labels: a single left rule on the children container,
+   plus a short elbow to each child. var(--bs-border-color) is theme-correct in light and dark
+   with no second rule. */
+.snapshot-tree-children {
+    margin-left: 1.05rem;
+    padding-left: .75rem;
+    border-left: 1px solid var(--bs-border-color);
+}
+.snapshot-tree-children > .form-check {
+    position: relative;
+}
+.snapshot-tree-children > .form-check::before {
+    content: "";
+    position: absolute;
+    left: -.75rem;
+    top: .6em;
+    width: .55rem;
+    border-top: 1px solid var(--bs-border-color);
+}

@@ -157,6 +157,74 @@ public class NodeServiceAiDetectionTests
     }
 
     [Fact]
+    public async Task FragmentedSightingsOfOneObjectWithinTheIdleGapCoalesceIntoASingleSpan()
+    {
+        // Tracker-ID churn / a brief occlusion closes one sighting; the object is re-acquired a few
+        // seconds later as a fresh span with a new StartUtc. Within the idle-timeout-plus-slack
+        // window that must extend the first span, not add a second Snapshots card.
+        var (db, service, cameraId, nodeId) = await SeedAsync();
+        var start = new DateTime(2026, 8, 10, 12, 0, 0, DateTimeKind.Utc);
+
+        await service.RecordMotionSpansAsync(nodeId, [
+            new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(4), 0.8,
+                DetectedObjectCategory: "Human", DetectedObjectLabel: "person",
+                BestFrameAtUtc: start.AddSeconds(2), BestBoxX: 0.1, BestBoxY: 0.1, BestBoxW: 0.2, BestBoxH: 0.3, BestBoxConfidence: 0.7)
+        ]);
+        await service.RecordMotionSpansAsync(nodeId, [
+            new MotionSpanReportItem(cameraId, null, start.AddSeconds(10), start.AddSeconds(16), 0.9,
+                DetectedObjectCategory: "Human", DetectedObjectLabel: "person",
+                BestFrameAtUtc: start.AddSeconds(12), BestBoxX: 0.4, BestBoxY: 0.4, BestBoxW: 0.3, BestBoxH: 0.4, BestBoxConfidence: 0.95)
+        ]);
+
+        var spans = await db.MotionSpans.Where(m => m.CameraId == cameraId).ToListAsync();
+        var span = Assert.Single(spans);
+        Assert.Equal(start, span.StartUtc);
+        Assert.Equal(start.AddSeconds(16), span.EndUtc);
+        Assert.Equal(0.9, span.Score);
+        Assert.Equal(0.95, span.BestBoxConfidence);          // adopted the more confident frame
+        Assert.Equal(start.AddSeconds(12), span.BestFrameAtUtc);
+    }
+
+    [Fact]
+    public async Task SightingsFartherApartThanTheIdleGapStaySeparateSpans()
+    {
+        var (db, service, cameraId, nodeId) = await SeedAsync();
+        var start = new DateTime(2026, 8, 10, 12, 0, 0, DateTimeKind.Utc);
+
+        await service.RecordMotionSpansAsync(nodeId, [
+            new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(4), 0.8,
+                DetectedObjectCategory: "Human", DetectedObjectLabel: "person")
+        ]);
+        // 40s later — well beyond the ~15s coalesce window: a genuinely separate visit.
+        await service.RecordMotionSpansAsync(nodeId, [
+            new MotionSpanReportItem(cameraId, null, start.AddSeconds(44), start.AddSeconds(50), 0.8,
+                DetectedObjectCategory: "Human", DetectedObjectLabel: "person")
+        ]);
+
+        Assert.Equal(2, await db.MotionSpans.CountAsync(m => m.CameraId == cameraId));
+    }
+
+    [Fact]
+    public async Task CoalescingOnlyMatchesTheSameLabel()
+    {
+        var (db, service, cameraId, nodeId) = await SeedAsync();
+        var start = new DateTime(2026, 8, 10, 12, 0, 0, DateTimeKind.Utc);
+
+        await service.RecordMotionSpansAsync(nodeId, [
+            new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(4), 0.8,
+                DetectedObjectCategory: "Vehicle", DetectedObjectLabel: "car")
+        ]);
+        // Overlapping in time, different label — a car and a truck really both in frame.
+        await service.RecordMotionSpansAsync(nodeId, [
+            new MotionSpanReportItem(cameraId, null, start.AddSeconds(3), start.AddSeconds(9), 0.7,
+                DetectedObjectCategory: "Vehicle", DetectedObjectLabel: "truck")
+        ]);
+
+        var spans = await db.MotionSpans.Where(m => m.CameraId == cameraId).ToListAsync();
+        Assert.Equal(2, spans.Count);
+    }
+
+    [Fact]
     public async Task ANonAiDetectionSpanNeverGetsACategory()
     {
         var (db, service, cameraId, nodeId) = await SeedAsync();

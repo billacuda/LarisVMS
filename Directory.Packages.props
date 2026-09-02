@@ -30,6 +30,13 @@
     <!-- LarisVMS.Vision / LarisVMS.Vision.Service — object detection (see the detection plan).
          Versions match what aitest (g:\Projects\aitest) already proved out. -->
     <PackageVersion Include="YoloDotNet" Version="4.2.0" />
+    <!-- ONNX graph edit (pass 4a): the D-FINE model gets an nv12->normalized-tensor preprocessing
+         head merged in at load so colour conversion + normalize run on the accelerator, not the CPU.
+         Google.Protobuf (BSD-3-Clause) is the runtime; Grpc.Tools (Apache-2.0, build-only) compiles
+         the vendored onnx-ml.proto (Apache-2.0) to C# messages — no gRPC services, just the ONNX IR
+         types. -->
+    <PackageVersion Include="Google.Protobuf" Version="3.29.3" />
+    <PackageVersion Include="Grpc.Tools" Version="2.69.0" />
     <PackageVersion Include="YoloDotNet.ExecutionProvider.Cuda" Version="1.1.0" />
     <PackageVersion Include="YoloDotNet.ExecutionProvider.DirectML" Version="1.0.0" />
     <PackageVersion Include="YoloDotNet.ExecutionProvider.OpenVino" Version="1.1.0" />

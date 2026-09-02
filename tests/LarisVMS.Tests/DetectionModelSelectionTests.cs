@@ -5,21 +5,14 @@ namespace LarisVMS.Tests;
 
 public class DetectionModelSelectionTests
 {
-    [Fact]
-    public void AutoOnNvidiaChoosesDFine()
-    {
-        Assert.Equal(DetectionModelFamily.DFine, DetectionModelSelection.Choose(DetectionModelFamily.Auto, AiAccelerator.Nvidia));
-    }
-
     [Theory]
+    [InlineData(AiAccelerator.Nvidia)]
     [InlineData(AiAccelerator.Intel)]
     [InlineData(AiAccelerator.Amd)]
     [InlineData(AiAccelerator.Cpu)]
-    public void AutoOnNonNvidiaFallsBackToDFineBecauseYoloXIsNotImplementedYet(AiAccelerator accelerator)
+    public void AutoResolvesToYoloXOnEveryAccelerator(AiAccelerator accelerator)
     {
-        // The "ideal" Auto default for these is YOLOX, but it doesn't exist yet — Choose must
-        // substitute D-FINE rather than return a family DetectionEngineFactory would throw for.
-        Assert.Equal(DetectionModelFamily.DFine, DetectionModelSelection.Choose(DetectionModelFamily.Auto, accelerator));
+        Assert.Equal(DetectionModelFamily.YoloX, DetectionModelSelection.Choose(DetectionModelFamily.Auto, accelerator));
     }
 
     [Fact]
@@ -28,13 +21,17 @@ public class DetectionModelSelectionTests
         Assert.Equal(DetectionModelFamily.DFine, DetectionModelSelection.Choose(DetectionModelFamily.DFine, AiAccelerator.Intel));
     }
 
-    [Theory]
-    [InlineData(DetectionModelFamily.RfDetr)]
-    [InlineData(DetectionModelFamily.YoloX)]
-    public void AnExplicitUnimplementedChoiceAlsoFallsBackToDFine(DetectionModelFamily unimplemented)
+    [Fact]
+    public void ExplicitYoloXChoiceIsHonored()
     {
-        // Not just Auto's own default — an explicit (stale setting, hand-edited DB row) choice of
-        // an unimplemented family must not crash the pipeline either.
-        Assert.Equal(DetectionModelFamily.DFine, DetectionModelSelection.Choose(unimplemented, AiAccelerator.Nvidia));
+        Assert.Equal(DetectionModelFamily.YoloX, DetectionModelSelection.Choose(DetectionModelFamily.YoloX, AiAccelerator.Nvidia));
+    }
+
+    [Fact]
+    public void RfDetrStillFallsBackToDFine()
+    {
+        // RF-DETR has no decoder yet — Choose must substitute D-FINE rather than return a family
+        // DetectionEngineFactory would throw for.
+        Assert.Equal(DetectionModelFamily.DFine, DetectionModelSelection.Choose(DetectionModelFamily.RfDetr, AiAccelerator.Nvidia));
     }
 }

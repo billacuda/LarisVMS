@@ -1,4 +1,5 @@
 using LarisVMS.Core.Dtos;
+using LarisVMS.Core.Logging;
 using LarisVMS.Vision.Service;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -6,6 +7,32 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.Configure<VisionServiceOptions>(builder.Configuration.GetSection("Vision"));
 builder.Services.AddHttpClient(nameof(CameraDetectionPipeline));
 builder.Services.AddSingleton<CameraPipelineManager>();
+
+// This process has never had its own log file — its console output is captured by
+// VisionServiceSupervisor.DrainOutputAsync and re-logged into Node's own logger, but always at
+// Debug severity regardless of the original level, and Node's own FileLoggerProvider is configured
+// at an Information minimum — so every line, including this pass's own high-res re-detection
+// diagnostics, was silently dropped rather than ever reaching any log file. Same shared
+// FileLoggerProvider Node itself uses (LarisVMS.Core.Logging — deliberately in Core so neither tier
+// needs a reference the other doesn't already have), writing into the same shared logs directory
+// under its own "vision-" prefix so StorageManager's existing 14-day sweep can retain it too (see
+// that sweep's own updated glob).
+// Initial level from the env var the node's VisionServiceSupervisor passes (the deployment-wide
+// Logging.Level setting); the node also pushes changes to POST /log-level below without a restart.
+var visionFileLogger = new FileLoggerProvider(
+    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "logs"),
+    "vision", LogLevels.Parse(builder.Configuration["Vision:LogLevel"]));
+builder.Logging.AddProvider(visionFileLogger);
+
+// Framework request-pipeline noise — the HttpClient play-by-play (four lines per Node callback) and
+// Kestrel/routing/result "Request starting / Executing endpoint / Setting status code / Request
+// finished" (six lines per /cameras/{id}/detections poll, several per second per camera), plus the
+// Hosting.Lifetime startup banner. All drowned the vision log. Hidden while the app's configured
+// level is Information or higher; drop it to Debug/Trace to get them back.
+var frameworkLogFilter = FrameworkLogFilter.HiddenUnlessDebug(visionFileLogger);
+builder.Logging.AddFilter("System.Net.Http.HttpClient", frameworkLogFilter);
+builder.Logging.AddFilter("Microsoft.AspNetCore", frameworkLogFilter);
+builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", frameworkLogFilter);
 
 // Loopback-only — this is a localhost control channel between LarisVMS.Node and this sibling
 // process on the same machine (decision 3), never reached from the LAN. Port read directly from
@@ -18,6 +45,14 @@ builder.WebHost.ConfigureKestrel(o => o.ListenLocalhost(port));
 var app = builder.Build();
 
 app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
+
+// Node pushes the deployment-wide Logging.Level here when it changes — takes effect immediately, no
+// restart. Loopback-only like every other route on this port.
+app.MapPost("/log-level", (LogLevelRequest request) =>
+{
+    visionFileLogger.MinLevel = LogLevels.Parse(request.Level);
+    return Results.NoContent();
+});
 
 app.MapPost("/cameras/{cameraId:guid}/start", async (Guid cameraId, VisionStartCameraRequest request,
     CameraPipelineManager manager, ILogger<Program> logger) =>

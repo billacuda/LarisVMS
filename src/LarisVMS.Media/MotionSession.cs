@@ -54,7 +54,12 @@ public record MotionSessionOptions(
 /// segment files, no live fanout, no stderr resolution parsing (the fixed-size Width*Height output
 /// makes that unnecessary — see MotionSessionOptions.Width/Height).
 /// </summary>
-public sealed class MotionSession(MotionSessionOptions options, IReadOnlyList<MotionZoneMask> zones, ILogger logger)
+/// <param name="gridSize">Detection/hardware-acceleration overhaul pass 3c-2: non-null only when the
+/// camera is in Grid mode — see GetCurrentCellScores' own doc comment. Grid mode's own single
+/// aggregate region (the whole frame minus masked cells) still flows through <paramref name="zones"/>
+/// exactly like a Polygon-mode zone does; this parameter only turns on the *additional* per-cell
+/// scoring pass MotionSession itself would otherwise have no reason to compute.</param>
+public sealed class MotionSession(MotionSessionOptions options, IReadOnlyList<MotionZoneMask> zones, ILogger logger, int? gridSize = null)
 {
     public StreamRecordingState State { get; private set; } = StreamRecordingState.Idle;
     public DateTime? LastFrameAt { get; private set; }
@@ -63,6 +68,24 @@ public sealed class MotionSession(MotionSessionOptions options, IReadOnlyList<Mo
     /// <summary>Raised once per completed span, per zone. NodeWorker attaches CameraId when
     /// enqueuing for report — this class stays camera-agnostic, same as RecordingSession.</summary>
     public event Action<Guid /*zoneId*/, MotionSpanResult>? MotionSpanCompleted;
+
+    /// <summary>Every zone's most recent per-frame motion score (confirmed span or not) — read by
+    /// MotionZoneOverlayHandler's own poll loop for object detection plan pass 3c-1's live per-zone
+    /// wash on the Zones editor. A plain volatile reference swap (never mutated in place), same
+    /// reasoning as CameraDetectionPipeline._liveSnapshot: a reader either sees the previous frame's
+    /// scores or the new ones, never a half-built dictionary. Empty (never null) before the first
+    /// frame has ever been scored.</summary>
+    private volatile IReadOnlyDictionary<Guid, double> _lastZoneScores = new Dictionary<Guid, double>();
+    public IReadOnlyDictionary<Guid, double> GetCurrentZoneScores() => _lastZoneScores;
+
+    /// <summary>Grid mode's own per-cell live feed (pass 3c-2), independent of the single aggregate
+    /// score GetCurrentZoneScores exposes for the "whole region minus masked cells" entry in
+    /// <c>zones</c> — see MotionGrid.ScoreCells' own doc comment for why this needs a dedicated pass
+    /// rather than being derived from the aggregate. Null when this session isn't in Grid mode
+    /// (constructed with no gridSize) or before the first frame has ever been scored; never null
+    /// once Grid mode has scored at least one frame.</summary>
+    private volatile IReadOnlyList<double>? _lastCellScores;
+    public IReadOnlyList<double>? GetCurrentCellScores() => _lastCellScores;
 
     // The Y (luma) plane is always Width*Height bytes and is grayscale by construction — both the
     // plain software path (format=gray, one byte/pixel already) and the CUDA path (nv12's Y plane,
@@ -252,12 +275,20 @@ public sealed class MotionSession(MotionSessionOptions options, IReadOnlyList<Mo
                 var currentY = current.AsSpan(0, _yPlaneSize);
 
                 var now = DateTime.UtcNow;
+                var scores = new Dictionary<Guid, double>(zones.Count);
                 foreach (var zone in zones)
                 {
                     var score = MotionDetector.Score(previousY, currentY, zone.Mask, options.PixelDeltaThreshold);
+                    scores[zone.ZoneId] = score;
                     var motionPresent = score >= zone.Sensitivity;
                     var result = hysteresis[zone.ZoneId].Observe(now, motionPresent, score);
                     if (result is not null) MotionSpanCompleted?.Invoke(zone.ZoneId, result);
+                }
+                _lastZoneScores = scores;
+
+                if (gridSize is { } gs)
+                {
+                    _lastCellScores = MotionGrid.ScoreCells(previousY, currentY, gs, options.Width, options.Height, options.PixelDeltaThreshold);
                 }
             }
 

@@ -129,6 +129,26 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         var aspectMode = await settings.GetAsync("Detection.AspectMode", "Letterbox", nodeId: nodeId, ct: ct);
         var detectionModelFamily = await settings.GetAsync("Detection.ModelFamily", "Auto", nodeId: nodeId, ct: ct);
         var dfineWeights = await settings.GetAsync("Detection.DFineWeights", "Obj2Coco", nodeId: nodeId, ct: ct);
+        // YOLOX model size — same node-scoped resolution; only meaningful when the family is YoloX.
+        var yoloXSize = await settings.GetAsync("Detection.YoloXSize", "S", nodeId: nodeId, ct: ct);
+        // Per-camera detection frame-rate ceiling (0 = decode rate). Node-scoped.
+        var maxDetectionFps = await settings.GetAsync("Detection.MaxFps", 10, nodeId: nodeId, ct: ct);
+        // Detection/hardware-acceleration overhaul, pass 3b — same node-scoped resolution as
+        // AspectMode/DetectionModelFamily above.
+        var enableHighResReDetection = await settings.GetAsync("Detection.EnableHighResReDetection", false, nodeId: nodeId, ct: ct);
+        // Diagnostic-only: whether Vision Service writes its per-trigger cropped JPEGs to
+        // logs\vision-debug\. Same Global -> Node resolution as the flags above. Defaults false
+        // (opt-in) — an existing install that wants it keeps a global Setting row = 'true' (seeded
+        // by the 0.168.0 migration); a fresh install starts with it off.
+        var enableVisionDebugImages = await settings.GetAsync("Detection.EnableVisionDebugImages", false, nodeId: nodeId, ct: ct);
+        // Pass 4a — same Global -> Node resolution as the flags above. Moves per-frame preprocessing
+        // off the CPU onto whatever accelerator ONNX Runtime is using. Opt-in, default off.
+        var gpuPreprocessing = await settings.GetAsync("Detection.GpuPreprocessing", false, nodeId: nodeId, ct: ct);
+        // Pass F — same Global -> Node resolution. Decode the Sub stream at up to native resolution
+        // so the eager AI-detection snapshot crop is sharper. Opt-in, default off.
+        var hiResSnapshots = await settings.GetAsync("Detection.HiResSnapshots", false, nodeId: nodeId, ct: ct);
+        // Deployment-wide minimum log level for nodes + their vision services. Global only.
+        var logLevel = await settings.GetAsync("Logging.Level", "Information", ct: ct);
         // Confidence/IoU/stream-role are resolved per camera below (Camera -> Node -> Global,
         // same chain RetentionDays/RecordingMode already use) — not read once globally here like
         // the settings above, since a specific camera can need its own threshold or stream choice.
@@ -180,7 +200,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             cameraDtos.Add(new NodeConfigCameraDto(
                 c.Id, c.Name, c.Username, c.Password,
                 c.Streams.Where(s => s.IsEnabled).Select(s => new NodeConfigStreamDto(
-                    s.Id, s.Role.ToString(), s.RtspUri, s.Codec, s.Width, s.Height, s.HasAudio)).ToList(),
+                    s.Id, s.Role.ToString(), s.RtspUri, s.Codec, s.Width, s.Height, s.HasAudio, s.Fps)).ToList(),
                 retentionDays, c.QuotaBytes,
                 zonesLookup[c.Id].Select(z => new NodeConfigZoneDto(z.Id, z.Kind.ToString(), z.PolygonJson, z.Sensitivity)).ToList(),
                 recordingMode, motionPreRollSeconds, motionPostRollSeconds,
@@ -193,7 +213,8 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
                 CameraIntegrations.ByKey(c.IntegrationKey)?.Key,
                 ResolveIntegrationBaseUri(c), segmentSeconds,
                 c.AiDetectionEnabled, c.MotionDetectionSource?.ToString(),
-                aiConfidence, aiIou, aiDetectionStreamRole, c.ServerMotionEnabled));
+                aiConfidence, aiIou, aiDetectionStreamRole, c.ServerMotionEnabled,
+                c.MotionRegionMode.ToString(), c.MotionGridSize, c.MotionGridMask, c.MotionGridSensitivity));
         }
 
         // Cameras this node has leftover Segments for but doesn't currently record — reassigned to a
@@ -220,7 +241,9 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
 
         return new NodeConfigResponse(cameraDtos, storageRoot, watermarkPercent, mediaSigningKey, orphanedCameraDtos,
             adaptiveStreamingEnabled, (aiAccelerator ?? AiAccelerator.Auto).ToString(),
-            reportIdleDetections, aspectMode, detectionModelFamily, dfineWeights, aiIdleTimeoutSeconds);
+            reportIdleDetections, aspectMode, detectionModelFamily, dfineWeights, aiIdleTimeoutSeconds,
+            enableHighResReDetection, enableVisionDebugImages, gpuPreprocessing, logLevel)
+        { YoloXSize = yoloXSize, MaxDetectionFps = maxDetectionFps, HiResSnapshots = hiResSnapshots };
     }
 
     /// <summary>Pulls the Events service's own XAddr out of the capability prober's raw category map
@@ -409,6 +432,12 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         // more importantly, redundant find-or-create races) within a single call.
         var categoryCache = new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
 
+        // How far apart two AI-detection sightings of the same object on the same camera can be and
+        // still be treated as one span (B1 coalescing below) — one full idle-timeout gap (the window
+        // a track can vanish and resume without opening a new span, Vision-side) plus a few seconds
+        // of slack for tracker-ID churn / a pipeline restart landing between two frames.
+        var coalesceGap = TimeSpan.FromSeconds(Math.Max(0, await settings.GetAsync("Detection.IdleTimeoutSeconds", 10, ct: ct)) + 5);
+
         // M8: a still-open span is checkpointed periodically (NodeWorker.EnqueueMotionCheckpoints),
         // not just reported once on close — without upserting, every checkpoint of the same
         // long-running span would pile up as its own row instead of one row that keeps extending.
@@ -463,6 +492,46 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
                     existing.BestBoxConfidence = item.BestBoxConfidence;
                 }
                 continue;
+            }
+
+            // B1: coalesce fragmented AI-detection spans. Tracker-ID churn, a per-frame label flip
+            // (car<->truck), a brief occlusion, or a Vision Service / pipeline restart each make one
+            // physical object's sighting close and a new span open a few seconds later with a fresh
+            // StartUtc — which surfaces as several near-identical Snapshots cards for one event. If
+            // this AI-detection item overlaps (within coalesceGap) an existing span for the same
+            // camera + label, extend that span instead of adding a new row.
+            if (item.DetectedObjectLabel is not null && item.ZoneId is null
+                && item.EventTagRuleId is null && item.DetectionKind is null)
+            {
+                var windowStart = item.StartUtc - coalesceGap;
+                var windowEnd = item.EndUtc + coalesceGap;
+                var sibling = await db.MotionSpans
+                    .Where(m => m.CameraId == item.CameraId
+                        && m.DetectedObjectLabel == item.DetectedObjectLabel
+                        && m.ZoneId == null && m.EventTagRuleId == null && m.DetectionKind == null
+                        && m.StartUtc <= windowEnd && m.EndUtc >= windowStart)
+                    .OrderByDescending(m => m.StartUtc)
+                    .FirstOrDefaultAsync(ct);
+                if (sibling is not null)
+                {
+                    if (item.StartUtc < sibling.StartUtc) sibling.StartUtc = item.StartUtc;
+                    if (item.EndUtc > sibling.EndUtc) sibling.EndUtc = item.EndUtc;
+                    sibling.Score = Math.Max(sibling.Score, item.Score);
+                    // Adopt the incoming best frame when it's at least as confident as the one on
+                    // record (or the span never had one) — same "a later report is never worse"
+                    // assumption the exact-match checkpoint path above already relies on.
+                    if (item.BestFrameAtUtc is not null
+                        && (sibling.BestBoxConfidence is null || (item.BestBoxConfidence ?? 0) >= sibling.BestBoxConfidence))
+                    {
+                        sibling.BestFrameAtUtc = item.BestFrameAtUtc;
+                        sibling.BestBoxX = item.BestBoxX;
+                        sibling.BestBoxY = item.BestBoxY;
+                        sibling.BestBoxW = item.BestBoxW;
+                        sibling.BestBoxH = item.BestBoxH;
+                        sibling.BestBoxConfidence = item.BestBoxConfidence;
+                    }
+                    continue;
+                }
             }
 
             db.MotionSpans.Add(new MotionSpan

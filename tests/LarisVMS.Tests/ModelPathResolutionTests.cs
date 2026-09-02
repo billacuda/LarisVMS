@@ -23,8 +23,8 @@ public class ModelPathResolutionTests : IDisposable
     }
 
     private static string Resolve(string configuredPath, DetectionModelFamily family = DetectionModelFamily.DFine,
-        DFineWeights dfineWeights = DFineWeights.Obj2Coco) =>
-        CameraPipelineManager.ResolveModelPath(configuredPath, family, dfineWeights, NullLogger.Instance);
+        DFineWeights dfineWeights = DFineWeights.Obj2Coco, YoloXSize yoloXSize = YoloXSize.S) =>
+        CameraPipelineManager.ResolveModelPath(configuredPath, family, dfineWeights, yoloXSize, NullLogger.Instance);
 
     public void Dispose()
     {
