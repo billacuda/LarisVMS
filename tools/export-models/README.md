@@ -13,6 +13,12 @@ Two weight variants are fetched by default, both the "small" (10.7M param) size:
   padding slot). Richer, but needs `DetectionCategoryMap`'s broader Objects365 coverage to resolve
   correctly.
 
+One more variant is opt-in (not in the default fetch — ~75 MB):
+
+- `medium-obj2coco` — the "medium" (19.6M param) size of the same Objects365→COCO fine-tune,
+  identical 80-class vocabulary and identical pipeline as `obj2coco`. More accurate, more work per
+  frame. Selected in the app as D-FINE weights `Obj2CocoMedium`.
+
 ## Setup
 
 ```
@@ -23,12 +29,13 @@ py -m venv .venv
 ## Run
 
 ```
-.venv\Scripts\python fetch_dfine.py                # both default variants
+.venv\Scripts\python fetch_dfine.py                       # the two small variants (default)
 .venv\Scripts\python fetch_dfine.py --weights obj365
+.venv\Scripts\python fetch_dfine.py --weights medium-obj2coco
 ```
 
 Output lands directly under `models/` at the repo root (gitignored — see `.gitignore`) as
-`dfine_s_obj2coco.onnx` / `dfine_s_obj365.onnx` — exact filenames `DetectionModelCatalog`
+`dfine_s_obj2coco.onnx` / `dfine_s_obj365.onnx` / `dfine_m_obj2coco.onnx` — exact filenames `DetectionModelCatalog`
 (`LarisVMS.Vision/Inference/DetectionModelCatalog.cs`) expects, since every `onnx-community`
 source repo names its own export the generic `onnx/model.onnx`. Each fetch gets a `.LICENSE.txt`
 note recording its real license/upstream/revision, plus (for `obj365`) an explicit note that only

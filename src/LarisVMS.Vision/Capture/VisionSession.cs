@@ -1,7 +1,9 @@
 using System.Buffers;
 using System.Diagnostics;
 using System.Globalization;
+using System.Text.RegularExpressions;
 using LarisVMS.Core.Enums;
+using LarisVMS.Media;
 using Microsoft.Extensions.Logging;
 
 namespace LarisVMS.Vision.Capture;
@@ -34,6 +36,33 @@ public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot 
     public StreamRecordingState State { get; private set; } = StreamRecordingState.Idle;
     public DateTime? LastFrameAt { get; private set; }
     public string? LastError { get; private set; }
+
+    /// <summary>The real decoded input resolution of the watched stream, parsed from ffmpeg's own
+    /// input banner (display orientation — rotation side data is applied). Null until the first
+    /// connection's banner has been read. The pipeline compares this against the dimensions it was
+    /// started with to catch a portrait stream that was set up as landscape, and warns pointing at
+    /// the camera's AiDetection.Orientation setting (see CameraDetectionPipeline's own
+    /// OnInputResolutionDetected for why it only warns rather than reporting the value back).</summary>
+    public (int Width, int Height)? DetectedInputResolution { get; private set; }
+
+    /// <summary>Raised once per successful ffmpeg connection, right after that connection's input
+    /// banner has been parsed. Fires on every reconnect (not just the first) so a consumer whose
+    /// one-shot report failed gets another chance; the consumer is expected to de-dupe.</summary>
+    public event Action<int, int>? InputResolutionDetected;
+
+    // ffmpeg prints the input stream summary once per connection, e.g.
+    // "Stream #0:0: Video: h264 (Main), yuvj420p(pc, bt709), 720x1280, 15 fps, ...". Mirrors
+    // RecordingSession.VideoStreamLine (duplicated rather than crossing LarisVMS.Media's internal
+    // boundary — same "duplicate the small skeleton" trade-off this file's own class doc describes).
+    private static readonly Regex VideoStreamLine = new(
+        @"Stream #\d+:\d+.*?Video:\s*[A-Za-z0-9_]+.*?(\d{2,5})x(\d{2,5})", RegexOptions.Compiled);
+
+    // A rotated stream (phone/rotated mount) prints a display-matrix side-data line after the
+    // stream summary: "      displaymatrix: rotation of -90.00 degrees". ffmpeg auto-rotates by
+    // default (no -noautorotate here), so the frames actually delivered to our -vf chain are in the
+    // display orientation — swap W/H when the rotation is a quarter turn.
+    private static readonly Regex RotationLine = new(
+        @"rotation of (-?\d+(?:\.\d+)?) degrees", RegexOptions.Compiled);
 
     // nv12 = Y plane (W*H) + interleaved UV (W*H/2); BGRA = 4 bytes/pixel.
     private readonly int _frameSize = options.Nv12Output
@@ -171,7 +200,7 @@ public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot 
         foreach (var a in BuildFfmpegArgs(options)) psi.ArgumentList.Add(a);
 
         logger.LogInformation("Starting vision ffmpeg for {RtspUri} at {Width}x{Height} (hwaccel: {Hwaccel}).",
-            RedactCredentials(options.RtspUri), options.Width, options.Height, options.HardwareAcceleration ?? "none");
+            CredentialScrubber.Scrub(options.RtspUri), options.Width, options.Height, options.HardwareAcceleration ?? "none");
 
         var process = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null.");
         return process;
@@ -263,11 +292,21 @@ public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot 
 
     private async Task DrainStderrAsync(Process process, CancellationToken ct)
     {
+        // Per-connection accumulators for input-resolution parsing (see DetectedInputResolution).
+        // rawW/rawH from the first Video stream line; rotationQuarterTurn from a later display-matrix
+        // side-data line in the same input banner; emitted once the banner is fully past (the muxer
+        // header / stream mapping / first progress line — whichever comes first), so any rotation
+        // line has definitely been seen by then.
+        int rawW = 0, rawH = 0;
+        var rotationQuarterTurn = false;
+        var resolutionEmitted = false;
+
         try
         {
             while (await process.StandardError.ReadLineAsync(ct) is { } line)
             {
-                logger.LogDebug("ffmpeg (vision): {Line}", line);
+                var safeLine = CredentialScrubber.Scrub(line);
+                logger.LogDebug("ffmpeg (vision): {Line}", safeLine);
 
                 if (line.Contains("error", StringComparison.OrdinalIgnoreCase)
                     || line.Contains("failed", StringComparison.OrdinalIgnoreCase)
@@ -275,7 +314,33 @@ public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot 
                     || line.Contains("denied", StringComparison.OrdinalIgnoreCase)
                     || line.Contains("refused", StringComparison.OrdinalIgnoreCase))
                 {
-                    logger.LogWarning("ffmpeg (vision): {Line}", line);
+                    logger.LogWarning("ffmpeg (vision): {Line}", safeLine);
+                }
+
+                if (!resolutionEmitted)
+                {
+                    if (rawW == 0 && VideoStreamLine.Match(line) is { Success: true } m)
+                    {
+                        rawW = int.Parse(m.Groups[1].Value);
+                        rawH = int.Parse(m.Groups[2].Value);
+                    }
+                    else if (rawW != 0 && RotationLine.Match(line) is { Success: true } rot
+                        && double.TryParse(rot.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var deg))
+                    {
+                        var q = ((int)Math.Round(Math.Abs(deg)) % 360) / 90 % 2;
+                        if (q == 1) rotationQuarterTurn = true;
+                    }
+                    else if (rawW != 0
+                        && (line.Contains("Output #", StringComparison.Ordinal)
+                            || line.Contains("Stream mapping", StringComparison.Ordinal)
+                            || line.StartsWith("frame=", StringComparison.Ordinal)))
+                    {
+                        resolutionEmitted = true;
+                        var (w, h) = rotationQuarterTurn ? (rawH, rawW) : (rawW, rawH);
+                        DetectedInputResolution = (w, h);
+                        try { InputResolutionDetected?.Invoke(w, h); }
+                        catch (Exception ex) { logger.LogDebug(ex, "InputResolutionDetected handler threw."); }
+                    }
                 }
             }
         }
@@ -287,16 +352,5 @@ public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot 
     {
         try { process.Kill(entireProcessTree: true); }
         catch (Exception ex) { logger.LogDebug(ex, "Failed to kill vision ffmpeg process (may have already exited)."); }
-    }
-
-    private static string RedactCredentials(string rtspUri)
-    {
-        try
-        {
-            var uri = new Uri(rtspUri);
-            if (string.IsNullOrEmpty(uri.UserInfo)) return rtspUri;
-            return rtspUri.Replace(uri.UserInfo, "***");
-        }
-        catch { return rtspUri; }
     }
 }

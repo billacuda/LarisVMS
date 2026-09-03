@@ -167,7 +167,7 @@ public sealed class SubLiveSession(SubLiveSessionOptions options, ILogger logger
         ];
         foreach (var a in args) psi.ArgumentList.Add(a);
 
-        logger.LogInformation("Starting Sub live ffmpeg for {RtspUri}", RedactCredentials(options.RtspUri));
+        logger.LogInformation("Starting Sub live ffmpeg for {RtspUri}", CredentialScrubber.Scrub(options.RtspUri));
 
         var process = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null.");
         return process;
@@ -267,7 +267,8 @@ public sealed class SubLiveSession(SubLiveSessionOptions options, ILogger logger
         {
             while (await process.StandardError.ReadLineAsync(ct) is { } line)
             {
-                logger.LogDebug("ffmpeg (sub live): {Line}", line);
+                var safeLine = CredentialScrubber.Scrub(line);
+                logger.LogDebug("ffmpeg (sub live): {Line}", safeLine);
 
                 if (line.Contains("error", StringComparison.OrdinalIgnoreCase)
                     || line.Contains("failed", StringComparison.OrdinalIgnoreCase)
@@ -275,7 +276,7 @@ public sealed class SubLiveSession(SubLiveSessionOptions options, ILogger logger
                     || line.Contains("denied", StringComparison.OrdinalIgnoreCase)
                     || line.Contains("refused", StringComparison.OrdinalIgnoreCase))
                 {
-                    logger.LogWarning("ffmpeg (sub live): {Line}", line);
+                    logger.LogWarning("ffmpeg (sub live): {Line}", safeLine);
                 }
             }
         }
@@ -287,16 +288,5 @@ public sealed class SubLiveSession(SubLiveSessionOptions options, ILogger logger
     {
         try { process.Kill(entireProcessTree: true); }
         catch (Exception ex) { logger.LogDebug(ex, "Failed to kill sub-live ffmpeg process (may have already exited)."); }
-    }
-
-    private static string RedactCredentials(string rtspUri)
-    {
-        try
-        {
-            var uri = new Uri(rtspUri);
-            if (string.IsNullOrEmpty(uri.UserInfo)) return rtspUri;
-            return rtspUri.Replace(uri.UserInfo, "***");
-        }
-        catch { return rtspUri; }
     }
 }

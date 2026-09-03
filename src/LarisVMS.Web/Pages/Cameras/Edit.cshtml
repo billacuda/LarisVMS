@@ -226,6 +226,24 @@
         </div>
         <div class="col-6">
             <label class="form-label">
+                Camera orientation override
+                <button type="button" class="help-icon" data-help-target="aiOrientationHelp" tabindex="0" aria-label="Help">ℹ️</button>
+            </label>
+            <select asp-for="AiDetectionOrientationOverride" class="form-select">
+                <option value="">(inherit — currently @Model.EffectiveAiDetectionOrientation)</option>
+                <option value="Auto">Auto</option>
+                <option value="Landscape">Landscape</option>
+                <option value="Portrait">Portrait</option>
+            </select>
+            <div class="help-text-source" id="aiOrientationHelp">
+                Set this to Portrait for a corridor-mounted camera that reports a landscape detection
+                stream (704x480) but actually sends portrait video (480x704). Left on Auto, detection
+                runs on a horizontally squashed frame and snapshot crops come out stretched. The node's
+                detection log names this setting when it sees the mismatch.
+            </div>
+        </div>
+        <div class="col-6">
+            <label class="form-label">
                 Confidence threshold override
                 <button type="button" class="help-icon" data-help-target="aiConfidenceHelp" tabindex="0" aria-label="Help">ℹ️</button>
             </label>

@@ -477,7 +477,7 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
         args.AddRange(["-map", "0:v", "-map", "0:a?", "-f", "tee", "-y", teeOutputs]);
         foreach (var a in args) psi.ArgumentList.Add(a);
 
-        logger.LogInformation("Starting ffmpeg for {RtspUri} -> {OutputDirectory}", RedactCredentials(options.RtspUri), options.OutputDirectory);
+        logger.LogInformation("Starting ffmpeg for {RtspUri} -> {OutputDirectory}", CredentialScrubber.Scrub(options.RtspUri), options.OutputDirectory);
 
         var process = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null.");
         return process;
@@ -634,7 +634,7 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
                 // alone previously missed the actual root cause of a real failure ("Could not write
                 // header (incorrect codec parameters?): Invalid argument"), leaving only the generic
                 // "Conversion failed!" summary line visible in the log.
-                logger.LogDebug("ffmpeg: {Line}", line);
+                logger.LogDebug("ffmpeg: {Line}", CredentialScrubber.Scrub(line));
 
                 if (!resolutionReported && TryParseVideoStreamLine(line) is { } resolution)
                 {
@@ -666,7 +666,7 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
                     || line.Contains("denied", StringComparison.OrdinalIgnoreCase)
                     || line.Contains("refused", StringComparison.OrdinalIgnoreCase))
                 {
-                    logger.LogWarning("ffmpeg: {Line}", line);
+                    logger.LogWarning("ffmpeg: {Line}", CredentialScrubber.Scrub(line));
                 }
             }
         }
@@ -864,14 +864,4 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
         catch (Exception ex) { logger.LogDebug(ex, "Failed to kill ffmpeg process (may have already exited)."); }
     }
 
-    private static string RedactCredentials(string rtspUri)
-    {
-        try
-        {
-            var uri = new Uri(rtspUri);
-            if (string.IsNullOrEmpty(uri.UserInfo)) return rtspUri;
-            return rtspUri.Replace(uri.UserInfo, "***");
-        }
-        catch { return rtspUri; }
-    }
 }

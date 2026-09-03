@@ -91,12 +91,13 @@ Not distributed in this repository; downloaded by tools/export-models/fetch_dfin
 carried alongside each fetched model in models/ (gitignored — see fetch_dfine.py's own
 write_license).
 
-D-FINE (small — obj2coco and obj365 variants)
+D-FINE (small — obj2coco and obj365 variants; medium — obj2coco variant)
     Apache-2.0 — https://github.com/Peterande/D-FINE (Yansong Peng et al.)
     ONNX weights redistributed via onnx-community on Hugging Face
-    (onnx-community/dfine_s_obj2coco-ONNX, onnx-community/dfine_s_obj365-ONNX), themselves derived
-    from ustc-community/dfine-small-obj2coco and ustc-community/dfine-small-obj365 — both
-    Apache-2.0, same upstream project. Replaced YOLOv9/LibreYOLO (see git history) as the default
+    (onnx-community/dfine_s_obj2coco-ONNX, onnx-community/dfine_s_obj365-ONNX,
+    onnx-community/dfine_m_obj2coco-ONNX), themselves derived from ustc-community/dfine-small-obj2coco,
+    ustc-community/dfine-small-obj365 and ustc-community/dfine-medium-obj2coco — all Apache-2.0, same
+    upstream project. Replaced YOLOv9/LibreYOLO (see git history) as the default
     detection model: license-clean (Apache-2.0 end to end, unlike YOLOv9's non-permissive weight
     lineage) and DETR-style (no per-frame NMS, and — per user-reported CPU/GPU utilization —
     noticeably lighter on the CPU than YoloDotNet's own YOLO-family decode+NMS path).

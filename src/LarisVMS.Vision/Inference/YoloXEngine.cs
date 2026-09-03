@@ -41,6 +41,7 @@ public sealed class YoloXEngine : IDetectionEngine
     private readonly IReadOnlyList<string> _labels;
     private readonly ILogger<YoloXEngine> _logger;
     private readonly string _inputName;
+    private readonly DenseTensor<float> _inputTensor;
     private bool _loggedFirstInference;
 
     public YoloXEngine(EngineOptions options, InferenceProfile profile, IReadOnlyList<string> labels, ILogger<YoloXEngine> logger)
@@ -58,6 +59,7 @@ public sealed class YoloXEngine : IDetectionEngine
 
         _inputName = _session.InputMetadata.Keys.First();
         ValidateInputShape();
+        _inputTensor = new DenseTensor<float>([1, 3, profile.NetworkHeight, profile.NetworkWidth]);
 
         _logger.LogInformation(
             "Loaded YOLOX model ({Classes} classes, input '{Input}') from {Path} in {LoadMs} ms.",
@@ -85,7 +87,16 @@ public sealed class YoloXEngine : IDetectionEngine
 
         var numAnchors = dims[1];
         var numAttrs = dims[2];
-        var results = YoloXDecoder.Decode(outTensor.ToArray(), numAnchors, numAttrs, _labels, confidence, iou, _profile);
+
+        // Read the output straight out of the tensor's own buffer. ToArray() here copied
+        // numAnchors*numAttrs floats per frame — 8400x85 is 2.86 MB, a Large Object Heap allocation
+        // on every single inference, six times over on a six-camera node. The decoder only ever reads
+        // forward through the span, and `outputs` is still alive for the whole call, so there is
+        // nothing to own. The ToArray fallback stays for a tensor that isn't dense-backed (ORT
+        // returns DenseTensor today; this is not contractual).
+        var results = outTensor is DenseTensor<float> dense
+            ? YoloXDecoder.Decode(dense.Buffer.Span, numAnchors, numAttrs, _labels, confidence, iou, _profile)
+            : YoloXDecoder.Decode(outTensor.ToArray(), numAnchors, numAttrs, _labels, confidence, iou, _profile);
 
         stopwatch.Stop();
         LastInferenceMilliseconds = stopwatch.Elapsed.TotalMilliseconds;
@@ -113,8 +124,18 @@ public sealed class YoloXEngine : IDetectionEngine
                 $"{_profile.NetworkWidth}x{_profile.NetworkHeight} — VisionSession's ffmpeg filter chain and this " +
                 "engine's InferenceProfile have disagreed about the decode target.");
 
-        var tensor = new DenseTensor<float>([1, 3, _profile.NetworkHeight, _profile.NetworkWidth]);
-        var t = tensor.Buffer.Span; // planar: [plane0][plane1][plane2], each H*W
+        // Reused across calls rather than allocated per frame. At 640x640 this tensor is 4.92 MB
+        // (H*W*3 floats) — a Large Object Heap allocation on every inference, and measured on a
+        // six-camera recorder it was the single largest source of allocation in the process, forcing
+        // several gen2 collections per second.
+        //
+        // One buffer is enough here, where DFineEngine needs two: Detect is this engine's only entry
+        // point, called from one camera pipeline's single-threaded inference loop. YOLOX does not
+        // implement IBatchDetectionEngine, so the concurrent DetectBatch caller
+        // (HighResReDetectionLoopAsync) that forces D-FINE to keep a separate tensor never reaches
+        // this class. ONNX Runtime has copied the tensor to the device by the time Run returns, and
+        // every element is rewritten below, so there is no stale data to clear first.
+        var t = _inputTensor.Buffer.Span; // planar: [plane0][plane1][plane2], each H*W
         var plane1 = pixelCount;
         var plane2 = pixelCount * 2;
 
@@ -130,7 +151,7 @@ public sealed class YoloXEngine : IDetectionEngine
             t[rPlane + i] = bgra[o + 2];     // R
         }
 
-        return tensor;
+        return _inputTensor;
     }
 
     private void ValidateInputShape()

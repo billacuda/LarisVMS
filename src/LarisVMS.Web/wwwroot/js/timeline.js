@@ -341,6 +341,8 @@ window.larisvmsTimeline = (function () {
             // full-height playhead line so the two can never be confused even where they coincide.
             if (bookmarks.length) {
                 ctx.fillStyle = '#ffca28';
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 1;
                 bookmarks.forEach(function (b) {
                     var bm = new Date(b.timestampUtc).getTime();
                     if (bm < r.from || bm > r.to) return;
@@ -351,6 +353,9 @@ window.larisvmsTimeline = (function () {
                     ctx.lineTo(x, barTop + 7);
                     ctx.closePath();
                     ctx.fill();
+                    // 1px black outline so the amber flag stays legible over a colored bucket or
+                    // under the white playhead.
+                    ctx.stroke();
                 });
             }
 

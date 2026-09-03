@@ -320,3 +320,28 @@ body {
     width: .55rem;
     border-top: 1px solid var(--bs-border-color);
 }
+
+/* Snapshots: multi-badge gradient frame — see Pages/Snapshots/Index.cshtml + Helpers/SnapshotBorderStyle.cs.
+   A card with one distinct badge color keeps the 1px inline border-color. A card grouping 2+
+   differently-colored badges gets .snapshot-card--framed plus an inline --snapshot-frame gradient;
+   ::before paints a 3px ring of it, mask-punched so the card content shows through, with the radius
+   inherited from the .card (a plain border-image would square off Bootstrap's rounded corners). The
+   ring colors are the already-validated badge hexes, so the frame reads the same in light and dark. */
+.snapshot-card--framed {
+    position: relative;
+    border-color: transparent;
+}
+.snapshot-card--framed::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 3px;
+    background: var(--snapshot-frame);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+            mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+            mask-composite: exclude;
+    pointer-events: none;
+    z-index: 2;
+}

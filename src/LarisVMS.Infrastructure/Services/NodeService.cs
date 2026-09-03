@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
@@ -18,6 +20,14 @@ namespace LarisVMS.Infrastructure.Services;
 /// </summary>
 public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : INodeService
 {
+    // One gate per node for RecordMotionSpansAsync: its check-then-insert/coalesce is not atomic
+    // across concurrent report calls, and the node's own flush loop can land two here at once — a
+    // batch retried after an HTTP timeout while the first call is still running, or a shutdown flush
+    // overlapping the periodic one. Both arrive with their own scoped DbContext, both pass the
+    // "does this span exist?" check, both INSERT, and the filtered unique index rejects the second.
+    // Motion-span recording is a low-frequency, 15s-batched path, so a per-node mutex costs nothing.
+    // Static because NodeService is registered scoped (one instance per request).
+    private static readonly ConcurrentDictionary<Guid, SemaphoreSlim> _recordSpansGates = new();
     public async Task<List<Node>> ListAsync(CancellationToken ct = default)
         => await db.Nodes.AsNoTracking().OrderBy(n => n.Name).ToListAsync(ct);
 
@@ -197,6 +207,10 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             var aiConfidence = await settings.GetAsync("Detection.Confidence", 0.35, cameraId: c.Id, nodeId: nodeId, ct: ct);
             var aiIou = await settings.GetAsync("Detection.Iou", 0.5, cameraId: c.Id, nodeId: nodeId, ct: ct);
             var aiDetectionStreamRole = await settings.GetAsync("AiDetection.StreamRole", "Sub", cameraId: c.Id, nodeId: nodeId, ct: ct);
+            // Corrects a camera that misreports its watch stream's orientation (a corridor-mounted
+            // device advertising 704x480 while delivering 480x704) before the node builds the
+            // detection profile from it — see LarisVMS.Node.DetectionOrientation.
+            var aiDetectionOrientation = await settings.GetAsync("AiDetection.Orientation", "Auto", cameraId: c.Id, nodeId: nodeId, ct: ct);
             cameraDtos.Add(new NodeConfigCameraDto(
                 c.Id, c.Name, c.Username, c.Password,
                 c.Streams.Where(s => s.IsEnabled).Select(s => new NodeConfigStreamDto(
@@ -213,7 +227,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
                 CameraIntegrations.ByKey(c.IntegrationKey)?.Key,
                 ResolveIntegrationBaseUri(c), segmentSeconds,
                 c.AiDetectionEnabled, c.MotionDetectionSource?.ToString(),
-                aiConfidence, aiIou, aiDetectionStreamRole, c.ServerMotionEnabled,
+                aiConfidence, aiIou, aiDetectionStreamRole, aiDetectionOrientation, c.ServerMotionEnabled,
                 c.MotionRegionMode.ToString(), c.MotionGridSize, c.MotionGridMask, c.MotionGridSensitivity));
         }
 
@@ -426,6 +440,20 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
 
     public async Task RecordMotionSpansAsync(Guid nodeId, IReadOnlyList<MotionSpanReportItem> spans, CancellationToken ct = default)
     {
+        var gate = _recordSpansGates.GetOrAdd(nodeId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        try
+        {
+            await RecordMotionSpansCoreAsync(spans, ct);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task RecordMotionSpansCoreAsync(IReadOnlyList<MotionSpanReportItem> spans, CancellationToken ct)
+    {
         // Object detection plan decision 5: resolved once per distinct category name actually
         // reported in this batch, not once per item — a busy batch can report the same category
         // (e.g. "Vehicle") many times in one call, and caching avoids redundant round-trips (and,
@@ -514,7 +542,17 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
                     .FirstOrDefaultAsync(ct);
                 if (sibling is not null)
                 {
-                    if (item.StartUtc < sibling.StartUtc) sibling.StartUtc = item.StartUtc;
+                    // Never move sibling.StartUtc. It is part of the filtered unique index
+                    // IX_MotionSpans_CameraId_DetectedObjectLabel_StartUtc and the whole
+                    // check-then-upsert here (and the periodic checkpoint path above) treats
+                    // (CameraId, DetectedObjectLabel, StartUtc) as a stable identity — see that
+                    // index's own comment. An earlier fragment backdating the sibling's StartUtc
+                    // onto a value another AI-detection row already holds (common when one moving
+                    // object produces several overlapping fragments) turns this UPDATE into a
+                    // duplicate-key violation, which the SaveChanges catch below then "handles" by
+                    // dropping the row — so a busy scene silently stops producing any AI-detection
+                    // spans at all. The span already exists; coalescing only needs to keep it from
+                    // fragmenting into extra cards, not to nudge its start a few seconds earlier.
                     if (item.EndUtc > sibling.EndUtc) sibling.EndUtc = item.EndUtc;
                     sibling.Score = Math.Max(sibling.Score, item.Score);
                     // Adopt the incoming best frame when it's at least as confident as the one on
@@ -569,12 +607,17 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             });
         }
 
-        // Same detach-and-retry shape as RecordSegmentsAsync — a failing row is dropped (not saved),
-        // not repaired, but that's still better than losing the whole batch over it. Realistic cause
-        // here is a race between a zone being deleted (ZoneService.DeleteAsync nulls out matching
-        // MotionSpans rows first, but can't retroactively fix a report already in flight) and an
-        // in-flight MotionSession reporting a span that still names the now-gone Id — the FK is
-        // still enforced on insert regardless of ON DELETE behavior, so that insert fails here.
+        // Detach-and-retry: a row the batch can't save is dropped (not the whole batch). Two causes
+        // in practice —
+        //  - an FK violation: a zone/rule/category deleted mid-flight (the *Service.DeleteAsync nulls
+        //    matching MotionSpans rows first but can't fix a report already in flight); the row is
+        //    genuinely unsaveable, so dropping it is right.
+        //  - a unique-index violation on IX_MotionSpans_CameraId_DetectedObjectLabel_StartUtc: another
+        //    report call already inserted this AI-detection span (the per-node gate above makes that
+        //    rare, but a multi-instance web farm, or a future caller, could still race). Here the row
+        //    is not junk — merge its forward progress (later EndUtc, better best-frame) into the
+        //    committed winner before dropping the duplicate, rather than losing it.
+        var attempt = 0;
         while (true)
         {
             try
@@ -582,10 +625,44 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
                 await db.SaveChangesAsync(ct);
                 break;
             }
-            catch (DbUpdateException ex) when (ex.Entries.Count > 0)
+            catch (DbUpdateException ex) when (ex.Entries.Count > 0 && ++attempt <= 20)
             {
-                foreach (var entry in ex.Entries) entry.State = EntityState.Detached;
+                var uniqueViolation = ex.InnerException is SqlException { Number: 2601 or 2627 };
+                foreach (var entry in ex.Entries)
+                {
+                    if (uniqueViolation && entry.State == EntityState.Added
+                        && entry.Entity is MotionSpan rejected && rejected.DetectedObjectLabel is not null)
+                    {
+                        var winner = await db.MotionSpans.FirstOrDefaultAsync(m =>
+                            m.CameraId == rejected.CameraId
+                            && m.DetectedObjectLabel == rejected.DetectedObjectLabel
+                            && m.StartUtc == rejected.StartUtc, ct);
+                        if (winner is not null) MergeSpanForward(winner, rejected);
+                    }
+                    entry.State = EntityState.Detached;
+                }
             }
+        }
+    }
+
+    /// <summary>Folds one AI-detection span's forward progress into another — later EndUtc, higher
+    /// Score, and a best frame that's at least as confident as the one on record. Same monotonic
+    /// "a later report is never worse" assumption the checkpoint and coalesce paths in
+    /// RecordMotionSpansCoreAsync already rely on. Used when a concurrent report already inserted the
+    /// row this one was trying to add.</summary>
+    private static void MergeSpanForward(MotionSpan target, MotionSpan incoming)
+    {
+        if (incoming.EndUtc > target.EndUtc) target.EndUtc = incoming.EndUtc;
+        target.Score = Math.Max(target.Score, incoming.Score);
+        if (incoming.BestFrameAtUtc is not null
+            && (target.BestBoxConfidence is null || (incoming.BestBoxConfidence ?? 0) >= target.BestBoxConfidence))
+        {
+            target.BestFrameAtUtc = incoming.BestFrameAtUtc;
+            target.BestBoxX = incoming.BestBoxX;
+            target.BestBoxY = incoming.BestBoxY;
+            target.BestBoxW = incoming.BestBoxW;
+            target.BestBoxH = incoming.BestBoxH;
+            target.BestBoxConfidence = incoming.BestBoxConfidence;
         }
     }
 

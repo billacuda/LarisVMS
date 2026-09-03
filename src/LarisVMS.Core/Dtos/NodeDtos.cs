@@ -128,6 +128,13 @@ public record NodeConfigCameraDto(Guid CameraId, string Name, string? Username, 
     /// behavior from before this was configurable at all: NodeWorker.ReconcileVision used to
     /// hardcode the "Sub" stream unconditionally).</summary>
     string AiDetectionStreamRole = "Sub",
+    /// <summary>How to orient this camera's reported watch-stream dimensions before the detection
+    /// profile is built from them — "Auto" (trust what the camera reports), "Landscape" or "Portrait".
+    /// Same Camera &rarr; Node &rarr; Global chain and string-wire-format-parsed-node-side shape as
+    /// AiDetectionStreamRole above; see LarisVMS.Node.DetectionOrientation for why a corridor-mounted
+    /// camera needs this and why it is an operator setting rather than a measurement. Defaults "Auto"
+    /// so an older, not-yet-updated node's deserialization keeps today's exact behavior.</summary>
+    string AiDetectionOrientation = "Auto",
     /// <summary>Detection/hardware-acceleration overhaul, pass 0 — see Camera.ServerMotionEnabled's
     /// own doc comment. Plain per-camera bool, not resolved through the Camera &rarr; Node &rarr;
     /// Global settings chain, same shape as AiDetectionEnabled above.</summary>

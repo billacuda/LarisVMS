@@ -165,7 +165,20 @@
             // must not be unified.
             var playFromUtcIso = s.PlayFromUtc.ToString("o");
             <div class="col">
-                <div class="card h-100" style="border-color: @s.ColorHex;">
+                @* Every card gets a 3px border in its badge color. One distinct color → a plain solid
+                   border; two or more (an AI-detection group carrying, say, a person and a vehicle) →
+                   a 3px gradient ring, lowest-hue color at the upper-left corner and the rest
+                   clockwise. See Helpers/SnapshotBorderStyle.cs and the .snapshot-card--framed block
+                   in site.css. *@
+                @{
+                    var frameColors = LarisVMS.Web.Helpers.SnapshotBorderStyle.OrderColors(
+                        s.Badges.Select(b => b.ColorHex).DefaultIfEmpty(s.ColorHex));
+                    var frameGradient = LarisVMS.Web.Helpers.SnapshotBorderStyle.GradientCss(frameColors);
+                }
+                <div class="card h-100@(frameGradient is null ? "" : " snapshot-card--framed")"
+                     style="@(frameGradient is null
+                                ? $"border-width: 3px; border-color: {(frameColors.Count == 1 ? frameColors[0] : s.ColorHex)};"
+                                : $"--snapshot-frame: {frameGradient};")">
                     @* Plain hand-written href, not asp-page/asp-route-* — matches Bookmarks/Index.cshtml's
                        own "▶ Play" link exactly (same deep-link scheme, same destination page), after the
                        tag-helper form of this same link was confirmed live to render pointing back at this
@@ -234,6 +247,9 @@
 
 @section Scripts {
     <script src="~/js/snapshot-load-status.js" asp-append-version="true"></script>
+    @* Filter-tree parent/child sync, the excludedLabels submit build, and per-user memory of the
+       tree's expand/collapse + checkbox state — see snapshot-filter-tree.js. *@
+    <script src="~/js/snapshot-filter-tree.js" asp-append-version="true"></script>
     <script>
         // Shows only the selector matching the current mode — the other two stay in the form
         // (unselected, so they submit nothing) but hidden, same "only what's relevant is visible"
@@ -248,55 +264,6 @@
             }
             modeSelect.addEventListener('change', applyMode);
             applyMode();
-        })();
-
-        // Filter tree: standard checkbox-tree parent/child sync, plus building the excludedLabels
-        // hidden inputs the form actually submits. Child (label) checkboxes deliberately have no
-        // `name` of their own — a plain checked-box name/value pair only ever submits *checked*
-        // items, but the server wants the opposite (which specific labels are UNchecked/excluded),
-        // and inverting the checkbox's own visual meaning (checked = excluded) would read backwards
-        // against every other checkbox on this page. So children stay checked = included for display,
-        // and this script converts "which ones ended up unchecked" into excludedLabels inputs right
-        // before the form actually submits.
-        (function () {
-            var form = document.getElementById('snapshotFilterForm');
-            if (!form) return;
-
-            function childrenOf(parentName) {
-                return Array.prototype.slice.call(
-                    document.querySelectorAll('.snapshot-tree-child[data-parent-name="' + CSS.escape(parentName) + '"]'));
-            }
-
-            // Parent checkbox change -> every child follows it.
-            document.querySelectorAll('.snapshot-tree-parent').forEach(function (parent) {
-                parent.addEventListener('change', function () {
-                    childrenOf(parent.dataset.childrenOf).forEach(function (child) { child.checked = parent.checked; });
-                });
-            });
-
-            // Child checkbox change -> parent reflects all-checked / all-unchecked / mixed.
-            document.querySelectorAll('.snapshot-tree-child').forEach(function (child) {
-                child.addEventListener('change', function () {
-                    var parent = document.querySelector('.snapshot-tree-parent[data-children-of="' + CSS.escape(child.dataset.parentName) + '"]');
-                    if (!parent) return;
-                    var siblings = childrenOf(child.dataset.parentName);
-                    var checkedCount = siblings.filter(function (s) { return s.checked; }).length;
-                    parent.checked = checkedCount > 0;
-                    parent.indeterminate = checkedCount > 0 && checkedCount < siblings.length;
-                });
-            });
-
-            form.addEventListener('submit', function () {
-                form.querySelectorAll('input[name="excludedLabels"]').forEach(function (el) { el.remove(); });
-                document.querySelectorAll('.snapshot-tree-child').forEach(function (child) {
-                    if (child.checked) return;
-                    var hidden = document.createElement('input');
-                    hidden.type = 'hidden';
-                    hidden.name = 'excludedLabels';
-                    hidden.value = child.dataset.labelToken;
-                    form.appendChild(hidden);
-                });
-            });
         })();
     </script>
 }

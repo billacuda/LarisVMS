@@ -113,4 +113,18 @@ public class VisionSessionFfmpegArgsTests
         Assert.Equal("scale_cuda=w=1280:h=720:format=nv12,hwdownload,format=nv12,fps=10",
             cuda[cuda.ToList().IndexOf("-vf") + 1]);
     }
+
+    [Fact]
+    public void CorridorCameraCorrectedToPortraitPadsLeftAndRight()
+    {
+        // End of the chain AiDetection.Orientation drives: a 480x704 source through
+        // InferenceProfile gives ScaledWidth 436 / PadLeft 102 (see InferenceProfileTests), which has
+        // to reach ffmpeg as a left/right pad. Pinned against the real command line observed on the
+        // recorder, since this is the difference between an undistorted frame and a squashed one.
+        var letterbox = new LetterboxGeometry(ScaledWidth: 436, ScaledHeight: 640, PadLeft: 102, PadTop: 0);
+        var args = VisionSession.BuildFfmpegArgs(Options("cuda", letterbox));
+
+        Assert.Equal("scale_cuda=w=436:h=640:format=nv12,hwdownload,format=nv12,pad=640:640:102:0:color=black",
+            args[args.ToList().IndexOf("-vf") + 1]);
+    }
 }

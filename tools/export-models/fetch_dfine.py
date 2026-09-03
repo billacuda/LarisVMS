@@ -11,8 +11,9 @@ Pinned revisions, not "main": a rebuild months from now must produce byte-identi
 whatever the upstream repo happens to contain that day.
 
 Run:
-    .venv/Scripts/python fetch_dfine.py                # both default variants (small)
+    .venv/Scripts/python fetch_dfine.py                        # the two small variants (default)
     .venv/Scripts/python fetch_dfine.py --weights obj365
+    .venv/Scripts/python fetch_dfine.py --weights medium-obj2coco   # opt-in, ~75 MB
 """
 
 from __future__ import annotations
@@ -53,7 +54,24 @@ VARIANTS = {
             "the derived model weights are. See https://www.objects365.org/download.html.\n"
         ),
     },
+    "medium-obj2coco": {
+        "repo_id": "onnx-community/dfine_m_obj2coco-ONNX",
+        "revision": "a2e1133c83887da7d5a000a025594b9d69fef5c2",
+        "filename": "dfine_m_obj2coco.onnx",
+        "license": "Apache-2.0",
+        "upstream": "ustc-community/dfine-medium-obj2coco (Peterande/D-FINE)",
+        "extra_note": (
+            "Medium size (19.6M params) of the same Objects365->COCO fine-tune as dfine_s_obj2coco\n"
+            "— identical 80-class vocabulary (DFineLabels.Obj2Coco), identical pipeline (640x640,\n"
+            "1/255 rescale, no normalize, logits/pred_boxes). A heavier backbone: more accurate,\n"
+            "more work per frame. Selected in the app as D-FINE weights 'Obj2CocoMedium'.\n"
+        ),
+    },
 }
+
+# The bare `fetch_dfine.py` run pulls only the two small variants that ship as the default bundle;
+# medium-obj2coco is ~75 MB and opt-in.
+DEFAULT_VARIANTS = ["obj2coco", "obj365"]
 
 
 def write_license(dest: Path, variant: dict) -> None:
@@ -86,7 +104,7 @@ def fetch_one(name: str, variant: dict) -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--weights", nargs="+", choices=sorted(VARIANTS), default=sorted(VARIANTS))
+    parser.add_argument("--weights", nargs="+", choices=sorted(VARIANTS), default=DEFAULT_VARIANTS)
     args = parser.parse_args()
 
     fetched = [fetch_one(name, VARIANTS[name]) for name in args.weights]

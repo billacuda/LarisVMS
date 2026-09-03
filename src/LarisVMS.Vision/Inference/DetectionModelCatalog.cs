@@ -18,6 +18,7 @@ public static class DetectionModelCatalog
         {
             DFineWeights.Obj2Coco => "dfine_s_obj2coco.onnx",
             DFineWeights.Obj365 => "dfine_s_obj365.onnx",
+            DFineWeights.Obj2CocoMedium => "dfine_m_obj2coco.onnx",
             _ => throw new ArgumentOutOfRangeException(nameof(dfineWeights), dfineWeights, null),
         },
         DetectionModelFamily.YoloX => GetYoloXFileName(yoloXSize),
@@ -45,6 +46,7 @@ public static class DetectionModelCatalog
     {
         DFineWeights.Obj2Coco => DFineLabels.Obj2Coco,
         DFineWeights.Obj365 => DFineLabels.Obj365,
+        DFineWeights.Obj2CocoMedium => DFineLabels.Obj2Coco, // same COCO-80 vocabulary as the small obj2coco model
         _ => throw new ArgumentOutOfRangeException(nameof(dfineWeights), dfineWeights, null),
     };
 

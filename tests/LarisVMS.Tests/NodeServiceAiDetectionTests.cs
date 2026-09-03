@@ -186,6 +186,34 @@ public class NodeServiceAiDetectionTests
     }
 
     [Fact]
+    public async Task AnEarlierFragmentExtendsTheExistingSpanWithoutMovingItsStartUtc()
+    {
+        // Regression: coalescing used to backdate sibling.StartUtc onto the incoming (earlier)
+        // value. StartUtc is part of the filtered unique index
+        // IX_MotionSpans_CameraId_DetectedObjectLabel_StartUtc; moving it onto a timestamp another
+        // AI-detection row already held turned the UPDATE into a duplicate-key violation that the
+        // SaveChanges catch then "handled" by dropping the row — so a scene with any real activity
+        // silently stopped logging AI-detection spans. Coalescing now only ever extends EndUtc.
+        var (db, service, cameraId, nodeId) = await SeedAsync();
+        var start = new DateTime(2026, 8, 10, 12, 0, 0, DateTimeKind.Utc);
+
+        await service.RecordMotionSpansAsync(nodeId, [
+            new MotionSpanReportItem(cameraId, null, start.AddSeconds(10), start.AddSeconds(14), 0.8,
+                DetectedObjectCategory: "Human", DetectedObjectLabel: "person")
+        ]);
+        // A fragment of the same object that actually began a few seconds earlier arrives next.
+        await service.RecordMotionSpansAsync(nodeId, [
+            new MotionSpanReportItem(cameraId, null, start.AddSeconds(3), start.AddSeconds(20), 0.9,
+                DetectedObjectCategory: "Human", DetectedObjectLabel: "person")
+        ]);
+
+        var span = Assert.Single(await db.MotionSpans.Where(m => m.CameraId == cameraId).ToListAsync());
+        Assert.Equal(start.AddSeconds(10), span.StartUtc); // unchanged — never backdated to +3
+        Assert.Equal(start.AddSeconds(20), span.EndUtc);   // extended forward
+        Assert.Equal(0.9, span.Score);
+    }
+
+    [Fact]
     public async Task SightingsFartherApartThanTheIdleGapStaySeparateSpans()
     {
         var (db, service, cameraId, nodeId) = await SeedAsync();

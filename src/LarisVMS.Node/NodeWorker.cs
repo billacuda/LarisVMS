@@ -1300,13 +1300,42 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
 
         var watchRtspUri = InjectCredentials(watchStream.RtspUri, camera.Username, camera.Password);
 
+        // The Main stream — used both for the watch-stream dimension fallback just below and, further
+        // down, as the high-res re-detection target (pass 3b, always Main regardless of watchRole).
+        // Null until RecordingSession has actually probed it.
+        var mainStream = camera.Streams.FirstOrDefault(s => s.Role == "Main");
+
         // Pass 1 of the detection/hardware-acceleration overhaul: this camera's own real stream
-        // dimensions (ffmpeg-probed ground truth — RecordingSession.TryParseVideoStreamLine),
-        // replacing the old global config.AiDetectionWidth/Height every camera used to share
-        // regardless of its own aspect ratio. Falls back to 1280x720 only if this stream has never
-        // actually been probed yet.
-        var sourceWidth = watchStream.Width ?? 1280;
-        var sourceHeight = watchStream.Height ?? 720;
+        // dimensions, replacing the old global config.AiDetectionWidth/Height every camera used to
+        // share regardless of its own aspect ratio. InferenceProfile only uses these as an aspect
+        // ratio. The watch (Sub) stream is never ffmpeg-probed on its own — nothing on the node
+        // decodes it unscaled (MotionSession/SubLiveSession force a fixed scale; VisionSession runs
+        // in the sibling process). So fall back to the Main stream's real probed dimensions rather
+        // than a hard-coded 1280x720 landscape: a portrait/corridor-mounted camera has a portrait
+        // Main stream too, so this gets the aspect right for the real-world failure case. Only a
+        // brand-new camera, before Main itself has been probed, still lands on 1280x720 — and the
+        // signature below carries these values, so the watch restarts with the correct aspect the
+        // moment Main is probed.
+        //
+        // The orientation override then corrects a camera that misreports the pair outright (ONVIF
+        // advertising 704x480 for a stream it actually delivers as 480x704). Applied here, before
+        // InferenceProfile sees it, so ffmpeg's own scale/pad chain is built for the real shape and
+        // the model never receives a squashed frame — see DetectionOrientation for why this is an
+        // operator setting rather than a measurement reported back by the Vision Service.
+        var (sourceWidth, sourceHeight) = DetectionOrientation.Apply(
+            camera.AiDetectionOrientation,
+            watchStream.Width ?? mainStream?.Width ?? 1280,
+            watchStream.Height ?? mainStream?.Height ?? 720);
+
+        // The same correction for the Main stream's dimensions, which pass 3b's high-res
+        // re-detection decodes against: orientation is a fact about how the camera is mounted, so a
+        // device that misreports one profile's shape misreports them all. Left null when Main hasn't
+        // been probed yet, exactly as before.
+        int? orientedMainWidth = null, orientedMainHeight = null;
+        if (mainStream is { Width: { } mw, Height: { } mh })
+        {
+            (orientedMainWidth, orientedMainHeight) = DetectionOrientation.Apply(camera.AiDetectionOrientation, mw, mh);
+        }
 
         // Detection frame-rate cap: only apply an fps= filter when the probed Sub rate is genuinely
         // above the ceiling — an unknown or already-low rate is left alone so ffmpeg never duplicates
@@ -1315,16 +1344,10 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             ? config.MaxDetectionFps
             : 0;
 
-        // Pass 3b: independent of watchStream/watchRole above — high-res re-detection always targets
-        // the Main stream specifically, regardless of which stream feeds the continuous pipeline.
-        // Null until RecordingSession has actually probed it (see VisionStartCameraRequest.
-        // MainStreamWidth/Height's own doc comment for what that means downstream).
-        var mainStream = camera.Streams.FirstOrDefault(s => s.Role == "Main");
-
         var signature = string.Join('|', watchRtspUri, sourceWidth, sourceHeight, config.AspectMode,
             camera.AiConfidence, camera.AiIou, config.ReportIdleDetections, config.AiIdleTimeoutSeconds,
             watchRole, _resolvedAccelerator, _resolvedDetectionModelFamily, config.DFineWeights, config.YoloXSize,
-            decodeFpsCap, config.EnableHighResReDetection, mainStream?.Width, mainStream?.Height,
+            decodeFpsCap, config.EnableHighResReDetection, orientedMainWidth, orientedMainHeight,
             config.EnableVisionDebugImages, config.GpuPreprocessing, config.HiResSnapshots);
 
         if (_activeVision.TryGetValue(camera.CameraId, out var existing) && existing.ConfigSignature == signature) return; // already watching, unchanged
@@ -1334,7 +1357,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             AccelToFfmpegHwaccel(_resolvedAccelerator.Value), camera.AiConfidence, camera.AiIou,
             config.ReportIdleDetections, config.AiIdleTimeoutSeconds,
             _resolvedDetectionModelFamily.ToString(), config.DFineWeights, $"http://127.0.0.1:{livePort}",
-            config.AspectMode, config.EnableHighResReDetection, mainStream?.Width, mainStream?.Height,
+            config.AspectMode, config.EnableHighResReDetection, orientedMainWidth, orientedMainHeight,
             config.EnableVisionDebugImages, config.GpuPreprocessing, config.YoloXSize, decodeFpsCap,
             config.HiResSnapshots);
 

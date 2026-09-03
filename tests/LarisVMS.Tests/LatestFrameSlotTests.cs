@@ -64,4 +64,53 @@ public class LatestFrameSlotTests
         slot.Resize(6);
         Assert.Equal(6, slot.FrameBytes);
     }
+
+    [Fact]
+    public async Task TakeIntoACallerBufferFillsThatExactBufferAcrossRepeatedCalls()
+    {
+        // The hot path reuses one buffer forever instead of allocating a 1.56 MB frame per take —
+        // what matters is that the returned frame IS the caller's buffer (no hidden copy to own) and
+        // that a second take overwrites it with the newer frame rather than appending or aliasing.
+        using var slot = new LatestFrameSlot(4);
+        var buffer = new byte[4];
+
+        slot.Publish(T0, b => { b[0] = 1; b[1] = 2; b[2] = 3; b[3] = 4; });
+        var first = await slot.TakeAsync(buffer, CancellationToken.None);
+        Assert.NotNull(first);
+        Assert.Same(buffer, first.Value.Frame);
+        Assert.Equal(new byte[] { 1, 2, 3, 4 }, buffer);
+
+        slot.Publish(T0.AddSeconds(1), b => { b[0] = 5; b[1] = 6; b[2] = 7; b[3] = 8; });
+        var second = await slot.TakeAsync(buffer, CancellationToken.None);
+        Assert.Same(buffer, second!.Value.Frame);
+        Assert.Equal(new byte[] { 5, 6, 7, 8 }, buffer);
+        Assert.Equal(T0.AddSeconds(1), second.Value.CapturedUtc);
+    }
+
+    [Fact]
+    public async Task TakeIntoAnOversizedCallerBufferCopiesOnlyTheFrame()
+    {
+        // A pooled/rented buffer is routinely larger than asked for; only FrameBytes may be written.
+        using var slot = new LatestFrameSlot(2);
+        var buffer = new byte[8];
+        Array.Fill(buffer, (byte)0xEE);
+
+        slot.Publish(T0, b => { b[0] = 1; b[1] = 2; });
+        var taken = await slot.TakeAsync(buffer, CancellationToken.None);
+
+        Assert.NotNull(taken);
+        Assert.Equal(1, buffer[0]);
+        Assert.Equal(2, buffer[1]);
+        Assert.Equal(0xEE, buffer[2]); // untouched past the frame
+    }
+
+    [Fact]
+    public async Task TakeIntoATooSmallBufferThrowsRatherThanCopyingAPartialFrame()
+    {
+        using var slot = new LatestFrameSlot(4);
+        slot.Publish(T0, b => b[0] = 1);
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            async () => await slot.TakeAsync(new byte[2], CancellationToken.None));
+    }
 }

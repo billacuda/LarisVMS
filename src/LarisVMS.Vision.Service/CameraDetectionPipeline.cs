@@ -47,11 +47,49 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     private readonly LatestFrameSlot _slot;
     private readonly IDetectionEngine _engine;
     private readonly ByteTracker _tracker;
+    // Reported in the cadence line so the score a real object actually reaches can be read directly
+    // against the bar it has to clear, instead of inferred.
+    private readonly float _trackerNewTrackThreshold;
     private readonly MovementClassifier _movement = new();
     private readonly HttpClient _http;
     private readonly ILogger _logger;
     private readonly CancellationTokenSource _cts = new();
     private readonly Task _runTask;
+
+    // 0 until the first (and only) InputResolutionDetected has been acted on — the event fires again
+    // on every reconnect, and an aspect mismatch only needs warning about once per pipeline lifetime.
+    private int _streamInfoReported;
+
+    // Frame-cadence accounting (see LogCadenceIfDue). What the inference loop actually achieves per
+    // second is the number that decides whether a moving object can be tracked at all — ByteTrack
+    // associates by IoU between consecutive processed frames, so a car in transit needs them close
+    // enough together to still overlap itself, where a static object does not. Nothing surfaced this
+    // before: LatestFrameSlot has always counted published/consumed frames and no one read them, and
+    // LastInferenceMilliseconds was only ever logged on the first inference.
+    private static readonly TimeSpan CadenceLogInterval = TimeSpan.FromSeconds(30);
+    private DateTime _lastCadenceLogUtc = DateTime.UtcNow;
+    private long _lastCadencePublished;
+    private long _lastCadenceConsumed;
+
+    // Process-wide GC counters, sampled per pipeline over its own window. Every pipeline sees the
+    // same numbers — that is the point: a blocking Gen2 collection stalls all six camera loops at
+    // once, which is exactly the lockstep 5-8x swing in inference time observed on the recorder
+    // (~15 ms across every camera in one 30s window, ~40-75 ms across every camera in the next).
+    // GPU contention from the recorder's own NVENC sessions would look identical from inside this
+    // process, so these two counters are what tell the two apart rather than guessing.
+    private int _lastCadenceGen2;
+    private long _lastCadenceAllocatedBytes;
+
+    // What the model found versus what survived tracking, over the cadence window. This is the pair
+    // of numbers that localises "an object is visible on screen but never produces a box or a span":
+    // a healthy raw count with a tracked count of zero means the detections are real and the tracker
+    // is refusing to promote them into tracks (its new-track threshold is the only thing that can do
+    // that), whereas a raw count of zero means the model genuinely is not seeing the object and the
+    // tracker is blameless. Peaks rather than averages, because an empty frame is the common case and
+    // would drown the one frame that matters in an average.
+    private int _cadencePeakDetections;
+    private int _cadencePeakTracked;
+    private double _cadenceBestDetectionScore;
 
     // Per-label state — see this class's own doc comment for why the grain is the label, not the
     // track. Only ever touched from the single inference loop below, so plain (not concurrent)
@@ -216,6 +254,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
                 Nv12Output: gpuPreprocessing,
                 FpsCap: request.DecodeFpsCap),
             _slot, loggerFactory.CreateLogger<VisionSession>());
+        _session.InputResolutionDetected += OnInputResolutionDetected;
 
         _engine = DetectionEngineFactory.Create(modelFamily, dfineWeights, yoloXSize, new EngineOptions
         {
@@ -230,9 +269,12 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             GpuPreprocessing = gpuPreprocessing,
         }, _profile, loggerFactory);
 
-        // Per-family tracker tuning (D-FINE keeps ByteTrack's stock values; YOLOX is pinned to the
-        // paper values that were calibrated for its objectness×class score).
-        _tracker = new ByteTracker(ByteTrackOptions.ForFamily(modelFamily));
+        // Per-family tracker tuning, anchored to this camera's own detection confidence — see
+        // ByteTrackOptions.ForFamily for why the tracker's gates must follow the configured
+        // confidence rather than sit at fixed values above it.
+        var trackerOptions = ByteTrackOptions.ForFamily(modelFamily, request.Confidence);
+        _trackerNewTrackThreshold = trackerOptions.HighThreshold;
+        _tracker = new ByteTracker(trackerOptions);
 
         _runTask = RunAsync(_cts.Token);
     }
@@ -269,9 +311,17 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
 
     private async Task InferenceLoopAsync(CancellationToken ct)
     {
+        // One buffer for the whole loop rather than a fresh array per frame. At the detection frame
+        // size this is a Large Object Heap allocation every time (640x640 BGRA is 1.56 MB), and on a
+        // six-camera node that was the single largest source of allocation in the process. Safe to
+        // reuse because everything that touches the frame does so synchronously inside one iteration:
+        // _engine.Detect reads it, TrySubFrameSnapshot encodes its JPEG before returning, and nothing
+        // retains it past that (PostEagerCropAsync is handed the finished JPEG, not the frame).
+        var frameBuffer = new byte[_slot.FrameBytes];
+
         while (!ct.IsCancellationRequested)
         {
-            var captured = await _slot.TakeAsync(ct);
+            var captured = await _slot.TakeAsync(frameBuffer, ct);
             if (captured is null) break; // cancelled or disposed
             var frame = captured.Value.Frame;
 
@@ -293,6 +343,15 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             }
 
             var tracked = _tracker.Update(detections);
+
+            if (detections.Count > _cadencePeakDetections) _cadencePeakDetections = detections.Count;
+            if (tracked.Count > _cadencePeakTracked) _cadencePeakTracked = tracked.Count;
+            foreach (var d in detections)
+            {
+                if (d.Confidence > _cadenceBestDetectionScore) _cadenceBestDetectionScore = d.Confidence;
+            }
+
+            LogCadenceIfDue();
             // The instant the reader captured this frame — NOT DateTime.UtcNow read here, which is
             // after TakeAsync waited for a slot and _engine.Detect ran, both of which push it later
             // than the moment the boxes actually describe (a systematic "the object already moved"
@@ -424,6 +483,69 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
                 TrySubFrameSnapshot(frame, now, movingThisFrame);
             }
         }
+    }
+
+    /// <summary>Once every <see cref="CadenceLogInterval"/>, logs what this camera's pipeline is
+    /// actually achieving: frames ffmpeg delivered, frames inference consumed (the difference is
+    /// frames dropped in the slot because inference couldn't keep up), and the last inference's own
+    /// duration. Called from the inference loop, so it is single-threaded like everything else there.
+    ///
+    /// Information rather than Debug on purpose — ffmpeg emits nothing on stderr in steady state, so
+    /// raising the deployment log level to Debug reveals nothing about throughput, and this is the
+    /// only way to tell a starved loop apart from a tracking fault after the fact.</summary>
+    private void LogCadenceIfDue()
+    {
+        var now = DateTime.UtcNow;
+        var elapsed = now - _lastCadenceLogUtc;
+        if (elapsed < CadenceLogInterval) return;
+
+        var published = _slot.PublishedCount;
+        var consumed = _slot.ConsumedCount;
+        var gen2 = GC.CollectionCount(2);
+        var allocated = GC.GetTotalAllocatedBytes();
+
+        var deltaPublished = published - _lastCadencePublished;
+        var deltaConsumed = consumed - _lastCadenceConsumed;
+        var deltaGen2 = gen2 - _lastCadenceGen2;
+        var deltaAllocated = allocated - _lastCadenceAllocatedBytes;
+
+        _lastCadenceLogUtc = now;
+        _lastCadencePublished = published;
+        _lastCadenceConsumed = consumed;
+        _lastCadenceGen2 = gen2;
+        _lastCadenceAllocatedBytes = allocated;
+
+        var seconds = elapsed.TotalSeconds;
+        if (seconds <= 0) return;
+
+        var peakDetections = _cadencePeakDetections;
+        var peakTracked = _cadencePeakTracked;
+        var bestScore = _cadenceBestDetectionScore;
+        _cadencePeakDetections = 0;
+        _cadencePeakTracked = 0;
+        _cadenceBestDetectionScore = 0;
+
+        // The live snapshot as the viewer's overlay would draw it, so a "there is clearly a car on
+        // screen and no box on it" report can be checked against what the pipeline actually held at
+        // that moment rather than reasoned about.
+        var live = _liveSnapshot;
+        var liveSummary = live.Count == 0
+            ? "none"
+            : string.Join(", ", live.Take(10).Select(b => $"{b.Label}/{b.MovementState}/{b.Confidence:F2}"));
+
+        _logger.LogInformation(
+            "Camera {CameraId} detection cadence over {Seconds:F0}s: capture {CaptureFps:F1} fps, " +
+            "inference {InferenceFps:F1} fps, {Dropped} frame(s) dropped ({DropPercent:F0}%), " +
+            "last inference {InferenceMs:F1} ms. Peak {PeakDetections} detection(s)/frame -> " +
+            "{PeakTracked} tracked, best raw score {BestScore:F2} (tracker needs {NewTrackThreshold:F2} " +
+            "to start a track). Live boxes now: {LiveBoxes}. Process-wide over the same window: " +
+            "{Gen2} gen2 collection(s), {AllocatedMbPerSec:F0} MB/s allocated.",
+            _request.CameraId, seconds, deltaPublished / seconds, deltaConsumed / seconds,
+            deltaPublished - deltaConsumed,
+            deltaPublished == 0 ? 0 : (deltaPublished - deltaConsumed) * 100.0 / deltaPublished,
+            _engine.LastInferenceMilliseconds ?? 0,
+            peakDetections, peakTracked, bestScore, _trackerNewTrackThreshold, liveSummary,
+            deltaGen2, deltaAllocated / seconds / (1024.0 * 1024.0));
     }
 
     /// <summary>Pass G: crops one JPEG from the frame the model just ran on, covering the union of
@@ -930,6 +1052,38 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         }
     }
 
+    // The watch stream is never ffmpeg-probed on the node side, so _request.Width/Height (what
+    // InferenceProfile, the ffmpeg scale/pad filter, and every snapshot crop's geometry were built
+    // from) can be a stale ONVIF value, the Main-stream aspect as a stand-in, or the 1280x720
+    // fallback. VisionSession reports what ffmpeg actually decoded; if its aspect ratio disagrees with
+    // what we were started with, this pipeline is feeding the model a squashed frame and every crop
+    // comes off that same distorted buffer (a portrait camera set up as landscape is the severe case).
+    //
+    // Diagnostic only — deliberately. 0.172.0 posted these dimensions back so the node could persist
+    // them and restart the watch, and that could not hold: CameraService.ReplaceStreamsAsync
+    // overwrites CameraStream.Width/Height from ONVIF on every re-probe (and a re-probe runs on every
+    // web app restart), so the correction was reverted and the watch restarted in a loop, discarding
+    // this camera's ByteTrack state each cycle. The fix is the camera's own AiDetection.Orientation
+    // setting, which lives where a re-probe can't reach it — so all this does now is name it.
+    private void OnInputResolutionDetected(int width, int height)
+    {
+        if (width <= 0 || height <= 0) return;
+        if (Interlocked.Exchange(ref _streamInfoReported, 1) != 0) return;
+
+        var assumedAspect = (double)_request.Width / _request.Height;
+        var actualAspect = (double)width / height;
+        var drift = Math.Abs(assumedAspect - actualAspect) / actualAspect;
+        if (drift <= 0.02) return; // within 2% — the geometry is close enough, nothing to correct
+
+        _logger.LogWarning(
+            "Camera {CameraId}: AI detection was set up for a {AssumedWidth}x{AssumedHeight} stream but " +
+            "ffmpeg is actually decoding {ActualWidth}x{ActualHeight}. The model is running on a distorted " +
+            "frame and snapshot crops will look stretched — set this camera's AI detection orientation to " +
+            "{Orientation} (Cameras > Edit, or the deployment default on Admin > Settings > Detection).",
+            _request.CameraId, _request.Width, _request.Height, width, height,
+            height > width ? "Portrait" : "Landscape");
+    }
+
     private async Task PostEagerCropAsync(DateTime atUtc, byte[] jpeg)
     {
         try
@@ -963,6 +1117,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         }
         await FlushPendingReportsAsync(CancellationToken.None);
 
+        _session.InputResolutionDetected -= OnInputResolutionDetected;
         _cts.Dispose();
         _slot.Dispose();
         _engine.Dispose();

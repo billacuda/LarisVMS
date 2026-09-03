@@ -52,6 +52,35 @@ public class InferenceProfileTests
     }
 
     [Fact]
+    public void LetterboxOnTheCorridorCameraSubStreamPadsLeftAndRight()
+    {
+        // The exact shape the AiDetection.Orientation setting exists to produce: a corridor-mounted
+        // camera whose Sub stream really is 480x704, where ONVIF advertises 704x480. scale =
+        // min(640/480, 640/704) = 640/704 = 0.9090... (height-constrained) -> scaledWidth =
+        // 480*0.909 = 436.36 -> 436 after the even-alignment trim, scaledHeight = 640 exactly.
+        var profile = InferenceProfile.Create(480, 704, AspectMode.Letterbox);
+
+        Assert.Equal(436, profile.ScaledWidth);
+        Assert.Equal(640, profile.ScaledHeight);
+        Assert.Equal(102, profile.PadLeft); // (640-436)/2
+        Assert.Equal(0, profile.PadTop);
+    }
+
+    [Fact]
+    public void TheUncorrectedLandscapeReadingOfThatCameraPadsOnTheWrongAxis()
+    {
+        // What the same camera produced before the orientation setting: ffmpeg was told to scale into
+        // a landscape box, so a portrait frame was squashed to fit it. Pinned as a test because the
+        // two profiles are mirror images and it is otherwise easy to "fix" one into the other.
+        var profile = InferenceProfile.Create(704, 480, AspectMode.Letterbox);
+
+        Assert.Equal(640, profile.ScaledWidth);
+        Assert.Equal(436, profile.ScaledHeight);
+        Assert.Equal(0, profile.PadLeft);
+        Assert.Equal(102, profile.PadTop);
+    }
+
+    [Fact]
     public void LetterboxOnAPanoramicSourcePadsTopAndBottomHeavily()
     {
         // A real camera shape from this deployment: 4096x1856. scale = min(640/4096, 640/1856) =

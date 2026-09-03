@@ -33,7 +33,12 @@ public record VisionStartCameraRequest(
     /// camera into whatever that global resolution's own aspect happened to be, before D-FINE's own
     /// 640x640 stretch squashed it a second time. Now purely an input to
     /// LarisVMS.Vision.Inference.InferenceProfile, which derives the actual ffmpeg decode target
-    /// (always exactly its own NetworkWidth/NetworkHeight) from these plus AspectMode below.</summary>
+    /// (always exactly its own NetworkWidth/NetworkHeight) from these plus AspectMode below.
+    /// The watch stream is never ffmpeg-probed node-side, so this can start out wrong (a stale ONVIF
+    /// value, or the Main-stream aspect as a stand-in, or the 1280x720 fallback) — a camera that
+    /// misreports its shape outright is corrected by the operator-set AiDetection.Orientation the
+    /// node applies before building this request (see LarisVMS.Node.DetectionOrientation), and
+    /// VisionSession warns when what ffmpeg actually decodes still disagrees.</summary>
     int Width,
     int Height,
     /// <summary>ffmpeg -hwaccel value for VisionSession's own GPU-hybrid decode, e.g. "cuda" — see

@@ -169,8 +169,9 @@ else
                                        value="@(Model.MaxFpsOverride.GetValueOrDefault(n.Id)?.ToString())" />
                                 <select name="dfineWeightsOverride" class="form-select form-select-sm mt-1">
                                     <option value="" selected="@(string.IsNullOrEmpty(Model.DFineWeightsOverride.GetValueOrDefault(n.Id)))">(inherit D-FINE weights)</option>
-                                    <option value="Obj2Coco" selected="@(Model.DFineWeightsOverride.GetValueOrDefault(n.Id) == "Obj2Coco")">Obj2Coco</option>
-                                    <option value="Obj365" selected="@(Model.DFineWeightsOverride.GetValueOrDefault(n.Id) == "Obj365")">Obj365</option>
+                                    <option value="Obj2Coco" selected="@(Model.DFineWeightsOverride.GetValueOrDefault(n.Id) == "Obj2Coco")">Obj2Coco (small)</option>
+                                    <option value="Obj2CocoMedium" selected="@(Model.DFineWeightsOverride.GetValueOrDefault(n.Id) == "Obj2CocoMedium")">Obj2Coco (medium)</option>
+                                    <option value="Obj365" selected="@(Model.DFineWeightsOverride.GetValueOrDefault(n.Id) == "Obj365")">Obj365 (small)</option>
                                 </select>
                                 @* Detection/hardware-acceleration overhaul, pass 1 — same per-node
                                    override shape as the two selects above. *@

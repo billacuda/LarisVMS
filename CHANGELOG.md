@@ -7,6 +7,216 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.178.0] - 2026-09-02
+
+### Changed
+
+- **Playback timeline bookmark markers now have a thin black outline**, so the amber flag stays
+  legible where it sits over a colored recording bucket or directly under the white playhead.
+
+### Notes
+
+- Web-only change. No recorder node rebuild or `install-node.ps1` re-run.
+
+## [0.177.0] - 2026-09-02
+
+### Added
+
+- **The Snapshots filter tree now remembers its state per user.** Collapsing a category, or
+  unchecking a whole category or a single object label, used to be forgotten on the next refresh
+  unless you also clicked Filter. Those toggles are now saved to your account as you make them and
+  restored on the next visit — on any device — while a URL that already carries a filter (a Filter
+  submit, a shared link, a pagination click) still wins and is left untouched. Clearing the filter
+  also clears the remembered tree state.
+
+### Notes
+
+- Web-only change. No recorder node rebuild or `install-node.ps1` re-run.
+
+## [0.176.0] - 2026-09-02
+
+### Changed
+
+- **Snapshot cards are now framed more prominently in their badge color(s).** Every card's border is
+  thicker (3px), and a card that groups overlapping detections on one camera (a person and a vehicle
+  in the same frame, for example) is framed in a gradient running through each distinct badge
+  color — two colors blend corner to corner, three or four anchor one per corner — instead of only
+  showing the first. Cards with a single detection type keep a plain solid border, just wider.
+
+### Notes
+
+- Web-only change. No recorder node rebuild or `install-node.ps1` re-run.
+
+## [0.175.0] - 2026-09-02
+
+### Fixed
+
+- **Lowering the AI detection confidence had no effect below 0.6.** Object tracking refused to start
+  a new track for anything scoring under a fixed 0.6, independently of
+  **Settings > Detection > Confidence** — so setting the confidence to 0.3 to pick up dimmer or more
+  distant objects did nothing, because the detections it let through were then discarded by a gate
+  further down. Objects *already* being tracked were unaffected, since tracking deliberately holds an
+  established object through weak detections; only newly-appearing ones were lost.
+
+  The tracker's thresholds now follow the configured confidence, keeping the relationship between
+  them that the tracking algorithm's own reference uses. A deployment left on the 0.5 default is
+  unaffected. One that had lowered its confidence now gets what it asked for — including the false
+  positives, so a very low value is worth revisiting: around 0.3 is a reasonable floor.
+
+### Added
+
+- **The detection cadence log line now reports what the model found versus what survived tracking** —
+  peak detections per frame, how many of those became tracks, the best raw score seen in the window,
+  the score a new track actually has to clear, and the boxes the live overlay is currently drawing
+  with their labels, movement states and scores. This is the pair of numbers that localises "there is
+  clearly something on screen and it never gets a box": a healthy detection count against zero tracks
+  means the model sees the object and tracking is refusing it, while zero detections means the model
+  genuinely does not see it. Neither was observable before.
+
+### Notes
+
+- Recorder node / detection-service change — rebuild and deploy the node package. No
+  `install-node.ps1` re-run needed.
+- The confidence fix above is a real defect but it is **not** the cause of a recorder that has
+  stopped reporting AI detections entirely — an object scoring above the configured confidence was
+  never affected by it.
+
+## [0.174.2] - 2026-09-02
+
+### Changed
+
+- **AI detection no longer allocates its model input buffer per frame.** 0.174.1 removed two large
+  per-frame allocations; instrumentation on a live six-camera recorder then showed the process still
+  allocating 140-255 MB/sec and running 4-7 gen2 garbage collections *per second*, essentially all of
+  it one line: the input tensor handed to the model, freshly allocated at 4.92 MB every inference and
+  large enough to land on the .NET Large Object Heap every time. It is now built once per camera and
+  refilled. D-FINE keeps two such buffers rather than one, because its high-resolution re-detection
+  runs on a separate task alongside the continuous loop and the two must not share.
+
+### Notes
+
+- Recorder node / detection-service change — rebuild and deploy the node package. No
+  `install-node.ps1` re-run needed.
+
+## [0.174.1] - 2026-09-02
+
+### Changed
+
+- **The AI detection loop no longer allocates two large buffers per frame.** Each processed frame
+  copied itself into a freshly allocated buffer (1.56 MB at the detection frame size), and YOLOX
+  copied its entire output tensor out again before decoding it (2.86 MB). Both are large enough to
+  go straight onto the .NET Large Object Heap, so a six-camera recorder was generating on the order
+  of 200 MB/sec of large-object garbage purely to move data it already had. The frame is now copied
+  into one buffer reused for the life of the pipeline, and the decoder reads the output tensor's own
+  memory in place. Neither changes what the model sees.
+- **The detection cadence line now also reports process-wide gen2 collection count and allocation
+  rate** over the same window. Inference time on a recorder was seen swinging five- to eightfold in
+  lockstep across every camera, which is the signature of a process-wide stall rather than anything
+  per-camera; garbage collection and GPU contention from the recorder's own hardware-encoded
+  recordings look identical from inside the detection service, and these two counters are what
+  distinguish them.
+
+### Notes
+
+- Recorder node / detection-service change — rebuild and deploy the node package. No
+  `install-node.ps1` re-run needed.
+
+## [0.174.0] - 2026-09-02
+
+### Added
+
+- **A per-camera AI detection orientation** (Cameras > Edit > "Camera orientation override", with a
+  deployment default on Admin > Settings > Detection). Some corridor-mounted cameras advertise a
+  landscape detection stream over ONVIF (704x480) while actually sending portrait video (480x704).
+  Left on the default `Auto`, the recorder builds its ffmpeg scale/pad chain for the advertised
+  shape and squashes the real frame into it — so the model runs on a horizontally stretched image
+  and every snapshot crop comes off that same distorted buffer. Setting `Portrait` corrects the
+  dimensions before the detection profile is built, which fixes the stretched crops **and** the
+  detection quality on those cameras. The detection service names this setting in its log when it
+  sees a stream whose real shape disagrees with what the watch was started with.
+- **A per-camera detection cadence log line**, every 30 seconds per watched camera: frames captured
+  per second, frames actually reaching the model per second, how many were dropped, and the last
+  inference's duration. The frame rate the inference loop achieves decides whether a moving object
+  can be tracked at all — the tracker matches an object between consecutive processed frames, and a
+  vehicle crossing frame stops overlapping itself once those frames are too far apart, where a
+  parked one never does. Nothing surfaced that number before, and it cannot be recovered from ffmpeg
+  (which emits no progress output here even at Debug).
+
+### Fixed
+
+- **AI detection no longer restarts a camera's watch in a loop.** 0.172.0 fixed stretched snapshot
+  crops by having the detection service measure the stream's real resolution and report it back for
+  the recorder to persist. That correction could not hold: a camera re-probe overwrites the stored
+  stream dimensions from ONVIF, and a re-probe runs on every server restart, so the corrected value
+  was reverted and the watch restarted — over and over, discarding that camera's object-tracking
+  state each time and losing detections around every cycle. The measurement is now a warning that
+  names the new orientation setting, which lives where a re-probe cannot reach it.
+
+### Notes
+
+- Recorder node / detection-service change — rebuild and deploy the node package. No
+  `install-node.ps1` re-run needed; nodes pick this up through the existing auto-update path.
+- An affected camera needs its orientation set explicitly once (Cameras > Edit). Cameras that report
+  their shape correctly need no change — `Auto` is the default and keeps today's behavior.
+
+## [0.173.1] - 2026-09-01
+
+### Security
+
+- Camera RTSP credentials are no longer written to log files. ffmpeg echoes the full stream URL —
+  username and password included — into its own output, and the recorder logged those lines
+  verbatim (every line at Debug, and any "authorization failed" / 401 line at Warning). All ffmpeg
+  output is now scrubbed of embedded `user:password@` before it is logged, across the recording,
+  motion, live, and AI-detection stream sessions. Existing log files may still contain credentials
+  and should be rotated.
+
+## [0.173.0] - 2026-09-01
+
+### Added
+
+- A **medium D-FINE model** (`Obj2Coco (medium)`) in the detection model selection, alongside the
+  existing small Obj2Coco / Obj365 options (Admin > Settings > Detection, and per-node on
+  Admin > Nodes). Same 80-class COCO vocabulary as small Obj2Coco with a larger backbone — more
+  accurate, and more work per frame, so pair it with a capable GPU and a lower detection
+  frame-rate cap. The model is not bundled by default; a node package built with it present
+  (`tools/export-models/fetch_dfine.py --weights medium-obj2coco`) picks it up automatically.
+
+## [0.172.2] - 2026-09-01
+
+### Changed
+
+- Detection span reports from a recorder are now processed one batch at a time per node, and a
+  report that loses a race to another (both inserting the same detection span) is merged into the
+  winner instead of being logged as an error and dropped. Hardening around the same area as the
+  0.172.1 fix — no visible behavior change on its own.
+
+## [0.172.1] - 2026-09-01
+
+### Fixed
+
+- AI object detection could silently stop producing spans, snapshots, and timeline tags for a busy
+  camera — a moving object crossing frame would be tracked live but never recorded — while static
+  objects on the same camera kept working. The fragment-coalescing logic backdated an existing
+  span's start time onto a value another detection row already held, which violated a unique index;
+  the resulting error was caught by dropping the row, so a scene with any real activity stopped
+  logging AI detections entirely. Coalescing no longer moves a span's start time (it only ever
+  extends the end). Most visible right after upgrading to 0.172.0, which restarted every detection
+  pipeline at once.
+
+## [0.172.0] - 2026-09-01
+
+### Fixed
+
+- Portrait and corridor-mounted cameras no longer produce severely horizontally-stretched
+  AI-detection snapshot crops. The detection pipeline assumed a 1280x720 landscape shape for any
+  camera whose watch stream had never been resolution-probed (which is every manually-added camera,
+  and any camera whose ONVIF metadata disagrees with the delivered stream), squashing a portrait
+  frame into a landscape buffer before the detector and every snapshot crop ever saw it. It now
+  falls back to the camera's real main-stream dimensions for the aspect ratio, and the recorder
+  learns and stores the watch stream's true resolution directly from ffmpeg on connect — so an
+  affected camera self-corrects within a reconcile cycle and its resolution now shows on the
+  dashboard.
+
 ## [0.171.0] - 2026-09-01
 
 ### Added

@@ -89,13 +89,17 @@
             <button type="button" class="help-icon" data-help-target="dfineWeightsHelp" tabindex="0" aria-label="Help">ℹ️</button>
         </label>
         <select asp-for="DFineWeights" class="form-select">
-            <option value="Obj2Coco">Obj2Coco — 80 COCO classes (default)</option>
-            <option value="Obj365">Obj365 — 365 Objects365 classes (richer vocabulary)</option>
+            <option value="Obj2Coco">Obj2Coco (small) — 80 COCO classes (default)</option>
+            <option value="Obj2CocoMedium">Obj2Coco (medium) — same 80 classes, heavier/more accurate</option>
+            <option value="Obj365">Obj365 (small) — 365 Objects365 classes (richer vocabulary)</option>
         </select>
         <div class="help-text-source" id="dfineWeightsHelp">
             Only meaningful when the detection model above is set to D-FINE. Obj365 recognizes a
             much wider range of specific object types at the cost of a larger, more specific
-            vocabulary — see the Snapshots page's own filter tree once it's in use.
+            vocabulary — see the Snapshots page's own filter tree once it's in use. The medium
+            Obj2Coco model keeps the same 80-class vocabulary but uses a larger backbone: more
+            accurate, noticeably more work per frame — best paired with a capable GPU and a lower
+            detection frame-rate cap. Changing this restarts each camera's detection pipeline.
         </div>
     </div>
     <div class="col-12">
@@ -129,6 +133,26 @@
         <div class="help-text-source" id="streamRoleHelp">
             Which of a camera's streams AI detection actually watches — Sub (lower resolution, lighter
             load) by default. A per-camera override is available on that camera's own Edit page.
+        </div>
+    </div>
+
+    <div class="col-12">
+        <label class="form-label">
+            Camera orientation
+            <button type="button" class="help-icon" data-help-target="orientationHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <select asp-for="Orientation" class="form-select">
+            <option value="Auto">Auto</option>
+            <option value="Landscape">Landscape</option>
+            <option value="Portrait">Portrait</option>
+        </select>
+        <div class="help-text-source" id="orientationHelp">
+            Auto trusts the resolution a camera reports for its detection stream. Some corridor-mounted
+            cameras advertise a landscape stream (704x480) while actually sending portrait video
+            (480x704) — detection then runs on a squashed frame and snapshot crops come out
+            horizontally stretched. Setting Portrait corrects the shape before the frame reaches the
+            model. Almost always a per-camera setting rather than a deployment default; the override
+            is on that camera's own Edit page.
         </div>
     </div>
 

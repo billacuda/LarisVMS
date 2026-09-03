@@ -384,7 +384,8 @@ public sealed class MotionSession(MotionSessionOptions options, IReadOnlyList<Mo
         {
             while (await process.StandardError.ReadLineAsync(ct) is { } line)
             {
-                logger.LogDebug("ffmpeg (motion): {Line}", line);
+                var safeLine = CredentialScrubber.Scrub(line);
+                logger.LogDebug("ffmpeg (motion): {Line}", safeLine);
 
                 if (line.Contains("error", StringComparison.OrdinalIgnoreCase)
                     || line.Contains("failed", StringComparison.OrdinalIgnoreCase)
@@ -392,7 +393,7 @@ public sealed class MotionSession(MotionSessionOptions options, IReadOnlyList<Mo
                     || line.Contains("denied", StringComparison.OrdinalIgnoreCase)
                     || line.Contains("refused", StringComparison.OrdinalIgnoreCase))
                 {
-                    logger.LogWarning("ffmpeg (motion): {Line}", line);
+                    logger.LogWarning("ffmpeg (motion): {Line}", safeLine);
                 }
             }
         }

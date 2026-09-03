@@ -19,6 +19,10 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
     [BindProperty] public double Confidence { get; set; } = 0.35;
     [BindProperty] public double Iou { get; set; } = 0.5;
     [BindProperty] public string StreamRole { get; set; } = "Sub";
+    /// <summary>Deployment default for how a camera's reported detection-stream dimensions are
+    /// oriented — "Auto", "Landscape" or "Portrait". Almost always overridden per camera rather than
+    /// set here, since it describes one device's mounting; see LarisVMS.Node.DetectionOrientation.</summary>
+    [BindProperty] public string Orientation { get; set; } = "Auto";
     [BindProperty] public bool ReportIdleDetections { get; set; }
     [BindProperty] public int IdleTimeoutSeconds { get; set; } = 10;
     /// <summary>Node-scoped ceiling on frames/sec per camera reaching the model. The Vision Service
@@ -67,6 +71,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         Confidence = await settings.GetAsync("Detection.Confidence", 0.35);
         Iou = await settings.GetAsync("Detection.Iou", 0.5);
         StreamRole = await settings.GetAsync("AiDetection.StreamRole", "Sub");
+        Orientation = await settings.GetAsync("AiDetection.Orientation", "Auto");
         ReportIdleDetections = await settings.GetAsync("Detection.ReportIdleDetections", false);
         IdleTimeoutSeconds = await settings.GetAsync("Detection.IdleTimeoutSeconds", 10);
         MaxFps = await settings.GetAsync("Detection.MaxFps", 10);
@@ -87,6 +92,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         var oldConfidence = await settings.GetAsync("Detection.Confidence", 0.35);
         var oldIou = await settings.GetAsync("Detection.Iou", 0.5);
         var oldStreamRole = await settings.GetAsync("AiDetection.StreamRole", "Sub");
+        var oldOrientation = await settings.GetAsync("AiDetection.Orientation", "Auto");
         var oldReportIdleDetections = await settings.GetAsync("Detection.ReportIdleDetections", false);
         var oldIdleTimeoutSeconds = await settings.GetAsync("Detection.IdleTimeoutSeconds", 10);
         var oldMaxFps = await settings.GetAsync("Detection.MaxFps", 10);
@@ -110,6 +116,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         await settings.SetGlobalAsync("Detection.Confidence", Confidence.ToString("0.####"), by);
         await settings.SetGlobalAsync("Detection.Iou", Iou.ToString("0.####"), by);
         await settings.SetGlobalAsync("AiDetection.StreamRole", StreamRole, by);
+        await settings.SetGlobalAsync("AiDetection.Orientation", Orientation, by);
         await settings.SetGlobalAsync("Detection.ReportIdleDetections", ReportIdleDetections.ToString(), by);
         await settings.SetGlobalAsync("Detection.IdleTimeoutSeconds", IdleTimeoutSeconds.ToString(), by);
         await settings.SetGlobalAsync("Detection.MaxFps", MaxFps.ToString(), by);
@@ -127,6 +134,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
             AuditDiff.Of("Detection.Confidence", oldConfidence.ToString("0.####"), Confidence.ToString("0.####")),
             AuditDiff.Of("Detection.Iou", oldIou.ToString("0.####"), Iou.ToString("0.####")),
             AuditDiff.Of("AiDetection.StreamRole", oldStreamRole, StreamRole),
+            AuditDiff.Of("AiDetection.Orientation", oldOrientation, Orientation),
             AuditDiff.Of("Detection.ReportIdleDetections", oldReportIdleDetections.ToString(), ReportIdleDetections.ToString()),
             AuditDiff.Of("Detection.IdleTimeoutSeconds", oldIdleTimeoutSeconds.ToString(), IdleTimeoutSeconds.ToString()),
             AuditDiff.Of("Detection.MaxFps", oldMaxFps.ToString(), MaxFps.ToString()),

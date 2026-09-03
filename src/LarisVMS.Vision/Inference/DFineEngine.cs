@@ -46,6 +46,20 @@ public sealed class DFineEngine : IDetectionEngine, IBatchDetectionEngine
     private readonly ILogger<DFineEngine> _logger;
     private bool _loggedFirstInference;
 
+    // Input tensors reused across calls rather than allocated per frame — at 640x640 each is 4.92 MB
+    // (H*W*3 floats), a Large Object Heap allocation every inference, which on a busy node forces
+    // several gen2 collections per second. ONNX Runtime has copied the tensor to the device by the
+    // time Run returns, so the next call is free to overwrite it.
+    //
+    // Two of them, not one, because this engine has two genuinely concurrent entry points:
+    // CameraDetectionPipeline calls Detect from its single inference loop and DetectBatch from
+    // HighResReDetectionLoopAsync, which is a separate task running alongside it. Each preprocessor
+    // has exactly one of those callers (Preprocess <- Detect, PreprocessNv12 <- DetectBatch), so a
+    // buffer per preprocessor keeps each one single-threaded. Sharing a single tensor between them
+    // would be a race. Allocated lazily so the path a given deployment doesn't use costs nothing.
+    private DenseTensor<float>? _detectTensor;
+    private DenseTensor<float>? _batchTensor;
+
     public DFineEngine(EngineOptions options, InferenceProfile profile, IReadOnlyList<string> labels, ILogger<DFineEngine> logger)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -180,8 +194,8 @@ public sealed class DFineEngine : IDetectionEngine, IBatchDetectionEngine
     {
         int w = _profile.NetworkWidth, h = _profile.NetworkHeight;
         var pixelCount = w * h;
-        var tensor = new DenseTensor<float>([1, 3, h, w]);
-        var t = tensor.Buffer.Span;
+        _batchTensor ??= new DenseTensor<float>([1, 3, h, w]);
+        var t = _batchTensor.Buffer.Span;
         var gPlane = pixelCount;
         var bPlane = pixelCount * 2;
 
@@ -199,7 +213,7 @@ public sealed class DFineEngine : IDetectionEngine, IBatchDetectionEngine
             }
         }
 
-        return tensor;
+        return _batchTensor;
     }
 
     /// <summary>CPU fallback preprocessing (GpuPreprocessing off): packs a raw BGRA8888 frame buffer
@@ -219,8 +233,8 @@ public sealed class DFineEngine : IDetectionEngine, IBatchDetectionEngine
                 "engine's InferenceProfile have disagreed about the decode target.");
         }
 
-        var tensor = new DenseTensor<float>([1, 3, _profile.NetworkHeight, _profile.NetworkWidth]);
-        var tensorSpan = tensor.Buffer.Span; // flat, row-major: [R plane][G plane][B plane], each H*W
+        _detectTensor ??= new DenseTensor<float>([1, 3, _profile.NetworkHeight, _profile.NetworkWidth]);
+        var tensorSpan = _detectTensor.Buffer.Span; // flat, row-major: [R plane][G plane][B plane], each H*W
         var gPlane = pixelCount;
         var bPlane = pixelCount * 2;
 
@@ -232,7 +246,7 @@ public sealed class DFineEngine : IDetectionEngine, IBatchDetectionEngine
             tensorSpan[i] = bgra[byteOffset + 2] / 255f;
         }
 
-        return tensor;
+        return _detectTensor;
     }
 
     public void Dispose()

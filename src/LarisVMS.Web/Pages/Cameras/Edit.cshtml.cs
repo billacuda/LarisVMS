@@ -46,6 +46,10 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
     [BindProperty] public double? IouOverride { get; set; }
     /// <summary>"" (blank) means inherit — same convention as RecordingModeOverride.</summary>
     [BindProperty] public string AiDetectionStreamRoleOverride { get; set; } = "";
+    /// <summary>"" (blank) means inherit, same as AiDetectionStreamRoleOverride above. Corrects a
+    /// camera that misreports the shape of its detection stream — see
+    /// LarisVMS.Node.DetectionOrientation.</summary>
+    [BindProperty] public string AiDetectionOrientationOverride { get; set; } = "";
 
     public bool IsNew => Id is null;
 
@@ -69,6 +73,7 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
     public double EffectiveConfidence { get; set; }
     public double EffectiveIou { get; set; }
     public string EffectiveAiDetectionStreamRole { get; set; } = "Sub";
+    public string EffectiveAiDetectionOrientation { get; set; } = "Auto";
     /// <summary>Whether this camera has at least one enabled ServerMotion zone — Motion mode does
     /// nothing without one (NodeWorker falls back to recording everything, logging a warning) so
     /// the Edit page can surface that up front instead of the operator discovering it in node logs.</summary>
@@ -170,6 +175,8 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
 
         AiDetectionStreamRoleOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "AiDetection.StreamRole") ?? "";
         EffectiveAiDetectionStreamRole = await settings.GetAsync("AiDetection.StreamRole", "Sub", cameraId: cameraId, nodeId: nodeId);
+        AiDetectionOrientationOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "AiDetection.Orientation") ?? "";
+        EffectiveAiDetectionOrientation = await settings.GetAsync("AiDetection.Orientation", "Auto", cameraId: cameraId, nodeId: nodeId);
 
         var zones = await zoneService.ListAsync(cameraId);
         HasServerMotionZone = zones.Any(z => z.Kind == ZoneKind.ServerMotion && z.IsEnabled);
@@ -254,6 +261,8 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
                 clampedIouOverride?.ToString("0.####"), User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "AiDetection.StreamRole",
                 string.IsNullOrEmpty(AiDetectionStreamRoleOverride) ? null : AiDetectionStreamRoleOverride, User.Identity?.Name);
+            await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "AiDetection.Orientation",
+                string.IsNullOrEmpty(AiDetectionOrientationOverride) ? null : AiDetectionOrientationOverride, User.Identity?.Name);
             return RedirectToPage("Index");
         }
         catch (Exception ex)

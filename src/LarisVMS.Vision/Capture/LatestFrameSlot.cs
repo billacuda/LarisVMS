@@ -109,9 +109,33 @@ public sealed class LatestFrameSlot : IDisposable
     /// only if cancelled or disposed — never as a side effect of a concurrent <see cref="Resize"/>,
     /// which callers must not mistake for shutdown. The copy is necessary: the reader will overwrite
     /// the slot's buffers while inference runs.
+    ///
+    /// Allocates a fresh buffer per call. At a detection frame size that is a Large Object Heap
+    /// allocation every frame (640x640 BGRA is 1.56 MB), so the hot path uses the
+    /// <see cref="TakeAsync(byte[], CancellationToken)"/> overload with a reusable buffer instead —
+    /// this one stays for callers that genuinely want an independently-owned frame.
     /// </summary>
     public async Task<CapturedFrame?> TakeAsync(CancellationToken cancellationToken)
+        => await TakeAsync(new byte[FrameBytes], cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// As <see cref="TakeAsync(CancellationToken)"/>, but copies into <paramref name="destination"/>
+    /// rather than allocating — the returned <see cref="CapturedFrame.Frame"/> *is* that buffer.
+    ///
+    /// The caller owns the buffer and must be finished with it before the next call: a single
+    /// consumer loop that reads the frame synchronously within one iteration (which is what
+    /// CameraDetectionPipeline's inference loop does — inference, then the eager snapshot crop, both
+    /// synchronous) can safely reuse one buffer forever. Do not hand the frame to anything that
+    /// outlives the iteration.
+    ///
+    /// <paramref name="destination"/> must be at least <see cref="FrameBytes"/> long. A buffer that
+    /// has been outgrown by a concurrent <see cref="Resize"/> throws rather than silently copying a
+    /// partial frame — the caller has to re-rent at the new size.
+    /// </summary>
+    public async Task<CapturedFrame?> TakeAsync(byte[] destination, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(destination);
+
         while (true)
         {
             try
@@ -132,10 +156,16 @@ public sealed class LatestFrameSlot : IDisposable
                 if (_disposed) return null;
                 if (!_hasFrame) continue; // a concurrent Resize discarded the frame that woke us
 
-                var copy = new byte[FrameBytes];
-                Array.Copy(_front, copy, FrameBytes);
+                if (destination.Length < FrameBytes)
+                {
+                    throw new ArgumentException(
+                        $"Destination buffer is {destination.Length} bytes, need at least {FrameBytes}.",
+                        nameof(destination));
+                }
+
+                Array.Copy(_front, destination, FrameBytes);
                 Interlocked.Increment(ref _consumed);
-                return new CapturedFrame(copy, _frontCapturedUtc);
+                return new CapturedFrame(destination, _frontCapturedUtc);
             }
         }
     }

@@ -16,24 +16,48 @@ namespace LarisVMS.Vision.Tracking;
 
 public sealed class ByteTrackOptions
 {
-    /// <summary>Per-detection-family tracker tuning. The stock values below are ByteTrack's own paper
-    /// defaults, which were calibrated against YOLOX's objectness×class score — so YOLOX gets them
-    /// unchanged. D-FINE (DETR class-probability scores) has run on these same values since its
-    /// integration and keeps them here too; this factory is the seam to diverge the two if a family
-    /// turns out to need it, without touching the one <c>new ByteTracker(...)</c> call site again.</summary>
-    public static ByteTrackOptions ForFamily(DetectionModelFamily family) => family switch
+    /// <summary>Per-detection-family tracker tuning, anchored to the deployment's own configured
+    /// detection confidence.
+    ///
+    /// These used to be hardcoded at ByteTrack's paper defaults (0.5 / 0.6), which are the values the
+    /// reference implementation pairs with a detector run at ~0.1 — the paper's whole design is that
+    /// the *tracker* does the gating, not the detector. LarisVMS instead runs the detector at the
+    /// operator's Detection.Confidence and then applied the paper's gates on top, so the two stacked:
+    /// with a 0.6 new-track threshold, any object whose score never reached 0.6 could never start a
+    /// track no matter how the confidence setting was tuned. That is invisible in daylight, where a
+    /// vehicle scores well above it, and total after dark, where a moving vehicle is blurred and dim
+    /// and sits around 0.3-0.5 — an object already being tracked survives on the second association
+    /// pass and keeps its box, while nothing new is ever picked up. Confirmed live: lowering
+    /// Detection.Confidence to 0.1 changed nothing, because this gate is downstream of it.
+    ///
+    /// So the gates now follow the confidence the operator actually set, keeping ByteTrack's own
+    /// relationship between them (the reference derives its new-track threshold as
+    /// <c>track_thresh + 0.1</c>). A deployment left on the old 0.5 default lands back on exactly
+    /// 0.5 / 0.6 and behaves as before.</summary>
+    public static ByteTrackOptions ForFamily(DetectionModelFamily family, double detectionConfidence)
     {
-        // Explicit rather than `new ByteTrackOptions()` so a change to the field defaults can't
-        // silently move YOLOX's tracker off the paper values.
-        DetectionModelFamily.YoloX => new ByteTrackOptions
+        // Clamped so a confidence at either extreme can't produce a nonsensical pair: at 0 the tracker
+        // would accept literally anything as a new track, and above ~0.9 nothing could ever start one.
+        var trackThreshold = (float)Math.Clamp(detectionConfidence, 0.05, 0.9);
+
+        return family switch
         {
-            TrackThreshold = 0.5f,
-            HighThreshold = 0.6f,
-            MatchThreshold = 0.8f,
-            FuseScore = true,
-        },
-        _ => new ByteTrackOptions(),
-    };
+            // Explicit rather than `new ByteTrackOptions()` so a change to the field defaults can't
+            // silently move YOLOX's tracker off these.
+            DetectionModelFamily.YoloX => new ByteTrackOptions
+            {
+                TrackThreshold = trackThreshold,
+                HighThreshold = trackThreshold + 0.1f,
+                MatchThreshold = 0.8f,
+                FuseScore = true,
+            },
+            _ => new ByteTrackOptions
+            {
+                TrackThreshold = trackThreshold,
+                HighThreshold = trackThreshold + 0.1f,
+            },
+        };
+    }
 
     /// <summary>Detections at or above this score enter the first association pass.</summary>
     public float TrackThreshold { get; init; } = 0.5f;

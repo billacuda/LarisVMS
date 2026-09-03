@@ -73,6 +73,21 @@ public class ModelPathResolutionTests : IDisposable
     }
 
     [Fact]
+    public void ResolvesTheMediumObj2CocoFilenameForThatWeightsVariant()
+    {
+        // dfine_m_obj2coco.onnx sorts before both small files — proving this is the catalog lookup
+        // keyed on Obj2CocoMedium, not the alphabetical fallback.
+        var dir = NewModelsDirectory();
+        var medium = Path.Combine(dir, "dfine_m_obj2coco.onnx");
+        var small = Path.Combine(dir, "dfine_s_obj2coco.onnx");
+        File.WriteAllText(medium, "");
+        File.WriteAllText(small, "");
+
+        Assert.Equal(medium, Resolve(Path.Combine(dir, "model.onnx"), dfineWeights: DFineWeights.Obj2CocoMedium));
+        Assert.Equal(small, Resolve(Path.Combine(dir, "model.onnx"), dfineWeights: DFineWeights.Obj2Coco));
+    }
+
+    [Fact]
     public void FallsBackToAlphabeticalGlobWhenTheExpectedCatalogFileIsMissing()
     {
         // A stale/hand-placed model with the wrong name — the last-resort tier, not the normal path.
