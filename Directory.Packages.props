@@ -37,10 +37,24 @@
          types. -->
     <PackageVersion Include="Google.Protobuf" Version="3.29.3" />
     <PackageVersion Include="Grpc.Tools" Version="2.69.0" />
-    <PackageVersion Include="YoloDotNet.ExecutionProvider.Cuda" Version="1.1.0" />
-    <PackageVersion Include="YoloDotNet.ExecutionProvider.DirectML" Version="1.0.0" />
-    <PackageVersion Include="YoloDotNet.ExecutionProvider.OpenVino" Version="1.1.0" />
-    <PackageVersion Include="YoloDotNet.ExecutionProvider.Cpu" Version="1.1.0" />
+    <!-- ONNX Runtime, multi-backend (see LarisVMS.Vision.csproj / VisionBackendResolver). One managed
+         assembly (comes with the base CPU package) is paired with several native builds staged into
+         onnxruntime-backends\<name>\ at publish time and chosen at runtime per machine:
+           - base package  -> managed assembly + the CPU native onnxruntime.dll at the app root
+           - Gpu.Windows   -> onnxruntime-backends\cuda\     (CUDA + TensorRT provider natives)
+           - DirectML + Microsoft.AI.DirectML -> onnxruntime-backends\directml\
+         Keep these on the same 1.23.x line; the managed assembly is unified to the highest by CPM.
+         OpenVINO (Intel.ML.OnnxRuntime.OpenVino) is intentionally not bundled — it lags at 1.22 and
+         would force a managed/native mismatch; DirectML already covers Intel GPUs.
+         Gpu.Windows forces the shared managed assembly to 1.23.2 (its nuspec minimum). base is
+         pinned to 1.23.2 to match; DirectML has no 1.23.2 release so it stays at 1.23.0 (its EP ABI
+         is stable — 1.23.0 native against the 1.23.2 managed assembly is fine, and pinning it stops
+         NuGet from floating it up to 1.24.x and dragging the managed assembly with it). -->
+    <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.23.2" />
+    <PackageVersion Include="Microsoft.ML.OnnxRuntime.Managed" Version="1.23.2" />
+    <PackageVersion Include="Microsoft.ML.OnnxRuntime.Gpu.Windows" Version="1.23.2" />
+    <PackageVersion Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.23.0" />
+    <PackageVersion Include="Microsoft.AI.DirectML" Version="1.15.4" />
     <PackageVersion Include="System.Management" Version="10.0.0" />
     <!-- Testing -->
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />

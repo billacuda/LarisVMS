@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.179.0] - 2026-09-03
+
+### Added
+
+- **One recorder node package now runs on any hardware.** The Vision Service bundles the DirectML
+  and CPU ONNX Runtime backends (plus the small CUDA files) and picks one at startup for the
+  accelerator the node detected — CUDA on an NVIDIA GPU when the CUDA Toolkit is present, otherwise
+  DirectML (any Direct3D 12 GPU, Intel iGPUs included), otherwise CPU — degrading gracefully when a
+  toolkit is missing instead of failing every camera. `build-node.ps1` and `deploy.ps1` no longer
+  take an accelerator flag.
+- **The 320 MB CUDA provider library is downloaded from the server on demand**, not shipped in every
+  node package. `deploy.ps1` seeds it onto the server and an NVIDIA node with the CUDA Toolkit
+  fetches it once — CPU/DirectML-only installs no longer carry it.
+- **`install-node.ps1` reports the AI backend a node will use** and, on an NVIDIA box missing the
+  CUDA Toolkit, prints exactly what to install; the node runs DirectML in the meantime.
+
+### Fixed
+
+- An Intel-iGPU node whose package was built for CUDA failed AI detection on every camera with
+  `OrtSessionOptionsAppendExecutionProvider_Cuda: Failed to load shared library`. The backend is now
+  resolved at runtime per machine, so this can't happen.
+- TensorRT (`Vision:EnableTensorRt`) was calling an ONNX Runtime API that 1.23 no longer accepts
+  (`Unknown provider name 'Tensorrt'`), and any failure in the CUDA setup path dropped the whole
+  node to CPU. It now uses the supported `AppendExecutionProvider_Tensorrt` API with `ORT_TENSORRT_*`
+  configuration, and a TensorRT failure falls back to plain CUDA instead of CPU. Requires TensorRT
+  10.x (this build links `nvinfer_10.dll`).
+
+### Notes
+
+- Recorder nodes must be updated with `install-node.ps1` (not auto-update) to pick up the bundled
+  backends — auto-update only swaps the Vision Service executable, not the native runtimes.
+
 ## [0.178.0] - 2026-09-02
 
 ### Changed

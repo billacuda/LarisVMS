@@ -1,5 +1,6 @@
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Logging;
+using LarisVMS.Vision.Inference;
 using LarisVMS.Vision.Service;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -44,7 +45,19 @@ builder.WebHost.ConfigureKestrel(o => o.ListenLocalhost(port));
 
 var app = builder.Build();
 
+// Resolve the ONNX Runtime backend for this machine's hardware once, before any camera pipeline
+// builds an InferenceSession. Every node package ships CUDA / DirectML / OpenVINO / CPU native
+// runtimes side by side (build-node.ps1's StageOnnxBackends); this points the OS loader at one of
+// them based on the accelerator the node passed in Vision__PreferredAccelerator, degrading down the
+// list when a backend's prerequisites (CUDA Toolkit, cuDNN) are missing. The chosen backend and any
+// operator action needed are logged here and reported back to the control plane on the heartbeat.
+VisionBackendResolver.Initialize(key => builder.Configuration[key], app.Logger);
+
 app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
+
+// The backend VisionBackendResolver settled on plus anything a site admin needs to do about it —
+// polled once by NodeWorker after the process starts and forwarded on the node heartbeat.
+app.MapGet("/backend", () => Results.Ok(VisionBackendResolver.Current));
 
 // Node pushes the deployment-wide Logging.Level here when it changes — takes effect immediately, no
 // restart. Loopback-only like every other route on this port.

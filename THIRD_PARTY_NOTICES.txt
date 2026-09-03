@@ -10,7 +10,7 @@ etc. — each carries its own standard OSS license via NuGet/npm, not separately
 RUNTIME DEPENDENCIES
 --------------------
 
-YoloDotNet 4.2.0 (+ YoloDotNet.ExecutionProvider.* 1.x)
+YoloDotNet 4.2.0
     MIT
     https://github.com/NickSwardh/YoloDotNet
     Copyright (c) Niklas Swärd
@@ -27,23 +27,29 @@ YoloDotNet 4.2.0 (+ YoloDotNet.ExecutionProvider.* 1.x)
     package-level MIT declaration is what is relied upon here. This inconsistency has been noted
     upstream.
 
-    STILL A RUNTIME DEPENDENCY, EVEN THOUGH ITS OWN DECODERS AREN'T USED ANY MORE: the D-FINE
-    integration (see below) bypasses YoloDotNet's model-specific decoding entirely — DFineEngine
-    runs Microsoft.ML.OnnxRuntime directly — but this package remains referenced for (1) the
-    YoloDotNet.ExecutionProvider.* packages, still the delivery vehicle for the correct native ONNX
-    Runtime build per accelerator (build-node.ps1 -Accel), (2) its ObjectDetection/LabelModel/
-    IDetection types, which DFineDecoder constructs directly so ByteTracker/MovementClassifier/
-    CameraDetectionPipeline never needed to change, and (3) its public LAPJV.Solve, which the
-    ByteTrack port below calls directly.
+    STILL A RUNTIME DEPENDENCY, EVEN THOUGH ITS OWN DECODERS AREN'T USED ANY MORE: the D-FINE and
+    YOLOX engines run Microsoft.ML.OnnxRuntime directly and no longer touch YoloDotNet's
+    model-specific decoding or its execution-provider wrappers. This package remains referenced for
+    (1) its ObjectDetection/LabelModel/IDetection types, which the decoders construct directly so
+    ByteTracker/MovementClassifier/CameraDetectionPipeline never needed to change, and (2) its public
+    LAPJV.Solve, which the ByteTrack port below calls directly.
 
-Microsoft.ML.OnnxRuntime (Gpu / DirectML / OpenVino variants)
+Microsoft.ML.OnnxRuntime + Microsoft.ML.OnnxRuntime.Gpu.Windows + Microsoft.ML.OnnxRuntime.DirectML
     MIT
     https://github.com/microsoft/onnxruntime
     Copyright (c) Microsoft Corporation
-    Pulled in transitively by whichever YoloDotNet.ExecutionProvider.* package LarisVMS.Vision.Service
-    was published against (build-node.ps1 -Accel) — and, since the D-FINE integration, also used
-    directly (Inference/OrtSessionFactory.cs, Inference/DFineEngine.cs) rather than only through
-    YoloDotNet's own IExecutionProvider wrapper.
+    LarisVMS.Vision references the managed assembly and the CPU native; LarisVMS.Vision.Service also
+    stages the CUDA(+TensorRT) and DirectML native builds into onnxruntime-backends/<name>/ so one
+    node package runs on any hardware (VisionBackendResolver picks one at runtime). The ~320 MB
+    onnxruntime_providers_cuda.dll is not shipped in the node package — deploy.ps1 seeds it onto the
+    LarisVMS server and an NVIDIA node downloads it from there once. Used directly from
+    Inference/OrtSessionFactory.cs, DFineEngine.cs, YoloXEngine.cs.
+
+Microsoft.AI.DirectML
+    MIT
+    https://github.com/microsoft/DirectML
+    Copyright (c) Microsoft Corporation
+    Provides DirectML.dll, staged alongside the DirectML ONNX Runtime build.
 
 SkiaSharp
     MIT

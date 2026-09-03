@@ -42,9 +42,9 @@ public record VisionStartCameraRequest(
     int Width,
     int Height,
     /// <summary>ffmpeg -hwaccel value for VisionSession's own GPU-hybrid decode, e.g. "cuda" — see
-    /// VisionSession.StartFfmpeg. Independent of which YoloDotNet execution provider this build of
-    /// Vision Service was compiled for (Accel/ACCEL_* — decode acceleration and inference
-    /// acceleration are two separate GPU usages).</summary>
+    /// VisionSession.StartFfmpeg. Independent of which ONNX Runtime execution provider Vision Service
+    /// resolved for inference (VisionBackendResolver) — decode acceleration and inference
+    /// acceleration are two separate GPU usages.</summary>
     string? HardwareAcceleration,
     double Confidence,
     double Iou,

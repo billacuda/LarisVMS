@@ -52,6 +52,29 @@ public class NodeApiClient
         return await response.Content.ReadAsStreamAsync(ct);
     }
 
+    /// <summary>Size + SHA-256 of a large Vision Service native dependency the server has seeded
+    /// (currently only "cuda-provider"), or null if it has none — the node then keeps running
+    /// DirectML.</summary>
+    public async Task<VisionNativeInfo?> GetVisionNativeInfoAsync(string name, CancellationToken ct)
+    {
+        var response = await _http.GetAsync($"api/nodes/vision-native/{Uri.EscapeDataString(name)}/info", ct);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<VisionNativeInfo>(ct);
+    }
+
+    /// <summary>Streams a large Vision Service native dependency from the server — see
+    /// <see cref="GetVisionNativeInfoAsync"/>. Uses the long-timeout client (the CUDA provider is
+    /// ~320 MB).</summary>
+    public async Task<Stream> OpenVisionNativeStreamAsync(string name, CancellationToken ct)
+    {
+        var response = await _downloadHttp.GetAsync(
+            $"api/nodes/vision-native/{Uri.EscapeDataString(name)}",
+            HttpCompletionOption.ResponseHeadersRead, ct);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStreamAsync(ct);
+    }
+
     public async Task<NodeRegisterResponse> RegisterAsync(NodeRegisterRequest request, CancellationToken ct)
     {
         var response = await _http.PostAsJsonAsync("api/nodes/register", request, ct);

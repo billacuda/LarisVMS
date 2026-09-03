@@ -32,6 +32,14 @@ public sealed class VisionServiceSupervisor(string nodeInstallDirectory, string 
     // Deployment-wide Logging.Level (M20 pass 4). Passed as an env var when the child starts and
     // pushed to the already-running child (its own /log-level endpoint) when it changes.
     private string _logLevel = "Information";
+
+    // The AiAccelerator this node resolved for its hardware (AccelSelection.Choose) — passed to the
+    // child so VisionBackendResolver can pick the matching bundled ONNX Runtime backend. Unlike the
+    // log level, a change here needs a restart (the native backend is chosen once, at child startup,
+    // and can't be rebound in-process), so SetPreferredAccelerator stops a running child whose
+    // value no longer matches.
+    private string _preferredAccelerator = "Auto";
+    private string? _startedAccelerator;
     private readonly HttpClient _http = new() { BaseAddress = new Uri($"http://127.0.0.1:{Port}/"), Timeout = TimeSpan.FromSeconds(5) };
 
     // Windows job object holding the child, created once and deliberately never closed for the
@@ -101,6 +109,7 @@ public sealed class VisionServiceSupervisor(string nodeInstallDirectory, string 
         // child re-derive it, so the two processes can never disagree about which ffmpeg they run.
         psi.EnvironmentVariables["Vision__FfmpegPath"] = ffmpegPath;
         psi.EnvironmentVariables["Vision__LogLevel"] = _logLevel;
+        psi.EnvironmentVariables["Vision__PreferredAccelerator"] = _preferredAccelerator;
 
         var process = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null.");
         AssignToKillOnCloseJob(process);
@@ -108,7 +117,28 @@ public sealed class VisionServiceSupervisor(string nodeInstallDirectory, string 
         _ = DrainOutputAsync(process.StandardError, "stderr");
 
         _process = process;
-        logger.LogInformation("Started LarisVMS.Vision.Service (PID {Pid}) on port {Port}.", process.Id, Port);
+        _startedAccelerator = _preferredAccelerator;
+        logger.LogInformation("Started LarisVMS.Vision.Service (PID {Pid}) on port {Port}, preferred accelerator {Accelerator}.",
+            process.Id, Port, _preferredAccelerator);
+    }
+
+    /// <summary>Sets the accelerator a future child starts with. If a child is already running
+    /// against a different one, stops it so the next <see cref="EnsureRunning"/> restarts it with the
+    /// new value — the native ONNX Runtime backend is chosen once at child startup and can't be
+    /// rebound live. A no-op when the value is unchanged, so this is safe to call every reconcile.</summary>
+    public void SetPreferredAccelerator(string accelerator)
+    {
+        var normalized = string.IsNullOrWhiteSpace(accelerator) ? "Auto" : accelerator.Trim();
+        if (normalized == _preferredAccelerator) return;
+
+        _preferredAccelerator = normalized;
+        if (_process is { HasExited: false } && _startedAccelerator is not null && _startedAccelerator != normalized)
+        {
+            logger.LogInformation(
+                "Node accelerator changed from {Old} to {New} — restarting LarisVMS.Vision.Service to pick up the matching backend.",
+                _startedAccelerator, normalized);
+            Stop();
+        }
     }
 
     /// <summary>Sets the log level a future child starts with, and — if one is running now — pushes

@@ -38,6 +38,14 @@ public record NodeUpdateInfoDto(string Version, string DownloadUrl, string Sha25
 
 public record NodeHeartbeatResponse(int IntervalSeconds, NodeUpdateInfoDto? UpdateAvailable = null);
 
+/// <summary>Metadata for a large Vision Service native dependency the node package doesn't bundle and
+/// fetches from the server on demand — currently only <c>onnxruntime_providers_cuda.dll</c> (~320 MB),
+/// downloaded by a node that resolved the CUDA backend so it isn't shipped to every node. The server
+/// serves the file from a cache directory seeded by <c>deploy.ps1</c>; <see cref="Sha256"/> is
+/// verified by the node before the file is put in place. Null from the endpoint means the server has
+/// no copy seeded.</summary>
+public record VisionNativeInfo(string Name, string Sha256, long SizeBytes);
+
 public record NodeConfigStreamDto(Guid StreamId, string Role, string RtspUri,
     string? Codec, int? Width, int? Height, bool HasAudio,
     /// <summary>The stream's probed frame rate (CameraStream.Fps), or null if not probed yet — used

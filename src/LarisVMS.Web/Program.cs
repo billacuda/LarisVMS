@@ -255,6 +255,7 @@ builder.Services.AddScoped<IViewService, ViewService>();
 builder.Services.AddScoped<ITimelineService, TimelineService>();
 builder.Services.AddSingleton<DetectedObjectCategoryColorCache>();
 builder.Services.AddSingleton<LarisVMS.Web.Services.DetectionModelDistributor>();
+builder.Services.AddSingleton<LarisVMS.Web.Services.VisionNativeDistributor>();
 builder.Services.AddScoped<IZoneService, ZoneService>();
 builder.Services.AddScoped<IEventTagRuleService, EventTagRuleService>();
 builder.Services.AddScoped<IScheduleWindowService, ScheduleWindowService>();
@@ -506,6 +507,24 @@ nodesApi.MapGet("/detection-model/{family}/{variant}", async (
             $"the pinned model host, or the file seeded into its detection-models cache directory. ({ex.Message})",
             statusCode: StatusCodes.Status502BadGateway);
     }
+});
+
+// A large Vision Service native dependency the node package doesn't bundle — currently just
+// onnxruntime_providers_cuda.dll (~320 MB), which only NVIDIA nodes load. Seeded into the server's
+// cache by deploy.ps1; a node with no seeded file keeps running DirectML. Bearer-auth like the rest
+// of /api/nodes/*.
+nodesApi.MapGet("/vision-native/{name}/info", (string name, LarisVMS.Web.Services.VisionNativeDistributor distributor) =>
+{
+    if (!distributor.IsKnown(name)) return Results.NotFound();
+    var info = distributor.GetInfo(name);
+    return info is null ? Results.NotFound() : Results.Json(info);
+});
+
+nodesApi.MapGet("/vision-native/{name}", (string name, LarisVMS.Web.Services.VisionNativeDistributor distributor) =>
+{
+    if (!distributor.IsKnown(name)) return Results.NotFound();
+    var stream = distributor.Open(name);
+    return stream is null ? Results.NotFound() : Results.Stream(stream, "application/octet-stream");
 });
 
 nodesApi.MapPost("/segments", async (HttpContext ctx, List<SegmentReportItem> segments, INodeService nodeService, CancellationToken ct) =>

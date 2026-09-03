@@ -8,28 +8,13 @@
   </PropertyGroup>
 
   <!--
-    Execution provider selection — ported from aitest's proven Accel switch (see
-    g:\Projects\aitest\src\Aitest.Vision\Aitest.Vision.csproj). YoloDotNet allows exactly ONE
-    execution provider package per build; referencing more than one causes native DLL conflicts.
-    So the provider is chosen at build time, and LarisVMS.Vision.Service is published once per
-    accelerator (see plan decision 2):
-
-        dotnet build -p:Accel=Cuda        Nvidia GPU (default, optional TensorRT)
-        dotnet build -p:Accel=DirectML    Any DX12 GPU incl. AMD/Intel
-        dotnet build -p:Accel=OpenVino    Intel iGPU/CPU, fastest on Intel
-        dotnet build -p:Accel=Cpu         No GPU
-
-    Each choice also defines an ACCEL_* symbol, consumed by Inference/EngineFactory.cs. Defaults
-    to Cpu here (unlike aitest, which defaulted to Cuda) since build-node.ps1 has no assumed GPU —
-    a site publishing for real hardware passes -p:Accel=... explicitly.
+    ONNX Runtime execution provider is chosen at RUNTIME now (see VisionBackendResolver), not by a
+    build-time -p:Accel switch. This project references only the managed ONNX Runtime assembly (via
+    the base CPU package, which also drops the CPU-only native onnxruntime.dll at the app root);
+    LarisVMS.Vision.Service stages the CUDA and DirectML native builds into
+    onnxruntime-backends\<name>\ and the resolver points the OS loader at whichever one matches the
+    node's hardware, degrading CUDA -> DirectML -> CPU when a toolkit is missing.
   -->
-  <PropertyGroup Condition="'$(Accel)' == ''">
-    <Accel>Cpu</Accel>
-  </PropertyGroup>
-
-  <PropertyGroup>
-    <DefineConstants>$(DefineConstants);ACCEL_$(Accel.ToUpperInvariant())</DefineConstants>
-  </PropertyGroup>
 
   <ItemGroup>
     <!-- Never the reverse — LarisVMS.Node must not be pulled toward the GPU/ONNX Runtime native
@@ -40,6 +25,9 @@
 
   <ItemGroup>
     <PackageReference Include="YoloDotNet" />
+    <!-- Managed ONNX Runtime + the CPU native (onnxruntime.dll) at the app root. The GPU natives are
+         staged into onnxruntime-backends\ by LarisVMS.Vision.Service's StageOnnxBackends target. -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <!-- ONNX IR types for OnnxPreprocessHead (pass 4a). Grpc.Tools is build-only (compiles the
          vendored onnx-ml.proto to C#); no gRPC runtime is pulled in. -->
@@ -63,26 +51,5 @@
          aitest's own Aitest.Vision.Tests project needed. -->
     <InternalsVisibleTo Include="LarisVMS.Tests" />
   </ItemGroup>
-
-  <ItemGroup Condition="'$(Accel)' == 'Cuda'">
-    <PackageReference Include="YoloDotNet.ExecutionProvider.Cuda" />
-  </ItemGroup>
-
-  <ItemGroup Condition="'$(Accel)' == 'DirectML'">
-    <PackageReference Include="YoloDotNet.ExecutionProvider.DirectML" />
-  </ItemGroup>
-
-  <ItemGroup Condition="'$(Accel)' == 'OpenVino'">
-    <PackageReference Include="YoloDotNet.ExecutionProvider.OpenVino" />
-  </ItemGroup>
-
-  <ItemGroup Condition="'$(Accel)' == 'Cpu'">
-    <PackageReference Include="YoloDotNet.ExecutionProvider.Cpu" />
-  </ItemGroup>
-
-  <Target Name="ValidateAccel" BeforeTargets="Build">
-    <Error Condition="'$(Accel)' != 'Cuda' AND '$(Accel)' != 'DirectML' AND '$(Accel)' != 'OpenVino' AND '$(Accel)' != 'Cpu'"
-           Text="Invalid Accel value '$(Accel)'. Expected one of: Cuda, DirectML, OpenVino, Cpu." />
-  </Target>
 
 </Project>

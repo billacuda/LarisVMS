@@ -7,25 +7,29 @@
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 
-  <!-- Published once per accelerator (object detection plan decision 2), same MSBuild switch as
-       LarisVMS.Vision itself and aitest before it:
-
-           dotnet publish -p:Accel=Cuda        Nvidia GPU
-           dotnet publish -p:Accel=DirectML    Any DX12 GPU incl. AMD/Intel
-           dotnet publish -p:Accel=OpenVino    Intel iGPU/CPU
-           dotnet publish -p:Accel=Cpu         No GPU
-
-       Not declared here — LarisVMS.Vision.csproj owns the Accel/ACCEL_* plumbing and the matching
-       YoloDotNet.ExecutionProvider.* package reference. MSBuild propagates a command-line global
-       property like -p:Accel=Cuda through to a ProjectReference's own build automatically, so
-       building or publishing *this* project with -p:Accel=X is enough to make LarisVMS.Vision
-       build against the matching provider too — nothing extra needed here. -->
-
   <ItemGroup>
     <!-- The only project allowed to reference LarisVMS.Vision — see that project's own csproj
          comment for why LarisVMS.Node must never do the same. -->
     <ProjectReference Include="..\LarisVMS.Vision\LarisVMS.Vision.csproj" />
     <ProjectReference Include="..\LarisVMS.Core\LarisVMS.Core.csproj" />
+  </ItemGroup>
+
+  <!-- The GPU native ONNX Runtime builds. Referenced only for their files (ExcludeAssets=all) —
+       nothing from them is compiled or auto-copied — and staged into
+       onnxruntime-backends\{cuda,directml}\ by StageOnnxBackends below so all backends ship in one
+       package and VisionBackendResolver can pick one per machine at runtime. The CPU backend is the
+       plain onnxruntime.dll that the base Microsoft.ML.OnnxRuntime package (referenced by
+       LarisVMS.Vision) already drops at the app root. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu.Windows" GeneratePathProperty="true">
+      <IncludeAssets>none</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" GeneratePathProperty="true">
+      <IncludeAssets>none</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.AI.DirectML" GeneratePathProperty="true">
+      <IncludeAssets>none</IncludeAssets>
+    </PackageReference>
   </ItemGroup>
 
   <ItemGroup>
@@ -35,5 +39,31 @@
          pipeline. Same arrangement LarisVMS.Vision already uses for the ByteTrack internals. -->
     <InternalsVisibleTo Include="LarisVMS.Tests" />
   </ItemGroup>
+
+  <!-- Copies each GPU backend's native payload into onnxruntime-backends\<name>\ next to the exe,
+       for both a plain build (bin\...) and a publish (build-node.ps1 then copies the whole publish
+       output, this folder included, into the node package). The property names below are MSBuild's
+       GeneratePathProperty form of the package ids (dots/dashes -> underscores). -->
+  <Target Name="_CollectOnnxBackendFiles">
+    <ItemGroup>
+      <OnnxCudaFile Include="$(PkgMicrosoft_ML_OnnxRuntime_Gpu_Windows)\runtimes\win-x64\native\*.dll" />
+      <OnnxDmlFile Include="$(PkgMicrosoft_ML_OnnxRuntime_DirectML)\runtimes\win-x64\native\*.dll" />
+      <OnnxDmlFile Include="$(PkgMicrosoft_AI_DirectML)\bin\x64-win\DirectML.dll" />
+    </ItemGroup>
+    <Error Condition="'@(OnnxCudaFile)' == ''"
+           Text="StageOnnxBackends found no CUDA native files under $(PkgMicrosoft_ML_OnnxRuntime_Gpu_Windows) — check the package restored and the GeneratePathProperty name." />
+    <Error Condition="'@(OnnxDmlFile)' == ''"
+           Text="StageOnnxBackends found no DirectML native files — check Microsoft.ML.OnnxRuntime.DirectML / Microsoft.AI.DirectML restored." />
+  </Target>
+
+  <Target Name="StageOnnxBackendsBuild" AfterTargets="Build" DependsOnTargets="_CollectOnnxBackendFiles">
+    <Copy SourceFiles="@(OnnxCudaFile)" DestinationFolder="$(TargetDir)onnxruntime-backends\cuda" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(OnnxDmlFile)" DestinationFolder="$(TargetDir)onnxruntime-backends\directml" SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="StageOnnxBackendsPublish" AfterTargets="Publish" DependsOnTargets="_CollectOnnxBackendFiles">
+    <Copy SourceFiles="@(OnnxCudaFile)" DestinationFolder="$(PublishDir)onnxruntime-backends\cuda" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(OnnxDmlFile)" DestinationFolder="$(PublishDir)onnxruntime-backends\directml" SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>

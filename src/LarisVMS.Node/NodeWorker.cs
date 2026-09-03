@@ -61,6 +61,11 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     private readonly ConcurrentDictionary<Guid, byte> _warnedVisionMissingSubStream = new();
     private readonly VisionServiceSupervisor _visionSupervisor =
         new(AppContext.BaseDirectory, ffmpegPath, loggerFactory.CreateLogger<VisionServiceSupervisor>());
+    // Fetches the ~320 MB onnxruntime_providers_cuda.dll from the server on demand — it isn't in the
+    // node package (see CudaProviderProvisioner). Only does anything on an NVIDIA node with the CUDA
+    // Toolkit installed.
+    private readonly CudaProviderProvisioner _cudaProvider =
+        new(AppContext.BaseDirectory, api, loggerFactory.CreateLogger<CudaProviderProvisioner>());
     private readonly HttpClient _visionHttp = new() { BaseAddress = new Uri($"http://127.0.0.1:{VisionServiceSupervisor.Port}/") };
 
     /// <summary>Same client this worker's own reconcile loop uses to start/stop watching a camera —
@@ -786,6 +791,22 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         var anyCameraWantsAiDetection = config.Cameras.Any(c => c.AiDetectionEnabled);
         if (anyCameraWantsAiDetection && _resolvedAccelerator is not null)
         {
+            // Tell the sibling process which ONNX Runtime backend to load for this machine — it
+            // restarts itself if this changed since it started (VisionServiceSupervisor).
+            _visionSupervisor.SetPreferredAccelerator(_resolvedAccelerator.Value.ToString());
+
+            if (_resolvedAccelerator == AiAccelerator.Nvidia)
+            {
+                // Pull the big CUDA provider DLL from the server if this NVIDIA node doesn't have it
+                // yet (fire-and-forget; the Vision Service resolves to DirectML until it lands).
+                _ = _cudaProvider.EnsureAsync(stoppingToken);
+                if (_cudaProvider.ConsumeJustProvisioned())
+                {
+                    _logger.LogInformation("CUDA provider library now present — restarting the Vision Service to switch it to CUDA.");
+                    _visionSupervisor.Stop();
+                }
+            }
+
             _visionSupervisor.EnsureRunning();
         }
         else

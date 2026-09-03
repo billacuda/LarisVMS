@@ -15,7 +15,7 @@ work on phone, tablet, and desktop.
 
 ---
 
-## **Current version [0.178.0](CHANGELOG.md)**
+## **Current version [0.179.0](CHANGELOG.md)**
 
 ## Stack
 
@@ -217,28 +217,34 @@ Only needed on nodes that will actually run AI object detection. A node without 
 records normally and keeps every other detection path (server-side motion zones, ONVIF camera
 events, vendor integrations) working exactly as before — AI detection is additive.
 
-Two separate things have to line up: the node package must be **built** for a given accelerator, and
-that accelerator's **runtime libraries** must be installed on the node itself. YoloDotNet links
-exactly one execution provider per build, so the choice is made at publish time and cannot be
-switched at runtime:
+There is **one** node package for every machine. It bundles the DirectML and CPU ONNX Runtime
+backends plus the small CUDA files; the Vision Service picks one at startup for whatever hardware the
+node detected — CUDA for an NVIDIA GPU when the CUDA Toolkit is present, otherwise DirectML (any
+Direct3D 12 GPU: NVIDIA, AMD, Intel), otherwise CPU. The large CUDA provider library
+(`onnxruntime_providers_cuda.dll`, ~320 MB) is **not** in the package — `deploy.ps1` seeds it into
+the server and an NVIDIA node downloads it once, so CPU/DirectML-only installs don't carry it.
+`deploy.ps1` / `build-node.ps1` take no accelerator flag:
 
 ```powershell
-# Accelerator is chosen when the node package is built — BOTH default to Cpu if omitted
-.\deploy.ps1    -IISSiteName "LarisVMS" -NodeAccel Cuda
-.\build-node.ps1 -Accel Cuda      # Cuda | DirectML | OpenVino | Cpu
+.\deploy.ps1     -IISSiteName "LarisVMS"
+.\build-node.ps1                            # -SkipVision for a recording-only package
 ```
 
-| Build | Hardware | Must be installed on the node |
+| Detected hardware | Backend used | Must be installed on the node |
 |---|---|---|
-| `Cuda` | Nvidia | CUDA Toolkit 12.x + cuDNN 9.x (see below) |
-| `DirectML` | Any DX12 GPU (AMD/Intel/Nvidia) | Nothing beyond a current GPU driver |
-| `OpenVino` | Intel iGPU/CPU | Intel GPU driver |
-| `Cpu` | None | Nothing |
+| NVIDIA GPU | CUDA (falls back to DirectML) | CUDA Toolkit 12.x + cuDNN 9.x (see below) — without them it runs DirectML; the node also downloads the CUDA provider library from the server once |
+| AMD / Intel GPU | DirectML | Nothing beyond a current GPU driver |
+| No GPU | CPU | Nothing |
 
-**Nvidia (`-Accel Cuda`)** needs the CUDA **Toolkit** installed on the node, not just a driver — the
-NuGet packages do not ship the CUDA runtime DLLs, and a node with only a driver fails at detection
-startup with `Error loading onnxruntime_providers_cuda.dll which depends on "cublasLt64_12.dll" which
-is missing`:
+`install-node.ps1` reports which backend the node will use and, on an NVIDIA box missing the CUDA
+Toolkit, prints exactly what to install; the node runs DirectML in the meantime and `Admin → Nodes`
+flags it. TensorRT and OpenVINO are not covered by the auto-path (OpenVINO is not bundled; DirectML
+covers Intel GPUs).
+
+**NVIDIA CUDA** needs the CUDA **Toolkit** installed on the node, not just a driver — the NuGet
+packages do not ship the CUDA runtime DLLs, and without them the CUDA backend can't load
+(`Error loading onnxruntime_providers_cuda.dll which depends on "cublasLt64_12.dll" which is
+missing`) and the node falls back to DirectML:
 
 - **[CUDA Toolkit 12.8](https://developer.nvidia.com/cuda-12-8-0-download-archive)** — provides
   `cublasLt64_12.dll`, `cublas64_12.dll`, `cudart64_12.dll`, `cufft64_11.dll`. The installer adds its

@@ -46,12 +46,11 @@ param(
     # $InstallDir *before* an update is ever triggered, since UpdateService looks for it next to the
     # currently-running exe and just logs a warning and skips the update if it's missing.
     [string]$UpdaterBinaryPath = (Join-Path $PSScriptRoot 'LarisVMS.NodeUpdater.exe'),
-    # Object detection plan decisions 2/3: LarisVMS.Vision.Service.exe + its execution provider's own
-    # native DLLs + models\ — all optional (build-node.ps1 -SkipVision omits them entirely), a plain
-    # recording-only node needs none of it. NodeWorker's own VisionServiceSupervisor looks for this
-    # exact fixed filename in its own install directory (AppContext.BaseDirectory) at runtime, so
-    # every sibling file next to it here (native DLLs, models\) has to land in $InstallDir too, not
-    # just the exe.
+    # LarisVMS.Vision.Service.exe + the onnxruntime-backends\ tree (every ONNX Runtime backend) +
+    # models\ — all optional (build-node.ps1 -SkipVision omits them entirely), a plain recording-only
+    # node needs none of it. NodeWorker's own VisionServiceSupervisor looks for this exact fixed
+    # filename in its own install directory (AppContext.BaseDirectory) at runtime, so every sibling
+    # file next to it here (onnxruntime-backends\, models\) has to land in $InstallDir too.
     [string]$VisionBinaryPath  = (Join-Path $PSScriptRoot 'LarisVMS.Vision.Service.exe'),
     [string]$InstallDir        = 'C:\Program Files\LarisVMS\Node',
     [string]$ServiceName       = 'LarisVMSNode',
@@ -136,25 +135,24 @@ function Copy-ItemWithRetry([string]$Source, [string]$Destination, [int]$MaxAtte
 }
 
 # ── AI detection native dependencies ─────────────────────────────────────────
-# LarisVMS.Vision.Service's execution provider loads native libraries that are NOT shipped in the
-# node package — the CUDA Toolkit runtime and cuDNN for a Cuda build. Nothing about installing the
-# node notices their absence on its own: the service starts fine, and the failure only appears
-# later, per camera, per reconcile tick, as an ONNX Runtime "Error loading ... which depends on
-# X.dll which is missing" buried in the Windows Application event log. Worse, the loader reports
-# exactly ONE missing DLL at a time, so discovering them by running the thing means a
-# fix-restart-retry cycle per library.
+# The node package now bundles every ONNX Runtime backend (onnxruntime-backends\{cuda,directml,
+# openvino,cpu}\) and VisionBackendResolver picks one at runtime for this machine's hardware. Only
+# the CUDA backend has prerequisites that aren't in the package: the CUDA Toolkit 12.x runtime and
+# cuDNN 9.x. DirectML and OpenVINO need nothing but a current GPU driver, and the resolver falls
+# back CUDA -> DirectML -> CPU on its own — so a node with an NVIDIA GPU but no toolkit still does
+# GPU-accelerated detection via DirectML; installing the toolkit just unlocks the faster CUDA path.
 #
-# So this checks all of them up front and, for anything missing, goes looking in the places these
-# libraries actually land — neither installs anywhere the OS loader searches by default: cuDNN via
-# `pip install nvidia-cudnn-cu12` goes to a Python environment's site-packages, and NVIDIA's own
-# cuDNN download is a zip you unpack wherever you like. When found, they're copied in beside
-# LarisVMS.Vision.Service.exe, which the loader searches first — deliberately a copy rather than a
-# PATH edit, because a Windows Service inherits its environment from services.exe at boot and would
-# not see a new PATH entry until the machine is rebooted.
+# This only does anything on a machine with an NVIDIA GPU. It checks for the CUDA runtime + cuDNN up
+# front (the OS loader reports exactly one missing DLL at a time, so finding them by running the
+# thing is a fix-restart-retry cycle per library), and for anything missing goes looking in the
+# places these libraries actually land — neither installs anywhere the loader searches by default:
+# `pip install nvidia-cudnn-cu12` goes to a Python env's site-packages, NVIDIA's own cuDNN download
+# is a zip you unpack wherever. When found they're copied into onnxruntime-backends\cuda\ (beside
+# that backend's onnxruntime.dll, which the loader searches first) — a copy rather than a PATH edit,
+# since a Windows Service inherits its environment from services.exe at boot. When not found, the
+# node is told what to install and that it's running DirectML meanwhile.
 #
-# Never fatal: a node whose GPU libraries aren't set up yet still records perfectly well, and every
-# non-AI detection path is unaffected — the same "AI detection is additive" reasoning as the rest of
-# this release. Anything that can't be found is reported with where to get it.
+# Never fatal: the same "AI detection is additive" reasoning as the rest of this release.
 
 # Where the OS loader would actually find a DLL for LarisVMS.Vision.Service.exe: its own directory
 # first, then the standard system directories, then PATH. The machine PATH is read from the registry
@@ -233,84 +231,85 @@ function Copy-NativeDllFromSource([string]$DllName, [string]$InstallDirectory, $
     return $false
 }
 
-# Which accelerator this package was built for is read from the native DLLs that actually shipped
-# next to the exe, not passed in as a parameter: build-node.ps1's -Accel choice is baked into the
-# published output (YoloDotNet links exactly one execution provider per build), and the operator
-# running this script on a recorder often isn't the person who built the package and has no reliable
-# way to know which variant they were handed.
+# The package bundles every ONNX Runtime backend, so there is no "which variant" to detect — the
+# only machine-specific setup is CUDA, and only on a box that actually has an NVIDIA GPU.
+function Test-NvidiaGpuPresent {
+    $names = @()
+    try { $names = @(Get-CimInstance Win32_VideoController -ErrorAction Stop | Select-Object -ExpandProperty Name) }
+    catch {
+        try { $names = @(Get-WmiObject Win32_VideoController -ErrorAction Stop | Select-Object -ExpandProperty Name) }
+        catch { return $false }
+    }
+    foreach ($n in $names) { if ($n -match 'NVIDIA') { return $true } }
+    return $false
+}
+
+function Test-VisionModelsPresent([string]$InstallDirectory) {
+    $modelsDir = Join-Path $InstallDirectory 'models'
+    $models = @()
+    if (Test-Path $modelsDir) { $models = @(Get-ChildItem $modelsDir -Filter '*.onnx' -File -ErrorAction SilentlyContinue) }
+    if ($models.Count -eq 0) {
+        Write-Host "    No .onnx model bundled - the Vision Service fetches the model it needs from the server on first use." -ForegroundColor DarkGray
+    } else {
+        Write-Ok "$($models.Count) model file(s) bundled"
+    }
+}
+
 function Install-VisionNativeDependencies([string]$InstallDirectory) {
-    $providerDll = @{
-        'onnxruntime_providers_cuda.dll' = 'Cuda'
-        'DirectML.dll'                   = 'DirectML'
-        'openvino.dll'                   = 'OpenVino'
-    }
-    $accel = 'Cpu'
-    foreach ($dll in $providerDll.Keys) {
-        if (Test-Path (Join-Path $InstallDirectory $dll)) { $accel = $providerDll[$dll]; break }
-    }
+    $cudaBackendDir = Join-Path $InstallDirectory 'onnxruntime-backends\cuda'
 
-    Write-Step "Checking AI detection dependencies (package built for: $accel)"
-
-    # Only a Cuda build has system-level prerequisites. DirectML ships its own provider DLL in the
-    # package and needs nothing but a current GPU driver; OpenVINO needs an Intel driver, which this
-    # can't meaningfully probe for by file name; Cpu needs nothing at all.
-    $required = @()
-    if ($accel -eq 'Cuda') {
-        $required = @(
-            @{ Dll = 'cudart64_12.dll';    Provides = 'CUDA Toolkit 12.x' }
-            @{ Dll = 'cublas64_12.dll';    Provides = 'CUDA Toolkit 12.x' }
-            @{ Dll = 'cublasLt64_12.dll';  Provides = 'CUDA Toolkit 12.x' }
-            @{ Dll = 'cufft64_11.dll';     Provides = 'CUDA Toolkit 12.x' }
-            @{ Dll = 'cudnn64_9.dll';      Provides = 'cuDNN 9.x for CUDA 12' }
-        )
+    if (-not (Test-NvidiaGpuPresent)) {
+        Write-Step "Checking AI detection dependencies"
+        Write-Ok "no NVIDIA GPU detected - this node runs DirectML or CPU, which need no extra libraries"
+        Test-VisionModelsPresent $InstallDirectory
+        return
     }
 
-    $searchDirs = Get-NativeDllSearchDirectories $InstallDirectory
+    Write-Step "Checking AI detection dependencies (NVIDIA GPU detected - checking the CUDA path)"
+
+    $required = @(
+        @{ Dll = 'cudart64_12.dll';    Provides = 'CUDA Toolkit 12.x' }
+        @{ Dll = 'cublas64_12.dll';    Provides = 'CUDA Toolkit 12.x' }
+        @{ Dll = 'cublasLt64_12.dll';  Provides = 'CUDA Toolkit 12.x' }
+        @{ Dll = 'cufft64_11.dll';     Provides = 'CUDA Toolkit 12.x' }
+        @{ Dll = 'cudnn64_9.dll';      Provides = 'cuDNN 9.x for CUDA 12' }
+    )
+
+    $searchDirs = @($cudaBackendDir) + @(Get-NativeDllSearchDirectories $InstallDirectory)
     $missing = @($required | Where-Object { -not (Test-NativeDllAvailable $_.Dll $searchDirs) })
 
     # Only pay for the source scan (globbing several Program Files/Python trees) when something is
     # actually missing — the common re-run case is a node that's already fully set up.
     if ($missing.Count -gt 0) {
+        if (-not (Test-Path $cudaBackendDir)) { New-Item -ItemType Directory -Path $cudaBackendDir -Force | Out-Null }
         $sourceDirs = Get-NativeDllSourceDirectories
         $stillMissing = [System.Collections.Generic.List[hashtable]]::new()
         foreach ($item in $missing) {
-            if (-not (Copy-NativeDllFromSource $item.Dll $InstallDirectory $sourceDirs)) {
+            # Copied next to the CUDA backend's own onnxruntime.dll — where VisionBackendResolver
+            # prepends to PATH and where the loader searches first.
+            if (-not (Copy-NativeDllFromSource $item.Dll $cudaBackendDir $sourceDirs)) {
                 $stillMissing.Add($item)
             }
         }
-        # Re-evaluated against the install directory rather than assumed from the copy results: a
-        # cudnn*.dll copy pulls in siblings that may themselves have been on the missing list, so
-        # asking the filesystem again is both simpler and more honest than tracking that by hand.
-        $searchDirs = Get-NativeDllSearchDirectories $InstallDirectory
+        $searchDirs = @($cudaBackendDir) + @(Get-NativeDllSearchDirectories $InstallDirectory)
         $missing = @($stillMissing | Where-Object { -not (Test-NativeDllAvailable $_.Dll $searchDirs) })
     }
 
-    # A model is required regardless of accelerator — a node with the runtime fully working but no
-    # .onnx to load fails at exactly the same point, in exactly the same way.
-    $modelsDir = Join-Path $InstallDirectory 'models'
-    $models = @()
-    if (Test-Path $modelsDir) { $models = @(Get-ChildItem $modelsDir -Filter '*.onnx' -File -ErrorAction SilentlyContinue) }
-
     if ($missing.Count -eq 0) {
-        $libraryNote = if ($required.Count -eq 0) { 'no extra native libraries needed' }
-                       else { "all $($required.Count) native libraries present" }
-        Write-Ok "$libraryNote, $($models.Count) model file(s)"
+        Write-Ok "CUDA Toolkit runtime + cuDNN present - the node downloads the ~320 MB CUDA provider library from the server on first run, then uses CUDA"
     } else {
-        Write-Host "WARNING: AI detection will not run on this node - could not find $($missing.Count) native librar$(if ($missing.Count -eq 1) { 'y' } else { 'ies' }) the CUDA execution provider needs, and they are not installed anywhere this script knows to look:" -ForegroundColor Yellow
+        Write-Host "NOTE: this node has an NVIDIA GPU but the CUDA path is not set up - it will run DirectML (still GPU-accelerated) instead." -ForegroundColor Yellow
+        Write-Host "      Missing, and not found anywhere this script knows to look:" -ForegroundColor Yellow
         foreach ($item in $missing) {
-            Write-Host "    $($item.Dll)  <- $($item.Provides)" -ForegroundColor Yellow
+            Write-Host "        $($item.Dll)  <- $($item.Provides)" -ForegroundColor Yellow
         }
-        Write-Host "    Recording and every non-AI detection path are unaffected." -ForegroundColor Yellow
-        Write-Host "    Install on THIS machine (not the LarisVMS web server), then re-run this script:" -ForegroundColor Yellow
-        Write-Host "      CUDA Toolkit 12.8  https://developer.nvidia.com/cuda-12-8-0-download-archive" -ForegroundColor Yellow
-        Write-Host "      cuDNN 9.x          https://developer.nvidia.com/cuda/cuda-x-libraries/cudnn" -ForegroundColor Yellow
-        Write-Host "      cuDNN via pip:     pip install --extra-index-url https://pypi.nvidia.com nvidia-cudnn-cu12" -ForegroundColor Yellow
+        Write-Host "      Install on THIS machine (not the LarisVMS web server), then re-run this script to switch it to CUDA:" -ForegroundColor Yellow
+        Write-Host "        CUDA Toolkit 12.8  https://developer.nvidia.com/cuda-12-8-0-download-archive" -ForegroundColor Yellow
+        Write-Host "        cuDNN 9.x          https://developer.nvidia.com/cudnn" -ForegroundColor Yellow
+        Write-Host "        cuDNN via pip:     pip install --extra-index-url https://pypi.nvidia.com nvidia-cudnn-cu12" -ForegroundColor Yellow
     }
 
-    if ($models.Count -eq 0) {
-        Write-Host "WARNING: No .onnx model found in $modelsDir - AI detection has nothing to run." -ForegroundColor Yellow
-        Write-Host "    Export one with tools\export-models\ and rebuild the package with build-node.ps1." -ForegroundColor Yellow
-    }
+    Test-VisionModelsPresent $InstallDirectory
 }
 
 # Locates an ffmpeg install without installing anything — mirrors LarisVMS.Media.FfmpegPathResolver
@@ -423,15 +422,19 @@ if (Test-Path $UpdaterBinaryPath) {
     Copy-ItemWithRetry $UpdaterBinaryPath (Join-Path $InstallDir 'LarisVMS.NodeUpdater.exe')
 }
 if ($hasVision) {
-    # Every sibling file next to LarisVMS.Vision.Service.exe in the package — its execution
-    # provider's own native DLLs (onnxruntime.dll, and for a Cuda build cuDNN/TensorRT's own), not
-    # just the exe itself — plus models\. Copied by name pattern rather than an exhaustive fixed
-    # list: which native DLLs actually ship alongside it depends on which -Accel variant
-    # build-node.ps1 was run with, and hardcoding one variant's set here would silently drop files a
-    # different variant needs.
+    # Everything the package ships beside LarisVMS.Vision.Service.exe: the exe, the loose managed
+    # assemblies (Microsoft.ML.OnnxRuntime.dll, YoloDotNet, ...), the onnxruntime-backends\ tree
+    # (every native ONNX Runtime build — cuda/directml/openvino/cpu — each with its own onnxruntime.dll
+    # and provider natives; VisionBackendResolver picks one at runtime), and models\.
     $visionSourceDir = Split-Path $VisionBinaryPath -Parent
     Copy-ItemWithRetry (Join-Path $visionSourceDir 'LarisVMS.Vision.Service.*') $InstallDir
     Copy-ItemWithRetry (Join-Path $visionSourceDir '*.dll') $InstallDir
+    $backendsSourceDir = Join-Path $visionSourceDir 'onnxruntime-backends'
+    if (Test-Path $backendsSourceDir) {
+        Copy-ItemWithRetry $backendsSourceDir $InstallDir
+    } else {
+        Write-Host "WARNING: onnxruntime-backends\ not found beside LarisVMS.Vision.Service.exe - AI detection will not run. Rebuild the package with build-node.ps1." -ForegroundColor Yellow
+    }
     $modelsSourceDir = Join-Path $visionSourceDir 'models'
     if (Test-Path $modelsSourceDir) {
         Copy-ItemWithRetry $modelsSourceDir $InstallDir

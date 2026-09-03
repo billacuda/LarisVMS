@@ -14,7 +14,8 @@
 
     Output:
         publish\LarisVMS.Node\win\   - LarisVMS.Node.exe + LarisVMS.NodeUpdater.exe + install-node.ps1
-                                       + (unless -SkipVision) LarisVMS.Vision.Service.exe + models\
+                                       + (unless -SkipVision) LarisVMS.Vision.Service.exe
+                                         + onnxruntime-backends\{cuda,directml}\ + models\
 
     LarisVMS.NodeUpdater.exe is what a node launches (as a detached process) to swap its own binary
     during a self-triggered auto-update — see LarisVMS.Node/Update/UpdateService.cs and
@@ -26,17 +27,16 @@
     standalone (as build-node.ps1 -ExtraPublishPath ...) and nothing gets registered — only
     deploy.ps1's own run does that.
 
-    -Accel picks which single execution-provider variant of LarisVMS.Vision.Service gets built into
-    this package (object detection plan decisions 2/3) — Cuda (Nvidia), DirectML (any DX12 GPU incl.
-    AMD/Intel), OpenVino (Intel iGPU/CPU), or Cpu (no GPU; the default, since it's the one variant
-    every machine can actually run). Exactly one variant is published per node package, always as the
-    same fixed filename LarisVMS.Vision.Service.exe (see that project's own csproj comment) — the
-    admin's Node.AiAccelerator setting on the server picks which physical hardware NodeWorker actually
-    tries to use, but that choice has to match whichever provider this specific machine's package was
-    actually built with; there's no way to switch providers at runtime (YoloDotNet only links one
-    execution-provider package per process). Sites with genuinely different hardware need separate
-    packages built with different -Accel values. -SkipVision omits it entirely, for a plain
-    recording-only node with no AI detection at all.
+    There is no -Accel switch any more. LarisVMS.Vision.Service.csproj's StageOnnxBackends target
+    stages the native ONNX Runtime GPU builds — CUDA(+TensorRT) and DirectML — into
+    onnxruntime-backends\<name>\ beside LarisVMS.Vision.Service.exe (CPU is the plain onnxruntime.dll
+    at the root), so one node package runs on any hardware. At startup the Vision
+    Service picks the backend that matches the accelerator the node resolved for its machine
+    (VisionBackendResolver), degrading CUDA -> DirectML -> CPU when a toolkit is missing and
+    reporting that back so Admin/Nodes can flag it. A machine that wants CUDA still needs the CUDA
+    Toolkit 12.x + cuDNN 9.x installed (install-node.ps1 detects this and prints what to install);
+    DirectML/OpenVINO/CPU need nothing extra. -SkipVision omits the Vision Service entirely, for a
+    plain recording-only node with no AI detection at all.
 
     Vision Service needs a fetched .onnx model to do anything — this script copies models\*.onnx
     from the repo root (gitignored, produced by tools/export-models/fetch_dfine.py) into the package
@@ -52,7 +52,7 @@
     .\build-node.ps1
 
 .EXAMPLE
-    .\build-node.ps1 -Accel Cuda -ExtraPublishPath '\\files1\nvr$\LarisVMS-node'
+    .\build-node.ps1 -ExtraPublishPath '\\files1\nvr$\LarisVMS-node'
 
 .EXAMPLE
     .\build-node.ps1 -SkipVision
@@ -65,8 +65,6 @@ param(
     [string]$ModelsPath         = (Join-Path $PSScriptRoot 'models'),
     [string]$OutputRoot         = (Join-Path $PSScriptRoot 'publish\LarisVMS.Node'),
     [string]$Configuration      = 'Release',
-    [ValidateSet('Cuda', 'DirectML', 'OpenVino', 'Cpu')]
-    [string]$Accel              = 'Cpu',
     [switch]$SkipVision,
     [string]$ExtraPublishPath
 )
@@ -114,7 +112,7 @@ Remove-Item $updaterTmp -Recurse -Force
 Write-Ok "Published"
 
 if (-not $SkipVision) {
-    Write-Step "Publishing LarisVMS.Vision.Service (win-x64, self-contained, single-file, Accel=$Accel)"
+    Write-Step "Publishing LarisVMS.Vision.Service (win-x64, self-contained, single-file, all ONNX Runtime backends)"
     # Own temp folder, same reasoning as the NodeUpdater publish above — a self-contained single-file
     # publish drops its own copy of shared runtime files, which would collide with Node's if published
     # straight into $winOut.
@@ -127,14 +125,35 @@ if (-not $SkipVision) {
         -p:PublishSingleFile=true `
         -p:EnableCompressionInSingleFile=true `
         -p:NoWarn=CA1416 `
-        -p:Accel=$Accel `
         -o $visionTmp
     if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed (exit $LASTEXITCODE)." }
-    # Everything from this publish, not just the .exe — the chosen execution provider's own native
-    # DLLs (onnxruntime, cuDNN/TensorRT for Cuda, etc.) sit alongside it, not inside the single file.
+    # Everything from this publish, not just the .exe — the managed ONNX Runtime assembly plus the
+    # onnxruntime-backends\{cuda,directml}\ tree LarisVMS.Vision.Service.csproj's StageOnnxBackends
+    # target lays down (each backend's own onnxruntime.dll + provider natives), all beside the exe
+    # rather than inside the single file.
     Copy-Item (Join-Path $visionTmp '*') $winOut -Recurse -Force
     Remove-Item $visionTmp -Recurse -Force
-    Write-Ok "Published (Accel=$Accel)"
+    if (-not (Test-Path (Join-Path $winOut 'onnxruntime-backends'))) {
+        throw "Vision publish produced no onnxruntime-backends\ folder — StageOnnxBackends did not run. AI detection would not work on any node."
+    }
+    Write-Ok "Published (ONNX Runtime backends bundled)"
+
+    # onnxruntime_providers_cuda.dll is ~320 MB and only NVIDIA nodes ever load it — pull it OUT of
+    # the package into a sibling folder deploy.ps1 seeds into the server's vision-native cache, so a
+    # node that resolves CUDA downloads it once instead of it bloating every CPU/DirectML install.
+    # See CudaProviderProvisioner. The small CUDA files (onnxruntime.dll, providers_shared/tensorrt)
+    # stay in the package so the resolver can still see a cuda\ folder.
+    $cudaProviderDll = Join-Path $winOut 'onnxruntime-backends\cuda\onnxruntime_providers_cuda.dll'
+    if (Test-Path $cudaProviderDll) {
+        $cudaProviderOut = Join-Path $OutputRoot 'cuda-provider'
+        if (Test-Path $cudaProviderOut) { Remove-Item $cudaProviderOut -Recurse -Force }
+        New-Item -ItemType Directory -Path $cudaProviderOut -Force | Out-Null
+        Move-Item $cudaProviderDll (Join-Path $cudaProviderOut 'onnxruntime_providers_cuda.dll') -Force
+        $sizeMb = [math]::Round((Get-Item (Join-Path $cudaProviderOut 'onnxruntime_providers_cuda.dll')).Length / 1MB)
+        Write-Ok "CUDA provider ($sizeMb MB) split out to $cudaProviderOut (not shipped in the package — deploy.ps1 seeds it to the server)"
+    } else {
+        Write-Host "    onnxruntime_providers_cuda.dll not found in the CUDA backend — CUDA acceleration won't be available on any node." -ForegroundColor Yellow
+    }
 
     Write-Step "Bundling exported model(s)"
     $modelsOut = Join-Path $winOut 'models'

@@ -1,3 +1,5 @@
+using LarisVMS.Vision.Inference;
+
 namespace LarisVMS.Vision.Service;
 
 /// <summary>
@@ -43,7 +45,18 @@ public sealed class VisionServiceOptions
     public string? TensorRtEngineCachePath { get; set; }
     public string? TensorRtLibPath { get; set; }
 
-    /// <summary>OpenVINO target device, e.g. "GPU" for an Intel iGPU or "CPU". Ignored outside an
-    /// OpenVINO build.</summary>
+    /// <summary>OpenVINO target device, e.g. "GPU" for an Intel iGPU or "CPU". Ignored unless the
+    /// OpenVINO backend is selected.</summary>
     public string OpenVinoDeviceType { get; set; } = "GPU";
+
+    /// <summary>The <c>AiAccelerator</c> the node resolved for this machine's hardware ("Nvidia",
+    /// "Intel", "Amd", "Cpu"), passed through by VisionServiceSupervisor as <c>Vision__PreferredAccelerator</c>.
+    /// <see cref="VisionBackendResolver"/> maps it to one of the bundled native ONNX Runtime backends
+    /// at startup. "Auto" (the default when nothing is passed) resolves to CPU.</summary>
+    public string PreferredAccelerator { get; set; } = "Auto";
+
+    /// <summary>Optional hard override of the ONNX Runtime backend regardless of detected hardware:
+    /// "cuda", "directml", "openvino" or "cpu". The only way to select OpenVINO (there is no
+    /// hardware auto-path to it, since DirectML covers Intel GPUs without an extra driver dependency).</summary>
+    public string? Backend { get; set; }
 }

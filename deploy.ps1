@@ -56,12 +56,9 @@ param(
     # every clone of this repo.
     [string]$ExtraNodePublishPath = '',
     [string]$NodeCsprojPath       = (Join-Path $PSScriptRoot 'src\LarisVMS.Node\LarisVMS.Node.csproj'),
-    # Passed straight through to build-node.ps1's own -Accel/-SkipVision — see that script's own doc
-    # comment for what each execution-provider variant needs. Defaults match build-node.ps1's own
-    # default (Cpu, Vision included) so an ordinary deploy still ships AI detection capability without
-    # any extra flags; a site with GPU-equipped recorder nodes should pass -NodeAccel explicitly.
-    [ValidateSet('Cuda', 'DirectML', 'OpenVino', 'Cpu')]
-    [string]$NodeAccel            = 'Cpu',
+    # The node package now bundles every ONNX Runtime backend and picks one at runtime per machine
+    # (see build-node.ps1) — there is no accelerator to choose at build time. -SkipNodeVision still
+    # builds a recording-only package with no AI detection at all.
     [switch]$SkipNodeVision,
     [switch]$SkipMigrations,
     [switch]$SkipNodeBuild,
@@ -258,7 +255,7 @@ Write-Ok "Published to: $PublishDir"
 if (-not $SkipNodeBuild) {
     Write-Step "Building recorder node package"
     $buildNodeScript = Join-Path $PSScriptRoot 'build-node.ps1'
-    $buildNodeArgs = @{ Configuration = $Configuration; Accel = $NodeAccel }
+    $buildNodeArgs = @{ Configuration = $Configuration }
     if (-not [string]::IsNullOrWhiteSpace($ExtraNodePublishPath)) {
         $buildNodeArgs['ExtraPublishPath'] = $ExtraNodePublishPath
     }
@@ -433,6 +430,30 @@ VALUES (@Id, @Version, @Platform, @FilePath, @SizeBytes, @Sha256, @VisionFilePat
             # abort an otherwise-good web-tier deploy. Worst case, register the build by hand later
             # or re-run.
             Write-Host "Could not register node build for approval: $_" -ForegroundColor Yellow
+        }
+    }
+
+    # ── seed the CUDA provider library ─────────────────────────────────────
+    # build-node.ps1 splits onnxruntime_providers_cuda.dll (~320 MB) out of the node package into
+    # publish\LarisVMS.Node\cuda-provider\ because only NVIDIA nodes load it. Copy it into the
+    # server's vision-native cache (VisionNativeDistributor.CacheDirectory — %ProgramData% so the IIS
+    # /MIR below can't wipe it); a node that resolves the CUDA backend downloads it from there once.
+    $cudaProviderSrc = Join-Path $PSScriptRoot 'publish\LarisVMS.Node\cuda-provider\onnxruntime_providers_cuda.dll'
+    if (Test-Path $cudaProviderSrc) {
+        try {
+            $visionNativeRoot = Join-Path $env:ProgramData 'LarisVMS\vision-native'
+            New-Item -ItemType Directory -Path $visionNativeRoot -Force | Out-Null
+            $cudaProviderDest = Join-Path $visionNativeRoot 'onnxruntime_providers_cuda.dll'
+            $srcHash = (Get-FileHash $cudaProviderSrc -Algorithm SHA256).Hash
+            if ((Test-Path $cudaProviderDest) -and (Get-FileHash $cudaProviderDest -Algorithm SHA256).Hash -eq $srcHash) {
+                Write-Host "CUDA provider library already current on the server - skipping."
+            } else {
+                Write-Step "Seeding the CUDA provider library for node download"
+                Copy-Item $cudaProviderSrc $cudaProviderDest -Force
+                Write-Ok "Seeded to $cudaProviderDest"
+            }
+        } catch {
+            Write-Host "Could not seed the CUDA provider library (NVIDIA nodes will keep running DirectML): $_" -ForegroundColor Yellow
         }
     }
 
