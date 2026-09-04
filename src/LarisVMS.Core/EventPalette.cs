@@ -30,6 +30,28 @@ public sealed record EventPalette(
         Detections.TryGetValue(kind, out var hex) && !string.IsNullOrWhiteSpace(hex)
             ? hex
             : DetectionDisplay.ColorHex(kind);
+
+    /// <summary>
+    /// The colour to draw for an AI-detection span, by its DetectedObjectCategory name.
+    ///
+    /// Prefers this palette over the category row's own stored ColorHex, which is the point: that
+    /// stored colour is auto-assigned by DetectedObjectColorAssigner when a category first appears and
+    /// is never surfaced in the Events settings editor, so an admin who set "Human" to orange there
+    /// still saw AI-detected humans badged in whatever the assigner happened to pick — and a
+    /// camera-classified human and an AI-detected one in the same list came out different colours.
+    /// Mapping through <see cref="CocoCategoryMap.ToDetectionKind"/> makes the Events tab the single
+    /// place that decides, for both pipelines at once.
+    ///
+    /// <paramref name="storedCategoryColorHex"/> still wins for any category name with no
+    /// DetectionKind equivalent — nothing in the Events editor describes such a category, so its own
+    /// assigned colour remains the only thing that could.
+    /// </summary>
+    public string ColorForAiCategory(string? categoryName, string? storedCategoryColorHex) =>
+        categoryName is not null && CocoCategoryMap.ToDetectionKind(categoryName) is { } kind
+            ? ColorFor(kind)
+            : storedCategoryColorHex is { } stored && !string.IsNullOrWhiteSpace(stored)
+                ? stored
+                : EventColors.DefaultMotion;
 }
 
 /// <summary>Setting keys and built-in defaults for the event palette. Kept beside the palette itself

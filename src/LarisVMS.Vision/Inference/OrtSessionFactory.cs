@@ -83,6 +83,20 @@ public static class OrtSessionFactory
         return sessionOptions;
     }
 
+    /// <summary>
+    /// Where TensorRT keeps its compiled engines and timing cache. A configured path wins; otherwise
+    /// this defaults rather than throwing, which is what it used to do. There is no sensible "no
+    /// cache" mode -- without one every process start recompiles from scratch -- so making the
+    /// setting mandatory only meant an operator who set <c>Vision__EnableTensorRt</c> alone got a
+    /// silent fall-through to plain CUDA. Same %ProgramData%\LarisVMS root the vision log already
+    /// writes to, so it exists and is writable wherever this service can run at all.
+    /// </summary>
+    internal static string ResolveTensorRtCachePath(string? configured) =>
+        !string.IsNullOrWhiteSpace(configured)
+            ? configured
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                "LarisVMS", "trt-cache");
+
     private static SessionOptions CreateCuda(EngineOptions options, ILogger logger)
     {
         var sessionOptions = new SessionOptions();
@@ -100,34 +114,53 @@ public static class OrtSessionFactory
             {
                 EngineFactory.PrependToPath(options.TensorRtLibPath, "nvinfer_10.dll", "TensorRT", logger);
 
-                if (string.IsNullOrWhiteSpace(options.TensorRtEngineCachePath))
-                {
-                    throw new InvalidOperationException(
-                        "EnableTensorRt requires TensorRtEngineCachePath -- without a cache, every " +
-                        "process start rebuilds the engine from scratch, which can take minutes.");
-                }
+                var cachePath = ResolveTensorRtCachePath(options.TensorRtEngineCachePath);
 
                 // ONNX Runtime 1.23's C# API no longer accepts the classic TensorRT EP via the
-                // string-keyed AppendExecutionProvider("Tensorrt", ...) overload -- only the typed
-                // AppendExecutionProvider_Tensorrt(deviceId). Its options come from ORT_TENSORRT_*
-                // environment variables, read by the provider at init (set here, in-process, right
-                // before the append). Requires TensorRT 10.x (this ORT build links nvinfer_10.dll) --
-                // a TensorRT 11 install (nvinfer_11.dll) will fail the load and drop through to plain
-                // CUDA below.
+                // string-keyed AppendExecutionProvider("Tensorrt", ...) overload. Configure it
+                // through OrtTensorRTProviderOptions instead (the ORT_TENSORRT_* environment
+                // variables are NOT honored by this build) -- notably the engine + timing caches, so
+                // the multi-minute engine build only happens once rather than on every restart.
+                // Requires TensorRT 10.x (this ORT build links nvinfer_10.dll); a TensorRT 11 install
+                // (nvinfer_11.dll) fails the load and drops through to plain CUDA below.
                 var fp16 = options.TensorRtPrecision.Equals("FP16", StringComparison.OrdinalIgnoreCase) ? "1" : "0";
-                Directory.CreateDirectory(options.TensorRtEngineCachePath);
-                Environment.SetEnvironmentVariable("ORT_TENSORRT_FP16_ENABLE", fp16);
-                Environment.SetEnvironmentVariable("ORT_TENSORRT_ENGINE_CACHE_ENABLE", "1");
-                Environment.SetEnvironmentVariable("ORT_TENSORRT_CACHE_PATH", options.TensorRtEngineCachePath);
-                Environment.SetEnvironmentVariable("ORT_TENSORRT_TIMING_CACHE_ENABLE", "1");
+                Directory.CreateDirectory(cachePath);
 
-                sessionOptions.AppendExecutionProvider_Tensorrt(options.GpuId);
+                var providerOptions = new Dictionary<string, string>
+                {
+                    ["device_id"] = options.GpuId.ToString(),
+                    ["trt_fp16_enable"] = fp16,
+                    ["trt_engine_cache_enable"] = "1",
+                    ["trt_engine_cache_path"] = cachePath,
+                    ["trt_timing_cache_enable"] = "1",
+                    ["trt_timing_cache_path"] = cachePath,
+                    // Left unset, TensorRT 10's builder may claim the entire device while compiling --
+                    // on a node concurrently running NVDEC decode for capture, motion and high-res
+                    // re-detection, that is a real contention source rather than a theoretical one.
+                    ["trt_max_workspace_size"] = options.TensorRtMaxWorkspaceBytes.ToString(),
+                };
+                if (options.TensorRtBuilderOptimizationLevel is { } level)
+                    providerOptions["trt_builder_optimization_level"] = level.ToString();
+
+                using (var trtOptions = new OrtTensorRTProviderOptions())
+                {
+                    trtOptions.UpdateOptions(providerOptions);
+                    // The append copies the options into the session; disposing trtOptions after is safe.
+                    sessionOptions.AppendExecutionProvider_Tensorrt(trtOptions);
+                }
                 tensorRtAppended = true;
                 VisionBackendResolver.SetEffectiveProvider("TensorRT");
 
+                // Note this logs that the provider was *appended*, not that an engine exists yet --
+                // the compile happens later, inside InferenceSession's constructor. EngineBuildGate
+                // logs that half, including whether the cache was cold; reading only this line during
+                // a cold start is what made a multi-minute stall look like a healthy startup.
                 logger.LogInformation(
-                    "TensorRT execution provider appended: gpuId={GpuId}, fp16={Fp16}, cache={CachePath}.",
-                    options.GpuId, fp16 == "1", options.TensorRtEngineCachePath);
+                    "TensorRT execution provider appended: gpuId={GpuId}, fp16={Fp16}, engine+timing cache={CachePath}, " +
+                    "max builder workspace={WorkspaceMb} MB, builder optimization level={Level}.",
+                    options.GpuId, fp16 == "1", cachePath,
+                    options.TensorRtMaxWorkspaceBytes / (1024 * 1024),
+                    options.TensorRtBuilderOptimizationLevel?.ToString() ?? "default");
             }
             catch (Exception ex)
             {

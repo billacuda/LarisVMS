@@ -345,3 +345,15 @@ body {
     pointer-events: none;
     z-index: 2;
 }
+
+/* Snapshots: the detection confidence inside a badge. Muted against the badge's own color rather
+   than a fixed grey — the badge background is an admin-chosen hex that can be light or dark, so a
+   grey that reads as "secondary" on one would vanish or clash on another. currentColor at reduced
+   opacity is the badge's own already-contrast-checked text color, just quieter, which holds against
+   every color in the palette and in both themes. */
+.snapshot-badge-confidence {
+    opacity: .7;
+    font-weight: 400;
+    margin-left: .25rem;
+    font-variant-numeric: tabular-nums;
+}

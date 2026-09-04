@@ -1,5 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using LarisVMS.Core;
+using LarisVMS.Core.Interfaces;
 using LarisVMS.Infrastructure.Data;
 
 namespace LarisVMS.Web.Helpers;
@@ -29,13 +31,25 @@ public sealed class DetectedObjectCategoryColorCache(IServiceScopeFactory scopeF
     public const string FallbackColorHex = "#22d3ee";
 
     private volatile Dictionary<string, string> _colors = new(StringComparer.OrdinalIgnoreCase);
+
+    // Refreshed on the same tick as _colors. The admin's Events palette outranks a category's own
+    // stored ColorHex for any category that maps to a DetectionKind — see
+    // EventPalette.ColorForAiCategory. Cached alongside rather than resolved per box: this is read
+    // several times per overlay tick, per camera, per viewer.
+    private volatile EventPalette _palette = EventPalette.Empty;
+
     private DateTime _lastRefreshUtc = DateTime.MinValue;
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
 
     public async Task<string> GetColorAsync(string category, CancellationToken ct)
     {
         if (DateTime.UtcNow - _lastRefreshUtc > RefreshInterval) await RefreshAsync(ct);
-        return _colors.GetValueOrDefault(category, FallbackColorHex);
+
+        // Without the palette step, a live box and the Snapshots card for that same detection drew in
+        // two different colors — the box from this table's auto-assigned hex, the card from the
+        // Events settings palette.
+        var stored = _colors.GetValueOrDefault(category);
+        return _palette.ColorForAiCategory(category, stored ?? FallbackColorHex);
     }
 
     private async Task RefreshAsync(CancellationToken ct)
@@ -57,6 +71,7 @@ public sealed class DetectedObjectCategoryColorCache(IServiceScopeFactory scopeF
                 .ToListAsync(ct);
 
             _colors = rows.ToDictionary(r => r.Name, r => r.ColorHex, StringComparer.OrdinalIgnoreCase);
+            _palette = await scope.ServiceProvider.GetRequiredService<IEventColorService>().GetAsync(ct);
             _lastRefreshUtc = DateTime.UtcNow;
         }
         finally

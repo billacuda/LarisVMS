@@ -45,7 +45,28 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     private readonly InferenceProfile _profile;
     private readonly VisionSession _session;
     private readonly LatestFrameSlot _slot;
-    private readonly IDetectionEngine _engine;
+
+    // Built by InferenceLoopAsync rather than in the constructor, so /start never blocks on it: with
+    // TensorRT the first build for a given model compiles an engine, which takes minutes and
+    // saturates every core. Doing that inside the request handler held a Kestrel thread for the whole
+    // build, once per camera concurrently, which starved the node's own recording ffmpeg drain loops
+    // badly enough that the tee muxer blocked and recording *and* live view stopped together (see
+    // EngineBuildGate for the other half of that fix). Null until the build completes; _engineReady
+    // is the signal for anything outside the inference loop that needs it.
+    private volatile IDetectionEngine? _engine;
+    private readonly EngineOptions _engineOptions;
+    private readonly DetectionModelFamily _modelFamily;
+    private readonly DFineWeights _dfineWeights;
+    private readonly YoloXSize _yoloXSize;
+    private readonly ILoggerFactory _loggerFactory;
+
+    // Completes once _engine is assigned. HighResReDetectionLoopAsync runs alongside the inference
+    // loop and type-tests _engine for IBatchDetectionEngine; without waiting it would read null on
+    // startup and disable high-res re-detection for the pipeline's whole lifetime. Never faulted —
+    // a failed build cancels _cts instead, which is what every loop here already unwinds on.
+    private readonly TaskCompletionSource _engineReady =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     private readonly ByteTracker _tracker;
     // Reported in the cadence line so the score a real object actually reaches can be read directly
     // against the bar it has to clear, instead of inferred.
@@ -256,7 +277,13 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             _slot, loggerFactory.CreateLogger<VisionSession>());
         _session.InputResolutionDetected += OnInputResolutionDetected;
 
-        _engine = DetectionEngineFactory.Create(modelFamily, dfineWeights, yoloXSize, new EngineOptions
+        // Only the options are built here — the engine itself is constructed by InferenceLoopAsync
+        // (see the _engine field's own comment for why it must not happen on the /start thread).
+        _modelFamily = modelFamily;
+        _dfineWeights = dfineWeights;
+        _yoloXSize = yoloXSize;
+        _loggerFactory = loggerFactory;
+        _engineOptions = new EngineOptions
         {
             ModelPath = resolvedModelPath,
             GpuId = serviceOptions.GpuId,
@@ -265,9 +292,11 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             TensorRtPrecision = serviceOptions.TensorRtPrecision,
             TensorRtEngineCachePath = serviceOptions.TensorRtEngineCachePath,
             TensorRtLibPath = serviceOptions.TensorRtLibPath,
+            TensorRtMaxWorkspaceBytes = serviceOptions.TensorRtMaxWorkspaceBytes,
+            TensorRtBuilderOptimizationLevel = serviceOptions.TensorRtBuilderOptimizationLevel,
             OpenVinoDeviceType = serviceOptions.OpenVinoDeviceType,
             GpuPreprocessing = gpuPreprocessing,
-        }, _profile, loggerFactory);
+        };
 
         // Per-family tracker tuning, anchored to this camera's own detection confidence — see
         // ByteTrackOptions.ForFamily for why the tracker's gates must follow the configured
@@ -278,6 +307,16 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
 
         _runTask = RunAsync(_cts.Token);
     }
+
+    /// <summary>Set when the deferred engine build failed, which leaves this pipeline capturing but
+    /// never inferring. Because the build now happens after /start has already returned 200, this is
+    /// how the failure reaches Node at all — CameraPipelineManager omits a failed pipeline from the
+    /// watched-camera list, and NodeWorker's reconcile re-issues a start on a later tick.
+    ///
+    /// Volatile because it is latched on the inference loop's own thread and read from a Kestrel
+    /// request thread serving GET /cameras.</summary>
+    public bool EngineBuildFailed => _engineBuildFailed;
+    private volatile bool _engineBuildFailed;
 
     public IReadOnlyList<VisionLiveDetectionBox> GetLiveSnapshot() => _liveSnapshot;
 
@@ -311,6 +350,36 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
 
     private async Task InferenceLoopAsync(CancellationToken ct)
     {
+        // Build the engine before the first frame rather than in the constructor. Task.Run because
+        // construction is a long synchronous native call (a TensorRT engine build is minutes on a
+        // cold cache) and this method is first entered on whichever thread RunAsync was started
+        // from — which, before this moved, was the /start request's own Kestrel thread.
+        IDetectionEngine engine;
+        try
+        {
+            engine = await Task.Run(() => EngineBuildGate.Build(
+                _request.CameraId, _engineOptions,
+                () => DetectionEngineFactory.Create(_modelFamily, _dfineWeights, _yoloXSize,
+                    _engineOptions, _profile, _loggerFactory),
+                _logger, ct), ct);
+        }
+        catch (OperationCanceledException) { return; }
+        catch (Exception ex)
+        {
+            // /start already returned 200 by this point, so there is no response left to fail — this
+            // log and the pipeline going quiet are the whole signal. Node notices via the watched-
+            // camera reconcile (GET /cameras) and re-issues a start on a later tick.
+            _logger.LogError(ex,
+                "Failed to build the detection engine for camera {CameraId} — this camera will not be watched. {Detail}",
+                _request.CameraId, Flatten(ex));
+            _engineBuildFailed = true;
+            await _cts.CancelAsync();
+            return;
+        }
+
+        _engine = engine;
+        _engineReady.TrySetResult();
+
         // One buffer for the whole loop rather than a fresh array per frame. At the detection frame
         // size this is a Large Object Heap allocation every time (640x640 BGRA is 1.56 MB), and on a
         // six-camera node that was the single largest source of allocation in the process. Safe to
@@ -334,7 +403,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
                 var inferenceFrame = _networkScratch is null
                     ? frame
                     : BgraOps.LetterboxResize(frame, _captureWidth, _captureHeight, _profile, _networkScratch);
-                detections = _engine.Detect(inferenceFrame, _request.Confidence, _request.Iou);
+                detections = engine.Detect(inferenceFrame, _request.Confidence, _request.Iou);
             }
             catch (Exception ex)
             {
@@ -543,7 +612,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             _request.CameraId, seconds, deltaPublished / seconds, deltaConsumed / seconds,
             deltaPublished - deltaConsumed,
             deltaPublished == 0 ? 0 : (deltaPublished - deltaConsumed) * 100.0 / deltaPublished,
-            _engine.LastInferenceMilliseconds ?? 0,
+            _engine?.LastInferenceMilliseconds ?? 0,
             peakDetections, peakTracked, bestScore, _trackerNewTrackThreshold, liveSummary,
             deltaGen2, deltaAllocated / seconds / (1024.0 * 1024.0));
     }
@@ -839,6 +908,12 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             return;
         }
 
+        // Wait for InferenceLoopAsync to finish building the engine before type-testing it — this
+        // loop starts concurrently with that build, and testing a null _engine here would silently
+        // disable high-res re-detection for the pipeline's whole lifetime.
+        try { await _engineReady.Task.WaitAsync(ct); }
+        catch (OperationCanceledException) { return; }
+
         if (_engine is not IBatchDetectionEngine batchEngine)
         {
             _logger.LogInformation(
@@ -1099,6 +1174,20 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     }
 
 
+    /// <summary>Flattens an exception chain to its messages only — same reasoning as Program's own
+    /// Describe: what makes an engine-load failure diagnosable is almost always the innermost message
+    /// (ONNX Runtime's "which depends on X.dll which is missing" text), and a build failure now lands
+    /// only in this log rather than in a /start response body.</summary>
+    private static string Flatten(Exception ex)
+    {
+        var messages = new List<string>();
+        for (Exception? current = ex; current is not null; current = current.InnerException)
+        {
+            if (!messages.Contains(current.Message)) messages.Add(current.Message);
+        }
+        return string.Join(" -> ", messages);
+    }
+
     public async ValueTask DisposeAsync()
     {
         await _cts.CancelAsync();
@@ -1120,6 +1209,6 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         _session.InputResolutionDetected -= OnInputResolutionDetected;
         _cts.Dispose();
         _slot.Dispose();
-        _engine.Dispose();
+        _engine?.Dispose();
     }
 }

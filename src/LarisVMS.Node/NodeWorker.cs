@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -66,7 +67,23 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     // Toolkit installed.
     private readonly CudaProviderProvisioner _cudaProvider =
         new(AppContext.BaseDirectory, api, loggerFactory.CreateLogger<CudaProviderProvisioner>());
-    private readonly HttpClient _visionHttp = new() { BaseAddress = new Uri($"http://127.0.0.1:{VisionServiceSupervisor.Port}/") };
+    // Explicit timeout rather than HttpClient's 100s default. Nothing on this loopback control channel
+    // is long-running any more: /start used to block for the whole detection-engine build (minutes,
+    // with TensorRT), and a 100s timeout there meant every slow start failed client-side, dropped its
+    // _activeVision entry, and got re-sent on the next 30s reconcile — which tore down the in-progress
+    // build and started another. The Vision Service now builds its engines off the request path, so a
+    // call that takes even 15s here means something is genuinely wrong and should say so quickly.
+    private readonly HttpClient _visionHttp = new()
+    {
+        BaseAddress = new Uri($"http://127.0.0.1:{VisionServiceSupervisor.Port}/"),
+        Timeout = TimeSpan.FromSeconds(15),
+    };
+
+    // Cameras with a /start POST in flight right now. Without this, a start that outlives a reconcile
+    // tick gets issued again by the next one (the _activeVision entry is removed on failure, and a
+    // timeout is a failure), stacking concurrent starts for the same camera — each of which replaces
+    // the pipeline the previous one was still setting up.
+    private readonly ConcurrentDictionary<Guid, byte> _visionStartsInFlight = new();
 
     /// <summary>Same client this worker's own reconcile loop uses to start/stop watching a camera —
     /// exposed so DetectionOverlayHandler (decision 6's live-view box overlay) can poll
@@ -808,6 +825,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             }
 
             _visionSupervisor.EnsureRunning();
+            PruneStaleVisionWatches();
         }
         else
         {
@@ -1382,6 +1400,9 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             config.EnableVisionDebugImages, config.GpuPreprocessing, config.YoloXSize, decodeFpsCap,
             config.HiResSnapshots);
 
+        // Never stack two starts for the same camera — see _visionStartsInFlight's own comment.
+        if (!_visionStartsInFlight.TryAdd(camera.CameraId, 0)) return;
+
         _activeVision[camera.CameraId] = new CameraVisionRecorder(signature);
         _ = StartVisionWatchAsync(request);
         _logger.LogInformation("Starting AI detection watch for camera {CameraId} ({Name}).", camera.CameraId, camera.Name);
@@ -1422,6 +1443,63 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         {
             _logger.LogWarning(ex, "Failed to reach LarisVMS.Vision.Service to start watching camera {CameraId} — will retry next reconcile.", request.CameraId);
             _activeVision.TryRemove(request.CameraId, out _);
+        }
+        finally
+        {
+            _visionStartsInFlight.TryRemove(request.CameraId, out _);
+        }
+    }
+
+    /// <summary>
+    /// Drops any <see cref="_activeVision"/> entry the Vision Service isn't actually watching, so a
+    /// later reconcile re-issues its start. Covers two silent drifts: the sibling process crashed and
+    /// <see cref="VisionServiceSupervisor.EnsureRunning"/> brought it back within this same tick (so
+    /// the <c>IsRunning</c> check in ReconcileVision never sees it down, and the stale signatures
+    /// suppress every restart), and — now that the detection engine is built after /start has already
+    /// returned 200 — a pipeline whose engine build failed after the fact.
+    ///
+    /// Fire-and-forget, like every other Vision Service call from this loop, so its effect lands on a
+    /// subsequent tick rather than this one; these are drifts that have already persisted for at least
+    /// a reconcile interval, so one more costs nothing. A service that doesn't answer (still starting,
+    /// mid-restart) leaves this node's view untouched rather than tearing down watches that are fine.
+    /// </summary>
+    private void PruneStaleVisionWatches()
+    {
+        if (_activeVision.IsEmpty) return;
+        _ = PruneStaleVisionWatchesAsync();
+    }
+
+    private async Task PruneStaleVisionWatchesAsync()
+    {
+        // Snapshot before the request as well as checking after it: a camera whose /start completes
+        // while this call is in flight is absent from the response through no fault of its own, and
+        // dropping it here would restart a pipeline that had only just finished being built.
+        var inFlightBefore = _visionStartsInFlight.Keys.ToHashSet();
+
+        List<Guid>? watched;
+        try
+        {
+            watched = await _visionHttp.GetFromJsonAsync<List<Guid>>("/cameras");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not read the Vision Service's watched-camera list — leaving this node's view unchanged.");
+            return;
+        }
+        if (watched is null) return;
+
+        foreach (var cameraId in _activeVision.Keys)
+        {
+            if (watched.Contains(cameraId)) continue;
+            if (inFlightBefore.Contains(cameraId) || _visionStartsInFlight.ContainsKey(cameraId)) continue;
+
+            if (_activeVision.TryRemove(cameraId, out _))
+            {
+                _logger.LogInformation(
+                    "LarisVMS.Vision.Service is not watching camera {CameraId} despite this node believing it is — " +
+                    "re-starting the watch on the next reconcile. Check the vision log for an engine build failure.",
+                    cameraId);
+            }
         }
     }
 

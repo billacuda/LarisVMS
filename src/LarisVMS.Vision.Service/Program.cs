@@ -91,6 +91,11 @@ app.MapPost("/cameras/{cameraId:guid}/start", async (Guid cameraId, VisionStartC
     }
 });
 
+// The cameras this process is actually watching. NodeWorker's reconcile compares its own _activeVision
+// against this and re-issues a start for anything missing — the only way it can now learn that a
+// pipeline's engine build failed, since that happens after /start has already returned 200.
+app.MapGet("/cameras", (CameraPipelineManager manager) => Results.Ok(manager.WatchedCameraIds()));
+
 app.MapPost("/cameras/{cameraId:guid}/stop", async (Guid cameraId, CameraPipelineManager manager) =>
 {
     var stopped = await manager.StopAsync(cameraId);

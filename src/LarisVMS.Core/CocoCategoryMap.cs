@@ -1,3 +1,5 @@
+using LarisVMS.Core.Enums;
+
 namespace LarisVMS.Core;
 
 /// <summary>
@@ -84,5 +86,29 @@ public static class CocoCategoryMap
         Vehicle => "🚗",
         Animal => "🐾",
         _ => "📦"
+    };
+
+    /// <summary>
+    /// The camera-native <see cref="DetectionKind"/> this AI category is the same concept as, or null
+    /// for a category name that has no equivalent.
+    ///
+    /// These are two independent pipelines that name the same things: a camera's own onboard
+    /// classifier reports a DetectionKind, and the AI detector resolves a raw class string into one of
+    /// the four buckets above. "A person was here" is the same event to a viewer either way, so the
+    /// admin's Events colour for Human has to govern both — otherwise the same object is one colour on
+    /// a camera-classified span and another on an AI-detected one, which is exactly what a per-category
+    /// stored colour (auto-assigned by DetectedObjectColorAssigner, never shown in the Events editor)
+    /// produced. <see cref="EventPalette.ColorForAiCategory"/> is what consumes this.
+    ///
+    /// Object maps to DetectionKind.Other deliberately — Other's own display label *is* "Object", and
+    /// both are the same "something we don't model specifically" catch-all.
+    /// </summary>
+    public static DetectionKind? ToDetectionKind(string categoryName) => categoryName switch
+    {
+        Human => DetectionKind.Human,
+        Vehicle => DetectionKind.Vehicle,
+        Animal => DetectionKind.Animal,
+        Object => DetectionKind.Other,
+        _ => null
     };
 }

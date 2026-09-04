@@ -64,16 +64,23 @@
             </details>
         }
         @* AI detection bounding-box overlay (live-view.js's startDetectionOverlay) — a pure
-           client-side toggle, both off by default: nothing is drawn and no /detections WebSocket
-           is opened for any tile until at least one of these is checked. *@
-        <div class="d-flex align-items-center gap-2 small" id="detectionToggleGroup" title="AI detection boxes">
-            <div class="form-check form-check-inline mb-0">
-                <input class="form-check-input" type="checkbox" id="detectionShowMoving">
+           client-side toggle, all off by default: nothing is drawn and no /detections WebSocket
+           is opened for any tile until Moving or Idle is switched on. Confidence only decorates
+           boxes that are already being drawn, so it is disabled while both of those are off —
+           see wireDetectionToggles for that dependency. All three persist per user (server-backed
+           preferences, not localStorage) so they survive a refresh and a sign-in elsewhere. *@
+        <div class="d-flex align-items-center gap-3 small" id="detectionToggleGroup" title="AI detection boxes">
+            <div class="form-check form-switch form-check-inline mb-0 me-0">
+                <input class="form-check-input" type="checkbox" role="switch" id="detectionShowMoving">
                 <label class="form-check-label" for="detectionShowMoving">Moving</label>
             </div>
-            <div class="form-check form-check-inline mb-0">
-                <input class="form-check-input" type="checkbox" id="detectionShowIdle">
+            <div class="form-check form-switch form-check-inline mb-0 me-0">
+                <input class="form-check-input" type="checkbox" role="switch" id="detectionShowIdle">
                 <label class="form-check-label" for="detectionShowIdle">Idle</label>
+            </div>
+            <div class="form-check form-switch form-check-inline mb-0 me-0">
+                <input class="form-check-input" type="checkbox" role="switch" id="detectionShowConfidence" disabled>
+                <label class="form-check-label" for="detectionShowConfidence">Confidence</label>
             </div>
         </div>
         <button type="button" class="btn btn-sm btn-outline-secondary" id="kioskBtn" title="Toggle fullscreen kiosk mode">⛶ Fullscreen</button>
@@ -104,6 +111,7 @@
             cameraPickerListId: 'cameraPickerList',
             detectionShowMovingId: 'detectionShowMoving',
             detectionShowIdleId: 'detectionShowIdle',
+            detectionShowConfidenceId: 'detectionShowConfidence',
             gridElId: 'viewPlayGrid',
             badgeCorner: @Html.Raw(JsonSerializer.Serialize(Model.EventBadgeCornerValue)),
             adaptiveStreamingEnabled: @Html.Raw(Model.AdaptiveStreamingEnabled ? "true" : "false"),

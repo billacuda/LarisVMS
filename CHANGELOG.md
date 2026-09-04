@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.181.0] - 2026-09-04
+
+### Added
+
+- **Snapshot badges now show each AI detection's confidence**, in muted text after the label —
+  `🚶 Human — person 81%`. Grouped cards (several overlapping detections in one frame) show each
+  label's own highest-scoring confidence. Only AI detections carry a score; motion, camera-classified
+  and custom-tag badges are unchanged.
+
+### Fixed
+
+- **Snapshot badges and card borders now follow the Events settings colors.** An AI-detected object
+  (Human/Vehicle/Animal/Object) was colored by an internal, auto-assigned hex that never appeared in
+  the Events tab, instead of the color an admin chose there — so a camera-classified detection and an
+  AI-detected one for the same kind of object showed up in two different colors, on both the
+  Snapshots grid and the live-view box overlay. Both now resolve through the same Events palette.
+
+### Notes
+
+- Web-only change. No recorder node rebuild or `install-node.ps1` re-run.
+
+## [0.180.0] - 2026-09-03
+
+### Added
+
+- **Live view can now label each AI detection box with its confidence.** A new Confidence switch in
+  the view toolbar appends each box's score as a percentage to its label (`car — vehicle 81%`). It
+  stays greyed out while both Moving and Idle are off, since there are no boxes for it to annotate,
+  and its own setting is remembered independently — turning the boxes back on restores your
+  confidence choice with them.
+
+### Changed
+
+- **The live-view Moving and Idle detection controls are now switches** rather than checkboxes,
+  matching the new Confidence control beside them. All three are off by default and saved to your
+  account, so they survive a refresh and follow you to another browser or device.
+
+### Notes
+
+- Web-only change. No recorder node rebuild or `install-node.ps1` re-run.
+
+## [0.179.1] - 2026-09-03
+
+### Fixed
+
+- Enabling TensorRT (`Vision:EnableTensorRt`) stopped recording and live view on the node. The
+  detection engine was built inside the Vision Service's `/start` request handler, so with TensorRT
+  the first cold build — minutes, saturating every core — ran once per camera concurrently. That
+  starved the node's recording pipeline: each camera's recorder is a single ffmpeg writing a `tee`
+  to both the segment files and the live pipe, so when the pipe drain stopped being scheduled the
+  muxer blocked and both legs stopped, silently, until the builds finished. Engines are now built off
+  the request path and one at a time process-wide, at below-normal process priority while a build is
+  in flight.
+- A Vision Service `/start` call that outran its timeout dropped the node's record of the watch and
+  re-sent the start on the next reconcile, tearing down the in-progress engine build and starting
+  another. Starts are now guarded against overlapping, and the loopback client has an explicit 15s
+  timeout instead of the 100s default.
+- The live-detection overlay poll shared that same 100s timeout at 6.7 Hz per viewer; it now gets a
+  2s budget and skips a tick rather than queueing.
+- A camera the Vision Service is not actually watching — after an in-tick restart, or a detection
+  engine that failed to load — stayed silently unwatched because the node still believed it was
+  running. The node now reconciles against the service's watched-camera list.
+
+### Changed
+
+- TensorRT's builder is bounded to a 2 GiB workspace (`trt_max_workspace_size`) instead of being free
+  to claim the whole GPU while the node is also decoding on it, with
+  `trt_builder_optimization_level` available as a per-node tuning knob.
+- `Vision:TensorRtEngineCachePath` is now optional, defaulting to `%ProgramData%\LarisVMS\trt-cache`.
+  Leaving it unset used to silently fall back to plain CUDA.
+- The vision log now reports whether a TensorRT engine build was a cache hit or a cold compile, and
+  how long it took — the "execution provider appended" line is written before the compile starts and
+  was being read as a healthy startup.
+
 ## [0.179.0] - 2026-09-03
 
 ### Added

@@ -42,8 +42,20 @@ public sealed class VisionServiceOptions
 
     public bool EnableTensorRt { get; set; }
     public string TensorRtPrecision { get; set; } = "FP16";
+
+    /// <summary>Optional — defaults to %ProgramData%\LarisVMS\trt-cache. See
+    /// Inference.EngineOptions.TensorRtEngineCachePath.</summary>
     public string? TensorRtEngineCachePath { get; set; }
     public string? TensorRtLibPath { get; set; }
+
+    /// <summary>Caps the VRAM TensorRT's builder may take while compiling — see
+    /// Inference.EngineOptions.TensorRtMaxWorkspaceBytes for why an unbounded builder is a problem on
+    /// a node that also decodes on the GPU.</summary>
+    public long TensorRtMaxWorkspaceBytes { get; set; } = 2L * 1024 * 1024 * 1024;
+
+    /// <summary>Null keeps ONNX Runtime's default (3). Lower builds faster, runs slightly slower —
+    /// a per-node A/B, not a default to change on reasoning.</summary>
+    public int? TensorRtBuilderOptimizationLevel { get; set; }
 
     /// <summary>OpenVINO target device, e.g. "GPU" for an Intel iGPU or "CPU". Ignored unless the
     /// OpenVINO backend is selected.</summary>

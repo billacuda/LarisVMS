@@ -89,6 +89,14 @@ public class IndexModel(ITimelineService timelineService, ICameraService cameraS
         return $"{Math.Max(0, (int)d.TotalSeconds)}s";
     }
 
+    /// <summary>A detection's 0-1 confidence as a whole-number percentage. Whole numbers because the
+    /// decimals carry no meaning a viewer can act on, and clamped because a stored score is a model
+    /// output rather than something this app validated on the way in — a badge reading "104%" would
+    /// be worse than one quietly reading "100%". Matches the live-view overlay's own formatting
+    /// (live-view.js's draw), so the same detection reads the same way in both places.</summary>
+    public static string FormatConfidence(double confidence) =>
+        $"{Math.Clamp(Math.Round(confidence * 100), 0, 100):0}%";
+
     // Named pageNumber, not page: confirmed live as the actual cause of "pagination does nothing" —
     // Razor Pages' own endpoint routing sets a route value literally named "page" on every request
     // (the relative page path, used internally to select which compiled page runs), and the

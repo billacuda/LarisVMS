@@ -581,6 +581,11 @@
     // client-side toggle" — nothing is drawn, and the socket isn't even opened, until at least one
     // is turned on by the caller.
     //
+    // A third toggle (setShowConfidence) is a different kind of thing and deliberately does not join
+    // that pair: it appends each box's score to its label and has no bearing on whether a box is
+    // drawn or the socket is open. The toolbar disables it while both Moving and Idle are off, since
+    // there would be nothing on screen for it to annotate.
+    //
     // Coordinates arrive normalized (0-1) against the camera's own real aspect ratio (detection/
     // hardware-acceleration overhaul pass 1 — InferenceProfile.MapBoxToSource undoes whatever
     // decode-resolution/letterbox transform AI detection actually used internally, so nothing here
@@ -610,6 +615,10 @@
         var latestBoxes = [];
         var showMoving = false;
         var showIdle = false;
+        // Decoration only — never gates whether a box is drawn or whether the socket is open, which
+        // is why updateActiveState below ignores it entirely and the toolbar disables it while both
+        // of the two above are off (there would be nothing for it to decorate).
+        var showConfidence = false;
         var stopped = false;
         var reconnectTimer = null;
 
@@ -646,7 +655,14 @@
                 ctx.lineWidth = 2;
                 ctx.strokeRect(x, y, boxW, boxH);
 
+                // Percentage rather than the raw 0-1 score: this sits on a moving video at 12px, and
+                // "81%" reads at a glance where "0.81" does not. Guarded because confidence is a
+                // relayed field — an older node, or a malformed tick, must degrade to the plain
+                // label rather than painting "NaN%" over the video.
                 var label = box.category + ' — ' + box.label;
+                if (showConfidence && typeof box.confidence === 'number' && isFinite(box.confidence)) {
+                    label += ' ' + Math.round(box.confidence * 100) + '%';
+                }
                 ctx.font = '12px sans-serif';
                 var textWidth = ctx.measureText(label).width;
                 var labelY = Math.max(0, y - 16);
@@ -721,6 +737,9 @@
         return {
             setShowMoving: function (on) { showMoving = !!on; updateActiveState(); draw(); },
             setShowIdle: function (on) { showIdle = !!on; updateActiveState(); draw(); },
+            // No updateActiveState: this changes what a box's label says, never whether any box is
+            // drawn, so it must not open or close the detections socket.
+            setShowConfidence: function (on) { showConfidence = !!on; draw(); },
             stop: function () {
                 stopped = true;
                 if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }

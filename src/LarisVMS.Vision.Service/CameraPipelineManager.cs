@@ -240,6 +240,15 @@ public sealed class CameraPipelineManager : IAsyncDisposable
         return true;
     }
 
+    /// <summary>The cameras this process is actually watching, for NodeWorker's reconcile to compare
+    /// its own view against. Two ways the two can drift, both silent before this existed: the Vision
+    /// Service restarted within a single reconcile tick (EnsureRunning brings it back before
+    /// ReconcileVision looks at IsRunning, so Node never re-sends its starts), and — now that the
+    /// engine is built after /start has returned — a pipeline whose engine build failed, which is
+    /// running but will never infer. Both show up here as an absent camera id.</summary>
+    public IReadOnlyList<Guid> WatchedCameraIds() =>
+        [.. _pipelines.Where(p => !p.Value.EngineBuildFailed).Select(p => p.Key)];
+
     /// <summary>Null when this camera isn't currently being watched — the caller (Node's own
     /// /live/{cameraId}/detections WS relay) treats that the same as "no boxes right now" rather
     /// than an error.</summary>

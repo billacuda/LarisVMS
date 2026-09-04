@@ -220,7 +220,14 @@
                            TimelineService always fills Badges with at least the primary. *@
                         @foreach (var badge in s.Badges)
                         {
-                            <span class="badge" style="background-color: @badge.ColorHex;">@badge.Emoji @badge.Label</span>
+                            @* The confidence rides inside the badge, muted, so it reads as a
+                               qualifier on the label rather than a second fact competing with it.
+                               Only AI detections carry a score (SnapshotBadgeDto.Confidence) — a
+                               camera-classified or motion badge renders exactly as before. *@
+                            <span class="badge" style="background-color: @badge.ColorHex;">
+                                @badge.Emoji @badge.Label@if (badge.Confidence is { } c)
+                                {<span class="snapshot-badge-confidence" title="Detection confidence">@IndexModel.FormatConfidence(c)</span>}
+                            </span>
                         }
                         <span class="badge bg-secondary" title="How long this event lasted">@IndexModel.FormatDuration(s.Duration)</span>
                         <div class="small text-muted mt-1">@s.CameraName</div>

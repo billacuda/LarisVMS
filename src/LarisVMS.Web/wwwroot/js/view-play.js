@@ -12,6 +12,10 @@ window.larisvmsViewPlay = (function () {
     // the viewer to another browser or device rather than resetting there.
     var DETECTION_SHOW_MOVING_KEY = 'liveDetectionShowMoving';
     var DETECTION_SHOW_IDLE_KEY = 'liveDetectionShowIdle';
+    // Remembered independently of the two above even though the toolbar disables it while both are
+    // off: a viewer who turns the boxes back on should get their confidence choice back with them,
+    // not silently reset to off.
+    var DETECTION_SHOW_CONFIDENCE_KEY = 'liveDetectionShowConfidence';
     var phoneQuery = window.matchMedia('(max-width: 767.98px)');
     // A phone held sideways is wider than the phone breakpoint but only ~400px tall, so it used to
     // fall through to the desktop grid — 12 columns squeezed into ~840px (≈70px each) while rows
@@ -44,11 +48,12 @@ window.larisvmsViewPlay = (function () {
     var cameraById = {};
     var stopFns = {};
     // AI detection box overlay (live-view.js's startDetectionOverlay) — one instance per cell,
-    // keyed by cell.id same as stopFns/cellControllers. Both start false ("off by default" per the
-    // 0.157.0 plan); wireDetectionToggles flips these and re-applies to every active overlay.
+    // keyed by cell.id same as stopFns/cellControllers. All three start false ("off by default" per
+    // the 0.157.0 plan); wireDetectionToggles flips these and re-applies to every active overlay.
     var detectionOverlays = {};
     var showMovingDetections = false;
     var showIdleDetections = false;
+    var showConfidenceDetections = false;
 
     // Playback-toggle is single-cell-at-a-time, same as the flat Live grid this was ported from —
     // switching a second cell into playback mode reverts whichever cell was previously toggled back
@@ -399,6 +404,7 @@ window.larisvmsViewPlay = (function () {
         var detectionOverlay = window.larisvmsLiveView.startDetectionOverlay(cameraId, video, fsHandle);
         detectionOverlay.setShowMoving(showMovingDetections);
         detectionOverlay.setShowIdle(showIdleDetections);
+        detectionOverlay.setShowConfidence(showConfidenceDetections);
         detectionOverlays[cell.id] = detectionOverlay;
 
         stopFns[cell.id] = function () {
@@ -688,38 +694,70 @@ window.larisvmsViewPlay = (function () {
     function wireDetectionToggles(o) {
         var movingCb = o.detectionShowMovingId && document.getElementById(o.detectionShowMovingId);
         var idleCb = o.detectionShowIdleId && document.getElementById(o.detectionShowIdleId);
+        var confidenceCb = o.detectionShowConfidenceId && document.getElementById(o.detectionShowConfidenceId);
         if (!movingCb || !idleCb) return;
 
         function apply() {
             Object.keys(detectionOverlays).forEach(function (id) {
                 detectionOverlays[id].setShowMoving(showMovingDetections);
                 detectionOverlays[id].setShowIdle(showIdleDetections);
+                detectionOverlays[id].setShowConfidence(showConfidenceDetections);
             });
         }
+
+        // Confidence annotates boxes; with neither Moving nor Idle on there are none, so the switch
+        // is disabled rather than silently doing nothing. Its *checked* state is left alone here —
+        // it stays remembered and comes back the moment boxes are switched on again. Bootstrap dims
+        // the paired label off :disabled on its own, so nothing to do for the greying itself.
+        function syncConfidenceEnabled() {
+            if (!confidenceCb) return;
+            var anyBoxes = showMovingDetections || showIdleDetections;
+            confidenceCb.disabled = !anyBoxes;
+            confidenceCb.title = anyBoxes
+                ? 'Show each box’s detection confidence'
+                : 'Turn on Moving or Idle first — there are no boxes to label';
+        }
+
         movingCb.addEventListener('change', function () {
             showMovingDetections = movingCb.checked;
             window.larisvmsPreferences.set(DETECTION_SHOW_MOVING_KEY, showMovingDetections);
+            syncConfidenceEnabled();
             apply();
         });
         idleCb.addEventListener('change', function () {
             showIdleDetections = idleCb.checked;
             window.larisvmsPreferences.set(DETECTION_SHOW_IDLE_KEY, showIdleDetections);
+            syncConfidenceEnabled();
             apply();
         });
+        if (confidenceCb) {
+            confidenceCb.addEventListener('change', function () {
+                showConfidenceDetections = confidenceCb.checked;
+                window.larisvmsPreferences.set(DETECTION_SHOW_CONFIDENCE_KEY, showConfidenceDetections);
+                apply();
+            });
+        }
 
         // Preferences load asynchronously (one GET on page load, shared across every script on the
         // page — see user-preferences.js's own doc comment); render() has already run by the time
-        // this resolves, and every tile so far started with both overlays off (the synchronous
-        // default). Once the saved value is known, flip the checkboxes and re-apply to whatever
+        // this resolves, and every tile so far started with all three overlays off (the synchronous
+        // default). Once the saved values are known, flip the switches and re-apply to whatever
         // tiles already exist — any tile created afterward already reads the now-updated globals
         // directly in startCellVideo.
         window.larisvmsPreferences.whenReady().then(function () {
             showMovingDetections = window.larisvmsPreferences.get(DETECTION_SHOW_MOVING_KEY, 'false') === 'true';
             showIdleDetections = window.larisvmsPreferences.get(DETECTION_SHOW_IDLE_KEY, 'false') === 'true';
+            showConfidenceDetections = window.larisvmsPreferences.get(DETECTION_SHOW_CONFIDENCE_KEY, 'false') === 'true';
             movingCb.checked = showMovingDetections;
             idleCb.checked = showIdleDetections;
+            if (confidenceCb) confidenceCb.checked = showConfidenceDetections;
+            syncConfidenceEnabled();
             apply();
         });
+
+        // Before that resolves the markup ships Confidence disabled (both others default off), which
+        // is already correct — this only keeps the tooltip consistent with it.
+        syncConfidenceEnabled();
     }
 
     function wireKiosk(kioskBtnId, navElId, toolbarElId) {

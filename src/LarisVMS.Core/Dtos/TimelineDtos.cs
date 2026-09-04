@@ -112,7 +112,10 @@ public record DetectedObjectLabelDto(string CategoryName, string Label);
 /// Label/ColorHex/Emoji, the primary), but AI-detection spans that overlap in time on the same camera
 /// (a person and a dog in frame together — separate per-label spans, one cropped-from-the-same-frame
 /// snapshot) collapse into one card that carries every label.</summary>
-public record SnapshotBadgeDto(string Label, string ColorHex, string Emoji);
+/// <summary>Confidence is the span's own BestBoxConfidence (0-1) for an AI detection, or null for a
+/// camera-classified/motion/custom-tag badge — nothing outside the AI pipeline produces a score, and
+/// the card renders the percentage only where there is one.</summary>
+public record SnapshotBadgeDto(string Label, string ColorHex, string Emoji, double? Confidence = null);
 
 /// <summary>Id is the primary span (the one whose /snapshot-image the card requests); SpanIds is
 /// every span the card represents (the primary plus any it grouped in). Badges is every label; the

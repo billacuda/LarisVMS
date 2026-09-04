@@ -70,14 +70,15 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
                 // ColorHex above — a span whose category still exists projects its color; the
                 // category is never expected to be deleted (see DetectedObjectCategory's own doc
                 // comment), but the same tolerance costs nothing to keep.
-                AiCategoryColorHex = m.DetectedObjectCategory != null ? m.DetectedObjectCategory.ColorHex : null
+                AiCategoryColorHex = m.DetectedObjectCategory != null ? m.DetectedObjectCategory.ColorHex : null,
+                AiCategoryName = m.DetectedObjectCategory != null ? m.DetectedObjectCategory.Name : null
             })
             .ToListAsync(ct);
 
         var palette = await eventColors.GetAsync(ct);
 
         return Bucket(segments.Select(s => (s.StartUtc, s.EndUtc)),
-            motionSpans.Select(m => (m.StartUtc, m.EndUtc, ResolveColor(palette, m.ColorHex, m.DetectionKind, m.AiCategoryColorHex))),
+            motionSpans.Select(m => (m.StartUtc, m.EndUtc, ResolveColor(palette, m.ColorHex, m.DetectionKind, m.AiCategoryName, m.AiCategoryColorHex))),
             fromUtc, toUtc, bucketCount);
     }
 
@@ -117,14 +118,15 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
                 m.EndUtc,
                 ColorHex = m.EventTagRule != null ? m.EventTagRule.ColorHex : null,
                 m.DetectionKind,
-                AiCategoryColorHex = m.DetectedObjectCategory != null ? m.DetectedObjectCategory.ColorHex : null
+                AiCategoryColorHex = m.DetectedObjectCategory != null ? m.DetectedObjectCategory.ColorHex : null,
+                AiCategoryName = m.DetectedObjectCategory != null ? m.DetectedObjectCategory.Name : null
             })
             .ToListAsync(ct);
 
         var palette = await eventColors.GetAsync(ct);
 
         return Bucket(segments.Select(s => (s.StartUtc, s.EndUtc)),
-            motionSpans.Select(m => (m.StartUtc, m.EndUtc, ResolveColor(palette, m.ColorHex, m.DetectionKind, m.AiCategoryColorHex))),
+            motionSpans.Select(m => (m.StartUtc, m.EndUtc, ResolveColor(palette, m.ColorHex, m.DetectionKind, m.AiCategoryName, m.AiCategoryColorHex))),
             fromUtc, toUtc, bucketCount);
     }
 
@@ -133,12 +135,23 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
     /// detection (DetectionKind) supplies its class color next — whatever an admin picked on
     /// Admin/Event Colors, or the built-in default for that class; an AI-detection span
     /// (object detection plan decisions 5/9 — DetectionKind stays null for these, see MotionSpan's
-    /// own doc comment) supplies its DetectedObjectCategory's own stored color next; anything else
+    /// own doc comment) resolves through that same Events palette next, by mapping its
+    /// DetectedObjectCategory's name onto the DetectionKind it represents (see
+    /// EventPalette.ColorForAiCategory) — so an admin-chosen Human/Vehicle/Animal/Object colour
+    /// governs both a camera-classified span and an AI-detected one, rather than the AI side
+    /// following its own internal auto-assigned colour no settings page ever showed; anything else
     /// falls through to the plain motion/recording scheme by returning null. Reusing the existing
     /// TagColorHex channel rather than adding a second color field means the canvas renderer needs
     /// no new concept.</summary>
-    private static string? ResolveColor(EventPalette palette, string? tagColorHex, DetectionKind? detectionKind, string? aiCategoryColorHex = null)
-        => tagColorHex ?? (detectionKind is { } kind ? palette.ColorFor(kind) : null) ?? aiCategoryColorHex;
+    private static string? ResolveColor(EventPalette palette, string? tagColorHex, DetectionKind? detectionKind,
+        string? aiCategoryName = null, string? aiCategoryColorHex = null)
+        => tagColorHex
+           ?? (detectionKind is { } kind ? palette.ColorFor(kind) : null)
+           // Was the category row's own stored ColorHex directly, which is never shown in the Events
+           // settings editor — so an AI-detected human ignored the Human colour an admin had set there
+           // and drew in whatever DetectedObjectColorAssigner happened to pick. See
+           // EventPalette.ColorForAiCategory.
+           ?? (aiCategoryName is not null ? palette.ColorForAiCategory(aiCategoryName, aiCategoryColorHex) : null);
 
     private static List<TimelineBucketDto> Bucket(
         IEnumerable<(DateTime StartUtc, DateTime EndUtc)> segments,
@@ -650,11 +663,12 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
             }
         }
 
-        (string Label, string Color, string Emoji) AiBadge(long rowId)
+        (string Label, string Color, string Emoji, double? Confidence) AiBadge(long rowId)
         {
             var row = rows.First(x => x.Id == rowId);
             var lbl = row.DetectedObjectLabel is { } sl ? $"{row.AiCategoryName} — {sl}" : row.AiCategoryName!;
-            return (lbl, row.AiCategoryColorHex ?? EventColors.DefaultMotion, CocoCategoryMap.Emoji(row.AiCategoryName!));
+            return (lbl, palette.ColorForAiCategory(row.AiCategoryName, row.AiCategoryColorHex),
+                CocoCategoryMap.Emoji(row.AiCategoryName!), row.BestBoxConfidence);
         }
 
         // Same label/color precedence as ResolveColor above (custom tag > detected class > plain
@@ -686,7 +700,9 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
                 label = r.DetectedObjectLabel is { } specificLabel
                     ? $"{r.AiCategoryName} — {specificLabel}"
                     : r.AiCategoryName;
-                color = r.AiCategoryColorHex ?? EventColors.DefaultMotion;
+                // The Events settings palette, not the category row's own auto-assigned ColorHex —
+                // see EventPalette.ColorForAiCategory for why that divergence was a bug.
+                color = palette.ColorForAiCategory(r.AiCategoryName, r.AiCategoryColorHex);
                 emoji = CocoCategoryMap.Emoji(r.AiCategoryName);
             }
             else
@@ -756,14 +772,21 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
             {
                 badges = memberIds
                     .Select(AiBadge)
+                    // Highest-scoring first within a label, so the one kept by DistinctBy carries the
+                    // confidence actually worth showing — the same "best box wins" rule the group's
+                    // own primary/crop selection already uses above.
+                    .OrderByDescending(b => b.Confidence ?? -1)
                     .DistinctBy(b => b.Label)
-                    .Select(b => new SnapshotBadgeDto(b.Label, b.Color, b.Emoji))
+                    .Select(b => new SnapshotBadgeDto(b.Label, b.Color, b.Emoji, b.Confidence))
                     .ToList();
                 spanIds = memberIds;
             }
             else
             {
-                badges = [new SnapshotBadgeDto(label, color, emoji)];
+                // Only an AI span has a score; a camera-classified, motion or custom-tag badge leaves
+                // it null and renders no percentage.
+                badges = [new SnapshotBadgeDto(label, color, emoji,
+                    r.AiCategoryName is not null ? r.BestBoxConfidence : null)];
                 spanIds = [r.Id];
             }
 

@@ -59,13 +59,27 @@ public static class DetectionOverlayHandler
     /// down the whole viewer connection over it.</summary>
     private static async Task<List<VisionLiveDetectionBox>> FetchBoxesAsync(Guid cameraId, HttpClient visionHttp, ILogger logger, CancellationToken ct)
     {
+        // Bounded well below the shared client's own timeout: this runs at PollInterval per viewer,
+        // so a Vision Service that has gone slow should cost this viewer a frame of boxes, not let
+        // polls queue up behind each other for seconds. A skipped tick is already a supported
+        // outcome here — see this method's doc comment.
+        using var pollTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        pollTimeout.CancelAfter(TimeSpan.FromSeconds(2));
+
         try
         {
-            var response = await visionHttp.GetAsync($"/cameras/{cameraId}/detections", ct);
+            var response = await visionHttp.GetAsync($"/cameras/{cameraId}/detections", pollTimeout.Token);
             if (!response.IsSuccessStatusCode) return [];
 
-            var snapshot = await response.Content.ReadFromJsonAsync<VisionLiveDetectionsResponse>(ct);
+            var snapshot = await response.Content.ReadFromJsonAsync<VisionLiveDetectionsResponse>(pollTimeout.Token);
             return snapshot?.Boxes ?? [];
+        }
+        // A poll that outran its own 2s budget while the viewer is still connected is a skipped tick,
+        // not a disconnect — only the caller's own ct ending the loop should propagate.
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            logger.LogDebug("Detection poll for camera {CameraId} timed out — showing no boxes this tick.", cameraId);
+            return [];
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

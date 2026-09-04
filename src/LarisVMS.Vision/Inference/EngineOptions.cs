@@ -40,8 +40,27 @@ public sealed class EngineOptions
 
     public string TensorRtPrecision { get; init; } = "FP16";
 
-    /// <summary>Required if <see cref="EnableTensorRt"/> is set; TensorRT needs somewhere to persist compiled engines.</summary>
+    /// <summary>Where TensorRT persists compiled engines and its timing cache. Leave null to use the
+    /// default under %ProgramData%\LarisVMS (see OrtSessionFactory.ResolveTensorRtCachePath) — without
+    /// a cache every process start recompiles the engine from scratch, which takes minutes, so there
+    /// is no sensible "off" for this and it is no longer an error to leave unset.</summary>
     public string? TensorRtEngineCachePath { get; init; }
+
+    /// <summary>
+    /// Upper bound on the VRAM TensorRT's *builder* may use while compiling (<c>trt_max_workspace_size</c>).
+    /// Unset, TensorRT 10 lets the builder claim the whole device — on a node that is concurrently
+    /// running NVDEC decode for vision capture, motion and high-res re-detection, that is a real
+    /// contention source. 2 GiB is generous for the detection models this project ships.
+    /// </summary>
+    public long TensorRtMaxWorkspaceBytes { get; init; } = 2L * 1024 * 1024 * 1024;
+
+    /// <summary>
+    /// <c>trt_builder_optimization_level</c>, or null for ONNX Runtime's own default (3). Lower
+    /// levels build markedly faster for a small runtime cost — worth A/B-ing on a node where the
+    /// cold-build wait matters, not worth changing on reasoning alone, which is why the default here
+    /// is "don't set it".
+    /// </summary>
+    public int? TensorRtBuilderOptimizationLevel { get; init; }
 
     /// <summary>
     /// Directory containing TensorRT's DLLs (nvinfer_10.dll and friends), prepended to the
