@@ -46,6 +46,11 @@ public sealed class DFineEngine : IDetectionEngine, IBatchDetectionEngine
     private readonly ILogger<DFineEngine> _logger;
     private bool _loggedFirstInference;
 
+    // Throttle for the non-finite-output warning below — checked only on the zero-detection path,
+    // logged at most once per interval so a persistently broken engine doesn't flood the log.
+    private DateTime _lastNonFiniteWarnUtc = DateTime.MinValue;
+    private static readonly TimeSpan NonFiniteWarnInterval = TimeSpan.FromSeconds(30);
+
     // Input tensors reused across calls rather than allocated per frame — at 640x640 each is 4.92 MB
     // (H*W*3 floats), a Large Object Heap allocation every inference, which on a busy node forces
     // several gen2 collections per second. ONNX Runtime has copied the tensor to the device by the
@@ -126,8 +131,10 @@ public sealed class DFineEngine : IDetectionEngine, IBatchDetectionEngine
         var numQueries = logitsTensor.Dimensions[1];
         var numClasses = logitsTensor.Dimensions[2];
 
-        var results = DFineDecoder.Decode(logitsTensor.ToArray(), boxesTensor.ToArray(), numQueries, numClasses,
-            _labels, confidence, _profile);
+        var logits = logitsTensor.ToArray();
+        var boxes = boxesTensor.ToArray();
+        var results = DFineDecoder.Decode(logits, boxes, numQueries, numClasses, _labels, confidence, _profile);
+        if (results.Count == 0) WarnIfNonFinite(logits, boxes);
 
         stopwatch.Stop();
         LastInferenceMilliseconds = stopwatch.Elapsed.TotalMilliseconds;
@@ -174,17 +181,49 @@ public sealed class DFineEngine : IDetectionEngine, IBatchDetectionEngine
                 : [NamedOnnxValue.CreateFromTensor("pixel_values", PreprocessNv12(nv12))];
 
             using var outputs = _session.Run(inputs);
-            var logits = outputs.First(o => o.Name == "logits").AsTensor<float>();
-            var boxes = outputs.First(o => o.Name == "pred_boxes").AsTensor<float>();
-            var numQueries = logits.Dimensions[1];
-            var numClasses = logits.Dimensions[2];
-            results.Add(DFineDecoder.Decode(logits.ToArray(), boxes.ToArray(), numQueries, numClasses,
-                _labels, confidence, imageProfile));
+            var logitsTensor = outputs.First(o => o.Name == "logits").AsTensor<float>();
+            var boxesTensor = outputs.First(o => o.Name == "pred_boxes").AsTensor<float>();
+            var numQueries = logitsTensor.Dimensions[1];
+            var numClasses = logitsTensor.Dimensions[2];
+            var logits = logitsTensor.ToArray();
+            var boxes = boxesTensor.ToArray();
+            var imageResults = DFineDecoder.Decode(logits, boxes, numQueries, numClasses, _labels, confidence, imageProfile);
+            if (imageResults.Count == 0) WarnIfNonFinite(logits, boxes);
+            results.Add(imageResults);
         }
 
         stopwatch.Stop();
         LastInferenceMilliseconds = stopwatch.Elapsed.TotalMilliseconds;
         return results;
+    }
+
+    /// <summary>
+    /// Called only when a frame decoded to zero detections: if the raw model output holds any NaN/Inf
+    /// value, every candidate was silently dropped by <see cref="DFineDecoder"/> (a NaN fails every
+    /// comparison, then clamps to a degenerate box). That is the signature of the TensorRT FP16
+    /// builder overflowing on D-FINE's transformer activations — otherwise invisible, since no
+    /// exception is thrown. Throttled so a persistently broken engine logs once per interval, not
+    /// once per frame.
+    /// </summary>
+    private void WarnIfNonFinite(ReadOnlySpan<float> logits, ReadOnlySpan<float> boxes)
+    {
+        if (!HasNonFinite(logits) && !HasNonFinite(boxes)) return;
+
+        var now = DateTime.UtcNow;
+        if (now - _lastNonFiniteWarnUtc < NonFiniteWarnInterval) return;
+        _lastNonFiniteWarnUtc = now;
+
+        _logger.LogWarning(
+            "D-FINE inference produced non-finite (NaN/Inf) logits or boxes — every detection was dropped. " +
+            "This is the TensorRT FP16-overflow signature for D-FINE. Set Vision:DFineTensorRtMode=Off " +
+            "(plain CUDA) or Fp32 on this node.");
+    }
+
+    private static bool HasNonFinite(ReadOnlySpan<float> values)
+    {
+        foreach (var v in values)
+            if (!float.IsFinite(v)) return true;
+        return false;
     }
 
     /// <summary>CPU fallback (GpuPreprocessing off): one 640x640 packed-nv12 frame → a

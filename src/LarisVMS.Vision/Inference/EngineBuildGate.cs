@@ -65,7 +65,11 @@ public static class EngineBuildGate
         // Only meaningful for a TensorRT build; a cache that already holds a .engine for this model
         // makes the difference between a sub-second load and a multi-minute compile, and an operator
         // reading the log during a cold start has no other way to tell which one they're waiting on.
-        var cacheWarm = options.EnableTensorRt && TensorRtCacheHasEntries(options.TensorRtEngineCachePath);
+        // Resolve the same default OrtSessionFactory uses (%ProgramData%\LarisVMS\trt-cache) before
+        // probing — a bare options.TensorRtEngineCachePath is null in the normal case, which read as
+        // "cold" on every start even when the default directory was fully populated.
+        var cacheWarm = options.EnableTensorRt
+            && TensorRtCacheHasEntries(OrtSessionFactory.ResolveTensorRtCachePath(options.TensorRtEngineCachePath));
         if (options.EnableTensorRt)
         {
             // Two messages rather than one with a substituted word: the cold case needs to say how

@@ -43,6 +43,22 @@ public sealed class VisionServiceOptions
     public bool EnableTensorRt { get; set; }
     public string TensorRtPrecision { get; set; } = "FP16";
 
+    /// <summary>
+    /// How the D-FINE model family uses TensorRT, independent of <see cref="EnableTensorRt"/> /
+    /// <see cref="TensorRtPrecision"/> (which YOLOX still follows directly). D-FINE is a
+    /// DETR/transformer: its LayerNorm/attention activations overflow FP16's range under the
+    /// TensorRT builder, which yields NaN/Inf logits and boxes that decode to zero detections with
+    /// no error. TensorRT was validated against YOLOX (a CNN), not D-FINE.
+    ///
+    /// Values (case-insensitive):
+    /// <list type="bullet">
+    /// <item><c>Off</c> (default) — D-FINE ignores TensorRT and runs on plain CUDA, its validated path.</item>
+    /// <item><c>Fp32</c> — D-FINE uses TensorRT (when <see cref="EnableTensorRt"/> is set) forced to FP32.</item>
+    /// <item><c>Fp16</c> — D-FINE uses TensorRT at whatever <see cref="TensorRtPrecision"/> says (old behavior).</item>
+    /// </list>
+    /// </summary>
+    public string DFineTensorRtMode { get; set; } = "Off";
+
     /// <summary>Optional — defaults to %ProgramData%\LarisVMS\trt-cache. See
     /// Inference.EngineOptions.TensorRtEngineCachePath.</summary>
     public string? TensorRtEngineCachePath { get; set; }

@@ -283,13 +283,34 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         _dfineWeights = dfineWeights;
         _yoloXSize = yoloXSize;
         _loggerFactory = loggerFactory;
+
+        // D-FINE (a DETR/transformer) is fragile under the TensorRT builder in a way YOLOX (the CNN
+        // TensorRT was validated against) is not — FP16 activation overflow yields NaN/Inf logits
+        // that DFineDecoder silently drops as zero detections. Vision:DFineTensorRtMode gates it for
+        // this family only; every other family follows EnableTensorRt/TensorRtPrecision as-is.
+        var (enableTensorRt, tensorRtPrecision) = (serviceOptions.EnableTensorRt, serviceOptions.TensorRtPrecision);
+        if (modelFamily == DetectionModelFamily.DFine)
+        {
+            (enableTensorRt, tensorRtPrecision) = (serviceOptions.DFineTensorRtMode ?? "Off").Trim().ToLowerInvariant() switch
+            {
+                "fp16" => (serviceOptions.EnableTensorRt, serviceOptions.TensorRtPrecision),
+                "fp32" => (serviceOptions.EnableTensorRt, "FP32"),
+                _ => (false, serviceOptions.TensorRtPrecision), // "off" and anything unrecognized
+            };
+            _logger.LogInformation(
+                "D-FINE TensorRT mode: {Mode} -> TensorRT {State}{Precision} for this camera's detection engine.",
+                serviceOptions.DFineTensorRtMode,
+                enableTensorRt ? "enabled" : "disabled (plain CUDA)",
+                enableTensorRt ? $" at {tensorRtPrecision}" : string.Empty);
+        }
+
         _engineOptions = new EngineOptions
         {
             ModelPath = resolvedModelPath,
             GpuId = serviceOptions.GpuId,
             CudnnPath = serviceOptions.CudnnPath,
-            EnableTensorRt = serviceOptions.EnableTensorRt,
-            TensorRtPrecision = serviceOptions.TensorRtPrecision,
+            EnableTensorRt = enableTensorRt,
+            TensorRtPrecision = tensorRtPrecision,
             TensorRtEngineCachePath = serviceOptions.TensorRtEngineCachePath,
             TensorRtLibPath = serviceOptions.TensorRtLibPath,
             TensorRtMaxWorkspaceBytes = serviceOptions.TensorRtMaxWorkspaceBytes,

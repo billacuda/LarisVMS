@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.182.0] - 2026-09-04
+
+### Fixed
+
+- **A camera using the D-FINE detection engine on a node with TensorRT enabled produced no
+  detections and no bounding boxes — with nothing in any log.** D-FINE is a DETR/transformer;
+  its LayerNorm and attention activations overflow FP16's range under the TensorRT builder, so
+  `logits`/`pred_boxes` came back `NaN`/`Inf` and the decoder dropped every candidate as a
+  degenerate box. TensorRT was validated against YOLOX (a CNN), not D-FINE. D-FINE now ignores
+  TensorRT and runs on plain CUDA — its validated path — by default. A new node-local
+  `Vision:DFineTensorRtMode` setting (`Off` default, `Fp32`, `Fp16`) can opt D-FINE back onto
+  TensorRT. YOLOX and its TensorRT path are unchanged.
+- **D-FINE inference that decodes to zero detections now checks its raw output for non-finite
+  values and writes a warning to the vision log** naming the cause and the fix, instead of
+  failing silently. The check only runs on the zero-result path, so a healthy pipeline is
+  unaffected.
+- A vision-log line reported the TensorRT engine cache as "cold" (a multi-minute compile) on
+  every start when `Vision:TensorRtEngineCachePath` was left at its default, even with the
+  default directory fully populated. It now probes the resolved path.
+
+### Changed
+
+- **The Cameras page row actions — Zones, Event tags, Schedule, Re-probe — are now
+  emoji-only buttons** (🚧 🏷️ 🗓️ 🔍). Each keeps its text label as a hover tooltip and an
+  accessible name. The list filter box now matches these cells on the glyph rather than on
+  every row containing the words "zones"/"schedule"/etc.
+
+### Notes
+
+- Recorder nodes pick up the D-FINE fix via auto-update (it is in the Vision Service binary);
+  no `install-node.ps1` re-run.
+
 ## [0.181.0] - 2026-09-04
 
 ### Added

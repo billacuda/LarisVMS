@@ -181,11 +181,11 @@ else
                             }
                         </td>
                         <td class="text-end text-nowrap">
-                            <a class="btn btn-sm btn-outline-secondary" asp-page="Zones" asp-route-id="@c.Id">Zones</a>
-                            <a class="btn btn-sm btn-outline-secondary" asp-page="EventTags" asp-route-id="@c.Id">Event tags</a>
-                            <a class="btn btn-sm btn-outline-secondary" asp-page="Schedule" asp-route-id="@c.Id">Schedule</a>
+                            <a class="btn btn-sm btn-outline-secondary" asp-page="Zones" asp-route-id="@c.Id" title="Zones" aria-label="Zones"><span aria-hidden="true">🚧</span></a>
+                            <a class="btn btn-sm btn-outline-secondary" asp-page="EventTags" asp-route-id="@c.Id" title="Event tags" aria-label="Event tags"><span aria-hidden="true">🏷️</span></a>
+                            <a class="btn btn-sm btn-outline-secondary" asp-page="Schedule" asp-route-id="@c.Id" title="Schedule" aria-label="Schedule"><span aria-hidden="true">🗓️</span></a>
                             <form method="post" asp-page-handler="Probe" asp-route-id="@c.Id" class="d-inline">
-                                <button type="submit" class="btn btn-sm btn-outline-secondary"><span aria-hidden="true">🔍</span> Re-probe</button>
+                                <button type="submit" class="btn btn-sm btn-outline-secondary" title="Re-probe" aria-label="Re-probe"><span aria-hidden="true">🔍</span></button>
                             </form>
                         </td>
                     </tr>
