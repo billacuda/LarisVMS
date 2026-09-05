@@ -97,6 +97,46 @@ public static class OrtSessionFactory
             : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
                 "LarisVMS", "trt-cache");
 
+    /// <summary>
+    /// Builds the <see cref="EngineOptions.TensorRtCacheKey"/> for one engine's exact graph variant.
+    /// Everything that changes the compiled TensorRT engine goes in the name: which model file, the
+    /// network size it decodes at, whether a preprocessing head was merged in (and, for slicing, for
+    /// what capture size and how many slices), and the batch size. Two engines that agree on all of
+    /// these are genuinely interchangeable; two that differ on any of them are not, and 0.186.0
+    /// shipped with the second pair silently sharing one cached engine.
+    ///
+    /// Shared by both engines rather than written twice: the whole point is that the two never
+    /// disagree about what makes a variant distinct, and a copy that drifts reintroduces exactly the
+    /// bug this exists to prevent.
+    /// </summary>
+    /// <remarks>Public rather than internal because CameraDetectionPipeline (a different assembly)
+    /// needs the same key to fill in <see cref="EngineOptions.TensorRtCacheKey"/> for
+    /// <see cref="EngineBuildGate"/>'s warm/cold probe, before any engine exists.</remarks>
+    public static string TensorRtCacheKeyFor(string modelPath, InferenceProfile profile,
+        SliceLayout? sliceLayout, int batchSize, bool gpuPreprocessing)
+    {
+        var model = Path.GetFileNameWithoutExtension(modelPath);
+        var variant = sliceLayout is { } layout
+            ? $"cap{layout.CaptureWidth}x{layout.CaptureHeight}-s{layout.Slices.Count}"
+            : gpuPreprocessing ? "nv12" : "raw";
+
+        return $"{model}-net{profile.NetworkWidth}x{profile.NetworkHeight}-{variant}-b{batchSize}";
+    }
+
+    /// <summary>Reduces <see cref="EngineOptions.TensorRtCacheKey"/> to characters that are safe in a
+    /// filename on every platform this can run on, since TensorRT concatenates it straight into a
+    /// path. Returns null for a null/blank/entirely-unusable key, meaning "let ONNX Runtime name its
+    /// own cache files". Internal so the engines' own key construction can be unit-tested against
+    /// exactly the transform that will be applied to it.</summary>
+    internal static string? SanitizeCacheKey(string? key)
+    {
+        if (string.IsNullOrWhiteSpace(key)) return null;
+
+        var chars = key.Select(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.' ? c : '-').ToArray();
+        var cleaned = new string(chars).Trim('-');
+        return cleaned.Length == 0 ? null : cleaned;
+    }
+
     private static SessionOptions CreateCuda(EngineOptions options, ILogger logger)
     {
         var sessionOptions = new SessionOptions();
@@ -142,9 +182,67 @@ public static class OrtSessionFactory
                 if (options.TensorRtBuilderOptimizationLevel is { } level)
                     providerOptions["trt_builder_optimization_level"] = level.ToString();
 
+                // Pin the builder to exactly one shape when this pipeline batches — see
+                // EngineOptions.BatchSize/TensorRtBatchProfile's own doc comments for why the shape
+                // is fixed for the pipeline's whole lifetime (never a per-call variable), so min/opt/
+                // max are all identical rather than a real range. Left alone (ORT's own default
+                // dynamic-shape handling) at BatchSize 1, which needs no profile at all.
+                //
+                // NOT verified against a real TensorRT 10.x build (this development box has no GPU) —
+                // trt_profile_*_shapes' exact option-name spelling and value grammar come from ORT's
+                // own documentation, not a confirmed run. If a node logs these as unrecognized/rejected,
+                // that is the first thing to check on real hardware.
+                if (options.BatchSize > 1)
+                {
+                    if (options.TensorRtBatchProfile is { } batchProfile)
+                    {
+                        var shape = $"{batchProfile.InputName}:{options.BatchSize}x3x{batchProfile.Height}x{batchProfile.Width}";
+                        providerOptions["trt_profile_min_shapes"] = shape;
+                        providerOptions["trt_profile_opt_shapes"] = shape;
+                        providerOptions["trt_profile_max_shapes"] = shape;
+                    }
+                    else
+                    {
+                        logger.LogWarning(
+                            "EngineOptions.BatchSize is {BatchSize} but no TensorRtBatchProfile was supplied -- " +
+                            "TensorRT has no pinned shape profile and may rebuild its engine on the first real " +
+                            "batch, or reject the graph outright depending on the ORT build.", options.BatchSize);
+                    }
+                }
+
+                // One cache directory holds every variant this node ever builds, and ONNX Runtime's
+                // own engine cache key is a hash of *names* only -- no shapes, and no model file name
+                // at all for the in-memory graphs the preprocessing/slicing heads produce. Naming the
+                // prefix ourselves keeps the directory readable (yolox_m-net640x640-cap1138x640-s2_...)
+                // and lets EngineBuildGate probe for this variant specifically rather than for any
+                // .engine file. See OnnxPreprocessHead.RetagGeneratedNames for the collision this is
+                // backing up.
+                var cacheKey = SanitizeCacheKey(options.TensorRtCacheKey);
+                if (cacheKey is not null) providerOptions["trt_engine_cache_prefix"] = cacheKey;
+
                 using (var trtOptions = new OrtTensorRTProviderOptions())
                 {
-                    trtOptions.UpdateOptions(providerOptions);
+                    try
+                    {
+                        trtOptions.UpdateOptions(providerOptions);
+                    }
+                    catch (Exception ex) when (cacheKey is not null)
+                    {
+                        // UpdateOptions rejects the whole dictionary if it doesn't recognize one key,
+                        // and the outer catch would then drop this node off TensorRT entirely. Losing
+                        // TensorRT is a far worse regression than losing a readable cache filename,
+                        // and correctness doesn't depend on this option (the graph names already
+                        // disambiguate the variants), so retry once without it.
+                        logger.LogWarning(ex,
+                            "This ONNX Runtime build rejected the trt_engine_cache_prefix option -- continuing with " +
+                            "TensorRT's own default engine cache naming. Engines stay correct (each graph variant is " +
+                            "already uniquely named at the graph level), but the cache directory is unreadable and " +
+                            "the engine build will report the cache as cold on every start for this camera, since it " +
+                            "probes for a prefix nothing is written under.");
+                        providerOptions.Remove("trt_engine_cache_prefix");
+                        cacheKey = null;
+                        trtOptions.UpdateOptions(providerOptions);
+                    }
                     // The append copies the options into the session; disposing trtOptions after is safe.
                     sessionOptions.AppendExecutionProvider_Tensorrt(trtOptions);
                 }
@@ -157,10 +255,11 @@ public static class OrtSessionFactory
                 // a cold start is what made a multi-minute stall look like a healthy startup.
                 logger.LogInformation(
                     "TensorRT execution provider appended: gpuId={GpuId}, fp16={Fp16}, engine+timing cache={CachePath}, " +
-                    "max builder workspace={WorkspaceMb} MB, builder optimization level={Level}.",
-                    options.GpuId, fp16 == "1", cachePath,
+                    "engine cache prefix={CachePrefix}, max builder workspace={WorkspaceMb} MB, " +
+                    "builder optimization level={Level}, batchSize={BatchSize}.",
+                    options.GpuId, fp16 == "1", cachePath, cacheKey ?? "(ORT default)",
                     options.TensorRtMaxWorkspaceBytes / (1024 * 1024),
-                    options.TensorRtBuilderOptimizationLevel?.ToString() ?? "default");
+                    options.TensorRtBuilderOptimizationLevel?.ToString() ?? "default", options.BatchSize);
             }
             catch (Exception ex)
             {

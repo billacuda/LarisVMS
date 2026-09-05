@@ -181,6 +181,7 @@ else
                                     </option>
                                     <option value="Letterbox" selected="@(Model.AspectModeOverride.GetValueOrDefault(n.Id) == "Letterbox")">Letterbox</option>
                                     <option value="Stretch" selected="@(Model.AspectModeOverride.GetValueOrDefault(n.Id) == "Stretch")">Stretch</option>
+                                    <option value="Slice" selected="@(Model.AspectModeOverride.GetValueOrDefault(n.Id) == "Slice")">Slice (requires GPU preprocessing)</option>
                                 </select>
                             </td>
                             <td data-sort-value="@(n.LastSeenAt?.Ticks ?? 0)">

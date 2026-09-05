@@ -79,23 +79,6 @@ public record VisionStartCameraRequest(
     /// ever read node-side, which it isn't — Vision Service parses it directly) lands on the safer of
     /// the two implemented values rather than today's stretch-and-distort behavior.</summary>
     string AspectMode = "Letterbox",
-    /// <summary>Detection/hardware-acceleration overhaul, pass 3b: opt-in (default off, deliberately
-    /// — meaningfully more CPU/GPU work than the continuous Sub-stream pipeline alone) motion-guided
-    /// native-scale re-detection against the Main stream. Global -> Node resolved setting, same
-    /// scoping as AspectMode/ModelFamily above (one Vision Service process per node, so this is a
-    /// per-node choice, not per-camera).</summary>
-    bool EnableHighResReDetection = false,
-    /// <summary>This camera's own real Main-stream resolution (CameraStream.Width/Height for the
-    /// Main role, the same ffmpeg-probed-ground-truth source Width/Height above already uses for the
-    /// Sub stream) — null until RecordingSession has actually probed it. Only meaningful when
-    /// EnableHighResReDetection is true; CameraDetectionPipeline's own high-res loop stays
-    /// permanently disabled for a camera until both are known.</summary>
-    int? MainStreamWidth = null,
-    int? MainStreamHeight = null,
-    /// <summary>Detection.EnableVisionDebugImages — diagnostic-only, node-scoped like AspectMode
-    /// above. When true, CameraDetectionPipeline writes one cropped JPEG per high-res re-detection
-    /// trigger to logs\vision-debug\. Off by default; SaveDebugImage is a no-op unless this is set.</summary>
-    bool EnableVisionDebugImages = false,
     /// <summary>Detection.GpuPreprocessing (pass 4a) — node-scoped. When true, ffmpeg emits packed
     /// nv12 and DFineEngine merges an nv12→normalized-tensor head into the model so colour conversion
     /// + normalize run on the accelerator instead of a CPU pixel loop. Vendor-neutral. Off by default.
@@ -112,15 +95,25 @@ public record VisionStartCameraRequest(
     /// stream is already at or below the cap (so a slow camera is never frame-*duplicated* up to the
     /// target). 0 = no fps filter.</summary>
     int DecodeFpsCap = 0,
-    /// <summary>Detection.HiResSnapshots (Pass F) — node-scoped, opt-in, off by default. When true the
-    /// Vision Service decodes the Sub stream at up to its native resolution (long edge capped to
-    /// SnapshotImageCapture.MaxDimension) instead of the detector's network input size, downscales a
-    /// copy per frame for inference, and crops the eager AI-detection snapshot from the larger buffer
-    /// — sharper only where the Sub stream's own resolution exceeds the network size. Small extra CPU
-    /// + memory per camera, no extra GPU. Forces GpuPreprocessing off for the camera while on (the
-    /// merged nv12 head can't consume a capture-sized frame). Appended last so positional
-    /// construction stays stable.</summary>
-    bool HiResSnapshots = false);
+    /// <summary>This camera's operator-facing name, carried purely so the Vision Service's own log
+    /// can say "Vision[Driveway]" instead of "Vision[2d970617-cb4f-4866-9ffc-7f3d773def04]". Nothing
+    /// keys off it — <see cref="CameraId"/> remains the only identity — so a stale name after a
+    /// rename is a cosmetic staleness that corrects itself on the next pipeline restart, and it is
+    /// deliberately NOT part of NodeWorker's restart signature (renaming a camera should not tear
+    /// down and rebuild its detection engine).
+    ///
+    /// Blank when an older node build talks to a newer Vision Service; every consumer falls back to
+    /// the short camera id, so the log degrades to something still readable rather than to "[]".</summary>
+    string CameraName = "")
+{
+    /// <summary>What this camera should be called in a log line. The operator's own name when there
+    /// is one, otherwise the first block of the camera id — short enough to scan a column of, and
+    /// still greppable against the full id, which every pipeline logs once at startup and on every
+    /// failure. Never the bare full GUID: 36 characters of it prefixed onto every cadence line was
+    /// the readability complaint this exists to answer.</summary>
+    public string DisplayName =>
+        string.IsNullOrWhiteSpace(CameraName) ? CameraId.ToString()[..8] : CameraName.Trim();
+}
 
 /// <summary>Node -&gt; Vision Service: stop watching a camera (disabled, reassigned, or the node is
 /// shutting down this camera's session).</summary>
@@ -153,13 +146,13 @@ public record VisionDetectionReportItem(
     double? BestBoxH,
     double? BestBoxConfidence);
 
-/// <summary>Vision Service -&gt; Node (POST /detections/crop): a snapshot image cropped from the
-/// exact Main-stream frame a high-res re-detection ran against — the same frame the vision-debug
-/// images come from, so it lines up with the detected object far better than a whole-second seek
-/// into the recorded segment can. Node stages it by <see cref="AtUtc"/> ticks under
-/// <c>cam-{id}/snapshots/hires/</c>; the /snapshot-image route promotes it into the span-keyed
-/// snapshot cache on first view (so retention governs it like any other snapshot). Best-effort —
-/// a lost crop just means that span falls back to the segment-seek crop.</summary>
+/// <summary>Vision Service -&gt; Node (POST /detections/crop): pass G's eager snapshot, cropped from
+/// the exact Sub-stream frame the model ran on the instant a track started Moving — lines up with
+/// the detected object far better than a later whole-second seek into the recorded segment can.
+/// Node stages it by <see cref="AtUtc"/> ticks under <c>cam-{id}/snapshots/hires/</c>; the
+/// /snapshot-image route promotes it into the span-keyed snapshot cache on first view (so
+/// retention governs it like any other snapshot). Best-effort — a lost crop just means that span
+/// falls back to the segment-seek crop.</summary>
 public record VisionDetectionCropItem(Guid CameraId, DateTime AtUtc, byte[] Jpeg);
 
 /// <summary>Node -&gt; Vision Service (GET /cameras/{cameraId}/detections) response: the live,

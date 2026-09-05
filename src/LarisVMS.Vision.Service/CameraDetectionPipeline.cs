@@ -33,6 +33,14 @@ namespace LarisVMS.Vision.Service;
 /// every track sharing a label, using the identical scoring formula (MovementClassifier.Score), so
 /// a label's reported span always cites whichever specific sighting was clearest across every
 /// instance of it, not just whichever track happened to be observed last.
+///
+/// Detection/hardware-acceleration overhaul, pass 4 (<see cref="AspectMode.Slice"/>): mandatorily
+/// GPU-preprocessed — there is deliberately no CPU fallback for cutting slices. Slicing exists
+/// specifically to put more real pixels on target than Letterbox's black-bar padding allows, and
+/// cutting a captured frame into slices on the CPU (decode → download → crop N times → re-upload)
+/// is exactly the "CPU back-and-forth" the accelerator-side slice (a Slice+Concat pair merged into
+/// the model's own ONNX graph, see <see cref="OnnxPreprocessHead.MergeSliced"/>) exists to avoid.
+/// A node with no usable GPU simply cannot run Slice mode — it can still run Letterbox/Stretch.
 /// </summary>
 public sealed class CameraDetectionPipeline : IAsyncDisposable
 {
@@ -42,7 +50,23 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     private static readonly TimeSpan ReportFlushInterval = TimeSpan.FromSeconds(2);
 
     private readonly VisionStartCameraRequest _request;
+    // Non-Slice modes: the camera's own real InferenceProfile (SourceWidth/Height == this camera's
+    // real dims, NetworkWidth/Height == the square decode target). Slice mode: the shared per-slice
+    // *identity* profile every slice's raw model output decodes through (Stretch, network-size
+    // square) — never this camera's own real dims, which is exactly why _sourceWidth/_sourceHeight
+    // below exist as their own fields instead of every caller reading _profile.SourceWidth/Height.
     private readonly InferenceProfile _profile;
+    // Detection/hardware-acceleration overhaul, pass 4: non-null only for AspectMode.Slice — see
+    // this class's own doc comment. Owns the whole per-camera capture/slice geometry that a Slice
+    // camera has no single InferenceProfile for.
+    private readonly SliceLayout? _sliceLayout;
+    // This camera's own real aspect-ratio pixel dimensions — the coordinate space every reported
+    // box, live-overlay box and snapshot crop is normalized against, regardless of AspectMode. Equal
+    // to _profile.SourceWidth/SourceHeight for Letterbox/Stretch (kept as separate fields anyway so
+    // Slice mode — whose _profile carries a completely different, non-camera-specific meaning — needs
+    // no special-casing at any of this class's many read sites).
+    private readonly int _sourceWidth;
+    private readonly int _sourceHeight;
     private readonly VisionSession _session;
     private readonly LatestFrameSlot _slot;
 
@@ -51,21 +75,13 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     // saturates every core. Doing that inside the request handler held a Kestrel thread for the whole
     // build, once per camera concurrently, which starved the node's own recording ffmpeg drain loops
     // badly enough that the tee muxer blocked and recording *and* live view stopped together (see
-    // EngineBuildGate for the other half of that fix). Null until the build completes; _engineReady
-    // is the signal for anything outside the inference loop that needs it.
+    // EngineBuildGate for the other half of that fix). Null until the build completes.
     private volatile IDetectionEngine? _engine;
     private readonly EngineOptions _engineOptions;
     private readonly DetectionModelFamily _modelFamily;
     private readonly DFineWeights _dfineWeights;
     private readonly YoloXSize _yoloXSize;
     private readonly ILoggerFactory _loggerFactory;
-
-    // Completes once _engine is assigned. HighResReDetectionLoopAsync runs alongside the inference
-    // loop and type-tests _engine for IBatchDetectionEngine; without waiting it would read null on
-    // startup and disable high-res re-detection for the pipeline's whole lifetime. Never faulted —
-    // a failed build cancels _cts instead, which is what every loop here already unwinds on.
-    private readonly TaskCompletionSource _engineReady =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private readonly ByteTracker _tracker;
     // Reported in the cadence line so the score a real object actually reaches can be read directly
@@ -112,6 +128,26 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     private int _cadencePeakTracked;
     private double _cadenceBestDetectionScore;
 
+    // Slice-mode accounting, same window and the same reasoning one level further in: once slicing is
+    // on, "the model found nothing" has two very different causes that the counters above cannot
+    // separate. Raw detections per slice say whether each slice is contributing at all (a slice stuck
+    // at zero is a geometry or preprocessing fault, not a model one); the two absorption counts say
+    // whether SliceMerge is reuniting anything, and specifically whether its *seam* rule — the whole
+    // reason that class exists — has ever fired. "Detected inside one slice but never across the
+    // seam" is exactly the report these exist to make diagnosable instead of arguable.
+    // Totals over the window, not peaks: what matters here is whether a thing ever happens at all.
+    private int[]? _cadenceSliceDetections;
+    private int _cadenceIouAbsorbed;
+    private int _cadenceSeamAbsorbed;
+    private int _cadenceSpanningMerges;
+
+    // Inference failures are counted rather than logged per frame. A persistent fault (a wrong
+    // TensorRT engine, say) fails every frame, and at the capture rate that is ten identical stack
+    // traces per second per camera — which is how the 0.186.0 engine cache collision buried every
+    // other line in the vision log. The first one still logs in full; the rest become a count here.
+    private int _cadenceInferenceFailures;
+    private bool _loggedInferenceFailure;
+
     // Per-label state — see this class's own doc comment for why the grain is the label, not the
     // track. Only ever touched from the single inference loop below, so plain (not concurrent)
     // collections are safe.
@@ -121,12 +157,12 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     // why "best frame" needs two tiers per label rather than one.
     private readonly LabelBestFrameTracker _bestFrames = new();
 
-    // A1 of the snapshot-alignment work: when a high-res re-detection produces a box for a label,
-    // that box (Main-stream-pixel-normalized, from a frame we decoded at an exact known instant and
-    // shipped a matching eager crop for) is authoritative for the span's snapshot — it beats any
-    // Sub-stream continuous-pass candidate, which is normalized against a different resolution/FOV
-    // and pinned only to a whole-second seek into the recorded segment. EnqueueReport prefers this
-    // over _bestFrames.GetBest(label); cleared alongside _bestFrames.Reset(label) on a real close.
+    // A1 of the snapshot-alignment work: a pass G eager crop's own box (Sub-stream-pixel-normalized,
+    // from a frame we decoded at an exact known instant and shipped a matching eager crop for) is
+    // authoritative for the span's snapshot — it beats the continuous pass's own best-frame
+    // candidate, which is otherwise pinned only to a whole-second seek into the recorded segment.
+    // EnqueueReport prefers this over _bestFrames.GetBest(label); cleared alongside
+    // _bestFrames.Reset(label) on a real close.
     private readonly Dictionary<string, BestFrame> _authoritativeBestByLabel = new(StringComparer.OrdinalIgnoreCase);
 
     // Object detection plan pass 2a: turns D-FINE's flickering per-frame label into one stable label
@@ -152,68 +188,48 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     // never back-pressure detection itself.
     private readonly ConcurrentQueue<VisionDetectionReportItem> _pendingReports = new();
 
-    // Detection/hardware-acceleration overhaul, pass 3b: one high-res Main-stream re-detection
-    // attempt per track, not per frame — a track only ever triggers once, the first frame it starts
-    // contributing motion, dequeued and processed by its own loop (HighResReDetectionLoopAsync)
-    // decoupled from the continuous Sub-stream inference loop for the same "slow work must never
-    // back-pressure the hot loop" reason _pendingReports already is. Pruned alongside
-    // _movement/_labelArbiter when ByteTrack drops a track.
-    private readonly HashSet<int> _triggeredHighResTrackIds = new();
-    private readonly ConcurrentQueue<HighResTrigger> _pendingHighResTriggers = new();
-    private readonly string _ffmpegPath;
-
     // Pass G: a snapshot is cropped from the exact frame the model ran on (this camera's continuous
     // Sub-stream buffer) the first frame a *new* track starts Moving — covering every object moving
-    // in that same frame. Once per track like _triggeredHighResTrackIds, plus a per-camera minimum
-    // gap so a burst of arrivals produces one crop, not one per track. _frameIsNv12 picks the crop
-    // helper (BGRA is the default; nv12 only when GpuPreprocessing is on — never for YOLOX).
+    // in that same frame. Once per track at minimum (see _snapshotScoreByLabel for the progressive
+    // upgrade on top), plus a per-camera minimum gap so a burst of arrivals produces one crop, not
+    // one per track. _frameIsNv12 picks the crop helper (BGRA is the default; nv12 only when
+    // GpuPreprocessing is on — never for YOLOX).
     private readonly HashSet<int> _snapshottedTrackIds = new();
     private readonly bool _frameIsNv12;
     private DateTime _lastSubSnapshotUtc = DateTime.MinValue;
     private static readonly TimeSpan SubSnapshotMinGap = TimeSpan.FromSeconds(1);
 
-    // Pass F (Detection.HiResSnapshots, opt-in): the capture buffer is the Sub stream at up to its
-    // native resolution rather than the network input size, so TrySubFrameSnapshot has real pixels
-    // to crop. _networkScratch non-null is the whole signal that hi-res mode is on — InferenceLoopAsync
-    // downscales each capture frame into it (BgraOps.LetterboxResize) before handing it to the engine,
-    // which still only ever sees the network size. Null (the default) keeps the frame path
-    // byte-identical to before this pass. Only helps where the Sub stream's own resolution exceeds
-    // the detector input; a near-no-op otherwise. Incompatible with GpuPreprocessing (forced off).
-    private readonly int _captureWidth;
-    private readonly int _captureHeight;
-    private readonly byte[]? _networkScratch;
+    // Progressive best snapshot: the MovementClassifier.Score (confidence * normalized area) of
+    // whichever frame is currently staged as this label's authoritative eager crop
+    // (_authoritativeBestByLabel). A track's very first Moving frame always sets these (there's
+    // nothing to compare against yet); after that, a later sighting only replaces them — and only
+    // triggers a fresh crop+upload at all — when it clearly beats what's already staged, so the
+    // span's snapshot keeps upgrading toward the clearest view of the object seen so far instead of
+    // freezing on whichever frame happened to be first. Reset alongside _authoritativeBestByLabel on
+    // a real span close, so a later, separate span for the same label starts its own fresh contest.
+    private readonly Dictionary<string, double> _snapshotScoreByLabel = new(StringComparer.OrdinalIgnoreCase);
 
-    // Checkpoint 3d: a high-res result feeds back into _bestFrames the same way UpdateBestFrameForLabel
-    // already does for the continuous Sub-stream pass — reusing the existing best-frame competition
-    // (and, downstream, the existing MotionSpan.BestBoxX/Y/W/H columns and lazy /snapshot-image crop)
-    // rather than a separate eager-write path, since the box is already normalized 0-1 and persisted
-    // per span regardless of which pass produced it. ProcessHighResTriggerAsync runs on its own task
-    // (HighResReDetectionLoopAsync), concurrently with InferenceLoopAsync, and _bestFrames is
-    // documented not thread-safe (single-inference-loop ownership) — so the result is queued here and
-    // applied from inside InferenceLoopAsync itself, never touched directly from the high-res task.
-    private readonly record struct HighResResult(int TrackId, string Label, DateTime AtUtc,
-        double XNorm, double YNorm, double WNorm, double HNorm, double Confidence);
-    private readonly ConcurrentQueue<HighResResult> _pendingHighResResults = new();
+    // Relative, not absolute: MovementClassifier.Score has no fixed scale (it's confidence * area,
+    // both already 0-1), and a bare "any improvement, however tiny" comparison would re-crop and
+    // re-upload almost every frame while an object cruises steadily through the scene, since the
+    // score jitters slightly frame to frame even when nothing meaningful changed.
+    private const double SnapshotImprovementMargin = 0.15;
 
-    // Shared by every camera's pipeline (owned by CameraPipelineManager, one instance for the whole
-    // process) — each trigger spawns its own ffmpeg process plus a batched inference call, and
-    // nothing bounded how many of those could run at once *across cameras*: a busy moment on several
-    // cameras simultaneously could pile up that many concurrent ffmpeg decodes, pegging node CPU. A
-    // single process-wide slot serializes them; there's no snapshot latency cost to that yet since
-    // this pass only logs its result (checkpoint 3d, not yet built, is what will actually persist it).
-    private readonly SemaphoreSlim _highResGate;
-
-    private readonly record struct HighResTrigger(int TrackId, string Label, DateTime AtUtc, double XNorm, double YNorm, double WNorm, double HNorm);
+    private const int EagerCropJpegQuality = 88;
 
     public CameraDetectionPipeline(VisionStartCameraRequest request, VisionServiceOptions serviceOptions,
         string resolvedFfmpegPath, string resolvedModelPath, DetectionModelFamily modelFamily, DFineWeights dfineWeights,
-        YoloXSize yoloXSize, AspectMode aspectMode, HttpClient http, ILoggerFactory loggerFactory, SemaphoreSlim highResGate)
+        YoloXSize yoloXSize, AspectMode aspectMode, HttpClient http, ILoggerFactory loggerFactory)
     {
         _request = request;
         _http = http;
-        _ffmpegPath = resolvedFfmpegPath;
-        _highResGate = highResGate;
-        _logger = loggerFactory.CreateLogger($"Vision[{request.CameraId}]");
+        // The camera's own name rather than its GUID — see VisionStartCameraRequest.DisplayName. The
+        // full id still reaches the log on the pipeline-start line below and on every failure, so a
+        // line here can always be tied back to a camera row; it just isn't repeated 36 characters at
+        // a time on every routine line.
+        _logger = loggerFactory.CreateLogger($"Vision[{request.DisplayName}]");
+        _logger.LogInformation("Detection pipeline starting for camera {Camera} (id {CameraId}).",
+            request.DisplayName, request.CameraId);
 
         // Detection/hardware-acceleration overhaul, pass 1: request.Width/Height are now this
         // camera's own source aspect ratio, not a decode target — InferenceProfile derives the
@@ -226,52 +242,70 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             ? DetectionModelCatalog.GetYoloXNetworkSize(yoloXSize)
             : InferenceProfile.DefaultNetworkSize;
 
-        // Pass F: with Detection.HiResSnapshots on, the capture buffer is the Sub stream at up to its
-        // native resolution (capped to SnapshotImageCapture.MaxDimension on the long edge) rather than
-        // the network input size, and _profile is built from those capture dims — the letterbox
-        // scale/pad depend only on the aspect ratio, so this is transparent to MapBoxToSource and to
-        // every _profile.SourceWidth/Height normalization downstream, while making the forward
-        // (LetterboxResize) and inverse (decode) transforms self-consistent by construction. The
-        // default (off) branch builds the profile from request.Width/Height exactly as before.
+        _sourceWidth = request.Width;
+        _sourceHeight = request.Height;
+
         int captureWidth, captureHeight;
-        if (request.HiResSnapshots)
+        bool gpuPreprocessing;
+        LetterboxGeometry? letterboxGeometry;
+
+        if (aspectMode == AspectMode.Slice)
         {
-            (captureWidth, captureHeight) = ComputeCaptureDimensions(request.Width, request.Height, networkSize);
-            _profile = InferenceProfile.Create(captureWidth, captureHeight, aspectMode, networkSize);
-            _networkScratch = new byte[networkSize * networkSize * 4];
+            // See this class's own doc comment for why Slice mode has no single square
+            // InferenceProfile and always forces GPU preprocessing regardless of the
+            // Detection.GpuPreprocessing setting's own value (there is no CPU fallback for it).
+            // _profile becomes the shared per-slice *identity* decode profile every slice's raw
+            // output goes through — degenerate (Stretch, network-size square), the same instance
+            // for every slice, never a per-camera transform.
+            _sliceLayout = SliceLayout.Create(request.Width, request.Height, networkSize);
+            _profile = InferenceProfile.Create(networkSize, networkSize, AspectMode.Stretch, networkSize);
+            captureWidth = _sliceLayout.CaptureWidth;
+            captureHeight = _sliceLayout.CaptureHeight;
+            gpuPreprocessing = true;
+            letterboxGeometry = null; // a plain scale to CaptureWidth x CaptureHeight, no pad at all
+
+            // Nothing logged the resolved geometry before, which made every question about slicing
+            // ("is anything actually landing in slice 1?", "how wide can an object be before it's
+            // clipped in both?") unanswerable from a deployment log. Information rather than Debug
+            // for the same reason the cadence line is: the node's own log level is Information.
+            _logger.LogInformation(
+                "Slice layout for camera {Camera}: source {SourceW}x{SourceH} -> capture {CapW}x{CapH}, " +
+                "{Count} slice(s) of {Net} px squares at origin(s) {Origins} along the {Axis} axis, " +
+                "overlap {Overlap} px ({OverlapPct:P0} of a slice). An object wider than the overlap is " +
+                "clipped in every slice containing it and depends on the seam merge to be reported whole.",
+                request.DisplayName, request.Width, request.Height,
+                _sliceLayout.CaptureWidth, _sliceLayout.CaptureHeight,
+                _sliceLayout.Slices.Count, networkSize,
+                string.Join(", ", _sliceLayout.Origins), _sliceLayout.IsLandscape ? "X" : "Y",
+                _sliceLayout.MinOverlap, _sliceLayout.MinOverlap / (double)networkSize);
         }
         else
         {
             _profile = InferenceProfile.Create(request.Width, request.Height, aspectMode, networkSize);
             captureWidth = _profile.NetworkWidth;
             captureHeight = _profile.NetworkHeight;
-        }
-        _captureWidth = captureWidth;
-        _captureHeight = captureHeight;
 
-        // Pass 4a: with GPU preprocessing, ffmpeg emits packed nv12 (W*H*3/2 bytes) and the engine's
-        // merged head does the colour convert + normalize on the accelerator; otherwise BGRA (W*H*4)
-        // and the engine packs it on the CPU. Forced off for YOLOX — OnnxPreprocessHead is D-FINE-
-        // shaped (/255 RGB); a YOLOX variant is a follow-up (see the model-swap plan's E1b). Also
-        // forced off when HiResSnapshots is on — the merged nv12 head bakes the network input size at
-        // load and can't consume a capture-sized frame (combining the two is a future pass).
-        var gpuPreprocessing = request.GpuPreprocessing
-            && modelFamily == DetectionModelFamily.DFine
-            && !request.HiResSnapshots;
+            // Pass 4a: with GPU preprocessing, ffmpeg emits packed nv12 (W*H*3/2 bytes) and the
+            // engine's merged head does the colour convert + normalize on the accelerator;
+            // otherwise BGRA (W*H*4) and the engine packs it on the CPU. Forced off for YOLOX —
+            // OnnxPreprocessHead's non-sliced head is D-FINE-shaped (/255 RGB); a plain (non-Slice)
+            // YOLOX variant was never needed once slicing shipped its own.
+            gpuPreprocessing = request.GpuPreprocessing && modelFamily == DetectionModelFamily.DFine;
+            letterboxGeometry = aspectMode == AspectMode.Letterbox
+                ? new LetterboxGeometry(_profile.ScaledWidth, _profile.ScaledHeight, _profile.PadLeft, _profile.PadTop)
+                : null;
+        }
+
         _frameIsNv12 = gpuPreprocessing;
         var frameBytes = gpuPreprocessing
-            ? _profile.NetworkWidth * _profile.NetworkHeight * 3 / 2
+            ? captureWidth * captureHeight * 3 / 2
             : captureWidth * captureHeight * 4;
 
         _slot = new LatestFrameSlot(frameBytes);
         _session = new VisionSession(
             new VisionSessionOptions(resolvedFfmpegPath, request.RtspUri, captureWidth, captureHeight,
                 request.HardwareAcceleration,
-                // No pre-pad step for hi-res: the capture buffer is native-aspect, ffmpeg does a
-                // plain scale= and BgraOps.LetterboxResize applies the pad in-process per frame.
-                Letterbox: aspectMode == AspectMode.Letterbox && !request.HiResSnapshots
-                    ? new LetterboxGeometry(_profile.ScaledWidth, _profile.ScaledHeight, _profile.PadLeft, _profile.PadTop)
-                    : null,
+                Letterbox: letterboxGeometry,
                 Nv12Output: gpuPreprocessing,
                 FpsCap: request.DecodeFpsCap),
             _slot, loggerFactory.CreateLogger<VisionSession>());
@@ -319,6 +353,17 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             GpuPreprocessing = gpuPreprocessing,
         };
 
+        // Set here as well as inside the engine (which recomputes the identical string from the
+        // identical inputs via the same helper) purely so EngineBuildGate can probe the cache for
+        // *this* variant before any engine exists. If the two ever disagreed the only casualty is a
+        // wrong warm/cold log line, never a wrong engine. Applied as a second step so BatchSize comes
+        // from the options actually built above rather than a copy of its default.
+        _engineOptions = _engineOptions with
+        {
+            TensorRtCacheKey = OrtSessionFactory.TensorRtCacheKeyFor(
+                resolvedModelPath, _profile, _sliceLayout, _engineOptions.BatchSize, gpuPreprocessing),
+        };
+
         // Per-family tracker tuning, anchored to this camera's own detection confidence — see
         // ByteTrackOptions.ForFamily for why the tracker's gates must follow the configured
         // confidence rather than sit at fixed values above it.
@@ -339,6 +384,11 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     public bool EngineBuildFailed => _engineBuildFailed;
     private volatile bool _engineBuildFailed;
 
+    /// <summary>What to call this camera in a log line — see VisionStartCameraRequest.DisplayName.
+    /// Exposed so CameraPipelineManager can name a camera it is disposing, where only the id is in
+    /// hand (VisionStopCameraRequest carries nothing else).</summary>
+    public string DisplayName => _request.DisplayName;
+
     public IReadOnlyList<VisionLiveDetectionBox> GetLiveSnapshot() => _liveSnapshot;
 
     /// <summary>The capture instant of the frame <see cref="GetLiveSnapshot"/>'s boxes were detected
@@ -356,16 +406,15 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         var inferenceTask = InferenceLoopAsync(ct);
         var checkpointTask = CheckpointLoopAsync(ct);
         var reportFlushTask = ReportFlushLoopAsync(ct);
-        var highResTask = HighResReDetectionLoopAsync(ct);
 
         try
         {
-            await Task.WhenAll(sessionTask, inferenceTask, checkpointTask, reportFlushTask, highResTask);
+            await Task.WhenAll(sessionTask, inferenceTask, checkpointTask, reportFlushTask);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Camera detection pipeline for {CameraId} failed.", _request.CameraId);
+            _logger.LogError(ex, "Camera detection pipeline for {Camera} (id {CameraId}) failed.", _request.DisplayName, _request.CameraId);
         }
     }
 
@@ -379,9 +428,9 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         try
         {
             engine = await Task.Run(() => EngineBuildGate.Build(
-                _request.CameraId, _engineOptions,
+                _request.DisplayName, _engineOptions,
                 () => DetectionEngineFactory.Create(_modelFamily, _dfineWeights, _yoloXSize,
-                    _engineOptions, _profile, _loggerFactory),
+                    _engineOptions, _profile, _loggerFactory, _sliceLayout),
                 _logger, ct), ct);
         }
         catch (OperationCanceledException) { return; }
@@ -391,15 +440,14 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             // log and the pipeline going quiet are the whole signal. Node notices via the watched-
             // camera reconcile (GET /cameras) and re-issues a start on a later tick.
             _logger.LogError(ex,
-                "Failed to build the detection engine for camera {CameraId} — this camera will not be watched. {Detail}",
-                _request.CameraId, Flatten(ex));
+                "Failed to build the detection engine for camera {Camera} (id {CameraId}) — this camera will not be watched. {Detail}",
+                _request.DisplayName, _request.CameraId, Flatten(ex));
             _engineBuildFailed = true;
             await _cts.CancelAsync();
             return;
         }
 
         _engine = engine;
-        _engineReady.TrySetResult();
 
         // One buffer for the whole loop rather than a fresh array per frame. At the detection frame
         // size this is a Large Object Heap allocation every time (640x640 BGRA is 1.56 MB), and on a
@@ -418,17 +466,23 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             List<YoloDotNet.Models.ObjectDetection> detections;
             try
             {
-                // Pass F: in hi-res mode `frame` is the (larger) capture buffer — downscale a copy
-                // into the reused network scratch for the engine, which still only sees the network
-                // size. TrySubFrameSnapshot below still gets the full-resolution `frame`.
-                var inferenceFrame = _networkScratch is null
-                    ? frame
-                    : BgraOps.LetterboxResize(frame, _captureWidth, _captureHeight, _profile, _networkScratch);
-                detections = engine.Detect(inferenceFrame, _request.Confidence, _request.Iou);
+                detections = _sliceLayout is { } layout
+                    ? MergeSliceDetections(layout, ((ISlicedDetectionEngine)engine).DetectSliced(frame, _request.Confidence))
+                    : engine.Detect(frame, _request.Confidence, _request.Iou);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Inference failed on one frame — skipping it.");
+                // See _cadenceInferenceFailures' own comment: the first failure logs in full, the
+                // rest are counted onto the cadence line so a permanently broken engine doesn't
+                // drown the log it would be diagnosed from.
+                _cadenceInferenceFailures++;
+                if (!_loggedInferenceFailure)
+                {
+                    _loggedInferenceFailure = true;
+                    _logger.LogWarning(ex,
+                        "Inference failed on one frame — skipping it. Further failures on this camera are counted " +
+                        "on the detection cadence line rather than logged individually.");
+                }
                 continue;
             }
 
@@ -454,23 +508,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             var activeTrackIds = tracked.Where(d => d.Id.HasValue).Select(d => d.Id!.Value).ToHashSet();
             _movement.Prune(activeTrackIds);
             _labelArbiter.Prune(activeTrackIds);
-            _triggeredHighResTrackIds.RemoveWhere(id => !activeTrackIds.Contains(id));
             _snapshottedTrackIds.RemoveWhere(id => !activeTrackIds.Contains(id));
-
-            // Checkpoint 3d: apply any high-res re-detection results that finished since the last
-            // frame — see _pendingHighResResults' own doc comment for why this has to happen here
-            // (the single inference-loop thread) rather than from ProcessHighResTriggerAsync's own
-            // task. A track that's already gone by the time its result comes back means the object
-            // moved on/disappeared before this could be applied — discarded rather than risking it
-            // winning a since-started, unrelated span for the same label.
-            while (_pendingHighResResults.TryDequeue(out var hr))
-            {
-                if (!activeTrackIds.Contains(hr.TrackId)) continue;
-                var normalizedArea = Math.Clamp(hr.WNorm * hr.HNorm, 0.0, 1.0);
-                var hrFrame = new BestFrame(hr.AtUtc, hr.XNorm, hr.YNorm, hr.WNorm, hr.HNorm, hr.Confidence);
-                _bestFrames.Observe(hr.Label, hrFrame, normalizedArea, hr.Confidence);
-                _authoritativeBestByLabel[hr.Label] = hrFrame;
-            }
 
             var seenLabels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var liveBoxes = new List<VisionLiveDetectionBox>(tracked.Count);
@@ -479,6 +517,10 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             // all of them at once.
             var movingThisFrame = new List<(string Label, YoloDotNet.Models.ObjectDetection Detection)>();
             var newMovingTrack = false;
+            // Progressive best snapshot: set when any already-snapshotted track's label is clearly
+            // better this frame than whichever crop is currently staged for it — see
+            // _snapshotScoreByLabel's own doc comment.
+            var betterSnapshotAvailable = false;
 
             foreach (var detection in tracked)
             {
@@ -495,13 +537,14 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
                 var category = CocoCategoryMap.Resolve(label);
                 seenLabels.Add(label);
 
-                // _profile.SourceWidth/SourceHeight, not frame.Width/frame.Height — as of pass 1,
-                // detection.BoundingBox is reported in the profile's own source-pixel space (see
-                // DFineDecoder.Decode's own doc comment), which only equals the captured frame's
-                // dimensions when AspectMode is Stretch. Normalizing against the wrong one would
-                // silently misplace every box on a Letterbox camera.
+                // _sourceWidth/_sourceHeight (this camera's own real dims), not frame.Width/Height —
+                // as of pass 1, detection.BoundingBox is reported in that same source-pixel space
+                // (see DFineDecoder.Decode's own doc comment) for Letterbox/Stretch, and pass 4's
+                // MergeSliceDetections below already remaps every slice's own local box into it
+                // before the tracker (and therefore this loop) ever sees it. Normalizing against the
+                // wrong dimensions would silently misplace every box on a non-Stretch camera.
                 var observation = _movement.Observe(trackId, detection.BoundingBox, detection.Confidence,
-                    _profile.SourceWidth, _profile.SourceHeight, now);
+                    _sourceWidth, _sourceHeight, now);
 
                 // Idle tracks never open/extend a span unless ReportIdleDetections is on — decision
                 // 7's "not interested in static objects" default. A Moving track always does.
@@ -515,23 +558,30 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
                 // detection is skipped entirely, not just deprioritized.
                 if (motionPresent)
                 {
-                    UpdateBestFrameForLabel(label, detection, _profile.SourceWidth, _profile.SourceHeight, now);
+                    UpdateBestFrameForLabel(label, detection, _sourceWidth, _sourceHeight, now);
 
                     movingThisFrame.Add((label, detection));
-                    // Pass G: a track we've never snapshotted starting to move is what triggers a
-                    // fresh Sub-frame snapshot after this loop (once-only per track, same as below).
-                    if (_snapshottedTrackIds.Add(trackId)) newMovingTrack = true;
+                    // Pass G: a track we've never snapshotted starting to move is what triggers this
+                    // frame's first Sub-frame snapshot after this loop.
+                    var isNewTrack = _snapshottedTrackIds.Add(trackId);
+                    if (isNewTrack) newMovingTrack = true;
 
-                    // Pass 3b: one high-res Main-stream re-detection per track, fired the first frame
-                    // it starts contributing motion — HashSet.Add returns false for a track already
-                    // triggered, so this is naturally once-only without a separate lookup.
-                    if (_request.EnableHighResReDetection && _triggeredHighResTrackIds.Add(trackId))
+                    // Progressive best snapshot: an already-snapshotted track can still trigger a
+                    // fresh crop if this frame's view of its label is clearly better than whichever
+                    // one is currently staged (see _snapshotScoreByLabel's own doc comment). Skipped
+                    // for a brand-new track — that one already triggers unconditionally above, and
+                    // has nothing staged yet to compare against.
+                    if (!isNewTrack)
                     {
-                        _pendingHighResTriggers.Enqueue(new HighResTrigger(trackId, label, now,
-                            detection.BoundingBox.Left / (double)_profile.SourceWidth,
-                            detection.BoundingBox.Top / (double)_profile.SourceHeight,
-                            detection.BoundingBox.Width / (double)_profile.SourceWidth,
-                            detection.BoundingBox.Height / (double)_profile.SourceHeight));
+                        var normalizedArea = Math.Clamp(
+                            (detection.BoundingBox.Width / (double)_sourceWidth) *
+                            (detection.BoundingBox.Height / (double)_sourceHeight), 0.0, 1.0);
+                        var score = MovementClassifier.Score(detection.Confidence, normalizedArea);
+                        if (!_snapshotScoreByLabel.TryGetValue(label, out var retained)
+                            || score > retained * (1 + SnapshotImprovementMargin))
+                        {
+                            betterSnapshotAvailable = true;
+                        }
                     }
                 }
 
@@ -543,10 +593,10 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
 
                 liveBoxes.Add(new VisionLiveDetectionBox(
                     trackId, rawCategory, rawLabel, observation.State.ToString(),
-                    detection.BoundingBox.Left / (double)_profile.SourceWidth,
-                    detection.BoundingBox.Top / (double)_profile.SourceHeight,
-                    detection.BoundingBox.Width / (double)_profile.SourceWidth,
-                    detection.BoundingBox.Height / (double)_profile.SourceHeight,
+                    detection.BoundingBox.Left / (double)_sourceWidth,
+                    detection.BoundingBox.Top / (double)_sourceHeight,
+                    detection.BoundingBox.Width / (double)_sourceWidth,
+                    detection.BoundingBox.Height / (double)_sourceHeight,
                     detection.Confidence));
             }
 
@@ -565,14 +615,100 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             _liveSnapshot = liveBoxes;
             Interlocked.Exchange(ref _liveSnapshotTicksUtc, now.Ticks);
 
-            // Pass G: a new track started moving this frame — snapshot it (and everything else
-            // moving) straight from this exact frame, once the per-camera cadence gate allows.
-            if (newMovingTrack && now - _lastSubSnapshotUtc >= SubSnapshotMinGap && movingThisFrame.Count > 0)
+            // Pass G / progressive best snapshot: a new track started moving, or an existing one now
+            // has a clearly better view of its label than what's staged — snapshot everything moving
+            // straight from this exact frame, once the per-camera cadence gate allows.
+            if ((newMovingTrack || betterSnapshotAvailable) && now - _lastSubSnapshotUtc >= SubSnapshotMinGap && movingThisFrame.Count > 0)
             {
                 _lastSubSnapshotUtc = now;
                 TrySubFrameSnapshot(frame, now, movingThisFrame);
             }
         }
+    }
+
+    // Local-pixel coordinates within this margin of a slice's own edge, along the axis
+    // SliceLayout.Slices overlap on, count as "the model's own view of this object was itself cut
+    // off by the tile boundary" — see SliceMerge.Candidate.TouchesSliceEdge's own doc comment. A
+    // couple of pixels of tolerance for rounding, not zero: DFineDecoder/YoloXDecoder both round to
+    // the nearest integer pixel when clamping a box to the network size.
+    private const int SliceEdgeMarginPx = 2;
+
+    /// <summary>Detection/hardware-acceleration overhaul, pass 4: maps every slice's own local-pixel
+    /// detections into this camera's global source-pixel space (<see cref="SliceLayout.MapSliceBoxToSource"/>,
+    /// then <see cref="_sourceWidth"/>/<see cref="_sourceHeight"/>) and merges the pooled result with
+    /// <see cref="SliceMerge"/>, so the tracker below sees exactly the same shape it always has —
+    /// one flat <c>List&lt;ObjectDetection&gt;</c> in this camera's own real pixel space — regardless
+    /// of how many slices actually produced it.</summary>
+    private List<YoloDotNet.Models.ObjectDetection> MergeSliceDetections(SliceLayout layout, List<List<YoloDotNet.Models.ObjectDetection>> perSlice)
+    {
+        _cadenceSliceDetections ??= new int[perSlice.Count];
+
+        var candidates = new List<SliceMerge.Candidate>();
+        for (var i = 0; i < perSlice.Count; i++)
+        {
+            if (i < _cadenceSliceDetections.Length) _cadenceSliceDetections[i] += perSlice[i].Count;
+
+            foreach (var d in perSlice[i])
+            {
+                var box = d.BoundingBox; // local pixel space, 0..NetworkSize (this slice's own square)
+                var touchesEdge = layout.IsLandscape
+                    ? box.Left <= SliceEdgeMarginPx || box.Right >= layout.NetworkSize - SliceEdgeMarginPx
+                    : box.Top <= SliceEdgeMarginPx || box.Bottom >= layout.NetworkSize - SliceEdgeMarginPx;
+
+                var (nx0, ny0, nx1, ny1) = layout.MapSliceBoxToSource(i,
+                    box.Left / (double)layout.NetworkSize, box.Top / (double)layout.NetworkSize,
+                    box.Right / (double)layout.NetworkSize, box.Bottom / (double)layout.NetworkSize);
+
+                var left = (int)Math.Round(Math.Clamp(nx0 * _sourceWidth, 0, _sourceWidth));
+                var top = (int)Math.Round(Math.Clamp(ny0 * _sourceHeight, 0, _sourceHeight));
+                var right = (int)Math.Round(Math.Clamp(nx1 * _sourceWidth, 0, _sourceWidth));
+                var bottom = (int)Math.Round(Math.Clamp(ny1 * _sourceHeight, 0, _sourceHeight));
+                if (right <= left || bottom <= top) continue; // degenerate — nothing to report
+
+                candidates.Add(new SliceMerge.Candidate(new SKRectI(left, top, right, bottom),
+                    d.Confidence, d.Label?.Name ?? "object", touchesEdge));
+            }
+        }
+
+        var merged = SliceMerge.Merge(candidates, out var mergeStats);
+        _cadenceIouAbsorbed += mergeStats.IouAbsorbed;
+        _cadenceSeamAbsorbed += mergeStats.SeamAbsorbed;
+
+        var results = new List<YoloDotNet.Models.ObjectDetection>(merged.Count);
+        foreach (var m in merged)
+        {
+            if (SpansMoreThanOneSlice(layout, m.Box)) _cadenceSpanningMerges++;
+
+            results.Add(new YoloDotNet.Models.ObjectDetection
+            {
+                Label = new YoloDotNet.Models.LabelModel { Index = 0, Name = m.Label },
+                Confidence = m.Confidence,
+                BoundingBox = m.Box,
+                Tail = [],
+            });
+        }
+        return results;
+    }
+
+    /// <summary>True when <paramref name="box"/> (this camera's own source-pixel space, post-merge)
+    /// is too wide along the slicing axis to fit inside any single slice — so reporting it whole
+    /// required at least two slices' detections to be reunited. Counting these is the direct answer
+    /// to "does anything crossing a seam ever get reported?", which no existing counter could give:
+    /// a spanning object that never merges simply doesn't appear anywhere, and absence is not
+    /// distinguishable from the model not seeing it.</summary>
+    private bool SpansMoreThanOneSlice(SliceLayout layout, SKRectI box)
+    {
+        // Source pixels -> capture pixels along the slicing axis only; the short axis is a whole
+        // slice edge by construction and can never be the reason something spans.
+        var (lo, hi) = layout.IsLandscape
+            ? (box.Left / (double)_sourceWidth * layout.CaptureWidth, box.Right / (double)_sourceWidth * layout.CaptureWidth)
+            : (box.Top / (double)_sourceHeight * layout.CaptureHeight, box.Bottom / (double)_sourceHeight * layout.CaptureHeight);
+
+        foreach (var origin in layout.Origins)
+        {
+            if (lo >= origin && hi <= origin + layout.NetworkSize) return false;
+        }
+        return true;
     }
 
     /// <summary>Once every <see cref="CadenceLogInterval"/>, logs what this camera's pipeline is
@@ -623,36 +759,60 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             ? "none"
             : string.Join(", ", live.Take(10).Select(b => $"{b.Label}/{b.MovementState}/{b.Confidence:F2}"));
 
+        // Slice mode only — see _cadenceSliceDetections' own comment. Appended to the existing line
+        // rather than logged separately so one window's numbers stay together in the log.
+        var sliceSummary = string.Empty;
+        if (_sliceLayout is not null && _cadenceSliceDetections is { } perSlice)
+        {
+            sliceSummary =
+                $" Slices: raw detection(s) per slice [{string.Join(", ", perSlice)}], merged {_cadenceIouAbsorbed} by " +
+                $"overlap and {_cadenceSeamAbsorbed} across a seam, {_cadenceSpanningMerges} reported box(es) too wide " +
+                $"for any one slice.";
+            Array.Clear(perSlice);
+            _cadenceIouAbsorbed = 0;
+            _cadenceSeamAbsorbed = 0;
+            _cadenceSpanningMerges = 0;
+        }
+
+        var failures = _cadenceInferenceFailures;
+        _cadenceInferenceFailures = 0;
+        var failureSummary = failures == 0
+            ? string.Empty
+            : $" {failures} frame(s) failed inference in this window (first one logged in full above).";
+
         _logger.LogInformation(
-            "Camera {CameraId} detection cadence over {Seconds:F0}s: capture {CaptureFps:F1} fps, " +
+            "Camera {Camera} detection cadence over {Seconds:F0}s: capture {CaptureFps:F1} fps, " +
             "inference {InferenceFps:F1} fps, {Dropped} frame(s) dropped ({DropPercent:F0}%), " +
             "last inference {InferenceMs:F1} ms. Peak {PeakDetections} detection(s)/frame -> " +
             "{PeakTracked} tracked, best raw score {BestScore:F2} (tracker needs {NewTrackThreshold:F2} " +
             "to start a track). Live boxes now: {LiveBoxes}. Process-wide over the same window: " +
-            "{Gen2} gen2 collection(s), {AllocatedMbPerSec:F0} MB/s allocated.",
-            _request.CameraId, seconds, deltaPublished / seconds, deltaConsumed / seconds,
+            "{Gen2} gen2 collection(s), {AllocatedMbPerSec:F0} MB/s allocated.{SliceSummary}{FailureSummary}",
+            _request.DisplayName, seconds, deltaPublished / seconds, deltaConsumed / seconds,
             deltaPublished - deltaConsumed,
             deltaPublished == 0 ? 0 : (deltaPublished - deltaConsumed) * 100.0 / deltaPublished,
             _engine?.LastInferenceMilliseconds ?? 0,
             peakDetections, peakTracked, bestScore, _trackerNewTrackThreshold, liveSummary,
-            deltaGen2, deltaAllocated / seconds / (1024.0 * 1024.0));
+            deltaGen2, deltaAllocated / seconds / (1024.0 * 1024.0), sliceSummary, failureSummary);
     }
 
     /// <summary>Pass G: crops one JPEG from the frame the model just ran on, covering the union of
-    /// every currently-Moving box, and makes it the authoritative snapshot for each of those labels'
-    /// spans. The box came out of these exact pixels, so — unlike a later timestamp lookup into
-    /// recorded footage — the object cannot have moved off the crop. ~150-300 px at the network
-    /// buffer size; Pass F (<c>Detection.HiResSnapshots</c>) routes through
-    /// <see cref="HiResSubFrameSnapshot"/> to crop from a larger capture buffer instead.</summary>
+    /// every currently-Moving box, and becomes the authoritative snapshot for each of those labels'
+    /// spans whose view in it is at least as good as whichever one is already staged (progressive
+    /// best snapshot — see _snapshotScoreByLabel's own doc comment). The box came out of these exact
+    /// pixels, so — unlike a later timestamp lookup into recorded footage — the object cannot have
+    /// moved off the crop. ~150-300 px at the network buffer size.</summary>
     private void TrySubFrameSnapshot(byte[] frame, DateTime nowUtc, List<(string Label, YoloDotNet.Models.ObjectDetection Detection)> moving)
     {
         try
         {
-            // Pass F: `frame` is the (larger) capture buffer and the crop works in capture-pixel
-            // space, with no letterbox pad to route around.
-            if (_networkScratch is not null)
+            // Slice mode's frame is _sliceLayout's own non-square CaptureWidth x CaptureHeight
+            // buffer, not this method's assumed square NetworkWidth x NetworkHeight one, and its
+            // boxes (post-merge) are already in _sourceWidth x _sourceHeight space rather than the
+            // network-buffer-pixel space _profile.NormalizedSourceToNetworkPixels below undoes into
+            // — genuinely different geometry, not just a parameter swap, hence its own method.
+            if (_sliceLayout is { } layout)
             {
-                HiResSubFrameSnapshot(frame, nowUtc, moving);
+                TrySliceSnapshot(layout, frame, nowUtc, moving);
                 return;
             }
 
@@ -704,13 +864,23 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
 
             _ = PostEagerCropAsync(nowUtc, jpeg);
 
-            // Make this exact frame authoritative for every span it covers, so the span's report
-            // cites nowUtc and the /snapshot-image bestFrameTicks lookup finds the file we just
-            // posted (same mechanism the high-res path uses). Box stored normalized 0-1 in source
-            // space, matching every other BestFrame.
+            // Make this exact frame authoritative for every label it covers whose view here is at
+            // least as good as whichever one is already staged, so the span's report cites nowUtc
+            // and the /snapshot-image bestFrameTicks lookup finds the file we just posted. A crop
+            // triggered because ONE label improved still covers every other currently-moving label
+            // in the same union image (TrySubFrameSnapshot only ever posts one crop per trigger) —
+            // a label that didn't itself improve just keeps its own earlier, better entry pointing
+            // at an earlier file; nothing is lost, that file just goes unpromoted. Box stored
+            // normalized 0-1 in source space, matching every other BestFrame.
             foreach (var (label, det) in moving)
             {
                 var b = det.BoundingBox;
+                var normalizedArea = Math.Clamp(
+                    (b.Width / (double)_profile.SourceWidth) * (b.Height / (double)_profile.SourceHeight), 0.0, 1.0);
+                var score = MovementClassifier.Score(det.Confidence, normalizedArea);
+                if (_snapshotScoreByLabel.TryGetValue(label, out var retained) && score <= retained) continue;
+
+                _snapshotScoreByLabel[label] = score;
                 _authoritativeBestByLabel[label] = new BestFrame(nowUtc,
                     b.Left / (double)_profile.SourceWidth, b.Top / (double)_profile.SourceHeight,
                     b.Width / (double)_profile.SourceWidth, b.Height / (double)_profile.SourceHeight,
@@ -719,29 +889,33 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Sub-frame snapshot failed for camera {CameraId} — that span falls back to the segment-seek crop.", _request.CameraId);
+            _logger.LogDebug(ex, "Sub-frame snapshot failed for camera {Camera} — that span falls back to the segment-seek crop.", _request.DisplayName);
         }
     }
 
-    /// <summary>Intersects a rect with <paramref name="bounds"/> — the codebase hand-rolls rect math
-    /// (see Nms.IoU) rather than depend on a particular SkiaSharp helper surface.</summary>
-    private static SKRectI ClampTo(SKRectI r, SKRectI bounds) => new(
-        Math.Max(r.Left, bounds.Left), Math.Max(r.Top, bounds.Top),
-        Math.Min(r.Right, bounds.Right), Math.Min(r.Bottom, bounds.Bottom));
-
-    /// <summary>Pass F: the hi-res <see cref="TrySubFrameSnapshot"/> path. <paramref name="frame"/> is
-    /// the capture buffer at (up to) native Sub-stream resolution; there is no letterbox pad in it,
-    /// and the detection boxes are already in <c>_profile</c> source space, which for a hi-res
-    /// pipeline <i>is</i> capture-pixel space — so this needs neither the network-buffer remap nor a
-    /// content-rect that excludes pad bars.</summary>
-    private void HiResSubFrameSnapshot(byte[] frame, DateTime nowUtc, List<(string Label, YoloDotNet.Models.ObjectDetection Detection)> moving)
+    /// <summary>Detection/hardware-acceleration overhaul, pass 4: <see cref="TrySubFrameSnapshot"/>'s
+    /// own logic, adapted for Slice mode's different geometry — <paramref name="frame"/> is
+    /// <paramref name="layout"/>'s own non-square CaptureWidth×CaptureHeight nv12 buffer (always
+    /// nv12 — Slice mode has no BGRA path at all, see this class's own doc comment), and
+    /// <paramref name="moving"/>'s boxes are already in this camera's <see cref="_sourceWidth"/>×
+    /// <see cref="_sourceHeight"/> space (post-<see cref="MergeSliceDetections"/>), not a
+    /// letterbox/stretch network buffer's — so the crop rescales uniformly from source-pixel space
+    /// into capture-pixel space (<see cref="SliceLayout"/>'s own uniform, unpadded scale) instead of
+    /// undoing a letterbox pad.</summary>
+    private void TrySliceSnapshot(SliceLayout layout, byte[] frame, DateTime nowUtc, List<(string Label, YoloDotNet.Models.ObjectDetection Detection)> moving)
     {
-        var content = new SKRectI(0, 0, _captureWidth, _captureHeight);
+        var content = new SKRectI(0, 0, layout.CaptureWidth, layout.CaptureHeight);
+        var scaleX = layout.CaptureWidth / (double)_sourceWidth;
+        var scaleY = layout.CaptureHeight / (double)_sourceHeight;
+
+        SKRectI ToCapturePixels(SKRectI b) => new(
+            (int)Math.Round(b.Left * scaleX), (int)Math.Round(b.Top * scaleY),
+            (int)Math.Round(b.Right * scaleX), (int)Math.Round(b.Bottom * scaleY));
 
         SKRectI? union = null;
         foreach (var (_, det) in moving)
         {
-            var px = det.BoundingBox;
+            var px = ToCapturePixels(det.BoundingBox);
             union = union is { } u
                 ? new SKRectI(Math.Min(u.Left, px.Left), Math.Min(u.Top, px.Top),
                     Math.Max(u.Right, px.Right), Math.Max(u.Bottom, px.Bottom))
@@ -750,20 +924,24 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         if (union is not { } unionRect || unionRect.Width < 2 || unionRect.Height < 2) return;
 
         var (mcx, mcy, mcw, mch) = SnapshotImageCapture.ComputeCropRect(
-            unionRect.Left / (double)_captureWidth, unionRect.Top / (double)_captureHeight,
-            unionRect.Width / (double)_captureWidth, unionRect.Height / (double)_captureHeight,
-            _captureWidth, _captureHeight, marginFraction: 0.12);
+            unionRect.Left / (double)layout.CaptureWidth, unionRect.Top / (double)layout.CaptureHeight,
+            unionRect.Width / (double)layout.CaptureWidth, unionRect.Height / (double)layout.CaptureHeight,
+            layout.CaptureWidth, layout.CaptureHeight, marginFraction: 0.12);
         var crop = ClampTo(new SKRectI(mcx, mcy, mcx + mcw, mcy + mch), content);
 
-        // Same guard as the network-space path: a person at one edge and a car at the other
-        // shouldn't degrade into a near-whole-frame crop.
+        // Same guard as TrySubFrameSnapshot: a person at one edge and a car at the other shouldn't
+        // degrade into a nearly whole-frame crop — fall back to the single highest-confidence box.
         if (crop.Width > content.Width * 0.8 || crop.Height > content.Height * 0.8)
         {
-            crop = ClampTo(moving.OrderByDescending(m => m.Detection.Confidence).First().Detection.BoundingBox, content);
+            crop = ClampTo(ToCapturePixels(moving.OrderByDescending(m => m.Detection.Confidence).First().Detection.BoundingBox), content);
             if (crop.Width < 2 || crop.Height < 2) return;
         }
 
-        var jpeg = BgraOps.CropRectToJpeg(frame, _captureWidth, _captureHeight, crop, EagerCropJpegQuality);
+        // Always nv12 — Slice mode has no BGRA path (mandatory GPU preprocessing, see this class's
+        // own doc comment). CropToJpeg applies its own margin + frame clamp, so it gets the raw
+        // union rather than the already-margined crop above (same convention TrySubFrameSnapshot's
+        // own nv12 branch uses).
+        var jpeg = Nv12Ops.CropToJpeg(frame, layout.CaptureWidth, layout.CaptureHeight, ClampTo(unionRect, content), EagerCropJpegQuality);
         if (jpeg is null) return;
 
         _ = PostEagerCropAsync(nowUtc, jpeg);
@@ -771,33 +949,24 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         foreach (var (label, det) in moving)
         {
             var b = det.BoundingBox;
+            var normalizedArea = Math.Clamp(
+                (b.Width / (double)_sourceWidth) * (b.Height / (double)_sourceHeight), 0.0, 1.0);
+            var score = MovementClassifier.Score(det.Confidence, normalizedArea);
+            if (_snapshotScoreByLabel.TryGetValue(label, out var retained) && score <= retained) continue;
+
+            _snapshotScoreByLabel[label] = score;
             _authoritativeBestByLabel[label] = new BestFrame(nowUtc,
-                b.Left / (double)_profile.SourceWidth, b.Top / (double)_profile.SourceHeight,
-                b.Width / (double)_profile.SourceWidth, b.Height / (double)_profile.SourceHeight,
+                b.Left / (double)_sourceWidth, b.Top / (double)_sourceHeight,
+                b.Width / (double)_sourceWidth, b.Height / (double)_sourceHeight,
                 det.Confidence);
         }
     }
 
-    /// <summary>Pass F: the capture-buffer dimensions for a hi-res pipeline — the Sub stream's own
-    /// aspect ratio with its long edge clamped to <c>[networkSize, SnapshotImageCapture.MaxDimension]</c>
-    /// (never below the network size, so the inference downscale is only ever a downscale; never above
-    /// the eager-crop JPEG cap, past which resolution is thrown away anyway) and both edges
-    /// even-aligned (4:2:0 decode targets, same convention as <c>InferenceProfile.CreateLetterbox</c>).
-    /// A Sub stream already at or below the network size comes back at the network size — Pass F is
-    /// then a no-op beyond routing the pad step in-process.</summary>
-    internal static (int Width, int Height) ComputeCaptureDimensions(int sourceWidth, int sourceHeight, int networkSize)
-    {
-        var sourceLong = Math.Max(sourceWidth, sourceHeight);
-        var targetLong = Math.Clamp(sourceLong, networkSize, SnapshotImageCapture.MaxDimension);
-
-        var scale = targetLong / (double)sourceLong;
-        var w = (int)Math.Round(sourceWidth * scale);
-        var h = (int)Math.Round(sourceHeight * scale);
-
-        w = Math.Max(2, w - w % 2);
-        h = Math.Max(2, h - h % 2);
-        return (w, h);
-    }
+    /// <summary>Intersects a rect with <paramref name="bounds"/> — the codebase hand-rolls rect math
+    /// rather than depend on a particular SkiaSharp helper surface.</summary>
+    private static SKRectI ClampTo(SKRectI r, SKRectI bounds) => new(
+        Math.Max(r.Left, bounds.Left), Math.Max(r.Top, bounds.Top),
+        Math.Min(r.Right, bounds.Right), Math.Min(r.Bottom, bounds.Bottom));
 
     private void UpdateBestFrameForLabel(string label, YoloDotNet.Models.ObjectDetection detection, int frameWidth, int frameHeight, DateTime nowUtc)
     {
@@ -837,11 +1006,11 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     /// checkpoint doesn't throw away bookkeeping the span itself is still going to need.</summary>
     private void EnqueueReport(MotionSpanResult span, string label, string category, bool spanClosed = true)
     {
-        // A1: a high-res re-detection box, if this span got one, is authoritative for the snapshot —
-        // it's normalized against the Main stream (what the crop is actually taken from) and has a
-        // matching eager crop staged on the node. Otherwise fall back to the continuous pass's own
-        // best frame: prefer the normal-sized candidate; an oversized one (see LabelBestFrameTracker's
-        // own doc comment) only stands in when nothing normal-sized was ever seen for this span.
+        // A1: a pass G eager crop's own box, if this span got one, is authoritative for the
+        // snapshot — it has a matching eager crop already staged on the node. Otherwise fall back to
+        // the continuous pass's own best frame: prefer the normal-sized candidate; an oversized one
+        // (see LabelBestFrameTracker's own doc comment) only stands in when nothing normal-sized was
+        // ever seen for this span.
         BestFrame? best = _authoritativeBestByLabel.TryGetValue(label, out var authoritative)
             ? authoritative
             : _bestFrames.GetBest(label);
@@ -857,6 +1026,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         {
             _bestFrames.Reset(label);
             _authoritativeBestByLabel.Remove(label);
+            _snapshotScoreByLabel.Remove(label);
         }
     }
 
@@ -905,246 +1075,9 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _logger.LogWarning(ex, "Failed to report a detection span for camera {CameraId} to Node — will retry.", _request.CameraId);
+                _logger.LogWarning(ex, "Failed to report a detection span for camera {Camera} to Node — will retry.", _request.DisplayName);
                 _pendingReports.Enqueue(item);
             }
-        }
-    }
-
-    /// <summary>Pass 3b: drains high-res re-detection triggers, decoupled from the continuous
-    /// Sub-stream inference loop for the same reason ReportFlushLoopAsync is decoupled from it — a
-    /// Node round trip + ffmpeg decode + batched inference is much heavier than one Sub-stream frame
-    /// tick and must never stall it. Returns immediately (a permanent no-op for this pipeline's
-    /// lifetime) if the feature isn't enabled, this camera's Main stream resolution isn't known yet,
-    /// or the loaded engine doesn't support batched inference at all.</summary>
-    private async Task HighResReDetectionLoopAsync(CancellationToken ct)
-    {
-        if (!_request.EnableHighResReDetection) return;
-
-        if (_request.MainStreamWidth is not { } mainWidth || _request.MainStreamHeight is not { } mainHeight)
-        {
-            _logger.LogWarning(
-                "High-res re-detection is enabled for camera {CameraId} but its Main stream resolution isn't known yet — skipping until the next restart.",
-                _request.CameraId);
-            return;
-        }
-
-        // Wait for InferenceLoopAsync to finish building the engine before type-testing it — this
-        // loop starts concurrently with that build, and testing a null _engine here would silently
-        // disable high-res re-detection for the pipeline's whole lifetime.
-        try { await _engineReady.Task.WaitAsync(ct); }
-        catch (OperationCanceledException) { return; }
-
-        if (_engine is not IBatchDetectionEngine batchEngine)
-        {
-            _logger.LogInformation(
-                "High-res re-detection is enabled for camera {CameraId} but the loaded detection engine doesn't support batched inference — skipping.",
-                _request.CameraId);
-            return;
-        }
-
-        while (!ct.IsCancellationRequested)
-        {
-            if (!_pendingHighResTriggers.TryDequeue(out var trigger))
-            {
-                try { await Task.Delay(TimeSpan.FromMilliseconds(200), ct); }
-                catch (OperationCanceledException) { break; }
-                continue;
-            }
-
-            try
-            {
-                await _highResGate.WaitAsync(ct);
-                try
-                {
-                    // The process-wide gate can hold a trigger for seconds under multi-camera load;
-                    // by the time it's our turn the object may be well outside the box the trigger
-                    // captured on the track's first motion frame. Re-detecting a stale instant wastes
-                    // a decode and risks a wrong-object match, so drop it — the continuous pass keeps
-                    // tracking, and a later frame of this same track can't re-trigger (once per track
-                    // id) but the span still gets its Sub-stream best frame.
-                    if (DateTime.UtcNow - trigger.AtUtc > TimeSpan.FromSeconds(3))
-                    {
-                        _logger.LogDebug("Skipping a stale high-res trigger for camera {CameraId}, track {TrackId} ({Age:0.0}s old).",
-                            _request.CameraId, trigger.TrackId, (DateTime.UtcNow - trigger.AtUtc).TotalSeconds);
-                    }
-                    else
-                    {
-                        await ProcessHighResTriggerAsync(trigger, mainWidth, mainHeight, batchEngine, ct);
-                    }
-                }
-                finally
-                {
-                    _highResGate.Release();
-                }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                _logger.LogWarning(ex, "High-res re-detection failed for camera {CameraId}, track {TrackId}.", _request.CameraId, trigger.TrackId);
-            }
-        }
-    }
-
-    /// <summary>Fetches the Main-stream instant this trigger points at from the node's own ring
-    /// buffer, decodes it once, runs one batched inference call over the whole-frame letterboxed pass
-    /// plus every native-scale tile the trigger's own centroid places, and merges the result with NMS
-    /// — see this pass's own plan for the SAHI-style reasoning. Deliberately stops at logging the
-    /// merged result: wiring it into an eagerly-written snapshot file needs its own file-naming
-    /// design (today's cache keys by a MotionSpan id that doesn't exist yet at this point in the
-    /// pipeline) and is the next checkpoint's job, not this one's.</summary>
-    private async Task ProcessHighResTriggerAsync(HighResTrigger trigger, int mainWidth, int mainHeight,
-        IBatchDetectionEngine batchEngine, CancellationToken ct)
-    {
-        var mainFrameUrl = $"{_request.NodeCallbackBaseUrl.TrimEnd('/')}/internal/main-frame/{_request.CameraId}" +
-            $"?atUtc={Uri.EscapeDataString(trigger.AtUtc.ToString("o"))}";
-
-        HttpResponseMessage response;
-        try
-        {
-            response = await _http.GetAsync(mainFrameUrl, ct);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogWarning(ex, "Could not reach this node's main-frame buffer for camera {CameraId} — not retrying this specific trigger.", _request.CameraId);
-            return;
-        }
-
-        // A 404 (nothing buffered for this instant — the trigger's own instant already aged out of
-        // the ring buffer's short window) is an expected, common outcome, not a failure worth logging.
-        if (!response.IsSuccessStatusCode) return;
-
-        var body = await response.Content.ReadAsByteArrayAsync(ct);
-        if (body.Length < 4) return;
-        var initLength = BitConverter.ToInt32(body, 0);
-        if (initLength < 0 || 4 + initLength > body.Length) return; // malformed — defensive, shouldn't happen
-        var initSegment = body.AsSpan(4, initLength).ToArray();
-        var fragment = body.AsSpan(4 + initLength).ToArray();
-
-        var nativeNv12 = await MainFrameDecoder.DecodeNv12Async(_ffmpegPath, initSegment, fragment, mainWidth, mainHeight, ct, _logger,
-            hardwareAcceleration: _request.HardwareAcceleration);
-        if (nativeNv12 is null) return;
-        // DecodeNv12Async forces even dims; use the same values for every downstream calc.
-        mainWidth &= ~1;
-        mainHeight &= ~1;
-
-        SaveNv12DebugImage(nativeNv12, mainWidth, mainHeight, $"{_request.CameraId}_{trigger.TrackId}_wholeframe-source");
-
-        // The same network size the continuous Sub-stream pipeline's own _profile uses (640).
-        var tileSize = _profile.NetworkWidth;
-        var wholeFrameProfile = InferenceProfile.Create(mainWidth, mainHeight, AspectMode.Letterbox, tileSize);
-        var triggerPoint = new TileLayout.TriggerPoint(trigger.XNorm, trigger.YNorm, trigger.WNorm, trigger.HNorm);
-        var tiles = TileLayout.PlaceTiles([triggerPoint], tileSize, mainWidth, mainHeight);
-
-        var wholeFrameNv12 = Nv12Ops.LetterboxTo(nativeNv12, mainWidth, mainHeight, wholeFrameProfile);
-        var tileNv12s = tiles.Select(t => Nv12Ops.CropTile(nativeNv12, mainWidth, mainHeight, t)).ToList();
-
-        SaveNv12DebugImage(wholeFrameNv12, tileSize, tileSize, $"{_request.CameraId}_{trigger.TrackId}_wholeframe-letterboxed");
-        for (var i = 0; i < tileNv12s.Count; i++)
-            SaveNv12DebugImage(tileNv12s[i], tiles[i].Width, tiles[i].Height, $"{_request.CameraId}_{trigger.TrackId}_tile{i}");
-
-        {
-            var images = new List<(byte[] Nv12, InferenceProfile Profile)> { (wholeFrameNv12, wholeFrameProfile) };
-            for (var t = 0; t < tiles.Count; t++)
-            {
-                // Source == network == tile size, Stretch mode: MapBoxToSource degenerates to an
-                // identity transform, so DFineDecoder.Decode hands back each tile's own boxes already
-                // in that tile's own local pixel space — exactly what MapTileBoxToFrame expects.
-                var tileProfile = InferenceProfile.Create(tiles[t].Width, tiles[t].Height, AspectMode.Stretch, tileSize);
-                images.Add((tileNv12s[t], tileProfile));
-            }
-
-            var batchResults = batchEngine.DetectBatch(images, _request.Confidence);
-
-            var merged = new List<(SKRectI Box, double Confidence, string Label)>();
-            foreach (var d in batchResults[0])
-            {
-                merged.Add((d.BoundingBox, d.Confidence, d.Label?.Name ?? "object"));
-            }
-            for (var t = 0; t < tiles.Count; t++)
-            {
-                foreach (var d in batchResults[t + 1])
-                {
-                    var (fx, fy, fw, fh) = TileLayout.MapTileBoxToFrame(tiles[t], d.BoundingBox.Left, d.BoundingBox.Top, d.BoundingBox.Width, d.BoundingBox.Height);
-                    merged.Add((new SKRectI(fx, fy, fx + fw, fy + fh), d.Confidence, d.Label?.Name ?? "object"));
-                }
-            }
-
-            var final = Nms.Suppress(merged, m => m.Box, m => m.Confidence);
-
-            // Debug, not Information: this fires several times per trigger and there can be thousands
-            // of triggers an hour on a busy camera — it flooded the vision log. Turn the Vision
-            // Service's log level up when a merge bug vs. a genuine detection failure needs telling
-            // apart.
-            if (_logger.IsEnabled(LogLevel.Debug))
-            {
-                foreach (var m in final)
-                {
-                    _logger.LogDebug(
-                        "High-res re-detection, camera {CameraId} track {TrackId}: {Label} ({Confidence:P0}) at ({X},{Y}) {Width}x{Height} in {MainWidth}x{MainHeight} Main-stream pixels ({TileCount} native tile(s) placed).",
-                        _request.CameraId, trigger.TrackId, m.Label, m.Confidence, m.Box.Left, m.Box.Top, m.Box.Width, m.Box.Height, mainWidth, mainHeight, tiles.Count);
-                }
-            }
-
-            // Checkpoint 3d: feed the result back into the label's best-frame competition. Matched by
-            // overlap against the trigger's own (coarse, Sub-stream-derived) box, not by label — the
-            // native-scale pass can genuinely disagree with the arbiter's stabilized label on what the
-            // object *is* (a cat re-detected as car/truck/bird, confirmed live), but that's an accuracy
-            // question for a different label-arbitration pass, not a reason to distrust *where* it is.
-            // Deliberately keeps the trigger's own arbiter-stabilized label rather than the
-            // re-detection's — every other candidate this label competes against downstream already
-            // goes through that same stabilization (see TrackLabelArbiter's own doc comment), so a
-            // one-off native-scale guess shouldn't get a special exemption from it. No match (IoU 0 —
-            // the object moved on, or was never really there) means nothing is queued; today's coarser
-            // Sub-stream candidate stays the best one on record, which is only ever a wash, never a
-            // regression.
-            var triggerBoxPx = new SKRectI(
-                (int)Math.Round(trigger.XNorm * mainWidth), (int)Math.Round(trigger.YNorm * mainHeight),
-                (int)Math.Round((trigger.XNorm + trigger.WNorm) * mainWidth), (int)Math.Round((trigger.YNorm + trigger.HNorm) * mainHeight));
-            if (Nms.FindBestMatch(final, triggerBoxPx, m => m.Box) is { } matched)
-            {
-                _pendingHighResResults.Enqueue(new HighResResult(trigger.TrackId, trigger.Label, trigger.AtUtc,
-                    matched.Box.Left / (double)mainWidth, matched.Box.Top / (double)mainHeight,
-                    matched.Box.Width / (double)mainWidth, matched.Box.Height / (double)mainHeight,
-                    matched.Confidence));
-
-                // A1: crop the snapshot from THIS frame (the exact Main-stream instant) using the
-                // re-detected box — not the stale trigger centroid. The POST is detached so a slow
-                // node round trip can't hold the process-wide gate.
-                var eagerCrop = Nv12Ops.CropToJpeg(nativeNv12, mainWidth, mainHeight, matched.Box, EagerCropJpegQuality);
-                if (eagerCrop is not null)
-                    _ = PostEagerCropAsync(trigger.AtUtc, eagerCrop);
-            }
-        }
-    }
-
-    private const int EagerCropJpegQuality = 88;
-
-    private void SaveNv12DebugImage(byte[] nv12, int w, int h, string fileName)
-    {
-        if (!_request.EnableVisionDebugImages) return;
-        using var bitmap = Nv12Ops.ToDebugBitmap(nv12, w, h);
-        SaveDebugImage(bitmap, fileName);
-    }
-
-    // Diagnostic — see ProcessHighResTriggerAsync's own call sites. Writes into the same shared logs
-    // directory Vision Service's own FileLoggerProvider now uses, under a dedicated subfolder,
-    // best-effort (a failure to write a debug image must never break real detection). Gated by the
-    // node-scoped Detection.EnableVisionDebugImages setting — a no-op unless an admin turns it on.
-    private void SaveDebugImage(SKBitmap bitmap, string fileName)
-    {
-        if (!_request.EnableVisionDebugImages) return;
-        try
-        {
-            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "logs", "vision-debug");
-            Directory.CreateDirectory(dir);
-            using var image = SKImage.FromBitmap(bitmap);
-            using var data = image.Encode(SKEncodedImageFormat.Jpeg, 90);
-            using var stream = File.OpenWrite(Path.Combine(dir, $"{fileName}.jpg"));
-            data.SaveTo(stream);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Could not write debug image {FileName} — harmless (diagnostic-only), but logged at Warning specifically so this failure itself is actually visible.", fileName);
         }
     }
 
@@ -1172,11 +1105,11 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         if (drift <= 0.02) return; // within 2% — the geometry is close enough, nothing to correct
 
         _logger.LogWarning(
-            "Camera {CameraId}: AI detection was set up for a {AssumedWidth}x{AssumedHeight} stream but " +
+            "Camera {Camera} (id {CameraId}): AI detection was set up for a {AssumedWidth}x{AssumedHeight} stream but " +
             "ffmpeg is actually decoding {ActualWidth}x{ActualHeight}. The model is running on a distorted " +
             "frame and snapshot crops will look stretched — set this camera's AI detection orientation to " +
             "{Orientation} (Cameras > Edit, or the deployment default on Admin > Settings > Detection).",
-            _request.CameraId, _request.Width, _request.Height, width, height,
+            _request.DisplayName, _request.CameraId, _request.Width, _request.Height, width, height,
             height > width ? "Portrait" : "Landscape");
     }
 
@@ -1190,10 +1123,9 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogDebug(ex, "Could not ship an eager snapshot crop for camera {CameraId} — that span will fall back to the segment-seek crop.", _request.CameraId);
+            _logger.LogDebug(ex, "Could not ship an eager snapshot crop for camera {Camera} — that span will fall back to the segment-seek crop.", _request.DisplayName);
         }
     }
-
 
     /// <summary>Flattens an exception chain to its messages only — same reasoning as Program's own
     /// Describe: what makes an engine-load failure diagnosable is almost always the innermost message

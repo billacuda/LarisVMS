@@ -7,6 +7,155 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.186.3] - 2026-09-05
+
+### Changed
+
+- **The vision log now identifies a camera by its name rather than its GUID.** Every line was
+  prefixed `Vision[2d970617-cb4f-4866-9ffc-7f3d773def04]` — 36 characters of identifier on lines
+  meant to be read a column at a time — and the detection cadence, slice layout and engine build
+  messages repeated it in the body. They now read `Vision[Driveway]`. The full camera id is still
+  logged once when a pipeline starts, and on every failure, so a line can always be tied back to a
+  camera row. A camera with no name falls back to the first block of its id rather than an empty
+  label. Renaming a camera deliberately does *not* restart its detection pipeline — that would mean
+  a multi-minute TensorRT engine rebuild for a cosmetic change — so the new name reaches the log on
+  that camera's next restart for some other reason.
+
+## [0.186.2] - 2026-09-05
+
+### Fixed
+
+- **On a node with TensorRT enabled, only the first camera switched to the Slice aspect-fitting
+  mode worked; every other one produced no detections at all and failed on every single frame**
+  with `TensorRT EP failed to call setInputShape() for input 'nv12'`. ONNX Runtime keys its
+  compiled-engine cache on a hash built from the model's file name and the *names* of the graph's
+  inputs and nodes — never their shapes, and never initializer values. The slicing preprocessing
+  head is built in memory (so there is no file name) and used one fixed set of node names for every
+  camera, while everything that actually differs between two cameras of different resolutions — the
+  frame input's shape and the per-slice cut coordinates — was invisible to that hash. Two such
+  cameras therefore collided on one cached engine file: the second camera loaded the first camera's
+  engine in under a second and then could not bind its own differently sized frames. Each graph
+  variant is now named for the exact capture size and slice count it was built for, and is given its
+  own explicit engine cache prefix, so every camera gets the engine it actually needs. The same
+  latent collision existed between two non-sliced GPU-preprocessing models of different input sizes
+  and is fixed the same way.
+- A camera's engine build logged "the TensorRT engine cache is warm, so this is a load rather than
+  a compile" whenever the cache directory held any engine at all, which from the second camera
+  onward was always true. A three-minute cold compile was being reported as a warm load. It now
+  probes for an engine belonging to that camera's own graph variant.
+- An inference failure was logged in full, with its stack trace, on every affected frame — ten times
+  a second per camera for a persistent fault, which buried every other line in the vision log. Only
+  the first is logged in full now; the rest are counted on the detection cadence line.
+
+### Added
+
+- The vision log now records a Slice camera's resolved geometry when its pipeline starts: capture
+  buffer size, how many slices, where each one begins, and how much neighbouring slices overlap —
+  which is the widest an object can be and still be seen whole by a single slice.
+- The detection cadence line now reports, for a Slice camera, how many raw detections each
+  individual slice produced, how many were merged as ordinary duplicates versus merged across a
+  slice seam, and how many reported boxes ended up too wide to fit in any one slice. Together these
+  separate "the model never saw the object" from "both halves were seen but never reunited", which
+  previously looked identical from the outside.
+
+### Notes
+
+- Because each camera resolution now correctly gets its own TensorRT engine, the first start after
+  updating compiles one engine per distinct resolution rather than one in total. Engine builds are
+  serialized across cameras, so allow several minutes per distinct resolution on that first start;
+  subsequent starts load from cache in under a second each. Clearing
+  `%ProgramData%\LarisVMS\trt-cache` once after updating is recommended — it holds engines saved
+  under the old ambiguous naming.
+
+## [0.186.1] - 2026-09-05
+
+### Fixed
+
+- Clicking Play on Playback before a camera's stream finished loading no longer left it
+  silently paused. The still-loading tile's own eventual startup checked the autoplay
+  flag captured back when that load began — always false for a fresh page load —
+  instead of the Play/Pause button's current state, so nothing actually started until
+  the user clicked Pause then Play again to notice. It now re-checks live state and
+  starts the stream itself once it finishes loading.
+
+## [0.186.0] - 2026-09-05
+
+### Added
+
+- **A new "Slice" aspect-fitting option for AI detection** (Admin > Settings > Detection, with a
+  per-node override on Admin > Nodes), alongside the existing Letterbox and Stretch. Instead of
+  padding a wide or tall camera into the detector's square input with black bars — and downscaling
+  the whole frame 2-3x in the process — Slice scales the camera's short edge to the model's own
+  input size and cuts the long edge into 2 or more overlapping squares, each run through the
+  detector at full resolution and merged back into one result. Meant to catch small or distant
+  objects a letterboxed camera loses to the padding and downscale.
+- The D-FINE and YOLOX detection engines can now be built directly from an accelerator-side
+  preprocessing head that also performs this slicing, entirely on the GPU (nv12 decode → colour
+  convert → normalize → cut into slices → batch, all inside the ONNX graph) — no CPU round trip to
+  cut or reassemble frames.
+
+### Changed
+
+- Selecting Slice forces GPU frame preprocessing on for that camera, regardless of the
+  Detection.GpuPreprocessing setting's own value — there is no CPU fallback for frame slicing, so
+  a node without a usable GPU cannot run Slice mode (it can still run Letterbox/Stretch).
+
+### Notes
+
+- Slicing multiplies inference work by the slice count — roughly double for a typical 16:9
+  camera. Watch the vision log's cadence line for drop%, and lower Detection.MaxFps if it climbs.
+- Nodes pick this up via auto-update (Node + Vision Service binaries); no `install-node.ps1`
+  re-run.
+
+## [0.185.0] - 2026-09-05
+
+### Changed
+
+- **Internal: the D-FINE and YOLOX detection engines can now run a real batched inference pass —
+  one ONNX Runtime call over multiple images at once instead of one call per image.** Lays the
+  groundwork for the planned frame-slicing feature; nothing turns batching on yet, so every
+  camera still runs exactly one image per pass and there is no behavior or performance change on
+  this release. YOLOX's pinned ONNX export is hardcoded to a batch of 1; it's rewritten in memory
+  at load time to accept a batch dimension only when one is actually requested (verified to
+  produce output bit-identical to running the same images one at a time). D-FINE's own export was
+  already batch-capable and needed no such rewrite.
+
+## [0.184.0] - 2026-09-05
+
+### Changed
+
+- **The AI-detection snapshot for a moving object now keeps upgrading toward the clearest view
+  seen so far, instead of freezing on its first sighting.** The eager Sub-stream crop (pass G)
+  used to fire once per track and stay final for the rest of that span. A later frame now
+  replaces the staged crop whenever its confidence-weighted box score (the same score already
+  used to rank the fallback best-frame candidate) clearly beats whichever one is currently
+  kept, so a distant or blurry first sighting gets replaced once the object passes closer or
+  comes into better light — right up until it stops moving or leaves the scene, at which point
+  the span closes and the next one starts its own fresh contest. No setting to configure.
+
+## [0.183.0] - 2026-09-05
+
+### Removed
+
+- **High-resolution re-detection (`Detection.EnableHighResReDetection`) and high-resolution
+  snapshots (`Detection.HiResSnapshots`) — neither worked reliably, and the former was the
+  largest CPU cost measured on a busy node.** High-res re-detection re-decoded a full
+  Main-stream keyframe from the node's ring buffer per trigger, tiled it, and ran a
+  loop-based (not genuinely batched) inference pass — confirmed live as the cause of a node
+  running at ~180% Vision Service CPU, dropping to ~20-25% with the feature off. Both
+  settings, their Admin > Settings > Detection controls, the node's Main-stream ring buffer,
+  and the `/internal/main-frame` loopback route are removed.
+- **`Detection.EnableVisionDebugImages` (the "Save vision debug images" checkbox and "Purge
+  debug images" button) removed with them** — its only purpose was diagnosing high-res
+  re-detection's snapshot alignment, so it had nothing left to gate.
+
+### Notes
+
+- The per-track eager Sub-stream snapshot crop (pass G) is unaffected and remains the source
+  of every AI-detection snapshot.
+- Nodes pick this up via auto-update (Node + Vision Service binaries); no `install-node.ps1`
+  re-run.
+
 ## [0.182.0] - 2026-09-04
 
 ### Fixed

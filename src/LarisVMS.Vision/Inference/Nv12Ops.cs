@@ -4,22 +4,21 @@ using LarisVMS.Media;
 namespace LarisVMS.Vision.Inference;
 
 /// <summary>
-/// Pass 4b: plain byte-level operations on packed nv12 frames (Y plane <c>w*h</c>, then interleaved
-/// UV <c>w*h/2</c>). The high-res re-detection path decodes one Main-stream frame to nv12
-/// (<see cref="Capture.MainFrameDecoder"/>) and everything after is either a byte copy here or work
-/// on the accelerator via the ONNX preprocessing head — no SkiaSharp scaling of a full frame, no
+/// Plain byte-level operations on packed nv12 frames (Y plane <c>w*h</c>, then interleaved
+/// UV <c>w*h/2</c>) — a byte copy or a bilinear resize, no SkiaSharp scaling of a full frame, no
 /// CPU per-pixel normalize loop.
 /// </summary>
 public static class Nv12Ops
 {
-    /// <summary>Carves an even-aligned rectangle out of a source nv12 frame into its own packed nv12
-    /// buffer (<c>rect.Width*rect.Height*3/2</c> bytes). Pure byte copies. The rect's x/y/w/h are
-    /// even — <see cref="TileLayout.PlaceTiles"/> only ever produces even values (it clamps to the
-    /// 640 network size and the frame's own even dimensions).</summary>
-    public static byte[] CropTile(byte[] src, int srcW, int srcH, TileLayout.Tile rect)
+    /// <summary>Carves an even-aligned <paramref name="x"/>,<paramref name="y"/>,
+    /// <paramref name="w"/>,<paramref name="h"/> rectangle out of a source nv12 frame into its own
+    /// packed nv12 buffer (<c>w*h*3/2</c> bytes). Pure byte copies. Currently unused — its caller
+    /// (high-res re-detection's tile placement) was removed; kept for the planned slicing overhaul,
+    /// whose fixed-grid tiles will also always be even (clamped to the 640 network size and the
+    /// frame's own even dimensions).</summary>
+    public static byte[] CropTile(byte[] src, int srcW, int srcH, int x, int y, int w, int h)
     {
         ArgumentNullException.ThrowIfNull(src);
-        var (x, y, w, h) = (rect.X, rect.Y, rect.Width, rect.Height);
         var dst = new byte[w * h * 3 / 2];
 
         // Y

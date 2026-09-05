@@ -15,15 +15,11 @@ public readonly record struct LetterboxGeometry(int ScaledWidth, int ScaledHeigh
 public sealed record VisionSessionOptions(
     string FfmpegPath,
     string RtspUri,
-    /// <summary>The captured frame's own dimensions. As of pass 1 this is normally the detection
+    /// <summary>The captured frame's own dimensions — as of pass 1 this is always the detection
     /// engine's network input size (InferenceProfile.NetworkWidth/NetworkHeight), so ffmpeg emits
     /// frames already at the exact tensor input size and the engine's Preprocess never resizes.
     /// Before that pass it was a fixed global decode resolution (1280x720) unrelated to the model's
-    /// own input, with a separate SKBitmap.Resize bridging the two. Pass F (Detection.HiResSnapshots)
-    /// re-introduces that split deliberately for opt-in cameras: these dims can then exceed the
-    /// network size (the Sub stream at up to native resolution), CameraDetectionPipeline downscales
-    /// each frame into the network buffer itself (BgraOps.LetterboxResize), and the eager snapshot
-    /// crop is taken from this larger buffer.</summary>
+    /// own input, with a separate SKBitmap.Resize bridging the two.</summary>
     int Width = 640,
     int Height = 640,
     /// <summary>ffmpeg -hwaccel value, e.g. "cuda". Null decodes on the CPU. Only "cuda" gets the

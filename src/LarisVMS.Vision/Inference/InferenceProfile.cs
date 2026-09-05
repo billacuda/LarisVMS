@@ -73,6 +73,11 @@ public sealed class InferenceProfile
             AspectMode.AspectMatched => throw new NotSupportedException(
                 "AspectMode.AspectMatched is reserved for a future pass — see the enum's own doc comment."),
 
+            AspectMode.Slice => throw new NotSupportedException(
+                "AspectMode.Slice has no single InferenceProfile — its capture buffer isn't square. " +
+                "Use SliceLayout.Create instead; CameraDetectionPipeline branches on the mode before " +
+                "ever reaching here."),
+
             _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, null),
         };
     }

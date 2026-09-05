@@ -26,9 +26,6 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     // viewer looking up a camera's active RecordingSession is a genuine concurrent reader.
     private readonly ConcurrentDictionary<Guid, CameraRecorder> _active = new();
 
-    // Pass 3a: one ring buffer per actively-recording camera, sharing that camera's own RecordingSession
-    // lifetime — created/removed alongside _active's own entry for the same camera, never independently.
-    private readonly ConcurrentDictionary<Guid, MainFrameRingBuffer> _ringBuffers = new();
     private readonly ConcurrentQueue<SegmentReportItem> _pendingSegments = new();
     private readonly ConcurrentQueue<StreamInfoReportItem> _pendingStreamInfo = new();
 
@@ -157,13 +154,6 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// if it isn't assigned here (or isn't recording yet). Used by the live-view WebSocket endpoint
     /// to attach a viewer to the right session's tee'd live fanout.</summary>
     public RecordingSession? TryGetSession(Guid cameraId) => _active.TryGetValue(cameraId, out var r) ? r.Session : null;
-
-    /// <summary>Pass 3a: the init segment plus whichever recently-buffered Main-stream fragment is
-    /// closest to <paramref name="atUtc"/>, for the loopback-only /internal/main-frame route — null if
-    /// this camera isn't actively recording, or nothing in its ring buffer's short window covers that
-    /// instant.</summary>
-    public (byte[] InitSegment, byte[] Fragment)? TryGetMainFrameSnapshot(Guid cameraId, DateTime atUtc)
-        => _ringBuffers.TryGetValue(cameraId, out var ring) ? ring.TryGet(atUtc) : null;
 
     // M18 follow-up: the /playback-segment route's partial-fetch fragment index (see
     // Program.cs) — keyed on full file path since a completed segment file never changes, so its
@@ -752,7 +742,6 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         {
             _logger.LogInformation("Camera {CameraId} no longer assigned to this node — stopping.", cameraId);
             if (_active.TryRemove(cameraId, out var recorder)) recorder.Cts.Cancel();
-            _ringBuffers.TryRemove(cameraId, out _);
         }
 
         foreach (var cameraId in _activeMotion.Keys.Except(desired.Keys).ToList())
@@ -897,7 +886,6 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 _logger.LogInformation("Privacy mask configuration changed for camera {CameraId} ({Name}) — restarting recording session.", camera.CameraId, camera.Name);
                 activeRecorder.Cts.Cancel();
                 _active.TryRemove(camera.CameraId, out _);
-                _ringBuffers.TryRemove(camera.CameraId, out _);
             }
             else if (activeRecorder is not null && activeRecorder.SegmentSeconds != camera.SegmentSeconds)
             {
@@ -905,14 +893,12 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                     camera.CameraId, camera.Name, activeRecorder.SegmentSeconds, camera.SegmentSeconds);
                 activeRecorder.Cts.Cancel();
                 _active.TryRemove(camera.CameraId, out _);
-                _ringBuffers.TryRemove(camera.CameraId, out _);
             }
             else if (activeRecorder is not null && rtspUri is not null && activeRecorder.RtspUri != rtspUri)
             {
                 _logger.LogInformation("Main stream URL changed for camera {CameraId} ({Name}) — restarting recording session.", camera.CameraId, camera.Name);
                 activeRecorder.Cts.Cancel();
                 _active.TryRemove(camera.CameraId, out _);
-                _ringBuffers.TryRemove(camera.CameraId, out _);
             }
 
             if (!_active.ContainsKey(camera.CameraId))
@@ -956,14 +942,6 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                     session.StreamAudioDetected += audio => _pendingStreamInfo.Enqueue(new StreamInfoReportItem(
                         camera.CameraId, "Main", Width: null, Height: null, Codec: null,
                         AudioCodec: audio.Codec, AudioSampleRateHz: audio.SampleRateHz));
-
-                    // Pass 3a: a sibling subscriber to the same live-tee fanout LiveViewerHandler
-                    // already reads from, buffering rather than forwarding to a viewer. Passes the
-                    // session's own current LiveInitSegment on every tick (not captured once) so a
-                    // restart mid-lifetime is detected — see MainFrameRingBuffer's own doc comment.
-                    var ringBuffer = new MainFrameRingBuffer();
-                    session.LiveFragmentReceived += fragment => ringBuffer.OnFragment(session.LiveInitSegment, fragment, DateTime.UtcNow);
-                    _ringBuffers[camera.CameraId] = ringBuffer;
 
                     // See _knownSegmentPaths' own doc comment — this is the fix for the confirmed
                     // mass-discard bug. OrdinalIgnoreCase prefix match since outputDir itself is
@@ -1339,9 +1317,8 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
 
         var watchRtspUri = InjectCredentials(watchStream.RtspUri, camera.Username, camera.Password);
 
-        // The Main stream — used both for the watch-stream dimension fallback just below and, further
-        // down, as the high-res re-detection target (pass 3b, always Main regardless of watchRole).
-        // Null until RecordingSession has actually probed it.
+        // The Main stream — used as the watch-stream dimension fallback just below. Null until
+        // RecordingSession has actually probed it.
         var mainStream = camera.Streams.FirstOrDefault(s => s.Role == "Main");
 
         // Pass 1 of the detection/hardware-acceleration overhaul: this camera's own real stream
@@ -1366,16 +1343,6 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             watchStream.Width ?? mainStream?.Width ?? 1280,
             watchStream.Height ?? mainStream?.Height ?? 720);
 
-        // The same correction for the Main stream's dimensions, which pass 3b's high-res
-        // re-detection decodes against: orientation is a fact about how the camera is mounted, so a
-        // device that misreports one profile's shape misreports them all. Left null when Main hasn't
-        // been probed yet, exactly as before.
-        int? orientedMainWidth = null, orientedMainHeight = null;
-        if (mainStream is { Width: { } mw, Height: { } mh })
-        {
-            (orientedMainWidth, orientedMainHeight) = DetectionOrientation.Apply(camera.AiDetectionOrientation, mw, mh);
-        }
-
         // Detection frame-rate cap: only apply an fps= filter when the probed Sub rate is genuinely
         // above the ceiling — an unknown or already-low rate is left alone so ffmpeg never duplicates
         // frames up to the target (which would *add* inference work).
@@ -1386,8 +1353,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         var signature = string.Join('|', watchRtspUri, sourceWidth, sourceHeight, config.AspectMode,
             camera.AiConfidence, camera.AiIou, config.ReportIdleDetections, config.AiIdleTimeoutSeconds,
             watchRole, _resolvedAccelerator, _resolvedDetectionModelFamily, config.DFineWeights, config.YoloXSize,
-            decodeFpsCap, config.EnableHighResReDetection, orientedMainWidth, orientedMainHeight,
-            config.EnableVisionDebugImages, config.GpuPreprocessing, config.HiResSnapshots);
+            decodeFpsCap, config.GpuPreprocessing);
 
         if (_activeVision.TryGetValue(camera.CameraId, out var existing) && existing.ConfigSignature == signature) return; // already watching, unchanged
 
@@ -1396,9 +1362,12 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             AccelToFfmpegHwaccel(_resolvedAccelerator.Value), camera.AiConfidence, camera.AiIou,
             config.ReportIdleDetections, config.AiIdleTimeoutSeconds,
             _resolvedDetectionModelFamily.ToString(), config.DFineWeights, $"http://127.0.0.1:{livePort}",
-            config.AspectMode, config.EnableHighResReDetection, orientedMainWidth, orientedMainHeight,
-            config.EnableVisionDebugImages, config.GpuPreprocessing, config.YoloXSize, decodeFpsCap,
-            config.HiResSnapshots);
+            config.AspectMode, config.GpuPreprocessing, config.YoloXSize, decodeFpsCap,
+            // Log-readability only, and deliberately absent from `signature` above — renaming a
+            // camera must not restart its pipeline (that would mean a multi-minute TensorRT engine
+            // rebuild for a cosmetic change). The name in the Vision log therefore updates on the
+            // next restart for some other reason, which is the right trade.
+            camera.Name ?? "");
 
         // Never stack two starts for the same camera — see _visionStartsInFlight's own comment.
         if (!_visionStartsInFlight.TryAdd(camera.CameraId, 0)) return;

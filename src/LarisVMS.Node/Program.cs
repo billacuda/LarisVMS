@@ -696,43 +696,6 @@ app.MapPost("/restart", async (HttpContext ctx, NodeWorker worker, LarisVMS.Node
     await ctx.Response.WriteAsync("Restarting.");
 });
 
-// Purge vision-debug images — POSTed by LarisVMS.Web's Admin/Settings/Detection "Purge debug
-// images" button. Same signed-token shape as /restart, scoped to the action name. Deletes every
-// *.jpg the detection service left under logs\vision-debug\ (best-effort — a file locked/removed
-// mid-sweep is skipped, not fatal) and responds with the count deleted as plain text.
-app.MapPost("/purge-vision-debug", async (HttpContext ctx, NodeWorker worker) =>
-{
-    var token = ExtractToken(ctx);
-    var currentKey = worker.MediaSigningKey;
-    if (currentKey is null)
-    {
-        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-        await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
-        return;
-    }
-    if (!MediaToken.TryValidateNodeControl(token, "purge-vision-debug", currentKey, out var tokenError))
-    {
-        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
-        await ctx.Response.WriteAsync(tokenError);
-        return;
-    }
-
-    var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-        "LarisVMS", "logs", "vision-debug");
-    var deleted = 0;
-    if (Directory.Exists(dir))
-    {
-        foreach (var file in Directory.EnumerateFiles(dir, "*.jpg"))
-        {
-            try { File.Delete(file); deleted++; }
-            catch (IOException) { /* locked or already gone — skip */ }
-            catch (UnauthorizedAccessException) { /* skip */ }
-        }
-    }
-
-    await ctx.Response.WriteAsync(deleted.ToString());
-});
-
 // Export trigger — POSTed by LarisVMS.Web's ExportJobDispatcher, never reached by a browser
 // directly. Token binds cameraId + exportItemId (MediaToken.IssueForExport/TryValidateExport)
 // rather than a specific file the way /playback-segment's does, since the whole point of this call
@@ -1024,39 +987,6 @@ app.MapPost("/detections/crop", async (HttpContext ctx, VisionDetectionCropItem 
         logger.LogWarning(ex, "Could not stage an eager snapshot crop for camera {CameraId} — that span will fall back to a segment-seek crop.", item.CameraId);
         ctx.Response.StatusCode = StatusCodes.Status500InternalServerError;
     }
-});
-
-// Pass 3a: LarisVMS.Vision.Service fetches a recent Main-stream instant to decode and re-detect
-// against at full resolution, instead of the lazy seek-into-an-already-written-segment approach that
-// caused the Segment.DurationMs-vs-real-duration drift bug fixed in v0.161.6. Same loopback-only trust
-// boundary as /detections above — this is a sibling-process call, never something LarisVMS.Web makes.
-// Response body is deliberately just bytes, no segment-path/offset metadata: that can always be
-// resolved later the normal way (TimelineService's existing segment+offset lookup) once this instant's
-// segment closes and is reported, so Node doesn't need a DB-backed concern bolted onto it here.
-app.MapGet("/internal/main-frame/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, DateTime atUtc, NodeWorker worker) =>
-{
-    if (!IPAddress.IsLoopback(ctx.Connection.RemoteIpAddress ?? IPAddress.None))
-    {
-        ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
-        await ctx.Response.WriteAsync("This endpoint only accepts connections from the local machine.");
-        return;
-    }
-
-    var snapshot = worker.TryGetMainFrameSnapshot(cameraId, atUtc);
-    if (snapshot is null)
-    {
-        ctx.Response.StatusCode = StatusCodes.Status404NotFound;
-        return;
-    }
-
-    // Fixed framing, no multipart complexity needed — always exactly two parts in a fixed order:
-    // a 4-byte little-endian init-segment length, the init segment itself, then the fragment.
-    var (initSegment, fragment) = snapshot.Value;
-    ctx.Response.ContentType = "application/octet-stream";
-    var lengthPrefix = BitConverter.GetBytes(initSegment.Length);
-    await ctx.Response.Body.WriteAsync(lengthPrefix, ctx.RequestAborted);
-    await ctx.Response.Body.WriteAsync(initSegment, ctx.RequestAborted);
-    await ctx.Response.Body.WriteAsync(fragment, ctx.RequestAborted);
 });
 
 // Loopback-only proxy so the sibling Vision Service can fetch a detection model it doesn't have

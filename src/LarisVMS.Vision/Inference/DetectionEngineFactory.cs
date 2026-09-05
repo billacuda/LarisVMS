@@ -11,8 +11,11 @@ namespace LarisVMS.Vision.Inference;
 /// </summary>
 public static class DetectionEngineFactory
 {
+    /// <param name="sliceLayout">Non-null only for <see cref="LarisVMS.Core.Enums.AspectMode.Slice"/>
+    /// — threaded straight through to the engine's own constructor. See
+    /// <see cref="ISlicedDetectionEngine"/>'s and DFineEngine/YoloXEngine's own doc comments.</param>
     public static IDetectionEngine Create(DetectionModelFamily family, DFineWeights dfineWeights, YoloXSize yoloXSize,
-        EngineOptions options, InferenceProfile profile, ILoggerFactory loggerFactory)
+        EngineOptions options, InferenceProfile profile, ILoggerFactory loggerFactory, SliceLayout? sliceLayout = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(profile);
@@ -22,9 +25,9 @@ public static class DetectionEngineFactory
         return family switch
         {
             DetectionModelFamily.DFine => new DFineEngine(options, profile, DetectionModelCatalog.GetDFineLabels(dfineWeights),
-                loggerFactory.CreateLogger<DFineEngine>()),
+                loggerFactory.CreateLogger<DFineEngine>(), sliceLayout),
             DetectionModelFamily.YoloX => new YoloXEngine(options, profile, DetectionModelCatalog.GetYoloXLabels(),
-                loggerFactory.CreateLogger<YoloXEngine>()),
+                loggerFactory.CreateLogger<YoloXEngine>(), sliceLayout),
             DetectionModelFamily.RfDetr => throw new NotSupportedException(
                 "RF-DETR is not yet implemented — deferred scope, see the model-swap plan."),
             DetectionModelFamily.Auto => throw new ArgumentException(

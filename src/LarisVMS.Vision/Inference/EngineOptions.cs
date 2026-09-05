@@ -6,8 +6,14 @@ namespace LarisVMS.Vision.Inference;
 /// is inert on a DirectML build.
 ///
 /// Ported near-verbatim from aitest (g:\Projects\aitest\src\Aitest.Vision\Inference\EngineOptions.cs).
+///
+/// A <c>record</c> (not a plain class) since pass 3 of the detection/hardware-acceleration overhaul:
+/// an engine that needs to layer its own graph-specific knowledge on top of the options it was handed
+/// (e.g. filling in <see cref="TensorRtBatchProfile"/>, which only that engine knows the right input
+/// name for) can do so with <c>options with { TensorRtBatchProfile = ... }</c> instead of hand-copying
+/// every property — value-based equality/ToString are unused side effects, not the point.
 /// </summary>
-public sealed class EngineOptions
+public sealed record EngineOptions
 {
     public required string ModelPath { get; init; }
 
@@ -80,4 +86,44 @@ public sealed class EngineOptions
     /// as raw nv12 bytes rather than a decoded BGRA <c>SKBitmap</c>. Vendor-neutral — the head runs
     /// on whatever execution provider this build uses. Off by default.</summary>
     public bool GpuPreprocessing { get; init; }
+
+    /// <summary>How many images <see cref="IBatchDetectionEngine.DetectBatch"/> is fed per call —
+    /// fixed for the whole lifetime of a camera's pipeline (derived from that camera's own aspect
+    /// ratio and known before the engine is ever built), never a per-call variable. Default 1 means
+    /// "no batching": <see cref="DFineEngine.DetectBatch"/> still works but degrades to the same
+    /// one-image-per-Run loop it always has. A YOLOX engine additionally needs its own graph
+    /// rewritten batch-dynamic when this is &gt; 1 — see <see cref="OnnxBatchAxis"/>.</summary>
+    public int BatchSize { get; init; } = 1;
+
+    /// <summary>The model's own graph input name plus its fixed H×W, needed only when
+    /// <see cref="BatchSize"/> is &gt; 1 to pin TensorRT's shape profile
+    /// (<c>trt_profile_min/opt/max_shapes</c>) to exactly that one shape. Required here rather than
+    /// discovered by <see cref="OrtSessionFactory"/> itself: that class builds
+    /// <see cref="Microsoft.ML.OnnxRuntime.SessionOptions"/> *before* the
+    /// <see cref="Microsoft.ML.OnnxRuntime.InferenceSession"/> — and so the model's own input
+    /// metadata — exists, so the caller (which already knows its own graph shape, e.g. "pixel_values"
+    /// vs "nv12" for D-FINE, or "images" for YOLOX's pinned export) has to supply it up front. Left
+    /// null when <see cref="BatchSize"/> is 1: there is nothing to pin, a single fixed shape needs no
+    /// profile at all.</summary>
+    public (string InputName, int Height, int Width)? TensorRtBatchProfile { get; init; }
+
+    /// <summary>
+    /// A short, filesystem-safe tag naming this exact graph variant — model, network size, whether a
+    /// preprocessing/slicing head was merged in and for what capture size, batch size. Used as
+    /// TensorRT's <c>trt_engine_cache_prefix</c> so each variant owns its own cached
+    /// <c>.engine</c> file, and by <see cref="EngineBuildGate"/> to decide whether the cache is warm
+    /// *for this variant* rather than warm for anything at all.
+    ///
+    /// Supplied by the engine rather than derived here for the same reason
+    /// <see cref="TensorRtBatchProfile"/> is: only the engine knows what it is about to do to the
+    /// graph, and <see cref="OrtSessionFactory"/> builds the session options before any model exists
+    /// to inspect. Null means "don't set a prefix" — ONNX Runtime's own default naming, which is what
+    /// every build before 0.186.2 used.
+    ///
+    /// The prefix is a second line of defence, not the primary one: ONNX Runtime's engine cache key
+    /// ignores shapes entirely, which is why <see cref="OnnxPreprocessHead"/> also tags its generated
+    /// node names per variant (see RetagGeneratedNames' own doc comment). Correctness does not depend
+    /// on this option being honored — readable cache filenames and an honest warm/cold probe do.
+    /// </summary>
+    public string? TensorRtCacheKey { get; init; }
 }

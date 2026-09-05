@@ -35,13 +35,15 @@ public static class EngineBuildGate
     /// Runs <paramref name="build"/> with at most one build in flight process-wide. Synchronous and
     /// blocking by design — callers hand this to <c>Task.Run</c> so no request thread is the one
     /// waiting. <paramref name="options"/> is used only for logging (which model, whether the
-    /// TensorRT cache was already warm).
+    /// TensorRT cache was already warm), and <paramref name="camera"/> is a display label for the
+    /// same reason (VisionStartCameraRequest.DisplayName) — these lines are the ones an operator
+    /// stares at during a multi-minute compile, so they name the camera, not its GUID.
     ///
     /// The queue wait honors <paramref name="ct"/>, so a camera stopped while queued behind another
     /// camera's multi-minute build unwinds immediately instead of holding its pipeline's disposal
     /// open. The build itself is a native call and cannot be cancelled once started.
     /// </summary>
-    public static IDetectionEngine Build(Guid cameraId, EngineOptions options,
+    public static IDetectionEngine Build(string camera, EngineOptions options,
         Func<IDetectionEngine> build, ILogger logger, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -54,8 +56,8 @@ public static class EngineBuildGate
         if (_gate.CurrentCount == 0)
         {
             logger.LogInformation(
-                "Camera {CameraId} is waiting for another camera's detection engine build to finish before starting its own.",
-                cameraId);
+                "Camera {Camera} is waiting for another camera's detection engine build to finish before starting its own.",
+                camera);
         }
 
         var waited = Stopwatch.StartNew();
@@ -68,8 +70,14 @@ public static class EngineBuildGate
         // Resolve the same default OrtSessionFactory uses (%ProgramData%\LarisVMS\trt-cache) before
         // probing — a bare options.TensorRtEngineCachePath is null in the normal case, which read as
         // "cold" on every start even when the default directory was fully populated.
+        //
+        // Probed for this camera's own graph variant (EngineOptions.TensorRtCacheKey), not for any
+        // .engine file at all: with several cameras of different resolutions on one node, "some
+        // engine exists" is true from the second camera onward and was reporting a 222-second cold
+        // compile as a warm load.
         var cacheWarm = options.EnableTensorRt
-            && TensorRtCacheHasEntries(OrtSessionFactory.ResolveTensorRtCachePath(options.TensorRtEngineCachePath));
+            && TensorRtCacheHasEntries(OrtSessionFactory.ResolveTensorRtCachePath(options.TensorRtEngineCachePath),
+                OrtSessionFactory.SanitizeCacheKey(options.TensorRtCacheKey));
         if (options.EnableTensorRt)
         {
             // Two messages rather than one with a substituted word: the cold case needs to say how
@@ -79,17 +87,17 @@ public static class EngineBuildGate
             if (cacheWarm)
             {
                 logger.LogInformation(
-                    "Loading the detection engine for camera {CameraId} from {ModelPath} — the TensorRT engine cache is " +
+                    "Loading the detection engine for camera {Camera} from {ModelPath} — the TensorRT engine cache is " +
                     "warm, so this is a load rather than a compile. Waited {WaitedMs} ms for the process-wide build gate.",
-                    cameraId, options.ModelPath, waited.ElapsedMilliseconds);
+                    camera, options.ModelPath, waited.ElapsedMilliseconds);
             }
             else
             {
                 logger.LogInformation(
-                    "Building the detection engine for camera {CameraId} from {ModelPath} — the TensorRT engine cache is " +
+                    "Building the detection engine for camera {Camera} from {ModelPath} — the TensorRT engine cache is " +
                     "cold, so this compiles the engine, which takes minutes and happens once per model. Every other " +
                     "camera's engine waits behind this one. Waited {WaitedMs} ms for the process-wide build gate.",
-                    cameraId, options.ModelPath, waited.ElapsedMilliseconds);
+                    camera, options.ModelPath, waited.ElapsedMilliseconds);
             }
         }
 
@@ -114,18 +122,24 @@ public static class EngineBuildGate
             if (options.EnableTensorRt)
             {
                 logger.LogInformation(
-                    "Detection engine build for camera {CameraId} finished in {ElapsedMs} ms (cache was {CacheState}).",
-                    cameraId, elapsed.ElapsedMilliseconds, cacheWarm ? "warm" : "cold");
+                    "Detection engine build for camera {Camera} finished in {ElapsedMs} ms (cache was {CacheState}).",
+                    camera, elapsed.ElapsedMilliseconds, cacheWarm ? "warm" : "cold");
             }
 
             _gate.Release();
         }
     }
 
-    private static bool TensorRtCacheHasEntries(string? cachePath)
+    /// <summary><paramref name="cacheKey"/> is the engine cache prefix this variant will be stored
+    /// under (see <see cref="EngineOptions.TensorRtCacheKey"/>) — matched as a filename prefix, since
+    /// TensorRT appends its own node/precision/architecture suffix to it. Null (no key, or an ONNX
+    /// Runtime build that rejected the prefix option) falls back to the old "any engine at all"
+    /// probe, which is the best signal available in that case.</summary>
+    private static bool TensorRtCacheHasEntries(string? cachePath, string? cacheKey)
     {
         if (string.IsNullOrWhiteSpace(cachePath)) return false;
-        try { return Directory.Exists(cachePath) && Directory.EnumerateFiles(cachePath, "*.engine").Any(); }
+        var pattern = cacheKey is null ? "*.engine" : $"{cacheKey}*.engine";
+        try { return Directory.Exists(cachePath) && Directory.EnumerateFiles(cachePath, pattern).Any(); }
         catch { return false; } // a log-only signal; never worth failing a build over
     }
 

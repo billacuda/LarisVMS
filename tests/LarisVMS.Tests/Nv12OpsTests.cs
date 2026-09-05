@@ -33,8 +33,7 @@ public class Nv12OpsTests
             uFn: (cx, cy) => (byte)(100 + cy * 10 + cx),
             vFn: (cx, cy) => (byte)(200 + cy * 10 + cx));
 
-        var tile = new TileLayout.Tile(X: 2, Y: 2, Width: 4, Height: 4);
-        var crop = Nv12Ops.CropTile(src, w, h, tile);
+        var crop = Nv12Ops.CropTile(src, w, h, x: 2, y: 2, w: 4, h: 4);
 
         Assert.Equal(4 * 4 * 3 / 2, crop.Length);
 
@@ -58,7 +57,7 @@ public class Nv12OpsTests
     {
         const int w = 6, h = 6;
         var src = MakeNv12(w, h, (x, y) => (byte)(x + y), (cx, cy) => (byte)(50 + cx + cy), (cx, cy) => (byte)(150 + cx + cy));
-        var crop = Nv12Ops.CropTile(src, w, h, new TileLayout.Tile(0, 0, w, h));
+        var crop = Nv12Ops.CropTile(src, w, h, x: 0, y: 0, w: w, h: h);
         Assert.Equal(src, crop);
     }
 

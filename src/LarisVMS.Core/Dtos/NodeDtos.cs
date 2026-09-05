@@ -225,18 +225,6 @@ public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? Stor
     /// absorbs that flicker while still finalizing the snapshot once the object is genuinely gone or
     /// has settled into Idle for good.</summary>
     int AiIdleTimeoutSeconds = 10,
-    /// <summary>Detection/hardware-acceleration overhaul, pass 3b: Detection.EnableHighResReDetection,
-    /// resolved Global -> Node like AspectMode/DetectionModelFamily above — one Vision Service process
-    /// per node, so whether it runs motion-guided native-scale Main-stream re-detection at all is a
-    /// per-node choice. Defaults false (opt-in) for the same "don't silently add CPU/GPU load an
-    /// older, not-yet-updated node build's deserialization would answer" reasoning ReportIdleDetections
-    /// already documents above.</summary>
-    bool EnableHighResReDetection = false,
-    /// <summary>Detection.EnableVisionDebugImages — diagnostic-only, resolved Global -&gt; Node like
-    /// EnableHighResReDetection above. When true, Vision Service writes one cropped JPEG per
-    /// re-detection trigger to logs\vision-debug\ for diagnosing snapshot box alignment. Defaults
-    /// false (opt-in) — an install that wants it keeps a global Setting row = 'true'.</summary>
-    bool EnableVisionDebugImages = false,
     /// <summary>Detection.GpuPreprocessing (pass 4a) — resolved Global -&gt; Node. When true the
     /// Vision Service moves per-frame colour conversion + normalize off the CPU onto the accelerator
     /// (an ONNX preprocessing head + nv12 ffmpeg output). Vendor-neutral, opt-in, defaults false.</summary>
@@ -257,15 +245,7 @@ public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? Stor
     /// `fps=` filter drops the rest before inference, so the GPU idles between frames instead of
     /// running flat out. Node-scoped. 0 = no cap (decode-rate). Default 10 — plenty for NVR object
     /// tracking, and where the live overlay poll already tops out.</summary>
-    int MaxDetectionFps = 10,
-    /// <summary>Detection.HiResSnapshots (Pass F) — resolved Global -&gt; Node like the other
-    /// Detection.* flags. When true the Vision Service decodes each Sub stream at up to its native
-    /// resolution (long edge capped to SnapshotImageCapture.MaxDimension) and crops the eager
-    /// AI-detection snapshot from that larger frame instead of the detector's network buffer —
-    /// sharper only where the Sub stream itself is bigger than the network size. Opt-in, defaults
-    /// false; forces GpuPreprocessing off per camera while on. Appended last so NodeService's
-    /// positional construction stays stable.</summary>
-    bool HiResSnapshots = false);
+    int MaxDetectionFps = 10);
 
 /// <summary>One completed MotionSpan, batch-reported the same way SegmentReportItem is — see
 /// NodeService.RecordMotionSpansAsync for why plain REST + EF insert is enough here despite the

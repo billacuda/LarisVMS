@@ -143,20 +143,9 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         var yoloXSize = await settings.GetAsync("Detection.YoloXSize", "S", nodeId: nodeId, ct: ct);
         // Per-camera detection frame-rate ceiling (0 = decode rate). Node-scoped.
         var maxDetectionFps = await settings.GetAsync("Detection.MaxFps", 10, nodeId: nodeId, ct: ct);
-        // Detection/hardware-acceleration overhaul, pass 3b — same node-scoped resolution as
-        // AspectMode/DetectionModelFamily above.
-        var enableHighResReDetection = await settings.GetAsync("Detection.EnableHighResReDetection", false, nodeId: nodeId, ct: ct);
-        // Diagnostic-only: whether Vision Service writes its per-trigger cropped JPEGs to
-        // logs\vision-debug\. Same Global -> Node resolution as the flags above. Defaults false
-        // (opt-in) — an existing install that wants it keeps a global Setting row = 'true' (seeded
-        // by the 0.168.0 migration); a fresh install starts with it off.
-        var enableVisionDebugImages = await settings.GetAsync("Detection.EnableVisionDebugImages", false, nodeId: nodeId, ct: ct);
         // Pass 4a — same Global -> Node resolution as the flags above. Moves per-frame preprocessing
         // off the CPU onto whatever accelerator ONNX Runtime is using. Opt-in, default off.
         var gpuPreprocessing = await settings.GetAsync("Detection.GpuPreprocessing", false, nodeId: nodeId, ct: ct);
-        // Pass F — same Global -> Node resolution. Decode the Sub stream at up to native resolution
-        // so the eager AI-detection snapshot crop is sharper. Opt-in, default off.
-        var hiResSnapshots = await settings.GetAsync("Detection.HiResSnapshots", false, nodeId: nodeId, ct: ct);
         // Deployment-wide minimum log level for nodes + their vision services. Global only.
         var logLevel = await settings.GetAsync("Logging.Level", "Information", ct: ct);
         // Confidence/IoU/stream-role are resolved per camera below (Camera -> Node -> Global,
@@ -256,8 +245,8 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         return new NodeConfigResponse(cameraDtos, storageRoot, watermarkPercent, mediaSigningKey, orphanedCameraDtos,
             adaptiveStreamingEnabled, (aiAccelerator ?? AiAccelerator.Auto).ToString(),
             reportIdleDetections, aspectMode, detectionModelFamily, dfineWeights, aiIdleTimeoutSeconds,
-            enableHighResReDetection, enableVisionDebugImages, gpuPreprocessing, logLevel)
-        { YoloXSize = yoloXSize, MaxDetectionFps = maxDetectionFps, HiResSnapshots = hiResSnapshots };
+            gpuPreprocessing, logLevel)
+        { YoloXSize = yoloXSize, MaxDetectionFps = maxDetectionFps };
     }
 
     /// <summary>Pulls the Events service's own XAddr out of the capability prober's raw category map

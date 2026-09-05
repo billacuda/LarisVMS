@@ -1720,11 +1720,29 @@
                 // 'waiting' event and arms the stall watchdog for a load that hasn't even started.
                 // That watchdog then fires ~3s later on an in-flight (not stalled) fetch and recovers
                 // with the wrong autoplay intent — confirmed live as "click a snapshot, it lands
-                // paused, and needs a Pause-then-Play click to actually start". Once loadSegment
-                // attaches a real source, tryStartPlaybackOnce/appendWholeSegment call videoEl.play()
-                // themselves — this guard only ever skips a call that would have been a no-op anyway.
-                if (playing && tile.player.hasSource()) tile.videoEl.play().catch(function () { /* autoplay policy — user can press play again */ });
-                else tile.videoEl.pause();
+                // paused, and needs a Pause-then-Play click to actually start".
+                if (playing) {
+                    if (tile.player.hasSource()) {
+                        tile.videoEl.play().catch(function () { /* autoplay policy — user can press play again */ });
+                    } else {
+                        // Once loadSegment attaches a real source, tryStartPlaybackOnce/
+                        // appendWholeSegment call videoEl.play() themselves — but only if *that*
+                        // load was itself started with autoplay=true. The page's own initial load
+                        // (rebuildTilesFromCells) always starts with autoplay=false regardless of
+                        // `playing`, so a Play click landing before that first segment attaches
+                        // would otherwise never resume — confirmed live as "click Play before the
+                        // cameras finish loading, have to click Pause then Play again". Re-issuing
+                        // the seek here with autoplay=true supersedes whatever's in flight via
+                        // seekTo's own loadToken/AbortController (see seekTo, above), and the
+                        // superseding request's own completion then starts playback correctly once
+                        // a source actually attaches. No .catch needed — player.seekTo already
+                        // swallows/logs its own rejections (see its definition above), same as
+                        // seekAll's own fan-out.
+                        tile.player.seekTo(playheadMs, true);
+                    }
+                } else {
+                    tile.videoEl.pause();
+                }
             }
         });
 

@@ -40,11 +40,6 @@ public sealed class CameraPipelineManager : IAsyncDisposable
     // doesn't run twice when two cameras' /start calls race for the same size.
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _modelResolveGates = new();
 
-    // Pass 3b: shared across every camera's pipeline so at most one high-res re-detection (ffmpeg
-    // decode + batched inference) runs at a time process-wide — see CameraDetectionPipeline's own
-    // _highResGate doc comment for why this needs to be cross-camera, not per-pipeline.
-    private readonly SemaphoreSlim _highResGate = new(1, 1);
-
     public CameraPipelineManager(IOptions<VisionServiceOptions> options, IHttpClientFactory httpClientFactory,
         ILoggerFactory loggerFactory, ILogger<CameraPipelineManager> logger)
     {
@@ -60,7 +55,7 @@ public sealed class CameraPipelineManager : IAsyncDisposable
     {
         if (_pipelines.TryRemove(request.CameraId, out var existing))
         {
-            _logger.LogInformation("Replacing existing pipeline for camera {CameraId} with updated configuration.", request.CameraId);
+            _logger.LogInformation("Replacing existing pipeline for camera {Camera} with updated configuration.", request.DisplayName);
             await existing.DisposeAsync();
         }
 
@@ -72,10 +67,10 @@ public sealed class CameraPipelineManager : IAsyncDisposable
         var http = _httpClientFactory.CreateClient(nameof(CameraDetectionPipeline));
         var resolvedModelPath = await ResolveModelPathCachedAsync(modelKey, family, dfineWeights, yoloXSize, request.NodeCallbackBaseUrl, http);
 
-        var pipeline = new CameraDetectionPipeline(request, _options, _ffmpegPath, resolvedModelPath, family, dfineWeights, yoloXSize, aspectMode, http, _loggerFactory, _highResGate);
+        var pipeline = new CameraDetectionPipeline(request, _options, _ffmpegPath, resolvedModelPath, family, dfineWeights, yoloXSize, aspectMode, http, _loggerFactory);
         _pipelines[request.CameraId] = pipeline;
-        _logger.LogInformation("Started watching camera {CameraId} ({Width}x{Height}, hwaccel: {Hwaccel}).",
-            request.CameraId, request.Width, request.Height, request.HardwareAcceleration ?? "none");
+        _logger.LogInformation("Started watching camera {Camera} (id {CameraId}, {Width}x{Height}, hwaccel: {Hwaccel}).",
+            request.DisplayName, request.CameraId, request.Width, request.Height, request.HardwareAcceleration ?? "none");
     }
 
     /// <summary>
@@ -235,8 +230,9 @@ public sealed class CameraPipelineManager : IAsyncDisposable
     {
         if (!_pipelines.TryRemove(cameraId, out var pipeline)) return false;
 
+        var name = pipeline.DisplayName;
         await pipeline.DisposeAsync();
-        _logger.LogInformation("Stopped watching camera {CameraId}.", cameraId);
+        _logger.LogInformation("Stopped watching camera {Camera}.", name);
         return true;
     }
 
