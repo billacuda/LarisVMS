@@ -190,7 +190,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
 
     // Pass G: a snapshot is cropped from the exact frame the model ran on (this camera's continuous
     // Sub-stream buffer) the first frame a *new* track starts Moving — covering every object moving
-    // in that same frame. Once per track at minimum (see _snapshotScoreByLabel for the progressive
+    // in that same frame. Once per track at minimum (see _stagedSnapshotScore for the progressive
     // upgrade on top), plus a per-camera minimum gap so a burst of arrivals produces one crop, not
     // one per track. _frameIsNv12 picks the crop helper (BGRA is the default; nv12 only when
     // GpuPreprocessing is on — never for YOLOX).
@@ -199,15 +199,17 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     private DateTime _lastSubSnapshotUtc = DateTime.MinValue;
     private static readonly TimeSpan SubSnapshotMinGap = TimeSpan.FromSeconds(1);
 
-    // Progressive best snapshot: the MovementClassifier.Score (confidence * normalized area) of
-    // whichever frame is currently staged as this label's authoritative eager crop
-    // (_authoritativeBestByLabel). A track's very first Moving frame always sets these (there's
-    // nothing to compare against yet); after that, a later sighting only replaces them — and only
-    // triggers a fresh crop+upload at all — when it clearly beats what's already staged, so the
-    // span's snapshot keeps upgrading toward the clearest view of the object seen so far instead of
-    // freezing on whichever frame happened to be first. Reset alongside _authoritativeBestByLabel on
-    // a real span close, so a later, separate span for the same label starts its own fresh contest.
-    private readonly Dictionary<string, double> _snapshotScoreByLabel = new(StringComparer.OrdinalIgnoreCase);
+    // Progressive best snapshot, per camera (not per label): the CompositeFrameScore of whichever
+    // frame is currently staged as the eager crop for this camera's in-progress detections — the
+    // count of moving objects it captured plus their cumulative confidence*area. A later frame only
+    // replaces the staged crop (and only triggers a fresh crop+upload at all) when it captures more
+    // moving objects, or the same number more clearly (SnapshotImprovementMargin) — so the snapshot
+    // keeps upgrading toward the frame that best shows *every* moving object at once, instead of
+    // drifting to whichever frame the one dominant object peaked in. Reset in EnqueueReport on the
+    // span close that empties _authoritativeBestByLabel (every co-detected label finished), so a
+    // later, separate burst of activity starts its own fresh contest — but kept across a brief
+    // mid-span track loss so a good staged crop isn't discarded.
+    private CompositeFrameScore _stagedSnapshotScore;
 
     // Relative, not absolute: MovementClassifier.Score has no fixed scale (it's confidence * area,
     // both already 0-1), and a bare "any improvement, however tiny" comparison would re-crop and
@@ -524,10 +526,6 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             // all of them at once.
             var movingThisFrame = new List<(string Label, YoloDotNet.Models.ObjectDetection Detection)>();
             var newMovingTrack = false;
-            // Progressive best snapshot: set when any already-snapshotted track's label is clearly
-            // better this frame than whichever crop is currently staged for it — see
-            // _snapshotScoreByLabel's own doc comment.
-            var betterSnapshotAvailable = false;
 
             foreach (var detection in tracked)
             {
@@ -569,27 +567,10 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
 
                     movingThisFrame.Add((label, detection));
                     // Pass G: a track we've never snapshotted starting to move is what triggers this
-                    // frame's first Sub-frame snapshot after this loop.
-                    var isNewTrack = _snapshottedTrackIds.Add(trackId);
-                    if (isNewTrack) newMovingTrack = true;
-
-                    // Progressive best snapshot: an already-snapshotted track can still trigger a
-                    // fresh crop if this frame's view of its label is clearly better than whichever
-                    // one is currently staged (see _snapshotScoreByLabel's own doc comment). Skipped
-                    // for a brand-new track — that one already triggers unconditionally above, and
-                    // has nothing staged yet to compare against.
-                    if (!isNewTrack)
-                    {
-                        var normalizedArea = Math.Clamp(
-                            (detection.BoundingBox.Width / (double)_sourceWidth) *
-                            (detection.BoundingBox.Height / (double)_sourceHeight), 0.0, 1.0);
-                        var score = MovementClassifier.Score(detection.Confidence, normalizedArea);
-                        if (!_snapshotScoreByLabel.TryGetValue(label, out var retained)
-                            || score > retained * (1 + SnapshotImprovementMargin))
-                        {
-                            betterSnapshotAvailable = true;
-                        }
-                    }
+                    // frame's first Sub-frame snapshot after this loop. The progressive upgrade on
+                    // top of that first crop is decided after the loop from the whole frame's
+                    // CompositeFrameScore, not per track — see the trigger block below.
+                    if (_snapshottedTrackIds.Add(trackId)) newMovingTrack = true;
                 }
 
                 var hysteresis = GetOrCreateHysteresis(label);
@@ -622,13 +603,30 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             _liveSnapshot = liveBoxes;
             Interlocked.Exchange(ref _liveSnapshotTicksUtc, now.Ticks);
 
-            // Pass G / progressive best snapshot: a new track started moving, or an existing one now
-            // has a clearly better view of its label than what's staged — snapshot everything moving
-            // straight from this exact frame, once the per-camera cadence gate allows.
-            if ((newMovingTrack || betterSnapshotAvailable) && now - _lastSubSnapshotUtc >= SubSnapshotMinGap && movingThisFrame.Count > 0)
+            // Pass G / progressive best snapshot: how well this frame captures *every* moving object
+            // at once — the count plus their cumulative confidence*area. Boxes are in this camera's
+            // source-pixel space here (same as everywhere else in this loop). Built with a plain loop
+            // rather than CompositeFrameScore.ForFrame (which the tests use) to keep this hot path
+            // allocation-free.
+            var cumulativeSnapshotScore = 0.0;
+            foreach (var (_, det) in movingThisFrame)
+            {
+                var mb = det.BoundingBox;
+                var mArea = Math.Clamp(
+                    (mb.Width / (double)_sourceWidth) * (mb.Height / (double)_sourceHeight), 0.0, 1.0);
+                cumulativeSnapshotScore += MovementClassifier.Score(det.Confidence, mArea);
+            }
+            var frameScore = new CompositeFrameScore(movingThisFrame.Count, cumulativeSnapshotScore);
+
+            // Snapshot everything moving straight from this exact frame when a new track started
+            // moving (its first crop), or this frame frames the moving set better than whatever is
+            // staged — more objects, or the same number more clearly. Per-camera cadence gate still
+            // caps a burst at one crop per second.
+            if ((newMovingTrack || frameScore.BeatsRetained(_stagedSnapshotScore, SnapshotImprovementMargin))
+                && now - _lastSubSnapshotUtc >= SubSnapshotMinGap && movingThisFrame.Count > 0)
             {
                 _lastSubSnapshotUtc = now;
-                TrySubFrameSnapshot(frame, now, movingThisFrame);
+                TrySubFrameSnapshot(frame, now, movingThisFrame, frameScore);
             }
         }
     }
@@ -803,12 +801,14 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     }
 
     /// <summary>Pass G: crops one JPEG from the frame the model just ran on, covering the union of
-    /// every currently-Moving box, and becomes the authoritative snapshot for each of those labels'
-    /// spans whose view in it is at least as good as whichever one is already staged (progressive
-    /// best snapshot — see _snapshotScoreByLabel's own doc comment). The box came out of these exact
-    /// pixels, so — unlike a later timestamp lookup into recorded footage — the object cannot have
-    /// moved off the crop. ~150-300 px at the network buffer size.</summary>
-    private void TrySubFrameSnapshot(byte[] frame, DateTime nowUtc, List<(string Label, YoloDotNet.Models.ObjectDetection Detection)> moving)
+    /// every currently-Moving box, and becomes the authoritative snapshot for every one of those
+    /// labels' spans (progressive best snapshot — see _stagedSnapshotScore's own doc comment). The
+    /// boxes came out of these exact pixels, so — unlike a later timestamp lookup into recorded
+    /// footage — the objects cannot have moved off the crop. ~150-300 px at the network buffer size.
+    /// <paramref name="frameScore"/> is this frame's CompositeFrameScore, already computed by the
+    /// caller for the trigger decision and stored as the new staged score once the crop is posted.</summary>
+    private void TrySubFrameSnapshot(byte[] frame, DateTime nowUtc,
+        List<(string Label, YoloDotNet.Models.ObjectDetection Detection)> moving, CompositeFrameScore frameScore)
     {
         try
         {
@@ -819,7 +819,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             // — genuinely different geometry, not just a parameter swap, hence its own method.
             if (_sliceLayout is { } layout)
             {
-                TrySliceSnapshot(layout, frame, nowUtc, moving);
+                TrySliceSnapshot(layout, frame, nowUtc, moving, frameScore);
                 return;
             }
 
@@ -852,47 +852,21 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
                 unionRect.Width / (double)_profile.NetworkWidth, unionRect.Height / (double)_profile.NetworkHeight,
                 _profile.NetworkWidth, _profile.NetworkHeight, marginFraction: 0.12);
             var crop = ClampTo(new SKRectI(mcx, mcy, mcx + mcw, mcy + mch), content);
-
-            // Guard: a person at one edge and a car at the other shouldn't degrade into a nearly
-            // whole-frame crop — fall back to the single highest-confidence box.
-            if (crop.Width > content.Width * 0.8 || crop.Height > content.Height * 0.8)
-            {
-                crop = ClampTo(BoxOf(moving.OrderByDescending(m => m.Detection.Confidence).First().Detection.BoundingBox), content);
-                if (crop.Width < 2 || crop.Height < 2) return;
-            }
+            if (crop.Width < 2 || crop.Height < 2) return;
 
             // BGRA path takes the final (margined, content-clamped) rect; the nv12 path reuses
             // Nv12Ops.CropToJpeg, which applies its own margin + frame clamp, so it gets the raw
             // union instead. nv12 only happens with GpuPreprocessing on (D-FINE only, off by default).
+            // No whole-frame guard: covering every moving object is the point even when they're at
+            // opposite edges — the union of the real detection boxes plus a 12% margin, clamped to
+            // the content rect, is never worse than a full-frame grab.
             var jpeg = _frameIsNv12
                 ? Nv12Ops.CropToJpeg(frame, _profile.NetworkWidth, _profile.NetworkHeight, ClampTo(unionRect, content), EagerCropJpegQuality)
                 : BgraOps.CropRectToJpeg(frame, _profile.NetworkWidth, _profile.NetworkHeight, crop, EagerCropJpegQuality);
             if (jpeg is null) return;
 
             _ = PostEagerCropAsync(nowUtc, jpeg);
-
-            // Make this exact frame authoritative for every label it covers whose view here is at
-            // least as good as whichever one is already staged, so the span's report cites nowUtc
-            // and the /snapshot-image bestFrameTicks lookup finds the file we just posted. A crop
-            // triggered because ONE label improved still covers every other currently-moving label
-            // in the same union image (TrySubFrameSnapshot only ever posts one crop per trigger) —
-            // a label that didn't itself improve just keeps its own earlier, better entry pointing
-            // at an earlier file; nothing is lost, that file just goes unpromoted. Box stored
-            // normalized 0-1 in source space, matching every other BestFrame.
-            foreach (var (label, det) in moving)
-            {
-                var b = det.BoundingBox;
-                var normalizedArea = Math.Clamp(
-                    (b.Width / (double)_profile.SourceWidth) * (b.Height / (double)_profile.SourceHeight), 0.0, 1.0);
-                var score = MovementClassifier.Score(det.Confidence, normalizedArea);
-                if (_snapshotScoreByLabel.TryGetValue(label, out var retained) && score <= retained) continue;
-
-                _snapshotScoreByLabel[label] = score;
-                _authoritativeBestByLabel[label] = new BestFrame(nowUtc,
-                    b.Left / (double)_profile.SourceWidth, b.Top / (double)_profile.SourceHeight,
-                    b.Width / (double)_profile.SourceWidth, b.Height / (double)_profile.SourceHeight,
-                    det.Confidence);
-            }
+            PromoteAuthoritativeBest(moving, nowUtc, frameScore);
         }
         catch (Exception ex)
         {
@@ -909,7 +883,8 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     /// letterbox/stretch network buffer's — so the crop rescales uniformly from source-pixel space
     /// into capture-pixel space (<see cref="SliceLayout"/>'s own uniform, unpadded scale) instead of
     /// undoing a letterbox pad.</summary>
-    private void TrySliceSnapshot(SliceLayout layout, byte[] frame, DateTime nowUtc, List<(string Label, YoloDotNet.Models.ObjectDetection Detection)> moving)
+    private void TrySliceSnapshot(SliceLayout layout, byte[] frame, DateTime nowUtc,
+        List<(string Label, YoloDotNet.Models.ObjectDetection Detection)> moving, CompositeFrameScore frameScore)
     {
         var content = new SKRectI(0, 0, layout.CaptureWidth, layout.CaptureHeight);
         var scaleX = layout.CaptureWidth / (double)_sourceWidth;
@@ -930,43 +905,44 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         }
         if (union is not { } unionRect || unionRect.Width < 2 || unionRect.Height < 2) return;
 
-        var (mcx, mcy, mcw, mch) = SnapshotImageCapture.ComputeCropRect(
-            unionRect.Left / (double)layout.CaptureWidth, unionRect.Top / (double)layout.CaptureHeight,
-            unionRect.Width / (double)layout.CaptureWidth, unionRect.Height / (double)layout.CaptureHeight,
-            layout.CaptureWidth, layout.CaptureHeight, marginFraction: 0.12);
-        var crop = ClampTo(new SKRectI(mcx, mcy, mcx + mcw, mcy + mch), content);
-
-        // Same guard as TrySubFrameSnapshot: a person at one edge and a car at the other shouldn't
-        // degrade into a nearly whole-frame crop — fall back to the single highest-confidence box.
-        if (crop.Width > content.Width * 0.8 || crop.Height > content.Height * 0.8)
-        {
-            crop = ClampTo(ToCapturePixels(moving.OrderByDescending(m => m.Detection.Confidence).First().Detection.BoundingBox), content);
-            if (crop.Width < 2 || crop.Height < 2) return;
-        }
-
         // Always nv12 — Slice mode has no BGRA path (mandatory GPU preprocessing, see this class's
-        // own doc comment). CropToJpeg applies its own margin + frame clamp, so it gets the raw
-        // union rather than the already-margined crop above (same convention TrySubFrameSnapshot's
-        // own nv12 branch uses).
+        // own doc comment). Nv12Ops.CropToJpeg applies its own margin + frame clamp, so it gets the
+        // raw union directly (no separate ComputeCropRect step, unlike the BGRA branch of
+        // TrySubFrameSnapshot). No whole-frame guard — see TrySubFrameSnapshot for why covering every
+        // moving object wins over a tighter single-object crop.
         var jpeg = Nv12Ops.CropToJpeg(frame, layout.CaptureWidth, layout.CaptureHeight, ClampTo(unionRect, content), EagerCropJpegQuality);
         if (jpeg is null) return;
 
         _ = PostEagerCropAsync(nowUtc, jpeg);
+        PromoteAuthoritativeBest(moving, nowUtc, frameScore);
+    }
 
-        foreach (var (label, det) in moving)
+    /// <summary>After an eager crop is posted for <paramref name="nowUtc"/>, makes that frame the
+    /// authoritative snapshot for every label with a moving detection in it — all their spans point
+    /// at the one composite image, and each carries a box from this same frame so an overlay lines
+    /// up. Unconditional (not "only if this label's own view improved"): the whole trigger already
+    /// decided this frame frames the moving set better than what was staged. When a label has
+    /// several moving instances this frame, its largest confidence*area box represents it. Boxes
+    /// stored normalized 0-1 in _sourceWidth/_sourceHeight space, matching every other BestFrame.</summary>
+    private void PromoteAuthoritativeBest(
+        List<(string Label, YoloDotNet.Models.ObjectDetection Detection)> moving, DateTime nowUtc, CompositeFrameScore frameScore)
+    {
+        double NormArea(SKRectI b) => Math.Clamp(
+            (b.Width / (double)_sourceWidth) * (b.Height / (double)_sourceHeight), 0.0, 1.0);
+
+        foreach (var group in moving.GroupBy(m => m.Label, StringComparer.OrdinalIgnoreCase))
         {
+            var det = group
+                .OrderByDescending(m => MovementClassifier.Score(m.Detection.Confidence, NormArea(m.Detection.BoundingBox)))
+                .First().Detection;
             var b = det.BoundingBox;
-            var normalizedArea = Math.Clamp(
-                (b.Width / (double)_sourceWidth) * (b.Height / (double)_sourceHeight), 0.0, 1.0);
-            var score = MovementClassifier.Score(det.Confidence, normalizedArea);
-            if (_snapshotScoreByLabel.TryGetValue(label, out var retained) && score <= retained) continue;
-
-            _snapshotScoreByLabel[label] = score;
-            _authoritativeBestByLabel[label] = new BestFrame(nowUtc,
+            _authoritativeBestByLabel[group.Key] = new BestFrame(nowUtc,
                 b.Left / (double)_sourceWidth, b.Top / (double)_sourceHeight,
                 b.Width / (double)_sourceWidth, b.Height / (double)_sourceHeight,
                 det.Confidence);
         }
+
+        _stagedSnapshotScore = frameScore;
     }
 
     /// <summary>Intersects a rect with <paramref name="bounds"/> — the codebase hand-rolls rect math
@@ -1033,7 +1009,12 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         {
             _bestFrames.Reset(label);
             _authoritativeBestByLabel.Remove(label);
-            _snapshotScoreByLabel.Remove(label);
+            // Once every co-detected label's span has closed, nothing on screen is described by the
+            // staged composite score any more — drop it so a later, separate burst of activity runs
+            // its own fresh contest instead of being held to a bar (e.g. a two-object frame) it may
+            // never clear. Kept until then, so a track briefly lost mid-span and re-acquired doesn't
+            // discard the good crop already staged for it.
+            if (_authoritativeBestByLabel.Count == 0) _stagedSnapshotScore = default;
         }
     }
 

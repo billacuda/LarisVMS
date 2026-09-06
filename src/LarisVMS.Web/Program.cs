@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 using LarisVMS.Core;
@@ -68,7 +69,18 @@ builder.Services.AddDbContext<ApplicationDbContext>((provider, options) =>
 {
     var cs = provider.GetRequiredService<IConfiguration>().GetConnectionString("DefaultConnection");
     if (!string.IsNullOrWhiteSpace(cs))
-        options.UseSqlServer(cs);
+    {
+        // Split-query by default: the one multi-collection projection in the app
+        // (CameraService.ProjectWithoutCredentials — Groups + Streams) is far better served by two
+        // round-trips than a single cartesian join, and it's on hot paths (dashboard, playback,
+        // snapshots, /live). Single-collection Includes elsewhere are unaffected in practice, and EF
+        // adds its own PK ordering to correlate the split results, so nothing needs a manual OrderBy.
+        options.UseSqlServer(cs, sql => sql.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery));
+        // Every query that trips FirstWithoutOrderByAndFilterWarning is an unfiltered read of a keyed
+        // singleton settings table (EmailSettings, EntraSsoSettings) where the app already assumes
+        // 0–1 rows — the nondeterministic-order case the warning guards against can't arise here.
+        options.ConfigureWarnings(w => w.Ignore(CoreEventId.FirstWithoutOrderByAndFilterWarning));
+    }
 });
 
 // ── Data Protection ───────────────────────────────────────────────────────────

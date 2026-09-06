@@ -75,6 +75,24 @@ public static class CocoCategoryMap
         return Object;
     }
 
+    /// <summary>The text a timeline card, Snapshots card or live-overlay box shows for an AI
+    /// detection: "<paramref name="categoryName"/> — <paramref name="specificLabel"/>" normally, but
+    /// just the category when the specific label adds nothing on top of it. Today that is only the
+    /// Human bucket, whose sole class is "person" — so "Human — person" collapses to "Human" while
+    /// "Vehicle — truck" is kept in full (car vs. truck vs. bus is exactly the detail the open-ended
+    /// category system exists to preserve — object detection plan decision 5). Object is the opposite
+    /// case: there the specific label ("Object — backpack") is the only informative part, so it is
+    /// always kept. Em-dash separator, matching how the combined string was originally built.</summary>
+    public static string DisplayLabel(string categoryName, string? specificLabel)
+    {
+        ArgumentNullException.ThrowIfNull(categoryName);
+
+        if (string.IsNullOrEmpty(specificLabel)) return categoryName;
+        if (string.Equals(categoryName, Human, StringComparison.Ordinal)) return Human;
+        if (string.Equals(specificLabel, categoryName, StringComparison.OrdinalIgnoreCase)) return categoryName;
+        return $"{categoryName} — {specificLabel}";
+    }
+
     /// <summary>Emoji marker for one of these four category names, matching this app's
     /// emoji-as-icons convention (see DetectionDisplay.Emoji, the equivalent for the camera-native
     /// DetectionKind side). Object is the genuine catch-all, same fallback DetectionDisplay itself

@@ -363,7 +363,11 @@ window.larisvmsViewPlay = (function () {
                     getThumbnailUrl: function (atMs) {
                         return '/playback-thumbnail/' + cameraId + '?atUtc=' + encodeURIComponent(new Date(atMs).toISOString());
                     },
-                    onScrub: function (ms) { if (pbPlayer) pbPlayer.seekTo(ms, pbPlaying); }
+                    onScrub: function (ms) { if (pbPlayer) pbPlayer.seekTo(ms, pbPlaying); },
+                    // Rolling scrub freeze — hold the last decoded frame between drag positions
+                    // instead of flashing black. One tile per cell, so no fan-out.
+                    onScrubStart: function () { if (pbPlayer) pbPlayer.beginScrub(); },
+                    onScrubEnd: function () { if (pbPlayer) pbPlayer.endScrub(); }
                 });
             }
             await pbPlayer.seekTo(initialMs, false);

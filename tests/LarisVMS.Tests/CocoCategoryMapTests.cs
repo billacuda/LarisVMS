@@ -124,4 +124,36 @@ public class CocoCategoryMapTests
     {
         Assert.Equal(expectedCategory, CocoCategoryMap.Resolve(label));
     }
+
+    [Fact]
+    public void DisplayLabelCollapsesTheRedundantHumanPersonPairToJustHuman()
+    {
+        Assert.Equal("Human", CocoCategoryMap.DisplayLabel(CocoCategoryMap.Human, "person"));
+        Assert.Equal("Human", CocoCategoryMap.DisplayLabel(CocoCategoryMap.Human, "Person"));
+    }
+
+    [Theory]
+    [InlineData(CocoCategoryMap.Vehicle, "truck", "Vehicle — truck")]
+    [InlineData(CocoCategoryMap.Vehicle, "car", "Vehicle — car")]
+    [InlineData(CocoCategoryMap.Animal, "dog", "Animal — dog")]
+    [InlineData(CocoCategoryMap.Object, "backpack", "Object — backpack")]
+    public void DisplayLabelKeepsTheSpecificLabelWhenItAddsDetail(string category, string label, string expected)
+    {
+        Assert.Equal(expected, CocoCategoryMap.DisplayLabel(category, label));
+    }
+
+    [Fact]
+    public void DisplayLabelReturnsJustTheCategoryWhenThereIsNoSpecificLabel()
+    {
+        Assert.Equal("Vehicle", CocoCategoryMap.DisplayLabel(CocoCategoryMap.Vehicle, null));
+        Assert.Equal("Object", CocoCategoryMap.DisplayLabel(CocoCategoryMap.Object, ""));
+    }
+
+    [Fact]
+    public void DisplayLabelDoesNotRepeatACategoryThatEqualsItsLabel()
+    {
+        // Defensive: a future single-class category (or a label stored as its own category name)
+        // should read "Vehicle", not "Vehicle — Vehicle".
+        Assert.Equal("Vehicle", CocoCategoryMap.DisplayLabel(CocoCategoryMap.Vehicle, "vehicle"));
+    }
 }

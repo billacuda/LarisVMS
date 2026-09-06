@@ -666,7 +666,7 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
         (string Label, string Color, string Emoji, double? Confidence) AiBadge(long rowId)
         {
             var row = rows.First(x => x.Id == rowId);
-            var lbl = row.DetectedObjectLabel is { } sl ? $"{row.AiCategoryName} — {sl}" : row.AiCategoryName!;
+            var lbl = CocoCategoryMap.DisplayLabel(row.AiCategoryName!, row.DetectedObjectLabel);
             return (lbl, palette.ColorForAiCategory(row.AiCategoryName, row.AiCategoryColorHex),
                 CocoCategoryMap.Emoji(row.AiCategoryName!), row.BestBoxConfidence);
         }
@@ -697,9 +697,8 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
                 // Object detection plan decision 5: combined "category — label" text, not just the
                 // category — a card that only said "Vehicle" would lose exactly the detail
                 // (car vs. truck vs. bus) the open-ended category system exists to preserve.
-                label = r.DetectedObjectLabel is { } specificLabel
-                    ? $"{r.AiCategoryName} — {specificLabel}"
-                    : r.AiCategoryName;
+                // DisplayLabel drops the specific label only when it is redundant (Human — person).
+                label = CocoCategoryMap.DisplayLabel(r.AiCategoryName, r.DetectedObjectLabel);
                 // The Events settings palette, not the category row's own auto-assigned ColorHex —
                 // see EventPalette.ColorForAiCategory for why that divergence was a bug.
                 color = palette.ColorForAiCategory(r.AiCategoryName, r.AiCategoryColorHex);

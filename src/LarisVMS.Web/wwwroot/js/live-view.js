@@ -659,7 +659,12 @@
                 // "81%" reads at a glance where "0.81" does not. Guarded because confidence is a
                 // relayed field — an older node, or a malformed tick, must degrade to the plain
                 // label rather than painting "NaN%" over the video.
-                var label = box.category + ' — ' + box.label;
+                // Mirror LarisVMS.Core.CocoCategoryMap.DisplayLabel: drop the specific label when it
+                // adds nothing beyond the category. Today that's only Human (sole class "person") —
+                // "Vehicle — truck" is kept in full.
+                var label = (!box.label || box.category === 'Human' || box.label.toLowerCase() === box.category.toLowerCase())
+                    ? box.category
+                    : box.category + ' — ' + box.label;
                 if (showConfidence && typeof box.confidence === 'number' && isFinite(box.confidence)) {
                     label += ' ' + Math.round(box.confidence * 100) + '%';
                 }

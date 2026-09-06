@@ -15,7 +15,7 @@ work on phone, tablet, and desktop.
 
 ---
 
-## **Current version [0.187.0](CHANGELOG.md)**
+## **Current version [0.187.2](CHANGELOG.md)**
 
 ## Stack
 

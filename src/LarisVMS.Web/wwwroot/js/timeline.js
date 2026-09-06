@@ -431,6 +431,23 @@ window.larisvmsTimeline = (function () {
         // pointer physically is, as long as the button is still down.
         var dragging = false, dragStartX = 0, dragStartCenter = 0, dragMoved = false, dragPointerId = null;
 
+        // Scrub bracket: onScrubStart fires once when a drag (or click-to-jump) begins, onScrubEnd
+        // once when it ends — regardless of how many throttled onScrub calls happen in between, and
+        // regardless of which exit path fires (pointerup, pointercancel, pinch takeover). Lets the
+        // player hold the last decoded frame over the seeks a drag produces instead of flashing black.
+        // Idempotent so the window-level backstop listeners re-invoking endDrag stay harmless.
+        var scrubStarted = false;
+        function fireScrubStart() {
+            if (scrubStarted) return;
+            scrubStarted = true;
+            if (options.onScrubStart) options.onScrubStart();
+        }
+        function fireScrubEnd() {
+            if (!scrubStarted) return;
+            scrubStarted = false;
+            if (options.onScrubEnd) options.onScrubEnd();
+        }
+
         // Two-finger pinch-to-zoom (phone/tablet — wheel above covers mouse/trackpad, which never
         // fires a second simultaneous pointerdown). Tracks every currently-down pointer by id so a
         // second touch landing mid-drag can cleanly take over from single-pointer panning instead of
@@ -475,6 +492,9 @@ window.larisvmsTimeline = (function () {
                 // gesture that started as a single-finger drag and then became a pinch.
                 dragging = false;
                 canvas.style.cursor = 'pointer';
+                // A pinch never moves the playhead or fires onScrub, so close any scrub bracket the
+                // first finger opened.
+                fireScrubEnd();
                 if (ids.length === 2) {
                     pinching = true;
                     pinchStartDist = pointerDistance();
@@ -489,6 +509,9 @@ window.larisvmsTimeline = (function () {
             dragStartCenter = centerMs;
             dragPointerId = e.pointerId;
             canvas.style.cursor = 'grabbing';
+            // Opens the bracket for both a drag and a plain click-to-jump (endDrag fires the final
+            // onScrub, then fireScrubEnd).
+            fireScrubStart();
         });
         // Live-scrub while dragging is throttled, not fired on every raw pointermove — a browser
         // dispatches those at a much higher rate than any seek pipeline can usefully keep up with,
@@ -526,6 +549,10 @@ window.larisvmsTimeline = (function () {
             // committed even if it landed inside the last throttle window during a drag.
             if (options.onScrub) options.onScrub(Math.round(centerMs));
             scheduleReload();
+            // After the final onScrub so the player has the last seek dispatched before it stops
+            // holding the frozen frame. Idempotent, so a pinch-takeover that already ended the
+            // bracket, or the window-level backstop re-invoking endDrag, is harmless.
+            fireScrubEnd();
         }
 
         canvas.addEventListener('pointermove', function (e) {

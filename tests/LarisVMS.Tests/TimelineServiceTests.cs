@@ -1465,7 +1465,9 @@ public class TimelineServiceTests
 
         var card = Assert.Single(page.Items);
         Assert.Equal(2, card.Badges.Count);
-        Assert.Contains(card.Badges, b => b.Label == "Human — person");
+        // "Human — person" collapses to just "Human" (person is the sole class of that category);
+        // "Animal — dog" keeps its specific label.
+        Assert.Contains(card.Badges, b => b.Label == "Human");
         Assert.Contains(card.Badges, b => b.Label == "Animal — dog");
         // Primary = higher best-box confidence (the dog span) — that's the id the card's image uses.
         Assert.Equal("Animal — dog", card.Label);

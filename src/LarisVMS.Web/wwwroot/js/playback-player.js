@@ -146,6 +146,16 @@
         // load attempt ends in an error with nothing to reveal. Lazily created and left in the DOM for
         // this tile's lifetime — cheap, and the returned teardown() hides it on tile disposal.
         var freezeCanvas = null;
+        var freezeCanvasHasContent = false;   // set once captureFreezeFrame has drawn a real frame
+
+        // Timeline-scrub rolling freeze: while the user drags the scrubber, keep the last decoded
+        // frame on screen only until the frame at the new cursor position paints, then swap to it —
+        // an image that chases the cursor rather than one frame held for the whole drag. Set by
+        // beginScrub/endScrub (below).
+        var scrubbing = false;
+        var freezeReadyCleanup = null;         // detaches the currently-armed hideFreezeFrameOnReady listeners
+        var scrubEndTimer = null;
+        var SCRUB_FREEZE_TIMEOUT_MS = 5000;    // backstop hide if the final post-drag seek never paints (> STALL_TIMEOUT_MS)
 
         function ensureFreezeCanvas() {
             if (freezeCanvas) return freezeCanvas;
@@ -167,10 +177,15 @@
             return freezeCanvas;
         }
 
-        function showFreezeFrame() {
-            if (!videoEl.videoWidth || !videoEl.videoHeight) return; // nothing painted yet to freeze
+        // Refresh the stored snapshot from whatever the <video> is currently painting. No visibility
+        // change. Returns false (and leaves the previous snapshot intact) when the element has no
+        // frame — during a rapid scrub the element is often already blank from a prior tick's
+        // teardown, which is why the scrub path captures at paint time (hideFreezeFrameOnReady)
+        // rather than at seek time.
+        function captureFreezeFrame() {
+            if (!videoEl.videoWidth || !videoEl.videoHeight) return false;
             var canvas = ensureFreezeCanvas();
-            if (!canvas) return;
+            if (!canvas) return false;
             try {
                 canvas.width = videoEl.videoWidth;
                 canvas.height = videoEl.videoHeight;
@@ -179,8 +194,20 @@
                 // so a frozen frame while zoomed in doesn't visually snap back to 1x for the gap.
                 canvas.style.transform = videoEl.style.transform || '';
                 canvas.style.transformOrigin = videoEl.style.transformOrigin || '';
-                canvas.style.display = '';
-            } catch (e) { /* worst case this one transition flashes black, same as before this existed */ }
+                freezeCanvasHasContent = true;
+                return true;
+            } catch (e) { return false; /* worst case this one transition flashes black, as before this existed */ }
+        }
+
+        function revealFreezeFrame() {
+            if (freezeCanvas && freezeCanvasHasContent) freezeCanvas.style.display = '';
+        }
+
+        // Capture the current frame and show it. Used by the segment-boundary auto-advance path,
+        // where the element always still has the previous segment's last frame painted.
+        function showFreezeFrame() {
+            captureFreezeFrame();
+            revealFreezeFrame();
         }
 
         function hideFreezeFrame() {
@@ -190,19 +217,39 @@
         // Deferred hide: waits for the new segment to actually have a frame ready ('seeked' fires
         // once a programmatic currentTime assignment's target frame is decoded; 'playing' covers the
         // same moment for a still-playing element) rather than hiding the instant currentTime/play()
-        // are called, which can be a tick ahead of anything actually being painted.
+        // are called, which can be a tick ahead of anything actually being painted. Token-scoped:
+        // a 'seeked'/'playing' left over from a superseded (aborted) load must not hide the canvas
+        // while a newer load is still mid-flight showing black. On a real paint it also refreshes the
+        // snapshot to the just-painted frame, so the next scrub tick can reveal it instantly without
+        // needing the element to still be non-blank.
         function hideFreezeFrameOnReady() {
             if (!freezeCanvas || freezeCanvas.style.display === 'none') return;
+            if (freezeReadyCleanup) freezeReadyCleanup();   // supersede an earlier arming
+            var myTok = loadToken;
             var done = false;
+            function cleanup() {
+                videoEl.removeEventListener('seeked', onReady);
+                videoEl.removeEventListener('playing', onReady);
+                if (freezeReadyCleanup === cleanup) freezeReadyCleanup = null;
+            }
             function onReady() {
                 if (done) return;
                 done = true;
-                videoEl.removeEventListener('seeked', onReady);
-                videoEl.removeEventListener('playing', onReady);
+                cleanup();
+                if (myTok !== loadToken) return;            // a newer load owns the freeze now
+                captureFreezeFrame();                        // arm the canvas with the frame we're about to show
                 hideFreezeFrame();
+                if (scrubEndTimer) { clearTimeout(scrubEndTimer); scrubEndTimer = null; }
             }
+            freezeReadyCleanup = cleanup;
             videoEl.addEventListener('seeked', onReady);
             videoEl.addEventListener('playing', onReady);
+        }
+
+        function hideFreezeFrameForLoadFailure() {
+            // During a drag, hold the last good frame rather than going black on a transient load
+            // failure — endScrub's timeout and the stall watchdog bound how long it can sit.
+            if (!scrubbing) hideFreezeFrame();
         }
 
         function findSegment(targetMs) {
@@ -262,6 +309,10 @@
 
         function teardown() {
             loadToken++;
+            // Drop a superseded load's pending hide listeners at the exact instant its token is
+            // invalidated, so a stale 'seeked'/'playing' can't fire after this teardown and hide the
+            // freeze canvas over the now-blank element.
+            if (freezeReadyCleanup) freezeReadyCleanup();
             currentSegmentId = null;
             currentSegmentTimeOrigin = 0;
             currentSegmentComplete = false;
@@ -280,11 +331,11 @@
             // the network round trip entirely — see prefetch's own comment. Only ever matches the
             // sequential 'ended' advance; an arbitrary seek's target segment was never the one being
             // prefetched, so this is always a no-op miss for that path (falls through unchanged).
-            // Before teardown() blanks the element — see showFreezeFrame's own comment. A no-op when
-            // there's nothing painted yet (first load on this tile), and harmlessly re-entrant on a
-            // rapid scrub: the video is already blank by then, so the previously captured frame
-            // stays up rather than being overwritten with nothing.
-            showFreezeFrame();
+            // Before teardown() blanks the element — see captureFreezeFrame's own comment. A no-op
+            // when there's nothing painted yet (first load on this tile). During a scrub the element
+            // is usually already blank from a prior tick, so a fresh capture here would fail — just
+            // reveal the snapshot hideFreezeFrameOnReady refreshed on the last real paint.
+            if (scrubbing) revealFreezeFrame(); else showFreezeFrame();
 
             var prefetchedBytes = null;
             if (prefetch && prefetch.id === segment.id) {
@@ -308,7 +359,7 @@
                 // fetch latency it was written to describe.
                 if (!mimeType) {
                     if (statusEl) statusEl.textContent = 'No supported codec for this browser.';
-                    hideFreezeFrame();
+                    hideFreezeFrameForLoadFailure();
                     return;
                 }
 
@@ -325,7 +376,7 @@
                         sourceBuffer = prefetchedMediaSource.addSourceBuffer(mimeType);
                     } catch (e) {
                         if (statusEl) statusEl.textContent = 'This browser cannot decode this stream.';
-                        hideFreezeFrame();
+                        hideFreezeFrameForLoadFailure();
                         return;
                     }
                     // 0: a prefetch hit always fetched its segment whole, from true start (see
@@ -341,7 +392,7 @@
 
             if (!mimeType) {
                 if (statusEl) statusEl.textContent = 'No supported codec for this browser.';
-                hideFreezeFrame();
+                hideFreezeFrameForLoadFailure();
                 return;
             }
 
@@ -393,12 +444,12 @@
                         return;
                     }
                     if (statusEl) statusEl.textContent = 'Recorder is not responding — try again shortly.';
-                    hideFreezeFrame();
+                    hideFreezeFrameForLoadFailure();
                     return;
                 }
 
                 if (statusEl) statusEl.textContent = 'Could not reach server.';
-                hideFreezeFrame();
+                hideFreezeFrameForLoadFailure();
                 return;
             }
             signal.removeEventListener('abort', onOuterAbort);
@@ -411,7 +462,7 @@
                 // this page load).
                 if (resp.status === 404) knownBadSegmentIds[segment.id] = true;
                 if (statusEl) statusEl.textContent = 'Playback error (' + resp.status + ').';
-                hideFreezeFrame();
+                hideFreezeFrameForLoadFailure();
                 return;
             }
 
@@ -438,7 +489,7 @@
                     sourceBuffer = mediaSource.addSourceBuffer(mimeType);
                 } catch (e) {
                     if (statusEl) statusEl.textContent = 'This browser cannot decode this stream.';
-                    hideFreezeFrame();
+                    hideFreezeFrameForLoadFailure();
                     return;
                 }
 
@@ -569,7 +620,7 @@
                 if (!startedPlayback) {
                     console.error('[playback] segment fully streamed but nothing buffered for camera', cameraId);
                     if (statusEl) statusEl.textContent = 'Segment could not be decoded.';
-                    hideFreezeFrame();
+                    hideFreezeFrameForLoadFailure();
                 }
             }
 
@@ -654,7 +705,7 @@
                     currentSegmentComplete = true;
                 } else {
                     if (statusEl) statusEl.textContent = 'Segment could not be decoded.';
-                    hideFreezeFrame();
+                    hideFreezeFrameForLoadFailure();
                     return;
                 }
                 if (statusEl) statusEl.textContent = '';
@@ -737,7 +788,15 @@
             if (segment.id === currentSegmentId && currentSegmentComplete) {
                 var targetTime = currentSegmentTimeOrigin + (targetMs - segment.startUtc) / 1000;
                 if (isTimeBuffered(targetTime)) {
+                    // Rolling scrub freeze: the bare currentTime assignment shows a decode-blank for
+                    // the instant between the seek and the target frame decoding — invisible for a
+                    // single seek, a constant flicker at ~8 seeks/sec while dragging. Reveal the
+                    // snapshot (refreshed on the previous tick's 'seeked') across that gap; the
+                    // token-scoped ready handler swaps to the new frame ~1 frame later and re-arms
+                    // the snapshot for the next tick.
+                    if (scrubbing) revealFreezeFrame();
                     videoEl.currentTime = targetTime;
+                    if (scrubbing) hideFreezeFrameOnReady();
                     if (autoplay) videoEl.play().catch(function () { /* see above */ });
                     return;
                 }
@@ -911,7 +970,31 @@
                 desiredPlaybackRate = rate;
                 videoEl.playbackRate = rate;
             },
+            // Timeline-scrub bracket (see the rolling-freeze block near freezeCanvas). Seed the
+            // canvas with the frame on screen right now (steady playback fires no 'seeked'/'playing'
+            // to have refreshed it since the last load); each subsequent real paint re-captures it
+            // via hideFreezeFrameOnReady, so the held image rolls forward with the cursor. A no-op
+            // if the tile is mid-blank (never loaded / in a gap) — black until the first tick loads.
+            beginScrub: function () {
+                scrubbing = true;
+                if (scrubEndTimer) { clearTimeout(scrubEndTimer); scrubEndTimer = null; }
+                captureFreezeFrame();
+            },
+            endScrub: function () {
+                scrubbing = false;
+                // The timeline already dispatched the final seek (endDrag fires onScrub, then
+                // onScrubEnd) — arm the ungated ready handler to drop the frozen frame the instant
+                // that seek paints, with a hard backstop in case it never does.
+                hideFreezeFrameOnReady();
+                if (scrubEndTimer) clearTimeout(scrubEndTimer);
+                scrubEndTimer = setTimeout(function () {
+                    scrubEndTimer = null;
+                    hideFreezeFrame();
+                }, SCRUB_FREEZE_TIMEOUT_MS);
+            },
             teardown: function () {
+                scrubbing = false;
+                if (scrubEndTimer) { clearTimeout(scrubEndTimer); scrubEndTimer = null; }
                 teardown();
                 clearStallTimer(); // tile is being disposed/rebuilt — a pending timer must not fire recovery on it later
                 hideFreezeFrame(); // tile is being disposed/rebuilt — never leave a frozen frame over a dead tile
@@ -1397,6 +1480,11 @@
         if (el) el.textContent = new Date(targetMs).toLocaleString();
         return Promise.all(pending);
     }
+
+    // Every tile freezes/unfreezes together for a scrub drag on either timeline (1 tile single-camera,
+    // N in a grid) — see createTile's beginScrub/endScrub.
+    function beginScrubAll() { Object.keys(tiles).forEach(function (id) { tiles[id].player.beginScrub(); }); }
+    function endScrubAll() { Object.keys(tiles).forEach(function (id) { tiles[id].player.endScrub(); }); }
 
     // Both timelines always track the one shared playhead — under the tape-scrubber model
     // (timeline.js) the marker itself never moves, so keeping the strip in sync means recentering
@@ -1982,6 +2070,8 @@
                     return fetch(url).then(function (r) { return r.ok ? r.json() : []; }).catch(function () { return []; });
                 },
                 onScrub: function (ms) { seekAll(ms, playing); },
+                onScrubStart: beginScrubAll,
+                onScrubEnd: endScrubAll,
                 onRangeChange: function (ms) { if (globalTimeline) globalTimeline.setRange(ms); schedulePositionSave(); }
             });
         }
@@ -1994,6 +2084,8 @@
                 initialRangeMs: initialRangeMs, // kept in lockstep with the per-camera timeline above
                 getBuckets: getGlobalBuckets,
                 onScrub: function (ms) { seekAll(ms, playing); },
+                onScrubStart: beginScrubAll,
+                onScrubEnd: endScrubAll,
                 onRangeChange: function (ms) { if (timeline) timeline.setRange(ms); schedulePositionSave(); }
             });
         }

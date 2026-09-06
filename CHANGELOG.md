@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.187.2] - 2026-09-05
+
+### Fixed
+
+- Dragging the recording timeline no longer flashes the video black between positions. The last
+  decoded frame now stays on screen until the frame at the new position loads, so the picture
+  follows the scrubber instead of strobing. Black still appears where there is genuinely no
+  recording for that moment.
+
+### Changed
+
+- Database queries that load a camera together with its groups and streams now run as split
+  queries, avoiding a slow combined join on cameras that belong to many groups.
+
+## [0.187.1] - 2026-09-05
+
+### Fixed
+
+- **A snapshot with several tagged objects now crops around all of them, not just one.** The
+  eager crop always covers the union of every moving object in the frame — the previous
+  fallback that discarded the union and framed only the single highest-confidence object when
+  they were spread across the scene is gone. The frame that becomes the snapshot is now chosen
+  by how well it captures the whole moving set: the frame with the most moving objects wins,
+  and ties break on their combined confidence and size, so a later frame showing one object
+  up close no longer replaces an earlier one that framed everything. Per-object peak
+  confidence is still reported as before.
+
+### Changed
+
+- AI detections of people are now labelled just **"Human"** instead of "Human — person" on
+  timeline cards, snapshot cards and the live-view box overlay. Categories with a specific
+  class that adds detail ("Vehicle — truck", "Object — backpack") are unchanged.
+
 ## [0.187.0] - 2026-09-05
 
 ### Added
