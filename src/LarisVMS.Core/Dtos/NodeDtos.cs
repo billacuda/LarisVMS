@@ -245,7 +245,16 @@ public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? Stor
     /// `fps=` filter drops the rest before inference, so the GPU idles between frames instead of
     /// running flat out. Node-scoped. 0 = no cap (decode-rate). Default 10 — plenty for NVR object
     /// tracking, and where the live overlay poll already tops out.</summary>
-    int MaxDetectionFps = 10);
+    int MaxDetectionFps = 10,
+    /// <summary>Detection.DFineTensorRtMode — "Off" (default) / "FP32" / "FP16", node-scoped like the
+    /// other Detection.* fields (Setting + SettingOverride(Scope.Node)). Only acted on when the family
+    /// resolves to "DFine" and the node has the machine-local Vision:EnableTensorRt set with a working
+    /// TensorRT SDK. Supersedes the machine-local Vision:DFineTensorRtMode (still honoured as a
+    /// fallback when this arrives blank from an older server). FP32 runs the plain model through
+    /// TensorRT; FP16 would need a mixed-precision model that isn't producible yet, so a node set to
+    /// FP16 transparently runs FP32 until one is bundled. Appended last so the positional NodeService
+    /// construction stays stable; defaults "Off" so an older node reads the safe value.</summary>
+    string DFineTensorRtMode = "Off");
 
 /// <summary>One completed MotionSpan, batch-reported the same way SegmentReportItem is — see
 /// NodeService.RecordMotionSpansAsync for why plain REST + EF insert is enough here despite the

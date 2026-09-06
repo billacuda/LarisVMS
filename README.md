@@ -15,7 +15,7 @@ work on phone, tablet, and desktop.
 
 ---
 
-## **Current version [0.186.3](CHANGELOG.md)**
+## **Current version [0.187.0](CHANGELOG.md)**
 
 ## Stack
 
@@ -265,7 +265,13 @@ missing`) and the node falls back to DirectML:
   Downloading the archive from NVIDIA instead works the same way: unpack it anywhere, then either
   point `Vision:CudnnPath` at its `bin` or put that directory on `PATH`.
 - **TensorRT 10.13.3** — optional, performance only. Off unless `Vision:EnableTensorRt` is set, which
-  also requires `Vision:TensorRtEngineCachePath`.
+  also requires `Vision:TensorRtEngineCachePath`. YOLOX follows `Vision:EnableTensorRt` /
+  `Vision:TensorRtPrecision` directly. D-FINE has its own web control instead —
+  **Admin > Settings > Detection > "D-FINE TensorRT"** (`Off` / `FP32`, node-scoped, with a per-node
+  override on Admin > Nodes). `FP32` gives graph fusion and kernel selection with no precision risk;
+  it still does nothing unless the node also has `Vision:EnableTensorRt` set and the SDK installed.
+  An `FP16` option exists but is disabled — a straight FP16 cast overflows D-FINE's transformer
+  decoder and the mixed-precision model that would avoid it isn't producible with current tooling.
 
 A detection model is also required: `build-node.ps1` bundles whatever `.onnx` files are in `models/`
 at the repo root into the node package, and a node with no model can't detect anything. No model is

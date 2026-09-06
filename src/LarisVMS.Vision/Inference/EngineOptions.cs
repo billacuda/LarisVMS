@@ -46,6 +46,17 @@ public sealed record EngineOptions
 
     public string TensorRtPrecision { get; init; } = "FP16";
 
+    /// <summary>
+    /// Adds <c>trt_layer_norm_fp32_fallback</c> to the TensorRT provider options — forces the
+    /// Pow + Reduce ops that make up a LayerNorm subgraph to run in FP32 even under
+    /// <c>trt_fp16_enable</c>. D-FINE is a DETR/transformer whose LayerNorm/attention activations
+    /// overflow FP16's range under the TensorRT builder (NaN/Inf <c>logits</c>/<c>pred_boxes</c> that
+    /// decode to zero detections); this is the ONNX-Runtime-native half of the mitigation, alongside
+    /// the FP16 mixed-precision model file itself (see DetectionModelCatalog / fetch_dfine.py). Inert
+    /// unless the resolved backend is CUDA with <see cref="EnableTensorRt"/> and FP16 precision.
+    /// </summary>
+    public bool TensorRtLayerNormFp32Fallback { get; init; }
+
     /// <summary>Where TensorRT persists compiled engines and its timing cache. Leave null to use the
     /// default under %ProgramData%\LarisVMS (see OrtSessionFactory.ResolveTensorRtCachePath) — without
     /// a cache every process start recompiles the engine from scratch, which takes minutes, so there

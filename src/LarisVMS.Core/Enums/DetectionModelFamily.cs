@@ -7,7 +7,7 @@ namespace LarisVMS.Core.Enums;
 /// than per-camera: one Vision Service process serves every camera on a node from the same loaded
 /// model, so which model family that process uses is inherently a per-node choice.
 ///
-/// YoloX is the Auto default on every accelerator. DFine stays fully supported but opt-in. RfDetr is
+/// YoloX is the Auto default on every accelerator. DFine is selectable but experimental. RfDetr is
 /// still declared-only — DetectionEngineFactory throws "not yet implemented" and
 /// DetectionModelSelection.Choose falls it back to DFine. Adding RF-DETR later is "implement a
 /// decoder + un-disable an admin-picker option," not an enum/schema migration.

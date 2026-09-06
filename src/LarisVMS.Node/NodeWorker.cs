@@ -1353,7 +1353,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         var signature = string.Join('|', watchRtspUri, sourceWidth, sourceHeight, config.AspectMode,
             camera.AiConfidence, camera.AiIou, config.ReportIdleDetections, config.AiIdleTimeoutSeconds,
             watchRole, _resolvedAccelerator, _resolvedDetectionModelFamily, config.DFineWeights, config.YoloXSize,
-            decodeFpsCap, config.GpuPreprocessing);
+            decodeFpsCap, config.GpuPreprocessing, config.DFineTensorRtMode);
 
         if (_activeVision.TryGetValue(camera.CameraId, out var existing) && existing.ConfigSignature == signature) return; // already watching, unchanged
 
@@ -1367,7 +1367,11 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             // camera must not restart its pipeline (that would mean a multi-minute TensorRT engine
             // rebuild for a cosmetic change). The name in the Vision log therefore updates on the
             // next restart for some other reason, which is the right trade.
-            camera.Name ?? "");
+            camera.Name ?? "",
+            // Detection.DFineTensorRtMode — node-scoped, only acted on for a D-FINE pipeline. In
+            // `signature` above: switching it changes both the loaded model file and the compiled
+            // TensorRT engine, so the pipeline must restart.
+            config.DFineTensorRtMode);
 
         // Never stack two starts for the same camera — see _visionStartsInFlight's own comment.
         if (!_visionStartsInFlight.TryAdd(camera.CameraId, 0)) return;

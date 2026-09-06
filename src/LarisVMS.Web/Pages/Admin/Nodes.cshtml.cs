@@ -41,6 +41,9 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
     /// ModelFamilyOverride above.</summary>
     public Dictionary<Guid, string> AspectModeOverride { get; set; } = [];
     public Dictionary<Guid, string> EffectiveAspectMode { get; set; } = [];
+    /// <summary>Detection.DFineTensorRtMode per-node override — same shape as AspectModeOverride.</summary>
+    public Dictionary<Guid, string> DFineTensorRtModeOverride { get; set; } = [];
+    public Dictionary<Guid, string> EffectiveDFineTensorRtMode { get; set; } = [];
     public Dictionary<Guid, double?> DaysRemaining { get; set; } = [];
     public Dictionary<Guid, int> StaleCameraCountByNode { get; set; } = [];
     public Dictionary<Guid, List<StaleCameraRow>> StaleCamerasByNode { get; set; } = [];
@@ -100,12 +103,14 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
             EffectiveModelFamily[n.Id] = await settings.GetAsync("Detection.ModelFamily", "Auto", nodeId: n.Id);
             AspectModeOverride[n.Id] = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.AspectMode") ?? "";
             EffectiveAspectMode[n.Id] = await settings.GetAsync("Detection.AspectMode", "Letterbox", nodeId: n.Id);
+            DFineTensorRtModeOverride[n.Id] = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.DFineTensorRtMode") ?? "";
+            EffectiveDFineTensorRtMode[n.Id] = await settings.GetAsync("Detection.DFineTensorRtMode", "Off", nodeId: n.Id);
         }
     }
 
     public async Task<IActionResult> OnPostUpdateAsync(Guid id, string name, string? storageRootPath, int? retentionDaysOverride,
         string? aiAccelerator, string? modelFamilyOverride, string? dfineWeightsOverride, string? yoloXSizeOverride,
-        int? maxFpsOverride, string? aspectModeOverride)
+        int? maxFpsOverride, string? aspectModeOverride, string? dfineTensorRtModeOverride)
     {
         try
         {
@@ -120,6 +125,7 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
             var oldYoloXSizeOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.YoloXSize");
             var oldMaxFpsOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.MaxFps");
             var oldAspectModeOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.AspectMode");
+            var oldDFineTensorRtModeOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.DFineTensorRtMode");
             // "" (blank/Auto) resolves as null — see NodeConfigResponse.AiAccelerator's own doc
             // comment for why Auto (not an explicit choice) is the safe default.
             var accelerator = Enum.TryParse<AiAccelerator>(aiAccelerator, out var acc) ? acc : (AiAccelerator?)null;
@@ -137,6 +143,8 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
                 maxFpsOverride?.ToString(), User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Node, id, "Detection.AspectMode",
                 string.IsNullOrEmpty(aspectModeOverride) ? null : aspectModeOverride, User.Identity?.Name);
+            await settings.SetOverrideAsync(SettingScope.Node, id, "Detection.DFineTensorRtMode",
+                string.IsNullOrEmpty(dfineTensorRtModeOverride) ? null : dfineTensorRtModeOverride, User.Identity?.Name);
 
             var details = AuditDiff.Build(
                 AuditDiff.Of("Name", before?.Name, name),
@@ -147,7 +155,8 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
                 AuditDiff.Of("D-FINE weights override", oldDFineWeightsOverride, dfineWeightsOverride),
                 AuditDiff.Of("YOLOX size override", oldYoloXSizeOverride, yoloXSizeOverride),
                 AuditDiff.Of("Max detection fps override", oldMaxFpsOverride, maxFpsOverride?.ToString()),
-                AuditDiff.Of("Aspect fitting override", oldAspectModeOverride, aspectModeOverride));
+                AuditDiff.Of("Aspect fitting override", oldAspectModeOverride, aspectModeOverride),
+                AuditDiff.Of("D-FINE TensorRT override", oldDFineTensorRtModeOverride, dfineTensorRtModeOverride));
 
             await LogAsync("Node.Update", details is null ? $"{name} ({id})" : $"{name} ({id}) — {details}");
         }

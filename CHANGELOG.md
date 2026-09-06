@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.187.0] - 2026-09-05
+
+### Added
+
+- **The D-FINE detection engine can now run on TensorRT at FP32**, selected from Admin > Settings >
+  Detection with the new "D-FINE TensorRT" control (`Off` / `FP32`) and a per-node override on
+  Admin > Nodes. `Off` (the default) keeps D-FINE on plain CUDA. `FP32` runs it through TensorRT for
+  graph fusion and kernel selection with no FP16 math — a safe speedup, no precision risk. This is
+  the first time D-FINE can use TensorRT at all: it has ignored it by default since 0.182.0 because
+  a straight FP16 cast overflows its transformer decoder.
+- An `FP16` option is present in the control but **disabled and not selectable yet**. Making D-FINE
+  FP16-safe needs a mixed-precision model (backbone FP16, decoder FP32) that no available conversion
+  tool produces correctly. The setting, per-node override, model-filename resolution
+  (`*.fp16.onnx`), engine cache key and the `trt_layer_norm_fp32_fallback` provider option are all
+  wired, so FP16 activates automatically for a node once such a model is bundled in its package —
+  until then a node set to FP16 transparently runs FP32 and logs a warning.
+
+### Changed
+
+- **The D-FINE detection model is now labelled "experimental" in Admin > Settings > Detection and
+  the per-node override.** It runs, but results can be unpredictable, and an object that straddles
+  two tiles under the Slice aspect-fitting option is currently missed or duplicated. YOLOX remains
+  the recommended default.
+- The node-scoped `Detection.DFineTensorRtMode` setting supersedes the machine-local
+  `Vision:DFineTensorRtMode` environment variable / appsettings key, which is now only a fallback
+  for a node that has not yet received the pushed value. The machine-local `Vision:EnableTensorRt`
+  master switch and TensorRT SDK paths are unchanged — they stay per-machine.
+- When a D-FINE frame decodes to zero detections on non-finite model output, the vision-log warning
+  now points at `Detection.DFineTensorRtMode` in the web UI rather than the old node-local env var.
+
+### Notes
+
+- D-FINE FP32 TensorRT needs the node to have `Vision:EnableTensorRt` set and the TensorRT 10.x SDK
+  installed — the setting does nothing on a node without them.
+- The first start after enabling `FP32` for a node recompiles the TensorRT engine — a multi-minute
+  cold build per distinct camera resolution, serialized across cameras, same as the YOLOX/Slice
+  first-start already documented in 0.186.2. Subsequent starts load from cache.
+- Recorder nodes pick this up via auto-update (Node + Vision Service binaries); no
+  `install-node.ps1` re-run.
+
 ## [0.186.3] - 2026-09-05
 
 ### Changed

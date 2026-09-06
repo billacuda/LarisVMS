@@ -23,8 +23,8 @@ public class ModelPathResolutionTests : IDisposable
     }
 
     private static string Resolve(string configuredPath, DetectionModelFamily family = DetectionModelFamily.DFine,
-        DFineWeights dfineWeights = DFineWeights.Obj2Coco, YoloXSize yoloXSize = YoloXSize.S) =>
-        CameraPipelineManager.ResolveModelPath(configuredPath, family, dfineWeights, yoloXSize, NullLogger.Instance);
+        DFineWeights dfineWeights = DFineWeights.Obj2Coco, YoloXSize yoloXSize = YoloXSize.S, bool dfineFp16Mixed = false) =>
+        CameraPipelineManager.ResolveModelPath(configuredPath, family, dfineWeights, yoloXSize, NullLogger.Instance, dfineFp16Mixed);
 
     public void Dispose()
     {
@@ -100,6 +100,48 @@ public class ModelPathResolutionTests : IDisposable
 
         Assert.Equal(Path.Combine(dir, "custom-a.onnx"), first);
         Assert.Equal(first, again); // stable across calls — a node must not switch models on restart
+    }
+
+    [Fact]
+    public void FP16ModeResolvesTheMixedPrecisionFileName()
+    {
+        // Detection.DFineTensorRtMode = FP16 must load <name>.fp16.onnx (backbone FP16 / decoder
+        // FP32), never the plain FP32 file — running that under trt_fp16_enable is the silent-NaN
+        // case the mixed export exists to prevent.
+        var dir = NewModelsDirectory();
+        var plain = Path.Combine(dir, "dfine_s_obj2coco.onnx");
+        var mixed = Path.Combine(dir, "dfine_s_obj2coco.fp16.onnx");
+        File.WriteAllText(plain, "");
+        File.WriteAllText(mixed, "");
+
+        Assert.Equal(mixed, Resolve(Path.Combine(dir, "model.onnx"), dfineFp16Mixed: true));
+        Assert.Equal(plain, Resolve(Path.Combine(dir, "model.onnx"), dfineFp16Mixed: false));
+    }
+
+    [Fact]
+    public void FP16ModeThrowsRatherThanFallingBackWhenTheMixedFileIsMissing()
+    {
+        // The plain file is present and would win the glob — but FP16 must hard-stop, not silently
+        // run the FP32 model at FP16 precision. (CameraPipelineManager checks File.Exists before
+        // ever passing dfineFp16Mixed: true, so this only guards a file that vanished mid-flight.)
+        var dir = NewModelsDirectory();
+        File.WriteAllText(Path.Combine(dir, "dfine_s_obj2coco.onnx"), "");
+
+        var ex = Assert.Throws<FileNotFoundException>(
+            () => Resolve(Path.Combine(dir, "model.onnx"), dfineFp16Mixed: true));
+        Assert.Contains("dfine_s_obj2coco.fp16.onnx", ex.Message);
+        Assert.Contains("DFineTensorRtMode", ex.Message);
+    }
+
+    [Fact]
+    public void TheGlobFallbackNeverPicksAMixedPrecisionFile()
+    {
+        // An FP32/Off run with only a *.fp16.onnx present is a broken package, not a reason to run
+        // the mixed model — the last-resort glob excludes them.
+        var dir = NewModelsDirectory();
+        File.WriteAllText(Path.Combine(dir, "dfine_s_obj2coco.fp16.onnx"), "");
+
+        Assert.Throws<FileNotFoundException>(() => Resolve(Path.Combine(dir, "model.onnx")));
     }
 
     [Fact]

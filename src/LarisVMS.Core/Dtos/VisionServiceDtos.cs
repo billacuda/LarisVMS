@@ -104,7 +104,15 @@ public record VisionStartCameraRequest(
     ///
     /// Blank when an older node build talks to a newer Vision Service; every consumer falls back to
     /// the short camera id, so the log degrades to something still readable rather than to "[]".</summary>
-    string CameraName = "")
+    string CameraName = "",
+    /// <summary>Detection.DFineTensorRtMode resolved for this node ("Off" / "FP32" / "FP16") — only
+    /// acted on for a D-FINE pipeline. Blank means "an older node that doesn't send it": CameraPipeline
+    /// Manager then falls back to the machine-local Vision:DFineTensorRtMode. FP32 forces the TensorRT
+    /// precision to FP32 on the plain model; Off (or unrecognised) keeps D-FINE on plain CUDA. FP16
+    /// would use a mixed-precision <c>*.fp16.onnx</c> model — none is producible yet, so the manager
+    /// transparently downgrades FP16 to FP32 (with a warning) unless such a file is bundled. Appended
+    /// so NodeWorker's positional construction stays stable.</summary>
+    string DFineTensorRtMode = "")
 {
     /// <summary>What this camera should be called in a log line. The operator's own name when there
     /// is one, otherwise the first block of the camera id — short enough to scan a column of, and

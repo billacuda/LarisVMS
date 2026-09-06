@@ -182,6 +182,15 @@ public static class OrtSessionFactory
                 if (options.TensorRtBuilderOptimizationLevel is { } level)
                     providerOptions["trt_builder_optimization_level"] = level.ToString();
 
+                // D-FINE (a DETR/transformer) overflows FP16 in its LayerNorm subgraphs under the
+                // TensorRT builder — trt_layer_norm_fp32_fallback forces those Pow + Reduce ops back
+                // to FP32 while the rest of the graph keeps FP16 throughput. Set only for D-FINE +
+                // FP16 (see CameraDetectionPipeline); the FP16 mixed-precision model file is the
+                // primary mitigation, this is a second line of defence. An ORT build that doesn't
+                // know the key is handled by the retry below.
+                if (options.TensorRtLayerNormFp32Fallback)
+                    providerOptions["trt_layer_norm_fp32_fallback"] = "1";
+
                 // Pin the builder to exactly one shape when this pipeline batches — see
                 // EngineOptions.BatchSize/TensorRtBatchProfile's own doc comments for why the shape
                 // is fixed for the pipeline's whole lifetime (never a per-call variable), so min/opt/
@@ -222,26 +231,33 @@ public static class OrtSessionFactory
 
                 using (var trtOptions = new OrtTensorRTProviderOptions())
                 {
-                    try
+                    // UpdateOptions rejects the whole dictionary if it doesn't recognize one key, and
+                    // the outer catch would then drop this node off TensorRT entirely -- a far worse
+                    // regression than losing any single one of these, none of which correctness
+                    // depends on (each graph variant is already uniquely named at the graph level;
+                    // the FP16 mixed-precision model is the real overflow fix). So on a rejection,
+                    // drop one optional key and retry rather than losing the provider.
+                    string[] optionalKeys = ["trt_engine_cache_prefix", "trt_layer_norm_fp32_fallback"];
+                    while (true)
                     {
-                        trtOptions.UpdateOptions(providerOptions);
-                    }
-                    catch (Exception ex) when (cacheKey is not null)
-                    {
-                        // UpdateOptions rejects the whole dictionary if it doesn't recognize one key,
-                        // and the outer catch would then drop this node off TensorRT entirely. Losing
-                        // TensorRT is a far worse regression than losing a readable cache filename,
-                        // and correctness doesn't depend on this option (the graph names already
-                        // disambiguate the variants), so retry once without it.
-                        logger.LogWarning(ex,
-                            "This ONNX Runtime build rejected the trt_engine_cache_prefix option -- continuing with " +
-                            "TensorRT's own default engine cache naming. Engines stay correct (each graph variant is " +
-                            "already uniquely named at the graph level), but the cache directory is unreadable and " +
-                            "the engine build will report the cache as cold on every start for this camera, since it " +
-                            "probes for a prefix nothing is written under.");
-                        providerOptions.Remove("trt_engine_cache_prefix");
-                        cacheKey = null;
-                        trtOptions.UpdateOptions(providerOptions);
+                        try
+                        {
+                            trtOptions.UpdateOptions(providerOptions);
+                            break;
+                        }
+                        catch (Exception ex)
+                        {
+                            var drop = optionalKeys.FirstOrDefault(providerOptions.ContainsKey);
+                            if (drop is null) throw; // nothing optional left -- a real failure
+                            logger.LogWarning(ex,
+                                "This ONNX Runtime build rejected a TensorRT provider option -- retrying without " +
+                                "'{Key}'. It is an optimization, not a correctness setting: without " +
+                                "trt_engine_cache_prefix the cache directory is unreadable and every start probes " +
+                                "cold for this camera; without trt_layer_norm_fp32_fallback D-FINE FP16 relies solely " +
+                                "on the mixed-precision model file.", drop);
+                            providerOptions.Remove(drop);
+                            if (drop == "trt_engine_cache_prefix") cacheKey = null;
+                        }
                     }
                     // The append copies the options into the session; disposing trtOptions after is safe.
                     sessionOptions.AppendExecutionProvider_Tensorrt(trtOptions);
@@ -254,10 +270,11 @@ public static class OrtSessionFactory
                 // logs that half, including whether the cache was cold; reading only this line during
                 // a cold start is what made a multi-minute stall look like a healthy startup.
                 logger.LogInformation(
-                    "TensorRT execution provider appended: gpuId={GpuId}, fp16={Fp16}, engine+timing cache={CachePath}, " +
-                    "engine cache prefix={CachePrefix}, max builder workspace={WorkspaceMb} MB, " +
+                    "TensorRT execution provider appended: gpuId={GpuId}, fp16={Fp16}, layerNormFp32Fallback={LnFallback}, " +
+                    "engine+timing cache={CachePath}, engine cache prefix={CachePrefix}, max builder workspace={WorkspaceMb} MB, " +
                     "builder optimization level={Level}, batchSize={BatchSize}.",
-                    options.GpuId, fp16 == "1", cachePath, cacheKey ?? "(ORT default)",
+                    options.GpuId, fp16 == "1", providerOptions.ContainsKey("trt_layer_norm_fp32_fallback"),
+                    cachePath, cacheKey ?? "(ORT default)",
                     options.TensorRtMaxWorkspaceBytes / (1024 * 1024),
                     options.TensorRtBuilderOptimizationLevel?.ToString() ?? "default", options.BatchSize);
             }

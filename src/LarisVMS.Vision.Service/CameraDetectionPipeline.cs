@@ -219,7 +219,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
 
     public CameraDetectionPipeline(VisionStartCameraRequest request, VisionServiceOptions serviceOptions,
         string resolvedFfmpegPath, string resolvedModelPath, DetectionModelFamily modelFamily, DFineWeights dfineWeights,
-        YoloXSize yoloXSize, AspectMode aspectMode, HttpClient http, ILoggerFactory loggerFactory)
+        YoloXSize yoloXSize, AspectMode aspectMode, string dfineTensorRtMode, HttpClient http, ILoggerFactory loggerFactory)
     {
         _request = request;
         _http = http;
@@ -320,22 +320,28 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
 
         // D-FINE (a DETR/transformer) is fragile under the TensorRT builder in a way YOLOX (the CNN
         // TensorRT was validated against) is not — FP16 activation overflow yields NaN/Inf logits
-        // that DFineDecoder silently drops as zero detections. Vision:DFineTensorRtMode gates it for
-        // this family only; every other family follows EnableTensorRt/TensorRtPrecision as-is.
-        var (enableTensorRt, tensorRtPrecision) = (serviceOptions.EnableTensorRt, serviceOptions.TensorRtPrecision);
+        // that DFineDecoder silently drops as zero detections. Detection.DFineTensorRtMode (resolved
+        // in CameraPipelineManager: the server-pushed value, else this machine's own local setting)
+        // gates it for this family only; every other family follows EnableTensorRt/TensorRtPrecision
+        // as-is. FP16 additionally runs the mixed-precision *.fp16.onnx model (decoder kept in FP32 —
+        // resolvedModelPath already points at it) and turns on trt_layer_norm_fp32_fallback as a
+        // second line of defence.
+        var (enableTensorRt, tensorRtPrecision, layerNormFp32Fallback) =
+            (serviceOptions.EnableTensorRt, serviceOptions.TensorRtPrecision, false);
         if (modelFamily == DetectionModelFamily.DFine)
         {
-            (enableTensorRt, tensorRtPrecision) = (serviceOptions.DFineTensorRtMode ?? "Off").Trim().ToLowerInvariant() switch
+            (enableTensorRt, tensorRtPrecision, layerNormFp32Fallback) = dfineTensorRtMode.Trim().ToLowerInvariant() switch
             {
-                "fp16" => (serviceOptions.EnableTensorRt, serviceOptions.TensorRtPrecision),
-                "fp32" => (serviceOptions.EnableTensorRt, "FP32"),
-                _ => (false, serviceOptions.TensorRtPrecision), // "off" and anything unrecognized
+                "fp16" => (serviceOptions.EnableTensorRt, "FP16", true),
+                "fp32" => (serviceOptions.EnableTensorRt, "FP32", false),
+                _ => (false, serviceOptions.TensorRtPrecision, false), // "off" and anything unrecognized
             };
             _logger.LogInformation(
-                "D-FINE TensorRT mode: {Mode} -> TensorRT {State}{Precision} for this camera's detection engine.",
-                serviceOptions.DFineTensorRtMode,
+                "D-FINE TensorRT mode: {Mode} -> TensorRT {State}{Precision}{Fallback} for this camera's detection engine.",
+                dfineTensorRtMode,
                 enableTensorRt ? "enabled" : "disabled (plain CUDA)",
-                enableTensorRt ? $" at {tensorRtPrecision}" : string.Empty);
+                enableTensorRt ? $" at {tensorRtPrecision}" : string.Empty,
+                enableTensorRt && layerNormFp32Fallback ? " (LayerNorm kept in FP32)" : string.Empty);
         }
 
         _engineOptions = new EngineOptions
@@ -345,6 +351,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             CudnnPath = serviceOptions.CudnnPath,
             EnableTensorRt = enableTensorRt,
             TensorRtPrecision = tensorRtPrecision,
+            TensorRtLayerNormFp32Fallback = layerNormFp32Fallback,
             TensorRtEngineCachePath = serviceOptions.TensorRtEngineCachePath,
             TensorRtLibPath = serviceOptions.TensorRtLibPath,
             TensorRtMaxWorkspaceBytes = serviceOptions.TensorRtMaxWorkspaceBytes,

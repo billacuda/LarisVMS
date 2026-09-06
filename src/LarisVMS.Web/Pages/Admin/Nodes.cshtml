@@ -153,7 +153,7 @@ else
                                     </option>
                                     <option value="Auto" selected="@(Model.ModelFamilyOverride.GetValueOrDefault(n.Id) == "Auto")">Auto (YOLOX)</option>
                                     <option value="YoloX" selected="@(Model.ModelFamilyOverride.GetValueOrDefault(n.Id) == "YoloX")">YOLOX</option>
-                                    <option value="DFine" selected="@(Model.ModelFamilyOverride.GetValueOrDefault(n.Id) == "DFine")">D-FINE</option>
+                                    <option value="DFine" selected="@(Model.ModelFamilyOverride.GetValueOrDefault(n.Id) == "DFine")">D-FINE (experimental)</option>
                                     <option value="RfDetr" disabled>RF-DETR (not yet available)</option>
                                 </select>
                                 @{ var yls = Model.YoloXSizeOverride.GetValueOrDefault(n.Id); }
@@ -182,6 +182,17 @@ else
                                     <option value="Letterbox" selected="@(Model.AspectModeOverride.GetValueOrDefault(n.Id) == "Letterbox")">Letterbox</option>
                                     <option value="Stretch" selected="@(Model.AspectModeOverride.GetValueOrDefault(n.Id) == "Stretch")">Stretch</option>
                                     <option value="Slice" selected="@(Model.AspectModeOverride.GetValueOrDefault(n.Id) == "Slice")">Slice (requires GPU preprocessing)</option>
+                                </select>
+                                @* D-FINE TensorRT mode — same per-node override shape. Only acted on
+                                   for a D-FINE pipeline on a node with Vision:EnableTensorRt set. *@
+                                <select name="dfineTensorRtModeOverride" class="form-select form-select-sm mt-1"
+                                        title="How D-FINE uses TensorRT on this node — blank inherits the global setting">
+                                    <option value="" selected="@(string.IsNullOrEmpty(Model.DFineTensorRtModeOverride.GetValueOrDefault(n.Id)))">
+                                        (inherit D-FINE TensorRT — currently @Model.EffectiveDFineTensorRtMode.GetValueOrDefault(n.Id, "Off"))
+                                    </option>
+                                    <option value="Off" selected="@(Model.DFineTensorRtModeOverride.GetValueOrDefault(n.Id) == "Off")">Off (plain CUDA)</option>
+                                    <option value="FP32" selected="@(Model.DFineTensorRtModeOverride.GetValueOrDefault(n.Id) == "FP32")">FP32</option>
+                                    <option value="FP16" disabled="@(Model.DFineTensorRtModeOverride.GetValueOrDefault(n.Id) != "FP16")" selected="@(Model.DFineTensorRtModeOverride.GetValueOrDefault(n.Id) == "FP16")">FP16 (not yet available)</option>
                                 </select>
                             </td>
                             <td data-sort-value="@(n.LastSeenAt?.Ticks ?? 0)">

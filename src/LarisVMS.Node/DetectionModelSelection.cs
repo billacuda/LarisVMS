@@ -13,7 +13,8 @@ public static class DetectionModelSelection
     /// <summary>Auto resolves to YOLOX on every accelerator — it runs well on low-power and
     /// non-Nvidia GPUs, uses an Nvidia GPU fully where present (same ONNX Runtime EP path D-FINE
     /// uses), needs no letterbox, and ByteTrack was designed against it. D-FINE stays selectable but
-    /// is opt-in only. <paramref name="accelerator"/> no longer influences the choice; kept on the
+    /// is experimental (unpredictable results; broken across Slice tile seams — see IDEAS.md).
+    /// <paramref name="accelerator"/> no longer influences the choice; kept on the
     /// signature for callers and for a future family that might key off it.</summary>
     public static DetectionModelFamily Choose(DetectionModelFamily desired, AiAccelerator accelerator)
     {

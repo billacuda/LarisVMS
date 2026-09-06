@@ -63,11 +63,42 @@ public sealed class CameraPipelineManager : IAsyncDisposable
         var dfineWeights = Enum.Parse<DFineWeights>(request.DFineWeights);
         var yoloXSize = Enum.Parse<YoloXSize>(request.YoloXSize);
         var aspectMode = Enum.Parse<AspectMode>(request.AspectMode);
-        var modelKey = $"{family}|{dfineWeights}|{yoloXSize}";
-        var http = _httpClientFactory.CreateClient(nameof(CameraDetectionPipeline));
-        var resolvedModelPath = await ResolveModelPathCachedAsync(modelKey, family, dfineWeights, yoloXSize, request.NodeCallbackBaseUrl, http);
 
-        var pipeline = new CameraDetectionPipeline(request, _options, _ffmpegPath, resolvedModelPath, family, dfineWeights, yoloXSize, aspectMode, http, _loggerFactory);
+        // Detection.DFineTensorRtMode resolved for this camera: the value the server pushed on the
+        // request wins; blank (an older node build) falls back to this machine's own local
+        // Vision:DFineTensorRtMode. Only ever acted on for a D-FINE pipeline.
+        var dfineTensorRtMode = string.IsNullOrWhiteSpace(request.DFineTensorRtMode)
+            ? (_options.DFineTensorRtMode ?? "Off")
+            : request.DFineTensorRtMode;
+
+        // FP16 for D-FINE needs a mixed-precision *.fp16.onnx model (backbone FP16, decoder FP32) —
+        // a straight FP16 cast overflows D-FINE's transformer decoder. No conversion toolchain
+        // produces a correct one yet, so FP16 is bundled-model-gated: it activates automatically if
+        // a *.fp16.onnx is present in the models directory, and otherwise transparently runs FP32
+        // TensorRT with a warning. Everything downstream (catalog filename, engine cache key, the
+        // trt_layer_norm_fp32_fallback belt) is already wired for when that model exists.
+        var dfineFp16Mixed = false;
+        if (family == DetectionModelFamily.DFine && _options.EnableTensorRt
+            && dfineTensorRtMode.Trim().Equals("FP16", StringComparison.OrdinalIgnoreCase))
+        {
+            var mixedName = DetectionModelCatalog.GetFileName(family, dfineWeights, yoloXSize, dfineFp16Mixed: true);
+            dfineFp16Mixed = File.Exists(Path.Combine(ModelsDirectory(_options.ModelPath), mixedName));
+            if (!dfineFp16Mixed)
+            {
+                _logger.LogWarning(
+                    "Detection.DFineTensorRtMode is FP16 for camera {Camera} but no mixed-precision model " +
+                    "({MixedName}) is bundled — running D-FINE on FP32 TensorRT instead. FP16 for D-FINE is not " +
+                    "yet available (a straight FP16 cast overflows its transformer decoder).",
+                    request.DisplayName, mixedName);
+                dfineTensorRtMode = "FP32";
+            }
+        }
+
+        var modelKey = $"{family}|{dfineWeights}|{yoloXSize}|{(dfineFp16Mixed ? "fp16" : "std")}";
+        var http = _httpClientFactory.CreateClient(nameof(CameraDetectionPipeline));
+        var resolvedModelPath = await ResolveModelPathCachedAsync(modelKey, family, dfineWeights, yoloXSize, dfineFp16Mixed, request.NodeCallbackBaseUrl, http);
+
+        var pipeline = new CameraDetectionPipeline(request, _options, _ffmpegPath, resolvedModelPath, family, dfineWeights, yoloXSize, aspectMode, dfineTensorRtMode, http, _loggerFactory);
         _pipelines[request.CameraId] = pipeline;
         _logger.LogInformation("Started watching camera {Camera} (id {CameraId}, {Width}x{Height}, hwaccel: {Hwaccel}).",
             request.DisplayName, request.CameraId, request.Width, request.Height, request.HardwareAcceleration ?? "none");
@@ -85,7 +116,7 @@ public sealed class CameraPipelineManager : IAsyncDisposable
     /// running after this integration replaced it, back when the glob was the *only* lookup.
     /// </summary>
     private async Task<string> ResolveModelPathCachedAsync(string modelKey, DetectionModelFamily family,
-        DFineWeights dfineWeights, YoloXSize yoloXSize, string nodeCallbackBaseUrl, HttpClient http)
+        DFineWeights dfineWeights, YoloXSize yoloXSize, bool dfineFp16Mixed, string nodeCallbackBaseUrl, HttpClient http)
     {
         if (_resolvedModelPathsByKey.TryGetValue(modelKey, out var cached)) return cached;
 
@@ -97,7 +128,7 @@ public sealed class CameraPipelineManager : IAsyncDisposable
 
             var resolved = family == DetectionModelFamily.YoloX
                 ? await ResolveYoloXModelPathAsync(yoloXSize, nodeCallbackBaseUrl, http)
-                : ResolveModelPath(_options.ModelPath, family, dfineWeights, yoloXSize, _logger);
+                : ResolveModelPath(_options.ModelPath, family, dfineWeights, yoloXSize, _logger, dfineFp16Mixed);
 
             _resolvedModelPathsByKey[modelKey] = resolved;
             return resolved;
@@ -178,7 +209,8 @@ public sealed class CameraPipelineManager : IAsyncDisposable
         return path;
     }
 
-    internal static string ResolveModelPath(string configuredPath, DetectionModelFamily family, DFineWeights dfineWeights, YoloXSize yoloXSize, ILogger logger)
+    internal static string ResolveModelPath(string configuredPath, DetectionModelFamily family, DFineWeights dfineWeights,
+        YoloXSize yoloXSize, ILogger logger, bool dfineFp16Mixed = false)
     {
         // Relative to the app's own directory, not the current working directory: this is a fact
         // about where the package's files live, and the process is launched by NodeWorker's
@@ -198,7 +230,7 @@ public sealed class CameraPipelineManager : IAsyncDisposable
                 "gets bundled.");
         }
 
-        var wantedFileName = DetectionModelCatalog.GetFileName(family, dfineWeights, yoloXSize);
+        var wantedFileName = DetectionModelCatalog.GetFileName(family, dfineWeights, yoloXSize, dfineFp16Mixed);
         var wantedPath = Path.Combine(directory, wantedFileName);
         if (File.Exists(wantedPath))
         {
@@ -206,7 +238,23 @@ public sealed class CameraPipelineManager : IAsyncDisposable
             return wantedPath;
         }
 
-        var candidates = Directory.GetFiles(directory, "*.onnx");
+        // FP16 D-FINE needs its own mixed-precision export — the plain FP32 file run under
+        // trt_fp16_enable is the silent-NaN case. The caller (CameraPipelineManager) only sets
+        // dfineFp16Mixed after confirming the file exists, so reaching here means it vanished between
+        // that check and this resolve: a hard stop, never a fall-through to the glob below.
+        if (dfineFp16Mixed)
+        {
+            throw new FileNotFoundException(
+                $"Detection.DFineTensorRtMode is FP16 but the mixed-precision model '{wantedFileName}' is not in " +
+                $"'{directory}'. Set Detection.DFineTensorRtMode to FP32 or Off, or restore the model file.");
+        }
+
+        // The *.fp16.onnx mixed-precision exports are a distinct artifact class tied to a specific
+        // TensorRT mode, never a stand-in for a missing plain model — exclude them from the
+        // last-resort glob so an FP32/Off run can't silently land on one.
+        var candidates = Directory.GetFiles(directory, "*.onnx")
+            .Where(f => !f.EndsWith(".fp16.onnx", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
         Array.Sort(candidates, StringComparer.OrdinalIgnoreCase);
         if (candidates.Length == 0)
         {

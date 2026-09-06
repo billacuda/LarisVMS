@@ -50,17 +50,19 @@
         <select asp-for="ModelFamily" class="form-select">
             <option value="Auto">Auto (YOLOX)</option>
             <option value="YoloX">YOLOX</option>
-            <option value="DFine">D-FINE</option>
+            <option value="DFine">D-FINE (experimental)</option>
             <option value="RfDetr" disabled>RF-DETR (not yet available)</option>
         </select>
         <div class="help-text-source" id="modelFamilyHelp">
             Which detection model architecture runs inference. Auto resolves to YOLOX on every
             accelerator — it needs no letterboxing, runs well on low-power and non-Nvidia GPUs, and
-            uses an Nvidia GPU fully where present. D-FINE stays fully supported but opt-in. This is a
-            per-node setting, not per-camera: one detection process serves every camera on a node
-            from one loaded model — a per-node override is on that node's own page
-            (<a asp-page="/Admin/Nodes">manage nodes</a>). YOLOX models are not bundled — a node
-            fetches the chosen size from this server on first use.
+            uses an Nvidia GPU fully where present. <strong>D-FINE is experimental</strong> — it works,
+            but results can be unpredictable, and objects that straddle two tiles under the Slice
+            aspect-fitting option are currently missed or duplicated. Prefer YOLOX unless you are
+            specifically evaluating D-FINE. This is a per-node setting, not per-camera: one detection
+            process serves every camera on a node from one loaded model — a per-node override is on
+            that node's own page (<a asp-page="/Admin/Nodes">manage nodes</a>). YOLOX models are not
+            bundled — a node fetches the chosen size from this server on first use.
         </div>
     </div>
     <div class="col-12">
@@ -100,6 +102,30 @@
             Obj2Coco model keeps the same 80-class vocabulary but uses a larger backbone: more
             accurate, noticeably more work per frame — best paired with a capable GPU and a lower
             detection frame-rate cap. Changing this restarts each camera's detection pipeline.
+        </div>
+    </div>
+    <div class="col-12">
+        <label class="form-label">
+            D-FINE TensorRT
+            <button type="button" class="help-icon" data-help-target="dfineTensorRtHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <select asp-for="DFineTensorRtMode" class="form-select">
+            <option value="Off">Off — plain CUDA (default)</option>
+            <option value="FP32">FP32 — TensorRT, graph fusion + kernel selection</option>
+            <option value="FP16" disabled="@(Model.DFineTensorRtMode != "FP16")">FP16 — not yet available (needs a calibrated model)</option>
+        </select>
+        <div class="help-text-source" id="dfineTensorRtHelp">
+            Only applies when the detection model is D-FINE <em>and</em> the node has TensorRT enabled
+            (the machine-local <code>Vision:EnableTensorRt</code> setting) with the TensorRT 10.x SDK
+            installed — it does nothing on a node without those. <strong>FP32</strong> runs D-FINE
+            through TensorRT for graph fusion and kernel selection with no FP16 math — a safe speedup
+            over plain CUDA. <strong>FP16</strong> is not selectable yet: D-FINE is a transformer and a
+            straight FP16 cast overflows its decoder (a camera that suddenly reports nothing), and the
+            mixed-precision model that would avoid that can't be produced with current tooling. The
+            setting and per-node override are in place so FP16 activates automatically once a
+            <code>*.fp16.onnx</code> model is bundled. This is a per-node setting; changing it
+            recompiles the TensorRT engine, which takes several minutes on the first start per camera
+            resolution. A per-node override is on <a asp-page="/Admin/Nodes">manage nodes</a>.
         </div>
     </div>
     <div class="col-12">

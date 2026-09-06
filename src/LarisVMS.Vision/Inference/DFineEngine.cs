@@ -353,8 +353,8 @@ public sealed class DFineEngine : IDetectionEngine, IBatchDetectionEngine, ISlic
 
         _logger.LogWarning(
             "D-FINE inference produced non-finite (NaN/Inf) logits or boxes — every detection was dropped. " +
-            "This is the TensorRT FP16-overflow signature for D-FINE. Set Vision:DFineTensorRtMode=Off " +
-            "(plain CUDA) or Fp32 on this node.");
+            "This is the TensorRT FP16-overflow signature for D-FINE. Set Detection.DFineTensorRtMode to FP32 " +
+            "(or Off) for this node in Admin > Settings > Detection, or its per-node override on Admin > Nodes.");
     }
 
     private static bool HasNonFinite(ReadOnlySpan<float> values)

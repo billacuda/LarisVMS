@@ -141,6 +141,9 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         var dfineWeights = await settings.GetAsync("Detection.DFineWeights", "Obj2Coco", nodeId: nodeId, ct: ct);
         // YOLOX model size — same node-scoped resolution; only meaningful when the family is YoloX.
         var yoloXSize = await settings.GetAsync("Detection.YoloXSize", "S", nodeId: nodeId, ct: ct);
+        // How D-FINE uses TensorRT ("Off" / "FP32" / "FP16") — same node-scoped resolution; only
+        // acted on for a D-FINE pipeline on a node with the machine-local Vision:EnableTensorRt set.
+        var dfineTensorRtMode = await settings.GetAsync("Detection.DFineTensorRtMode", "Off", nodeId: nodeId, ct: ct);
         // Per-camera detection frame-rate ceiling (0 = decode rate). Node-scoped.
         var maxDetectionFps = await settings.GetAsync("Detection.MaxFps", 10, nodeId: nodeId, ct: ct);
         // Pass 4a — same Global -> Node resolution as the flags above. Moves per-frame preprocessing
@@ -246,7 +249,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             adaptiveStreamingEnabled, (aiAccelerator ?? AiAccelerator.Auto).ToString(),
             reportIdleDetections, aspectMode, detectionModelFamily, dfineWeights, aiIdleTimeoutSeconds,
             gpuPreprocessing, logLevel)
-        { YoloXSize = yoloXSize, MaxDetectionFps = maxDetectionFps };
+        { YoloXSize = yoloXSize, MaxDetectionFps = maxDetectionFps, DFineTensorRtMode = dfineTensorRtMode };
     }
 
     /// <summary>Pulls the Events service's own XAddr out of the capability prober's raw category map

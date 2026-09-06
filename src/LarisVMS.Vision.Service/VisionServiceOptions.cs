@@ -44,17 +44,18 @@ public sealed class VisionServiceOptions
     public string TensorRtPrecision { get; set; } = "FP16";
 
     /// <summary>
-    /// How the D-FINE model family uses TensorRT, independent of <see cref="EnableTensorRt"/> /
+    /// Fallback for how the D-FINE model family uses TensorRT, used only when the server does not
+    /// push a <c>Detection.DFineTensorRtMode</c> value on the start request (an older node build) —
+    /// the pushed Web setting is the normal source now. Independent of <see cref="EnableTensorRt"/> /
     /// <see cref="TensorRtPrecision"/> (which YOLOX still follows directly). D-FINE is a
-    /// DETR/transformer: its LayerNorm/attention activations overflow FP16's range under the
-    /// TensorRT builder, which yields NaN/Inf logits and boxes that decode to zero detections with
-    /// no error. TensorRT was validated against YOLOX (a CNN), not D-FINE.
+    /// DETR/transformer: its LayerNorm/attention activations overflow FP16's range under the TensorRT
+    /// builder, yielding NaN/Inf logits and boxes that decode to zero detections with no error.
     ///
     /// Values (case-insensitive):
     /// <list type="bullet">
     /// <item><c>Off</c> (default) — D-FINE ignores TensorRT and runs on plain CUDA, its validated path.</item>
-    /// <item><c>Fp32</c> — D-FINE uses TensorRT (when <see cref="EnableTensorRt"/> is set) forced to FP32.</item>
-    /// <item><c>Fp16</c> — D-FINE uses TensorRT at whatever <see cref="TensorRtPrecision"/> says (old behavior).</item>
+    /// <item><c>Fp32</c> — D-FINE uses TensorRT (when <see cref="EnableTensorRt"/> is set) forced to FP32, on the plain model.</item>
+    /// <item><c>Fp16</c> — would use a mixed-precision <c>*.fp16.onnx</c> model (decoder kept in FP32) plus trt_layer_norm_fp32_fallback. None is producible yet, so CameraPipelineManager downgrades Fp16 to Fp32 (with a warning) unless such a file is bundled.</item>
     /// </list>
     /// </summary>
     public string DFineTensorRtMode { get; set; } = "Off";

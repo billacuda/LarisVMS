@@ -12,15 +12,23 @@ namespace LarisVMS.Vision.Inference;
 /// </summary>
 public static class DetectionModelCatalog
 {
-    public static string GetFileName(DetectionModelFamily family, DFineWeights dfineWeights, YoloXSize yoloXSize) => family switch
+    /// <param name="dfineFp16Mixed">Select the mixed-precision D-FINE export
+    /// (<c>&lt;name&gt;.fp16.onnx</c>, backbone FP16 / decoder FP32) that
+    /// <c>Detection.DFineTensorRtMode = FP16</c> would use, rather than the plain FP32 file. Ignored
+    /// for every non-D-FINE family. No tool currently produces a correct <c>.fp16.onnx</c> for D-FINE
+    /// (a naive FP16 cast overflows its decoder) — CameraPipelineManager only passes <c>true</c> here
+    /// when such a file is actually present, and otherwise falls back to FP32; this parameter is the
+    /// resolution plumbing kept ready for that model.</param>
+    public static string GetFileName(DetectionModelFamily family, DFineWeights dfineWeights, YoloXSize yoloXSize,
+        bool dfineFp16Mixed = false) => family switch
     {
-        DetectionModelFamily.DFine => dfineWeights switch
+        DetectionModelFamily.DFine => (dfineWeights switch
         {
-            DFineWeights.Obj2Coco => "dfine_s_obj2coco.onnx",
-            DFineWeights.Obj365 => "dfine_s_obj365.onnx",
-            DFineWeights.Obj2CocoMedium => "dfine_m_obj2coco.onnx",
+            DFineWeights.Obj2Coco => "dfine_s_obj2coco",
+            DFineWeights.Obj365 => "dfine_s_obj365",
+            DFineWeights.Obj2CocoMedium => "dfine_m_obj2coco",
             _ => throw new ArgumentOutOfRangeException(nameof(dfineWeights), dfineWeights, null),
-        },
+        }) + (dfineFp16Mixed ? ".fp16.onnx" : ".onnx"),
         DetectionModelFamily.YoloX => GetYoloXFileName(yoloXSize),
         DetectionModelFamily.RfDetr => throw new NotSupportedException(
             "RF-DETR is not yet implemented — deferred scope, see the model-swap plan."),

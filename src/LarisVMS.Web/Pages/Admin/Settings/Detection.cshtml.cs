@@ -29,9 +29,13 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
     [BindProperty] public int MaxFps { get; set; } = 10;
     /// <summary>Node-scoped, not this page's other global-default fields' Camera-override sibling —
     /// see NodeConfigResponse.DetectionModelFamily's own doc comment for why. Auto → YOLOX; DFine is
-    /// selectable but opt-in; RF-DETR still renders disabled (no decoder).</summary>
+    /// selectable but experimental (labelled so in the UI); RF-DETR still renders disabled (no decoder).</summary>
     [BindProperty] public string ModelFamily { get; set; } = "Auto";
     [BindProperty] public string DFineWeights { get; set; } = "Obj2Coco";
+    /// <summary>Node-scoped like ModelFamily — how D-FINE uses TensorRT: "Off" (default), "FP32", or
+    /// "FP16". Only acted on for a D-FINE pipeline on a node that also has the machine-local
+    /// Vision:EnableTensorRt set. FP16 needs the bundled *.fp16.onnx mixed-precision model files.</summary>
+    [BindProperty] public string DFineTensorRtMode { get; set; } = "Off";
     /// <summary>Node-scoped like ModelFamily — the YOLOX model size (Nano/Tiny/S/M/L/X). Only
     /// meaningful when the family resolves to YOLOX; the node fetches the chosen ONNX from the server
     /// on first use (YOLOX models aren't bundled).</summary>
@@ -60,6 +64,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         MaxFps = await settings.GetAsync("Detection.MaxFps", 10);
         ModelFamily = await settings.GetAsync("Detection.ModelFamily", "Auto");
         DFineWeights = await settings.GetAsync("Detection.DFineWeights", "Obj2Coco");
+        DFineTensorRtMode = await settings.GetAsync("Detection.DFineTensorRtMode", "Off");
         YoloXSize = await settings.GetAsync("Detection.YoloXSize", "S");
         AspectMode = await settings.GetAsync("Detection.AspectMode", "Letterbox");
         GpuPreprocessing = await settings.GetAsync("Detection.GpuPreprocessing", false);
@@ -78,6 +83,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         var oldMaxFps = await settings.GetAsync("Detection.MaxFps", 10);
         var oldModelFamily = await settings.GetAsync("Detection.ModelFamily", "Auto");
         var oldDFineWeights = await settings.GetAsync("Detection.DFineWeights", "Obj2Coco");
+        var oldDFineTensorRtMode = await settings.GetAsync("Detection.DFineTensorRtMode", "Off");
         var oldYoloXSize = await settings.GetAsync("Detection.YoloXSize", "S");
         var oldAspectMode = await settings.GetAsync("Detection.AspectMode", "Letterbox");
         var oldGpuPreprocessing = await settings.GetAsync("Detection.GpuPreprocessing", false);
@@ -89,6 +95,14 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         Iou = Math.Clamp(Iou, 0, 1);
         IdleTimeoutSeconds = Math.Max(0, IdleTimeoutSeconds);
         MaxFps = Math.Clamp(MaxFps, 0, 60);
+        // Only three values are meaningful downstream (CameraDetectionPipeline's switch); anything
+        // else lands on "Off" there anyway, so normalize a stray form value rather than store it.
+        DFineTensorRtMode = DFineTensorRtMode?.Trim().ToUpperInvariant() switch
+        {
+            "FP32" => "FP32",
+            "FP16" => "FP16",
+            _ => "Off",
+        };
 
         await settings.SetGlobalAsync("Detection.Confidence", Confidence.ToString("0.####"), by);
         await settings.SetGlobalAsync("Detection.Iou", Iou.ToString("0.####"), by);
@@ -100,6 +114,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         // RfDetr still renders disabled (no decoder); ModelFamily is "Auto", "DFine" or "YoloX" here.
         await settings.SetGlobalAsync("Detection.ModelFamily", ModelFamily, by);
         await settings.SetGlobalAsync("Detection.DFineWeights", DFineWeights, by);
+        await settings.SetGlobalAsync("Detection.DFineTensorRtMode", DFineTensorRtMode, by);
         await settings.SetGlobalAsync("Detection.YoloXSize", YoloXSize, by);
         await settings.SetGlobalAsync("Detection.AspectMode", AspectMode, by);
         await settings.SetGlobalAsync("Detection.GpuPreprocessing", GpuPreprocessing.ToString(), by);
@@ -114,6 +129,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
             AuditDiff.Of("Detection.MaxFps", oldMaxFps.ToString(), MaxFps.ToString()),
             AuditDiff.Of("Detection.ModelFamily", oldModelFamily, ModelFamily),
             AuditDiff.Of("Detection.DFineWeights", oldDFineWeights, DFineWeights),
+            AuditDiff.Of("Detection.DFineTensorRtMode", oldDFineTensorRtMode, DFineTensorRtMode),
             AuditDiff.Of("Detection.YoloXSize", oldYoloXSize, YoloXSize),
             AuditDiff.Of("Detection.AspectMode", oldAspectMode, AspectMode),
             AuditDiff.Of("Detection.GpuPreprocessing", oldGpuPreprocessing.ToString(), GpuPreprocessing.ToString()));
