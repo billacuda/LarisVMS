@@ -234,6 +234,22 @@
     </div>
 
     <div class="col-12 form-check">
+        <input asp-for="SnapshotMotionAccuracy" type="checkbox" class="form-check-input" />
+        <label asp-for="SnapshotMotionAccuracy" class="form-check-label">
+            Snapshot motion accuracy
+            <button type="button" class="help-icon" data-help-target="snapshotMotionAccuracyHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <div class="help-text-source" id="snapshotMotionAccuracyHelp">
+            On by default. Two related improvements: a stationary object whose detection box wobbles
+            slightly frame-to-frame (a parked car at a distance) no longer counts as "moving" and
+            stops producing stray snapshots; and once a moving object leaves the scene its snapshot is
+            finalized within a few seconds instead of staying open long enough for a later, unrelated
+            object of the same type to be folded into it. Turn it off to compare against the previous
+            behaviour. Global; changing it restarts each camera's detection pipeline.
+        </div>
+    </div>
+
+    <div class="col-12 form-check">
         <input asp-for="GpuPreprocessing" type="checkbox" class="form-check-input" />
         <label asp-for="GpuPreprocessing" class="form-check-label">
             GPU frame preprocessing

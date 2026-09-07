@@ -7,6 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.189.0] - 2026-09-06
+
+### Fixed
+
+- Moving people and animals are reliably tagged as "moving" again. The 0.188.0 "Snapshot motion
+  accuracy" check added a directedness test that a rigid vehicle box passed but a person's or
+  animal's naturally unsteady detection box often failed, so real movers were logged as idle and
+  produced no snapshot or timeline event. The movement check now keys only on how far the object's
+  centre travels across the two-second window; a parked vehicle is still held idle by the same
+  displacement floor. The **Admin → Settings → Detection → "Snapshot motion accuracy"** toggle is
+  unchanged.
+- The registration key on **Admin → Settings → Nodes** shows its value again — it had been rendered
+  as a blank field (nothing revealed by the eye toggle, and no masking dots either) since the key
+  was first masked in 0.171.0.
+
+### Changed
+
+- Hover thumbnails and AI-detection snapshot images are now stored as WebP, which is smaller and
+  loads faster. Images already cached as JPEG keep being served and are replaced with WebP the next
+  time each one is regenerated — there is no bulk re-encode. A recorder node whose bundled ffmpeg
+  has no WebP encoder automatically keeps producing JPEG.
+- The per-volume "days of retention left" estimate on **Admin → Nodes** now also shows for a node's
+  archive volume, and both the primary and archive figures say "runway not yet estimated" while
+  there is too little recent activity to project one, instead of showing nothing.
+
+## [0.188.0] - 2026-09-06
+
+### Changed
+
+- **Storage configuration is now per recorder node.** Each node has its own recording path and its
+  own optional archive path, set when the node is installed (`install-node.ps1 -StorageRoot … [-ArchiveRoot …]`)
+  or afterwards on **Admin → Nodes**. The old global "storage root" setting is retired — on upgrade,
+  any node that was inheriting it keeps that path automatically. A node left with no storage path
+  records nothing (and is flagged on Admin → Nodes) until one is set. The first-run Setup wizard's
+  Storage step is now informational only.
+
+### Added
+
+- **Archive storage tier.** A recorder node can be pointed at a secondary volume — an SMB share or a
+  USB drive — for older footage. When primary retention would delete a segment and archiving is
+  enabled, the node **moves** the file to that node's archive volume instead of deleting it, and
+  keeps it there until a separate archive retention (counted from the recording date) is reached.
+  Playback, thumbnails, snapshots and export all work transparently from either volume; the timeline
+  says "Loading from archive…" for a cold-storage segment. If a node's primary volume passes the
+  storage watermark, its oldest footage is archived **early** rather than deleted, so nothing is lost
+  while there's another place to put it — with a warning shown next to that node. Enable it and set
+  the retention on **Admin → Settings → Storage and retention** (overridable per node and per
+  camera); set each node's archive volume path on **Admin → Nodes** or at install time
+  (`install-node.ps1 -ArchiveRoot …`). A segment's cached hover thumbnails and AI-detection snapshot
+  crops are moved to the archive volume alongside the video, so archived footage keeps its fast
+  previews and they expire together with it. If you repoint a node's storage to a new volume and
+  demote the old one to the archive volume, the node notices footage that's now on the archive
+  volume and re-labels those recordings as archived on its own.
+- Playback and thumbnails keep working for footage recorded while a node's storage path was
+  temporarily pointed somewhere else and then changed back — a recording is served from wherever its
+  file actually is, not only from the currently-configured storage/archive roots.
+- **Node build numbers.** Every recorder-node package now carries a monotonically increasing build
+  number as a 4th version component (e.g. `0.188.0.244`), so rebuilding for a test deploy without
+  changing the version still registers as a newer build that nodes auto-update to.
+- A snapshot badge now shows a count (e.g. "Human ×2", "Vehicle ×3") when several objects of the
+  same type were moving in it — previously two people walking past together, or a car following a
+  truck, showed only a single "Human" or "Vehicle" badge.
+- New **Admin → Settings → Detection → Snapshot motion accuracy** toggle (on by default) governing
+  the two detection-quality fixes below; turn it off to compare against the previous behaviour.
+
+### Fixed
+
+- The Snapshots filter tree no longer shows a redundant "Person" entry nested under "Human" — "Human"
+  is now a single checkbox, matching how the label reads elsewhere in the app.
+- A stationary vehicle parked in a camera's view no longer intermittently registers as "moving" and
+  produces stray snapshots. The movement check now ignores the small frame-to-frame wobble of a
+  distant detection box and only reacts to sustained, directed travel.
+- A moving object that leaves the scene now finalizes its own snapshot within a few seconds instead
+  of being held open long enough for a later, unrelated object of the same type on the same camera
+  to be merged into it — so two vehicles passing 30 seconds apart produce two separate snapshots,
+  each cropped to its own vehicle, rather than one combined snapshot missing the first.
+
 ## [0.187.2] - 2026-09-05
 
 ### Fixed

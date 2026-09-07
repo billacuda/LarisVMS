@@ -1001,6 +1001,9 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.Property<Guid?>("EventTagRuleId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<int?>("MovingCount")
+                        .HasColumnType("int");
+
                     b.Property<double>("Score")
                         .HasColumnType("float");
 
@@ -1047,6 +1050,19 @@ namespace LarisVMS.Infrastructure.Migrations
                         .IsRequired()
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
+
+                    b.Property<long?>("ArchiveFreeBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("ArchiveRootPath")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<DateTime?>("ArchiveStatsUpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<long?>("ArchiveTotalBytes")
+                        .HasColumnType("bigint");
 
                     b.Property<DateTime?>("ClockSkewMeasuredAt")
                         .HasColumnType("datetime2");
@@ -1097,6 +1113,12 @@ namespace LarisVMS.Infrastructure.Migrations
 
                     b.Property<long?>("StorageFreeBytes")
                         .HasColumnType("bigint");
+
+                    b.Property<bool>("StoragePressureActive")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("StoragePressureSince")
+                        .HasColumnType("datetime2");
 
                     b.Property<string>("StorageRootPath")
                         .HasMaxLength(500)
@@ -1320,6 +1342,9 @@ namespace LarisVMS.Infrastructure.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
 
+                    b.Property<DateTime?>("ArchivedAt")
+                        .HasColumnType("datetime2");
+
                     b.Property<Guid>("CameraId")
                         .HasColumnType("uniqueidentifier");
 
@@ -1356,6 +1381,9 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.Property<DateTime>("StartUtc")
                         .HasColumnType("datetime2");
 
+                    b.Property<byte>("StorageTier")
+                        .HasColumnType("tinyint");
+
                     b.Property<int>("StreamRole")
                         .HasColumnType("int");
 
@@ -1374,6 +1402,8 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.HasIndex("CameraId", "StartUtc");
 
                     SqlServerIndexBuilderExtensions.IsClustered(b.HasIndex("CameraId", "StartUtc"));
+
+                    b.HasIndex("CameraId", "StorageTier");
 
                     b.ToTable("Segments");
                 });

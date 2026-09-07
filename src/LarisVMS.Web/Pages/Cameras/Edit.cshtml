@@ -122,6 +122,21 @@
             <div class="help-text-source" id="retentionHelp">0 = keep forever on this camera. Blank inherits the node's/global setting.</div>
         </div>
         <div class="col-6">
+            <label class="form-label">
+                Archive retention override (days)
+                <button type="button" class="help-icon" data-help-target="archiveRetentionHelp" tabindex="0" aria-label="Help">ℹ️</button>
+            </label>
+            <input asp-for="ArchiveRetentionDaysOverride" type="number" min="0" class="form-control"
+                   placeholder="(inherit — currently @Model.EffectiveArchiveRetentionDays days)" />
+            <div class="help-text-source" id="archiveRetentionHelp">
+                How long this camera's footage stays on the archive volume, counted from its original
+                recording date — set this higher than other cameras to keep this one archived longer.
+                0 = keep forever. Blank inherits the node's/global setting.
+                Archiving is currently @(Model.EffectiveArchiveEnabled ? "on" : "off") for this camera
+                (set on <a asp-page="/Admin/Nodes">the node</a> or <a asp-page="/Admin/Settings/StorageAndRetention">globally</a>).
+            </div>
+        </div>
+        <div class="col-6">
             <label class="form-label">Recording mode override</label>
             <select asp-for="RecordingModeOverride" class="form-select">
                 <option value="">(inherit — currently @Model.EffectiveRecordingMode)</option>

@@ -225,7 +225,8 @@
                                Only AI detections carry a score (SnapshotBadgeDto.Confidence) — a
                                camera-classified or motion badge renders exactly as before. *@
                             <span class="badge" style="background-color: @badge.ColorHex;">
-                                @badge.Emoji @badge.Label@if (badge.Confidence is { } c)
+                                @badge.Emoji @badge.Label@if (badge.MovingCount is { } n && n > 1)
+                                {<span class="snapshot-badge-count" title="@n moving at once">&times;@n</span>}@if (badge.Confidence is { } c)
                                 {<span class="snapshot-badge-confidence" title="Detection confidence">@IndexModel.FormatConfidence(c)</span>}
                             </span>
                         }

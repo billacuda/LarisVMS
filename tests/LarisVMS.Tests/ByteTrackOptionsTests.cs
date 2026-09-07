@@ -83,12 +83,17 @@ public sealed class ByteTrackOptionsTests
     public void AnObjectScoringBelowTheOldFixedGateNowGetsATrack()
     {
         // End to end through the tracker itself, at the score a moving vehicle actually produces at
-        // night. Under the old fixed 0.6 this returned nothing on every frame — no track, so no box
-        // and no span — which is exactly what the deployment showed after dark.
+        // night (both frames well under the old fixed 0.6 new-track gate, which returned nothing on
+        // every frame — no track, no box, no span — exactly what the deployment showed after dark).
+        // The between-frame move is a realistic single-step displacement: ByteTrack associates by
+        // IoU across *consecutive* processed frames, and fuse-score weights that by the (low) night
+        // confidence, so a jump large enough to drop the boxes below ~0.5 IoU legitimately breaks
+        // association in the reference tracker too — that is a frame-cadence problem, not a
+        // threshold one, and not what this test is about.
         var tracker = new ByteTracker(ByteTrackOptions.ForFamily(DetectionModelFamily.YoloX, 0.25));
 
         var f1 = tracker.Update([FakeDetection.Box(100, 100, 60, 40, confidence: 0.42)]);
-        var f2 = tracker.Update([FakeDetection.Box(130, 102, 60, 40, confidence: 0.38)]);
+        var f2 = tracker.Update([FakeDetection.Box(112, 102, 60, 40, confidence: 0.38)]);
 
         Assert.NotEmpty(f2);
         Assert.Equal(f1[0].Id, f2[0].Id);

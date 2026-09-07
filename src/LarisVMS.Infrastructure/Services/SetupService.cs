@@ -143,10 +143,6 @@ public class SetupService(
         return Task.CompletedTask;
     }
 
-    public async Task SaveStorageRootAsync(string rootPath, CancellationToken ct = default)
-        => await UpsertSettingAsync("Storage.RootPath", rootPath,
-            "Default local disk path or UNC share recorder nodes write recordings to.", ct);
-
     public async Task<string> GetOrCreateNodeRegistrationKeyAsync(CancellationToken ct = default)
     {
         var existing = await db.Settings.FirstOrDefaultAsync(s => s.Key == "Node.RegistrationKey", ct);

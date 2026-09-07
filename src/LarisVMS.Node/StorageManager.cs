@@ -38,6 +38,12 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
     // snapshot cleanup or vice versa.
     private DateTime? _lastSnapshotsReconciledAtUtc;
 
+    // Archive storage: catches segment rows still marked StorageTier=Primary whose file is
+    // physically under the archive root — the case where an admin repoints a node's storage root to
+    // a new volume and demotes the old one to the archive root, so footage the node never "moved" is
+    // suddenly on the archive volume. Same slow (hourly) cadence and independent gate as the others.
+    private DateTime? _lastArchiveTierReconciledAtUtc;
+
     // Files this deleted from disk but hasn't yet successfully told the web tier about — carried
     // over to the next sweep's report attempt on failure. Without this, a deletion report that
     // fails (a network blip, the web tier restarting mid-sweep) permanently orphans the Segment
@@ -47,6 +53,26 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
     // didn't. Plain List, not a ConcurrentQueue: SweepAsync only ever runs from this single
     // BackgroundService's own sequential loop, never concurrently with itself.
     private readonly List<string> _pendingDeletionReports = [];
+
+    // Archive storage: a segment file this MOVED to the archive volume but hasn't yet successfully
+    // told the web tier about (POST /api/nodes/segments/relocate). Same re-queue-on-failure reason as
+    // _pendingDeletionReports above, but the stakes are higher: the source file is deliberately kept
+    // on the primary volume until the relocate report lands, so a failed report just retries with
+    // both copies present. Carries the primary-side cache dirs so the source's thumbnails/snapshots
+    // moved to the archive alongside it once the report succeeds — a segment's cached hover
+    // thumbnails and AI-detection snapshot crops follow the video so archived footage keeps its fast
+    // previews and they expire together with it, rather than being deleted and regenerated slowly
+    // from a cold-storage seek. ReconcileAsync excludes any OldFilePath still in this list from its
+    // "missing file -> delete the row" inference.
+    private readonly record struct PendingRelocation(
+        LarisVMS.Core.Dtos.SegmentRelocateItem Item,
+        string PrimaryMainDir, string PrimaryThumbsDir, string PrimarySnapshotsDir,
+        string ArchiveThumbsDir, string ArchiveSnapshotsDir);
+    private readonly List<PendingRelocation> _pendingRelocationReports = [];
+
+    // Leave this much headroom on the archive volume when deciding whether a file can be moved there
+    // — a partial copy that fills the archive disk helps nobody.
+    private const long ArchiveFreeSpaceMargin = 512L * 1024 * 1024;
 
     // Never touch a file this fresh — the safety margin against evicting the segment ffmpeg might
     // still be writing (default segment length is 60s; this is generous headroom against clock skew
@@ -79,6 +105,28 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
 
         var now = DateTime.UtcNow;
         var deletedPaths = new List<string>();
+        var relocations = new List<PendingRelocation>();
+
+        // Archive storage (phase 2): the archive volume is usable when it's configured, sits outside
+        // the storage root (or its files would be re-imported as new primary segments), and passes a
+        // read/write probe. Checked once per sweep — a per-file failure inside TryArchiveFile is
+        // handled there.
+        var archiveRoot = string.IsNullOrWhiteSpace(config.ArchiveRootPath) ? null : config.ArchiveRootPath;
+        var archiveUsable = false;
+        if (archiveRoot is not null)
+        {
+            if (IsUnderStorageRoot(archiveRoot, storageRoot))
+            {
+                logger.LogWarning("Archive root {ArchiveRoot} is inside the storage root {StorageRoot} — archiving is disabled this sweep. Point it at a separate volume.", archiveRoot, storageRoot);
+            }
+            else
+            {
+                try { Directory.CreateDirectory(archiveRoot); } catch { /* CanReachStorage reports the failure below */ }
+                archiveUsable = StorageHealth.CanReachStorage(archiveRoot);
+                if (!archiveUsable)
+                    logger.LogWarning("Archive root {ArchiveRoot} did not pass a read/write probe — footage that would be archived is being kept on primary this sweep.", archiveRoot);
+            }
+        }
 
         foreach (var camera in config.Cameras)
         {
@@ -92,34 +140,24 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             // sibling directory.
             var thumbsDir = Path.Combine(storageRoot, $"cam-{camera.CameraId}", "thumbs");
             var snapshotsDir = Path.Combine(storageRoot, $"cam-{camera.CameraId}", "snapshots");
+            var archiveCameraMainDir = archiveRoot is null ? "" : Path.Combine(archiveRoot, $"cam-{camera.CameraId}", "main");
+            var archiveThisCamera = camera.ArchiveEnabled && archiveUsable;
 
             var files = EnumerateEvictable(cameraDir, now);
 
             // Retention sweep: unconditional age cutoff. 0 or negative RetentionDays is an explicit
             // "keep forever" choice, not "unset" (unset falls through to NodeService's compiled-in
-            // 30-day default before this DTO is ever built).
+            // 30-day default before this DTO is ever built). When archiving is on for this camera, a
+            // retention eviction MOVES the file to the archive volume instead of deleting it — see
+            // ArchiveOrDelete.
             foreach (var f in SelectRetentionEvictions(files, now, camera.RetentionDays))
-            {
-                if (TryDelete(f.FullName))
-                {
-                    deletedPaths.Add(f.FullName);
+                if (ArchiveOrDelete(f, cameraDir, thumbsDir, snapshotsDir, archiveCameraMainDir, archiveThisCamera, archiveRoot, deletedPaths, relocations))
                     files.Remove(f);
-                    DeleteMatchingThumbnails(cameraDir, thumbsDir, f.FullName);
-                    DeleteMatchingSnapshotImages(cameraDir, snapshotsDir, f.FullName);
-                }
-            }
 
-            // Per-camera quota: oldest-first until back under the cap.
+            // Per-camera quota: oldest-first until back under the cap. Same archive-or-delete branch.
             foreach (var f in SelectQuotaEvictions(files, camera.QuotaBytes))
-            {
-                if (TryDelete(f.FullName))
-                {
-                    deletedPaths.Add(f.FullName);
+                if (ArchiveOrDelete(f, cameraDir, thumbsDir, snapshotsDir, archiveCameraMainDir, archiveThisCamera, archiveRoot, deletedPaths, relocations))
                     files.Remove(f);
-                    DeleteMatchingThumbnails(cameraDir, thumbsDir, f.FullName);
-                    DeleteMatchingSnapshotImages(cameraDir, snapshotsDir, f.FullName);
-                }
-            }
 
             // Pass G: the eager-crop staging files (snapshots/hires/{ticks}.jpg). Copied into the
             // span-keyed cache on first view but deliberately left in place (a second span sharing
@@ -134,9 +172,15 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             if (Directory.Exists(snapshotsDir)) PruneEmptyDirectories(snapshotsDir);
         }
 
-        SweepOrphanedCameraFolders(config, storageRoot, now, deletedPaths);
+        // Archive-expiry: footage on the archive volume past that camera's ArchiveRetentionDays (from
+        // the file's own mtime, which TryArchiveFile anchored to the recording time). Genuinely gone
+        // now — reported through the normal delete path so the row is removed.
+        if (archiveUsable && archiveRoot is not null)
+            ExpireArchivedFootage(config, archiveRoot, now, deletedPaths);
 
-        await ApplyWatermarkAsync(config, storageRoot, now, deletedPaths, ct);
+        SweepOrphanedCameraFolders(config, storageRoot, archiveRoot, archiveUsable, now, deletedPaths, relocations);
+
+        ApplyWatermark(config, storageRoot, archiveRoot, archiveUsable, now, deletedPaths, relocations);
 
         // Export output files (and any stray concat list file ExportRunner didn't get to clean up
         // after a crash) — a sibling of the cam-{id}/ folders above, deliberately never walked by
@@ -149,9 +193,16 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
 
         if (_lastReconciledAtUtc is null || now - _lastReconciledAtUtc >= ReconcileInterval)
         {
+            // Old paths of segments this or a prior sweep archived but hasn't finished reporting —
+            // their source is deliberately still on primary, so File.Exists says "present", but the
+            // row is (or is about to be) at the archive path. Excluded from the missing-file
+            // inference so a mid-flight relocation is never read as a deletion.
+            var relocatingOldPaths = relocations.Select(r => r.Item.OldFilePath)
+                .Concat(_pendingRelocationReports.Select(r => r.Item.OldFilePath))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
             // Only stamped on success — a failed fetch (network blip, web tier restarting) should
             // retry on the next 5-minute sweep, not wait a full extra hour for the next scheduled one.
-            if (await ReconcileAsync(config, storageRoot, deletedPaths, ct)) _lastReconciledAtUtc = now;
+            if (await ReconcileAsync(config, storageRoot, archiveRoot, relocatingOldPaths, deletedPaths, ct)) _lastReconciledAtUtc = now;
         }
 
         if (_lastSnapshotsReconciledAtUtc is null || now - _lastSnapshotsReconciledAtUtc >= ReconcileInterval)
@@ -163,6 +214,19 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             catch (Exception ex) when (!ct.IsCancellationRequested)
             {
                 logger.LogWarning(ex, "Snapshot reconciliation sweep failed — will retry next cycle.");
+            }
+        }
+
+        if (archiveUsable && archiveRoot is not null
+            && (_lastArchiveTierReconciledAtUtc is null || now - _lastArchiveTierReconciledAtUtc >= ReconcileInterval))
+        {
+            try
+            {
+                if (await ReconcileArchiveTierAsync(config, archiveRoot, relocations, ct)) _lastArchiveTierReconciledAtUtc = now;
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                logger.LogWarning(ex, "Archive-tier reconciliation sweep failed — will retry next cycle.");
             }
         }
 
@@ -186,6 +250,137 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
                 logger.LogWarning(ex, "Failed to report {Count} deleted segment(s) to the server — will retry next sweep.", deletedPaths.Count);
             }
         }
+
+        // Relocations (archive moves): the source is still on the primary volume — only removed once
+        // the web has updated the row to the archive path. A failed report keeps both copies and
+        // retries next sweep (TryArchiveFile treats a pre-existing matching target as done).
+        relocations.AddRange(_pendingRelocationReports);
+        _pendingRelocationReports.Clear();
+
+        if (relocations.Count > 0)
+        {
+            try
+            {
+                await api.RelocateSegmentsAsync(relocations.Select(r => r.Item).ToList(), ct);
+                logger.LogInformation("Archived {Count} segment(s) to the archive volume.", relocations.Count);
+                foreach (var r in relocations)
+                {
+                    // A tier-flip reconcile (ReconcileArchiveTierAsync) reports OldFilePath ==
+                    // NewFilePath — the file is already on the archive volume and there is nothing to
+                    // move. Only a real move has a distinct primary source + caches to relocate.
+                    if (string.Equals(r.Item.OldFilePath, r.Item.NewFilePath, StringComparison.OrdinalIgnoreCase)) continue;
+                    TryDelete(r.Item.OldFilePath); // the primary .mp4 — already copied to the archive by TryArchiveFile
+                    // Move the segment's cached hover thumbnails and AI-detection snapshot crops onto
+                    // the archive volume too, so archived footage keeps its fast previews and they
+                    // expire together with it (a delete-and-regenerate would mean a slow cold-storage
+                    // seek per preview, and the crops would otherwise be swept on the primary
+                    // retention schedule, not the archive one).
+                    MoveCachedMediaToArchive(FindMatchingThumbnails(r.PrimaryMainDir, r.PrimaryThumbsDir, r.Item.OldFilePath),
+                        r.PrimaryThumbsDir, r.ArchiveThumbsDir);
+                    MoveCachedMediaToArchive(FindMatchingSnapshotImages(r.PrimaryMainDir, r.PrimarySnapshotsDir, r.Item.OldFilePath),
+                        r.PrimarySnapshotsDir, r.ArchiveSnapshotsDir);
+                }
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                _pendingRelocationReports.AddRange(relocations);
+                logger.LogWarning(ex, "Failed to report {Count} archived segment(s) to the server — sources kept on primary, will retry next sweep.", relocations.Count);
+            }
+        }
+    }
+
+    /// <summary>Retention/quota eviction: archive the file to the archive volume (and queue a
+    /// relocation report) when archiving is on for this camera and the archive has room; otherwise
+    /// delete it and its cached thumbnails/snapshots as before. Returns true if the file was handled
+    /// (so the caller can drop it from its working set). Returns false — keeping the file for a later
+    /// retry — when an archive move was wanted but failed (a locked file, a transient I/O error): the
+    /// point of archiving is to NOT lose footage while there's somewhere to put it.</summary>
+    private bool ArchiveOrDelete(FileInfo f, string primaryMainDir, string primaryThumbsDir, string primarySnapshotsDir,
+        string archiveCameraMainDir, bool archiveThisCamera, string? archiveRoot,
+        List<string> deletedPaths, List<PendingRelocation> relocations)
+    {
+        if (archiveThisCamera && archiveRoot is not null && ArchiveHasRoom(archiveRoot, f.Length))
+        {
+            var target = BuildArchiveTargetPath(primaryMainDir, archiveCameraMainDir, f.FullName);
+            if (TryArchiveFile(f.FullName, target, logger))
+            {
+                var archiveCameraDir = Path.GetDirectoryName(archiveCameraMainDir)!; // {archiveRoot}/cam-{id}
+                relocations.Add(new PendingRelocation(
+                    new LarisVMS.Core.Dtos.SegmentRelocateItem(f.FullName, target, f.Length),
+                    primaryMainDir, primaryThumbsDir, primarySnapshotsDir,
+                    Path.Combine(archiveCameraDir, "thumbs"), Path.Combine(archiveCameraDir, "snapshots")));
+                return true;
+            }
+            return false; // wanted to archive, couldn't — keep it, don't delete
+        }
+
+        if (TryDelete(f.FullName))
+        {
+            deletedPaths.Add(f.FullName);
+            DeleteMatchingThumbnails(primaryMainDir, primaryThumbsDir, f.FullName);
+            DeleteMatchingSnapshotImages(primaryMainDir, primarySnapshotsDir, f.FullName);
+            return true;
+        }
+        return false;
+    }
+
+    private static bool ArchiveHasRoom(string archiveRoot, long fileLength)
+    {
+        var usage = DiskSpace.TryGetUsage(archiveRoot);
+        return usage is { } u && u.FreeBytes > fileLength + ArchiveFreeSpaceMargin;
+    }
+
+    /// <summary>Moves each cached thumbnail/snapshot file from under <paramref name="fromRootDir"/> to
+    /// the same relative location under <paramref name="toRootDir"/>. Best-effort: a file that can't
+    /// be moved is deleted instead so it doesn't linger on the primary volume and get swept on the
+    /// wrong schedule — the archive endpoint just regenerates that one preview on demand.</summary>
+    private void MoveCachedMediaToArchive(IEnumerable<string> files, string fromRootDir, string toRootDir)
+    {
+        foreach (var src in files)
+        {
+            var dest = Path.Combine(toRootDir, Path.GetRelativePath(fromRootDir, src));
+            try
+            {
+                var destDir = Path.GetDirectoryName(dest);
+                if (destDir is not null) Directory.CreateDirectory(destDir);
+                if (File.Exists(dest)) File.Delete(dest);
+                File.Move(src, dest); // cross-volume Move = copy + delete
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                logger.LogWarning(ex, "Could not move cached preview {Src} to the archive volume — deleting it; the archive will regenerate it on demand.", src);
+                try { File.Delete(src); } catch { /* best effort */ }
+            }
+        }
+    }
+
+    /// <summary>Deletes archive-volume footage past that camera's ArchiveRetentionDays — measured
+    /// from the file's own mtime, which TryArchiveFile stamped to the recording time. Reuses the
+    /// same pure age selector the primary retention sweep uses.</summary>
+    private void ExpireArchivedFootage(NodeConfigResponse config, string archiveRoot, DateTime now, List<string> deletedPaths)
+    {
+        foreach (var camera in config.Cameras)
+        {
+            var archiveCameraDir = Path.Combine(archiveRoot, $"cam-{camera.CameraId}", "main");
+            if (!Directory.Exists(archiveCameraDir)) continue;
+
+            var archiveThumbsDir = Path.Combine(archiveRoot, $"cam-{camera.CameraId}", "thumbs");
+            var archiveSnapshotsDir = Path.Combine(archiveRoot, $"cam-{camera.CameraId}", "snapshots");
+
+            foreach (var f in SelectRetentionEvictions(EnumerateEvictable(archiveCameraDir, now), now, camera.ArchiveRetentionDays))
+            {
+                if (TryDelete(f.FullName))
+                {
+                    deletedPaths.Add(f.FullName);
+                    DeleteMatchingThumbnails(archiveCameraDir, archiveThumbsDir, f.FullName);
+                    DeleteMatchingSnapshotImages(archiveCameraDir, archiveSnapshotsDir, f.FullName);
+                }
+            }
+
+            PruneEmptyDirectories(archiveCameraDir);
+            if (Directory.Exists(archiveThumbsDir)) PruneEmptyDirectories(archiveThumbsDir);
+            if (Directory.Exists(archiveSnapshotsDir)) PruneEmptyDirectories(archiveSnapshotsDir);
+        }
     }
 
     // Confirmed live: once a camera is reassigned to a different node (or deleted entirely), its
@@ -204,33 +399,56 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
     // beats leaving it unmanaged the way this whole fix exists to avoid).
     private static readonly TimeSpan OrphanedCameraFallbackRetention = TimeSpan.FromDays(30);
 
-    private void SweepOrphanedCameraFolders(NodeConfigResponse config, string storageRoot, DateTime now, List<string> deletedPaths)
+    private void SweepOrphanedCameraFolders(NodeConfigResponse config, string storageRoot, string? archiveRoot,
+        bool archiveUsable, DateTime now, List<string> deletedPaths, List<PendingRelocation> relocations)
     {
-        var retentionByCamera = config.OrphanedCameras.ToDictionary(o => o.CameraId, o => o.RetentionDays);
+        var orphanById = config.OrphanedCameras.ToDictionary(o => o.CameraId, o => o);
+        var assignedIds = config.Cameras.Select(c => c.CameraId).ToList();
 
-        foreach (var (cameraId, mainDir) in FindOrphanedCameraMainDirs(storageRoot, config.Cameras.Select(c => c.CameraId)))
+        // Primary-volume leftovers: same age cutoff, and same archive-or-delete branch — an orphaned
+        // camera whose ArchiveEnabled is still set keeps its footage on the archive volume rather
+        // than losing it.
+        foreach (var (cameraId, mainDir) in FindOrphanedCameraMainDirs(storageRoot, assignedIds))
         {
-            var retentionDays = retentionByCamera.TryGetValue(cameraId, out var resolved) && resolved is { } d
-                ? d
-                : (int)OrphanedCameraFallbackRetention.TotalDays;
-
+            var orphan = orphanById.GetValueOrDefault(cameraId);
+            var retentionDays = orphan?.RetentionDays ?? (int)OrphanedCameraFallbackRetention.TotalDays;
             var thumbsDir = Path.Combine(Path.GetDirectoryName(mainDir)!, "thumbs");
             var snapshotsDir = Path.Combine(Path.GetDirectoryName(mainDir)!, "snapshots");
-            var files = EnumerateEvictable(mainDir, now);
+            var archiveCameraMainDir = archiveRoot is null ? "" : Path.Combine(archiveRoot, $"cam-{cameraId}", "main");
+            var archiveThisOrphan = (orphan?.ArchiveEnabled ?? false) && archiveUsable;
 
-            foreach (var f in SelectRetentionEvictions(files, now, retentionDays))
-            {
-                if (TryDelete(f.FullName))
-                {
-                    deletedPaths.Add(f.FullName);
-                    DeleteMatchingThumbnails(mainDir, thumbsDir, f.FullName);
-                    DeleteMatchingSnapshotImages(mainDir, snapshotsDir, f.FullName);
-                }
-            }
+            foreach (var f in SelectRetentionEvictions(EnumerateEvictable(mainDir, now), now, retentionDays))
+                ArchiveOrDelete(f, mainDir, thumbsDir, snapshotsDir, archiveCameraMainDir, archiveThisOrphan, archiveRoot, deletedPaths, relocations);
 
             PruneEmptyDirectories(mainDir);
             if (Directory.Exists(thumbsDir)) PruneEmptyDirectories(thumbsDir);
             if (Directory.Exists(snapshotsDir)) PruneEmptyDirectories(snapshotsDir);
+        }
+
+        // Archive-volume leftovers for the same cameras: age out at ArchiveRetentionDays.
+        if (archiveUsable && archiveRoot is not null)
+        {
+            foreach (var (cameraId, mainDir) in FindOrphanedCameraMainDirs(archiveRoot, assignedIds))
+            {
+                var orphan = orphanById.GetValueOrDefault(cameraId);
+                var archiveRetentionDays = orphan?.ArchiveRetentionDays ?? (int)OrphanedCameraFallbackRetention.TotalDays;
+                var thumbsDir = Path.Combine(Path.GetDirectoryName(mainDir)!, "thumbs");
+                var snapshotsDir = Path.Combine(Path.GetDirectoryName(mainDir)!, "snapshots");
+
+                foreach (var f in SelectRetentionEvictions(EnumerateEvictable(mainDir, now), now, archiveRetentionDays))
+                {
+                    if (TryDelete(f.FullName))
+                    {
+                        deletedPaths.Add(f.FullName);
+                        DeleteMatchingThumbnails(mainDir, thumbsDir, f.FullName);
+                        DeleteMatchingSnapshotImages(mainDir, snapshotsDir, f.FullName);
+                    }
+                }
+
+                PruneEmptyDirectories(mainDir);
+                if (Directory.Exists(thumbsDir)) PruneEmptyDirectories(thumbsDir);
+                if (Directory.Exists(snapshotsDir)) PruneEmptyDirectories(snapshotsDir);
+            }
         }
     }
 
@@ -256,12 +474,14 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
         return result;
     }
 
-    private async Task ApplyWatermarkAsync(NodeConfigResponse config, string storageRoot,
-        DateTime now, List<string> deletedPaths, CancellationToken ct)
+    private void ApplyWatermark(NodeConfigResponse config, string storageRoot, string? archiveRoot,
+        bool archiveUsable, DateTime now, List<string> deletedPaths, List<PendingRelocation> relocations)
     {
         var usage = DiskSpace.TryGetUsage(storageRoot);
         if (usage is not { } u || u.TotalBytes <= 0) return;
         if (100.0 * (u.TotalBytes - u.FreeBytes) / u.TotalBytes <= config.WatermarkPercent) return;
+
+        var archiveEnabledByCamera = config.Cameras.ToDictionary(c => c.CameraId, c => c.ArchiveEnabled);
 
         // Global oldest-first across every camera on this node — retention/quota already ran, so
         // whatever's left here is "in policy" but the volume is full anyway; age is the only fair
@@ -274,23 +494,31 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             .SelectMany(x => EnumerateEvictable(x.MainDir, now).Select(f => (x.CameraId, x.MainDir, File: f)))
             .OrderBy(x => x.File.LastWriteTimeUtc);
 
+        // Bytes we've queued to free but not yet actually removed — an archived file's source isn't
+        // deleted until the relocate report lands at the end of this sweep, and a deleted file's
+        // space is reclaimed immediately. Tracking the projected free space lets the loop stop once
+        // it's committed enough work to get under the watermark instead of archiving every last file.
+        long projectedFreed = 0;
+        var storagePercentTarget = config.WatermarkPercent;
+
         foreach (var c in candidates)
         {
             var current = DiskSpace.TryGetUsage(storageRoot);
             if (current is null) break;
-            if (100.0 * (current.Value.TotalBytes - current.Value.FreeBytes) / current.Value.TotalBytes <= config.WatermarkPercent) break;
+            var projectedFree = current.Value.FreeBytes + projectedFreed;
+            if (100.0 * (current.Value.TotalBytes - projectedFree) / current.Value.TotalBytes <= storagePercentTarget) break;
 
-            if (TryDelete(c.File.FullName))
-            {
-                deletedPaths.Add(c.File.FullName);
-                var thumbsDir = Path.Combine(storageRoot, $"cam-{c.CameraId}", "thumbs");
-                var snapshotsDir = Path.Combine(storageRoot, $"cam-{c.CameraId}", "snapshots");
-                DeleteMatchingThumbnails(c.MainDir, thumbsDir, c.File.FullName);
-                DeleteMatchingSnapshotImages(c.MainDir, snapshotsDir, c.File.FullName);
-            }
+            var thumbsDir = Path.Combine(storageRoot, $"cam-{c.CameraId}", "thumbs");
+            var snapshotsDir = Path.Combine(storageRoot, $"cam-{c.CameraId}", "snapshots");
+            var archiveCameraMainDir = archiveRoot is null ? "" : Path.Combine(archiveRoot, $"cam-{c.CameraId}", "main");
+            var archiveThisCamera = archiveEnabledByCamera.GetValueOrDefault(c.CameraId) && archiveUsable;
+
+            // Prefer moving the file to the archive volume over deleting it — "footage must not be
+            // deleted while there's another location for it". Falls back to a hard delete when
+            // archiving is off / the archive is full / a per-file archive move fails.
+            if (ArchiveOrDelete(c.File, c.MainDir, thumbsDir, snapshotsDir, archiveCameraMainDir, archiveThisCamera, archiveRoot, deletedPaths, relocations))
+                projectedFreed += c.File.Length;
         }
-
-        await Task.CompletedTask;
     }
 
     /// <summary>Finds and reports Segment rows whose file no longer exists on this node's disk —
@@ -319,7 +547,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
     /// segment by the node's UTC offset. CreationTimeUtc/LastWriteTimeUtc are unambiguous and are what
     /// the normal reporting path already derives its own start/end from.
     /// </summary>
-    private async Task ImportOrphanedSegmentsAsync(NodeConfigResponse config, string storageRoot,
+    private async Task ImportOrphanedSegmentsAsync(NodeConfigResponse config, string storageRoot, string? archiveRoot,
         List<string> knownPaths, CancellationToken ct)
     {
         var known = new HashSet<string>(knownPaths, StringComparer.OrdinalIgnoreCase);
@@ -342,7 +570,12 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
                 continue;
             }
 
-            toImport.AddRange(SelectImportableSegments(camera.CameraId, files, known));
+            // If archiving is on, a primary file whose row has already been moved to the archive path
+            // (a relocate report that landed, then a source-delete that didn't — a crash between the
+            // two) would otherwise be re-imported here as a brand new segment. Skip it when its
+            // archive-equivalent path is already a known row.
+            var archiveCameraMainDir = archiveRoot is null ? null : Path.Combine(archiveRoot, $"cam-{camera.CameraId}", "main");
+            toImport.AddRange(SelectImportableSegments(camera.CameraId, files, known, cameraDir, archiveCameraMainDir));
         }
 
         if (toImport.Count == 0) return;
@@ -362,7 +595,63 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
         }
     }
 
-    private async Task<bool> ReconcileAsync(NodeConfigResponse config, string storageRoot, List<string> deletedPaths, CancellationToken ct)
+    /// <summary>Catches Segment rows still marked StorageTier=Primary whose file actually sits under
+    /// this node's archive root — the case where an admin repoints a node's storage root to a new
+    /// volume and demotes the old one to the archive root, so footage the node never explicitly
+    /// moved is now on the archive volume. Fetches this node's Primary-tiered paths, walks the
+    /// archive root's cam-{id}/main directories, and reports the intersection as tier-flips
+    /// (OldFilePath == NewFilePath). Rides the normal relocation report; the end-of-sweep flush skips
+    /// the source-delete when old == new. Nothing is deleted here, so it needs no reachability
+    /// paranoia beyond the archiveUsable gate the caller already applies.</summary>
+    private async Task<bool> ReconcileArchiveTierAsync(NodeConfigResponse config, string archiveRoot,
+        List<PendingRelocation> relocations, CancellationToken ct)
+    {
+        List<string> primaryPaths;
+        try
+        {
+            primaryPaths = await api.GetPrimaryTieredSegmentFilePathsAsync(ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            logger.LogWarning(ex, "Archive-tier reconciliation could not fetch this node's primary-tiered segment paths — will retry next sweep.");
+            return false;
+        }
+        if (primaryPaths.Count == 0) return true;
+        var primary = new HashSet<string>(primaryPaths, StringComparer.OrdinalIgnoreCase);
+
+        var archiveMainDirs = config.Cameras
+            .Select(c => Path.Combine(archiveRoot, $"cam-{c.CameraId}", "main"))
+            .Concat(FindOrphanedCameraMainDirs(archiveRoot, config.Cameras.Select(c => c.CameraId)).Select(x => x.MainDir))
+            .Where(Directory.Exists)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+        var found = 0;
+        foreach (var mainDir in archiveMainDirs)
+        {
+            List<string> files;
+            try { files = Directory.EnumerateFiles(mainDir, "*.mp4", SearchOption.AllDirectories).ToList(); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
+
+            foreach (var path in files)
+            {
+                if (!primary.Contains(path)) continue;
+                long length; try { length = new FileInfo(path).Length; } catch { continue; }
+                // Tier flip only — OldFilePath == NewFilePath, so the end-of-sweep flush skips the
+                // source move/delete entirely; the cache-dir fields go unused.
+                relocations.Add(new PendingRelocation(
+                    new LarisVMS.Core.Dtos.SegmentRelocateItem(path, path, length), mainDir, "", "", "", ""));
+                found++;
+            }
+        }
+
+        if (found > 0)
+            logger.LogInformation(
+                "Archive-tier reconciliation: {Count} segment(s) whose file is on the archive volume but were still marked as primary storage — correcting.", found);
+        return true;
+    }
+
+    private async Task<bool> ReconcileAsync(NodeConfigResponse config, string storageRoot, string? archiveRoot,
+        HashSet<string> relocatingOldPaths, List<string> deletedPaths, CancellationToken ct)
     {
         List<string> knownPaths;
         try
@@ -375,9 +664,14 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             return false;
         }
 
-        // Guard 1: prove storage is genuinely reachable before believing any File.Exists miss. See
-        // StorageHealth's own doc comment — an unreachable SMB share reports every path as simply
-        // "not there", which would otherwise delete every row this node owns for footage still on disk.
+        // A segment mid-relocation: its source is deliberately still on the primary volume (so
+        // File.Exists says "present"), but its row is (or is about to be) at the archive path.
+        // Excluded here so a stalled relocate report is never read as a deletion.
+        if (relocatingOldPaths.Count > 0)
+            knownPaths = knownPaths.Where(p => !relocatingOldPaths.Contains(p)).ToList();
+
+        // The import direction only ever walks {storageRoot}/cam-{id}/main and can't lose data, so
+        // the reachability probe alone is enough for it.
         if (!StorageHealth.CanReachStorage(storageRoot))
         {
             logger.LogWarning(
@@ -385,53 +679,66 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
                 storageRoot);
             return false;
         }
+        await ImportOrphanedSegmentsAsync(config, storageRoot, archiveRoot, knownPaths, ct);
 
-        // The other direction: footage on disk the web tier has no row for. Runs before the deletion
-        // inference below and independently of it — an import can never lose data, so it doesn't need
-        // the same paranoia the deletion path does (the reachability probe above is enough).
-        await ImportOrphanedSegmentsAsync(config, storageRoot, knownPaths, ct);
+        // A known path can live on either volume — gate the "missing -> delete the row" inference on
+        // the reachability of whichever volume it's on, so an archive-share outage never deletes rows
+        // for footage still on the primary and vice versa. Paths under neither root (a stale
+        // storage-root change) are left alone entirely.
+        var (primary, archive, _) = PartitionByRoot(knownPaths, storageRoot, archiveRoot);
 
-        var missing = SelectMissingPaths(knownPaths);
+        var ok = await ReconcileMissingSubsetAsync("primary storage", storageRoot, primary, storageReachableAlready: true, deletedPaths, ct);
+        if (archive.Count > 0 && !string.IsNullOrWhiteSpace(archiveRoot))
+            ok &= await ReconcileMissingSubsetAsync("archive storage", archiveRoot!, archive, storageReachableAlready: false, deletedPaths, ct);
+
+        return ok;
+    }
+
+    /// <summary>The guarded "these known paths no longer exist on disk, so report their rows for
+    /// deletion" flow, per storage volume: prove the volume is reachable, re-check every candidate
+    /// after a short delay, and refuse a mass disappearance that looks more like a fault than real
+    /// deletions. Returns false (caller retries sooner than the next scheduled reconcile) when the
+    /// volume can't be trusted; true when it completed, whether or not anything was reported.</summary>
+    private async Task<bool> ReconcileMissingSubsetAsync(string label, string root, List<string> known,
+        bool storageReachableAlready, List<string> deletedPaths, CancellationToken ct)
+    {
+        if (known.Count == 0) return true;
+
+        if (!storageReachableAlready && !StorageHealth.CanReachStorage(root))
+        {
+            logger.LogWarning("Reconciliation sweep skipped for {Label} — {Root} did not pass a read/write probe. Will retry next sweep.", label, root);
+            return false;
+        }
+
+        var missing = SelectMissingPaths(known);
         if (missing.Count == 0) return true;
 
-        // Guard 2: re-check every candidate after a moment. A blip that starts *after* the probe above
-        // passed still lands here, and a genuinely deleted file stays gone on a second look — so this
-        // costs one extra stat per candidate (a small list in normal operation) and removes the entire
-        // class of "transient unavailability read as deletion".
         try { await Task.Delay(TimeSpan.FromSeconds(5), ct); }
         catch (OperationCanceledException) { return false; }
 
-        if (!StorageHealth.CanReachStorage(storageRoot))
+        if (!StorageHealth.CanReachStorage(root))
         {
-            logger.LogWarning("Reconciliation sweep abandoned — storage stopped responding while re-verifying {Count} candidate(s). Will retry next sweep.", missing.Count);
+            logger.LogWarning("Reconciliation sweep abandoned for {Label} — {Root} stopped responding while re-verifying {Count} candidate(s). Will retry next sweep.", label, root, missing.Count);
             return false;
         }
 
         var confirmed = SelectMissingPaths(missing);
         if (confirmed.Count < missing.Count)
-        {
-            logger.LogWarning(
-                "Reconciliation sweep: {Recovered} of {Candidates} candidate(s) reappeared on re-check — storage was briefly unavailable, not genuinely missing. Only confirmed deletions are being reported.",
-                missing.Count - confirmed.Count, missing.Count);
-        }
+            logger.LogWarning("Reconciliation sweep ({Label}): {Recovered} of {Candidates} candidate(s) reappeared on re-check — storage was briefly unavailable. Only confirmed deletions are being reported.",
+                label, missing.Count - confirmed.Count, missing.Count);
         if (confirmed.Count == 0) return true;
 
-        // Guard 3: a mass disappearance is a fault, not a fleet of real deletions this sweep somehow
-        // didn't perform itself. Refusing here only delays genuine orphan cleanup by one sweep; acting
-        // wrongly permanently drops rows for footage that still exists.
-        if (StorageHealth.IsImplausibleMissingCount(confirmed.Count, knownPaths.Count))
+        if (StorageHealth.IsImplausibleMissingCount(confirmed.Count, known.Count))
         {
             logger.LogError(
-                "Reconciliation sweep refusing to report {Count} of {Total} segment(s) as deleted — that proportion indicates a storage fault, not real deletions. Nothing has been reported; investigate the storage backend, then this will resolve itself on a later sweep once storage is healthy.",
-                confirmed.Count, knownPaths.Count);
+                "Reconciliation sweep refusing to report {Count} of {Total} {Label} segment(s) as deleted — that proportion indicates a storage fault, not real deletions. Nothing has been reported; investigate the storage backend.",
+                confirmed.Count, known.Count, label);
             return false;
         }
 
-        logger.LogInformation(
-            "Reconciliation sweep found {Count} segment row(s) (of {Total} checked) pointing at files no longer on disk — reporting for cleanup.",
-            confirmed.Count, knownPaths.Count);
+        logger.LogInformation("Reconciliation sweep found {Count} {Label} segment row(s) (of {Total} checked) pointing at files no longer on disk — reporting for cleanup.",
+            confirmed.Count, label, known.Count);
         deletedPaths.AddRange(confirmed);
-
         return true;
     }
 
@@ -440,10 +747,10 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
     internal static List<string> SelectMissingPaths(IEnumerable<string> knownPaths)
         => knownPaths.Where(p => !File.Exists(p)).ToList();
 
-    // Pass 2c: {segment-stem}_span{spanId}.jpg — the same naming convention Program.cs's own
-    // snapshot-cache writer uses.
+    // Pass 2c: {segment-stem}_span{spanId}.{jpg|webp} — the same naming convention Program.cs's own
+    // snapshot-cache writer uses (WebP for new files, .jpg for ones already on disk).
     private static readonly System.Text.RegularExpressions.Regex SnapshotSpanIdPattern =
-        new(@"_span(\d+)\.jpg$", System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        new(@"_span(\d+)\.(?:jpg|webp)$", System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     /// <summary>Pass 2c: self-heals cached snapshot-crop files whose owning MotionSpan row was
     /// deleted independently of the segment it was cropped from (MotionSpanRetentionService's own
@@ -505,10 +812,10 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
         return true;
     }
 
-    /// <summary>Pass G: staged eager-crop files (<c>snapshots/hires/{ticks}.jpg</c>) older than a
-    /// few days — bounded at the camera's own retention window, capped at 7 days. Tick-named, so a
-    /// filename that doesn't parse as a positive Int64 is left alone. Pure/testable like the other
-    /// selectors here.</summary>
+    /// <summary>Pass G: staged eager-crop files (<c>snapshots/hires/{ticks}.{webp|jpg}</c>) older
+    /// than a few days — bounded at the camera's own retention window, capped at 7 days. Tick-named,
+    /// so a filename that doesn't parse as a positive Int64 is left alone. Pure/testable like the
+    /// other selectors here.</summary>
     internal static List<string> SelectExpiredStagedCrops(string snapshotsDir, DateTime now, int? retentionDays)
     {
         var hiresDir = Path.Combine(snapshotsDir, "hires");
@@ -518,7 +825,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
         var cutoff = now.AddDays(-maxAgeDays);
 
         var result = new List<string>();
-        foreach (var file in Directory.EnumerateFiles(hiresDir, "*.jpg", SearchOption.TopDirectoryOnly))
+        foreach (var file in LarisVMS.Media.CachedImageFormat.EnumerateFiles(hiresDir, "*", SearchOption.TopDirectoryOnly))
         {
             if (!long.TryParse(Path.GetFileNameWithoutExtension(file), out var ticks) || ticks <= 0 || ticks > DateTime.MaxValue.Ticks)
                 continue;
@@ -534,7 +841,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             ? Directory.EnumerateDirectories(storageRoot, "cam-*", SearchOption.TopDirectoryOnly)
                 .Select(camDir => Path.Combine(camDir, "snapshots"))
                 .Where(Directory.Exists)
-                .SelectMany(snapshotsDir => Directory.EnumerateFiles(snapshotsDir, "*_span*.jpg", SearchOption.AllDirectories))
+                .SelectMany(snapshotsDir => LarisVMS.Media.CachedImageFormat.EnumerateFiles(snapshotsDir, "*_span*", SearchOption.AllDirectories))
                 .ToList()
             : [];
 
@@ -561,12 +868,17 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
     /// same file can legitimately be spelled with different casing than the row that recorded it, and
     /// treating those as different would re-import a segment that is already known on every sweep.</summary>
     internal static List<SegmentReportItem> SelectImportableSegments(Guid cameraId, IEnumerable<FileInfo> files,
-        HashSet<string> knownPaths)
+        HashSet<string> knownPaths, string? primaryMainDir = null, string? archiveMainDir = null)
     {
         var result = new List<SegmentReportItem>();
         foreach (var file in files)
         {
             if (knownPaths.Contains(file.FullName)) continue;
+            // A file whose row has already moved to the archive path (a landed relocate report whose
+            // source-delete then didn't happen) must not be re-imported as a new segment.
+            if (primaryMainDir is not null && archiveMainDir is not null
+                && knownPaths.Contains(BuildArchiveTargetPath(primaryMainDir, archiveMainDir, file.FullName)))
+                continue;
             // Same 0-byte guard PollForCompletedSegments applies: ffmpeg creates the file before it can
             // fail the header write, so an empty file is a failed-connection artifact, never a real
             // recording.
@@ -588,8 +900,9 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
 
     /// <summary>Every cached thumbnail file belonging to mainFilePath (M7 pass 2) — derived purely
     /// from the segment's own relative path/filename under mainDir (never client-supplied), globbing
-    /// every bucketed-offset variant ("_o00.jpg", "_o05.jpg", ...) a hover request may have generated
-    /// for it. Pure/testable against a real temp directory, same pattern as EnumerateEvictable.</summary>
+    /// every bucketed-offset variant ("_o00...", "_o05...", ...) a hover request may have generated
+    /// for it, in either cache format. Pure/testable against a real temp directory, same pattern as
+    /// EnumerateEvictable.</summary>
     internal static List<string> FindMatchingThumbnails(string mainDir, string thumbsDir, string mainFilePath)
     {
         if (!Directory.Exists(thumbsDir)) return [];
@@ -598,7 +911,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
         var stem = Path.GetFileNameWithoutExtension(relative);
         var thumbDirForSegment = Path.Combine(thumbsDir, relativeDir);
         if (!Directory.Exists(thumbDirForSegment)) return [];
-        return Directory.EnumerateFiles(thumbDirForSegment, stem + "_o*.jpg", SearchOption.TopDirectoryOnly).ToList();
+        return LarisVMS.Media.CachedImageFormat.EnumerateFiles(thumbDirForSegment, stem + "_o*", SearchOption.TopDirectoryOnly).ToList();
     }
 
     private void DeleteMatchingThumbnails(string mainDir, string thumbsDir, string mainFilePath)
@@ -607,8 +920,8 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
     }
 
     /// <summary>Object detection plan decision 10: every cached snapshot-image file belonging to
-    /// mainFilePath — same derivation as FindMatchingThumbnails, but globbing "_span*.jpg" (one
-    /// MotionSpan's own id) instead of "_o*.jpg" (a bucketed time offset), since a segment can carry
+    /// mainFilePath — same derivation as FindMatchingThumbnails, but globbing "_span*" (one
+    /// MotionSpan's own id) instead of "_o*" (a bucketed time offset), since a segment can carry
     /// more than one detected object, each with its own owning span and its own cached crop.</summary>
     internal static List<string> FindMatchingSnapshotImages(string mainDir, string snapshotsDir, string mainFilePath)
     {
@@ -618,7 +931,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
         var stem = Path.GetFileNameWithoutExtension(relative);
         var snapshotDirForSegment = Path.Combine(snapshotsDir, relativeDir);
         if (!Directory.Exists(snapshotDirForSegment)) return [];
-        return Directory.EnumerateFiles(snapshotDirForSegment, stem + "_span*.jpg", SearchOption.TopDirectoryOnly).ToList();
+        return LarisVMS.Media.CachedImageFormat.EnumerateFiles(snapshotDirForSegment, stem + "_span*", SearchOption.TopDirectoryOnly).ToList();
     }
 
     private void DeleteMatchingSnapshotImages(string mainDir, string snapshotsDir, string mainFilePath)
@@ -631,6 +944,91 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             .Select(p => new FileInfo(p))
             .Where(f => now - f.LastWriteTimeUtc > MinAge)
             .ToList();
+
+    // ── Archive storage (phase 2) — pure helpers, unit-tested against real temp dirs like the
+    //    selectors above; wiring into SweepAsync is separate. ──────────────────────────────────
+
+    /// <summary>Where a segment on the primary volume lands on the archive volume — the same
+    /// cam-{id}/main/YYYY/MM/DD/HH/filename relative subpath, just under the archive root's
+    /// cam-{id}/main. Keeping the layout identical means the node's media-path checks and the
+    /// Path.GetRelativePath(mainDir, …) thumbnail/snapshot derivation work against either root with
+    /// only a "which root matched" change.</summary>
+    internal static string BuildArchiveTargetPath(string primaryCameraMainDir, string archiveCameraMainDir, string sourceFullPath)
+        => Path.Combine(archiveCameraMainDir, Path.GetRelativePath(primaryCameraMainDir, sourceFullPath));
+
+    /// <summary>True when <paramref name="candidate"/> is the same as or nested under
+    /// <paramref name="root"/> (case-insensitive, separator-aware). The archive root must NOT be under
+    /// the storage root, or the node's orphan-import sweep would re-import archived files as new
+    /// primary segments.</summary>
+    internal static bool IsUnderStorageRoot(string? candidate, string? root)
+    {
+        if (string.IsNullOrWhiteSpace(candidate) || string.IsNullOrWhiteSpace(root)) return false;
+        var c = candidate.TrimEnd('/', '\\');
+        var r = root.TrimEnd('/', '\\');
+        return c.Equals(r, StringComparison.OrdinalIgnoreCase)
+            || c.StartsWith(r + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || c.StartsWith(r + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Splits a set of file paths into (under storageRoot, under archiveRoot, neither) so
+    /// ReconcileAsync can gate a "missing file" inference on the reachability of whichever volume the
+    /// path lives on — an archive-share outage must not delete rows for footage still on primary and
+    /// vice versa.</summary>
+    internal static (List<string> Primary, List<string> Archive, List<string> Other) PartitionByRoot(
+        IEnumerable<string> paths, string storageRoot, string? archiveRoot)
+    {
+        List<string> primary = [], archive = [], other = [];
+        foreach (var p in paths)
+        {
+            if (!string.IsNullOrWhiteSpace(archiveRoot) && IsUnderStorageRoot(p, archiveRoot)) archive.Add(p);
+            else if (IsUnderStorageRoot(p, storageRoot)) primary.Add(p);
+            else other.Add(p);
+        }
+        return (primary, archive, other);
+    }
+
+    /// <summary>Moves one segment file onto the archive volume: copy to a same-volume ".tmp", verify
+    /// size, atomically rename, then stamp the archive copy's mtime to the source's so the archive
+    /// expiry pass measures age from the recording time. Returns true on success (the SOURCE is left
+    /// in place — the caller deletes it only after the web has recorded the new path). Idempotent: a
+    /// target already present with matching size is treated as done. Any I/O failure leaves the
+    /// source untouched and the ".tmp" cleaned up, and the move retries next sweep.</summary>
+    internal static bool TryArchiveFile(string sourceFullPath, string targetFullPath, ILogger logger)
+    {
+        try
+        {
+            var source = new FileInfo(sourceFullPath);
+            if (!source.Exists) return false;
+
+            var targetDir = Path.GetDirectoryName(targetFullPath);
+            if (targetDir is not null) Directory.CreateDirectory(targetDir);
+
+            if (File.Exists(targetFullPath) && new FileInfo(targetFullPath).Length == source.Length)
+                return true; // a previous sweep already copied it; the report just hadn't landed
+
+            var tmp = targetFullPath + ".tmp";
+            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { /* stale, best effort */ }
+
+            File.Copy(sourceFullPath, tmp, overwrite: true);
+            if (new FileInfo(tmp).Length != source.Length)
+            {
+                try { File.Delete(tmp); } catch { /* best effort */ }
+                logger.LogWarning("Archive copy of {Source} was a different size than the source — leaving it on primary, will retry.", sourceFullPath);
+                return false;
+            }
+
+            if (File.Exists(targetFullPath)) File.Delete(targetFullPath);
+            File.Move(tmp, targetFullPath);
+            try { File.SetLastWriteTimeUtc(targetFullPath, source.LastWriteTimeUtc); } catch { /* mtime is a best-effort anchor */ }
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger.LogWarning(ex, "Could not archive {Source} — leaving it on primary, will retry next sweep.", sourceFullPath);
+            try { if (File.Exists(targetFullPath + ".tmp")) File.Delete(targetFullPath + ".tmp"); } catch { /* best effort */ }
+            return false;
+        }
+    }
 
     /// <summary>Files past the age cutoff — a pure decision extracted from the sweep so it's testable
     /// without touching a real (or fake) filesystem. 0/negative retentionDays means "keep forever".</summary>

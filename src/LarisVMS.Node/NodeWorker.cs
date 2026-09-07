@@ -150,6 +150,17 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     // previously-stored value alone rather than clearing it — see NodeService.RecordHeartbeatAsync).
     private IReadOnlyList<string>? _detectedEncoders;
 
+    // Probed once at startup alongside the encoders (same "the installed ffmpeg build doesn't
+    // change while this process runs" reasoning) — gates whether this node writes hover thumbnails
+    // and segment-seek snapshot crops as WebP or falls back to JPEG. The Vision Service's eager
+    // crops are always WebP (SkiaSharp, no ffmpeg). Defaults false so a node that hasn't finished
+    // probing keeps producing JPEG until it has.
+    private bool _webpSupported;
+
+    /// <summary>Whether this node's ffmpeg can encode WebP (libwebp) — read by the thumbnail and
+    /// snapshot-image routes to pick the cache file's format. See <see cref="_webpSupported"/>.</summary>
+    public bool WebpSupported => _webpSupported;
+
     /// <summary>The active RecordingSession for a camera this node is currently recording, or null
     /// if it isn't assigned here (or isn't recording yet). Used by the live-view WebSocket endpoint
     /// to attach a viewer to the right session's tee'd live fanout.</summary>
@@ -230,7 +241,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// OnDemandThumbnailGate — a hover request that can't get a slot within 3s gives up (the caller
     /// renders "No preview available") rather than piling up behind an unbounded queue for a preview
     /// that may already be stale by the time it'd be served.</summary>
-    public async Task<byte[]?> CaptureThumbnailAsync(string filePath, int offsetSeconds, CancellationToken ct, int maxDimension = ThumbnailCapture.DefaultMaxDimension, int quality = ThumbnailCapture.DefaultQuality)
+    public async Task<byte[]?> CaptureThumbnailAsync(string filePath, int offsetSeconds, CancellationToken ct, int maxDimension = ThumbnailCapture.DefaultMaxDimension, int quality = ThumbnailCapture.DefaultQuality, bool webp = false)
     {
         using var gateCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         gateCts.CancelAfter(TimeSpan.FromSeconds(3));
@@ -249,7 +260,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         }
         try
         {
-            return await ThumbnailCapture.CaptureAsync(ffmpegPath, filePath, offsetSeconds, ct, maxDimension: maxDimension, quality: quality);
+            return await ThumbnailCapture.CaptureAsync(ffmpegPath, filePath, offsetSeconds, ct, maxDimension: maxDimension, quality: quality, webp: webp);
         }
         finally
         {
@@ -262,12 +273,12 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// OS process priority (see ThumbnailCapture.CaptureAsync's lowPriority parameter) so it never
     /// meaningfully competes with live recording or an on-demand hover. Waits for a slot rather than
     /// giving up on a timeout, since nothing is blocked synchronously waiting on this.</summary>
-    public async Task<byte[]?> CaptureThumbnailInBackgroundAsync(string filePath, int offsetSeconds, CancellationToken ct)
+    public async Task<byte[]?> CaptureThumbnailInBackgroundAsync(string filePath, int offsetSeconds, CancellationToken ct, bool webp = false)
     {
         await BackgroundThumbnailGate.WaitAsync(ct);
         try
         {
-            return await ThumbnailCapture.CaptureAsync(ffmpegPath, filePath, offsetSeconds, ct, lowPriority: true);
+            return await ThumbnailCapture.CaptureAsync(ffmpegPath, filePath, offsetSeconds, ct, lowPriority: true, webp: webp);
         }
         finally
         {
@@ -298,7 +309,8 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// own directory-prefix validation already confirms filePath belongs to this node before this is
     /// ever called).</summary>
     public async Task<byte[]?> CaptureSnapshotImageAsync(string filePath, double offsetSeconds,
-        double boxX, double boxY, double boxW, double boxH, int frameWidth, int frameHeight, CancellationToken ct)
+        double boxX, double boxY, double boxW, double boxH, int frameWidth, int frameHeight, CancellationToken ct,
+        bool webp = false)
     {
         using var gateCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         gateCts.CancelAfter(OnDemandSnapshotGateTimeout);
@@ -316,7 +328,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         }
         try
         {
-            return await SnapshotImageCapture.CaptureAsync(ffmpegPath, filePath, offsetSeconds, boxX, boxY, boxW, boxH, frameWidth, frameHeight, ct, logger: _logger);
+            return await SnapshotImageCapture.CaptureAsync(ffmpegPath, filePath, offsetSeconds, boxX, boxY, boxW, boxH, frameWidth, frameHeight, ct, logger: _logger, webp: webp);
         }
         finally
         {
@@ -341,6 +353,12 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// written from the reconcile loop.</summary>
     public volatile string? StorageRoot;
 
+    /// <summary>The archive storage root the most recent reconcile resolved (config's
+    /// ArchiveRootPath), or null when no archive volume is configured. The media endpoints accept a
+    /// segment path under either this or <see cref="StorageRoot"/>; StorageManager moves aged-out
+    /// footage here. Volatile for the same read-from-request-threads reason as StorageRoot.</summary>
+    public volatile string? ArchiveRoot;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // Must happen before ReconcileLoopAsync can start any RecordingSession — see
@@ -364,6 +382,10 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         _detectedEncoders = await FfmpegCapabilityProber.ProbeAsync(ffmpegPath, stoppingToken);
         _logger.LogInformation("Detected encoder(s): {Encoders}",
             _detectedEncoders.Count > 0 ? string.Join(", ", _detectedEncoders) : "(none — ffmpeg -encoders probe found nothing recognized, or failed)");
+
+        _webpSupported = await FfmpegCapabilityProber.HasLibWebpAsync(ffmpegPath, stoppingToken);
+        _logger.LogInformation("Cached thumbnail/snapshot image format: {Format}",
+            _webpSupported ? "WebP (ffmpeg has libwebp)" : "JPEG (ffmpeg has no libwebp encoder)");
 
         // Object detection plan decision 2: probed once, same reasoning as encoders above — this
         // node's hardware doesn't change while the process is running. AccelSelection combines this
@@ -469,8 +491,15 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 var storageRoot = Reconcile(config, ct);
                 PersistConfigCache(config);
                 var usage = DiskSpace.TryGetUsage(storageRoot);
+                // Archive volume (SMB / USB) usage — only measured when an archive root is configured.
+                var archiveUsage = ArchiveRoot is { } archiveRoot ? DiskSpace.TryGetUsage(archiveRoot) : null;
+                // Primary volume over the watermark → footage is being archived/deleted early; surfaced
+                // as a warning next to the node on Admin/Nodes.
+                var storagePressure = usage is { TotalBytes: > 0 } u
+                    && 100.0 * (u.TotalBytes - u.FreeBytes) / u.TotalBytes > config.WatermarkPercent;
                 var heartbeat = await api.HeartbeatAsync(new NodeHeartbeatRequest(NodeVersion.Current, usage?.FreeBytes, usage?.TotalBytes, livePort,
-                    DateTime.UtcNow, _detectedEncoders?.ToList(), _detectedAccelerators.Select(a => a.ToString()).ToList()), ct);
+                    DateTime.UtcNow, _detectedEncoders?.ToList(), _detectedAccelerators.Select(a => a.ToString()).ToList(),
+                    archiveUsage?.FreeBytes, archiveUsage?.TotalBytes, storagePressure), ct);
 
                 // Auto-update: server only ever hands this back when a genuinely newer build exists
                 // for this node's platform and NodeAutoUpdate.Enabled is on (see Program.cs's
@@ -736,6 +765,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     {
         var storageRoot = string.IsNullOrWhiteSpace(config.StorageRootPath) ? fallbackStorageRoot : config.StorageRootPath;
         StorageRoot = storageRoot;
+        ArchiveRoot = string.IsNullOrWhiteSpace(config.ArchiveRootPath) ? null : config.ArchiveRootPath;
         var desired = config.Cameras.ToDictionary(c => c.CameraId);
 
         foreach (var cameraId in _active.Keys.Except(desired.Keys).ToList())
@@ -1353,7 +1383,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         var signature = string.Join('|', watchRtspUri, sourceWidth, sourceHeight, config.AspectMode,
             camera.AiConfidence, camera.AiIou, config.ReportIdleDetections, config.AiIdleTimeoutSeconds,
             watchRole, _resolvedAccelerator, _resolvedDetectionModelFamily, config.DFineWeights, config.YoloXSize,
-            decodeFpsCap, config.GpuPreprocessing, config.DFineTensorRtMode);
+            decodeFpsCap, config.GpuPreprocessing, config.DFineTensorRtMode, config.SnapshotMotionAccuracy);
 
         if (_activeVision.TryGetValue(camera.CameraId, out var existing) && existing.ConfigSignature == signature) return; // already watching, unchanged
 
@@ -1371,7 +1401,10 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             // Detection.DFineTensorRtMode — node-scoped, only acted on for a D-FINE pipeline. In
             // `signature` above: switching it changes both the loaded model file and the compiled
             // TensorRT engine, so the pipeline must restart.
-            config.DFineTensorRtMode);
+            config.DFineTensorRtMode,
+            // Detection.SnapshotMotionAccuracy — global. In `signature` above: it changes how the
+            // movement classifier and span lifecycle behave, so a change restarts the pipeline.
+            config.SnapshotMotionAccuracy);
 
         // Never stack two starts for the same camera — see _visionStartsInFlight's own comment.
         if (!_visionStartsInFlight.TryAdd(camera.CameraId, 0)) return;
@@ -1536,7 +1569,8 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             EventTagRuleId: null, DetectionKind: null,
             DetectedObjectCategory: item.DetectedObjectCategory, DetectedObjectLabel: item.DetectedObjectLabel,
             BestFrameAtUtc: item.BestFrameAtUtc, BestBoxX: item.BestBoxX, BestBoxY: item.BestBoxY,
-            BestBoxW: item.BestBoxW, BestBoxH: item.BestBoxH, BestBoxConfidence: item.BestBoxConfidence));
+            BestBoxW: item.BestBoxW, BestBoxH: item.BestBoxH, BestBoxConfidence: item.BestBoxConfidence,
+            MovingCount: item.MovingCount));
 
         if (_activeVision.TryGetValue(item.CameraId, out var recorder)) recorder.RecordDetection(item.EndUtc);
     }

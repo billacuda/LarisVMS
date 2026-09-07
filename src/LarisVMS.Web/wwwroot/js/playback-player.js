@@ -298,7 +298,10 @@
                 }
                 var list = await resp.json();
                 segments = list.map(function (s) {
-                    return { id: s.id, startUtc: new Date(s.startUtc).getTime(), endUtc: new Date(s.endUtc).getTime() };
+                    return {
+                        id: s.id, startUtc: new Date(s.startUtc).getTime(), endUtc: new Date(s.endUtc).getTime(),
+                        isArchived: !!s.isArchived
+                    };
                 });
             } catch (e) {
                 if (signal.aborted) return; // superseded by a newer seek — expected, not an error
@@ -388,7 +391,9 @@
 
             teardown();
             loadToken = myToken; // teardown() bumped it again — restore the token this call owns
-            if (statusEl) statusEl.textContent = 'Loading…';
+            // Archived segments live on the node's slower cold-storage volume — say so, so a longer
+            // wait reads as expected rather than a stall.
+            if (statusEl) statusEl.textContent = segment.isArchived ? 'Loading from archive…' : 'Loading…';
 
             if (!mimeType) {
                 if (statusEl) statusEl.textContent = 'No supported codec for this browser.';

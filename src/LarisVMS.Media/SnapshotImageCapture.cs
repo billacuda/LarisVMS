@@ -29,6 +29,10 @@ public static class SnapshotImageCapture
     /// as the uncropped card it sits alongside, not the heavier hover-preview compression.</summary>
     public const int DefaultQuality = 4;
 
+    /// <summary>libwebp -quality (0-100, higher is better) for the WebP path — a touch higher than
+    /// the hover thumbnail's, since this is the image a viewer actually studies.</summary>
+    public const int DefaultWebpQuality = 82;
+
     /// <summary>Fraction of the box's own width/height added as margin on every side before cropping —
     /// a razor-tight crop on just the reported box reads as an odd, context-free sliver; a little
     /// surrounding scene makes it obvious what's actually in frame. Tuned up from an initial 0.15
@@ -87,7 +91,8 @@ public static class SnapshotImageCapture
         return (pxX, pxY, pxW, pxH);
     }
 
-    /// <summary>Returns JPEG bytes, or null if ffmpeg produced nothing (corrupt/truncated segment,
+    /// <summary>Returns JPEG bytes (or WebP bytes when <paramref name="webp"/> is set and this
+    /// ffmpeg has libwebp), or null if ffmpeg produced nothing (corrupt/truncated segment,
     /// offset beyond the file's actual content, timeout, or a crop rectangle ffmpeg otherwise
     /// rejects) — callers turn that into a 502 rather than this class deciding what an HTTP failure
     /// should look like, same convention ThumbnailCapture.CaptureAsync already uses. On a null result,
@@ -96,7 +101,7 @@ public static class SnapshotImageCapture
     /// distinct ffmpeg error text.</summary>
     public static async Task<byte[]?> CaptureAsync(string ffmpegPath, string filePath, double offsetSeconds,
         double boxX, double boxY, double boxW, double boxH, int frameWidth, int frameHeight,
-        CancellationToken ct, TimeSpan? timeout = null, ILogger? logger = null)
+        CancellationToken ct, TimeSpan? timeout = null, ILogger? logger = null, bool webp = false)
     {
         var (cropX, cropY, cropW, cropH) = ComputeCropRect(boxX, boxY, boxW, boxH, frameWidth, frameHeight);
         // Whole-second -ss truncated a fast-moving object out of a tight crop; a fractional value
@@ -121,8 +126,9 @@ public static class SnapshotImageCapture
             "-i", filePath,
             "-frames:v", "1",
             "-vf", $"crop={cropW}:{cropH}:{cropX}:{cropY},scale={MaxDimension}:{MaxDimension}:force_original_aspect_ratio=decrease",
-            "-q:v", DefaultQuality.ToString(),
-            "-f", "image2",
+            .. (webp
+                ? new[] { "-c:v", "libwebp", "-quality", DefaultWebpQuality.ToString(), "-f", "image2" }
+                : new[] { "-q:v", DefaultQuality.ToString(), "-f", "image2" }),
             "pipe:1"
         ];
         foreach (var a in args) psi.ArgumentList.Add(a);

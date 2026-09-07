@@ -95,11 +95,6 @@ public interface ISetupService
 
     Task SaveBrandingAsync(string appName, string primaryColor, CancellationToken ct = default);
 
-    /// <summary>Local disk path or UNC share the recorder nodes should write recordings to.
-    /// Wired to actual StorageTargets once that entity lands in M4 — for M1 this is a single
-    /// Settings row (Storage.RootPath) so the wizard shape matches the plan.</summary>
-    Task SaveStorageRootAsync(string rootPath, CancellationToken ct = default);
-
     /// <summary>Generates (or returns the existing) node registration key so the wizard can print
     /// the install-node.ps1 command line. The Nodes table itself lands in M3.</summary>
     Task<string> GetOrCreateNodeRegistrationKeyAsync(CancellationToken ct = default);

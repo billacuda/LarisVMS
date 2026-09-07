@@ -109,9 +109,23 @@ public class NodeApiClient
         response.EnsureSuccessStatusCode();
     }
 
+    public async Task RelocateSegmentsAsync(List<SegmentRelocateItem> items, CancellationToken ct)
+    {
+        if (items.Count == 0) return;
+        var response = await _http.PostAsJsonAsync("api/nodes/segments/relocate", new SegmentRelocateRequest(items), ct);
+        response.EnsureSuccessStatusCode();
+    }
+
     public async Task<List<string>> GetSegmentFilePathsAsync(CancellationToken ct)
     {
         var response = await _http.GetAsync("api/nodes/segments/paths", ct);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<List<string>>(ct))!;
+    }
+
+    public async Task<List<string>> GetPrimaryTieredSegmentFilePathsAsync(CancellationToken ct)
+    {
+        var response = await _http.GetAsync("api/nodes/segments/primary-paths", ct);
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<List<string>>(ct))!;
     }

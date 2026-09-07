@@ -87,7 +87,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     // Reported in the cadence line so the score a real object actually reaches can be read directly
     // against the bar it has to clear, instead of inferred.
     private readonly float _trackerNewTrackThreshold;
-    private readonly MovementClassifier _movement = new();
+    private readonly MovementClassifier _movement;
     private readonly HttpClient _http;
     private readonly ILogger _logger;
     private readonly CancellationTokenSource _cts = new();
@@ -153,6 +153,21 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     // collections are safe.
     private readonly Dictionary<string, MotionHysteresis> _hysteresisByLabel = new(StringComparer.OrdinalIgnoreCase);
 
+    // Detection.SnapshotMotionAccuracy: the last instant any instance of this label was classified
+    // Moving. When a label's span has been open with no Moving instance for DepartureGrace — the
+    // moving object drove off / left frame, as opposed to settling into Idle where it might resume —
+    // the span is finalized early rather than held open the full IdleTimeoutSeconds, so a later,
+    // unrelated object of the same type on the same camera starts its own span and its own snapshot
+    // instead of being merged into this one. Distinct from MotionHysteresis's own endAfter, which
+    // still governs the Idle-object and ReportIdleDetections cases.
+    private readonly Dictionary<string, DateTime> _lastMovingAtByLabel = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly TimeSpan DepartureGrace = TimeSpan.FromSeconds(5);
+
+    // Peak number of distinct tracks of one label classified Moving in a single frame over the life
+    // of that label's currently-open span — surfaced as the "x2" / "x3" count on the snapshot badge.
+    // Reset alongside _bestFrames.Reset(label) when the span genuinely closes.
+    private readonly Dictionary<string, int> _peakMovingCountByLabel = new(StringComparer.OrdinalIgnoreCase);
+
     // Pulled out as its own pure/testable class — see LabelBestFrameTracker's own doc comment for
     // why "best frame" needs two tiers per label rather than one.
     private readonly LabelBestFrameTracker _bestFrames = new();
@@ -217,7 +232,9 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     // score jitters slightly frame to frame even when nothing meaningful changed.
     private const double SnapshotImprovementMargin = 0.15;
 
-    private const int EagerCropJpegQuality = 88;
+    // libwebp quality (0-100). WebP at 80 is visually on par with the JPEG q88 this replaced, at a
+    // fraction of the bytes — the eager crop always goes out as WebP (SkiaSharp needs no probe).
+    private const int EagerCropWebpQuality = 80;
 
     public CameraDetectionPipeline(VisionStartCameraRequest request, VisionServiceOptions serviceOptions,
         string resolvedFfmpegPath, string resolvedModelPath, DetectionModelFamily modelFamily, DFineWeights dfineWeights,
@@ -225,6 +242,14 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     {
         _request = request;
         _http = http;
+
+        // Detection.SnapshotMotionAccuracy off => the classifier keeps its original single
+        // oldest-vs-newest centroid comparison (the fast revert path); on => averaged endpoints +
+        // pixel floor + directedness ratio so a parked vehicle's box jitter can't read as Moving.
+        _movement = new MovementClassifier(new MovementClassifierOptions
+        {
+            JitterRejectionEnabled = request.SnapshotMotionAccuracy,
+        });
         // The camera's own name rather than its GUID — see VisionStartCameraRequest.DisplayName. The
         // full id still reaches the log on the pipeline-start line below and on every failure, so a
         // line here can always be tied back to a camera row; it just isn't repeated 36 characters at
@@ -564,6 +589,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
                 if (motionPresent)
                 {
                     UpdateBestFrameForLabel(label, detection, _sourceWidth, _sourceHeight, now);
+                    if (observation.State == MovementState.Moving) _lastMovingAtByLabel[label] = now;
 
                     movingThisFrame.Add((label, detection));
                     // Pass G: a track we've never snapshotted starting to move is what triggers this
@@ -597,6 +623,48 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
                 if (hysteresis.Observe(now, motionPresent: false, score: 0) is { } closed)
                 {
                     EnqueueReport(closed, label, CocoCategoryMap.Resolve(label));
+                }
+            }
+
+            // "x2" / "x3" badge: peak moving tracks per label this frame, kept as a running max over
+            // the life of that label's open span (reset in EnqueueReport on close). Each entry in
+            // movingThisFrame is one distinct track (the tracker returns a track at most once per
+            // frame and the arbiter gives it one label), so a per-label tally is the distinct count.
+            if (movingThisFrame.Count > 0)
+            {
+                var perLabel = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                foreach (var (lbl, _) in movingThisFrame)
+                {
+                    perLabel[lbl] = perLabel.GetValueOrDefault(lbl) + 1;
+                }
+                foreach (var (lbl, count) in perLabel)
+                {
+                    _peakMovingCountByLabel[lbl] = Math.Max(_peakMovingCountByLabel.GetValueOrDefault(lbl), count);
+                }
+            }
+
+            // Detection.SnapshotMotionAccuracy: finalize a span early once its object has genuinely
+            // left — no instance of the label classified Moving for DepartureGrace — rather than
+            // holding it open the full IdleTimeoutSeconds. Without this, a later unrelated object of
+            // the same type on this camera (a second truck 30s after the first drove off) merges
+            // into the first one's span and its snapshot. Skipped when ReportIdleDetections is on:
+            // there, a still-present idle instance is deliberately kept reported, not "departed".
+            if (_request.SnapshotMotionAccuracy && !_request.ReportIdleDetections)
+            {
+                List<(MotionSpanResult Closed, string Label)>? departed = null;
+                foreach (var (label, hysteresis) in _hysteresisByLabel)
+                {
+                    if (!hysteresis.IsActive) continue;
+                    var lastMoving = _lastMovingAtByLabel.GetValueOrDefault(label, DateTime.MinValue);
+                    if (now - lastMoving < DepartureGrace) continue;
+                    if (hysteresis.Flush(now) is { } closed) (departed ??= []).Add((closed, label));
+                }
+                if (departed is not null)
+                {
+                    foreach (var (closed, label) in departed)
+                    {
+                        EnqueueReport(closed, label, CocoCategoryMap.Resolve(label));
+                    }
                 }
             }
 
@@ -855,17 +923,17 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             if (crop.Width < 2 || crop.Height < 2) return;
 
             // BGRA path takes the final (margined, content-clamped) rect; the nv12 path reuses
-            // Nv12Ops.CropToJpeg, which applies its own margin + frame clamp, so it gets the raw
+            // Nv12Ops.CropToWebp, which applies its own margin + frame clamp, so it gets the raw
             // union instead. nv12 only happens with GpuPreprocessing on (D-FINE only, off by default).
             // No whole-frame guard: covering every moving object is the point even when they're at
             // opposite edges — the union of the real detection boxes plus a 12% margin, clamped to
             // the content rect, is never worse than a full-frame grab.
-            var jpeg = _frameIsNv12
-                ? Nv12Ops.CropToJpeg(frame, _profile.NetworkWidth, _profile.NetworkHeight, ClampTo(unionRect, content), EagerCropJpegQuality)
-                : BgraOps.CropRectToJpeg(frame, _profile.NetworkWidth, _profile.NetworkHeight, crop, EagerCropJpegQuality);
-            if (jpeg is null) return;
+            var image = _frameIsNv12
+                ? Nv12Ops.CropToWebp(frame, _profile.NetworkWidth, _profile.NetworkHeight, ClampTo(unionRect, content), EagerCropWebpQuality)
+                : BgraOps.CropRectToWebp(frame, _profile.NetworkWidth, _profile.NetworkHeight, crop, EagerCropWebpQuality);
+            if (image is null) return;
 
-            _ = PostEagerCropAsync(nowUtc, jpeg);
+            _ = PostEagerCropAsync(nowUtc, image);
             PromoteAuthoritativeBest(moving, nowUtc, frameScore);
         }
         catch (Exception ex)
@@ -906,14 +974,14 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         if (union is not { } unionRect || unionRect.Width < 2 || unionRect.Height < 2) return;
 
         // Always nv12 — Slice mode has no BGRA path (mandatory GPU preprocessing, see this class's
-        // own doc comment). Nv12Ops.CropToJpeg applies its own margin + frame clamp, so it gets the
+        // own doc comment). Nv12Ops.CropToWebp applies its own margin + frame clamp, so it gets the
         // raw union directly (no separate ComputeCropRect step, unlike the BGRA branch of
         // TrySubFrameSnapshot). No whole-frame guard — see TrySubFrameSnapshot for why covering every
         // moving object wins over a tighter single-object crop.
-        var jpeg = Nv12Ops.CropToJpeg(frame, layout.CaptureWidth, layout.CaptureHeight, ClampTo(unionRect, content), EagerCropJpegQuality);
-        if (jpeg is null) return;
+        var image = Nv12Ops.CropToWebp(frame, layout.CaptureWidth, layout.CaptureHeight, ClampTo(unionRect, content), EagerCropWebpQuality);
+        if (image is null) return;
 
-        _ = PostEagerCropAsync(nowUtc, jpeg);
+        _ = PostEagerCropAsync(nowUtc, image);
         PromoteAuthoritativeBest(moving, nowUtc, frameScore);
     }
 
@@ -997,10 +1065,13 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         BestFrame? best = _authoritativeBestByLabel.TryGetValue(label, out var authoritative)
             ? authoritative
             : _bestFrames.GetBest(label);
+        // "x2" / "x3" badge: peak distinct moving instances of this label over the span, floored at
+        // 1 so a checkpoint fired before the first count is recorded still reports a sane value.
+        var movingCount = Math.Max(1, _peakMovingCountByLabel.GetValueOrDefault(label));
         _pendingReports.Enqueue(new VisionDetectionReportItem(
             _request.CameraId, span.StartUtc, span.EndUtc, span.PeakScore,
             category, label,
-            best?.AtUtc, best?.X, best?.Y, best?.W, best?.H, best?.Confidence));
+            best?.AtUtc, best?.X, best?.Y, best?.W, best?.H, best?.Confidence, movingCount));
 
         // A closed span is done contributing best-frame candidates — reset so a later, separate
         // span for this same label runs its own fresh contest instead of being handed a stale
@@ -1009,6 +1080,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         {
             _bestFrames.Reset(label);
             _authoritativeBestByLabel.Remove(label);
+            _peakMovingCountByLabel.Remove(label);
             // Once every co-detected label's span has closed, nothing on screen is described by the
             // staged composite score any more — drop it so a later, separate burst of activity runs
             // its own fresh contest instead of being held to a bar (e.g. a two-object frame) it may
@@ -1101,12 +1173,12 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             height > width ? "Portrait" : "Landscape");
     }
 
-    private async Task PostEagerCropAsync(DateTime atUtc, byte[] jpeg)
+    private async Task PostEagerCropAsync(DateTime atUtc, byte[] image)
     {
         try
         {
             var url = $"{_request.NodeCallbackBaseUrl.TrimEnd('/')}/detections/crop";
-            var response = await _http.PostAsJsonAsync(url, new VisionDetectionCropItem(_request.CameraId, atUtc, jpeg), _cts.Token);
+            var response = await _http.PostAsJsonAsync(url, new VisionDetectionCropItem(_request.CameraId, atUtc, image), _cts.Token);
             response.EnsureSuccessStatusCode();
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

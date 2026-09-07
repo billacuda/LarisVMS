@@ -1,19 +1,13 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
-using LarisVMS.Core.Interfaces;
 
 namespace LarisVMS.Web.Pages.Setup;
 
-public class StorageModel(ISetupService setupService) : PageModel
+// Informational only since 0.188.0 — storage config is per recorder node (set by install-node.ps1
+// or on Admin -> Nodes), there is no global storage path to collect here anymore.
+public class StorageModel : PageModel
 {
-    [BindProperty] public string RootPath { get; set; } = string.Empty;
-
     public void OnGet() { }
 
-    public async Task<IActionResult> OnPostAsync()
-    {
-        if (!string.IsNullOrWhiteSpace(RootPath))
-            await setupService.SaveStorageRootAsync(RootPath);
-        return RedirectToPage("Node");
-    }
+    public IActionResult OnPost() => RedirectToPage("Node");
 }

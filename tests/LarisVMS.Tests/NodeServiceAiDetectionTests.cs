@@ -157,6 +157,44 @@ public class NodeServiceAiDetectionTests
     }
 
     [Fact]
+    public async Task MovingCountIsStoredAndKeptAsARunningMaxAcrossCheckpoints()
+    {
+        var (db, service, cameraId, nodeId) = await SeedAsync();
+        var start = new DateTime(2026, 8, 10, 12, 0, 0, DateTimeKind.Utc);
+
+        // First report: one truck moving.
+        await service.RecordMotionSpansAsync(nodeId, [
+            new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(5), 0.8,
+                DetectedObjectCategory: "Vehicle", DetectedObjectLabel: "truck", MovingCount: 1)
+        ]);
+        // Checkpoint: two trucks moving at once now.
+        await service.RecordMotionSpansAsync(nodeId, [
+            new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(12), 0.8,
+                DetectedObjectCategory: "Vehicle", DetectedObjectLabel: "truck", MovingCount: 2)
+        ]);
+        // Later checkpoint: back down to one — the peak must stick.
+        await service.RecordMotionSpansAsync(nodeId, [
+            new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(18), 0.8,
+                DetectedObjectCategory: "Vehicle", DetectedObjectLabel: "truck", MovingCount: 1)
+        ]);
+
+        var span = await db.MotionSpans.SingleAsync(m => m.CameraId == cameraId);
+        Assert.Equal(2, span.MovingCount);
+    }
+
+    [Fact]
+    public async Task MovingCountIsNullForANonAiDetectionSpan()
+    {
+        var (db, service, cameraId, nodeId) = await SeedAsync();
+        var start = new DateTime(2026, 8, 10, 12, 0, 0, DateTimeKind.Utc);
+
+        await service.RecordMotionSpansAsync(nodeId, [new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(5), 0.5)]);
+
+        var span = await db.MotionSpans.SingleAsync(m => m.CameraId == cameraId);
+        Assert.Null(span.MovingCount);
+    }
+
+    [Fact]
     public async Task FragmentedSightingsOfOneObjectWithinTheIdleGapCoalesceIntoASingleSpan()
     {
         // Tracker-ID churn / a brief occlusion closes one sighting; the object is re-acquired a few

@@ -17,7 +17,8 @@ namespace LarisVMS.Web.Pages.Admin.Settings;
 /// merge to be useful for discoverability.
 /// </summary>
 [Authorize("Settings.Edit")]
-public class NodesModel(ISettingsResolver settings, INodeBuildService nodeBuildService, IAuditService auditService) : PageModel
+public class NodesModel(ISettingsResolver settings, ISetupService setupService,
+    INodeBuildService nodeBuildService, IAuditService auditService) : PageModel
 {
     [BindProperty] public string? RegistrationKey { get; set; }
     [BindProperty] public bool NodeAutoUpdateEnabled { get; set; } = true;
@@ -27,7 +28,9 @@ public class NodesModel(ISettingsResolver settings, INodeBuildService nodeBuildS
 
     public async Task OnGetAsync(CancellationToken ct)
     {
-        RegistrationKey = await settings.GetRawAsync("Node.RegistrationKey");
+        // Get-or-create rather than a bare read: a deployment whose setup predates the wizard's
+        // Node step (or whose Settings row was deleted) would otherwise render an empty field.
+        RegistrationKey = await setupService.GetOrCreateNodeRegistrationKeyAsync(ct);
         NodeAutoUpdateEnabled = await settings.GetAsync("NodeAutoUpdate.Enabled", true);
         PendingBuildCount = (await nodeBuildService.ListAsync(ct)).Count(b => b.Status == NodeBuildStatus.Pending);
     }

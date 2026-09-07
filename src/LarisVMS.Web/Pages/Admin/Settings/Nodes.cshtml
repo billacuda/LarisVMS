@@ -55,7 +55,10 @@
             <button type="button" class="help-icon" data-help-target="regKeyHelp" tabindex="0" aria-label="Help">ℹ️</button>
         </label>
         <div class="input-group">
-            <input asp-for="RegistrationKey" type="password" class="form-control font-monospace" id="registrationKeyInput" />
+            @* Explicit value: the Input Tag Helper's password branch never emits the model value
+               into the rendered value attribute, so asp-for + type="password" alone renders an
+               empty field (nothing to mask, nothing for secret-reveal.js to reveal). *@
+            <input asp-for="RegistrationKey" type="password" value="@Model.RegistrationKey" class="form-control font-monospace" id="registrationKeyInput" />
             <button type="button" class="btn btn-outline-secondary" data-secret-toggle="registrationKeyInput"
                     data-secret-label="registration key" aria-pressed="false" aria-label="Show registration key">
                 <span aria-hidden="true" data-secret-glyph>👁️</span>

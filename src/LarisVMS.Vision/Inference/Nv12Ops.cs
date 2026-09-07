@@ -101,9 +101,9 @@ public static class Nv12Ops
     /// <summary>Eager snapshot crop (pass 3d/4b): expands <paramref name="boxPx"/> via
     /// <see cref="SnapshotImageCapture.ComputeCropRect"/>, converts just that region of the nv12
     /// frame to RGB (BT.601), downscales so the longer edge is at most
-    /// <see cref="SnapshotImageCapture.MaxDimension"/>, and JPEG-encodes. Region-sized, not
-    /// frame-sized — the Skia cost is trivial. Null on any failure.</summary>
-    public static byte[]? CropToJpeg(byte[] src, int srcW, int srcH, SKRectI boxPx, int quality)
+    /// <see cref="SnapshotImageCapture.MaxDimension"/>, and WebP-encodes (<paramref name="quality"/>
+    /// 0-100). Region-sized, not frame-sized — the Skia cost is trivial. Null on any failure.</summary>
+    public static byte[]? CropToWebp(byte[] src, int srcW, int srcH, SKRectI boxPx, int quality)
     {
         try
         {
@@ -124,7 +124,7 @@ public static class Nv12Ops
             }
             using (scaled)
             using (var image = SKImage.FromBitmap(toEncode))
-            using (var data = image.Encode(SKEncodedImageFormat.Jpeg, quality))
+            using (var data = image.Encode(SKEncodedImageFormat.Webp, quality))
                 return data.ToArray();
         }
         catch

@@ -55,8 +55,9 @@ SkiaSharp
     MIT
     https://github.com/mono/SkiaSharp
     Copyright (c) Microsoft Corporation
-    Pulled in transitively by YoloDotNet; used directly in LarisVMS.Vision for detection box geometry
-    and, since the D-FINE integration, for DFineEngine's own frame preprocessing (resize/pixel pack).
+    Pulled in transitively by YoloDotNet; used directly in LarisVMS.Vision for detection box geometry,
+    for DFineEngine's own frame preprocessing (resize/pixel pack) since the D-FINE integration, and to
+    WebP-encode the eager AI-detection snapshot crops.
 
 
 VENDORED SOURCE

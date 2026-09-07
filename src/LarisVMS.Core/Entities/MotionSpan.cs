@@ -79,6 +79,15 @@ public class MotionSpan
     /// threshold once" from "someone walked through for ten seconds," without storing every frame.</summary>
     public double Score { get; set; }
 
+    /// <summary>Object-detection spans only: the peak number of distinct objects of this span's
+    /// label seen moving in a single frame over its lifetime (kept as a running max across
+    /// checkpoint/coalesce updates, same as Score). Surfaced as the "x2" / "x3" count on the
+    /// snapshot badge — because Vision debounces one span per label, this is where the multiplicity
+    /// that per-label grouping collapses ("two people walked by") is preserved. Null for every
+    /// non-AiDetection span and for every span that existed before this column did; 1 or absent
+    /// renders with no count suffix.</summary>
+    public int? MovingCount { get; set; }
+
     public Camera Camera { get; set; } = null!;
     public Zone? Zone { get; set; }
     public EventTagRule? EventTagRule { get; set; }

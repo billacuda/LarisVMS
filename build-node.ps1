@@ -77,6 +77,29 @@ function Write-Ok([string]$msg)   { Write-Host "    $msg"  -ForegroundColor Gree
 
 $winOut = Join-Path $OutputRoot 'win'
 
+# ── Build number ─────────────────────────────────────────────────────────────
+# Every node package this script produces gets a monotonically increasing 4th version component
+# (0.188.0 -> 0.188.0.244), so a rebuild that doesn't change the hand-maintained semver still
+# registers as a *newer* NodeBuildVersion and recorder nodes auto-update to it for testing.
+# build-number.txt is the single source of truth (a file, not a DB row); it is incremented here and
+# committed with the release. NodeVersionComparer uses System.Version, which orders 4-part versions
+# correctly, so nothing on the compare side changes. Plain `dotnet build` (dev/tests) never touches
+# this — only the release build scripts do.
+$buildNumberPath = Join-Path $PSScriptRoot 'build-number.txt'
+if (-not (Test-Path $buildNumberPath)) { throw "build-number.txt not found at $buildNumberPath." }
+$buildNumber = [int]((Get-Content $buildNumberPath -Raw).Trim()) + 1
+Set-Content -Path $buildNumberPath -Value $buildNumber -NoNewline
+
+$baseVersionMatch = Select-String -Path $NodeProject -Pattern '<Version>([^<]+)</Version>' | Select-Object -First 1
+if (-not $baseVersionMatch) { throw "Could not find <Version> in '$NodeProject'." }
+$baseVersion = $baseVersionMatch.Matches[0].Groups[1].Value.Trim()
+$fullVersion = "$baseVersion.$buildNumber"
+Write-Step "Build $fullVersion (build number $buildNumber)"
+
+# Read back by deploy.ps1's node-build registration so it registers exactly this version.
+New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null
+Set-Content -Path (Join-Path $OutputRoot 'node-build-version.txt') -Value $fullVersion -NoNewline
+
 Write-Step "Publishing LarisVMS.Node (win-x64, self-contained, single-file)"
 if (Test-Path $winOut) { Remove-Item $winOut -Recurse -Force }
 dotnet publish $NodeProject `
@@ -86,6 +109,7 @@ dotnet publish $NodeProject `
     -p:PublishSingleFile=true `
     -p:EnableCompressionInSingleFile=true `
     -p:NoWarn=CA1416 `
+    "-p:Version=$fullVersion" `
     -o $winOut
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed (exit $LASTEXITCODE)." }
 Write-Ok "Published"
@@ -105,6 +129,7 @@ dotnet publish $NodeUpdaterProject `
     -p:PublishSingleFile=true `
     -p:EnableCompressionInSingleFile=true `
     -p:NoWarn=CA1416 `
+    "-p:Version=$fullVersion" `
     -o $updaterTmp
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed (exit $LASTEXITCODE)." }
 Copy-Item (Join-Path $updaterTmp 'LarisVMS.NodeUpdater.exe') $winOut -Force
@@ -125,6 +150,7 @@ if (-not $SkipVision) {
         -p:PublishSingleFile=true `
         -p:EnableCompressionInSingleFile=true `
         -p:NoWarn=CA1416 `
+        "-p:Version=$fullVersion" `
         -o $visionTmp
     if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed (exit $LASTEXITCODE)." }
     # Everything from this publish, not just the .exe — the managed ONNX Runtime assembly plus the

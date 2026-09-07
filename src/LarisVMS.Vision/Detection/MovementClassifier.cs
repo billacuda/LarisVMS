@@ -30,6 +30,23 @@ public sealed class MovementClassifierOptions
     /// bound against a pathologically high frame rate growing the ring buffer unbounded, not
     /// something a normal detection frame rate would ever reach.</summary>
     public int MaxHistorySamples { get; init; } = 256;
+
+    /// <summary>When true (the default), Moving/Idle is decided from the net displacement between
+    /// <em>lightly smoothed</em> (up to two samples each) endpoints, which must clear both an
+    /// absolute pixel floor (<see cref="MinNetDisplacementPixels"/>) and <see
+    /// cref="MovementThresholdFraction"/> of the box diagonal. When false, the classifier falls
+    /// back to the original single oldest-vs-newest centroid comparison against <see
+    /// cref="MovementThresholdFraction"/> only. This is the "off" path of the
+    /// Detection.SnapshotMotionAccuracy live toggle — a stationary vehicle whose raw detection box
+    /// jitters frame-to-frame could otherwise cross the fractional threshold on a single bad
+    /// sample and register as Moving.</summary>
+    public bool JitterRejectionEnabled { get; init; } = true;
+
+    /// <summary>Jitter-rejection only: the centroid must also have a net displacement of at least
+    /// this many pixels, regardless of box size. A small/distant box has a small diagonal, so
+    /// <see cref="MovementThresholdFraction"/> alone can be only a handful of pixels — well within
+    /// the frame-to-frame wobble of the raw detection box for a parked car.</summary>
+    public double MinNetDisplacementPixels { get; init; } = 3.0;
 }
 
 /// <summary>
@@ -111,16 +128,56 @@ public sealed class MovementClassifier(MovementClassifierOptions? options = null
 
     private MovementState ClassifyMovement(TrackHistory history, SKRectI currentBox)
     {
-        if (history.Samples.Count < 2) return MovementState.Idle;
-
-        var oldest = history.Samples[0].Centroid;
-        var newest = history.Samples[^1].Centroid;
-        var displacement = MathF.Sqrt(MathF.Pow(newest.X - oldest.X, 2) + MathF.Pow(newest.Y - oldest.Y, 2));
-
         var diagonal = MathF.Sqrt((float)(currentBox.Width * currentBox.Width + currentBox.Height * currentBox.Height));
         if (diagonal <= 0f) return MovementState.Idle;
 
-        return displacement / diagonal >= _options.MovementThresholdFraction ? MovementState.Moving : MovementState.Idle;
+        if (!_options.JitterRejectionEnabled)
+        {
+            // Original behaviour, kept intact for the Detection.SnapshotMotionAccuracy "off" path.
+            if (history.Samples.Count < 2) return MovementState.Idle;
+            var first = history.Samples[0].Centroid;
+            var last = history.Samples[^1].Centroid;
+            var d = Distance(first, last);
+            return d / diagonal >= _options.MovementThresholdFraction ? MovementState.Moving : MovementState.Idle;
+        }
+
+        // Need a few samples before the smoothed-endpoint analysis means anything.
+        if (history.Samples.Count < 3) return MovementState.Idle;
+
+        // Smooth each end over up to two samples rather than trusting a single one — a stationary
+        // object's raw detection box jitters frame-to-frame, and one bad sample at either endpoint
+        // would otherwise spike the displacement over the threshold. Deliberately light: averaging
+        // a full third of the window each side (the original 0.188.0 form) understated a real
+        // walker's net travel enough to read as Idle.
+        var cluster = Math.Min(2, history.Samples.Count / 2);
+        var startCentroid = MeanCentroid(history.Samples, 0, cluster);
+        var endCentroid = MeanCentroid(history.Samples, history.Samples.Count - cluster, cluster);
+        var net = Distance(startCentroid, endCentroid);
+
+        // Moving once the centroid has travelled a real distance across the window: past an
+        // absolute pixel floor (a small/distant box's diagonal is only a handful of px, within the
+        // raw wobble of a parked car's box) and past a fraction of the box diagonal. No
+        // path-directedness ratio — it rejected genuinely-moving non-rigid subjects (people,
+        // animals) whose per-frame box wobble inflated the walked-path length, while a parked
+        // vehicle's rigid box sailed through it.
+        if (net < _options.MinNetDisplacementPixels) return MovementState.Idle;
+        if (net / diagonal < _options.MovementThresholdFraction) return MovementState.Idle;
+
+        return MovementState.Moving;
+    }
+
+    private static float Distance(SKPoint a, SKPoint b) =>
+        MathF.Sqrt(MathF.Pow(b.X - a.X, 2) + MathF.Pow(b.Y - a.Y, 2));
+
+    private static SKPoint MeanCentroid(List<(DateTime AtUtc, SKPoint Centroid)> samples, int start, int count)
+    {
+        float sumX = 0f, sumY = 0f;
+        for (var i = start; i < start + count; i++)
+        {
+            sumX += samples[i].Centroid.X;
+            sumY += samples[i].Centroid.Y;
+        }
+        return new SKPoint(sumX / count, sumY / count);
     }
 
     private static void UpdateBestFrame(TrackHistory history, SKRectI box, double confidence,

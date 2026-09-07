@@ -38,6 +38,11 @@ public interface INodeService
     /// to have deleted another's files.</summary>
     Task DeleteSegmentsAsync(Guid nodeId, IReadOnlyList<string> filePaths, CancellationToken ct = default);
 
+    /// <summary>Updates each Segment row this node reports as moved from the primary volume to the
+    /// archive volume — FilePath, StorageTier, ArchivedAt, SizeBytes — scoped to this node.
+    /// Idempotent: a report for a row already at the new path is a no-op.</summary>
+    Task RelocateSegmentsAsync(Guid nodeId, IReadOnlyList<SegmentRelocateItem> items, CancellationToken ct = default);
+
     /// <summary>Every FilePath this node currently owns a Segment row for — used by the node's own
     /// periodic reconciliation sweep (StorageManager) to find rows whose file no longer exists on
     /// disk (most commonly a deletion that was made but never successfully reported, before the
@@ -45,6 +50,11 @@ public interface INodeService
     /// paged: at the row counts one node's own footage produces this is a few MB at most, and this
     /// only runs on an hours-long cadence, not every reconcile.</summary>
     Task<List<string>> ListSegmentFilePathsAsync(Guid nodeId, CancellationToken ct = default);
+
+    /// <summary>Every FilePath this node owns a Segment row for that is still StorageTier=Primary —
+    /// used by the node's archive-tier reconciliation to spot rows whose file is actually on the
+    /// archive volume (a repointed storage root) and flip them.</summary>
+    Task<List<string>> ListPrimaryTieredSegmentFilePathsAsync(Guid nodeId, CancellationToken ct = default);
 
     /// <summary>Every MotionSpan id this node's cameras currently have a row for (pass 2c) — used by
     /// StorageManager's own snapshot-reconciliation sweep to find cached crop image files whose owning
@@ -68,13 +78,19 @@ public interface INodeService
     /// alone rather than clearing a real prior probe result.</summary>
     Task RecordHeartbeatAsync(Guid nodeId, long? freeBytes, long? totalBytes, string? version, int? livePort,
         DateTime? nodeSentAtUtc, DateTime serverReceivedUtc, List<string>? detectedEncoders = null,
-        List<string>? detectedAccelerators = null, CancellationToken ct = default);
+        List<string>? detectedAccelerators = null, long? archiveFreeBytes = null, long? archiveTotalBytes = null,
+        bool storagePressureActive = false, CancellationToken ct = default);
 
     /// <summary>Rough "days of retention remaining" per node: free bytes divided by that node's
     /// measured write rate over the last 24h. Null for a node with no free-space report yet or no
     /// recent writes to estimate a rate from — an honest "unknown" rather than a misleading number
     /// from too little history. Not SMART/disk-health, just a bytes-in / bytes-free projection.</summary>
     Task<Dictionary<Guid, double?>> GetEstimatedDaysRemainingAsync(CancellationToken ct = default);
+
+    /// <summary>Same estimate as GetEstimatedDaysRemainingAsync but for each node's archive volume
+    /// (Node.ArchiveFreeBytes divided by bytes moved to archive over the last 24h). Null until there
+    /// is archiving activity to estimate a rate from, or for a node with no archive volume.</summary>
+    Task<Dictionary<Guid, double?>> GetArchiveEstimatedDaysRemainingAsync(CancellationToken ct = default);
 
     Task AssignCameraAsync(Guid cameraId, Guid? nodeId, CancellationToken ct = default);
 
@@ -83,11 +99,12 @@ public interface INodeService
     /// rows; footage already recorded stays attached to whichever NodeId actually wrote it.</summary>
     Task ReassignCamerasAsync(IReadOnlyCollection<Guid> cameraIds, Guid? nodeId, CancellationToken ct = default);
 
-    /// <summary>Updates the node's name, per-node storage root override, and (object detection plan
-    /// decision 2) hardware accelerator choice. A blank storageRootPath clears the override, falling
-    /// back to the global Storage.RootPath setting. aiAccelerator null resolves as Auto — see
-    /// NodeConfigResponse.AiAccelerator's own doc comment for why that's the safe default.</summary>
-    Task UpdateAsync(Guid nodeId, string name, string? storageRootPath, AiAccelerator? aiAccelerator = null, CancellationToken ct = default);
+    /// <summary>Updates the node's name, its (required) storage root and optional archive root, and
+    /// (object detection plan decision 2) hardware accelerator choice. Storage config is per-node with
+    /// no global fallback — the Admin/Nodes handler rejects a blank storageRootPath. aiAccelerator
+    /// null resolves as Auto — see NodeConfigResponse.AiAccelerator's own doc comment.</summary>
+    Task UpdateAsync(Guid nodeId, string name, string? storageRootPath, AiAccelerator? aiAccelerator = null,
+        string? archiveRootPath = null, CancellationToken ct = default);
 
     /// <summary>Removes a node. Cameras assigned to it are unassigned (NodeId set null via
     /// DeleteBehavior.SetNull), not deleted — their recording just stops until reassigned.

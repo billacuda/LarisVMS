@@ -23,6 +23,12 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
     [BindProperty] public string Orientation { get; set; } = "Auto";
     [BindProperty] public bool ReportIdleDetections { get; set; }
     [BindProperty] public int IdleTimeoutSeconds { get; set; } = 10;
+    /// <summary>When on (the default), the Vision Service rejects raw-detection-box jitter so a
+    /// parked vehicle stops flickering to "moving", and finalizes a detection's snapshot promptly
+    /// once its object leaves frame instead of holding the span open long enough for a later,
+    /// unrelated object of the same type to be merged into it. Off restores the previous behaviour
+    /// for side-by-side comparison. Global; changing it restarts each camera's detection pipeline.</summary>
+    [BindProperty] public bool SnapshotMotionAccuracy { get; set; } = true;
     /// <summary>Node-scoped ceiling on frames/sec per camera reaching the model. The Vision Service
     /// still decodes the Sub stream in real time; an ffmpeg fps= filter drops the surplus before
     /// inference so the GPU idles between frames. 0 = no cap. 10 is plenty for object tracking.</summary>
@@ -61,6 +67,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         Orientation = await settings.GetAsync("AiDetection.Orientation", "Auto");
         ReportIdleDetections = await settings.GetAsync("Detection.ReportIdleDetections", false);
         IdleTimeoutSeconds = await settings.GetAsync("Detection.IdleTimeoutSeconds", 10);
+        SnapshotMotionAccuracy = await settings.GetAsync("Detection.SnapshotMotionAccuracy", true);
         MaxFps = await settings.GetAsync("Detection.MaxFps", 10);
         ModelFamily = await settings.GetAsync("Detection.ModelFamily", "Auto");
         DFineWeights = await settings.GetAsync("Detection.DFineWeights", "Obj2Coco");
@@ -80,6 +87,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         var oldOrientation = await settings.GetAsync("AiDetection.Orientation", "Auto");
         var oldReportIdleDetections = await settings.GetAsync("Detection.ReportIdleDetections", false);
         var oldIdleTimeoutSeconds = await settings.GetAsync("Detection.IdleTimeoutSeconds", 10);
+        var oldSnapshotMotionAccuracy = await settings.GetAsync("Detection.SnapshotMotionAccuracy", true);
         var oldMaxFps = await settings.GetAsync("Detection.MaxFps", 10);
         var oldModelFamily = await settings.GetAsync("Detection.ModelFamily", "Auto");
         var oldDFineWeights = await settings.GetAsync("Detection.DFineWeights", "Obj2Coco");
@@ -110,6 +118,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         await settings.SetGlobalAsync("AiDetection.Orientation", Orientation, by);
         await settings.SetGlobalAsync("Detection.ReportIdleDetections", ReportIdleDetections.ToString(), by);
         await settings.SetGlobalAsync("Detection.IdleTimeoutSeconds", IdleTimeoutSeconds.ToString(), by);
+        await settings.SetGlobalAsync("Detection.SnapshotMotionAccuracy", SnapshotMotionAccuracy.ToString(), by);
         await settings.SetGlobalAsync("Detection.MaxFps", MaxFps.ToString(), by);
         // RfDetr still renders disabled (no decoder); ModelFamily is "Auto", "DFine" or "YoloX" here.
         await settings.SetGlobalAsync("Detection.ModelFamily", ModelFamily, by);
@@ -126,6 +135,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
             AuditDiff.Of("AiDetection.Orientation", oldOrientation, Orientation),
             AuditDiff.Of("Detection.ReportIdleDetections", oldReportIdleDetections.ToString(), ReportIdleDetections.ToString()),
             AuditDiff.Of("Detection.IdleTimeoutSeconds", oldIdleTimeoutSeconds.ToString(), IdleTimeoutSeconds.ToString()),
+            AuditDiff.Of("Detection.SnapshotMotionAccuracy", oldSnapshotMotionAccuracy.ToString(), SnapshotMotionAccuracy.ToString()),
             AuditDiff.Of("Detection.MaxFps", oldMaxFps.ToString(), MaxFps.ToString()),
             AuditDiff.Of("Detection.ModelFamily", oldModelFamily, ModelFamily),
             AuditDiff.Of("Detection.DFineWeights", oldDFineWeights, DFineWeights),

@@ -88,6 +88,15 @@ else
                                         .Select(r => $"{r.CameraName} — falls off {r.ClearsAtUtc.ToLocalTime():g}"));
                                     <span class="ms-1" title="@staleTooltip">⚠️ @staleCount</span>
                                 }
+                                @if (n.StoragePressureActive)
+                                {
+                                    var since = n.StoragePressureSince?.ToLocalTime().ToString("g");
+                                    <span class="ms-1 text-warning" title="This node's primary volume is over the storage watermark@(since is null ? "" : $" (since {since})") — its oldest footage is being archived early (or deleted, if archiving is unavailable) to keep the disk under the limit.">⚠️ storage full</span>
+                                }
+                                @if (string.IsNullOrWhiteSpace(n.StorageRootPath))
+                                {
+                                    <span class="ms-1 text-danger" title="This node has no storage path — it is recording nothing. Set a storage path below and save.">⚠️ no storage path — not recording</span>
+                                }
                             </td>
                             <td class="font-monospace">@(n.LastIpAddress ?? "—")</td>
                             <td>@n.Version</td>
@@ -212,7 +221,11 @@ else
                             <td>@Model.CameraCountByNode.GetValueOrDefault(n.Id, 0)</td>
                             <td style="min-width: 16rem;" data-sort-value="@n.StorageRootPath">
                                 <input name="StorageRootPath" class="form-control form-control-sm font-monospace"
-                                       value="@n.StorageRootPath" placeholder="(use global default)" />
+                                       value="@n.StorageRootPath" placeholder="e.g. E:\LarisVMS\recordings" required
+                                       title="Where this node records to. Required — a node with no storage path records nothing." />
+                                <input name="archiveRootPath" class="form-control form-control-sm font-monospace mt-1"
+                                       value="@n.ArchiveRootPath" placeholder="archive volume (optional)"
+                                       title="Optional secondary (SMB / USB) volume for aged-out footage. Must be a separate location from the recording path above." />
                             </td>
                             <td style="min-width: 12rem;" data-sort-value="@((n.StorageTotalBytes is { } t && n.StorageFreeBytes is { } f) ? t - f : -1)">
                                 @if (n.StorageTotalBytes is { } total && n.StorageFreeBytes is { } free)
@@ -228,17 +241,50 @@ else
                                         {
                                             <text>&middot; ~@days.ToString("0") day(s) left</text>
                                         }
+                                        else
+                                        {
+                                            <text>&middot; <span title="Needs about a day of recording history to estimate">runway not yet estimated</span></text>
+                                        }
                                     </span>
                                 }
                                 else
                                 {
                                     <span class="text-muted">no report yet</span>
                                 }
+                                @if (n.ArchiveTotalBytes is { } aTotal && n.ArchiveFreeBytes is { } aFree)
+                                {
+                                    var aUsedPercent = aTotal > 0 ? 100.0 * (aTotal - aFree) / aTotal : 0;
+                                    <div class="progress mt-1" style="height: 0.5rem;" title="Archive volume: @ByteFormat.Format(aTotal - aFree) used of @ByteFormat.Format(aTotal)">
+                                        <div class="progress-bar bg-secondary" style="width: @aUsedPercent.ToString("0.#")%"></div>
+                                    </div>
+                                    <span class="small text-muted">
+                                        archive: @ByteFormat.Format(aFree) free
+                                        @if (Model.ArchiveDaysRemaining.GetValueOrDefault(n.Id) is { } aDays)
+                                        {
+                                            <text>&middot; ~@aDays.ToString("0") day(s) left</text>
+                                        }
+                                        else
+                                        {
+                                            <text>&middot; <span title="Needs about a day of archiving activity to estimate">runway not yet estimated</span></text>
+                                        }
+                                    </span>
+                                }
                             </td>
                             <td style="min-width: 8rem;" data-sort-value="@Model.EffectiveRetentionDays.GetValueOrDefault(n.Id, 30)">
                                 <input name="RetentionDaysOverride" type="number" min="0" class="form-control form-control-sm"
                                        value="@Model.RetentionOverride.GetValueOrDefault(n.Id)"
                                        placeholder="(global: @Model.EffectiveRetentionDays.GetValueOrDefault(n.Id, 30))" />
+                                @{ var archEn = Model.ArchiveEnabledOverride.GetValueOrDefault(n.Id, ""); }
+                                <select name="archiveEnabledOverride" class="form-select form-select-sm mt-1"
+                                        title="Whether aged-out footage on this node is archived rather than deleted">
+                                    <option value="" selected="@(archEn == "")">archive: inherit (@(Model.EffectiveArchiveEnabled.GetValueOrDefault(n.Id) ? "on" : "off"))</option>
+                                    <option value="True" selected="@(archEn == "True")">archive: on</option>
+                                    <option value="False" selected="@(archEn == "False")">archive: off</option>
+                                </select>
+                                <input name="archiveRetentionDaysOverride" type="number" min="0" class="form-control form-control-sm mt-1"
+                                       value="@Model.ArchiveRetentionOverride.GetValueOrDefault(n.Id)"
+                                       placeholder="archive days (global: @Model.EffectiveArchiveRetentionDays.GetValueOrDefault(n.Id, 0))"
+                                       title="How long footage stays on the archive volume, from its original record date. 0 = keep forever." />
                             </td>
                             <td class="text-end text-nowrap">
                                 <button type="submit" class="btn btn-sm btn-outline-primary"><span aria-hidden="true">💾</span> Save</button>
@@ -264,8 +310,10 @@ else
     </div>
     <div data-paginate-controls-for="nodesTable" class="mt-2"></div>
     <p class="text-muted small">
-        Blank storage root uses the <a asp-page="/Admin/Settings/StorageAndRetention">global default</a>. A node's own value takes
-        priority — useful when a node records to its own local disk instead of the shared target.
+        Every node records to its own storage path (there is no global default) — usually set when the
+        node is installed (<code>install-node.ps1 -StorageRoot …</code>), editable here. The archive
+        volume is optional and must be a separate location. A node with no storage path records
+        nothing until one is set.
         Blank retention inherits the <a asp-page="/Admin/Settings/StorageAndRetention">global default</a>; a value here
         overrides it for every camera on this node unless that camera has its own override too. "Days
         left" is a rough estimate from this node's write rate over the last 24h, not disk health. The

@@ -45,8 +45,16 @@ if (config is null)
     // uploaded build applies to this node (see NodeVersionComparer/Program.cs's auto-update check).
     // LarisVMS.Node is Windows-only and single-RID for now (see NodeConfigStore's doc comment on why
     // there's no Linux build), so this is a fixed literal rather than something resolved at runtime.
+    // Storage config is per-node with no global default — carry the storage path (and optional
+    // archive path) install-node.ps1 was given into the register call so the new Node row has them
+    // immediately. The full local fallback (ProgramData) is parsed below for the running process;
+    // here we send only what was explicitly given, so an operator who omitted -StorageRoot lands in
+    // the "no storage path" state on the server rather than silently registering ProgramData.
+    var registerStorageRoot = GetArg(args, "--storage-root") ?? Environment.GetEnvironmentVariable("LARISVMS_STORAGE_ROOT");
+    var registerArchiveRoot = GetArg(args, "--archive-root") ?? Environment.GetEnvironmentVariable("LARISVMS_ARCHIVE_ROOT");
     var response = await registerClient.RegisterAsync(
-        new LarisVMS.Core.Dtos.NodeRegisterRequest(registrationKey, Environment.MachineName, NodeVersion.Current, "win-x64"),
+        new LarisVMS.Core.Dtos.NodeRegisterRequest(registrationKey, Environment.MachineName, NodeVersion.Current, "win-x64",
+            registerStorageRoot, registerArchiveRoot),
         CancellationToken.None);
 
     config = new NodeConfig(serverUrl, response.NodeId, response.Secret, response.MediaSigningKey);
@@ -281,11 +289,10 @@ app.MapGet("/playback-segment/{cameraId:guid}", async (HttpContext ctx, Guid cam
         return;
     }
 
-    string fullPath, cameraDir;
+    string fullPath;
     try
     {
         fullPath = Path.GetFullPath(path);
-        cameraDir = Path.GetFullPath(Path.Combine(storageRoot, $"cam-{cameraId}", "main")) + Path.DirectorySeparatorChar;
     }
     catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
     {
@@ -293,7 +300,9 @@ app.MapGet("/playback-segment/{cameraId:guid}", async (HttpContext ctx, Guid cam
         return;
     }
 
-    if (!fullPath.StartsWith(cameraDir, StringComparison.OrdinalIgnoreCase) || !File.Exists(fullPath))
+    // Path must sit under this camera's cam-{id}/main on the primary OR the archive root — an
+    // archived segment's row carries the archive path but is served the same way.
+    if (!MediaPathResolver.IsAllowed(fullPath, cameraId, storageRoot, worker.ArchiveRoot) || !File.Exists(fullPath))
     {
         ctx.Response.StatusCode = StatusCodes.Status404NotFound;
         return;
@@ -446,12 +455,10 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid c
         return;
     }
 
-    string fullPath, mainDir, thumbsDir;
+    string fullPath;
     try
     {
         fullPath = Path.GetFullPath(path);
-        mainDir = Path.GetFullPath(Path.Combine(storageRoot, $"cam-{cameraId}", "main")) + Path.DirectorySeparatorChar;
-        thumbsDir = Path.GetFullPath(Path.Combine(storageRoot, $"cam-{cameraId}", "thumbs"));
     }
     catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
     {
@@ -461,12 +468,13 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid c
 
     // Diagnostic-only logging (no behavior change): a card whose Playback link plays fine but whose
     // thumbnail 404s/502s has no other way to tell which of these three causes fired, since none of
-    // them previously logged anything at all.
-    if (!fullPath.StartsWith(mainDir, StringComparison.OrdinalIgnoreCase))
+    // them previously logged anything at all. The path can be under this node's primary OR archive
+    // root — the cache dirs are derived from whichever matched.
+    if (!MediaPathResolver.TryResolve(fullPath, cameraId, storageRoot, worker.ArchiveRoot, out var mainDir, out var thumbsDir, out _))
     {
         logger.LogWarning(
-            "Playback-thumbnail 404: requested path {FullPath} does not start with this node's current main directory {MainDir} (StorageRoot={StorageRoot}) — likely a Segment.FilePath recorded under a since-changed storage root.",
-            fullPath, mainDir, storageRoot);
+            "Playback-thumbnail 404: requested path {FullPath} is not under this node's primary or archive main directory for cam-{CameraId} (StorageRoot={StorageRoot}, ArchiveRoot={ArchiveRoot}) — likely a Segment.FilePath recorded under a since-changed storage root.",
+            fullPath, cameraId, storageRoot, worker.ArchiveRoot);
         ctx.Response.StatusCode = StatusCodes.Status404NotFound;
         return;
     }
@@ -478,17 +486,22 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid c
     }
 
     var relativeToMain = Path.GetRelativePath(mainDir, fullPath);
-    var thumbRelative = Path.ChangeExtension(relativeToMain, null) + $"_o{offsetSeconds:D2}_{maxDimension}q{quality}.jpg";
-    var thumbPath = Path.Combine(thumbsDir, thumbRelative);
+    // Cache-file stem (no extension). The trailing "q{quality}" is still a bucket key even for a
+    // WebP file — it distinguishes the 150/q8 hover preview from the 1280/q4 "exact" card — the
+    // WebP encode itself uses its own fixed quality (ThumbnailCapture.DefaultWebpQuality).
+    var thumbStem = Path.Combine(thumbsDir,
+        Path.ChangeExtension(relativeToMain, null) + $"_o{offsetSeconds:D2}_{maxDimension}q{quality}");
 
-    if (File.Exists(thumbPath))
+    var cached = CachedImageFormat.FindExisting(thumbStem);
+    if (cached is not null)
     {
-        ctx.Response.ContentType = "image/jpeg";
-        await ctx.Response.SendFileAsync(thumbPath, ctx.RequestAborted);
+        ctx.Response.ContentType = CachedImageFormat.ContentType(cached);
+        await ctx.Response.SendFileAsync(cached, ctx.RequestAborted);
         return;
     }
 
-    var bytes = await worker.CaptureThumbnailAsync(fullPath, offsetSeconds, ctx.RequestAborted, maxDimension, quality);
+    var webp = worker.WebpSupported;
+    var bytes = await worker.CaptureThumbnailAsync(fullPath, offsetSeconds, ctx.RequestAborted, maxDimension, quality, webp);
     if (bytes is null)
     {
         logger.LogWarning("Playback-thumbnail 502: ffmpeg produced no frame for {FullPath} at offset {OffsetSeconds}s (timeout, corrupt segment, or offset beyond content).", fullPath, offsetSeconds);
@@ -497,13 +510,14 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid c
         return;
     }
 
+    var thumbPath = thumbStem + CachedImageFormat.Extension(webp);
     // Atomic cache write shared with ThumbnailBackfillService — see SaveToCacheAsync's own doc
     // comment for why (a naive write straight to thumbPath let a concurrent reader see a
     // still-being-written, truncated file — confirmed live as the browser's broken-image icon
     // appearing right after "Loading…").
     await LarisVMS.Media.ThumbnailCapture.SaveToCacheAsync(thumbPath, bytes, CancellationToken.None);
 
-    ctx.Response.ContentType = "image/jpeg";
+    ctx.Response.ContentType = CachedImageFormat.ContentType(thumbPath);
     await ctx.Response.Body.WriteAsync(bytes, ctx.RequestAborted);
 });
 
@@ -572,12 +586,10 @@ app.MapGet("/snapshot-image/{cameraId:guid}", async (HttpContext ctx, Guid camer
         return;
     }
 
-    string fullPath, mainDir, snapshotsDir;
+    string fullPath;
     try
     {
         fullPath = Path.GetFullPath(path);
-        mainDir = Path.GetFullPath(Path.Combine(storageRoot, $"cam-{cameraId}", "main")) + Path.DirectorySeparatorChar;
-        snapshotsDir = Path.GetFullPath(Path.Combine(storageRoot, $"cam-{cameraId}", "snapshots"));
     }
     catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
     {
@@ -586,11 +598,12 @@ app.MapGet("/snapshot-image/{cameraId:guid}", async (HttpContext ctx, Guid camer
     }
 
     // Diagnostic-only logging (no behavior change) — see /playback-thumbnail's own identical comment.
-    if (!fullPath.StartsWith(mainDir, StringComparison.OrdinalIgnoreCase))
+    // Primary or archive root; cache dir derived from whichever matched.
+    if (!MediaPathResolver.TryResolve(fullPath, cameraId, storageRoot, worker.ArchiveRoot, out var mainDir, out _, out var snapshotsDir))
     {
         logger.LogWarning(
-            "Snapshot-image 404 for span {SpanId}: requested path {FullPath} does not start with this node's current main directory {MainDir} (StorageRoot={StorageRoot}) — likely a Segment.FilePath recorded under a since-changed storage root.",
-            spanId, fullPath, mainDir, storageRoot);
+            "Snapshot-image 404 for span {SpanId}: requested path {FullPath} is not under this node's primary or archive main directory for cam-{CameraId} (StorageRoot={StorageRoot}, ArchiveRoot={ArchiveRoot}) — likely a Segment.FilePath recorded under a since-changed storage root.",
+            spanId, fullPath, cameraId, storageRoot, worker.ArchiveRoot);
         ctx.Response.StatusCode = StatusCodes.Status404NotFound;
         return;
     }
@@ -602,13 +615,13 @@ app.MapGet("/snapshot-image/{cameraId:guid}", async (HttpContext ctx, Guid camer
     }
 
     var relativeToMain = Path.GetRelativePath(mainDir, fullPath);
-    var snapshotRelative = Path.ChangeExtension(relativeToMain, null) + $"_span{spanId}.jpg";
-    var snapshotPath = Path.Combine(snapshotsDir, snapshotRelative);
+    var snapshotStem = Path.Combine(snapshotsDir, Path.ChangeExtension(relativeToMain, null) + $"_span{spanId}");
 
-    if (File.Exists(snapshotPath))
+    var cachedSnapshot = CachedImageFormat.FindExisting(snapshotStem);
+    if (cachedSnapshot is not null)
     {
-        ctx.Response.ContentType = "image/jpeg";
-        await ctx.Response.SendFileAsync(snapshotPath, ctx.RequestAborted);
+        ctx.Response.ContentType = CachedImageFormat.ContentType(cachedSnapshot);
+        await ctx.Response.SendFileAsync(cachedSnapshot, ctx.RequestAborted);
         return;
     }
 
@@ -621,16 +634,17 @@ app.MapGet("/snapshot-image/{cameraId:guid}", async (HttpContext ctx, Guid camer
     // StorageManager.SelectExpiredStagedCrops ages the stagers out after a few days.
     if (bestFrameTicks > 0)
     {
-        var stagedPath = Path.Combine(snapshotsDir, "hires", $"{bestFrameTicks}.jpg");
-        if (File.Exists(stagedPath))
+        var stagedPath = CachedImageFormat.FindExisting(Path.Combine(snapshotsDir, "hires", bestFrameTicks.ToString()));
+        if (stagedPath is not null)
         {
             try
             {
                 var staged = await File.ReadAllBytesAsync(stagedPath, ctx.RequestAborted);
                 if (staged.Length > 0)
                 {
-                    await LarisVMS.Media.ThumbnailCapture.SaveToCacheAsync(snapshotPath, staged, CancellationToken.None);
-                    ctx.Response.ContentType = "image/jpeg";
+                    var promoted = snapshotStem + Path.GetExtension(stagedPath);
+                    await LarisVMS.Media.ThumbnailCapture.SaveToCacheAsync(promoted, staged, CancellationToken.None);
+                    ctx.Response.ContentType = CachedImageFormat.ContentType(promoted);
                     await ctx.Response.Body.WriteAsync(staged, ctx.RequestAborted);
                     return;
                 }
@@ -642,7 +656,8 @@ app.MapGet("/snapshot-image/{cameraId:guid}", async (HttpContext ctx, Guid camer
         }
     }
 
-    var bytes = await worker.CaptureSnapshotImageAsync(fullPath, offsetMs / 1000.0, boxX, boxY, boxW, boxH, frameW, frameH, ctx.RequestAborted);
+    var webp = worker.WebpSupported;
+    var bytes = await worker.CaptureSnapshotImageAsync(fullPath, offsetMs / 1000.0, boxX, boxY, boxW, boxH, frameW, frameH, ctx.RequestAborted, webp);
     if (bytes is null)
     {
         logger.LogWarning(
@@ -654,9 +669,10 @@ app.MapGet("/snapshot-image/{cameraId:guid}", async (HttpContext ctx, Guid camer
     }
 
     // Same atomic cache write as /playback-thumbnail above.
+    var snapshotPath = snapshotStem + CachedImageFormat.Extension(webp);
     await LarisVMS.Media.ThumbnailCapture.SaveToCacheAsync(snapshotPath, bytes, CancellationToken.None);
 
-    ctx.Response.ContentType = "image/jpeg";
+    ctx.Response.ContentType = CachedImageFormat.ContentType(snapshotPath);
     await ctx.Response.Body.WriteAsync(bytes, ctx.RequestAborted);
 });
 
@@ -748,15 +764,14 @@ app.MapPost("/export/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, Ex
         return;
     }
 
-    string cameraDir;
     var validatedPaths = new List<string>();
     try
     {
-        cameraDir = Path.GetFullPath(Path.Combine(storageRoot, $"cam-{cameraId}", "main")) + Path.DirectorySeparatorChar;
         foreach (var p in request.SegmentFilePaths)
         {
             var fullPath = Path.GetFullPath(p);
-            if (!fullPath.StartsWith(cameraDir, StringComparison.OrdinalIgnoreCase))
+            // A range that spans an archived segment carries the archive path — allowed the same way.
+            if (!MediaPathResolver.IsAllowed(fullPath, cameraId, storageRoot, worker.ArchiveRoot))
             {
                 ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
                 await ctx.Response.WriteAsync("segment path outside this camera's recording directory");
@@ -970,15 +985,17 @@ app.MapPost("/detections/crop", async (HttpContext ctx, VisionDetectionCropItem 
 
     var storageRoot = worker.StorageRoot;
     if (storageRoot is null) { ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable; return; }
-    if (item.Jpeg is not { Length: > 0 }) { ctx.Response.StatusCode = StatusCodes.Status400BadRequest; return; }
+    if (item.Image is not { Length: > 0 }) { ctx.Response.StatusCode = StatusCodes.Status400BadRequest; return; }
 
     try
     {
         var dir = Path.Combine(storageRoot, $"cam-{item.CameraId}", "snapshots", "hires");
         Directory.CreateDirectory(dir);
-        var tmp = Path.Combine(dir, $"{item.AtUtc.Ticks}.jpg.tmp");
-        var final = Path.Combine(dir, $"{item.AtUtc.Ticks}.jpg");
-        await File.WriteAllBytesAsync(tmp, item.Jpeg, ctx.RequestAborted);
+        // The eager crop is always WebP — SkiaSharp encodes it directly in the Vision Service, no
+        // ffmpeg/libwebp probe involved (see CameraDetectionPipeline.EagerCropWebpQuality).
+        var tmp = Path.Combine(dir, $"{item.AtUtc.Ticks}{CachedImageFormat.WebpExtension}.tmp");
+        var final = Path.Combine(dir, $"{item.AtUtc.Ticks}{CachedImageFormat.WebpExtension}");
+        await File.WriteAllBytesAsync(tmp, item.Image, ctx.RequestAborted);
         File.Move(tmp, final, overwrite: true);
         ctx.Response.StatusCode = StatusCodes.Status204NoContent;
     }

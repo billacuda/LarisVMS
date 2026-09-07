@@ -45,6 +45,15 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
     public Dictionary<Guid, string> DFineTensorRtModeOverride { get; set; } = [];
     public Dictionary<Guid, string> EffectiveDFineTensorRtMode { get; set; } = [];
     public Dictionary<Guid, double?> DaysRemaining { get; set; } = [];
+    /// <summary>Archive-storage: per-node archive volume free/total (off Node.Archive*Bytes) and the
+    /// "days remaining" estimate for it, plus the per-node archive settings overrides. ArchiveRootPath
+    /// is a Node column like StorageRootPath; Enabled/RetentionDays are SettingOverride(Scope.Node)
+    /// rows like Retention.Days. "" on the enabled override select means inherit.</summary>
+    public Dictionary<Guid, double?> ArchiveDaysRemaining { get; set; } = [];
+    public Dictionary<Guid, string> ArchiveEnabledOverride { get; set; } = [];
+    public Dictionary<Guid, bool> EffectiveArchiveEnabled { get; set; } = [];
+    public Dictionary<Guid, int?> ArchiveRetentionOverride { get; set; } = [];
+    public Dictionary<Guid, int> EffectiveArchiveRetentionDays { get; set; } = [];
     public Dictionary<Guid, int> StaleCameraCountByNode { get; set; } = [];
     public Dictionary<Guid, List<StaleCameraRow>> StaleCamerasByNode { get; set; } = [];
     public string? ErrorMessage { get; set; }
@@ -54,6 +63,29 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
     /// StaleSegmentDetail's own doc comment for why it's the newest segment, not the oldest, that
     /// determines this), which is the same moment the camera drops out of the warning on its own.</summary>
     public record StaleCameraRow(string CameraName, DateTime ClearsAtUtc);
+
+    /// <summary>A node's archive root must be short enough that a segment path built under it stays
+    /// within Segment.FilePath's 450-char unique-indexed column (cam-{guid}/main/YYYY/MM/DD/HH/filename
+    /// adds ~55 chars), and must be a distinct location from that node's own recording root so the
+    /// node's orphan-import sweep never re-imports archived files. Returns null when valid.</summary>
+    internal static string? ValidateArchiveRoot(string? archiveRoot, string? storageRoot)
+    {
+        if (string.IsNullOrWhiteSpace(archiveRoot)) return null;
+        if (archiveRoot.Length > 300)
+            return "Archive storage root is too long — keep it under 300 characters.";
+        if (!string.IsNullOrWhiteSpace(storageRoot))
+        {
+            var a = archiveRoot.TrimEnd('/', '\\');
+            var s = storageRoot.TrimEnd('/', '\\');
+            if (a.Equals(s, StringComparison.OrdinalIgnoreCase)
+                || a.StartsWith(s + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                || a.StartsWith(s + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                || s.StartsWith(a + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                || s.StartsWith(a + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                return "Archive storage root must be a separate location from this node's recording storage root.";
+        }
+        return null;
+    }
 
     public async Task OnGetAsync()
     {
@@ -88,12 +120,19 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
         }
 
         DaysRemaining = await nodeService.GetEstimatedDaysRemainingAsync();
+        ArchiveDaysRemaining = await nodeService.GetArchiveEstimatedDaysRemainingAsync();
 
         foreach (var n in Nodes)
         {
             EffectiveRetentionDays[n.Id] = await settings.GetAsync("Retention.Days", 30, nodeId: n.Id);
             var ownOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Retention.Days");
             RetentionOverride[n.Id] = int.TryParse(ownOverride, out var days) ? days : null;
+
+            ArchiveEnabledOverride[n.Id] = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Archive.Enabled") ?? "";
+            EffectiveArchiveEnabled[n.Id] = await settings.GetAsync("Archive.Enabled", false, nodeId: n.Id);
+            var archiveRetentionOwn = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Archive.RetentionDays");
+            ArchiveRetentionOverride[n.Id] = int.TryParse(archiveRetentionOwn, out var ard) ? ard : null;
+            EffectiveArchiveRetentionDays[n.Id] = await settings.GetAsync("Archive.RetentionDays", 0, nodeId: n.Id);
 
             ModelFamilyOverride[n.Id] = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.ModelFamily") ?? "";
             DFineWeightsOverride[n.Id] = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.DFineWeights") ?? "";
@@ -110,10 +149,27 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
 
     public async Task<IActionResult> OnPostUpdateAsync(Guid id, string name, string? storageRootPath, int? retentionDaysOverride,
         string? aiAccelerator, string? modelFamilyOverride, string? dfineWeightsOverride, string? yoloXSizeOverride,
-        int? maxFpsOverride, string? aspectModeOverride, string? dfineTensorRtModeOverride)
+        int? maxFpsOverride, string? aspectModeOverride, string? dfineTensorRtModeOverride,
+        string? archiveRootPath, string? archiveEnabledOverride, int? archiveRetentionDaysOverride)
     {
         try
         {
+            // Storage path is per-node and required — a node with none records nothing (GetConfigAsync
+            // serves it no cameras). A node that already has one can't have it cleared here.
+            if (string.IsNullOrWhiteSpace(storageRootPath))
+            {
+                ErrorMessage = "A storage path is required — this is where the node records to.";
+                await OnGetAsync();
+                return Page();
+            }
+            var archiveError = ValidateArchiveRoot(archiveRootPath, storageRootPath);
+            if (archiveError is not null)
+            {
+                ErrorMessage = archiveError;
+                await OnGetAsync();
+                return Page();
+            }
+
             // Pre-edit state first, so the entry reports what actually changed — including the
             // per-node retention override, which previously rode along inside this same generic
             // "Node.Update" entry with nothing to indicate it had been touched at all. No secret
@@ -126,11 +182,13 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
             var oldMaxFpsOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.MaxFps");
             var oldAspectModeOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.AspectMode");
             var oldDFineTensorRtModeOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.DFineTensorRtMode");
+            var oldArchiveEnabledOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Archive.Enabled");
+            var oldArchiveRetentionOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Archive.RetentionDays");
             // "" (blank/Auto) resolves as null — see NodeConfigResponse.AiAccelerator's own doc
             // comment for why Auto (not an explicit choice) is the safe default.
             var accelerator = Enum.TryParse<AiAccelerator>(aiAccelerator, out var acc) ? acc : (AiAccelerator?)null;
 
-            await nodeService.UpdateAsync(id, name, storageRootPath, accelerator);
+            await nodeService.UpdateAsync(id, name, storageRootPath, accelerator, archiveRootPath);
             await settings.SetOverrideAsync(SettingScope.Node, id, "Retention.Days",
                 retentionDaysOverride?.ToString(), User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Node, id, "Detection.ModelFamily",
@@ -145,6 +203,10 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
                 string.IsNullOrEmpty(aspectModeOverride) ? null : aspectModeOverride, User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Node, id, "Detection.DFineTensorRtMode",
                 string.IsNullOrEmpty(dfineTensorRtModeOverride) ? null : dfineTensorRtModeOverride, User.Identity?.Name);
+            await settings.SetOverrideAsync(SettingScope.Node, id, "Archive.Enabled",
+                string.IsNullOrEmpty(archiveEnabledOverride) ? null : archiveEnabledOverride, User.Identity?.Name);
+            await settings.SetOverrideAsync(SettingScope.Node, id, "Archive.RetentionDays",
+                archiveRetentionDaysOverride?.ToString(), User.Identity?.Name);
 
             var details = AuditDiff.Build(
                 AuditDiff.Of("Name", before?.Name, name),
@@ -156,7 +218,10 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
                 AuditDiff.Of("YOLOX size override", oldYoloXSizeOverride, yoloXSizeOverride),
                 AuditDiff.Of("Max detection fps override", oldMaxFpsOverride, maxFpsOverride?.ToString()),
                 AuditDiff.Of("Aspect fitting override", oldAspectModeOverride, aspectModeOverride),
-                AuditDiff.Of("D-FINE TensorRT override", oldDFineTensorRtModeOverride, dfineTensorRtModeOverride));
+                AuditDiff.Of("D-FINE TensorRT override", oldDFineTensorRtModeOverride, dfineTensorRtModeOverride),
+                AuditDiff.Of("Archive root", before?.ArchiveRootPath, archiveRootPath),
+                AuditDiff.Of("Archive enabled override", oldArchiveEnabledOverride, archiveEnabledOverride),
+                AuditDiff.Of("Archive retention override", oldArchiveRetentionOverride, archiveRetentionDaysOverride?.ToString()));
 
             await LogAsync("Node.Update", details is null ? $"{name} ({id})" : $"{name} ({id}) — {details}");
         }

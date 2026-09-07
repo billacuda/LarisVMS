@@ -27,7 +27,10 @@ public record TimelineBucketDto(
     string? TagColorHex = null,
     IReadOnlyList<string>? TagColorHexes = null);
 
-public record SegmentSummaryDto(long Id, DateTime StartUtc, DateTime EndUtc);
+/// <summary>IsArchived: this segment's file has been moved to the node's archive volume (slower
+/// storage). Playback still works transparently; the timeline shows a subtle marker so a longer load
+/// isn't mistaken for a fault.</summary>
+public record SegmentSummaryDto(long Id, DateTime StartUtc, DateTime EndUtc, bool IsArchived = false);
 
 /// <summary>One object class currently being detected on a camera, already resolved to its display
 /// form (label/emoji/color) server-side from DetectionDisplay — so the live tile's badge and the
@@ -115,7 +118,11 @@ public record DetectedObjectLabelDto(string CategoryName, string Label);
 /// <summary>Confidence is the span's own BestBoxConfidence (0-1) for an AI detection, or null for a
 /// camera-classified/motion/custom-tag badge — nothing outside the AI pipeline produces a score, and
 /// the card renders the percentage only where there is one.</summary>
-public record SnapshotBadgeDto(string Label, string ColorHex, string Emoji, double? Confidence = null);
+/// <summary>MovingCount is the span's peak simultaneous moving instances of this label (AI detection
+/// only) — the card renders it as an "x2" / "x3" suffix when it is greater than 1, so "two people
+/// walked by" reads as "Human x2" rather than the single "Human" that per-label span grouping would
+/// otherwise collapse it to. Null or 1 renders no suffix.</summary>
+public record SnapshotBadgeDto(string Label, string ColorHex, string Emoji, double? Confidence = null, int? MovingCount = null);
 
 /// <summary>Id is the primary span (the one whose /snapshot-image the card requests); SpanIds is
 /// every span the card represents (the primary plus any it grouped in). Badges is every label; the

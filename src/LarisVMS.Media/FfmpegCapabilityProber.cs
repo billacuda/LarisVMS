@@ -68,6 +68,56 @@ public static class FfmpegCapabilityProber
         }
     }
 
+    /// <summary>Whether this ffmpeg build has the <c>libwebp</c> encoder — gates whether the node
+    /// writes hover thumbnails and snapshot crops as WebP (smaller/faster) or falls back to JPEG.
+    /// Same never-throws, best-effort contract as <see cref="ProbeAsync"/>: a probe failure just
+    /// means "assume no WebP", which is always safe. Not folded into <see cref="KnownEncoders"/> —
+    /// that closed list is the heartbeat's hardware-encoder report, a different concern.</summary>
+    public static async Task<bool> HasLibWebpAsync(string ffmpegPath, CancellationToken ct = default)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = ffmpegPath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("-hide_banner");
+            psi.ArgumentList.Add("-encoders");
+
+            using var process = Process.Start(psi);
+            if (process is null) return false;
+
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(15));
+
+            var stdout = await process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
+            await process.WaitForExitAsync(timeoutCts.Token);
+
+            return ListsEncoder(stdout, "libwebp");
+        }
+        catch (Exception) when (ct.IsCancellationRequested is false)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>True when a real `ffmpeg -encoders` line names <paramref name="encoderName"/> as its
+    /// second whitespace-delimited token — the same exact-equality match <see cref="ParseEncodersOutput"/>
+    /// uses, so a hypothetical "libwebp_anim" couldn't be mistaken for "libwebp".</summary>
+    internal static bool ListsEncoder(string stdout, string encoderName)
+    {
+        foreach (var rawLine in stdout.Split('\n'))
+        {
+            var parts = rawLine.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 2 && parts[1] == encoderName) return true;
+        }
+        return false;
+    }
+
     // Real `ffmpeg -encoders` output (to stdout, unlike most other ffmpeg diagnostics which go to
     // stderr) looks like:
     //   Encoders:

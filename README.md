@@ -15,7 +15,7 @@ work on phone, tablet, and desktop.
 
 ---
 
-## **Current version [0.187.2](CHANGELOG.md)**
+## **Current version [0.189.0](CHANGELOG.md)**
 
 ## Stack
 
@@ -34,8 +34,13 @@ Milestones **M1 (skeleton, setup, deploy)**, **M2 (ONVIF discovery & camera mana
 (motion/events)** are in place: solution layout, Identity + RBAC, encryption at rest, the setup
 wizard, `deploy.ps1`, WS-Discovery LAN scan, ONVIF capability probing (Profile S/T/G/M), camera CRUD,
 a Windows Service recorder node that supervises `ffmpeg -c copy` per camera with crash/stall
-auto-recovery, a per-node storage manager that enforces retention (global → per-node → per-camera,
-`Admin → Retention`), per-camera quota, and a global watermark backstop, and browser live view
+auto-recovery, a per-node storage manager that enforces retention (global default → per-node →
+per-camera, `Admin → Settings → Storage and retention`), per-camera quota, and a watermark backstop.
+Each node writes to its own storage path (set at install time or on `Admin → Nodes`); it can also be
+given a second **archive volume** (SMB share / USB drive) that aged-out footage is *moved* to
+instead of deleted, with its own retention — and if the primary volume fills past the watermark,
+footage is archived early rather than lost. Playback, thumbnails and export work transparently from
+either volume. Also: browser live view
 (`Pages/Live`) proxied through IIS with no direct browser-to-node connection and no certificate
 needed on the node — all verified end-to-end against real Amcrest cameras, including killing the
 recording process and the node process mid-recording and confirming both recover cleanly. Live view
@@ -87,8 +92,12 @@ pipeline against a second RTSP session on the camera's Sub stream, GPU-accelerat
 logging when nothing's available). Detected objects draw as live, tracked **on-screen bounding boxes**
 — a client-side-only overlay, independently toggleable for Moving vs. Idle objects, never baked into
 recordings — colored by a small auto-assigned category (Human/Vehicle/Animal/Object) with the specific
-class riding alongside ("Vehicle — car"). A detected object also gets its own cropped, best-frame
-snapshot image, separate from the ordinary hover-thumbnail cache. Runs as a sibling process
+class riding alongside ("Vehicle — car"), and a count on the badge ("Human ×2") when several objects
+of the same type were moving at once. A detected object also gets its own cropped, best-frame
+snapshot image, separate from the ordinary hover-thumbnail cache; a stationary object whose box only
+wobbles isn't treated as moving, and once a moving object leaves it finalizes its own snapshot
+promptly rather than being merged with a later, unrelated object of the same type
+(`Admin → Settings → Detection → Snapshot motion accuracy`). Runs as a sibling process
 (`LarisVMS.Vision.Service`) so a site that never enables it pays nothing for the GPU/ONNX Runtime
 dependency, and a bad GPU/driver interaction can never take down recording itself. **Unverified against
 real GPU hardware or an actual camera end-to-end** — see [CHANGELOG.md](CHANGELOG.md).

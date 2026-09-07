@@ -198,14 +198,13 @@ if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
 
 # ── storage root guard ────────────────────────────────────────────────────────
 # robocopy /MIR below mirrors the publish output onto $DestinationPath — anything present at the
-# destination that isn't in the publish output is deleted. If a camera's storage root were ever
-# configured to a path under the IIS site directory, this would silently delete every recording on
-# the next deploy. Storage.RootPath is a Settings-table row (SetupService.SaveStorageRootAsync),
-# not part of setup-generated.json, so this queries it straight from the database using the same
-# connection string already resolved above for migrations. Best-effort only — if the query fails
-# for any reason (pre-setup, migrations skipped, no -ConnectionString available) the guard is
-# skipped with a warning rather than blocking the deploy, and is not a substitute for keeping
-# recordings outside the site directory entirely.
+# destination that isn't in the publish output is deleted. If any node's storage (or archive) root
+# were configured to a path under the IIS site directory, this would silently delete every recording
+# under it on the next deploy. Storage config is per-node (Nodes.StorageRootPath / ArchiveRootPath),
+# so this queries every node's paths straight from the database using the same connection string
+# already resolved above for migrations. Best-effort only — if the query fails for any reason
+# (pre-setup, migrations skipped, no -ConnectionString) the guard is skipped with a warning rather
+# than blocking the deploy, and is not a substitute for keeping recordings outside the site dir.
 if (-not [string]::IsNullOrWhiteSpace($ConnectionString)) {
     try {
         Add-Type -AssemblyName System.Data
@@ -214,23 +213,31 @@ if (-not [string]::IsNullOrWhiteSpace($ConnectionString)) {
         $conn = New-Object System.Data.SqlClient.SqlConnection($sqlCs)
         $conn.Open()
         $cmd = $conn.CreateCommand()
-        $cmd.CommandText = "SELECT Value FROM Settings WHERE [Key] = 'Storage.RootPath'"
-        $storageRoot = $cmd.ExecuteScalar()
+        $cmd.CommandText = "SELECT StorageRootPath, ArchiveRootPath FROM Nodes"
+        $reader = $cmd.ExecuteReader()
+        $nodePaths = @()
+        while ($reader.Read()) {
+            if (-not $reader.IsDBNull(0)) { $nodePaths += $reader.GetString(0) }
+            if (-not $reader.IsDBNull(1)) { $nodePaths += $reader.GetString(1) }
+        }
+        $reader.Close()
         $conn.Close()
 
-        if (-not [string]::IsNullOrWhiteSpace($storageRoot)) {
-            $normalizedDest = [System.IO.Path]::GetFullPath($DestinationPath).TrimEnd('\') + '\'
-            $normalizedStorage = [System.IO.Path]::GetFullPath($storageRoot).TrimEnd('\') + '\'
+        $normalizedDest = [System.IO.Path]::GetFullPath($DestinationPath).TrimEnd('\') + '\'
+        foreach ($p in $nodePaths) {
+            if ([string]::IsNullOrWhiteSpace($p)) { continue }
+            try { $normalizedStorage = [System.IO.Path]::GetFullPath($p).TrimEnd('\') + '\' }
+            catch { continue }  # a UNC path this deploy host can't resolve — not under the local site dir
             if ($normalizedStorage.StartsWith($normalizedDest, [StringComparison]::OrdinalIgnoreCase)) {
-                throw "Storage root '$storageRoot' resolves under the IIS site directory '$DestinationPath'. " +
-                      "A robocopy /MIR deploy would delete every recording under it. Move the storage root " +
-                      "outside the site directory (Admin -> Storage) before deploying."
+                throw "A recorder node's storage/archive path '$p' resolves under the IIS site directory " +
+                      "'$DestinationPath'. A robocopy /MIR deploy would delete every recording under it. " +
+                      "Move that node's path (Admin -> Nodes) outside the site directory before deploying."
             }
         }
     } catch [System.Management.Automation.RuntimeException] {
         throw
     } catch {
-        Write-Host "Could not read Storage.RootPath for the storage-root guard: $_"
+        Write-Host "Could not read node storage paths for the storage-root guard: $_"
     }
 } else {
     Write-Host "No connection string available - skipping storage-root guard."
@@ -345,9 +352,18 @@ try {
     } else {
         Write-Step "Registering node build for approval"
         try {
-            $nodeVersionMatch = Select-String -Path $NodeCsprojPath -Pattern '<Version>([^<]+)</Version>' | Select-Object -First 1
-            if (-not $nodeVersionMatch) { throw "Could not find <Version> in '$NodeCsprojPath'." }
-            $nodeVersion = $nodeVersionMatch.Matches[0].Groups[1].Value
+            # build-node.ps1 writes the exact 4-part version it published (semver + monotonic build
+            # number, e.g. 0.188.0.244) here, so a rebuild that didn't change the hand-maintained
+            # semver still registers as a distinct, newer NodeBuildVersion. Fall back to the csproj's
+            # 3-part <Version> only if that file is missing (an older build flow).
+            $nodeVersionFile = Join-Path $PSScriptRoot 'publish\LarisVMS.Node\node-build-version.txt'
+            if (Test-Path $nodeVersionFile) {
+                $nodeVersion = (Get-Content $nodeVersionFile -Raw).Trim()
+            } else {
+                $nodeVersionMatch = Select-String -Path $NodeCsprojPath -Pattern '<Version>([^<]+)</Version>' | Select-Object -First 1
+                if (-not $nodeVersionMatch) { throw "Could not find <Version> in '$NodeCsprojPath'." }
+                $nodeVersion = $nodeVersionMatch.Matches[0].Groups[1].Value
+            }
             $platform = 'win-x64'
             $nodeExePath = Join-Path $PSScriptRoot 'publish\LarisVMS.Node\win\LarisVMS.Node.exe'
             if (-not (Test-Path $nodeExePath)) { throw "Built node exe not found: $nodeExePath" }

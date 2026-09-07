@@ -97,11 +97,14 @@ public class ThumbnailBackfillService(NodeApiClient api, NodeWorker worker, stri
                 if (ct.IsCancellationRequested) return false;
                 if (processed >= MaxPerPass) return false;
 
-                var bytes = await worker.CaptureThumbnailInBackgroundAsync(segmentPath, 0, ct);
+                var webp = worker.WebpSupported;
+                var bytes = await worker.CaptureThumbnailInBackgroundAsync(segmentPath, 0, ct, webp);
                 if (bytes is not null)
                 {
                     var relative = Path.GetRelativePath(mainDir, segmentPath);
-                    var thumbPath = Path.Combine(thumbsDir, Path.ChangeExtension(relative, null) + $"_o00_{LarisVMS.Media.ThumbnailCapture.DefaultMaxDimension}q{LarisVMS.Media.ThumbnailCapture.DefaultQuality}.jpg");
+                    var thumbPath = Path.Combine(thumbsDir, Path.ChangeExtension(relative, null)
+                        + $"_o00_{LarisVMS.Media.ThumbnailCapture.DefaultMaxDimension}q{LarisVMS.Media.ThumbnailCapture.DefaultQuality}"
+                        + LarisVMS.Media.CachedImageFormat.Extension(webp));
                     await LarisVMS.Media.ThumbnailCapture.SaveToCacheAsync(thumbPath, bytes, ct);
                 }
                 processed++;
@@ -142,8 +145,10 @@ public class ThumbnailBackfillService(NodeApiClient api, NodeWorker worker, stri
             if (nowUtc - info.LastWriteTimeUtc < MinAge) continue;
 
             var relative = Path.GetRelativePath(mainDir, path);
-            var thumbPath = Path.Combine(thumbsDir, Path.ChangeExtension(relative, null) + $"_o00_{LarisVMS.Media.ThumbnailCapture.DefaultMaxDimension}q{LarisVMS.Media.ThumbnailCapture.DefaultQuality}.jpg");
-            if (!File.Exists(thumbPath)) results.Add(path);
+            var thumbStem = Path.Combine(thumbsDir, Path.ChangeExtension(relative, null)
+                + $"_o00_{LarisVMS.Media.ThumbnailCapture.DefaultMaxDimension}q{LarisVMS.Media.ThumbnailCapture.DefaultQuality}");
+            // Either a legacy .jpg or a new .webp counts as "already have it".
+            if (LarisVMS.Media.CachedImageFormat.FindExisting(thumbStem) is null) results.Add(path);
         }
         return results;
     }

@@ -7,9 +7,11 @@
 <partial name="_SettingsTabs" model="@("StorageAndRetention")" />
 
 <p class="text-muted">
-    Override per node on <a asp-page="/Admin/Nodes">Admin &rarr; Nodes</a>, or per camera on that
-    camera's edit page; a camera-level override wins over its node's, which wins over the global
-    defaults here.
+    Storage <strong>paths</strong> are set per recorder node on
+    <a asp-page="/Admin/Nodes">Admin &rarr; Nodes</a> (each node writes to its own volume, and
+    optionally archives to a second one). The values here are the retention/watermark/archive-policy
+    defaults — override per node on Admin &rarr; Nodes, or per camera on that camera's edit page; a
+    camera-level override wins over its node's, which wins over the global defaults here.
 </p>
 
 @if (!string.IsNullOrEmpty(Model.SavedMessage))
@@ -18,19 +20,6 @@
 }
 
 <form method="post" class="row g-3" style="max-width: 560px;">
-    <div class="col-12">
-        <label class="form-label">
-            Default storage root
-            <button type="button" class="help-icon" data-help-target="storageRootHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <input asp-for="StorageRootPath" class="form-control font-monospace" placeholder="e.g. E:\LarisVMS\recordings or \\files1\nvr$\LarisVMS" />
-        <div class="help-text-source" id="storageRootHelp">
-            Local disk path or UNC share recorder nodes write to when they have no
-            <a asp-page="/Admin/Nodes">node-specific override</a>. Changing this only affects where a
-            node writes <strong>new</strong> recordings from its next reconcile cycle on — it does not
-            move footage already written under the old path.
-        </div>
-    </div>
     <div class="col-12">
         <label class="form-label">
             Global retention (days)
@@ -46,9 +35,39 @@
         </label>
         <input asp-for="WatermarkPercent" type="number" min="1" max="99" class="form-control" required />
         <div class="help-text-source" id="watermarkHelp">
-            When a node's storage root passes this usage, its oldest unlocked segments across every
-            camera on that node are deleted regardless of retention/quota — a hard backstop against a
-            full disk, not a preference.
+            When a node's storage volume passes this usage, its oldest unlocked segments across every
+            camera on that node are archived early (or, if archiving is unavailable, deleted) to keep
+            the disk under the limit — a hard backstop, not a preference.
+        </div>
+    </div>
+
+    <hr class="col-12 mt-2" />
+    <div class="col-12">
+        <h2 class="h5">Archive storage tier</h2>
+        <p class="text-muted small mb-2">
+            A secondary volume (SMB share or USB drive) for older footage. When primary retention
+            would delete a segment and archiving is enabled, the recorder <strong>moves</strong> the
+            file to that node's archive volume instead and keeps it until the archive retention below
+            is hit — measured from when the footage was originally recorded. The archive volume path
+            is set per node on <a asp-page="/Admin/Nodes">Admin &rarr; Nodes</a>. Override the
+            settings below per node or per camera the same way as the retention above.
+        </p>
+    </div>
+    <div class="col-12">
+        <div class="form-check">
+            <input asp-for="ArchiveEnabled" class="form-check-input" type="checkbox" />
+            <label asp-for="ArchiveEnabled" class="form-check-label">Enable archiving by default</label>
+        </div>
+    </div>
+    <div class="col-12">
+        <label class="form-label">
+            Archive retention (days)
+            <button type="button" class="help-icon" data-help-target="archiveRetentionHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <input asp-for="ArchiveRetentionDays" type="number" min="0" class="form-control" required />
+        <div class="help-text-source" id="archiveRetentionHelp">
+            How long footage stays on the archive volume, counted from its original recording date.
+            0 = keep forever unless a node/camera override says otherwise.
         </div>
     </div>
 

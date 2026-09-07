@@ -1430,6 +1430,11 @@ public class TimelineServiceTests
     public async Task SnapshotsCombinesAiCategoryAndSpecificLabelIntoOneBadge()
     {
         var (db, cameraId, _) = await SeedCameraAsync(withSnapshotCoverage: true);
+        // The stored ColorHex here is deliberately not what the badge should use: "Vehicle" maps to
+        // DetectionKind.Vehicle, so EventPalette.ColorForAiCategory resolves it through the Events
+        // palette (default here) rather than the row's own auto-assigned colour — the point of that
+        // method (an admin-set Vehicle colour, and a camera-classified vs AI-detected vehicle, must
+        // match). So the badge colour is DetectionDisplay's Vehicle default, not "#3366cc".
         var category = new DetectedObjectCategory { Id = Guid.NewGuid(), Name = "Vehicle", ColorHex = "#3366cc", FirstSeenUtc = DateTime.UtcNow };
         db.DetectedObjectCategories.Add(category);
         var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
@@ -1445,7 +1450,36 @@ public class TimelineServiceTests
 
         var item = Assert.Single(page.Items);
         Assert.Equal("Vehicle — car", item.Label);
-        Assert.Equal("#3366cc", item.ColorHex);
+        Assert.Equal(DetectionDisplay.ColorHex(DetectionKind.Vehicle), item.ColorHex);
+    }
+
+    [Fact]
+    public async Task SnapshotBadgeCarriesMovingCountForTheXnSuffix()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync(withSnapshotCoverage: true);
+        var category = new DetectedObjectCategory { Id = Guid.NewGuid(), Name = "Human", ColorHex = "#aa0000", FirstSeenUtc = DateTime.UtcNow };
+        db.DetectedObjectCategories.Add(category);
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.AddRange(
+            new MotionSpan
+            {
+                CameraId = cameraId, Source = MotionSource.AiDetection, DetectedObjectCategoryId = category.Id,
+                DetectedObjectLabel = "person", StartUtc = start, EndUtc = start.AddSeconds(3), MovingCount = 2,
+            },
+            new MotionSpan
+            {
+                CameraId = cameraId, Source = MotionSource.AiDetection, DetectedObjectCategoryId = category.Id,
+                DetectedObjectLabel = "person", StartUtc = start.AddMinutes(5), EndUtc = start.AddMinutes(5).AddSeconds(3), MovingCount = 1,
+            });
+        await db.SaveChangesAsync();
+
+        var service = new TimelineService(db, DefaultPalette);
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
+
+        // Newest first: the single-person span, then the two-person one.
+        Assert.Equal(2, page.Items.Count);
+        Assert.Equal(1, Assert.Single(page.Items[0].Badges).MovingCount);
+        Assert.Equal(2, Assert.Single(page.Items[1].Badges).MovingCount);
     }
 
     [Fact]
@@ -1624,7 +1658,8 @@ public class TimelineServiceTests
         var (db, cameraId, _) = await SeedCameraAsync();
         var vehicle = new DetectedObjectCategory { Id = Guid.NewGuid(), Name = "Vehicle", ColorHex = "#3366cc", FirstSeenUtc = DateTime.UtcNow };
         var animal = new DetectedObjectCategory { Id = Guid.NewGuid(), Name = "Animal", ColorHex = "#33cc66", FirstSeenUtc = DateTime.UtcNow };
-        db.DetectedObjectCategories.AddRange(vehicle, animal);
+        var human = new DetectedObjectCategory { Id = Guid.NewGuid(), Name = "Human", ColorHex = "#cc6633", FirstSeenUtc = DateTime.UtcNow };
+        db.DetectedObjectCategories.AddRange(vehicle, animal, human);
         var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
         db.MotionSpans.AddRange(
             new MotionSpan { CameraId = cameraId, Source = MotionSource.AiDetection, DetectedObjectCategoryId = vehicle.Id, DetectedObjectLabel = "truck", StartUtc = start, EndUtc = start.AddSeconds(1) },
@@ -1633,7 +1668,10 @@ public class TimelineServiceTests
             new MotionSpan { CameraId = cameraId, Source = MotionSource.AiDetection, DetectedObjectCategoryId = vehicle.Id, DetectedObjectLabel = "car", StartUtc = start.AddMinutes(2), EndUtc = start.AddMinutes(2).AddSeconds(1) },
             new MotionSpan { CameraId = cameraId, Source = MotionSource.AiDetection, DetectedObjectCategoryId = animal.Id, DetectedObjectLabel = "dog", StartUtc = start.AddMinutes(3), EndUtc = start.AddMinutes(3).AddSeconds(1) },
             // No specific label at all — must be excluded, not surfaced as a null-labeled node.
-            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human, StartUtc = start.AddMinutes(4), EndUtc = start.AddMinutes(4).AddSeconds(1) });
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human, StartUtc = start.AddMinutes(4), EndUtc = start.AddMinutes(4).AddSeconds(1) },
+            // AI "Human"/"person" — the specific label adds nothing over the category (CocoCategoryMap
+            // .DisplayLabel collapses it), so it must NOT surface as a "Person" leaf under "Human".
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.AiDetection, DetectedObjectCategoryId = human.Id, DetectedObjectLabel = "person", StartUtc = start.AddMinutes(5), EndUtc = start.AddMinutes(5).AddSeconds(1) });
         await db.SaveChangesAsync();
 
         var service = new TimelineService(db, DefaultPalette);

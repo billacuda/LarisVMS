@@ -31,5 +31,18 @@ public class Segment
     /// exists before the storage manager (M4) needs it.</summary>
     public bool IsLocked { get; set; }
 
+    /// <summary>Which storage volume this segment's file currently lives on. <see cref="StorageTier.Primary"/>
+    /// for every freshly recorded segment; set to <see cref="StorageTier.Archive"/> by
+    /// NodeService.RelocateSegmentsAsync when the node moves the file to the archive volume (primary
+    /// retention would have deleted it, and archiving is enabled). The node serves playback from
+    /// either volume transparently; this drives the archive-expiry sweep, the playback "archived"
+    /// marker, and per-volume storage stats.</summary>
+    public StorageTier StorageTier { get; set; }
+
+    /// <summary>When the file was moved to the archive volume, or null while it is still on primary.
+    /// Observability only — archive retention is measured from the file's own timestamp (anchored to
+    /// its record time), not from this.</summary>
+    public DateTime? ArchivedAt { get; set; }
+
     public Camera Camera { get; set; } = null!;
 }

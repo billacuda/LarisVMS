@@ -357,3 +357,12 @@ body {
     margin-left: .25rem;
     font-variant-numeric: tabular-nums;
 }
+
+/* Snapshots: the "x2" / "x3" count of same-type objects moving in one snapshot. Slightly heavier
+   than the confidence qualifier (it's a distinct fact, not a footnote) but still the badge's own
+   text color so it holds against every palette color and both themes. */
+.snapshot-badge-count {
+    font-weight: 600;
+    margin-left: .25rem;
+    font-variant-numeric: tabular-nums;
+}

@@ -61,11 +61,13 @@ public class ThumbnailBackfillServiceTests : IDisposable
         Assert.Empty(found);
     }
 
-    [Fact]
-    public void SkipsASegmentThatAlreadyHasItsThumbnailCached()
+    [Theory]
+    [InlineData(".webp")] // a node with WebP support
+    [InlineData(".jpg")]  // a legacy JPEG already on disk still counts as cached
+    public void SkipsASegmentThatAlreadyHasItsThumbnailCached(string extension)
     {
         WriteSegment(@"2026\08\09\14\20260809T140500Z.mp4", DateTime.UtcNow.AddMinutes(-10));
-        WriteThumbnail($@"2026\08\09\14\20260809T140500Z_o00_{LarisVMS.Media.ThumbnailCapture.DefaultMaxDimension}q{LarisVMS.Media.ThumbnailCapture.DefaultQuality}.jpg");
+        WriteThumbnail($@"2026\08\09\14\20260809T140500Z_o00_{LarisVMS.Media.ThumbnailCapture.DefaultMaxDimension}q{LarisVMS.Media.ThumbnailCapture.DefaultQuality}{extension}");
 
         var found = ThumbnailBackfillService.FindAlignedSegmentsMissingThumbnails(_mainDir, _thumbsDir, DateTime.UtcNow).ToList();
 

@@ -5,7 +5,12 @@ namespace LarisVMS.Core.Dtos;
 // Wire DTOs for the node control plane (POST /api/nodes/*). Shared via Core so LarisVMS.Node can
 // serialize/deserialize them without referencing LarisVMS.Infrastructure or LarisVMS.Web.
 
-public record NodeRegisterRequest(string RegistrationKey, string Hostname, string? Version, string? Platform);
+public record NodeRegisterRequest(string RegistrationKey, string Hostname, string? Version, string? Platform,
+    /// <summary>The storage path (and optional archive path) install-node.ps1 was given
+    /// (-StorageRoot / -ArchiveRoot). Persisted on the new Node row so storage config is per-node
+    /// with no global default. Null from an older install-node.ps1 — the node then has no storage
+    /// path and records nothing until an admin sets one on Admin/Nodes.</summary>
+    string? StorageRootPath = null, string? ArchiveRootPath = null);
 public record NodeRegisterResponse(Guid NodeId, string Secret, string MediaSigningKey);
 
 /// <summary>SentAtUtc is the node's own DateTime.UtcNow at the moment it builds this request — the
@@ -19,7 +24,11 @@ public record NodeRegisterResponse(Guid NodeId, string Secret, string MediaSigni
 /// UI's readout in Node.DetectedAcceleratorsJson); the node always acts on its own fresh local probe,
 /// never a value round-tripped back from the server.</summary>
 public record NodeHeartbeatRequest(string? Version, long? FreeBytes = null, long? TotalBytes = null, int? LivePort = null,
-    DateTime? SentAtUtc = null, List<string>? DetectedEncoders = null, List<string>? DetectedAccelerators = null);
+    DateTime? SentAtUtc = null, List<string>? DetectedEncoders = null, List<string>? DetectedAccelerators = null,
+    /// <summary>Archive-storage: free/total bytes on the archive volume, and whether the primary
+    /// volume is currently over the storage watermark (footage being archived/deleted early). All
+    /// null/false on an older node build or one with no archive root configured.</summary>
+    long? ArchiveFreeBytes = null, long? ArchiveTotalBytes = null, bool StoragePressureActive = false);
 
 /// <summary>Recorder-node auto-update: a genuinely newer NodeBuildVersion exists for this node's
 /// reported Platform (NodeVersionComparer.IsNewer), and NodeAutoUpdate.Enabled is on. DownloadUrl is
@@ -161,7 +170,13 @@ public record NodeConfigCameraDto(Guid CameraId, string Name, string? Username, 
     /// Sensitivity, needed because Grid mode's single aggregate region (see NodeWorker.ReconcileMotion)
     /// still has to compare its own score against *something* to decide when a span opens. Same
     /// 0.03 default Zone.Sensitivity itself uses.</summary>
-    double MotionGridSensitivity = 0.03);
+    double MotionGridSensitivity = 0.03,
+    /// <summary>Archive-storage: whether footage for this camera on this node is moved to the archive
+    /// volume when primary retention would delete it (Camera &rarr; Node &rarr; Global, key
+    /// "Archive.Enabled"), and how long it is then kept on the archive volume before the node's
+    /// archive-expiry sweep deletes it ("Archive.RetentionDays"; 0/null = keep forever). Defaults
+    /// off/null so an older node's deserialization never archives.</summary>
+    bool ArchiveEnabled = false, int? ArchiveRetentionDays = null);
 /// <summary>A camera this node has leftover Segments for but is no longer assigned to record
 /// (reassigned to a different node, or deleted) — StorageManager's orphaned-folder sweep uses
 /// RetentionDays here so leftover footage still ages out on the same schedule it always would have,
@@ -169,7 +184,11 @@ public record NodeConfigCameraDto(Guid CameraId, string Name, string? Username, 
 /// same global -&gt; per-node -&gt; per-camera way NodeConfigCameraDto.RetentionDays is (scoped to
 /// *this* node, since that's whose copy is being aged out) — null only when nothing resolves it at
 /// all, which StorageManager falls back to a flat default for.</summary>
-public record NodeConfigOrphanedCameraDto(Guid CameraId, int? RetentionDays);
+public record NodeConfigOrphanedCameraDto(Guid CameraId, int? RetentionDays,
+    /// <summary>Archive-storage: same as NodeConfigCameraDto's fields, resolved for this no-longer-
+    /// assigned camera so the archive-expiry sweep still ages its leftover archived footage out on
+    /// the schedule its own settings specified. Defaults off/null.</summary>
+    bool ArchiveEnabled = false, int? ArchiveRetentionDays = null);
 
 /// <summary>AdaptiveStreamingEnabled (M18) is the server-side "LiveView.AdaptiveStreamingEnabled"
 /// setting, resolved once here rather than left for the node to fetch on its own — same pattern as
@@ -254,7 +273,21 @@ public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? Stor
     /// TensorRT; FP16 would need a mixed-precision model that isn't producible yet, so a node set to
     /// FP16 transparently runs FP32 until one is bundled. Appended last so the positional NodeService
     /// construction stays stable; defaults "Off" so an older node reads the safe value.</summary>
-    string DFineTensorRtMode = "Off");
+    string DFineTensorRtMode = "Off",
+    /// <summary>Archive-storage: the resolved archive volume root for this node (Node.ArchiveRootPath
+    /// or the global Archive.RootPath setting) — the secondary (SMB / USB) location aged-out footage
+    /// is moved to when a camera's ArchiveEnabled is set. Null when no archive root is configured, in
+    /// which case archiving is inert regardless of the per-camera flag. Must be a path outside
+    /// StorageRootPath. Appended last so the positional NodeService construction stays stable.</summary>
+    string? ArchiveRootPath = null,
+    /// <summary>Detection.SnapshotMotionAccuracy (global) — when true (the default), the Vision
+    /// Service rejects raw-detection-box jitter so a parked vehicle stops flickering to Moving, and
+    /// finalizes a label's span promptly once its object leaves rather than holding it open long
+    /// enough for a later unrelated object of the same type to merge into it. False restores the
+    /// prior behaviour for A/B comparison. Threaded into every VisionStartCameraRequest and part of
+    /// NodeWorker's restart signature. Appended last so the positional NodeService construction
+    /// stays stable; defaults true so an older node build reads the improved behaviour.</summary>
+    bool SnapshotMotionAccuracy = true);
 
 /// <summary>One completed MotionSpan, batch-reported the same way SegmentReportItem is — see
 /// NodeService.RecordMotionSpansAsync for why plain REST + EF insert is enough here despite the
@@ -283,7 +316,12 @@ public record MotionSpanReportItem(Guid CameraId, Guid? ZoneId, DateTime StartUt
     Guid? EventTagRuleId = null, DetectionKind? DetectionKind = null,
     string? DetectedObjectCategory = null, string? DetectedObjectLabel = null,
     DateTime? BestFrameAtUtc = null, double? BestBoxX = null, double? BestBoxY = null,
-    double? BestBoxW = null, double? BestBoxH = null, double? BestBoxConfidence = null);
+    double? BestBoxW = null, double? BestBoxH = null, double? BestBoxConfidence = null,
+    /// <summary>Peak distinct moving instances of this label over the span (object detection: the
+    /// "x2" / "x3" snapshot badge count). Null for a non-AiDetection span and for an older node that
+    /// doesn't report it; NodeService keeps the running max across checkpoint/coalesce updates the
+    /// same way it does Score.</summary>
+    int? MovingCount = null);
 
 /// <summary>M8 pass 6: one raw ONVIF PullPoint notification, reported the same batched way a
 /// MotionSpan or Segment is. IsMotion (see CameraEventClassifier, run on the node as each
@@ -300,6 +338,14 @@ public record NodeStatusReportItem(Guid CameraId, string State, DateTime? LastSe
 /// per-camera quota, or watermark eviction) — the web deletes the matching Segment rows so the DB
 /// index never claims a file that no longer exists.</summary>
 public record SegmentDeleteRequest(List<string> FilePaths);
+
+/// <summary>Reported by the node's StorageManager after it MOVES a segment file from the primary
+/// volume to the archive volume (primary retention would have deleted it, and archiving is enabled).
+/// The web updates the Segment row in place — FilePath to the archive path, StorageTier to Archive,
+/// ArchivedAt, and SizeBytes (unchanged for a plain move; changed once phase 3 re-encodes). One
+/// statement per item, idempotent: a report for a row already at NewFilePath is a no-op success.</summary>
+public record SegmentRelocateItem(string OldFilePath, string NewFilePath, long SizeBytes);
+public record SegmentRelocateRequest(List<SegmentRelocateItem> Items);
 
 /// <summary>Real resolution/codec parsed from ffmpeg's own stderr when it opens a camera's stream,
 /// plus (M11) periodic health signals — real-time fps/bitrate from ffmpeg's progress line and a

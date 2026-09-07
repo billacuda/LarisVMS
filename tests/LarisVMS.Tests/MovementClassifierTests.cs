@@ -61,16 +61,95 @@ public class MovementClassifierTests
     public void TrackDisplacedBeyondThresholdBecomesMoving()
     {
         var classifier = new MovementClassifier();
-        var box = new SKRectI(0, 0, 50, 50); // 50x50 box, diagonal ~70.7px
+
+        // A box travelling steadily right, ~40px/frame over five frames (200px total) — net
+        // displacement well over the 0.5-of-diagonal threshold, directed (net ~= path), inside the
+        // 2s window.
+        MovementState state = MovementState.Idle;
+        for (var i = 0; i < 5; i++)
+        {
+            var box = new SKRectI(i * 40, 0, i * 40 + 50, 50); // 50x50 box, diagonal ~70.7px
+            state = classifier.Observe(1, box, 0.8, 1280, 720, BaseTime.AddMilliseconds(i * 200)).State;
+        }
+
+        Assert.Equal(MovementState.Moving, state);
+    }
+
+    [Fact]
+    public void JitteringStationaryTrackStaysIdle()
+    {
+        var classifier = new MovementClassifier();
+
+        // A distant parked vehicle: small box whose centroid wobbles a few pixels each frame with
+        // no net travel. The old oldest-vs-newest comparison could catch a single bad endpoint and
+        // flip this to Moving; the smoothed-endpoint net + absolute pixel floor must not.
+        var offsets = new[] { 0, 3, -2, 4, -3, 2, -4, 3, -1, 2, -3, 1, 0, 3, -2 };
+        MovementState state = MovementState.Idle;
+        for (var i = 0; i < offsets.Length; i++)
+        {
+            var left = 500 + offsets[i];
+            var box = new SKRectI(left, 300, left + 18, 314); // ~18x14 box, diagonal ~23px
+            state = classifier.Observe(1, box, 0.6, 1280, 720, BaseTime.AddMilliseconds(i * 120)).State;
+        }
+
+        Assert.Equal(MovementState.Idle, state);
+    }
+
+    [Fact]
+    public void MovingSubjectWithNoisyBoxIsStillMoving()
+    {
+        var classifier = new MovementClassifier();
+
+        // A person/animal walking across frame: the centroid advances ~13px per frame, but the
+        // detection box is non-rigid and wobbles up to ~16px each frame (limbs, box breathing).
+        // The 0.188.0 form classified this Idle — its third-window endpoint averaging understated
+        // the net travel and the walked-path length (inflated by the wobble) failed the
+        // directedness ratio. The lightly-smoothed net now clears the diagonal fraction.
+        var jitter = new[] { 1, -1, 16, -16, 14, -14, 15, -15, 2, -2 };
+        MovementState state = MovementState.Idle;
+        for (var i = 0; i < jitter.Length; i++)
+        {
+            var left = (i * 13) + jitter[i];
+            var box = new SKRectI(left, 100, left + 70, 230); // 70x130 box, diagonal ~148px
+            state = classifier.Observe(1, box, 0.7, 1280, 720, BaseTime.AddMilliseconds(i * 150)).State;
+        }
+
+        Assert.Equal(MovementState.Moving, state);
+    }
+
+    [Fact]
+    public void NearStationaryWobbleStaysIdle()
+    {
+        var classifier = new MovementClassifier();
+
+        // A mid-size box whose centroid drifts a pixel or two each frame with no net travel — the
+        // absolute pixel floor (not just the box-diagonal fraction) must keep this Idle.
+        var offsets = new[] { 0, 2, -1, 2, -2, 1, -1, 2, 0, -1, 1, -2, 0, 1, -1 };
+        MovementState state = MovementState.Idle;
+        for (var i = 0; i < offsets.Length; i++)
+        {
+            var left = 400 + offsets[i];
+            var box = new SKRectI(left, 300, left + 40, 360); // 40x60 box, diagonal ~72px
+            state = classifier.Observe(1, box, 0.8, 1280, 720, BaseTime.AddMilliseconds(i * 120)).State;
+        }
+
+        Assert.Equal(MovementState.Idle, state);
+    }
+
+    [Fact]
+    public void JitterRejectionDisabledKeepsTheOriginalTwoSampleBehaviour()
+    {
+        var classifier = new MovementClassifier(new MovementClassifierOptions
+        {
+            JitterRejectionEnabled = false,
+        });
+        var box = new SKRectI(0, 0, 50, 50);
 
         classifier.Observe(1, box, 0.8, 1280, 720, BaseTime);
+        // Two samples, one big jump — enough for the legacy path, which only compares first vs last.
+        var moved = classifier.Observe(1, new SKRectI(200, 0, 250, 50), 0.8, 1280, 720, BaseTime.AddMilliseconds(500));
 
-        // Move the box far enough (200px right) that displacement/diagonal well exceeds the
-        // default 0.5 threshold, within the 2s movement window.
-        var moved = new SKRectI(200, 0, 250, 50);
-        var observation = classifier.Observe(1, moved, 0.8, 1280, 720, BaseTime.AddMilliseconds(500));
-
-        Assert.Equal(MovementState.Moving, observation.State);
+        Assert.Equal(MovementState.Moving, moved.State);
     }
 
     [Fact]
@@ -190,9 +269,13 @@ public class MovementClassifierTests
         classifier.Observe(1, stationaryBox, 0.8, 1280, 720, BaseTime);
         var track1 = classifier.Observe(1, stationaryBox, 0.8, 1280, 720, BaseTime.AddMilliseconds(200));
 
-        // Track 2 moves far in the same window.
-        classifier.Observe(2, new SKRectI(0, 0, 50, 50), 0.8, 1280, 720, BaseTime);
-        var track2 = classifier.Observe(2, new SKRectI(300, 0, 350, 50), 0.8, 1280, 720, BaseTime.AddMilliseconds(200));
+        // Track 2 travels steadily across the same window.
+        TrackObservation track2 = default;
+        for (var i = 0; i < 5; i++)
+        {
+            track2 = classifier.Observe(2, new SKRectI(i * 60, 0, i * 60 + 50, 50), 0.8, 1280, 720,
+                BaseTime.AddMilliseconds(i * 150));
+        }
 
         Assert.Equal(MovementState.Idle, track1.State);
         Assert.Equal(MovementState.Moving, track2.State);

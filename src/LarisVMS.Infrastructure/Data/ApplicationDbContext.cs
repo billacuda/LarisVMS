@@ -294,6 +294,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
         {
             e.Property(x => x.Name).HasMaxLength(200).IsRequired();
             e.Property(x => x.StorageRootPath).HasMaxLength(500);
+            e.Property(x => x.ArchiveRootPath).HasMaxLength(500);
             e.Property(x => x.ApiKeyHash).HasMaxLength(200).IsRequired();
             e.Property(x => x.PreviousApiKeyHash).HasMaxLength(200);
             e.Property(x => x.Version).HasMaxLength(50);
@@ -318,6 +319,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             // filename is ~90 chars) while staying under that limit for the unique index below.
             e.Property(x => x.FilePath).HasMaxLength(450).IsRequired();
             e.Property(x => x.Codec).HasMaxLength(50);
+            e.Property(x => x.StorageTier).HasConversion<byte>();
             e.HasOne(x => x.Camera).WithMany()
                 .HasForeignKey(x => x.CameraId).OnDelete(DeleteBehavior.Cascade);
             // Id stays the primary key (uniqueness, FK targets) but is deliberately non-clustered —
@@ -331,6 +333,10 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             // catches the resulting constraint violation and skips the duplicate rather than losing
             // the rest of the batch.
             e.HasIndex(x => x.FilePath).IsUnique();
+            // Archive-storage: the archive-expiry sweep and the per-node tier tallies both ask
+            // "which of this camera's segments are on the archive tier" — this keeps that off the
+            // clustered (CameraId, StartUtc) index without disturbing it.
+            e.HasIndex(x => new { x.CameraId, x.StorageTier });
             // Pass 2c: TimelineService.GetSnapshotsAsync's footage-overlap guard needs "does a
             // segment for this camera end after some threshold" — the clustered (CameraId, StartUtc)
             // index alone forces a large scan of a camera's whole segment history per row to answer

@@ -70,4 +70,26 @@ public class FfmpegCapabilityProberTests
 
         Assert.Empty(FfmpegCapabilityProber.ParseEncodersOutput(line));
     }
+
+    [Fact]
+    public void DetectsLibWebpWhenTheBuildListsIt()
+    {
+        const string withWebp = SampleOutput + "\n V..... libwebp              libwebp WebP (codec webp)";
+
+        Assert.True(FfmpegCapabilityProber.ListsEncoder(withWebp, "libwebp"));
+    }
+
+    [Fact]
+    public void ReportsNoLibWebpWhenTheBuildOmitsIt()
+    {
+        Assert.False(FfmpegCapabilityProber.ListsEncoder(SampleOutput, "libwebp"));
+    }
+
+    [Fact]
+    public void LibWebpMatchIsExactNotSubstring()
+    {
+        const string line = " V..... libwebp_anim         some hypothetical animated variant (codec webp)";
+
+        Assert.False(FfmpegCapabilityProber.ListsEncoder(line, "libwebp"));
+    }
 }

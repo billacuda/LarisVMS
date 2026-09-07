@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
@@ -18,7 +19,7 @@ namespace LarisVMS.Infrastructure.Services;
 /// CryptographicOperations.FixedTimeEquals against the stored hash, with PreviousApiKeyHash as a
 /// fallback slot for a future rotation flow (not wired up yet — see Node's doc comment).
 /// </summary>
-public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : INodeService
+public class NodeService(ApplicationDbContext db, ISettingsResolver settings, ILogger<NodeService>? logger = null) : INodeService
 {
     // One gate per node for RecordMotionSpansAsync: its check-then-insert/coalesce is not atomic
     // across concurrent report calls, and the node's own flush loop can land two here at once — a
@@ -54,6 +55,12 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             MediaSigningKey = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),
             Version = request.Version,
             Platform = request.Platform,
+            // Storage/archive paths are per-node — captured here from what install-node.ps1 passed
+            // (--storage-root / --archive-root). A node that registers with neither (an older
+            // install-node.ps1) starts with no storage path and records nothing until an admin sets
+            // one on Admin/Nodes — see GetConfigAsync.
+            StorageRootPath = string.IsNullOrWhiteSpace(request.StorageRootPath) ? null : request.StorageRootPath,
+            ArchiveRootPath = string.IsNullOrWhiteSpace(request.ArchiveRootPath) ? null : request.ArchiveRootPath,
             Status = NodeStatus.Active,
             LastSeenAt = DateTime.UtcNow,
             CreatedAt = DateTime.UtcNow
@@ -85,18 +92,25 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
 
     public async Task<NodeConfigResponse> GetConfigAsync(Guid nodeId, CancellationToken ct = default)
     {
-        var cameras = await db.Cameras
-            .Where(c => c.NodeId == nodeId && c.IsEnabled)
-            .Include(c => c.Streams)
-            .Include(c => c.Capabilities)
-            .ToListAsync(ct);
+        // Storage path (and the optional archive path) are per-node, no global default — set when the
+        // node is added (install-node.ps1 -StorageRoot/-ArchiveRoot -> RegisterAsync) or on
+        // Admin/Nodes. A node with no storage path is served no camera config (below): it must not
+        // silently record to some fallback location an admin never chose.
+        var nodeRoots = await db.Nodes.Where(n => n.Id == nodeId)
+            .Select(n => new { n.StorageRootPath, n.ArchiveRootPath }).FirstOrDefaultAsync(ct);
+        var storageRoot = string.IsNullOrWhiteSpace(nodeRoots?.StorageRootPath) ? null : nodeRoots.StorageRootPath;
+        var archiveRoot = string.IsNullOrWhiteSpace(nodeRoots?.ArchiveRootPath) ? null : nodeRoots.ArchiveRootPath;
 
-        // Per-node override (a node writing to its own local disk, say) takes priority over the
-        // global default — see Node.StorageRootPath's doc comment.
-        var nodeStorageRoot = await db.Nodes.Where(n => n.Id == nodeId).Select(n => n.StorageRootPath).FirstOrDefaultAsync(ct);
-        var storageRoot = string.IsNullOrWhiteSpace(nodeStorageRoot)
-            ? await settings.GetRawAsync("Storage.RootPath", ct: ct)
-            : nodeStorageRoot;
+        var cameras = string.IsNullOrWhiteSpace(storageRoot)
+            ? []
+            : await db.Cameras
+                .Where(c => c.NodeId == nodeId && c.IsEnabled)
+                .Include(c => c.Streams)
+                .Include(c => c.Capabilities)
+                .ToListAsync(ct);
+
+        if (string.IsNullOrWhiteSpace(storageRoot))
+            logger?.LogWarning("Node {NodeId} has no storage path configured — serving no camera config until one is set on Admin/Nodes.", nodeId);
 
         // Lazily backfilled here, not just generated at registration: a node that registered before
         // M5 (live view) shipped has none, and re-registering to get one would mean a brand new
@@ -129,6 +143,10 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         // own doc comments for why these are deployment-wide rather than per-camera settings.
         var reportIdleDetections = await settings.GetAsync("Detection.ReportIdleDetections", false, ct: ct);
         var aiIdleTimeoutSeconds = await settings.GetAsync("Detection.IdleTimeoutSeconds", 10, ct: ct);
+        // Global detection-quality toggle — jitter rejection in the movement classifier + prompt
+        // span finalization when an object leaves (so a later unrelated same-type object isn't
+        // merged into it). Default on; off is the fast A/B revert. See NodeConfigResponse.
+        var snapshotMotionAccuracy = await settings.GetAsync("Detection.SnapshotMotionAccuracy", true, ct: ct);
         // Node-scoped (Global -> Node, no per-camera override) — one Vision Service process serves
         // every camera on a node from the same loaded model, see NodeConfigResponse.DetectionModelFamily's
         // own doc comment for why that makes this a per-node choice rather than a per-camera one.
@@ -203,6 +221,9 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             // device advertising 704x480 while delivering 480x704) before the node builds the
             // detection profile from it — see LarisVMS.Node.DetectionOrientation.
             var aiDetectionOrientation = await settings.GetAsync("AiDetection.Orientation", "Auto", cameraId: c.Id, nodeId: nodeId, ct: ct);
+            // Archive-storage: same Camera -> Node -> Global chain as RetentionDays above.
+            var archiveEnabled = await settings.GetAsync("Archive.Enabled", false, cameraId: c.Id, nodeId: nodeId, ct: ct);
+            var archiveRetentionDays = await settings.GetAsync<int?>("Archive.RetentionDays", 0, cameraId: c.Id, nodeId: nodeId, ct: ct);
             cameraDtos.Add(new NodeConfigCameraDto(
                 c.Id, c.Name, c.Username, c.Password,
                 c.Streams.Where(s => s.IsEnabled).Select(s => new NodeConfigStreamDto(
@@ -220,7 +241,8 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
                 ResolveIntegrationBaseUri(c), segmentSeconds,
                 c.AiDetectionEnabled, c.MotionDetectionSource?.ToString(),
                 aiConfidence, aiIou, aiDetectionStreamRole, aiDetectionOrientation, c.ServerMotionEnabled,
-                c.MotionRegionMode.ToString(), c.MotionGridSize, c.MotionGridMask, c.MotionGridSensitivity));
+                c.MotionRegionMode.ToString(), c.MotionGridSize, c.MotionGridMask, c.MotionGridSensitivity,
+                archiveEnabled, archiveRetentionDays));
         }
 
         // Cameras this node has leftover Segments for but doesn't currently record — reassigned to a
@@ -229,11 +251,14 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         // which is exactly the gap that let old footage accumulate on a node forever after a camera
         // moved away — see StorageManager.SweepOrphanedCameraFolders' own doc comment.
         var assignedCameraIds = cameras.Select(c => c.Id).ToList();
-        var orphanedCameraIds = await db.Segments
-            .Where(s => s.NodeId == nodeId && !assignedCameraIds.Contains(s.CameraId))
-            .Select(s => s.CameraId)
-            .Distinct()
-            .ToListAsync(ct);
+        // No storage path -> no sweeps of any kind for this node (see the top of this method).
+        var orphanedCameraIds = string.IsNullOrWhiteSpace(storageRoot)
+            ? []
+            : await db.Segments
+                .Where(s => s.NodeId == nodeId && !assignedCameraIds.Contains(s.CameraId))
+                .Select(s => s.CameraId)
+                .Distinct()
+                .ToListAsync(ct);
 
         var orphanedCameraDtos = new List<NodeConfigOrphanedCameraDto>();
         foreach (var orphanedCameraId in orphanedCameraIds)
@@ -242,14 +267,19 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             // *this* node — a per-node override this node had for that camera (set back when it was
             // still assigned here) still applies to aging out its leftover copy.
             var retentionDays = await settings.GetAsync<int?>("Retention.Days", 30, cameraId: orphanedCameraId, nodeId: nodeId, ct: ct);
-            orphanedCameraDtos.Add(new NodeConfigOrphanedCameraDto(orphanedCameraId, retentionDays));
+            var orphanArchiveEnabled = await settings.GetAsync("Archive.Enabled", false, cameraId: orphanedCameraId, nodeId: nodeId, ct: ct);
+            var orphanArchiveRetentionDays = await settings.GetAsync<int?>("Archive.RetentionDays", 0, cameraId: orphanedCameraId, nodeId: nodeId, ct: ct);
+            orphanedCameraDtos.Add(new NodeConfigOrphanedCameraDto(orphanedCameraId, retentionDays, orphanArchiveEnabled, orphanArchiveRetentionDays));
         }
 
         return new NodeConfigResponse(cameraDtos, storageRoot, watermarkPercent, mediaSigningKey, orphanedCameraDtos,
             adaptiveStreamingEnabled, (aiAccelerator ?? AiAccelerator.Auto).ToString(),
             reportIdleDetections, aspectMode, detectionModelFamily, dfineWeights, aiIdleTimeoutSeconds,
             gpuPreprocessing, logLevel)
-        { YoloXSize = yoloXSize, MaxDetectionFps = maxDetectionFps, DFineTensorRtMode = dfineTensorRtMode };
+        {
+            YoloXSize = yoloXSize, MaxDetectionFps = maxDetectionFps, DFineTensorRtMode = dfineTensorRtMode,
+            ArchiveRootPath = archiveRoot, SnapshotMotionAccuracy = snapshotMotionAccuracy,
+        };
     }
 
     /// <summary>Pulls the Events service's own XAddr out of the capability prober's raw category map
@@ -290,8 +320,41 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             .ExecuteDeleteAsync(ct);
     }
 
+    public async Task RelocateSegmentsAsync(Guid nodeId, IReadOnlyList<SegmentRelocateItem> items, CancellationToken ct = default)
+    {
+        if (items.Count == 0) return;
+        var now = DateTime.UtcNow;
+        // One statement per item — each row moves to a distinct new path, so there's no bulk form.
+        // Same "a handful of rows per sweep" scale as RecordSegmentsAsync. Idempotent: if the row is
+        // already at NewFilePath (a retried report after the node deleted the source), 0 rows update
+        // and we just move on — the node clears its queue either way.
+        foreach (var item in items)
+        {
+            var updated = await db.Segments
+                .Where(s => s.NodeId == nodeId && s.FilePath == item.OldFilePath)
+                .ExecuteUpdateAsync(u => u
+                    .SetProperty(s => s.FilePath, item.NewFilePath)
+                    .SetProperty(s => s.StorageTier, StorageTier.Archive)
+                    .SetProperty(s => s.ArchivedAt, now)
+                    .SetProperty(s => s.SizeBytes, item.SizeBytes), ct);
+
+            if (updated == 0)
+            {
+                var alreadyMoved = await db.Segments
+                    .AnyAsync(s => s.NodeId == nodeId && s.FilePath == item.NewFilePath, ct);
+                if (!alreadyMoved)
+                    logger?.LogWarning("Node {NodeId} reported a relocation of '{Old}' but no matching Segment row exists.", nodeId, item.OldFilePath);
+            }
+        }
+    }
+
     public async Task<List<string>> ListSegmentFilePathsAsync(Guid nodeId, CancellationToken ct = default)
         => await db.Segments.AsNoTracking().Where(s => s.NodeId == nodeId).Select(s => s.FilePath).ToListAsync(ct);
+
+    public async Task<List<string>> ListPrimaryTieredSegmentFilePathsAsync(Guid nodeId, CancellationToken ct = default)
+        => await db.Segments.AsNoTracking()
+            .Where(s => s.NodeId == nodeId && s.StorageTier == StorageTier.Primary)
+            .Select(s => s.FilePath).ToListAsync(ct);
 
     public async Task<List<long>> ListMotionSpanIdsAsync(Guid nodeId, CancellationToken ct = default)
         => await db.MotionSpans.AsNoTracking().Where(m => m.Camera.NodeId == nodeId).Select(m => m.Id).ToListAsync(ct);
@@ -304,17 +367,29 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
 
     public async Task RecordHeartbeatAsync(Guid nodeId, long? freeBytes, long? totalBytes, string? version, int? livePort,
         DateTime? nodeSentAtUtc, DateTime serverReceivedUtc, List<string>? detectedEncoders = null,
-        List<string>? detectedAccelerators = null, CancellationToken ct = default)
+        List<string>? detectedAccelerators = null, long? archiveFreeBytes = null, long? archiveTotalBytes = null,
+        bool storagePressureActive = false, CancellationToken ct = default)
     {
         var skew = ComputeClockSkewSeconds(nodeSentAtUtc, serverReceivedUtc);
         var encodersJson = detectedEncoders is not null ? System.Text.Json.JsonSerializer.Serialize(detectedEncoders) : null;
         // Object detection plan decision 2: same coalesce-preserve shape as encodersJson above.
         var acceleratorsJson = detectedAccelerators is not null ? System.Text.Json.JsonSerializer.Serialize(detectedAccelerators) : null;
+        var now = DateTime.UtcNow;
 
         await db.Nodes.Where(n => n.Id == nodeId).ExecuteUpdateAsync(s => s
             .SetProperty(n => n.StorageFreeBytes, freeBytes)
             .SetProperty(n => n.StorageTotalBytes, totalBytes)
-            .SetProperty(n => n.StorageStatsUpdatedAt, DateTime.UtcNow)
+            .SetProperty(n => n.StorageStatsUpdatedAt, now)
+            // Archive stats: the node always measures both when it has an archive root, so a blind
+            // overwrite is right (unlike the coalesce-preserve encoder JSON above). Both null when the
+            // node has no archive root configured or predates the field.
+            .SetProperty(n => n.ArchiveFreeBytes, archiveFreeBytes)
+            .SetProperty(n => n.ArchiveTotalBytes, archiveTotalBytes)
+            .SetProperty(n => n.ArchiveStatsUpdatedAt, n => archiveFreeBytes != null ? now : n.ArchiveStatsUpdatedAt)
+            .SetProperty(n => n.StoragePressureActive, storagePressureActive)
+            .SetProperty(n => n.StoragePressureSince, n => storagePressureActive
+                ? (n.StoragePressureActive ? n.StoragePressureSince : now)
+                : (DateTime?)null)
             .SetProperty(n => n.Version, n => version ?? n.Version)
             .SetProperty(n => n.LivePort, n => livePort ?? n.LivePort)
             .SetProperty(n => n.ClockSkewSeconds, n => skew ?? n.ClockSkewSeconds)
@@ -355,32 +430,45 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
         }
     }
 
+    /// <summary>free / (bytes written per day) as a day count, or null when either input is missing
+    /// or the write rate is non-positive — an honest "unknown" rather than a misleading number from
+    /// too little history. Pure so it's unit-testable without a database.</summary>
+    internal static double? EstimateDaysRemaining(long? freeBytes, long bytesPerDay)
+        => freeBytes is { } free && bytesPerDay > 0 ? free / (double)bytesPerDay : null;
+
     public async Task<Dictionary<Guid, double?>> GetEstimatedDaysRemainingAsync(CancellationToken ct = default)
     {
         var since = DateTime.UtcNow.AddDays(-1);
         var bytesPerNodeLastDay = await db.Segments
-            .Where(s => s.StartUtc >= since)
+            .Where(s => s.StartUtc >= since && s.StorageTier == StorageTier.Primary)
             .GroupBy(s => s.NodeId)
             .Select(g => new { NodeId = g.Key, Bytes = g.Sum(s => s.SizeBytes) })
             .ToDictionaryAsync(x => x.NodeId, x => x.Bytes, ct);
 
         var nodes = await db.Nodes.AsNoTracking().Select(n => new { n.Id, n.StorageFreeBytes }).ToListAsync(ct);
 
-        var result = new Dictionary<Guid, double?>();
-        foreach (var n in nodes)
-        {
-            if (n.StorageFreeBytes is not { } free
-                || !bytesPerNodeLastDay.TryGetValue(n.Id, out var bytesPerDay)
-                || bytesPerDay <= 0)
-            {
-                result[n.Id] = null;
-                continue;
-            }
+        return nodes.ToDictionary(
+            n => n.Id,
+            n => EstimateDaysRemaining(n.StorageFreeBytes, bytesPerNodeLastDay.GetValueOrDefault(n.Id)));
+    }
 
-            result[n.Id] = free / (double)bytesPerDay;
-        }
+    /// <summary>Same shape as GetEstimatedDaysRemainingAsync but for each node's archive volume:
+    /// archive free bytes divided by the bytes moved to archive over the last 24h. Null until there
+    /// is archiving activity to estimate a rate from.</summary>
+    public async Task<Dictionary<Guid, double?>> GetArchiveEstimatedDaysRemainingAsync(CancellationToken ct = default)
+    {
+        var since = DateTime.UtcNow.AddDays(-1);
+        var bytesPerNodeLastDay = await db.Segments
+            .Where(s => s.StorageTier == StorageTier.Archive && s.ArchivedAt >= since)
+            .GroupBy(s => s.NodeId)
+            .Select(g => new { NodeId = g.Key, Bytes = g.Sum(s => s.SizeBytes) })
+            .ToDictionaryAsync(x => x.NodeId, x => x.Bytes, ct);
 
-        return result;
+        var nodes = await db.Nodes.AsNoTracking().Select(n => new { n.Id, n.ArchiveFreeBytes }).ToListAsync(ct);
+
+        return nodes.ToDictionary(
+            n => n.Id,
+            n => EstimateDaysRemaining(n.ArchiveFreeBytes, bytesPerNodeLastDay.GetValueOrDefault(n.Id)));
     }
 
     public async Task RecordSegmentsAsync(Guid nodeId, IReadOnlyList<SegmentReportItem> segments, CancellationToken ct = default)
@@ -498,6 +586,9 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
                 // older report should never pull EndUtc backward.
                 if (item.EndUtc > existing.EndUtc) existing.EndUtc = item.EndUtc;
                 existing.Score = Math.Max(existing.Score, item.Score);
+                // Running max, same as Score — a later checkpoint may have seen more of the same
+                // object type moving at once than an earlier one did.
+                if (item.MovingCount is { } mc) existing.MovingCount = Math.Max(existing.MovingCount ?? 1, mc);
                 // Object detection plan decision 10: LarisVMS.Vision.Service's own best-frame
                 // tracking is already monotonic (a later report's box is never worse than an
                 // earlier one for the same track), so a later checkpoint can just overwrite rather
@@ -547,6 +638,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
                     // fragmenting into extra cards, not to nudge its start a few seconds earlier.
                     if (item.EndUtc > sibling.EndUtc) sibling.EndUtc = item.EndUtc;
                     sibling.Score = Math.Max(sibling.Score, item.Score);
+                    if (item.MovingCount is { } mc) sibling.MovingCount = Math.Max(sibling.MovingCount ?? 1, mc);
                     // Adopt the incoming best frame when it's at least as confident as the one on
                     // record (or the span never had one) — same "a later report is never worse"
                     // assumption the exact-match checkpoint path above already relies on.
@@ -595,7 +687,10 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
                 BestBoxConfidence = item.BestBoxConfidence,
                 StartUtc = item.StartUtc,
                 EndUtc = item.EndUtc,
-                Score = item.Score
+                Score = item.Score,
+                // "x2" / "x3" snapshot badge — peak simultaneous moving instances of this label.
+                // Null for every non-AiDetection span and for an older node that doesn't report it.
+                MovingCount = item.MovingCount
             });
         }
 
@@ -646,6 +741,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
     {
         if (incoming.EndUtc > target.EndUtc) target.EndUtc = incoming.EndUtc;
         target.Score = Math.Max(target.Score, incoming.Score);
+        if (incoming.MovingCount is { } mc) target.MovingCount = Math.Max(target.MovingCount ?? 1, mc);
         if (incoming.BestFrameAtUtc is not null
             && (target.BestBoxConfidence is null || (incoming.BestBoxConfidence ?? 0) >= target.BestBoxConfidence))
         {
@@ -756,12 +852,14 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings) : 
             .ExecuteUpdateAsync(u => u.SetProperty(c => c.NodeId, nodeId), ct);
     }
 
-    public async Task UpdateAsync(Guid nodeId, string name, string? storageRootPath, AiAccelerator? aiAccelerator = null, CancellationToken ct = default)
+    public async Task UpdateAsync(Guid nodeId, string name, string? storageRootPath, AiAccelerator? aiAccelerator = null,
+        string? archiveRootPath = null, CancellationToken ct = default)
     {
         var node = await db.Nodes.FirstOrDefaultAsync(n => n.Id == nodeId, ct)
             ?? throw new InvalidOperationException("Node not found.");
         node.Name = name;
         node.StorageRootPath = string.IsNullOrWhiteSpace(storageRootPath) ? null : storageRootPath;
+        node.ArchiveRootPath = string.IsNullOrWhiteSpace(archiveRootPath) ? null : archiveRootPath;
         node.AiAccelerator = aiAccelerator;
         await db.SaveChangesAsync(ct);
     }

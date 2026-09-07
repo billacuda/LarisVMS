@@ -438,7 +438,8 @@ nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest requ
     // reported to stamp; this is the one place NodeHeartbeatRequest's fields are actually read.
     var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
     await nodeService.RecordHeartbeatAsync(node.Id, request.FreeBytes, request.TotalBytes, request.Version, request.LivePort,
-        request.SentAtUtc, DateTime.UtcNow, request.DetectedEncoders, request.DetectedAccelerators, ct);
+        request.SentAtUtc, DateTime.UtcNow, request.DetectedEncoders, request.DetectedAccelerators,
+        request.ArchiveFreeBytes, request.ArchiveTotalBytes, request.StoragePressureActive, ct);
 
     // ── Auto-update check ────────────────────────────────────────────────
     // Global-only gate (Admin/Settings/Nodes' NodeAutoUpdate.Enabled) — no per-node override for this
@@ -555,6 +556,14 @@ nodesApi.MapGet("/segments/paths", async (HttpContext ctx, INodeService nodeServ
     return Results.Json(await nodeService.ListSegmentFilePathsAsync(node.Id, ct));
 });
 
+// Archive storage: feeds the node's archive-tier reconciliation — rows still marked primary storage
+// whose file is actually on the archive volume (an admin repointed the storage root) get flipped.
+nodesApi.MapGet("/segments/primary-paths", async (HttpContext ctx, INodeService nodeService, CancellationToken ct) =>
+{
+    var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
+    return Results.Json(await nodeService.ListPrimaryTieredSegmentFilePathsAsync(node.Id, ct));
+});
+
 // Pass 2c: feeds StorageManager's own snapshot-reconciliation sweep, mirroring the shape of
 // /segments/paths above — the node diffs this against its own cam-{id}/snapshots/ cache files to
 // self-heal any crop image whose owning MotionSpan row has since been deleted independently (by
@@ -569,6 +578,16 @@ nodesApi.MapPost("/segments/delete", async (HttpContext ctx, SegmentDeleteReques
 {
     var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
     await nodeService.DeleteSegmentsAsync(node.Id, request.FilePaths, ct);
+    return Results.Ok();
+});
+
+// Archive storage: the node moved these segment files from its primary volume to its archive volume
+// (primary retention would have deleted them). Update the rows in place so playback finds them at
+// the new path — the node serves either location transparently.
+nodesApi.MapPost("/segments/relocate", async (HttpContext ctx, SegmentRelocateRequest request, INodeService nodeService, CancellationToken ct) =>
+{
+    var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
+    await nodeService.RelocateSegmentsAsync(node.Id, request.Items, ct);
     return Results.Ok();
 });
 
@@ -1395,7 +1414,10 @@ async Task<IResult> ProxyThumbnailAsync(Guid cameraId, ThumbnailInfo? thumb, IHt
     // cache should ever store.
     if (longLivedCache) httpContext.Response.Headers.CacheControl = "private, max-age=86400";
 
-    return Results.Stream(await nodeResponse.Content.ReadAsStreamAsync(ct), "image/jpeg");
+    // Pass the node's own Content-Type through (image/webp for new cache files, image/jpeg for
+    // legacy ones) rather than asserting one — both are served from the same routes now.
+    return Results.Stream(await nodeResponse.Content.ReadAsStreamAsync(ct),
+        nodeResponse.Content.Headers.ContentType?.ToString() ?? "image/jpeg");
 }
 
 // GetThumbnailInfoAsync resolves which segment covers atUtc and buckets/clamps the offset within it
@@ -1544,7 +1566,9 @@ async Task<IResult> ProxySnapshotImageAsync(Guid cameraId, SnapshotImageInfo? in
     // keyed uniquely by spanId, so a repeat view of the same card skips the network round trip.
     httpContext.Response.Headers.CacheControl = "private, max-age=86400";
 
-    return Results.Stream(await nodeResponse.Content.ReadAsStreamAsync(ct), "image/jpeg");
+    // Pass the node's own Content-Type through — image/webp for new crops, image/jpeg for legacy.
+    return Results.Stream(await nodeResponse.Content.ReadAsStreamAsync(ct),
+        nodeResponse.Content.Headers.ContentType?.ToString() ?? "image/jpeg");
 }
 
 app.MapGet("/snapshot-image/{cameraId:guid}/{spanId:long}", async (

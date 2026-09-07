@@ -31,13 +31,19 @@ public static class ThumbnailCapture
     /// detail out of it, and these are cached indefinitely alongside their segment.</summary>
     public const int DefaultQuality = 8;
 
-    /// <summary>Returns JPEG bytes, or null if ffmpeg produced nothing (corrupt/truncated segment,
-    /// offset beyond the file's actual content, timeout) — callers turn that into a 502 rather than
-    /// this class deciding what an HTTP failure should look like. lowPriority runs the ffmpeg process
-    /// at BelowNormal OS priority — set by the background backfill loop (ThumbnailBackfillService) so
+    /// <summary>libwebp -quality (0-100, higher is better — the opposite sense to -q:v) used for the
+    /// WebP path. Even a hover-detailed 854/1280px card at this level lands well under the old JPEG
+    /// bytes; a 150px preview is visually identical.</summary>
+    public const int DefaultWebpQuality = 80;
+
+    /// <summary>Returns JPEG bytes (or WebP bytes when <paramref name="webp"/> is set and this
+    /// ffmpeg has libwebp), or null if ffmpeg produced nothing (corrupt/truncated segment, offset
+    /// beyond the file's actual content, timeout) — callers turn that into a 502 rather than this
+    /// class deciding what an HTTP failure should look like. lowPriority runs the ffmpeg process at
+    /// BelowNormal OS priority — set by the background backfill loop (ThumbnailBackfillService) so
     /// its catch-up work never meaningfully contends with live recording or an on-demand hover for
     /// CPU; on-demand callers leave this false since a user is actively waiting on those.</summary>
-    public static async Task<byte[]?> CaptureAsync(string ffmpegPath, string filePath, int offsetSeconds, CancellationToken ct, TimeSpan? timeout = null, bool lowPriority = false, int maxDimension = DefaultMaxDimension, int quality = DefaultQuality)
+    public static async Task<byte[]?> CaptureAsync(string ffmpegPath, string filePath, int offsetSeconds, CancellationToken ct, TimeSpan? timeout = null, bool lowPriority = false, int maxDimension = DefaultMaxDimension, int quality = DefaultQuality, bool webp = false)
     {
         var psi = new ProcessStartInfo
         {
@@ -56,8 +62,9 @@ public static class ThumbnailCapture
             "-i", filePath,
             "-frames:v", "1",
             "-vf", $"scale={maxDimension}:{maxDimension}:force_original_aspect_ratio=decrease",
-            "-q:v", quality.ToString(),
-            "-f", "image2",
+            .. (webp
+                ? new[] { "-c:v", "libwebp", "-quality", DefaultWebpQuality.ToString(), "-f", "image2" }
+                : new[] { "-q:v", quality.ToString(), "-f", "image2" }),
             "pipe:1"
         ];
         foreach (var a in args) psi.ArgumentList.Add(a);
@@ -107,8 +114,8 @@ public static class ThumbnailCapture
         catch { /* already exited */ }
     }
 
-    /// <summary>Writes JPEG bytes to a hover-thumbnail cache file atomically — shared by the
-    /// on-demand /playback-thumbnail route and the background backfill loop so a concurrent reader
+    /// <summary>Writes image bytes to a hover-thumbnail (or snapshot-crop) cache file atomically —
+    /// shared by the on-demand routes and the background backfill loop so a concurrent reader
     /// of thumbPath (another hover, another backfill pass, a second browser tab) never sees a
     /// partially-written file: written to a per-call-unique temp file first, then moved into place
     /// with File.Move, an atomic rename on the same volume. Best-effort — swallows IOException (a

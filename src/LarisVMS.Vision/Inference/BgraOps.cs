@@ -12,9 +12,9 @@ public static class BgraOps
 {
     /// <summary>Crops <paramref name="rectPx"/> out of a <paramref name="frameW"/>×<paramref name="frameH"/>
     /// BGRA8888 buffer, downscales so the longer edge is at most
-    /// <see cref="SnapshotImageCapture.MaxDimension"/>, and JPEG-encodes. Null on any failure or a
-    /// degenerate rectangle.</summary>
-    public static byte[]? CropRectToJpeg(byte[] bgra, int frameW, int frameH, SKRectI rectPx, int quality)
+    /// <see cref="SnapshotImageCapture.MaxDimension"/>, and WebP-encodes (<paramref name="quality"/>
+    /// 0-100). Null on any failure or a degenerate rectangle.</summary>
+    public static byte[]? CropRectToWebp(byte[] bgra, int frameW, int frameH, SKRectI rectPx, int quality)
     {
         try
         {
@@ -51,7 +51,7 @@ public static class BgraOps
 
                 using (scaled)
                 using (var image = SKImage.FromBitmap(toEncode))
-                using (var data = image.Encode(SKEncodedImageFormat.Jpeg, quality))
+                using (var data = image.Encode(SKEncodedImageFormat.Webp, quality))
                     return data?.ToArray();
             }
             finally

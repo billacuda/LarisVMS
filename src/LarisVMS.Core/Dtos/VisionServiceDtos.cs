@@ -112,7 +112,15 @@ public record VisionStartCameraRequest(
     /// would use a mixed-precision <c>*.fp16.onnx</c> model — none is producible yet, so the manager
     /// transparently downgrades FP16 to FP32 (with a warning) unless such a file is bundled. Appended
     /// so NodeWorker's positional construction stays stable.</summary>
-    string DFineTensorRtMode = "")
+    string DFineTensorRtMode = "",
+    /// <summary>Detection.SnapshotMotionAccuracy (global) — when true (the default) the movement
+    /// classifier rejects raw-detection-box jitter (a parked vehicle no longer flickers to Moving)
+    /// and a label's span is finalized promptly once its object leaves rather than being held open
+    /// long enough for a later unrelated object of the same type to merge into it. False restores
+    /// the older behaviour exactly, for A/B comparison without a redeploy. Appended so NodeWorker's
+    /// positional construction stays stable; defaults true so an older node build's request still
+    /// gets the improved behaviour.</summary>
+    bool SnapshotMotionAccuracy = true)
 {
     /// <summary>What this camera should be called in a log line. The operator's own name when there
     /// is one, otherwise the first block of the camera id — short enough to scan a column of, and
@@ -152,7 +160,13 @@ public record VisionDetectionReportItem(
     double? BestBoxY,
     double? BestBoxW,
     double? BestBoxH,
-    double? BestBoxConfidence);
+    double? BestBoxConfidence,
+    /// <summary>Peak number of distinct tracks of this label seen moving in a single frame over the
+    /// span's life — surfaced as the "x2" / "x3" count on the snapshot badge. Because spans are
+    /// grouped per label (two trucks passing together are one "truck" span), this is where the
+    /// multiplicity that grouping collapses is preserved. Defaults to 1 so an older Vision Service
+    /// build that doesn't send it still deserializes to a sensible single-object count.</summary>
+    int MovingCount = 1);
 
 /// <summary>Vision Service -&gt; Node (POST /detections/crop): pass G's eager snapshot, cropped from
 /// the exact Sub-stream frame the model ran on the instant a track started Moving — lines up with
@@ -161,7 +175,7 @@ public record VisionDetectionReportItem(
 /// /snapshot-image route promotes it into the span-keyed snapshot cache on first view (so
 /// retention governs it like any other snapshot). Best-effort — a lost crop just means that span
 /// falls back to the segment-seek crop.</summary>
-public record VisionDetectionCropItem(Guid CameraId, DateTime AtUtc, byte[] Jpeg);
+public record VisionDetectionCropItem(Guid CameraId, DateTime AtUtc, byte[] Image);
 
 /// <summary>Node -&gt; Vision Service (GET /cameras/{cameraId}/detections) response: the live,
 /// current-instant snapshot for the live-view box overlay (decision 6) — every object Vision

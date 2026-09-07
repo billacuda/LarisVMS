@@ -27,7 +27,10 @@ public class NodeServiceDetectionOrientationTests
         // ExecuteUpdateAsync, which the in-memory provider doesn't support.
         var node = new LarisVMS.Core.Entities.Node
         {
-            Id = Guid.NewGuid(), Name = "node-1", ApiKeyHash = "hash", MediaSigningKey = "key"
+            // StorageRootPath is required for GetConfigAsync to return any cameras — storage config
+            // is per-node with no global default.
+            Id = Guid.NewGuid(), Name = "node-1", ApiKeyHash = "hash", MediaSigningKey = "key",
+            StorageRootPath = @"E:\LarisVMS\recordings",
         };
         var camera = new Camera
         {

@@ -62,7 +62,15 @@ param(
     # --ffmpeg-path, otherwise the node re-discovers at every startup (so an ffmpeg upgrade needs no
     # re-install here).
     [string]$FfmpegPath        = '',
+    # Where this node records to. Storage config is per-node (there is no global default) — pass this
+    # when installing a node, or set it later on Admin -> Nodes. A node installed without it records
+    # nothing until a path is set. Sent to the server at registration and baked into the service
+    # command line as --storage-root.
     [string]$StorageRoot       = '',
+    # Optional secondary volume (SMB share / USB drive) this node archives aged-out footage to when
+    # archiving is enabled. Must be a separate location from -StorageRoot. Sent at registration;
+    # not baked into the command line (archive root comes from server config at runtime).
+    [string]$ArchiveRoot       = '',
     [switch]$InsecureTls,
     [pscredential]$ServiceCredential,
     # M5 live view: the node's own Kestrel port, reached only by LarisVMS.Web's server-side proxy over
@@ -465,6 +473,9 @@ $exePath = Join-Path $InstallDir 'LarisVMS.Node.exe'
 $argParts = @('--server-url', $ServerUrl, '--registration-key', $RegistrationKey, '--live-port', $LivePort)
 if (-not [string]::IsNullOrWhiteSpace($FfmpegPath)) { $argParts += @('--ffmpeg-path', $resolvedFfmpeg) }
 if ($StorageRoot) { $argParts += @('--storage-root', $StorageRoot) }
+# --archive-root is read only during first-run registration (to persist it on the Node row); after
+# that the archive root comes from server config, so it's still safe to bake in but not required.
+if ($ArchiveRoot) { $argParts += @('--archive-root', $ArchiveRoot) }
 if ($InsecureTls) { $argParts += '--insecure-tls' }
 
 $binPath = (Format-ServiceArg $exePath) + ' ' + (($argParts | ForEach-Object { Format-ServiceArg $_ }) -join ' ')

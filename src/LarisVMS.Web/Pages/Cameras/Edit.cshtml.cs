@@ -23,6 +23,9 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
     [BindProperty] public bool IsEnabled { get; set; } = true;
     [BindProperty] public decimal? QuotaGb { get; set; }
     [BindProperty] public int? RetentionDaysOverride { get; set; }
+    /// <summary>Per-camera "archived for longer" — how long this camera's footage stays on the
+    /// archive volume, from its original record date. Blank inherits the node/global default.</summary>
+    [BindProperty] public int? ArchiveRetentionDaysOverride { get; set; }
     /// <summary>"" (blank) means inherit — same convention as every other override field here, just
     /// expressed as an empty select option instead of a blank number input.</summary>
     [BindProperty] public string RecordingModeOverride { get; set; } = "";
@@ -66,6 +69,8 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
     public string? ErrorMessage { get; set; }
     public string? ProbeMessage { get; set; }
     public int EffectiveRetentionDays { get; set; }
+    public bool EffectiveArchiveEnabled { get; set; }
+    public int EffectiveArchiveRetentionDays { get; set; }
     public string EffectiveRecordingMode { get; set; } = "Continuous";
     public int EffectiveMotionPreRollSeconds { get; set; }
     public int EffectiveMotionPostRollSeconds { get; set; }
@@ -150,6 +155,11 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
         RetentionDaysOverride = int.TryParse(ownRetentionOverride, out var days) ? days : null;
         EffectiveRetentionDays = await settings.GetAsync("Retention.Days", 30, cameraId: cameraId, nodeId: nodeId);
 
+        var ownArchiveRetentionOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "Archive.RetentionDays");
+        ArchiveRetentionDaysOverride = int.TryParse(ownArchiveRetentionOverride, out var ard) ? ard : null;
+        EffectiveArchiveEnabled = await settings.GetAsync("Archive.Enabled", false, cameraId: cameraId, nodeId: nodeId);
+        EffectiveArchiveRetentionDays = await settings.GetAsync("Archive.RetentionDays", 0, cameraId: cameraId, nodeId: nodeId);
+
         RecordingModeOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "Recording.Mode") ?? "";
         EffectiveRecordingMode = await settings.GetAsync("Recording.Mode", "Continuous", cameraId: cameraId, nodeId: nodeId);
 
@@ -219,6 +229,7 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
             // reach the log regardless.
             var before = await cameraService.GetAsync(Id.Value);
             var oldRetentionOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, Id.Value, "Retention.Days");
+            var oldArchiveRetentionOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, Id.Value, "Archive.RetentionDays");
 
             var motionDetectionSource = Enum.TryParse<MotionDetectionSource>(MotionDetectionSourceOverride, out var mds) ? mds : (MotionDetectionSource?)null;
 
@@ -232,6 +243,7 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
                 AuditDiff.Of("Enabled", before?.IsEnabled.ToString(), IsEnabled.ToString()),
                 AuditDiff.Of("Quota", QuotaText(before?.QuotaBytes), QuotaText(quotaBytes)),
                 AuditDiff.Of("Retention override", oldRetentionOverride, RetentionDaysOverride?.ToString()),
+                AuditDiff.Of("Archive retention override", oldArchiveRetentionOverride, ArchiveRetentionDaysOverride?.ToString()),
                 AuditDiff.Of("AI detection enabled", before?.AiDetectionEnabled.ToString(), AiDetectionEnabled.ToString()),
                 AuditDiff.Of("Motion detection source", before?.MotionDetectionSource?.ToString(), motionDetectionSource?.ToString()),
                 AuditDiff.Of("Server-side motion detection enabled", before?.ServerMotionEnabled.ToString(), ServerMotionEnabled.ToString()),
@@ -241,6 +253,8 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
             await LogAsync("Camera.Update", details is null ? $"{Name} ({Id})" : $"{Name} ({Id}) — {details}");
             await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Retention.Days",
                 RetentionDaysOverride?.ToString(), User.Identity?.Name);
+            await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Archive.RetentionDays",
+                ArchiveRetentionDaysOverride?.ToString(), User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Recording.Mode",
                 string.IsNullOrEmpty(RecordingModeOverride) ? null : RecordingModeOverride, User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Recording.MotionPreRollSeconds",

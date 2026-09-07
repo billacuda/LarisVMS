@@ -21,7 +21,11 @@ public class StorageManagerTests : IDisposable
 
     private string WriteFile(string relativePath, int bytes, DateTime lastWriteUtc)
     {
-        var path = Path.Combine(_root, relativePath);
+        // GetFullPath so the returned string uses the OS separator throughout — relativePath here
+        // uses forward slashes for readability, and Directory.EnumerateFiles (what the selectors
+        // return) always yields backslash-normalized paths, so a raw Path.Combine result wouldn't
+        // string-compare equal to them.
+        var path = Path.GetFullPath(Path.Combine(_root, relativePath));
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllBytes(path, new byte[bytes]);
         File.SetLastWriteTimeUtc(path, lastWriteUtc);
@@ -370,5 +374,64 @@ public class StorageManagerTests : IDisposable
         var found = StorageManager.FindMatchingSnapshotImages(mainDir, snapshotsDir, mainFile);
 
         Assert.Equal([ownSnapshot], found);
+    }
+
+    // ── WebP: new .webp cache files and legacy .jpg files must both be found by every sweep ──
+
+    [Fact]
+    public void FindMatchingThumbnailsFindsBothWebpAndLegacyJpegForTheSameSegment()
+    {
+        var mainDir = Path.Combine(_root, "cam-1", "main");
+        var thumbsDir = Path.Combine(_root, "cam-1", "thumbs");
+        var mainFile = Path.Combine(mainDir, "2026", "08", "09", "14", "20260809T140000Z.mp4");
+        Directory.CreateDirectory(Path.GetDirectoryName(mainFile)!);
+        File.WriteAllText(mainFile, "data");
+
+        var thumbDir = Path.Combine(thumbsDir, "2026", "08", "09", "14");
+        Directory.CreateDirectory(thumbDir);
+        var legacyJpeg = Path.Combine(thumbDir, "20260809T140000Z_o00_150q8.jpg");
+        var newWebp = Path.Combine(thumbDir, "20260809T140000Z_o05_150q8.webp");
+        File.WriteAllText(legacyJpeg, "jpg");
+        File.WriteAllText(newWebp, "webp");
+
+        var found = StorageManager.FindMatchingThumbnails(mainDir, thumbsDir, mainFile);
+
+        Assert.Contains(legacyJpeg, found);
+        Assert.Contains(newWebp, found);
+    }
+
+    [Fact]
+    public void EnumerateAndOrphanSweepHandleWebpSnapshotCrops()
+    {
+        var known = WriteFile("cam-1/snapshots/2026/08/16/seg_span1.webp", 10, DateTime.UtcNow);
+        var orphaned = WriteFile("cam-1/snapshots/2026/08/16/seg_span2.webp", 10, DateTime.UtcNow);
+        var legacyOrphan = WriteFile("cam-1/snapshots/2026/08/16/seg_span3.jpg", 10, DateTime.UtcNow);
+
+        var all = StorageManager.EnumerateSnapshotFiles(_root);
+        Assert.Contains(known, all);
+        Assert.Contains(orphaned, all);
+        Assert.Contains(legacyOrphan, all);
+
+        var result = StorageManager.SelectOrphanedSnapshotFiles(all, new HashSet<long> { 1 });
+
+        Assert.Contains(orphaned, result);
+        Assert.Contains(legacyOrphan, result);
+        Assert.DoesNotContain(known, result);
+    }
+
+    [Fact]
+    public void SelectExpiredStagedCropsHandlesWebpAndJpegStagers()
+    {
+        var now = new DateTime(2026, 9, 1, 12, 0, 0, DateTimeKind.Utc);
+        var snapshotsDir = Path.Combine(_root, "cam-z", "snapshots");
+        var oldWebp = WriteFile($"cam-z/snapshots/hires/{now.AddDays(-9).Ticks}.webp", 10, now.AddDays(-9));
+        var oldJpeg = WriteFile($"cam-z/snapshots/hires/{now.AddDays(-10).Ticks}.jpg", 10, now.AddDays(-10));
+        WriteFile($"cam-z/snapshots/hires/{now.AddDays(-1).Ticks}.webp", 10, now.AddDays(-1));
+
+        var expired = StorageManager.SelectExpiredStagedCrops(snapshotsDir, now, retentionDays: 30);
+
+        Assert.Contains(oldWebp, expired);
+        Assert.Contains(oldJpeg, expired);
+        Assert.Equal(2, expired.Count);
     }
 }

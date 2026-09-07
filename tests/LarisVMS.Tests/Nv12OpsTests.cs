@@ -90,17 +90,24 @@ public class Nv12OpsTests
     }
 
     [Fact]
-    public void CropToJpeg_ProducesADecodableJpeg()
+    public void CropToWebp_ProducesADecodableWebp()
     {
         const int w = 128, h = 96;
         var src = MakeNv12(w, h, (x, y) => (byte)(x + y), (cx, cy) => 128, (cx, cy) => 128);
         var box = new SkiaSharp.SKRectI(20, 20, 80, 70);
 
-        var jpeg = Nv12Ops.CropToJpeg(src, w, h, box, 80);
+        var image = Nv12Ops.CropToWebp(src, w, h, box, 80);
 
-        Assert.NotNull(jpeg);
-        Assert.True(jpeg!.Length > 100);
-        Assert.Equal(0xFF, jpeg[0]);
-        Assert.Equal(0xD8, jpeg[1]); // JPEG SOI marker
+        Assert.NotNull(image);
+        Assert.True(image!.Length > 100);
+        // WebP container: "RIFF" .... "WEBP"
+        Assert.Equal((byte)'R', image[0]);
+        Assert.Equal((byte)'I', image[1]);
+        Assert.Equal((byte)'F', image[2]);
+        Assert.Equal((byte)'F', image[3]);
+        Assert.Equal((byte)'W', image[8]);
+        Assert.Equal((byte)'E', image[9]);
+        Assert.Equal((byte)'B', image[10]);
+        Assert.Equal((byte)'P', image[11]);
     }
 }

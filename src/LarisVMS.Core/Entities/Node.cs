@@ -16,10 +16,16 @@ public class Node
     public Guid Id { get; set; }
     public string Name { get; set; } = string.Empty;
 
-    /// <summary>Per-node override of the global Storage.RootPath setting — a node writing to its
-    /// own local disk instead of the shared SMB target, for example. Null means "use the global
-    /// default"; see NodeService.GetConfigAsync for the resolution order.</summary>
+    /// <summary>Where this node records to — its own local disk or a UNC share. Storage config is
+    /// per-node with no global default: set when the node is added (install-node.ps1 -StorageRoot,
+    /// carried into NodeService.RegisterAsync) or on Admin/Nodes. A node with this unset is served
+    /// no camera config by NodeService.GetConfigAsync and records nothing until an admin sets it.</summary>
     public string? StorageRootPath { get; set; }
+
+    /// <summary>Optional secondary (SMB / USB) volume this node moves aged-out footage to when
+    /// archiving is enabled. Per-node, no global default; null = this node doesn't archive. Must be a
+    /// path outside <see cref="StorageRootPath"/>.</summary>
+    public string? ArchiveRootPath { get; set; }
 
     public string ApiKeyHash { get; set; } = string.Empty;
     public string? PreviousApiKeyHash { get; set; }
@@ -41,6 +47,21 @@ public class Node
     public long? StorageFreeBytes { get; set; }
     public long? StorageTotalBytes { get; set; }
     public DateTime? StorageStatsUpdatedAt { get; set; }
+
+    /// <summary>Free/total bytes on the archive volume (<see cref="ArchiveRootPath"/> or the global
+    /// Archive.RootPath), self-reported every heartbeat when an archive root is configured — drives
+    /// the second Admin/Nodes usage bar and the per-volume "days of retention remaining" estimate.
+    /// Null when no archive root is set or the node predates this field.</summary>
+    public long? ArchiveFreeBytes { get; set; }
+    public long? ArchiveTotalBytes { get; set; }
+    public DateTime? ArchiveStatsUpdatedAt { get; set; }
+
+    /// <summary>True while this node's primary volume is over the storage watermark — footage is
+    /// being archived early (or, if archiving is unavailable, deleted early) to keep the disk under
+    /// the limit. Set/cleared on every heartbeat; <see cref="StoragePressureSince"/> records when the
+    /// current stretch of pressure began. Surfaced as a warning next to the node on Admin/Nodes.</summary>
+    public bool StoragePressureActive { get; set; }
+    public DateTime? StoragePressureSince { get; set; }
 
     /// <summary>How far this node's own OS clock disagrees with the web server's, measured every
     /// heartbeat: (web server's receive-time UtcNow) - (SentAtUtc the node stamped when building the

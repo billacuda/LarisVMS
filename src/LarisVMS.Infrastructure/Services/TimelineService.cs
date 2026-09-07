@@ -203,7 +203,7 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
         return await db.Segments
             .Where(s => s.CameraId == cameraId && s.StartUtc < toUtc && s.EndUtc > fromUtc)
             .OrderBy(s => s.StartUtc)
-            .Select(s => new SegmentSummaryDto(s.Id, s.StartUtc, s.EndUtc))
+            .Select(s => new SegmentSummaryDto(s.Id, s.StartUtc, s.EndUtc, s.StorageTier == StorageTier.Archive))
             .ToListAsync(ct);
     }
 
@@ -524,6 +524,7 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
                 // loop below for how the two combine into one badge.
                 m.DetectedObjectLabel,
                 m.BestBoxConfidence,
+                m.MovingCount,
                 AiCategoryName = m.DetectedObjectCategory != null ? m.DetectedObjectCategory.Name : null,
                 AiCategoryColorHex = m.DetectedObjectCategory != null ? m.DetectedObjectCategory.ColorHex : null
             })
@@ -663,12 +664,12 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
             }
         }
 
-        (string Label, string Color, string Emoji, double? Confidence) AiBadge(long rowId)
+        (string Label, string Color, string Emoji, double? Confidence, int? MovingCount) AiBadge(long rowId)
         {
             var row = rows.First(x => x.Id == rowId);
             var lbl = CocoCategoryMap.DisplayLabel(row.AiCategoryName!, row.DetectedObjectLabel);
             return (lbl, palette.ColorForAiCategory(row.AiCategoryName, row.AiCategoryColorHex),
-                CocoCategoryMap.Emoji(row.AiCategoryName!), row.BestBoxConfidence);
+                CocoCategoryMap.Emoji(row.AiCategoryName!), row.BestBoxConfidence, row.MovingCount);
         }
 
         // Same label/color precedence as ResolveColor above (custom tag > detected class > plain
@@ -776,7 +777,7 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
                     // own primary/crop selection already uses above.
                     .OrderByDescending(b => b.Confidence ?? -1)
                     .DistinctBy(b => b.Label)
-                    .Select(b => new SnapshotBadgeDto(b.Label, b.Color, b.Emoji, b.Confidence))
+                    .Select(b => new SnapshotBadgeDto(b.Label, b.Color, b.Emoji, b.Confidence, b.MovingCount))
                     .ToList();
                 spanIds = memberIds;
             }
@@ -785,7 +786,8 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
                 // Only an AI span has a score; a camera-classified, motion or custom-tag badge leaves
                 // it null and renders no percentage.
                 badges = [new SnapshotBadgeDto(label, color, emoji,
-                    r.AiCategoryName is not null ? r.BestBoxConfidence : null)];
+                    r.AiCategoryName is not null ? r.BestBoxConfidence : null,
+                    r.AiCategoryName is not null ? r.MovingCount : null)];
                 spanIds = [r.Id];
             }
 
@@ -811,12 +813,21 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
 
     public async Task<List<DetectedObjectLabelDto>> GetDetectedObjectLabelsAsync(CancellationToken ct = default)
     {
-        return await db.MotionSpans.AsNoTracking()
+        var pairs = await db.MotionSpans.AsNoTracking()
             .Where(m => m.DetectedObjectCategory != null && m.DetectedObjectLabel != null)
             .Select(m => new { CategoryName = m.DetectedObjectCategory!.Name, Label = m.DetectedObjectLabel! })
             .Distinct()
             .OrderBy(x => x.CategoryName).ThenBy(x => x.Label)
-            .Select(x => new DetectedObjectLabelDto(x.CategoryName, x.Label))
             .ToListAsync(ct);
+
+        // Drop pairs whose specific label adds nothing to the category — the same rule
+        // CocoCategoryMap.DisplayLabel applies to badge text (today only "Human"/"person"). Without
+        // this the Snapshots filter tree renders a redundant "Person" leaf under "Human"; with the
+        // pair gone the category falls through to a plain single checkbox. Post-materialization
+        // because DisplayLabel has no SQL translation.
+        return pairs
+            .Where(x => !string.Equals(CocoCategoryMap.DisplayLabel(x.CategoryName, x.Label), x.CategoryName, StringComparison.Ordinal))
+            .Select(x => new DetectedObjectLabelDto(x.CategoryName, x.Label))
+            .ToList();
     }
 }
