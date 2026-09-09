@@ -15,7 +15,7 @@ work on phone, tablet, and desktop.
 
 ---
 
-## **Current version [0.195.0](CHANGELOG.md)**
+## **Current version [0.196.0](CHANGELOG.md)**
 
 ## Stack
 
@@ -38,9 +38,10 @@ auto-recovery, a per-node storage manager that enforces retention (global defaul
 per-camera, `Admin → Settings → Storage and retention`), per-camera quota, and a watermark backstop.
 Each node writes to its own storage path (set at install time or on `Admin → Nodes`); it can also be
 given a second **archive volume** (SMB share / USB drive) that aged-out footage is *moved* to
-instead of deleted, with its own retention — and if the primary volume fills past the watermark,
-footage is archived early rather than lost. Playback, thumbnails and export work transparently from
-either volume. Also: browser live view
+instead of deleted, with its own retention — and if the primary volume fills past the watermark, an
+archive-enabled camera's oldest footage is moved to the archive volume while there is headroom,
+falling back to deletion only when the primary volume is critically full or the archive volume is
+unreachable. Playback, thumbnails and export work transparently from either volume. Also: browser live view
 (`Pages/Live`) proxied through IIS with no direct browser-to-node connection and no certificate
 needed on the node — all verified end-to-end against real Amcrest cameras, including killing the
 recording process and the node process mid-recording and confirming both recover cleanly. Live view

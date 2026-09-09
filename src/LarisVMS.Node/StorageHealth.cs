@@ -45,6 +45,33 @@ public static class StorageHealth
         }
     }
 
+    // How the once-per-sweep archive-usability probe backs off before concluding the archive volume
+    // is unreachable. A dropped SMB session or a USB archive disk that briefly stops responding
+    // recovers within a few seconds; without this, a single failed probe disables archiving for the
+    // whole sweep and every aged-out or watermark-selected segment from an archive-enabled camera is
+    // DELETED instead of moved, which is unrecoverable. ~6.5s total is nothing against the 5-minute
+    // sweep cadence and is cheap insurance against that outcome.
+    private static readonly TimeSpan[] ReachRetryBackoff =
+        [TimeSpan.FromMilliseconds(500), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4)];
+
+    /// <summary>The same canary round-trip as <see cref="CanReachStorage"/>, retried a few times over
+    /// a few seconds before giving up — for the once-per-sweep "is the archive volume usable this
+    /// sweep" gate specifically, where a transient blip being read as "unreachable" sends footage to
+    /// deletion rather than the archive. The reconcile guards deliberately keep using the single-shot
+    /// probe: they already re-probe on their own schedule and must not be slowed.</summary>
+    public static async Task<bool> CanReachStorageWithRetryAsync(
+        string storageRoot, CancellationToken ct, IReadOnlyList<TimeSpan>? backoff = null)
+    {
+        backoff ??= ReachRetryBackoff;
+        for (var attempt = 0; ; attempt++)
+        {
+            if (CanReachStorage(storageRoot)) return true;
+            if (attempt >= backoff.Count) return false;
+            try { await Task.Delay(backoff[attempt], ct); }
+            catch (OperationCanceledException) { return false; }
+        }
+    }
+
     /// <summary>A second, independent guard behind <see cref="CanReachStorage"/>, for the case a share
     /// drops *after* the probe passes but *during* the scan: past this fraction of a node's known
     /// segments appearing to vanish at once, a storage fault is overwhelmingly more likely than that

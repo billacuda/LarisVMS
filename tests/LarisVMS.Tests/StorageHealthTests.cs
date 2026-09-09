@@ -40,6 +40,40 @@ public class StorageHealthTests
         Assert.False(StorageHealth.CanReachStorage(Path.Combine(Path.GetTempPath(), "larisvms-does-not-exist-" + Guid.NewGuid().ToString("N"))));
     }
 
+    [Fact]
+    public async Task RetryProbeReturnsImmediatelyForAReachableDirectory()
+    {
+        var dir = Directory.CreateTempSubdirectory().FullName;
+        try
+        {
+            Assert.True(await StorageHealth.CanReachStorageWithRetryAsync(dir, CancellationToken.None));
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public async Task RetryProbeGivesUpAfterExhaustingBackoffForAnUnreachableDirectory()
+    {
+        var missing = Path.Combine(Path.GetTempPath(), "larisvms-does-not-exist-" + Guid.NewGuid().ToString("N"));
+        // Zero-length backoff so the exhaustion path is exercised without the real ~6.5s wait.
+        Assert.False(await StorageHealth.CanReachStorageWithRetryAsync(missing, CancellationToken.None, backoff: []));
+    }
+
+    [Fact]
+    public async Task RetryProbeRecoversWhenTheDirectoryAppearsPartwayThroughTheBackoff()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "larisvms-late-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var create = Task.Run(async () => { await Task.Delay(120); Directory.CreateDirectory(dir); });
+            var reachable = await StorageHealth.CanReachStorageWithRetryAsync(
+                dir, CancellationToken.None, backoff: [TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(200)]);
+            await create;
+            Assert.True(reachable);
+        }
+        finally { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+    }
+
     [Theory]
     // Below the absolute floor, any proportion is plausible — a node with a handful of segments can
     // legitimately have most of them evicted between sweeps.

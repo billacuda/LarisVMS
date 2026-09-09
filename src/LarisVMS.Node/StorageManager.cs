@@ -9,7 +9,10 @@ namespace LarisVMS.Node;
 /// quota, then a global watermark backstop — a segment past its retention window is deleted
 /// regardless of quota/watermark state; quota then caps one camera's footprint before the shared
 /// watermark pass has to consider it; watermark is the last-resort "the volume is nearly full
-/// regardless of what settings say" pass across every camera on this node. Deletion isn't
+/// regardless of what settings say" pass across every camera on this node — it moves an
+/// archive-enabled camera's oldest footage to the archive volume while there is headroom to do so
+/// and only deletes once the primary volume is critically full or the archive volume is unusable.
+/// Deletion isn't
 /// time-critical the way starting/stopping ffmpeg is, so this polls independently of NodeWorker's
 /// reconcile loop on its own (slower) cadence rather than competing with recording for attention.
 ///
@@ -132,7 +135,10 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             else
             {
                 try { Directory.CreateDirectory(archiveRoot); } catch { /* CanReachStorage reports the failure below */ }
-                archiveUsable = StorageHealth.CanReachStorage(archiveRoot);
+                // Retried, not a single shot: a brief SMB/USB blip on the archive volume otherwise
+                // disables archiving for the entire sweep and every aged-out or watermark-selected
+                // segment from an archive-enabled camera is deleted rather than moved.
+                archiveUsable = await StorageHealth.CanReachStorageWithRetryAsync(archiveRoot, ct);
                 if (!archiveUsable)
                     logger.LogWarning(
                         "Archive root {ArchiveRoot} did not pass a read/write probe — archiving is OFF this sweep. Aged-out footage from archive-enabled camera(s) will be DELETED by the retention/quota/watermark passes instead of moved there, and cannot be recovered. Restore the archive volume to resume archiving.",
@@ -192,7 +198,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
 
         SweepOrphanedCameraFolders(config, storageRoot, archiveRoot, archiveUsable, now, deletedPaths, relocations);
 
-        ApplyWatermark(config, storageRoot, archiveRoot, archiveUsable, now, deletedPaths);
+        ApplyWatermark(config, storageRoot, archiveRoot, archiveUsable, now, deletedPaths, relocations);
 
         // Export output files (and any stray concat list file ExportRunner didn't get to clean up
         // after a crash) — a sibling of the cam-{id}/ folders above, deliberately never walked by
@@ -368,8 +374,17 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
 
     private static bool ArchiveHasRoom(string archiveRoot, long fileLength)
     {
-        var usage = DiskSpace.TryGetUsage(archiveRoot);
-        return usage is { } u && u.FreeBytes > fileLength + ArchiveFreeSpaceMargin;
+        // TryGetUsage returns null on a transient UNC hiccup, not just when the volume is genuinely
+        // full — reading that as "no room" is what makes the sweep delete archive-enabled footage
+        // while the archive volume actually has terabytes free. Re-measure a couple of times before
+        // concluding anything; a persistent null still lands on "no room", the safe direction.
+        for (var attempt = 0; ; attempt++)
+        {
+            if (DiskSpace.TryGetUsage(archiveRoot) is { } u)
+                return u.FreeBytes > fileLength + ArchiveFreeSpaceMargin;
+            if (attempt >= 2) return false;
+            Thread.Sleep(TimeSpan.FromMilliseconds(300 * (attempt + 1)));
+        }
     }
 
     /// <summary>Moves each cached thumbnail/snapshot file from under <paramref name="fromRootDir"/> to
@@ -516,15 +531,36 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
         return result;
     }
 
+    // Headroom above the watermark within which the watermark pass will still MOVE an archive-enabled
+    // camera's oldest footage to the archive volume rather than delete it. Between the watermark and
+    // (watermark + this), a segment's primary copy is left for the end-of-sweep relocation flush to
+    // reclaim once the web tier records the new path — the same deferred free the retention/quota
+    // passes already accept. At or above (watermark + this) the primary volume is close enough to
+    // full that the deferral is a liability — archiving frees nothing *this* sweep — so the pass
+    // reverts to deleting outright to guarantee the node keeps recording (the failure mode the
+    // 0.195.0 "watermark always deletes" change was made for). Deletion is also unconditional
+    // whenever the archive volume is unreachable, full, or the copy keeps failing.
+    private const int WatermarkArchiveHeadroomPercent = 7;
+
     private void ApplyWatermark(NodeConfigResponse config, string storageRoot, string? archiveRoot,
-        bool archiveUsable, DateTime now, List<string> deletedPaths)
+        bool archiveUsable, DateTime now, List<string> deletedPaths, List<PendingRelocation> relocations)
     {
         var usage = DiskSpace.TryGetUsage(storageRoot);
         if (usage is not { } u || u.TotalBytes <= 0) return;
         var usedBytes = u.TotalBytes - u.FreeBytes;
-        if (100.0 * usedBytes / u.TotalBytes <= config.WatermarkPercent) return;
+        var usedPercent = 100.0 * usedBytes / u.TotalBytes;
+        if (usedPercent <= config.WatermarkPercent) return;
 
         var archiveEnabledByCamera = config.Cameras.ToDictionary(c => c.CameraId, c => c.ArchiveEnabled);
+
+        var criticalPercent = Math.Min(99, config.WatermarkPercent + WatermarkArchiveHeadroomPercent);
+        var archiveThisPass = archiveUsable && archiveRoot is not null && usedPercent < criticalPercent;
+
+        // A segment this sweep's retention/quota pass already archived (source still on disk, waiting
+        // for its relocation report) or deleted must not be handled a second time here — and its
+        // bytes, still occupied right now, must not be counted as space this pass can free.
+        var alreadyHandled = new HashSet<string>(deletedPaths, StringComparer.OrdinalIgnoreCase);
+        foreach (var r in relocations) alreadyHandled.Add(r.Item.OldFilePath);
 
         // Global oldest-first across every camera on this node — retention/quota already ran, so
         // whatever's left here is "in policy" but the volume is full anyway; age is the only fair
@@ -535,43 +571,69 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             .Select(c => (c.CameraId, MainDir: Path.Combine(storageRoot, $"cam-{c.CameraId}", "main")))
             .Where(x => Directory.Exists(x.MainDir))
             .SelectMany(x => EnumerateEvictable(x.MainDir, now).Select(f => (x.CameraId, x.MainDir, File: f)))
+            .Where(x => !alreadyHandled.Contains(x.File.FullName))
             .OrderBy(x => x.File.LastWriteTimeUtc);
 
-        // The watermark is the "the volume is nearly full regardless of what the settings say"
-        // backstop, so it always DELETES — it never archives. Archiving had its chance in the
-        // retention and quota passes above; doing it here would be actively wrong, because a segment
-        // moved to the archive volume stays on the primary until its relocate report round-trips to
-        // the web tier at the very end of this sweep (and only if that call succeeds) — so it frees
-        // no primary space now, which is the one thing the watermark exists to do. This is also the
-        // pass that keeps the node recording at all when the archive volume is unreachable.
-        var toDelete = SelectWatermarkEvictions(candidates, usedBytes, u.TotalBytes, config.WatermarkPercent);
-        if (toDelete.Count == 0) return;
+        // Projection assumes each selected segment frees its own length — exact for a deletion,
+        // optimistic for an archive move (whose primary copy isn't freed until the relocation report
+        // lands). An archive-heavy sweep can therefore finish still over the watermark and clear the
+        // rest next sweep, where TryArchiveFile treats the already-copied target as done so the retry
+        // is a re-report, not a re-copy.
+        var toHandle = SelectWatermarkEvictions(candidates, usedBytes, u.TotalBytes, config.WatermarkPercent);
+        if (toHandle.Count == 0) return;
 
         long freed = 0;
         var deleted = 0;
+        var archived = 0;
         var archiveEnabledDeleted = 0;
-        foreach (var c in toDelete)
+        foreach (var c in toHandle)
         {
             var thumbsDir = Path.Combine(storageRoot, $"cam-{c.CameraId}", "thumbs");
             var snapshotsDir = Path.Combine(storageRoot, $"cam-{c.CameraId}", "snapshots");
+            var archiveEnabled = archiveEnabledByCamera.GetValueOrDefault(c.CameraId);
+
+            if (archiveThisPass && archiveEnabled && ArchiveHasRoom(archiveRoot!, c.File.Length))
+            {
+                var archiveCameraMainDir = Path.Combine(archiveRoot!, $"cam-{c.CameraId}", "main");
+                var target = BuildArchiveTargetPath(c.MainDir, archiveCameraMainDir, c.File.FullName);
+                if (TryArchiveFile(c.File.FullName, target, logger))
+                {
+                    var archiveCameraDir = Path.GetDirectoryName(archiveCameraMainDir)!; // {archiveRoot}/cam-{id}
+                    relocations.Add(new PendingRelocation(
+                        new LarisVMS.Core.Dtos.SegmentRelocateItem(c.File.FullName, target, c.File.Length),
+                        c.MainDir, thumbsDir, snapshotsDir,
+                        Path.Combine(archiveCameraDir, "thumbs"), Path.Combine(archiveCameraDir, "snapshots")));
+                    archived++;
+                    continue;
+                }
+                // copy failed after retries — fall through to deletion so the volume still gets
+                // relief this sweep.
+            }
+
             if (!DeleteSegmentFile(c.File, c.MainDir, thumbsDir, snapshotsDir, deletedPaths)) continue;
             deleted++;
             freed += c.File.Length;
-            if (archiveEnabledByCamera.GetValueOrDefault(c.CameraId)) archiveEnabledDeleted++;
+            if (archiveEnabled) archiveEnabledDeleted++;
         }
 
-        if (deleted == 0) return;
+        if (deleted == 0 && archived == 0) return;
+
+        if (archived > 0)
+            logger.LogInformation(
+                "Primary volume over the {Watermark}% watermark — moved {Archived} of the oldest archive-enabled segment(s) to the archive volume; each primary copy is freed once its relocation is confirmed.",
+                config.WatermarkPercent, archived);
 
         if (archiveEnabledDeleted > 0)
         {
             var archiveState = archiveRoot is null ? "is not configured"
-                : archiveUsable ? "is full or rejecting writes"
-                : "is unreachable";
+                : !archiveUsable ? "is unreachable"
+                : usedPercent >= criticalPercent ? "could not free space fast enough — the primary volume is critically full"
+                : "is full or rejecting writes";
             logger.LogWarning(
                 "Primary volume was over the {Watermark}% watermark — deleted the {Deleted} oldest segment(s) ({Freed:N0} bytes) to keep recording going. {ArchiveDeleted} of them belonged to archive-enabled camera(s) and could NOT be archived first (the archive volume {ArchiveState}); that footage is permanently gone.",
                 config.WatermarkPercent, deleted, freed, archiveEnabledDeleted, archiveState);
         }
-        else
+        else if (deleted > 0)
         {
             logger.LogWarning(
                 "Primary volume was over the {Watermark}% watermark — deleted the {Deleted} oldest segment(s) ({Freed:N0} bytes) to keep recording going.",
@@ -580,15 +642,23 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
 
         var after = DiskSpace.TryGetUsage(storageRoot);
         if (after is { TotalBytes: > 0 } a && 100.0 * (a.TotalBytes - a.FreeBytes) / a.TotalBytes > config.WatermarkPercent)
-            logger.LogError(
-                "Primary volume {StorageRoot} is still over the {Watermark}% watermark after deleting {Deleted} segment(s) — every remaining segment is younger than the {MinAge:N0}-minute safety floor, or deletions are failing. Recording will stop if the volume fills completely.",
-                storageRoot, config.WatermarkPercent, deleted, MinAge.TotalMinutes);
+        {
+            if (deleted == 0 && archived > 0)
+                logger.LogInformation(
+                    "Primary volume {StorageRoot} is still over the {Watermark}% watermark — {Archived} segment(s) were moved to the archive volume this sweep; their primary copies are reclaimed once the relocation report lands (typically next sweep).",
+                    storageRoot, config.WatermarkPercent, archived);
+            else
+                logger.LogError(
+                    "Primary volume {StorageRoot} is still over the {Watermark}% watermark after deleting {Deleted} segment(s) — every remaining segment is younger than the {MinAge:N0}-minute safety floor, or deletions are failing. Recording will stop if the volume fills completely.",
+                    storageRoot, config.WatermarkPercent, deleted, MinAge.TotalMinutes);
+        }
     }
 
-    /// <summary>Oldest-first, across every camera, the segments to delete to bring a volume that is
-    /// over its watermark back under it — assuming each delete frees its own length. Pure so it is
-    /// testable without a genuinely full volume; the caller performs the deletions and re-checks the
-    /// real free space afterwards. Nothing younger than the caller's <c>MinAge</c> floor is ever in
+    /// <summary>Oldest-first, across every camera, the segments to evict (delete, or move to the
+    /// archive volume for an archive-enabled camera) to bring a volume that is over its watermark
+    /// back under it — assuming each frees its own length. Pure so it is testable without a genuinely
+    /// full volume; the caller performs the evictions and re-checks the real free space afterwards.
+    /// Nothing younger than the caller's <c>MinAge</c> floor is ever in
     /// <paramref name="candidatesOldestFirst"/> to begin with.</summary>
     internal static List<(Guid CameraId, string MainDir, FileInfo File)> SelectWatermarkEvictions(
         IEnumerable<(Guid CameraId, string MainDir, FileInfo File)> candidatesOldestFirst,
@@ -1074,46 +1144,68 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
         return (primary, archive, other);
     }
 
+    // In-sweep backoff for a single file's archive copy, before it's left for next sweep. A locked
+    // file (a hover request reading it) or a momentary share stall clears well inside this window, so
+    // one transient error no longer means the watermark pass deletes that segment as "could not be
+    // archived". Mirrors StorageRetry's own schedule; ~4.3s worst case, and only ever paid on the
+    // exception path (a healthy archive volume never enters it).
+    private static readonly TimeSpan[] ArchiveCopyRetryDelays =
+        [TimeSpan.FromMilliseconds(300), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(3)];
+
     /// <summary>Moves one segment file onto the archive volume: copy to a same-volume ".tmp", verify
     /// size, atomically rename, then stamp the archive copy's mtime to the source's so the archive
     /// expiry pass measures age from the recording time. Returns true on success (the SOURCE is left
     /// in place — the caller deletes it only after the web has recorded the new path). Idempotent: a
-    /// target already present with matching size is treated as done. Any I/O failure leaves the
-    /// source untouched and the ".tmp" cleaned up, and the move retries next sweep.</summary>
+    /// target already present with matching size is treated as done. A transient I/O error is retried
+    /// a few times with a short backoff first; only a persistent failure returns false, leaving the
+    /// source untouched and the ".tmp" cleaned up for next sweep to retry again.</summary>
     internal static bool TryArchiveFile(string sourceFullPath, string targetFullPath, ILogger logger)
     {
-        try
+        for (var attempt = 0; ; attempt++)
         {
-            var source = new FileInfo(sourceFullPath);
-            if (!source.Exists) return false;
-
-            var targetDir = Path.GetDirectoryName(targetFullPath);
-            if (targetDir is not null) Directory.CreateDirectory(targetDir);
-
-            if (File.Exists(targetFullPath) && new FileInfo(targetFullPath).Length == source.Length)
-                return true; // a previous sweep already copied it; the report just hadn't landed
-
-            var tmp = targetFullPath + ".tmp";
-            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { /* stale, best effort */ }
-
-            File.Copy(sourceFullPath, tmp, overwrite: true);
-            if (new FileInfo(tmp).Length != source.Length)
+            try
             {
-                try { File.Delete(tmp); } catch { /* best effort */ }
-                logger.LogWarning("Archive copy of {Source} was a different size than the source — leaving it on primary, will retry.", sourceFullPath);
+                var source = new FileInfo(sourceFullPath);
+                if (!source.Exists) return false;
+
+                var targetDir = Path.GetDirectoryName(targetFullPath);
+                if (targetDir is not null) Directory.CreateDirectory(targetDir);
+
+                if (File.Exists(targetFullPath) && new FileInfo(targetFullPath).Length == source.Length)
+                    return true; // a previous sweep already copied it; the report just hadn't landed
+
+                var tmp = targetFullPath + ".tmp";
+                try { if (File.Exists(tmp)) File.Delete(tmp); } catch { /* stale, best effort */ }
+
+                File.Copy(sourceFullPath, tmp, overwrite: true);
+                if (new FileInfo(tmp).Length != source.Length)
+                {
+                    try { File.Delete(tmp); } catch { /* best effort */ }
+                    logger.LogWarning("Archive copy of {Source} was a different size than the source — leaving it on primary, will retry.", sourceFullPath);
+                    return false;
+                }
+
+                if (File.Exists(targetFullPath)) File.Delete(targetFullPath);
+                File.Move(tmp, targetFullPath);
+                try { File.SetLastWriteTimeUtc(targetFullPath, source.LastWriteTimeUtc); } catch { /* mtime is a best-effort anchor */ }
+                return true;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                try { if (File.Exists(targetFullPath + ".tmp")) File.Delete(targetFullPath + ".tmp"); } catch { /* best effort */ }
+
+                if (attempt < ArchiveCopyRetryDelays.Length)
+                {
+                    logger.LogWarning(ex, "Could not archive {Source} (attempt {Attempt}/{Max}) — retrying in {DelayMs}ms.",
+                        sourceFullPath, attempt + 1, ArchiveCopyRetryDelays.Length + 1, ArchiveCopyRetryDelays[attempt].TotalMilliseconds);
+                    Thread.Sleep(ArchiveCopyRetryDelays[attempt]);
+                    continue;
+                }
+
+                logger.LogWarning(ex, "Could not archive {Source} after {Attempts} attempts — leaving it on primary, will retry next sweep.",
+                    sourceFullPath, ArchiveCopyRetryDelays.Length + 1);
                 return false;
             }
-
-            if (File.Exists(targetFullPath)) File.Delete(targetFullPath);
-            File.Move(tmp, targetFullPath);
-            try { File.SetLastWriteTimeUtc(targetFullPath, source.LastWriteTimeUtc); } catch { /* mtime is a best-effort anchor */ }
-            return true;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            logger.LogWarning(ex, "Could not archive {Source} — leaving it on primary, will retry next sweep.", sourceFullPath);
-            try { if (File.Exists(targetFullPath + ".tmp")) File.Delete(targetFullPath + ".tmp"); } catch { /* best effort */ }
-            return false;
         }
     }
 

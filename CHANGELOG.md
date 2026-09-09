@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.196.0] - 2026-09-08
+
+### Fixed
+
+- **The storage watermark backstop deleted archive-enabled footage even when the archive volume was
+  healthy and had terabytes free.** 0.195.0 made the watermark pass (the "primary disk is nearly
+  full regardless of settings" backstop) *always* delete rather than archive — so a primary volume
+  that crossed the watermark before its footage aged out (a long primary retention window, or a
+  volume sized on the assumption that the archive absorbs the overflow) permanently lost
+  still-in-policy footage from archive-enabled cameras, and the log line blamed an archive volume
+  that was actually fine (the pass never tried to write to it). Separately, a single transient
+  SMB/USB blip gave up immediately at three points — the once-per-sweep archive read/write probe,
+  the archive free-space check, and each per-file copy — so one dropped share session sent a whole
+  sweep's aged-out footage to deletion instead of the archive. Now:
+  - the archive reachability probe is retried over ~6.5s before the volume is declared unreachable,
+    the free-space check re-measures a few times before concluding "full", and each archive copy is
+    retried on a 300 ms / 1 s / 3 s backoff (the existing `StorageRetry` schedule) before a segment
+    is given up on;
+  - the watermark pass again **moves** an archive-enabled camera's oldest footage to the archive
+    volume while the primary still has headroom — the primary copy is reclaimed when the relocation
+    report lands, typically the next sweep;
+  - it falls back to deleting only when the primary volume is within 7% of full, the archive volume
+    is genuinely unreachable or full, or the copy keeps failing — preserving 0.195.0's guarantee
+    that the node keeps recording no matter what;
+  - the warning/error log lines now name which of those happened, and an "archived, primary space
+    frees next sweep" outcome is logged at information level rather than as an error.
+
+### Note
+
+- Recorder nodes auto-update to this build (Node binaries only); no `install-node.ps1` re-run and
+  no settings changes. A node that had been deleting archive-enabled footage under disk pressure
+  starts moving it to the archive volume on its next storage sweep (within ~5 minutes).
+- This stops the footage loss on transient blips, but if a primary volume is genuinely filling
+  faster than primary retention ages footage out you will still want to shorten `Retention.Days`
+  (so footage moves to the archive sooner) or grow the primary volume — the new information-level
+  "moved N to archive" / "still over the watermark" log lines make that visible.
+- Schema migration `BumpVersion0_196_0` (version-tracking row only, no table changes) —
+  `dotnet ef database update` / redeploy applies it.
+
 ## [0.195.0] - 2026-09-08
 
 ### Changed
@@ -47,6 +86,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cameras and is therefore gone for good), and logs an error if the drive is still over the watermark
   afterwards. The per-sweep "archive volume unreachable" warning now says plainly that aged-out
   footage will be deleted, not preserved, until the archive volume is restored.
+  *(0.196.0 revisits this: the watermark pass moves footage to a healthy archive volume again, with
+  deletion as the fallback when the primary is critically full or the archive is unusable.)*
 
 ### Note
 
