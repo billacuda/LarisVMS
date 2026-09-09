@@ -27,6 +27,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **AI-detection reporting logged a constant stream of `MotionSpans` duplicate-key errors.** A
+  single motion-span batch from a node routinely carries two reports for one still-open detection —
+  Vision's 15-second checkpoint and that span's close-report, both with the same backdated
+  `StartUtc`. `NodeService.RecordMotionSpansAsync` decided new-vs-extend with database queries only,
+  which can't see a row added earlier in the same batch but not yet saved, so it inserted two rows
+  with the same `(CameraId, DetectedObjectLabel, StartUtc)` and `SaveChanges` failed the unique
+  index `IX_MotionSpans_CameraId_DetectedObjectLabel_StartUtc` (SQL error 2601). A retry loop
+  recovered the data, but EF Core logged the violation at Error level on every occurrence — many
+  per minute on a busy camera. The upsert now also checks the spans added so far in the current
+  batch (exact-identity and coalesce alike) and folds the second report onto the pending row.
 - **A recorder node's primary drive could fill to 100% when its archive volume was unreachable.**
   The watermark backstop (the "disk is nearly full regardless of settings" pass) tried to *archive*
   the oldest footage rather than delete it — but a file moved to the archive volume stays on the

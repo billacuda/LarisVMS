@@ -291,6 +291,58 @@ public class NodeServiceAiDetectionTests
     }
 
     [Fact]
+    public async Task TwoReportsForOneSpanInASingleBatchProduceOneRow()
+    {
+        // The production 2601 spam: NodeWorker.FlushMotionSpansAsync drains its whole queue into
+        // one batch, so Vision's 15s checkpoint of a still-open "car" span and that span's
+        // close-report — both carrying the identical backdated StartUtc — routinely arrive in the
+        // same call. The exact-identity DB lookup can't see the first item's not-yet-saved Added
+        // row, so without the in-batch `pending` check the loop Adds two rows with the same
+        // (CameraId, DetectedObjectLabel, StartUtc) and SaveChanges fails the unique index.
+        var (db, service, cameraId, nodeId) = await SeedAsync();
+        var start = new DateTime(2026, 8, 10, 12, 0, 0, DateTimeKind.Utc);
+
+        await service.RecordMotionSpansAsync(nodeId, [
+            new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(30), 0.7,
+                DetectedObjectCategory: "Vehicle", DetectedObjectLabel: "car", MovingCount: 1,
+                BestFrameAtUtc: start.AddSeconds(5), BestBoxX: 0.1, BestBoxY: 0.1, BestBoxW: 0.2, BestBoxH: 0.2, BestBoxConfidence: 0.6),
+            new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(45), 0.9,
+                DetectedObjectCategory: "Vehicle", DetectedObjectLabel: "car", MovingCount: 2,
+                BestFrameAtUtc: start.AddSeconds(20), BestBoxX: 0.3, BestBoxY: 0.3, BestBoxW: 0.5, BestBoxH: 0.5, BestBoxConfidence: 0.95),
+        ]);
+
+        var span = Assert.Single(await db.MotionSpans.Where(m => m.CameraId == cameraId).ToListAsync());
+        Assert.Equal(start, span.StartUtc);
+        Assert.Equal(start.AddSeconds(45), span.EndUtc); // extended forward to the later item
+        Assert.Equal(0.9, span.Score);                   // running max
+        Assert.Equal(2, span.MovingCount);               // running max
+        Assert.Equal(start.AddSeconds(20), span.BestFrameAtUtc); // exact path overwrites best frame
+        Assert.Equal(0.95, span.BestBoxConfidence);
+    }
+
+    [Fact]
+    public async Task FragmentsThatCoalesceOntoAPendingSpanInTheSameBatchProduceOneRow()
+    {
+        // Same in-batch blindness as above, but via the B1 coalesce path: two overlapping "person"
+        // fragments with different StartUtc land in one call. The second must extend the first
+        // item's not-yet-saved row rather than Add a second overlapping span.
+        var (db, service, cameraId, nodeId) = await SeedAsync();
+        var start = new DateTime(2026, 8, 10, 12, 0, 0, DateTimeKind.Utc);
+
+        await service.RecordMotionSpansAsync(nodeId, [
+            new MotionSpanReportItem(cameraId, null, start, start.AddSeconds(4), 0.8,
+                DetectedObjectCategory: "Human", DetectedObjectLabel: "person"),
+            new MotionSpanReportItem(cameraId, null, start.AddSeconds(6), start.AddSeconds(12), 0.9,
+                DetectedObjectCategory: "Human", DetectedObjectLabel: "person"),
+        ]);
+
+        var span = Assert.Single(await db.MotionSpans.Where(m => m.CameraId == cameraId).ToListAsync());
+        Assert.Equal(start, span.StartUtc);              // first fragment's start, never moved
+        Assert.Equal(start.AddSeconds(12), span.EndUtc); // extended to the second fragment
+        Assert.Equal(0.9, span.Score);
+    }
+
+    [Fact]
     public async Task ANonAiDetectionSpanNeverGetsACategory()
     {
         var (db, service, cameraId, nodeId) = await SeedAsync();

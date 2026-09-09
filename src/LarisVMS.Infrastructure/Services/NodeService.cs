@@ -711,6 +711,40 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         // changes once a span is confirmed open (MotionHysteresis backdates it once, at
         // confirmation, and never moves it again), so every checkpoint and the eventual close-report
         // for one span all carry the same triple.
+        //
+        // Spans this call has created but not yet saved. The exact-identity and coalesce lookups
+        // below are database queries — they can't see rows still in Added state from an earlier
+        // iteration of this same loop. A single batch routinely carries two reports for one span
+        // (Vision's 15s checkpoint landing in the same flush as that span's close-report — both
+        // carry the identical backdated StartUtc), so without also checking this list the loop
+        // Adds two rows with the same (CameraId, DetectedObjectLabel, StartUtc) and SaveChanges
+        // fails the filtered unique index IX_MotionSpans_CameraId_DetectedObjectLabel_StartUtc.
+        var pending = new List<MotionSpan>();
+
+        // Folds one report item's forward progress onto a span already on record — a tracked DB
+        // row or a pending Added one: extend EndUtc forward only, running-max Score/MovingCount,
+        // adopt the incoming best frame. bestFrameByConfidence mirrors the two call sites' existing
+        // rule — the exact-identity path trusts Vision's monotonic best-frame tracking and just
+        // overwrites; the coalesce path, joining two independently-tracked fragments, only takes a
+        // best frame at least as confident as the one already on record.
+        static void Apply(MotionSpan span, MotionSpanReportItem item, bool bestFrameByConfidence)
+        {
+            if (item.EndUtc > span.EndUtc) span.EndUtc = item.EndUtc;
+            span.Score = Math.Max(span.Score, item.Score);
+            if (item.MovingCount is { } mc) span.MovingCount = Math.Max(span.MovingCount ?? 1, mc);
+            if (item.BestFrameAtUtc is not null
+                && (!bestFrameByConfidence || span.BestBoxConfidence is null
+                    || (item.BestBoxConfidence ?? 0) >= span.BestBoxConfidence))
+            {
+                span.BestFrameAtUtc = item.BestFrameAtUtc;
+                span.BestBoxX = item.BestBoxX;
+                span.BestBoxY = item.BestBoxY;
+                span.BestBoxW = item.BestBoxW;
+                span.BestBoxH = item.BestBoxH;
+                span.BestBoxConfidence = item.BestBoxConfidence;
+            }
+        }
+
         foreach (var item in spans)
         {
             var detectedObjectCategoryId = item.DetectedObjectCategory is { } categoryName
@@ -741,25 +775,24 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             if (existing is not null)
             {
                 // Only ever extends forward — a checkpoint racing a slightly-stale retry of an
-                // older report should never pull EndUtc backward.
-                if (item.EndUtc > existing.EndUtc) existing.EndUtc = item.EndUtc;
-                existing.Score = Math.Max(existing.Score, item.Score);
-                // Running max, same as Score — a later checkpoint may have seen more of the same
-                // object type moving at once than an earlier one did.
-                if (item.MovingCount is { } mc) existing.MovingCount = Math.Max(existing.MovingCount ?? 1, mc);
-                // Object detection plan decision 10: LarisVMS.Vision.Service's own best-frame
+                // older report should never pull EndUtc backward. Best-frame just overwrites:
+                // object detection plan decision 10 — LarisVMS.Vision.Service's own best-frame
                 // tracking is already monotonic (a later report's box is never worse than an
-                // earlier one for the same track), so a later checkpoint can just overwrite rather
-                // than needing its own comparison here.
-                if (item.BestFrameAtUtc is not null)
-                {
-                    existing.BestFrameAtUtc = item.BestFrameAtUtc;
-                    existing.BestBoxX = item.BestBoxX;
-                    existing.BestBoxY = item.BestBoxY;
-                    existing.BestBoxW = item.BestBoxW;
-                    existing.BestBoxH = item.BestBoxH;
-                    existing.BestBoxConfidence = item.BestBoxConfidence;
-                }
+                // earlier one for the same track).
+                Apply(existing, item, bestFrameByConfidence: false);
+                continue;
+            }
+
+            // Same identity, but the only match is a row this batch already Added and hasn't
+            // saved yet (the checkpoint-plus-close pair described at `pending` above). Fold onto
+            // it rather than Adding a second row that would collide on SaveChanges.
+            var pendingExact = pending.FirstOrDefault(m =>
+                m.CameraId == item.CameraId && m.ZoneId == item.ZoneId && m.EventTagRuleId == item.EventTagRuleId
+                && m.DetectionKind == item.DetectionKind && m.DetectedObjectLabel == item.DetectedObjectLabel
+                && m.StartUtc == item.StartUtc);
+            if (pendingExact is not null)
+            {
+                Apply(pendingExact, item, bestFrameByConfidence: false);
                 continue;
             }
 
@@ -794,27 +827,25 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
                     // dropping the row — so a busy scene silently stops producing any AI-detection
                     // spans at all. The span already exists; coalescing only needs to keep it from
                     // fragmenting into extra cards, not to nudge its start a few seconds earlier.
-                    if (item.EndUtc > sibling.EndUtc) sibling.EndUtc = item.EndUtc;
-                    sibling.Score = Math.Max(sibling.Score, item.Score);
-                    if (item.MovingCount is { } mc) sibling.MovingCount = Math.Max(sibling.MovingCount ?? 1, mc);
-                    // Adopt the incoming best frame when it's at least as confident as the one on
-                    // record (or the span never had one) — same "a later report is never worse"
-                    // assumption the exact-match checkpoint path above already relies on.
-                    if (item.BestFrameAtUtc is not null
-                        && (sibling.BestBoxConfidence is null || (item.BestBoxConfidence ?? 0) >= sibling.BestBoxConfidence))
-                    {
-                        sibling.BestFrameAtUtc = item.BestFrameAtUtc;
-                        sibling.BestBoxX = item.BestBoxX;
-                        sibling.BestBoxY = item.BestBoxY;
-                        sibling.BestBoxW = item.BestBoxW;
-                        sibling.BestBoxH = item.BestBoxH;
-                        sibling.BestBoxConfidence = item.BestBoxConfidence;
-                    }
+                    Apply(sibling, item, bestFrameByConfidence: true);
+                    continue;
+                }
+
+                // Same as pendingExact above, for the coalesce case: the overlapping span this
+                // fragment belongs to is one this batch just Added and hasn't saved.
+                var pendingSibling = pending.FirstOrDefault(m =>
+                    m.CameraId == item.CameraId
+                    && m.DetectedObjectLabel == item.DetectedObjectLabel
+                    && m.ZoneId == null && m.EventTagRuleId == null && m.DetectionKind == null
+                    && m.StartUtc <= windowEnd && m.EndUtc >= windowStart);
+                if (pendingSibling is not null)
+                {
+                    Apply(pendingSibling, item, bestFrameByConfidence: true);
                     continue;
                 }
             }
 
-            db.MotionSpans.Add(new MotionSpan
+            var created = new MotionSpan
             {
                 CameraId = item.CameraId,
                 ZoneId = item.ZoneId,
@@ -849,7 +880,9 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
                 // "x2" / "x3" snapshot badge — peak simultaneous moving instances of this label.
                 // Null for every non-AiDetection span and for an older node that doesn't report it.
                 MovingCount = item.MovingCount
-            });
+            };
+            db.MotionSpans.Add(created);
+            pending.Add(created);
         }
 
         // Detach-and-retry: a row the batch can't save is dropped (not the whole batch). Two causes
