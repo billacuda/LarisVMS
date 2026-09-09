@@ -302,6 +302,46 @@
         </div>
         <div class="col-6">
             <label class="form-label">
+                Stationary-object jitter rejection
+                <button type="button" class="help-icon" data-help-target="aiRejectJitterHelp" tabindex="0" aria-label="Help">ℹ️</button>
+            </label>
+            <select asp-for="RejectMotionJitterOverride" class="form-select">
+                <option value="">(inherit — currently @(Model.EffectiveRejectMotionJitter ? "on" : "off"))</option>
+                <option value="True">On</option>
+                <option value="False">Off</option>
+            </select>
+            <div class="help-text-source" id="aiRejectJitterHelp">
+                Turn this On for a camera that has a parked vehicle in view whose box wobble is being
+                reported as motion. It smooths the movement check so frame-to-frame box jitter doesn't
+                count as moving — but can also hold a genuinely slow-moving object as idle, so it is
+                off by default. Global default on <a asp-page="/Admin/Settings/Detection">AI Detection settings</a>.
+            </div>
+        </div>
+        <div class="col-6">
+            <label class="form-label">
+                Jitter threshold override (pixels)
+                <button type="button" class="help-icon" data-help-target="aiJitterPixelsHelp" tabindex="0" aria-label="Help">ℹ️</button>
+            </label>
+            <div class="d-flex align-items-center gap-2">
+                <div class="form-check form-check-inline mb-0">
+                    <input type="checkbox" class="form-check-input" id="jitterPixelsOverrideToggle"
+                           checked="@(Model.MotionJitterPixelsOverride.HasValue)" />
+                    <label class="form-check-label small" for="jitterPixelsOverrideToggle">Override</label>
+                </div>
+                <input type="range" name="MotionJitterPixelsOverride" id="jitterPixelsOverrideSlider" min="1" max="15" step="1" class="form-range"
+                       value="@(Model.MotionJitterPixelsOverride ?? Model.EffectiveMotionJitterPixels)"
+                       disabled="@(!Model.MotionJitterPixelsOverride.HasValue)" />
+                <output class="text-muted small" style="min-width: 2.5em;" id="jitterPixelsOverrideReadout">@(Model.MotionJitterPixelsOverride ?? Model.EffectiveMotionJitterPixels)</output>
+            </div>
+            <div class="help-text-source" id="aiJitterPixelsHelp">
+                Minimum real pixel travel before a box counts as moving — only used when jitter
+                rejection is on for this camera. Higher rejects more wobble but ignores slower genuine
+                movement. Unchecked "Override" inherits the node's/global setting from
+                <a asp-page="/Admin/Settings/Detection">AI Detection settings</a>.
+            </div>
+        </div>
+        <div class="col-6">
+            <label class="form-label">
                 Motion detection source
                 <button type="button" class="help-icon" data-help-target="motionSourceHelp" tabindex="0" aria-label="Help">ℹ️</button>
             </label>
@@ -507,12 +547,12 @@ else if (Model.VideoSourceToken is { } channelToken)
         // wrong, and initializing from the slider's own value below (rather than trusting the two to
         // already agree) rules out the readout and the slider ever silently disagreeing.
         (function () {
-            function wireOverride(toggleId, rangeId, readoutId) {
+            function wireOverride(toggleId, rangeId, readoutId, transform) {
                 var toggle = document.getElementById(toggleId);
                 var range = document.getElementById(rangeId);
                 var readout = document.getElementById(readoutId);
                 if (!toggle || !range || !readout) return;
-                function sync() { readout.textContent = Math.round(range.value * 100); }
+                function sync() { readout.textContent = transform(range.value); }
                 range.addEventListener('input', sync);
                 toggle.addEventListener('change', function () {
                     range.disabled = !toggle.checked;
@@ -524,8 +564,11 @@ else if (Model.VideoSourceToken is { } channelToken)
                 });
                 sync(); // in case the slider's own value differs from what was rendered server-side
             }
-            wireOverride('confidenceOverrideToggle', 'confidenceOverrideSlider', 'confidenceOverrideReadout');
-            wireOverride('iouOverrideToggle', 'iouOverrideSlider', 'iouOverrideReadout');
+            var asPercent = function (v) { return Math.round(v * 100); };
+            var asInt = function (v) { return Math.round(v); };
+            wireOverride('confidenceOverrideToggle', 'confidenceOverrideSlider', 'confidenceOverrideReadout', asPercent);
+            wireOverride('iouOverrideToggle', 'iouOverrideSlider', 'iouOverrideReadout', asPercent);
+            wireOverride('jitterPixelsOverrideToggle', 'jitterPixelsOverrideSlider', 'jitterPixelsOverrideReadout', asInt);
         })();
     </script>
 }

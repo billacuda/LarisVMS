@@ -154,14 +154,15 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     private readonly Dictionary<string, MotionHysteresis> _hysteresisByLabel = new(StringComparer.OrdinalIgnoreCase);
 
     // Detection.SnapshotMotionAccuracy: the last instant any instance of this label was classified
-    // Moving. When a label's span has been open with no Moving instance for DepartureGrace — the
+    // Moving. When a label's span has been open with no Moving instance for _departureGrace — the
     // moving object drove off / left frame, as opposed to settling into Idle where it might resume —
     // the span is finalized early rather than held open the full IdleTimeoutSeconds, so a later,
     // unrelated object of the same type on the same camera starts its own span and its own snapshot
     // instead of being merged into this one. Distinct from MotionHysteresis's own endAfter, which
     // still governs the Idle-object and ReportIdleDetections cases.
     private readonly Dictionary<string, DateTime> _lastMovingAtByLabel = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly TimeSpan DepartureGrace = TimeSpan.FromSeconds(5);
+    // Detection.DepartureGraceSeconds (global, 1-10) — was a hard-coded 5s. Set from the request.
+    private readonly TimeSpan _departureGrace;
 
     // Peak number of distinct tracks of one label classified Moving in a single frame over the life
     // of that label's currently-open span — surfaced as the "x2" / "x3" count on the snapshot badge.
@@ -243,13 +244,16 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         _request = request;
         _http = http;
 
-        // Detection.SnapshotMotionAccuracy off => the classifier keeps its original single
-        // oldest-vs-newest centroid comparison (the fast revert path); on => averaged endpoints +
-        // pixel floor + directedness ratio so a parked vehicle's box jitter can't read as Moving.
+        // Detection.RejectMotionJitter (per-camera) off => the classifier keeps its original single
+        // oldest-vs-newest centroid comparison (the default / fast revert path); on => averaged
+        // endpoints + the Detection.MotionJitterPixels absolute floor so a parked vehicle's box
+        // jitter can't read as Moving.
         _movement = new MovementClassifier(new MovementClassifierOptions
         {
-            JitterRejectionEnabled = request.SnapshotMotionAccuracy,
+            JitterRejectionEnabled = request.RejectMotionJitter,
+            MinNetDisplacementPixels = request.MotionJitterPixels,
         });
+        _departureGrace = TimeSpan.FromSeconds(Math.Clamp(request.DepartureGraceSeconds, 1, 10));
         // The camera's own name rather than its GUID — see VisionStartCameraRequest.DisplayName. The
         // full id still reaches the log on the pipeline-start line below and on every failure, so a
         // line here can always be tied back to a camera row; it just isn't repeated 36 characters at
@@ -656,7 +660,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
                 {
                     if (!hysteresis.IsActive) continue;
                     var lastMoving = _lastMovingAtByLabel.GetValueOrDefault(label, DateTime.MinValue);
-                    if (now - lastMoving < DepartureGrace) continue;
+                    if (now - lastMoving < _departureGrace) continue;
                     if (hysteresis.Flush(now) is { } closed) (departed ??= []).Add((closed, label));
                 }
                 if (departed is not null)

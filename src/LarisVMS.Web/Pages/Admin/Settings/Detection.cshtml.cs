@@ -23,12 +23,27 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
     [BindProperty] public string Orientation { get; set; } = "Auto";
     [BindProperty] public bool ReportIdleDetections { get; set; }
     [BindProperty] public int IdleTimeoutSeconds { get; set; } = 10;
-    /// <summary>When on (the default), the Vision Service rejects raw-detection-box jitter so a
-    /// parked vehicle stops flickering to "moving", and finalizes a detection's snapshot promptly
-    /// once its object leaves frame instead of holding the span open long enough for a later,
-    /// unrelated object of the same type to be merged into it. Off restores the previous behaviour
-    /// for side-by-side comparison. Global; changing it restarts each camera's detection pipeline.</summary>
+    /// <summary>When on (the default), the Vision Service finalizes a detection's snapshot promptly
+    /// once its object leaves frame — no instance classified moving for <see cref="DepartureGraceSeconds"/>
+    /// — instead of holding the span open long enough for a later, unrelated object of the same type
+    /// to be merged into it. Off restores the previous behaviour. Global; changing it restarts each
+    /// camera's detection pipeline. (The raw-detection-box jitter rejection this once also governed
+    /// is now the per-camera <see cref="RejectMotionJitter"/>.)</summary>
     [BindProperty] public bool SnapshotMotionAccuracy { get; set; } = true;
+    /// <summary>Global default for the per-camera box-jitter rejection (key "Detection.RejectMotionJitter").
+    /// Off by default: it smooths the movement check so a distant parked vehicle whose box wobbles
+    /// doesn't count as moving, but on a noisier model it has also suppressed genuinely slow movers,
+    /// so it is opt-in — usually set per camera on Cameras/Edit. Restarts each pipeline.</summary>
+    [BindProperty] public bool RejectMotionJitter { get; set; }
+    /// <summary>Global default (per-camera on Cameras/Edit) for the jitter-rejection pixel floor
+    /// (key "Detection.MotionJitterPixels", 1-15): minimum real centroid travel before a track
+    /// counts as moving. Only acted on where <see cref="RejectMotionJitter"/> is on. Higher rejects
+    /// more wobble at the cost of ignoring slower real movement.</summary>
+    [BindProperty] public int MotionJitterPixels { get; set; } = 3;
+    /// <summary>How long (seconds, 1-10) a span with no moving instance is held before
+    /// <see cref="SnapshotMotionAccuracy"/>'s early-finalize flushes it as "the object left frame".
+    /// Global; was a fixed 5s. Key "Detection.DepartureGraceSeconds".</summary>
+    [BindProperty] public int DepartureGraceSeconds { get; set; } = 5;
     /// <summary>Node-scoped ceiling on frames/sec per camera reaching the model. The Vision Service
     /// still decodes the Sub stream in real time; an ffmpeg fps= filter drops the surplus before
     /// inference so the GPU idles between frames. 0 = no cap. 10 is plenty for object tracking.</summary>
@@ -68,6 +83,9 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         ReportIdleDetections = await settings.GetAsync("Detection.ReportIdleDetections", false);
         IdleTimeoutSeconds = await settings.GetAsync("Detection.IdleTimeoutSeconds", 10);
         SnapshotMotionAccuracy = await settings.GetAsync("Detection.SnapshotMotionAccuracy", true);
+        RejectMotionJitter = await settings.GetAsync("Detection.RejectMotionJitter", false);
+        MotionJitterPixels = await settings.GetAsync("Detection.MotionJitterPixels", 3);
+        DepartureGraceSeconds = await settings.GetAsync("Detection.DepartureGraceSeconds", 5);
         MaxFps = await settings.GetAsync("Detection.MaxFps", 10);
         ModelFamily = await settings.GetAsync("Detection.ModelFamily", "Auto");
         DFineWeights = await settings.GetAsync("Detection.DFineWeights", "Obj2Coco");
@@ -88,6 +106,9 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         var oldReportIdleDetections = await settings.GetAsync("Detection.ReportIdleDetections", false);
         var oldIdleTimeoutSeconds = await settings.GetAsync("Detection.IdleTimeoutSeconds", 10);
         var oldSnapshotMotionAccuracy = await settings.GetAsync("Detection.SnapshotMotionAccuracy", true);
+        var oldRejectMotionJitter = await settings.GetAsync("Detection.RejectMotionJitter", false);
+        var oldMotionJitterPixels = await settings.GetAsync("Detection.MotionJitterPixels", 3);
+        var oldDepartureGraceSeconds = await settings.GetAsync("Detection.DepartureGraceSeconds", 5);
         var oldMaxFps = await settings.GetAsync("Detection.MaxFps", 10);
         var oldModelFamily = await settings.GetAsync("Detection.ModelFamily", "Auto");
         var oldDFineWeights = await settings.GetAsync("Detection.DFineWeights", "Obj2Coco");
@@ -102,6 +123,8 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         Confidence = Math.Clamp(Confidence, 0, 1);
         Iou = Math.Clamp(Iou, 0, 1);
         IdleTimeoutSeconds = Math.Max(0, IdleTimeoutSeconds);
+        MotionJitterPixels = Math.Clamp(MotionJitterPixels, 1, 15);
+        DepartureGraceSeconds = Math.Clamp(DepartureGraceSeconds, 1, 10);
         MaxFps = Math.Clamp(MaxFps, 0, 60);
         // Only three values are meaningful downstream (CameraDetectionPipeline's switch); anything
         // else lands on "Off" there anyway, so normalize a stray form value rather than store it.
@@ -119,6 +142,9 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         await settings.SetGlobalAsync("Detection.ReportIdleDetections", ReportIdleDetections.ToString(), by);
         await settings.SetGlobalAsync("Detection.IdleTimeoutSeconds", IdleTimeoutSeconds.ToString(), by);
         await settings.SetGlobalAsync("Detection.SnapshotMotionAccuracy", SnapshotMotionAccuracy.ToString(), by);
+        await settings.SetGlobalAsync("Detection.RejectMotionJitter", RejectMotionJitter.ToString(), by);
+        await settings.SetGlobalAsync("Detection.MotionJitterPixels", MotionJitterPixels.ToString(), by);
+        await settings.SetGlobalAsync("Detection.DepartureGraceSeconds", DepartureGraceSeconds.ToString(), by);
         await settings.SetGlobalAsync("Detection.MaxFps", MaxFps.ToString(), by);
         // RfDetr still renders disabled (no decoder); ModelFamily is "Auto", "DFine" or "YoloX" here.
         await settings.SetGlobalAsync("Detection.ModelFamily", ModelFamily, by);
@@ -136,6 +162,9 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
             AuditDiff.Of("Detection.ReportIdleDetections", oldReportIdleDetections.ToString(), ReportIdleDetections.ToString()),
             AuditDiff.Of("Detection.IdleTimeoutSeconds", oldIdleTimeoutSeconds.ToString(), IdleTimeoutSeconds.ToString()),
             AuditDiff.Of("Detection.SnapshotMotionAccuracy", oldSnapshotMotionAccuracy.ToString(), SnapshotMotionAccuracy.ToString()),
+            AuditDiff.Of("Detection.RejectMotionJitter", oldRejectMotionJitter.ToString(), RejectMotionJitter.ToString()),
+            AuditDiff.Of("Detection.MotionJitterPixels", oldMotionJitterPixels.ToString(), MotionJitterPixels.ToString()),
+            AuditDiff.Of("Detection.DepartureGraceSeconds", oldDepartureGraceSeconds.ToString(), DepartureGraceSeconds.ToString()),
             AuditDiff.Of("Detection.MaxFps", oldMaxFps.ToString(), MaxFps.ToString()),
             AuditDiff.Of("Detection.ModelFamily", oldModelFamily, ModelFamily),
             AuditDiff.Of("Detection.DFineWeights", oldDFineWeights, DFineWeights),

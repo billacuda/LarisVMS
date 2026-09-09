@@ -65,6 +65,7 @@ else
                     <th>Storage root</th>
                     <th data-sort-numeric>Storage usage</th>
                     <th data-sort-numeric>Retention (days)</th>
+                    <th data-no-sort>Streaming &amp; failover</th>
                     <th data-no-sort></th>
                 </tr>
             </thead>
@@ -286,6 +287,131 @@ else
                                        placeholder="archive days (global: @Model.EffectiveArchiveRetentionDays.GetValueOrDefault(n.Id, 0))"
                                        title="How long footage stays on the archive volume, from its original record date. 0 = keep forever." />
                             </td>
+                            <td style="min-width: 13rem;">
+                                @{
+                                    var dsm = n.DirectStreamingMode ?? "";
+                                    var ins = n.AllowInsecureClientEndpoint;
+                                }
+                                <select name="directStreamingMode" class="form-select form-select-sm"
+                                        title="Where this node's live/playback bytes flow">
+                                    <option value="" selected="@(dsm == "")">inherit (@Model.GlobalDirectStreaming)</option>
+                                    <option value="Proxy" selected="@(dsm == "Proxy")">Proxy</option>
+                                    <option value="Direct" selected="@(dsm == "Direct")">Direct</option>
+                                </select>
+                                <input name="clientEndpointHost" class="form-control form-control-sm mt-1"
+                                       value="@n.ClientEndpointHost" placeholder="client endpoint FQDN" />
+                                <input name="clientCertPfxPath" class="form-control form-control-sm mt-1"
+                                       value="@n.ClientCertPfxPath" placeholder="cert .pfx path (optional)" />
+                                <input name="clientCertPfxPassword" type="password" autocomplete="new-password"
+                                       class="form-control form-control-sm mt-1" placeholder="pfx password (unchanged)" />
+                                <select name="allowInsecureClientEndpoint" class="form-select form-select-sm mt-1"
+                                        title="Allow a self-signed certificate on this node's client endpoint">
+                                    <option value="" selected="@(ins is null)">insecure: inherit (@(Model.GlobalAllowInsecureClientEndpoint ? "allow" : "block"))</option>
+                                    <option value="true" selected="@(ins == true)">insecure: allow</option>
+                                    <option value="false" selected="@(ins == false)">insecure: block</option>
+                                </select>
+                                @if (Model.AvailableProxies.Count > 0)
+                                {
+                                    <select name="primaryProxyId" class="form-select form-select-sm mt-1" title="Route this node's cameras through this media proxy">
+                                        <option value="" selected="@(n.PrimaryProxyId is null)">no proxy (direct / central)</option>
+                                        @foreach (var px in Model.AvailableProxies)
+                                        {
+                                            <option value="@px.Id" selected="@(n.PrimaryProxyId == px.Id)">via @px.Name</option>
+                                        }
+                                    </select>
+                                    <select name="backupProxyId" class="form-select form-select-sm mt-1" title="Used when the primary proxy is unhealthy">
+                                        <option value="" selected="@(n.BackupProxyId is null)">no backup proxy</option>
+                                        @foreach (var px in Model.AvailableProxies)
+                                        {
+                                            <option value="@px.Id" selected="@(n.BackupProxyId == px.Id)">backup: @px.Name</option>
+                                        }
+                                    </select>
+                                }
+                                else
+                                {
+                                    <input type="hidden" name="primaryProxyId" value="@(n.PrimaryProxyId?.ToString() ?? "")" />
+                                    <input type="hidden" name="backupProxyId" value="@(n.BackupProxyId?.ToString() ?? "")" />
+                                }
+
+                                @* Failover plan phase 3: recording failover. *@
+                                @{
+                                    var otherNodes = Model.Nodes.Where(x => x.Id != n.Id).ToList();
+                                    var backup = n.BackupNodeId is { } bnid ? Model.Nodes.FirstOrDefault(x => x.Id == bnid) : null;
+                                    string AccelLabel(LarisVMS.Core.Entities.Node x) =>
+                                        x.AiAccelerator?.ToString()
+                                        ?? (string.IsNullOrWhiteSpace(x.DetectedAcceleratorsJson) || x.DetectedAcceleratorsJson == "[]" ? "none/CPU" : x.DetectedAcceleratorsJson.Trim('[', ']', '"'));
+                                    var hwMismatch = backup is not null && !string.Equals(AccelLabel(backup), AccelLabel(n), StringComparison.OrdinalIgnoreCase);
+                                }
+                                <select name="backupNodeId" class="form-select form-select-sm mt-1"
+                                        title="Recording failover: this node's cameras move here for recording while it is down">
+                                    <option value="" selected="@(n.BackupNodeId is null)">no backup node (recording stops if down)</option>
+                                    @foreach (var bn in otherNodes)
+                                    {
+                                        <option value="@bn.Id" selected="@(n.BackupNodeId == bn.Id)">fails over to @bn.Name</option>
+                                    }
+                                </select>
+                                <div class="form-check form-check-sm mt-1">
+                                    <input class="form-check-input" type="checkbox" name="disableAiObjectDetection" value="true"
+                                           id="recOnly_@n.Id" checked="@n.DisableAiObjectDetection" />
+                                    <label class="form-check-label small" for="recOnly_@n.Id"
+                                           title="Never run AI object detection on this node — it still records continuously and tags ONVIF events">
+                                        recording only (AI detection off)
+                                    </label>
+                                </div>
+                                @if (hwMismatch && backup is not null)
+                                {
+                                    <div class="small text-warning mt-1" title="During a failover, AI detection and hardware transcoding for this node's cameras may be slower or unavailable on the backup.">
+                                        ⚠️ backup @backup.Name has different acceleration (@AccelLabel(n) vs @AccelLabel(backup))
+                                    </div>
+                                }
+                                @if (backup is { DisableAiObjectDetection: true })
+                                {
+                                    <div class="small text-warning mt-1">⚠️ backup @backup.Name is recording-only — object detection pauses for this node's cameras during a failover</div>
+                                }
+                                @{
+                                    var (fBadge, fText) = n.FailoverState switch
+                                    {
+                                        LarisVMS.Core.Enums.NodeFailoverState.FailedOverAway when n.FailoverReason == LarisVMS.Core.Enums.NodeFailoverReason.Maintenance
+                                            => ("text-bg-warning", "in maintenance — cameras on backup"),
+                                        LarisVMS.Core.Enums.NodeFailoverState.FailedOverAway
+                                            => ("text-bg-danger", "failed over — cameras on backup"),
+                                        LarisVMS.Core.Enums.NodeFailoverState.HostingFailover
+                                            => ("text-bg-info", "hosting failover cameras"),
+                                        _ => ("", ""),
+                                    };
+                                }
+                                @if (fText.Length > 0)
+                                {
+                                    <div class="mt-1"><span class="badge @fBadge">@fText</span>
+                                        @if (n.FailoverSinceUtc is { } fsince)
+                                        {
+                                            <span class="text-muted small" title="@fsince.ToString("u")"> since @fsince.ToLocalTime().ToString("g")</span>
+                                        }
+                                    </div>
+                                }
+                                <div class="small text-muted mt-1">
+                                    @if (n.ClientEndpointReportedPort is { } cePort)
+                                    {
+                                        <text>endpoint&nbsp;:@cePort</text>
+                                        @if (n.ClientEndpointCertNotAfter is { } na)
+                                        {
+                                            <text> &middot; cert to @na.ToLocalTime().ToString("d")</text>
+                                        }
+                                        @if (n.ClientEndpointCertIsSelfSigned == true)
+                                        {
+                                            <span class="text-warning"> &middot; self-signed</span>
+                                        }
+                                    }
+                                    else
+                                    {
+                                        <text>no client endpoint running</text>
+                                    }
+                                    @if (!string.IsNullOrEmpty(n.ClientEndpointLastError))
+                                    {
+                                        <div class="text-danger" title="@n.ClientEndpointLastError">⚠️ endpoint error</div>
+                                    }
+                                </div>
+                            </td>
                             <td class="text-end text-nowrap">
                                 <button type="submit" class="btn btn-sm btn-outline-primary"><span aria-hidden="true">💾</span> Save</button>
                             </td>
@@ -298,6 +424,31 @@ else
                                   onsubmit="return confirm('Restart the LarisVMS node service on &quot;@n.Name&quot;?\n\nRecording on its @Model.CameraCountByNode.GetValueOrDefault(n.Id) camera(s) will stop for a few seconds. This restarts the service only, not the machine.');">
                                 <button type="submit" class="btn btn-sm btn-outline-secondary" title="Restart this node's service (not the machine)"><span aria-hidden="true">🔄</span> Restart</button>
                             </form>
+                            @* Failover plan phase 5: clears a wedged rolling check-in nonce (a
+                               heartbeat response the node never received). Harmless if the node is
+                               healthy — it just re-syncs the nonce on its next cycle. *@
+                            <form method="post" asp-page-handler="ResetAuth" asp-route-id="@n.Id" class="d-inline"
+                                  onsubmit="return confirm('Reset the check-in nonce for &quot;@n.Name&quot;?\n\nUse this only if the node shows repeated auth failures after a missed heartbeat — it clears the rolling nonce so the node re-syncs on its next check-in. No effect on a healthy node.');">
+                                <button type="submit" class="btn btn-sm btn-outline-warning" title="Clear this node's rolling check-in nonce (recovery for a locked-out node)"><span aria-hidden="true">🔑</span> Reset auth</button>
+                            </form>
+                            @* Failover plan phase 3: maintenance mode — fails this node's cameras over
+                               to its backup and holds them there until turned off. *@
+                            @{
+                                var maintCams = Model.CameraCountByNode.GetValueOrDefault(n.Id);
+                                var maintBackup = n.BackupNodeId is { } mbid ? Model.Nodes.FirstOrDefault(x => x.Id == mbid)?.Name : null;
+                            }
+                            <form method="post" asp-page-handler="SetMaintenance" asp-route-id="@n.Id" class="d-inline"
+                                  onsubmit="return confirm('@(n.MaintenanceMode
+                                      ? "Take this node out of maintenance? Its cameras return to it once it is a confirmed-healthy quorum."
+                                      : maintBackup is not null
+                                          ? $"Put this node into maintenance? Its {maintCams} camera(s) fail over to node " + maintBackup + $" for recording within about 15 seconds, and will not fail back until you turn maintenance off."
+                                          : $"Put this node into maintenance? It has NO backup node - its {maintCams} camera(s) will STOP recording until maintenance is turned off.")');">
+                                <input type="hidden" name="enabled" value="@((!n.MaintenanceMode).ToString().ToLowerInvariant())" />
+                                <button type="submit" class="btn btn-sm @(n.MaintenanceMode ? "btn-warning" : "btn-outline-warning")"
+                                        title="@(n.MaintenanceMode ? "End maintenance mode" : "Fail this node's cameras over to its backup for maintenance")">
+                                    <span aria-hidden="true">🛠️</span> @(n.MaintenanceMode ? "End maintenance" : "Maintenance")
+                                </button>
+                            </form>
                             <form method="post" asp-page-handler="Delete" asp-route-id="@n.Id" class="d-inline"
                                   onsubmit="return confirm('Delete node &quot;@n.Name&quot;? Cameras assigned to it will be unassigned, not deleted. Past recordings are unaffected.');">
                                 <button type="submit" class="btn btn-sm btn-outline-danger"><span aria-hidden="true">🗑️</span> Delete</button>
@@ -309,7 +460,21 @@ else
         </table>
     </div>
     <div data-paginate-controls-for="nodesTable" class="mt-2"></div>
-    <p class="text-muted small">
+
+    <div class="card mt-3" style="max-width: 640px;">
+        <div class="card-body py-2">
+            <h6 class="card-title mb-1">Streaming relay (since @Model.RelayMetrics.SinceUtc.ToLocalTime().ToString("g"))</h6>
+            <p class="card-text small text-muted mb-0">
+                Live streams relayed through this server right now: <strong>@Model.RelayMetrics.ActiveLiveRelays</strong>
+                (@Model.RelayMetrics.LiveRelaysStarted total) &middot;
+                playback segments proxied: <strong>@Model.RelayMetrics.PlaybackSegmentsProxied</strong>
+                (@ByteFormat.Format(Model.RelayMetrics.PlaybackBytesProxied)).
+                With <a asp-page="/Admin/Settings/LiveView">direct streaming</a> on, these trend toward zero.
+            </p>
+        </div>
+    </div>
+
+    <p class="text-muted small mt-3">
         Every node records to its own storage path (there is no global default) — usually set when the
         node is installed (<code>install-node.ps1 -StorageRoot …</code>), editable here. The archive
         volume is optional and must be a separate location. A node with no storage path records

@@ -11,6 +11,7 @@ using LarisVMS.Core.Security;
 using LarisVMS.Media;
 using LarisVMS.Node;
 using LarisVMS.Node.Update;
+using LarisVMS.Relay;
 using LarisVMS.Onvif.Clients;
 using LarisVMS.Onvif.Soap;
 
@@ -81,12 +82,12 @@ Console.WriteLine($"Using ffmpeg: {ffmpegPath}");
 var fallbackStorageRoot = GetArg(args, "--storage-root") ?? Environment.GetEnvironmentVariable("LARISVMS_STORAGE_ROOT")
     ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "recordings");
 
-// M5 live view: this node's own Kestrel port, reached only by LarisVMS.Web proxying a browser's live
-// view request — plain HTTP, never TLS, and never dialed directly by a browser. See the plan's
-// "Media path" section for why: every node needing its own cert (self-signed and asking each viewer
-// to trust it, or a real one via an internal CA) was rejected in favor of LarisVMS.Web always proxying,
-// which needs nothing installed on the node at all. LastIpAddress (M4, captured server-side from
-// this node's own outbound connections) plus this port is the address LarisVMS.Web dials.
+// M5 live view: this node's own Kestrel port for LarisVMS.Web to proxy live/playback through —
+// plain HTTP, LAN-only. Originally the *only* media path (a browser never dialed a node directly).
+// Since the failover plan's phase 1 a browser can also be pointed straight at the node over HTTPS on
+// a second listener (see ClientEndpointConfig / CertHolder below), behind a toggle; this plain-HTTP
+// port stays and is always bound. LastIpAddress (M4, captured server-side from this node's own
+// outbound connections) plus this port is the address LarisVMS.Web dials.
 var livePort = int.TryParse(GetArg(args, "--live-port") ?? Environment.GetEnvironmentVariable("LARISVMS_LIVE_PORT"), out var parsedPort)
     ? parsedPort : 8554;
 
@@ -119,15 +120,61 @@ builder.Logging.AddProvider(nodeFileLogger);
 var frameworkLogFilter = FrameworkLogFilter.HiddenUnlessDebug(nodeFileLogger);
 builder.Logging.AddFilter("Microsoft.AspNetCore", frameworkLogFilter);
 builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", frameworkLogFilter);
-builder.WebHost.ConfigureKestrel(o => o.ListenAnyIP(livePort));
+
+// Failover plan phase 1: the optional second, client-facing Kestrel listener — a browser connecting
+// straight to this node for live/playback over HTTPS. Config is the local client-endpoint.json
+// merged over the last server poll (local wins); resolving the *listener* is a restart-time decision
+// (the cert itself hot-reloads — see CertWatcherService). The plain-HTTP LAN port (livePort) is
+// always bound; the HTTPS port only when a certificate actually resolves.
+var clientEndpoint = ClientEndpointConfig.Resolve(config.CachedConfig);
+CertHolder? certHolder = null;
+if (clientEndpoint.Enabled)
+{
+    var selfSignedPfx = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "client-endpoint.selfsigned.pfx");
+    certHolder = new CertHolder(
+        new CertHolderOptions(clientEndpoint.PfxPath, clientEndpoint.PfxPassword, clientEndpoint.AllowInsecure,
+            clientEndpoint.Host, selfSignedPfx),
+        nodeFileLogger.CreateLogger("ClientEndpoint"));
+    if (certHolder.Load())
+        Console.WriteLine($"Client HTTPS endpoint: binding port {clientEndpoint.Port} " +
+            $"({(certHolder.IsSelfSigned ? "self-signed" : "supplied certificate")}).");
+    else
+        Console.Error.WriteLine($"Client HTTPS endpoint enabled but not starting: {certHolder.LastError}");
+}
+
+builder.WebHost.ConfigureKestrel(o =>
+{
+    o.ListenAnyIP(livePort);
+    if (certHolder is { Current: not null })
+        o.ListenAnyIP(clientEndpoint.Port, lo => lo.UseHttps(h =>
+            h.ServerCertificateSelector = (_, _) => certHolder.Current));
+});
 builder.Services.AddWindowsService(o => o.ServiceName = "LarisVMS Node");
 builder.Services.AddSingleton(apiClient);
+// Failover plan phase 5c: rejects a second use of a one-shot Web→Node control token (v2 tokens only;
+// v1 and the multi-use live-view token pass a null jti and are unaffected).
+builder.Services.AddSingleton<SeenTokenCache>();
+if (certHolder is not null)
+{
+    builder.Services.AddSingleton(certHolder);
+    if (certHolder.Current is not null)
+        builder.Services.AddSingleton<IHostedService>(sp => new CertWatcherService(
+            certHolder, sp.GetRequiredService<ILoggerFactory>().CreateLogger<CertWatcherService>()));
+}
 builder.Services.AddSingleton(sp => new UpdateService(
     config, insecureTls, sp.GetRequiredService<ILoggerFactory>().CreateLogger<UpdateService>(),
     sp.GetRequiredService<IHostApplicationLifetime>()));
+// Failover plan phase 3: recording-failover quorum — this node probes the /health of any node it is
+// the backup for and reports the verdict each heartbeat.
+builder.Services.AddSingleton<PartnerHealthTracker>();
+builder.Services.AddSingleton<IHostedService>(sp => new PartnerProbeService(
+    sp.GetRequiredService<PartnerHealthTracker>(),
+    sp.GetRequiredService<ILoggerFactory>().CreateLogger<PartnerProbeService>()));
 builder.Services.AddSingleton(sp => new NodeWorker(
     apiClient, ffmpegPath, fallbackStorageRoot, livePort, config, sp.GetRequiredService<ILoggerFactory>(), onvifEventsClient,
-    sp.GetRequiredService<UpdateService>(), nodeFileLogger));
+    sp.GetRequiredService<UpdateService>(), nodeFileLogger, clientEndpoint, certHolder,
+    sp.GetRequiredService<PartnerHealthTracker>()));
 builder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<NodeWorker>());
 builder.Services.AddSingleton<IHostedService>(sp => new StorageManager(
     apiClient, fallbackStorageRoot, sp.GetRequiredService<ILoggerFactory>().CreateLogger<StorageManager>()));
@@ -142,6 +189,17 @@ app.UseWebSockets();
 
 var liveLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("LiveView");
 var playbackLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Playback");
+
+// Failover plan phase 3: unauthenticated liveness probe on the plain-HTTP LAN port. A quorum voter
+// (the partner node, central, an assigned proxy) hits this to decide "is the recorder service
+// actually running" — a real service check, deliberately not a ping: a lingering socket or a load
+// balancer answering for a dead process must read as down, so this returns a parseable body the
+// caller validates, not just a 200. No auth: it exposes only version + recording count + uptime, all
+// low-sensitivity, and a voter can't present a node bearer secret. Mirrors the proxy's own /health.
+var nodeProcessStartUtc = System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime();
+app.MapGet("/health", (NodeWorker worker) => Results.Json(new NodeHealthDto(
+    NodeVersion.Current, worker.ActiveRecordingCount,
+    (long)(DateTime.UtcNow - nodeProcessStartUtc).TotalSeconds)));
 
 app.Map("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWorker worker) =>
 {
@@ -179,6 +237,7 @@ app.Map("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWork
     // failing the request — a tile that briefly can't get Sub should still show something.
     var wantsSub = string.Equals(ctx.Request.Query["role"].ToString(), "sub", StringComparison.OrdinalIgnoreCase);
     ILiveSource? session = wantsSub ? worker.TryGetLiveSubSession(cameraId) : null;
+    var servingSub = session is not null;
     session ??= worker.TryGetSession(cameraId);
     if (session is null)
     {
@@ -188,7 +247,28 @@ app.Map("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWork
     }
 
     using var socket = await ctx.WebSockets.AcceptWebSocketAsync();
-    await LiveViewerHandler.RunAsync(socket, session, liveLogger, ctx.RequestAborted);
+
+    // Failover plan phase 1: log every viewer that attaches to a camera's live stream and how long it
+    // stayed. A browser connecting directly (direct mode) sends an Origin header on the WS handshake;
+    // LarisVMS.Web's own proxy ClientWebSocket does not — so this distinguishes a real client from a
+    // relayed one without a second signal.
+    var origin = ctx.Request.Headers.Origin.ToString();
+    var via = string.IsNullOrEmpty(origin) ? "proxy" : $"direct from {origin}";
+    var roleLabel = servingSub ? "Sub" : "Main";
+    var clientIp = ctx.Connection.RemoteIpAddress?.ToString() ?? "?";
+    var cameraName = worker.CameraDisplayName(cameraId);
+    var startedAt = DateTime.UtcNow;
+    liveLogger.LogInformation("Live stream started: {CameraName} ({Role}) -> client {ClientIp} ({Via}).",
+        cameraName, roleLabel, clientIp, via);
+    try
+    {
+        await LiveViewerHandler.RunAsync(socket, session, liveLogger, ctx.RequestAborted);
+    }
+    finally
+    {
+        liveLogger.LogInformation("Live stream ended: {CameraName} ({Role}) -> client {ClientIp} ({Via}) after {Seconds:F0}s.",
+            cameraName, roleLabel, clientIp, via, (DateTime.UtcNow - startedAt).TotalSeconds);
+    }
 });
 
 // Object detection plan decision 6: live-view box overlay — a separate WS from the video stream
@@ -252,13 +332,22 @@ app.Map("/live/{cameraId:guid}/motion-zones", async (HttpContext ctx, Guid camer
     await MotionZoneOverlayHandler.RunAsync(socket, cameraId, worker, liveLogger, ctx.RequestAborted);
 });
 
-// M7 playback: serves exactly one segment file's raw bytes to LarisVMS.Web's proxy — never reached
-// by a browser directly, same "IIS proxies every byte" shape as /live above. The token binds
-// cameraId + this exact path, so path itself can't be tampered with independently of the
-// signature; the directory-prefix check below is a second, independent line of defense in case
-// that ever changes, not a substitute for it.
-app.MapGet("/playback-segment/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWorker worker) =>
+// M7 playback: serves exactly one segment file's raw bytes. Normally reached via LarisVMS.Web's
+// proxy ("IIS proxies every byte", same as /live); since the failover plan's phase 1, when direct
+// streaming is on, Web instead 302-redirects the browser straight here and the request arrives
+// cross-origin — hence the CORS headers below (a simple GET, no preflight; X-Fragment-Start-Seconds
+// must be exposed so playback-player.js can still read it). The token binds cameraId + this exact
+// path, so path can't be tampered with independently of the signature; the directory-prefix check
+// below is a second, independent line of defense.
+app.MapGet("/playback-segment/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWorker worker, SeenTokenCache seenTokens) =>
 {
+    // These routes carry no cookies and authorize on the signed ?token= alone, so a reflected (or
+    // wildcard) allow-origin is safe — it only lets the already-authorized browser read the response.
+    var origin = ctx.Request.Headers.Origin.ToString();
+    ctx.Response.Headers.AccessControlAllowOrigin = string.IsNullOrEmpty(origin) ? "*" : origin;
+    ctx.Response.Headers["Access-Control-Expose-Headers"] = "X-Fragment-Start-Seconds";
+    if (!string.IsNullOrEmpty(origin)) ctx.Response.Headers["Vary"] = "Origin";
+
     var token = ExtractToken(ctx);
     var path = ctx.Request.Query["path"].ToString();
     var currentKey = worker.MediaSigningKey;
@@ -274,12 +363,30 @@ app.MapGet("/playback-segment/{cameraId:guid}", async (HttpContext ctx, Guid cam
         await ctx.Response.WriteAsync("missing path");
         return;
     }
-    if (!MediaToken.TryValidateSegment(token, cameraId, path, currentKey, out var tokenError))
+    if (!MediaToken.TryValidateSegment(token, cameraId, path, currentKey, out var tokenError, out var tokenJti))
     {
         ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
         await ctx.Response.WriteAsync(tokenError);
         return;
     }
+    // Failover plan phase 5c: one segment fetch per token. Web mints a fresh token per request, so a
+    // repeat here is a replay. v1 tokens (older Web) carry no jti and skip this.
+    if (!seenTokens.TryConsume(tokenJti))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync("token already used");
+        return;
+    }
+
+    // Failover plan phase 1: a browser hitting this directly (direct mode) arrives cross-origin with
+    // an Origin header — LarisVMS.Web's proxy does not. Log the direct fetches at Information so an
+    // operator can see the node is serving playback straight to clients; proxied fetches stay at
+    // Debug (there's already an audit trail for those on the Web tier).
+    if (!string.IsNullOrEmpty(origin))
+        playbackLogger.LogInformation("Direct playback: {CameraName} -> client {ClientIp} (origin {Origin}), segment {File}.",
+            worker.CameraDisplayName(cameraId), ctx.Connection.RemoteIpAddress?.ToString() ?? "?", origin, Path.GetFileName(path));
+    else
+        playbackLogger.LogDebug("Proxied playback: {CameraName}, segment {File}.", worker.CameraDisplayName(cameraId), Path.GetFileName(path));
 
     var storageRoot = worker.StorageRoot;
     if (storageRoot is null)
@@ -413,7 +520,7 @@ app.MapGet("/playback-segment/{cameraId:guid}", async (HttpContext ctx, Guid cam
 // on-disk cache checked first. The cache path is derived only from the already-validated fullPath
 // (substituting the "main" segment of the path for "thumbs") and the token-bound offsetSeconds —
 // never from anything else the client sends, so it can't be spoofed into naming an arbitrary file.
-app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWorker worker, ILogger<Program> logger) =>
+app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWorker worker, SeenTokenCache seenTokens, ILogger<Program> logger) =>
 {
     var token = ExtractToken(ctx);
     var path = ctx.Request.Query["path"].ToString();
@@ -440,10 +547,17 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid c
     // ffmpeg -q:v, 2 (best) to 31 (worst). Same reasoning as maxDim above: LarisVMS.Web decides it,
     // this only carries the decision across the proxy hop, and it's clamped rather than trusted.
     var quality = int.TryParse(ctx.Request.Query["q"], out var qv) ? Math.Clamp(qv, 2, 31) : LarisVMS.Media.ThumbnailCapture.DefaultQuality;
-    if (!MediaToken.TryValidateThumbnail(token, cameraId, path, offsetSeconds, currentKey, out var tokenError))
+    if (!MediaToken.TryValidateThumbnail(token, cameraId, path, offsetSeconds, currentKey, out var tokenError, out var tokenJti))
     {
         ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
         await ctx.Response.WriteAsync(tokenError);
+        return;
+    }
+    // Failover plan phase 5c — one frame per token. Web mints one per request (see ProxyThumbnailAsync).
+    if (!seenTokens.TryConsume(tokenJti))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync("token already used");
         return;
     }
 
@@ -532,7 +646,7 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid c
 // same "a quality knob, not something that needs tamper-protection" reasoning maxDim/q already use
 // above — a tampered box only changes what crop of an already-authorized frame comes back, never
 // which file or offset is read.
-app.MapGet("/snapshot-image/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWorker worker, ILogger<Program> logger) =>
+app.MapGet("/snapshot-image/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWorker worker, SeenTokenCache seenTokens, ILogger<Program> logger) =>
 {
     var token = ExtractToken(ctx);
     var path = ctx.Request.Query["path"].ToString();
@@ -549,10 +663,17 @@ app.MapGet("/snapshot-image/{cameraId:guid}", async (HttpContext ctx, Guid camer
         await ctx.Response.WriteAsync("missing or invalid path/offset");
         return;
     }
-    if (!MediaToken.TryValidateThumbnail(token, cameraId, path, offsetSeconds, currentKey, out var tokenError))
+    if (!MediaToken.TryValidateThumbnail(token, cameraId, path, offsetSeconds, currentKey, out var tokenError, out var tokenJti))
     {
         ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
         await ctx.Response.WriteAsync(tokenError);
+        return;
+    }
+    // Failover plan phase 5c — one crop per token (Web mints one per request).
+    if (!seenTokens.TryConsume(tokenJti))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync("token already used");
         return;
     }
 
@@ -684,7 +805,7 @@ app.MapGet("/snapshot-image/{cameraId:guid}", async (HttpContext ctx, Guid camer
 // afterward would never reach the caller and the Web tier would see a dropped connection instead of
 // a result. TryRestartService only launches the detached helper and signals shutdown, so there is a
 // real window to flush this response first.
-app.MapPost("/restart", async (HttpContext ctx, NodeWorker worker, LarisVMS.Node.Update.UpdateService updateService) =>
+app.MapPost("/restart", async (HttpContext ctx, NodeWorker worker, SeenTokenCache seenTokens, LarisVMS.Node.Update.UpdateService updateService) =>
 {
     var token = ExtractToken(ctx);
     var currentKey = worker.MediaSigningKey;
@@ -694,10 +815,17 @@ app.MapPost("/restart", async (HttpContext ctx, NodeWorker worker, LarisVMS.Node
         await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
         return;
     }
-    if (!MediaToken.TryValidateNodeControl(token, "restart", currentKey, out var tokenError))
+    if (!MediaToken.TryValidateNodeControl(token, "restart", currentKey, out var tokenError, out var tokenJti))
     {
         ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
         await ctx.Response.WriteAsync(tokenError);
+        return;
+    }
+    // Failover plan phase 5c — a restart command can't be replayed within its 30s window.
+    if (!seenTokens.TryConsume(tokenJti))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync("token already used");
         return;
     }
 
@@ -1030,6 +1158,12 @@ app.MapGet("/internal/detection-model/{family}/{variant}", async (HttpContext ct
         await ctx.Response.WriteAsync($"Could not obtain the {family}/{variant} model from the server: {ex.Message}");
     }
 });
+
+// Failover plan phase 1: a friendly landing page for the "open https://{node}:{port}/ and trust the
+// certificate" step the client shows when direct streaming is running on a self-signed cert.
+app.MapGet("/", () => Results.Content(
+    "LarisVMS recorder node. If you opened this page to trust its certificate, that's done — you can close this tab.",
+    "text/plain"));
 
 await app.RunAsync();
 

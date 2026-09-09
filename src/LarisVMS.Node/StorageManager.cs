@@ -25,6 +25,16 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
 {
     private static readonly TimeSpan SweepInterval = TimeSpan.FromMinutes(5);
 
+    // Deletion/relocation reports go out in batches this size rather than one giant POST. Confirmed
+    // live as a real failure: the first sweep after archiving is switched on for a node with years of
+    // existing footage queued ~224k relocations in one request and the web tier's host rejected it
+    // with 413 (Payload Too Large) before the handler ran, stalling the whole backlog. Each item is
+    // one idempotent upsert server-side (see SegmentRelocateItem / SegmentDeleteRequest docs), so a
+    // batch that partially lands and then fails just costs a re-report of the ones that already
+    // succeeded on the next attempt — no correctness impact. 1000 keeps even a max-length path list
+    // comfortably under a default 30 MB request cap.
+    private const int ReportBatchSize = 1000;
+
     // Deliberately much slower than SweepInterval: this asks the web tier for every FilePath it
     // thinks this node still owns (thousands of rows on a busy install) and checks each one against
     // disk, so it's real DB + network load for a check that only ever finds something in the wake of
@@ -124,7 +134,9 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
                 try { Directory.CreateDirectory(archiveRoot); } catch { /* CanReachStorage reports the failure below */ }
                 archiveUsable = StorageHealth.CanReachStorage(archiveRoot);
                 if (!archiveUsable)
-                    logger.LogWarning("Archive root {ArchiveRoot} did not pass a read/write probe — footage that would be archived is being kept on primary this sweep.", archiveRoot);
+                    logger.LogWarning(
+                        "Archive root {ArchiveRoot} did not pass a read/write probe — archiving is OFF this sweep. Aged-out footage from archive-enabled camera(s) will be DELETED by the retention/quota/watermark passes instead of moved there, and cannot be recovered. Restore the archive volume to resume archiving.",
+                        archiveRoot);
             }
         }
 
@@ -180,7 +192,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
 
         SweepOrphanedCameraFolders(config, storageRoot, archiveRoot, archiveUsable, now, deletedPaths, relocations);
 
-        ApplyWatermark(config, storageRoot, archiveRoot, archiveUsable, now, deletedPaths, relocations);
+        ApplyWatermark(config, storageRoot, archiveRoot, archiveUsable, now, deletedPaths);
 
         // Export output files (and any stray concat list file ExportRunner didn't get to clean up
         // after a crash) — a sibling of the cam-{id}/ folders above, deliberately never walked by
@@ -238,16 +250,24 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
         if (deletedPaths.Count > 0)
         {
             logger.LogInformation("Evicted {Count} segment(s) for storage limits.", deletedPaths.Count);
-            try
+            var reportedDeletes = 0;
+            foreach (var batch in deletedPaths.Chunk(ReportBatchSize))
             {
-                await api.DeleteSegmentsAsync(deletedPaths, ct);
-            }
-            catch (Exception ex) when (!ct.IsCancellationRequested)
-            {
-                // The files are already gone from disk regardless of whether this succeeds — only
-                // the *report* is being retried, not the deletion itself.
-                _pendingDeletionReports.AddRange(deletedPaths);
-                logger.LogWarning(ex, "Failed to report {Count} deleted segment(s) to the server — will retry next sweep.", deletedPaths.Count);
+                try
+                {
+                    await api.DeleteSegmentsAsync([.. batch], ct);
+                    reportedDeletes += batch.Length;
+                }
+                catch (Exception ex) when (!ct.IsCancellationRequested)
+                {
+                    // The files are already gone from disk regardless of whether this succeeds — only
+                    // the *report* is being retried, not the deletion itself. Re-queue only what
+                    // hasn't been reported yet; the batches that already landed are done.
+                    _pendingDeletionReports.AddRange(deletedPaths.Skip(reportedDeletes));
+                    logger.LogWarning(ex, "Failed to report deleted segment(s) to the server after {Reported}/{Total} — will retry the rest next sweep.",
+                        reportedDeletes, deletedPaths.Count);
+                    break;
+                }
             }
         }
 
@@ -259,11 +279,27 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
 
         if (relocations.Count > 0)
         {
-            try
+            var reportedRelocs = 0;
+            foreach (var batch in relocations.Chunk(ReportBatchSize))
             {
-                await api.RelocateSegmentsAsync(relocations.Select(r => r.Item).ToList(), ct);
-                logger.LogInformation("Archived {Count} segment(s) to the archive volume.", relocations.Count);
-                foreach (var r in relocations)
+                try
+                {
+                    await api.RelocateSegmentsAsync(batch.Select(r => r.Item).ToList(), ct);
+                    reportedRelocs += batch.Length;
+                }
+                catch (Exception ex) when (!ct.IsCancellationRequested)
+                {
+                    // Sources for this batch (and every later one) stay on primary — TryArchiveFile
+                    // treats the already-copied archive target as done next sweep, so the retry just
+                    // re-reports without re-copying. Batches that already landed have had their
+                    // sources cleaned up below.
+                    _pendingRelocationReports.AddRange(relocations.Skip(reportedRelocs));
+                    logger.LogWarning(ex, "Failed to report archived segment(s) to the server after {Reported}/{Total} — the rest stay on primary, will retry next sweep.",
+                        reportedRelocs, relocations.Count);
+                    break;
+                }
+
+                foreach (var r in batch)
                 {
                     // A tier-flip reconcile (ReconcileArchiveTierAsync) reports OldFilePath ==
                     // NewFilePath — the file is already on the archive volume and there is nothing to
@@ -281,11 +317,9 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
                         r.PrimarySnapshotsDir, r.ArchiveSnapshotsDir);
                 }
             }
-            catch (Exception ex) when (!ct.IsCancellationRequested)
-            {
-                _pendingRelocationReports.AddRange(relocations);
-                logger.LogWarning(ex, "Failed to report {Count} archived segment(s) to the server — sources kept on primary, will retry next sweep.", relocations.Count);
-            }
+
+            if (reportedRelocs > 0)
+                logger.LogInformation("Archived {Count} segment(s) to the archive volume.", reportedRelocs);
         }
     }
 
@@ -314,14 +348,22 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             return false; // wanted to archive, couldn't — keep it, don't delete
         }
 
-        if (TryDelete(f.FullName))
-        {
-            deletedPaths.Add(f.FullName);
-            DeleteMatchingThumbnails(primaryMainDir, primaryThumbsDir, f.FullName);
-            DeleteMatchingSnapshotImages(primaryMainDir, primarySnapshotsDir, f.FullName);
-            return true;
-        }
-        return false;
+        return DeleteSegmentFile(f, primaryMainDir, primaryThumbsDir, primarySnapshotsDir, deletedPaths);
+    }
+
+    /// <summary>Deletes one segment file and its cached hover thumbnails / AI-detection snapshot
+    /// crops, recording the path for the end-of-sweep deletion report. Returns true on success. The
+    /// bare-delete half of <see cref="ArchiveOrDelete"/>, split out so the watermark backstop — which
+    /// must free real primary-volume space and never archive (see ApplyWatermark) — can call it
+    /// directly.</summary>
+    private bool DeleteSegmentFile(FileInfo f, string primaryMainDir, string primaryThumbsDir,
+        string primarySnapshotsDir, List<string> deletedPaths)
+    {
+        if (!TryDelete(f.FullName)) return false;
+        deletedPaths.Add(f.FullName);
+        DeleteMatchingThumbnails(primaryMainDir, primaryThumbsDir, f.FullName);
+        DeleteMatchingSnapshotImages(primaryMainDir, primarySnapshotsDir, f.FullName);
+        return true;
     }
 
     private static bool ArchiveHasRoom(string archiveRoot, long fileLength)
@@ -475,11 +517,12 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
     }
 
     private void ApplyWatermark(NodeConfigResponse config, string storageRoot, string? archiveRoot,
-        bool archiveUsable, DateTime now, List<string> deletedPaths, List<PendingRelocation> relocations)
+        bool archiveUsable, DateTime now, List<string> deletedPaths)
     {
         var usage = DiskSpace.TryGetUsage(storageRoot);
         if (usage is not { } u || u.TotalBytes <= 0) return;
-        if (100.0 * (u.TotalBytes - u.FreeBytes) / u.TotalBytes <= config.WatermarkPercent) return;
+        var usedBytes = u.TotalBytes - u.FreeBytes;
+        if (100.0 * usedBytes / u.TotalBytes <= config.WatermarkPercent) return;
 
         var archiveEnabledByCamera = config.Cameras.ToDictionary(c => c.CameraId, c => c.ArchiveEnabled);
 
@@ -494,31 +537,75 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             .SelectMany(x => EnumerateEvictable(x.MainDir, now).Select(f => (x.CameraId, x.MainDir, File: f)))
             .OrderBy(x => x.File.LastWriteTimeUtc);
 
-        // Bytes we've queued to free but not yet actually removed — an archived file's source isn't
-        // deleted until the relocate report lands at the end of this sweep, and a deleted file's
-        // space is reclaimed immediately. Tracking the projected free space lets the loop stop once
-        // it's committed enough work to get under the watermark instead of archiving every last file.
-        long projectedFreed = 0;
-        var storagePercentTarget = config.WatermarkPercent;
+        // The watermark is the "the volume is nearly full regardless of what the settings say"
+        // backstop, so it always DELETES — it never archives. Archiving had its chance in the
+        // retention and quota passes above; doing it here would be actively wrong, because a segment
+        // moved to the archive volume stays on the primary until its relocate report round-trips to
+        // the web tier at the very end of this sweep (and only if that call succeeds) — so it frees
+        // no primary space now, which is the one thing the watermark exists to do. This is also the
+        // pass that keeps the node recording at all when the archive volume is unreachable.
+        var toDelete = SelectWatermarkEvictions(candidates, usedBytes, u.TotalBytes, config.WatermarkPercent);
+        if (toDelete.Count == 0) return;
 
-        foreach (var c in candidates)
+        long freed = 0;
+        var deleted = 0;
+        var archiveEnabledDeleted = 0;
+        foreach (var c in toDelete)
         {
-            var current = DiskSpace.TryGetUsage(storageRoot);
-            if (current is null) break;
-            var projectedFree = current.Value.FreeBytes + projectedFreed;
-            if (100.0 * (current.Value.TotalBytes - projectedFree) / current.Value.TotalBytes <= storagePercentTarget) break;
-
             var thumbsDir = Path.Combine(storageRoot, $"cam-{c.CameraId}", "thumbs");
             var snapshotsDir = Path.Combine(storageRoot, $"cam-{c.CameraId}", "snapshots");
-            var archiveCameraMainDir = archiveRoot is null ? "" : Path.Combine(archiveRoot, $"cam-{c.CameraId}", "main");
-            var archiveThisCamera = archiveEnabledByCamera.GetValueOrDefault(c.CameraId) && archiveUsable;
-
-            // Prefer moving the file to the archive volume over deleting it — "footage must not be
-            // deleted while there's another location for it". Falls back to a hard delete when
-            // archiving is off / the archive is full / a per-file archive move fails.
-            if (ArchiveOrDelete(c.File, c.MainDir, thumbsDir, snapshotsDir, archiveCameraMainDir, archiveThisCamera, archiveRoot, deletedPaths, relocations))
-                projectedFreed += c.File.Length;
+            if (!DeleteSegmentFile(c.File, c.MainDir, thumbsDir, snapshotsDir, deletedPaths)) continue;
+            deleted++;
+            freed += c.File.Length;
+            if (archiveEnabledByCamera.GetValueOrDefault(c.CameraId)) archiveEnabledDeleted++;
         }
+
+        if (deleted == 0) return;
+
+        if (archiveEnabledDeleted > 0)
+        {
+            var archiveState = archiveRoot is null ? "is not configured"
+                : archiveUsable ? "is full or rejecting writes"
+                : "is unreachable";
+            logger.LogWarning(
+                "Primary volume was over the {Watermark}% watermark — deleted the {Deleted} oldest segment(s) ({Freed:N0} bytes) to keep recording going. {ArchiveDeleted} of them belonged to archive-enabled camera(s) and could NOT be archived first (the archive volume {ArchiveState}); that footage is permanently gone.",
+                config.WatermarkPercent, deleted, freed, archiveEnabledDeleted, archiveState);
+        }
+        else
+        {
+            logger.LogWarning(
+                "Primary volume was over the {Watermark}% watermark — deleted the {Deleted} oldest segment(s) ({Freed:N0} bytes) to keep recording going.",
+                config.WatermarkPercent, deleted, freed);
+        }
+
+        var after = DiskSpace.TryGetUsage(storageRoot);
+        if (after is { TotalBytes: > 0 } a && 100.0 * (a.TotalBytes - a.FreeBytes) / a.TotalBytes > config.WatermarkPercent)
+            logger.LogError(
+                "Primary volume {StorageRoot} is still over the {Watermark}% watermark after deleting {Deleted} segment(s) — every remaining segment is younger than the {MinAge:N0}-minute safety floor, or deletions are failing. Recording will stop if the volume fills completely.",
+                storageRoot, config.WatermarkPercent, deleted, MinAge.TotalMinutes);
+    }
+
+    /// <summary>Oldest-first, across every camera, the segments to delete to bring a volume that is
+    /// over its watermark back under it — assuming each delete frees its own length. Pure so it is
+    /// testable without a genuinely full volume; the caller performs the deletions and re-checks the
+    /// real free space afterwards. Nothing younger than the caller's <c>MinAge</c> floor is ever in
+    /// <paramref name="candidatesOldestFirst"/> to begin with.</summary>
+    internal static List<(Guid CameraId, string MainDir, FileInfo File)> SelectWatermarkEvictions(
+        IEnumerable<(Guid CameraId, string MainDir, FileInfo File)> candidatesOldestFirst,
+        long usedBytes, long totalBytes, int watermarkPercent)
+    {
+        var result = new List<(Guid, string, FileInfo)>();
+        if (totalBytes <= 0) return result;
+
+        var ceiling = watermarkPercent / 100.0 * totalBytes;
+        double projectedUsed = usedBytes;
+        foreach (var c in candidatesOldestFirst)
+        {
+            if (projectedUsed <= ceiling) break;
+            result.Add(c);
+            projectedUsed -= c.File.Length;
+        }
+        return result;
     }
 
     /// <summary>Finds and reports Segment rows whose file no longer exists on this node's disk —

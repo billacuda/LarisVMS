@@ -16,14 +16,15 @@
         <h5>Auto Node Updates <button type="button" class="help-icon" data-help-target="autoUpdateHelp" tabindex="0" aria-label="Help">ℹ️</button></h5>
         <div class="form-check">
             <input asp-for="NodeAutoUpdateEnabled" type="checkbox" class="form-check-input" />
-            <label asp-for="NodeAutoUpdateEnabled" class="form-check-label">Auto-update recorder nodes</label>
+            <label asp-for="NodeAutoUpdateEnabled" class="form-check-label">Auto-update recorder nodes and media proxies</label>
         </div>
         <div class="help-text-source" id="autoUpdateHelp">
-            When on, every recorder node whose reported version is older than the newest
-            <strong>approved</strong> build for its platform downloads and applies it automatically
-            on its next heartbeat — builds are registered by every <code>deploy.ps1</code> run and
-            wait for review below. Turning this off freezes every node on whatever it's already
-            running until it's turned back on.
+            When on, every recorder node (and every <a asp-page="/Admin/Proxies">media proxy</a>)
+            whose reported version is older than the newest <strong>approved</strong> build for its
+            platform downloads and applies it automatically on its next check-in — builds are
+            registered by every <code>deploy.ps1</code> run (proxy builds only with
+            <code>-BuildProxy</code>) and wait for review below. Turning this off freezes every node
+            and proxy on whatever it's already running until it's turned back on.
         </div>
     </div>
 

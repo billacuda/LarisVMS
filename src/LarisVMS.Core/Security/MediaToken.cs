@@ -13,6 +13,32 @@ namespace LarisVMS.Core.Security;
 /// </summary>
 public static class MediaToken
 {
+    /// <summary>Random per-token id (16 hex chars, 8 bytes), embedded in the signed payload of every
+    /// "v2" token so a node can reject a second use of the same token inside its short validity
+    /// window — see <c>SeenTokenCache</c> in LarisVMS.Node. Only the one-shot Web→Node control-token
+    /// families carry one (segment / thumbnail / export / node-control): each is a single
+    /// token → single request, so single-use is the right shape. The live-view <see cref="Issue"/>
+    /// family deliberately does not — one browser reuses that token across the video socket and the
+    /// detection/motion-zone overlay sockets (and again on a reconnect), so its protection is the
+    /// 60-second TTL, not a replay cache. A v1 token (issued by a Web tier older than 0.190.0) carries
+    /// no jti and skips the replay check, exactly as before this existed.</summary>
+    public static string NewJti() => Convert.ToHexString(RandomNumberGenerator.GetBytes(8));
+
+    /// <summary>Strips the <c>v2:{jti}:</c> prefix an updated Web tier puts on a control token's
+    /// signed payload, returning the bare legacy payload the field-parse below already understands and
+    /// handing the jti back through <paramref name="jti"/>. The signature check has already run over
+    /// the full payload (prefix included) by the time this is called, so the jti here is
+    /// tamper-proof. A payload with no prefix is a v1 token: returned unchanged, jti null.</summary>
+    private static string StripVersionPrefix(string payload, out string? jti)
+    {
+        jti = null;
+        if (!payload.StartsWith("v2:", StringComparison.Ordinal)) return payload;
+        var parts = payload.Split(':', 3);
+        if (parts.Length != 3) return payload; // malformed — let the caller's own field parse reject it
+        jti = parts[1];
+        return parts[2];
+    }
+
     public static string Issue(Guid cameraId, string signingKeyHex, TimeSpan validFor)
     {
         var exp = DateTimeOffset.UtcNow.Add(validFor).ToUnixTimeSeconds();
@@ -67,13 +93,17 @@ public static class MediaToken
     public static string IssueForSegment(Guid cameraId, string filePath, string signingKeyHex, TimeSpan validFor)
     {
         var exp = DateTimeOffset.UtcNow.Add(validFor).ToUnixTimeSeconds();
-        var payload = $"segment:{cameraId:N}:{exp}:{filePath}";
+        var payload = $"v2:{NewJti()}:segment:{cameraId:N}:{exp}:{filePath}";
         return $"{payload}.{Sign(payload, signingKeyHex)}";
     }
 
     public static bool TryValidateSegment(string? token, Guid expectedCameraId, string expectedFilePath, string signingKeyHex, out string error)
+        => TryValidateSegment(token, expectedCameraId, expectedFilePath, signingKeyHex, out error, out _);
+
+    public static bool TryValidateSegment(string? token, Guid expectedCameraId, string expectedFilePath, string signingKeyHex, out string error, out string? jti)
     {
         error = "";
+        jti = null;
         if (string.IsNullOrEmpty(token)) { error = "missing token"; return false; }
 
         var dot = token.LastIndexOf('.');
@@ -95,7 +125,7 @@ public static class MediaToken
 
         if (!CryptographicOperations.FixedTimeEquals(provided, expected)) { error = "signature mismatch"; return false; }
 
-        var parts = payload.Split(':', 4);
+        var parts = StripVersionPrefix(payload, out jti).Split(':', 4);
         if (parts.Length != 4 || parts[0] != "segment") { error = "malformed payload"; return false; }
         if (!Guid.TryParse(parts[1], out var cameraId) || !long.TryParse(parts[2], out var exp))
         {
@@ -122,13 +152,17 @@ public static class MediaToken
     public static string IssueForThumbnail(Guid cameraId, string filePath, int offsetSeconds, string signingKeyHex, TimeSpan validFor)
     {
         var exp = DateTimeOffset.UtcNow.Add(validFor).ToUnixTimeSeconds();
-        var payload = $"thumb:{cameraId:N}:{offsetSeconds}:{exp}:{filePath}";
+        var payload = $"v2:{NewJti()}:thumb:{cameraId:N}:{offsetSeconds}:{exp}:{filePath}";
         return $"{payload}.{Sign(payload, signingKeyHex)}";
     }
 
     public static bool TryValidateThumbnail(string? token, Guid expectedCameraId, string expectedFilePath, int expectedOffsetSeconds, string signingKeyHex, out string error)
+        => TryValidateThumbnail(token, expectedCameraId, expectedFilePath, expectedOffsetSeconds, signingKeyHex, out error, out _);
+
+    public static bool TryValidateThumbnail(string? token, Guid expectedCameraId, string expectedFilePath, int expectedOffsetSeconds, string signingKeyHex, out string error, out string? jti)
     {
         error = "";
+        jti = null;
         if (string.IsNullOrEmpty(token)) { error = "missing token"; return false; }
 
         var dot = token.LastIndexOf('.');
@@ -150,7 +184,7 @@ public static class MediaToken
 
         if (!CryptographicOperations.FixedTimeEquals(provided, expected)) { error = "signature mismatch"; return false; }
 
-        var parts = payload.Split(':', 5);
+        var parts = StripVersionPrefix(payload, out jti).Split(':', 5);
         if (parts.Length != 5 || parts[0] != "thumb") { error = "malformed payload"; return false; }
         if (!Guid.TryParse(parts[1], out var cameraId) || !int.TryParse(parts[2], out var offsetSeconds) || !long.TryParse(parts[3], out var exp))
         {
@@ -181,13 +215,17 @@ public static class MediaToken
     public static string IssueForNodeControl(string action, string signingKeyHex, TimeSpan validFor)
     {
         var exp = DateTimeOffset.UtcNow.Add(validFor).ToUnixTimeSeconds();
-        var payload = $"nodectl:{action}:{exp}";
+        var payload = $"v2:{NewJti()}:nodectl:{action}:{exp}";
         return $"{payload}.{Sign(payload, signingKeyHex)}";
     }
 
     public static bool TryValidateNodeControl(string? token, string expectedAction, string signingKeyHex, out string error)
+        => TryValidateNodeControl(token, expectedAction, signingKeyHex, out error, out _);
+
+    public static bool TryValidateNodeControl(string? token, string expectedAction, string signingKeyHex, out string error, out string? jti)
     {
         error = "";
+        jti = null;
         if (string.IsNullOrEmpty(token)) { error = "missing token"; return false; }
 
         var dot = token.LastIndexOf('.');
@@ -209,7 +247,7 @@ public static class MediaToken
 
         if (!CryptographicOperations.FixedTimeEquals(provided, expected)) { error = "signature mismatch"; return false; }
 
-        var parts = payload.Split(':', 3);
+        var parts = StripVersionPrefix(payload, out jti).Split(':', 3);
         if (parts.Length != 3 || parts[0] != "nodectl") { error = "malformed payload"; return false; }
         if (!long.TryParse(parts[2], out var exp)) { error = "malformed payload"; return false; }
 
@@ -229,13 +267,17 @@ public static class MediaToken
     public static string IssueForExport(Guid cameraId, Guid exportItemId, string signingKeyHex, TimeSpan validFor)
     {
         var exp = DateTimeOffset.UtcNow.Add(validFor).ToUnixTimeSeconds();
-        var payload = $"export:{cameraId:N}:{exportItemId:N}:{exp}";
+        var payload = $"v2:{NewJti()}:export:{cameraId:N}:{exportItemId:N}:{exp}";
         return $"{payload}.{Sign(payload, signingKeyHex)}";
     }
 
     public static bool TryValidateExport(string? token, Guid expectedCameraId, Guid expectedExportItemId, string signingKeyHex, out string error)
+        => TryValidateExport(token, expectedCameraId, expectedExportItemId, signingKeyHex, out error, out _);
+
+    public static bool TryValidateExport(string? token, Guid expectedCameraId, Guid expectedExportItemId, string signingKeyHex, out string error, out string? jti)
     {
         error = "";
+        jti = null;
         if (string.IsNullOrEmpty(token)) { error = "missing token"; return false; }
 
         var dot = token.LastIndexOf('.');
@@ -257,7 +299,7 @@ public static class MediaToken
 
         if (!CryptographicOperations.FixedTimeEquals(provided, expected)) { error = "signature mismatch"; return false; }
 
-        var parts = payload.Split(':', 4);
+        var parts = StripVersionPrefix(payload, out jti).Split(':', 4);
         if (parts.Length != 4 || parts[0] != "export") { error = "malformed payload"; return false; }
         if (!Guid.TryParse(parts[1], out var cameraId) || !Guid.TryParse(parts[2], out var exportItemId) || !long.TryParse(parts[3], out var exp))
         {
@@ -279,13 +321,17 @@ public static class MediaToken
     public static string IssueForExportDownload(Guid exportItemId, string filePath, string signingKeyHex, TimeSpan validFor)
     {
         var exp = DateTimeOffset.UtcNow.Add(validFor).ToUnixTimeSeconds();
-        var payload = $"exportfile:{exportItemId:N}:{exp}:{filePath}";
+        var payload = $"v2:{NewJti()}:exportfile:{exportItemId:N}:{exp}:{filePath}";
         return $"{payload}.{Sign(payload, signingKeyHex)}";
     }
 
     public static bool TryValidateExportDownload(string? token, Guid expectedExportItemId, string expectedFilePath, string signingKeyHex, out string error)
+        => TryValidateExportDownload(token, expectedExportItemId, expectedFilePath, signingKeyHex, out error, out _);
+
+    public static bool TryValidateExportDownload(string? token, Guid expectedExportItemId, string expectedFilePath, string signingKeyHex, out string error, out string? jti)
     {
         error = "";
+        jti = null;
         if (string.IsNullOrEmpty(token)) { error = "missing token"; return false; }
 
         var dot = token.LastIndexOf('.');
@@ -307,7 +353,7 @@ public static class MediaToken
 
         if (!CryptographicOperations.FixedTimeEquals(provided, expected)) { error = "signature mismatch"; return false; }
 
-        var parts = payload.Split(':', 4);
+        var parts = StripVersionPrefix(payload, out jti).Split(':', 4);
         if (parts.Length != 4 || parts[0] != "exportfile") { error = "malformed payload"; return false; }
         if (!Guid.TryParse(parts[1], out var exportItemId) || !long.TryParse(parts[2], out var exp))
         {
@@ -330,13 +376,17 @@ public static class MediaToken
     public static string IssueForExportDelete(Guid exportItemId, string filePath, string signingKeyHex, TimeSpan validFor)
     {
         var exp = DateTimeOffset.UtcNow.Add(validFor).ToUnixTimeSeconds();
-        var payload = $"exportdelete:{exportItemId:N}:{exp}:{filePath}";
+        var payload = $"v2:{NewJti()}:exportdelete:{exportItemId:N}:{exp}:{filePath}";
         return $"{payload}.{Sign(payload, signingKeyHex)}";
     }
 
     public static bool TryValidateExportDelete(string? token, Guid expectedExportItemId, string expectedFilePath, string signingKeyHex, out string error)
+        => TryValidateExportDelete(token, expectedExportItemId, expectedFilePath, signingKeyHex, out error, out _);
+
+    public static bool TryValidateExportDelete(string? token, Guid expectedExportItemId, string expectedFilePath, string signingKeyHex, out string error, out string? jti)
     {
         error = "";
+        jti = null;
         if (string.IsNullOrEmpty(token)) { error = "missing token"; return false; }
 
         var dot = token.LastIndexOf('.');
@@ -358,7 +408,7 @@ public static class MediaToken
 
         if (!CryptographicOperations.FixedTimeEquals(provided, expected)) { error = "signature mismatch"; return false; }
 
-        var parts = payload.Split(':', 4);
+        var parts = StripVersionPrefix(payload, out jti).Split(':', 4);
         if (parts.Length != 4 || parts[0] != "exportdelete") { error = "malformed payload"; return false; }
         if (!Guid.TryParse(parts[1], out var exportItemId) || !long.TryParse(parts[2], out var exp))
         {

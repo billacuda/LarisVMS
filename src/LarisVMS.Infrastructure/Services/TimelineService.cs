@@ -220,7 +220,7 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
             .Select(n => new { n.LastIpAddress, n.LivePort, n.MediaSigningKey })
             .FirstOrDefaultAsync(ct);
 
-        return new PlaybackSegmentInfo(segment.FilePath, node?.LastIpAddress, node?.LivePort, node?.MediaSigningKey);
+        return new PlaybackSegmentInfo(segment.FilePath, node?.LastIpAddress, node?.LivePort, node?.MediaSigningKey, segment.NodeId);
     }
 
     // Coarse on purpose (user-specified): enough to notice something changed while hovering,

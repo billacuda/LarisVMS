@@ -32,6 +32,7 @@
     <ProjectReference Include="..\..\src\LarisVMS.Onvif\LarisVMS.Onvif.csproj" />
     <ProjectReference Include="..\..\src\LarisVMS.Node\LarisVMS.Node.csproj" />
     <ProjectReference Include="..\..\src\LarisVMS.NodeUpdater\LarisVMS.NodeUpdater.csproj" />
+    <ProjectReference Include="..\..\src\LarisVMS.Proxy\LarisVMS.Proxy.csproj" />
     <ProjectReference Include="..\..\src\LarisVMS.Media\LarisVMS.Media.csproj" />
     <ProjectReference Include="..\..\src\LarisVMS.Vision\LarisVMS.Vision.csproj" />
     <ProjectReference Include="..\..\src\LarisVMS.Vision.Service\LarisVMS.Vision.Service.csproj" />

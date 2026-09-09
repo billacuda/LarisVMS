@@ -421,4 +421,50 @@ public class MediaTokenTests
 
         Assert.False(MediaToken.TryValidateExportDelete(downloadToken, exportItemId, path, Key, out _));
     }
+
+    // ── Failover plan phase 5c: per-use id (jti) on one-shot control tokens ─────
+
+    [Fact]
+    public void SegmentTokenCarriesADistinctJtiEachIssue()
+    {
+        var cameraId = Guid.NewGuid();
+        const string path = @"C:\a\segment1.mp4";
+        var a = MediaToken.IssueForSegment(cameraId, path, Key, TimeSpan.FromSeconds(30));
+        var b = MediaToken.IssueForSegment(cameraId, path, Key, TimeSpan.FromSeconds(30));
+
+        Assert.True(MediaToken.TryValidateSegment(a, cameraId, path, Key, out _, out var jtiA));
+        Assert.True(MediaToken.TryValidateSegment(b, cameraId, path, Key, out _, out var jtiB));
+        Assert.False(string.IsNullOrEmpty(jtiA));
+        Assert.NotEqual(jtiA, jtiB);
+    }
+
+    [Fact]
+    public void ThumbnailAndNodeControlTokensAlsoSurfaceAJti()
+    {
+        var cameraId = Guid.NewGuid();
+        const string path = @"C:\a\segment1.mp4";
+        var thumb = MediaToken.IssueForThumbnail(cameraId, path, 5, Key, TimeSpan.FromSeconds(30));
+        var ctl = MediaToken.IssueForNodeControl("restart", Key, TimeSpan.FromSeconds(30));
+
+        Assert.True(MediaToken.TryValidateThumbnail(thumb, cameraId, path, 5, Key, out _, out var thumbJti));
+        Assert.True(MediaToken.TryValidateNodeControl(ctl, "restart", Key, out _, out var ctlJti));
+        Assert.False(string.IsNullOrEmpty(thumbJti));
+        Assert.False(string.IsNullOrEmpty(ctlJti));
+    }
+
+    [Fact]
+    public void TamperingWithTheJtiBreaksTheSignature()
+    {
+        var cameraId = Guid.NewGuid();
+        const string path = @"C:\a\segment1.mp4";
+        var token = MediaToken.IssueForSegment(cameraId, path, Key, TimeSpan.FromSeconds(30));
+
+        // Flip one hex nibble of the v2 jti (the 4th char of the payload — "v2:X...").
+        var chars = token.ToCharArray();
+        chars[3] = chars[3] == 'a' ? 'b' : 'a';
+        var tampered = new string(chars);
+
+        Assert.False(MediaToken.TryValidateSegment(tampered, cameraId, path, Key, out var error, out _));
+        Assert.Equal("signature mismatch", error);
+    }
 }

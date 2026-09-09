@@ -117,6 +117,53 @@ public class StorageManagerTests : IDisposable
         Assert.Empty(StorageManager.SelectQuotaEvictions(files, quotaBytes: 0));
     }
 
+    private (Guid, string, FileInfo) Candidate(string name, int bytes, DateTime lastWriteUtc)
+        => (Guid.NewGuid(), _root, new FileInfo(WriteFile(name, bytes, lastWriteUtc)));
+
+    [Fact]
+    public void SelectWatermarkEvictionsDeletesOldestFirstUntilProjectedUsageIsUnderTheCeiling()
+    {
+        var now = DateTime.UtcNow;
+        var candidates = new[]
+        {
+            Candidate("a.mp4", 100, now.AddHours(-4)),
+            Candidate("b.mp4", 100, now.AddHours(-3)),
+            Candidate("c.mp4", 100, now.AddHours(-2)),
+            Candidate("d.mp4", 100, now.AddHours(-1)),
+        };
+
+        // 1000-byte volume, 80% watermark => 800-byte ceiling, currently 950 used. Freeing a+b gets
+        // projected usage to 750 (under 800); c and d must be left alone.
+        var toDelete = StorageManager.SelectWatermarkEvictions(candidates, usedBytes: 950, totalBytes: 1000, watermarkPercent: 80);
+
+        Assert.Equal(["a.mp4", "b.mp4"], toDelete.Select(x => Path.GetFileName(x.File.FullName)));
+    }
+
+    [Fact]
+    public void SelectWatermarkEvictionsIsNoOpWhenAlreadyUnderTheWatermark()
+    {
+        var candidates = new[] { Candidate("a.mp4", 100, DateTime.UtcNow.AddHours(-1)) };
+
+        Assert.Empty(StorageManager.SelectWatermarkEvictions(candidates, usedBytes: 700, totalBytes: 1000, watermarkPercent: 80));
+    }
+
+    [Fact]
+    public void SelectWatermarkEvictionsReturnsEveryCandidateWhenDeletingThemStillCannotGetUnder()
+    {
+        var now = DateTime.UtcNow;
+        var candidates = new[]
+        {
+            Candidate("a.mp4", 50, now.AddHours(-2)),
+            Candidate("b.mp4", 50, now.AddHours(-1)),
+        };
+
+        // Even after freeing both (900 -> 800) the volume is still exactly at, not under, an
+        // aggressive 70% ceiling — the caller logs "still over" and the next sweep retries.
+        var toDelete = StorageManager.SelectWatermarkEvictions(candidates, usedBytes: 900, totalBytes: 1000, watermarkPercent: 70);
+
+        Assert.Equal(["a.mp4", "b.mp4"], toDelete.Select(x => Path.GetFileName(x.File.FullName)));
+    }
+
     [Fact]
     public void SelectMissingPathsReturnsOnlyPathsThatNoLongerExistOnDisk()
     {

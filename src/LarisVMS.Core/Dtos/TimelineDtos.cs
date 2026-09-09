@@ -45,7 +45,11 @@ public record CameraDetectionStateDto(Guid CameraId, IReadOnlyList<DetectionBadg
 /// node's address/port/key are null when that node has never reported live-view readiness
 /// (registered before M5, or hasn't heartbeat-reported since), same condition /live already
 /// checks for.</summary>
-public record PlaybackSegmentInfo(string FilePath, string? NodeIp, int? NodeLivePort, string? NodeMediaSigningKey);
+public record PlaybackSegmentInfo(string FilePath, string? NodeIp, int? NodeLivePort, string? NodeMediaSigningKey,
+    /// <summary>Failover plan phase 1: the owning node's id, so the Web layer can ask
+    /// MediaRoutingService whether this segment should be served by a redirect straight to the node
+    /// instead of proxied. Defaulted so existing test constructions stay valid.</summary>
+    Guid NodeId = default);
 
 /// <summary>What the Web layer needs to proxy one hover-thumbnail request (M7 pass 2) — same shape
 /// as PlaybackSegmentInfo plus OffsetSeconds, the offset into FilePath that

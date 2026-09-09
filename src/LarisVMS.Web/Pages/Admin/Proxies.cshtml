@@ -1,0 +1,136 @@
+@page
+@model LarisVMS.Web.Pages.Admin.ProxiesModel
+@{
+    ViewData["Title"] = "Media proxies";
+    var serverOrigin = $"{Request.Scheme}://{Request.Host}";
+    var regKey = string.IsNullOrEmpty(Model.RegistrationKey) ? "<set one on Admin - Settings - Nodes>" : Model.RegistrationKey;
+}
+
+<h1>Media proxies</h1>
+<p class="text-muted" style="max-width: 60rem;">
+    A media proxy is a standalone relay (<code>LarisVMS.Proxy</code>) that sits between browsers and
+    recorder nodes for live view and playback — a dumb TLS-terminating pass-through. Assign a primary
+    (and optional backup) proxy to a node on <a asp-page="/Admin/Nodes">Nodes</a>; browsers are then
+    routed through the first healthy one, falling back to direct-to-node or this server.
+</p>
+
+@if (!string.IsNullOrEmpty(Model.StatusMessage))
+{
+    <div class="alert alert-info">@Model.StatusMessage</div>
+}
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <div class="alert alert-danger">@Model.ErrorMessage</div>
+}
+
+<div class="card mb-3" style="max-width: 60rem;">
+    <div class="card-body py-2 small">
+        <strong>Adding a proxy:</strong> run <code>install-proxy.ps1</code> on the relay machine
+        (as Administrator):
+        <div class="d-flex align-items-start gap-2 mb-0 mt-1">
+            <pre id="proxyInstallCmd" class="mb-0 flex-grow-1">.\install-proxy.ps1 -ServerUrl @serverOrigin -RegistrationKey @regKey -ClientPort 4443 [-ClientPfxPath C:\certs\proxy.pfx -ClientPfxPassword ...]</pre>
+            <button type="button" class="btn btn-sm btn-outline-secondary flex-shrink-0" title="Copy command"
+                    onclick="navigator.clipboard.writeText(document.getElementById('proxyInstallCmd').textContent).then(() => { const b = this; const t = b.textContent; b.textContent = '✅'; setTimeout(() => b.textContent = t, 1500); });">📋</button>
+        </div>
+        It appears here after its first check-in; then set its routable host and enable it below.
+        After that first install, upgrades are automatic — <code>deploy.ps1 -BuildProxy</code>
+        registers each new build on <a asp-page="/Admin/NodeBuilds/Index">Node&nbsp;Builds</a> and,
+        once approved, every proxy applies it on its next check-in (controlled by the
+        <a asp-page="/Admin/Settings/Nodes">auto-update setting</a>).
+    </div>
+</div>
+
+@if (Model.Proxies.Count == 0)
+{
+    <p class="text-muted">No proxies have registered yet.</p>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table align-middle">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Health</th>
+                    <th>Routable host</th>
+                    <th>Port</th>
+                    <th>Certificate</th>
+                    <th>Nodes</th>
+                    <th>Version</th>
+                    <th>Enabled</th>
+                    <th data-no-sort></th>
+                    <th data-no-sort></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var p in Model.Proxies)
+                {
+                    var stale = p.LastSeenAt is null || p.LastSeenAt < DateTime.UtcNow.AddMinutes(-2);
+                    var ins = p.AllowInsecure;
+                    <tr>
+                        <form method="post" asp-page-handler="Update" asp-route-id="@p.Id">
+                            <td style="min-width: 9rem;"><input name="name" class="form-control form-control-sm" value="@p.Name" required /></td>
+                            <td>
+                                @if (!p.Enabled)
+                                {
+                                    <span class="badge text-bg-secondary">disabled</span>
+                                }
+                                else if (p.Healthy)
+                                {
+                                    <span class="badge text-bg-success">healthy</span>
+                                }
+                                else
+                                {
+                                    <span class="badge text-bg-danger" title="@p.LastError">unhealthy</span>
+                                }
+                                @if (stale)
+                                {
+                                    <div class="text-muted small" title="No check-in in the last 2 minutes">not checking in</div>
+                                }
+                            </td>
+                            <td style="min-width: 10rem;"><input name="host" class="form-control form-control-sm" value="@p.Host" placeholder="proxy FQDN" required /></td>
+                            <td style="width: 6rem;"><input name="port" type="number" min="1" max="65535" class="form-control form-control-sm" value="@(p.Port == 0 ? "" : p.Port.ToString())" placeholder="@(p.ReportedPort?.ToString() ?? "4443")" /></td>
+                            <td style="min-width: 15rem;">
+                                <input name="certPfxPath" class="form-control form-control-sm" value="@p.CertPfxPath" placeholder="cert .pfx path (optional)" />
+                                <input name="certPfxPassword" type="password" autocomplete="new-password" class="form-control form-control-sm mt-1" placeholder="pfx password (unchanged)" />
+                                <select name="allowInsecure" class="form-select form-select-sm mt-1">
+                                    <option value="" selected="@(ins is null)">insecure: inherit global</option>
+                                    <option value="true" selected="@(ins == true)">insecure: allow</option>
+                                    <option value="false" selected="@(ins == false)">insecure: block</option>
+                                </select>
+                                <div class="small text-muted mt-1">
+                                    @if (p.ReportedPort is { } rp)
+                                    {
+                                        <text>serving :@rp</text>
+                                        @if (p.CertNotAfter is { } na)
+                                        {
+                                            <text> &middot; cert to @na.ToLocalTime().ToString("d")</text>
+                                        }
+                                        @if (p.CertIsSelfSigned == true)
+                                        {
+                                            <span class="text-warning"> &middot; self-signed</span>
+                                        }
+                                    }
+                                    else
+                                    {
+                                        <text>endpoint not reported yet</text>
+                                    }
+                                </div>
+                            </td>
+                            <td class="text-center">@Model.AssignedNodeCount.GetValueOrDefault(p.Id)</td>
+                            <td>@p.Version</td>
+                            <td class="text-center"><input type="checkbox" name="enabled" value="true" checked="@p.Enabled" /></td>
+                            <td class="text-end"><button type="submit" class="btn btn-sm btn-outline-primary"><span aria-hidden="true">💾</span> Save</button></td>
+                        </form>
+                        <td class="text-end">
+                            <form method="post" asp-page-handler="Delete" asp-route-id="@p.Id"
+                                  onsubmit="return confirm('Remove proxy &quot;@p.Name&quot;? Any nodes assigned to it will be unassigned.');">
+                                <button type="submit" class="btn btn-sm btn-outline-danger"><span aria-hidden="true">🗑️</span> Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}

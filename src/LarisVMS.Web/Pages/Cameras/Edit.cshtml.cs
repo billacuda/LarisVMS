@@ -53,6 +53,13 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
     /// camera that misreports the shape of its detection stream — see
     /// LarisVMS.Node.DetectionOrientation.</summary>
     [BindProperty] public string AiDetectionOrientationOverride { get; set; } = "";
+    /// <summary>Detection.RejectMotionJitter for this camera: "" (blank) = inherit the node/global
+    /// default, "True"/"False" = force it. Same inherit convention as AiDetectionStreamRoleOverride;
+    /// the values match bool.ToString() so SettingsResolver parses them back.</summary>
+    [BindProperty] public string RejectMotionJitterOverride { get; set; } = "";
+    /// <summary>Detection.MotionJitterPixels for this camera (1-15), or null to inherit — same
+    /// nullable-override shape as ConfidenceOverride.</summary>
+    [BindProperty] public int? MotionJitterPixelsOverride { get; set; }
 
     public bool IsNew => Id is null;
 
@@ -79,6 +86,8 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
     public double EffectiveIou { get; set; }
     public string EffectiveAiDetectionStreamRole { get; set; } = "Sub";
     public string EffectiveAiDetectionOrientation { get; set; } = "Auto";
+    public bool EffectiveRejectMotionJitter { get; set; }
+    public int EffectiveMotionJitterPixels { get; set; } = 3;
     /// <summary>Whether this camera has at least one enabled ServerMotion zone — Motion mode does
     /// nothing without one (NodeWorker falls back to recording everything, logging a warning) so
     /// the Edit page can surface that up front instead of the operator discovering it in node logs.</summary>
@@ -188,6 +197,14 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
         AiDetectionOrientationOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "AiDetection.Orientation") ?? "";
         EffectiveAiDetectionOrientation = await settings.GetAsync("AiDetection.Orientation", "Auto", cameraId: cameraId, nodeId: nodeId);
 
+        RejectMotionJitterOverride =
+            await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "Detection.RejectMotionJitter") is { } ownJitter
+            && bool.TryParse(ownJitter, out var jitterOverride) ? jitterOverride.ToString() : "";
+        EffectiveRejectMotionJitter = await settings.GetAsync("Detection.RejectMotionJitter", false, cameraId: cameraId, nodeId: nodeId);
+        var ownJitterPixels = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "Detection.MotionJitterPixels");
+        MotionJitterPixelsOverride = int.TryParse(ownJitterPixels, out var jitterPixels) ? jitterPixels : null;
+        EffectiveMotionJitterPixels = await settings.GetAsync("Detection.MotionJitterPixels", 3, cameraId: cameraId, nodeId: nodeId);
+
         var zones = await zoneService.ListAsync(cameraId);
         HasServerMotionZone = zones.Any(z => z.Kind == ZoneKind.ServerMotion && z.IsEnabled);
 
@@ -277,6 +294,12 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
                 string.IsNullOrEmpty(AiDetectionStreamRoleOverride) ? null : AiDetectionStreamRoleOverride, User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "AiDetection.Orientation",
                 string.IsNullOrEmpty(AiDetectionOrientationOverride) ? null : AiDetectionOrientationOverride, User.Identity?.Name);
+            await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Detection.RejectMotionJitter",
+                string.IsNullOrEmpty(RejectMotionJitterOverride) ? null : RejectMotionJitterOverride, User.Identity?.Name);
+            // Same 1-15 clamp NodeService.GetConfigAsync applies when resolving this for a node.
+            var clampedJitterPixelsOverride = MotionJitterPixelsOverride is { } jp ? Math.Clamp(jp, 1, 15) : (int?)null;
+            await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Detection.MotionJitterPixels",
+                clampedJitterPixelsOverride?.ToString(), User.Identity?.Name);
             return RedirectToPage("Index");
         }
         catch (Exception ex)

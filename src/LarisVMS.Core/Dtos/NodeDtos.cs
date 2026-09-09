@@ -28,7 +28,40 @@ public record NodeHeartbeatRequest(string? Version, long? FreeBytes = null, long
     /// <summary>Archive-storage: free/total bytes on the archive volume, and whether the primary
     /// volume is currently over the storage watermark (footage being archived/deleted early). All
     /// null/false on an older node build or one with no archive root configured.</summary>
-    long? ArchiveFreeBytes = null, long? ArchiveTotalBytes = null, bool StoragePressureActive = false);
+    long? ArchiveFreeBytes = null, long? ArchiveTotalBytes = null, bool StoragePressureActive = false,
+    /// <summary>Replay hardening (failover plan phase 5a): the single-use nonce this node received in
+    /// the previous heartbeat response (NodeHeartbeatResponse.NextNonce), echoed back verbatim. Null
+    /// from a node that has never been issued one — an older build, or the first heartbeat after
+    /// (re-)registration. The server treats absent-vs-present-but-wrong as genuinely different cases:
+    /// absent against a stored nonce = a not-yet-upgraded node (allowed, stored value cleared);
+    /// present but not matching = a replay (401). Never normalized to "" — see the failover plan's
+    /// nonce-rollout note.</summary>
+    string? Nonce = null,
+    /// <summary>Failover plan phase 1: what the node's client HTTPS endpoint is actually doing right
+    /// now — the port it bound (null if it isn't running one), the NotAfter and self-signed-ness of
+    /// the certificate it's serving, and the last error it hit standing the endpoint up or reloading
+    /// the cert (null when healthy). All informational; the ticket endpoint uses them to decide
+    /// whether a browser can be routed straight to this node.</summary>
+    int? ClientEndpointReportedPort = null, DateTime? ClientEndpointCertNotAfterUtc = null,
+    bool? ClientEndpointCertIsSelfSigned = null, string? ClientEndpointLastError = null,
+    /// <summary>Failover plan phase 3: this node's own reads of the partner nodes it was told to
+    /// probe (<see cref="NodeConfigResponse.PartnersToProbe"/>), one entry per partner it actually
+    /// managed to reach a verdict on this cycle. The server persists these as this node's outgoing
+    /// votes; <c>RecordingFailoverService</c> tallies them alongside central's own live probe and any
+    /// assigned proxy's. Null/empty from an older node build or one with nothing to probe.</summary>
+    List<NodePartnerHealthReport>? PartnerHealthReports = null);
+
+/// <summary>Failover plan phase 3: one recorder node a voter (a partner node, or a media proxy) is
+/// asked to probe for the recording-failover quorum. <see cref="Host"/>/<see cref="Port"/> are the
+/// node's plain-HTTP LAN address (<c>LastIpAddress</c> + <c>LivePort</c>) — the voter GETs
+/// <c>http://{Host}:{Port}/health</c> with a short timeout.</summary>
+public record NodePartnerProbeDto(Guid NodeId, string Host, int Port);
+
+/// <summary>Failover plan phase 3: one voter's verdict on one subject node's <c>/health</c> this
+/// cycle. <see cref="ServiceRunning"/> is true only on a clean HTTP 200 whose body parsed as
+/// <see cref="NodeHealthDto"/>; a non-200, a timeout, or an unparseable body is false (and never a
+/// bare TCP accept). <see cref="Detail"/> is a short human-readable reason when false.</summary>
+public record NodePartnerHealthReport(Guid NodeId, bool ServiceRunning, DateTime CheckedAtUtc, string? Detail = null);
 
 /// <summary>Recorder-node auto-update: a genuinely newer NodeBuildVersion exists for this node's
 /// reported Platform (NodeVersionComparer.IsNewer), and NodeAutoUpdate.Enabled is on. DownloadUrl is
@@ -45,7 +78,18 @@ public record NodeHeartbeatRequest(string? Version, long? FreeBytes = null, long
 public record NodeUpdateInfoDto(string Version, string DownloadUrl, string Sha256, long SizeBytes,
     string? VisionDownloadUrl = null, string? VisionSha256 = null, long? VisionSizeBytes = null);
 
-public record NodeHeartbeatResponse(int IntervalSeconds, NodeUpdateInfoDto? UpdateAvailable = null);
+/// <summary>NextNonce (failover plan phase 5a): the single-use value the node must echo on its next
+/// heartbeat (NodeHeartbeatRequest.Nonce). Issued fresh every heartbeat that passes validation. Null
+/// only on a 401 replay rejection (the node never sees a 200 body then anyway).
+///
+/// NewSecret (phase 5b): a freshly minted bearer secret the node must switch to immediately and
+/// persist to its node.config. Non-null only when automatic rotation is due (Node.SecretRotationDays,
+/// 0 = never) or an admin forced one, and only on a heartbeat that already passed nonce validation —
+/// a replayed/forged check-in can never harvest one. The server keeps the old secret working
+/// (PreviousApiKeyHash) until the node first authenticates with the new one, so there is no downtime
+/// window.</summary>
+public record NodeHeartbeatResponse(int IntervalSeconds, NodeUpdateInfoDto? UpdateAvailable = null,
+    string? NextNonce = null, string? NewSecret = null);
 
 /// <summary>Metadata for a large Vision Service native dependency the node package doesn't bundle and
 /// fetches from the server on demand — currently only <c>onnxruntime_providers_cuda.dll</c> (~320 MB),
@@ -54,6 +98,15 @@ public record NodeHeartbeatResponse(int IntervalSeconds, NodeUpdateInfoDto? Upda
 /// verified by the node before the file is put in place. Null from the endpoint means the server has
 /// no copy seeded.</summary>
 public record VisionNativeInfo(string Name, string Sha256, long SizeBytes);
+
+/// <summary>Failover plan phase 3: the body of the recorder node's unauthenticated
+/// <c>GET /health</c> on its plain-HTTP LAN Kestrel port. A quorum voter (the partner node, central,
+/// or an assigned proxy) treats "HTTP 200 + a body that parses to this" as <em>service running</em>;
+/// a non-200, a timeout, or an unparseable body is <em>service not running</em> — a bare TCP accept
+/// or an ICMP echo must never count, since a lingering socket or a proxy answering for a dead process
+/// has to read as down. <see cref="RecordingCameraCount"/> is informational (a node that is up but
+/// recording nothing is still up); <see cref="UptimeSeconds"/> lets a probe spot a crash-loop.</summary>
+public record NodeHealthDto(string? Version, int RecordingCameraCount, long UptimeSeconds);
 
 public record NodeConfigStreamDto(Guid StreamId, string Role, string RtspUri,
     string? Codec, int? Width, int? Height, bool HasAudio,
@@ -176,7 +229,15 @@ public record NodeConfigCameraDto(Guid CameraId, string Name, string? Username, 
     /// "Archive.Enabled"), and how long it is then kept on the archive volume before the node's
     /// archive-expiry sweep deletes it ("Archive.RetentionDays"; 0/null = keep forever). Defaults
     /// off/null so an older node's deserialization never archives.</summary>
-    bool ArchiveEnabled = false, int? ArchiveRetentionDays = null);
+    bool ArchiveEnabled = false, int? ArchiveRetentionDays = null,
+    /// <summary>Detection.RejectMotionJitter / Detection.MotionJitterPixels — per-camera
+    /// (Camera &rarr; Node &rarr; Global, same chain AiConfidence resolves through), because
+    /// box-wobble jitter is a property of one camera's view (a driveway with a parked vehicle in
+    /// frame), not a deployment-wide fact. RejectMotionJitter off by default restores the proven
+    /// pre-0.188 movement classifier; MotionJitterPixels (1-15, default 3) is the absolute
+    /// centroid-travel floor the rejection path requires, only acted on when the toggle is on.
+    /// Appended last so the positional NodeService construction stays stable.</summary>
+    bool RejectMotionJitter = false, int MotionJitterPixels = 3);
 /// <summary>A camera this node has leftover Segments for but is no longer assigned to record
 /// (reassigned to a different node, or deleted) — StorageManager's orphaned-folder sweep uses
 /// RetentionDays here so leftover footage still ages out on the same schedule it always would have,
@@ -287,7 +348,33 @@ public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? Stor
     /// prior behaviour for A/B comparison. Threaded into every VisionStartCameraRequest and part of
     /// NodeWorker's restart signature. Appended last so the positional NodeService construction
     /// stays stable; defaults true so an older node build reads the improved behaviour.</summary>
-    bool SnapshotMotionAccuracy = true);
+    bool SnapshotMotionAccuracy = true,
+    /// <summary>Failover plan phase 1: the node's client HTTPS endpoint (a browser connecting straight
+    /// to the node for live/playback, skipping the central relay). ClientEndpointEnabled + Port
+    /// establish the second Kestrel listener — a change to either needs a node restart, the same
+    /// "restart to apply" model SegmentSeconds uses. ClientCertPfxPath/Password name the certificate
+    /// to serve (password sent decrypted over this HTTPS control channel and cached in the
+    /// DPAPI-protected node.config, identical handling to NodeConfigCameraDto.Password).
+    /// ClientEndpointAllowInsecure is what permits the self-signed fallback — with it false the node
+    /// never generates one and the listener simply doesn't start when no valid pfx resolves. A local
+    /// %ProgramData%\LarisVMS\client-endpoint.json on the node host overrides all of these. WebOrigin
+    /// is this server's own scheme://host, echoed so the node can send it as
+    /// Access-Control-Allow-Origin on its client-facing routes. All defaulted so an older node
+    /// deserializes cleanly and simply never stands an endpoint up.</summary>
+    bool ClientEndpointEnabled = false, int ClientEndpointPort = 0, string? ClientCertPfxPath = null,
+    string? ClientCertPfxPassword = null, bool ClientEndpointAllowInsecure = false, string? WebOrigin = null,
+    /// <summary>Failover plan phase 3: recorder nodes this node is the backup for and must probe for
+    /// the recording-failover quorum — it GETs each one's <c>http://{Host}:{Port}/health</c> every
+    /// ~15s and carries the verdicts back in <see cref="NodeHeartbeatRequest.PartnerHealthReports"/>.
+    /// Null/empty for a node that backs up nobody, or an older build. Appended last so the positional
+    /// NodeService construction stays stable.</summary>
+    List<NodePartnerProbeDto>? PartnersToProbe = null,
+    /// <summary>Detection.DepartureGraceSeconds (global, 1-10) — how long a label's span with no
+    /// instance classified Moving is held before SnapshotMotionAccuracy's early-finalize flushes it
+    /// as "the object left frame". Was a hard-coded 5s in CameraDetectionPipeline. Threaded into
+    /// every VisionStartCameraRequest and part of NodeWorker's restart signature. Appended last so
+    /// the positional NodeService construction stays stable; defaults 5 = the previous constant.</summary>
+    int DepartureGraceSeconds = 5);
 
 /// <summary>One completed MotionSpan, batch-reported the same way SegmentReportItem is — see
 /// NodeService.RecordMotionSpansAsync for why plain REST + EF insert is enough here despite the

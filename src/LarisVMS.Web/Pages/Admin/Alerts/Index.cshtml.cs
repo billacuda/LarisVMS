@@ -71,6 +71,8 @@ public class IndexModel(ApplicationDbContext db, ICameraService cameraService, I
                 $"Node \"{(rule.NodeId is { } nid ? nodeNames.GetValueOrDefault(nid, "(deleted node)") : "?")}\" offline",
             AlertConditionType.NodeStorageLow =>
                 $"Node \"{(rule.NodeId is { } snid ? nodeNames.GetValueOrDefault(snid, "(deleted node)") : "?")}\" storage below {rule.ThresholdPercent}%",
+            AlertConditionType.NodeFailoverActivated =>
+                $"Node \"{(rule.NodeId is { } fnid ? nodeNames.GetValueOrDefault(fnid, "(deleted node)") : "?")}\" failover activated",
             _ => rule.ConditionType.ToString()
         };
 }

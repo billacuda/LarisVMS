@@ -126,6 +126,23 @@ public class AlertEvaluatorService(IServiceScopeFactory scopeFactory, ILogger<Al
                 return $"Node \"{node.Name}\" has {freePercent:F1}% free storage, below the {threshold}% threshold.";
             }
 
+            case AlertConditionType.NodeFailoverActivated:
+            {
+                // Failover plan phase 3: fires while the node is FailedOverAway (quorum or
+                // maintenance) — RecordingFailoverService owns that flag. De-duplication of repeat
+                // deliveries is the caller's job, same as every other condition here.
+                if (rule.NodeId is not { } failoverNodeId) return null;
+                var node = await db.Nodes.Where(n => n.Id == failoverNodeId)
+                    .Select(n => new { n.Name, n.FailoverState, n.FailoverReason, n.FailoverSinceUtc }).FirstOrDefaultAsync(ct);
+                if (node is null || node.FailoverState != Core.Enums.NodeFailoverState.FailedOverAway) return null;
+
+                var why = node.FailoverReason == Core.Enums.NodeFailoverReason.Maintenance
+                    ? "was put into maintenance" : "was found down by a quorum of health checks";
+                return $"Node \"{node.Name}\" {why}" +
+                       (node.FailoverSinceUtc is { } since ? $" at {since:u}" : "") +
+                       " — its cameras are now recording on its backup node.";
+            }
+
             default:
                 return null;
         }

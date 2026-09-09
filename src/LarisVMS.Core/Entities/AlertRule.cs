@@ -20,7 +20,8 @@ public class AlertRule
     /// <summary>Required when ConditionType is CameraNotReporting, otherwise null.</summary>
     public Guid? CameraId { get; set; }
 
-    /// <summary>Required when ConditionType is NodeOffline or NodeStorageLow, otherwise null.</summary>
+    /// <summary>Required when ConditionType is NodeOffline, NodeStorageLow or NodeFailoverActivated,
+    /// otherwise null.</summary>
     public Guid? NodeId { get; set; }
 
     /// <summary>Required when ConditionType is NodeStorageLow — fires when free space drops below

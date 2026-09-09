@@ -85,9 +85,69 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         node.LastSeenAt = DateTime.UtcNow;
         node.Status = NodeStatus.Active;
         if (remoteIp is not null) node.LastIpAddress = remoteIp;
+        // Failover plan phase 5b: the post-rotation grace window closes the first time the node
+        // actually authenticates with the *new* secret (matches current, not previous) — until then
+        // an in-flight request or a node that hasn't applied NewSecret yet still works off the old one.
+        if (matchesCurrent && !matchesPrevious && node.PreviousApiKeyHash is not null)
+            node.PreviousApiKeyHash = null;
         await db.SaveChangesAsync(ct);
 
         return node;
+    }
+
+    public async Task<NodeCheckInSecurity> ApplyCheckInSecurityAsync(Guid nodeId, string? presentedNonce, CancellationToken ct = default)
+    {
+        var node = await db.Nodes.FirstOrDefaultAsync(n => n.Id == nodeId, ct);
+        if (node is null) return new NodeCheckInSecurity(ReplayRejected: false, NextNonce: null, NewSecret: null);
+
+        // Phase 5a nonce gate. Absent and wrong are deliberately different cases (see the failover
+        // plan's nonce-rollout note — never `presentedNonce ?? ""`):
+        //  - stored nonce, node echoes nothing  -> a build that predates this field; allow, and clear
+        //    the stored value so it isn't stuck failing the moment it does update.
+        //  - stored nonce, node echoes the wrong one -> replay (or a corrupted node.config); reject
+        //    401 and touch nothing, so the legitimate node still holding the real nonce passes next.
+        if (node.CheckInNonce is not null)
+        {
+            if (presentedNonce is null)
+            {
+                node.CheckInNonce = null;
+            }
+            else if (!SecretHash.FixedTimeEquals(presentedNonce, node.CheckInNonce))
+            {
+                return new NodeCheckInSecurity(ReplayRejected: true, NextNonce: null, NewSecret: null);
+            }
+        }
+
+        var nextNonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
+        node.CheckInNonce = nextNonce;
+
+        // Phase 5b secret rotation — only ever reached on a check-in that already passed the nonce
+        // gate above, so a replayed/forged heartbeat can never harvest a fresh secret.
+        string? newSecret = null;
+        var rotationDue = node.PendingSecretRotation
+            || (node.SecretRotationDays > 0
+                && DateTime.UtcNow - (node.ApiKeyRotatedAt ?? node.CreatedAt) >= TimeSpan.FromDays(node.SecretRotationDays));
+        if (rotationDue)
+        {
+            newSecret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+            node.PreviousApiKeyHash = node.ApiKeyHash;
+            node.ApiKeyHash = SecretHash.Hash(newSecret);
+            node.ApiKeyRotatedAt = DateTime.UtcNow;
+            node.PendingSecretRotation = false;
+        }
+
+        await db.SaveChangesAsync(ct);
+        return new NodeCheckInSecurity(ReplayRejected: false, NextNonce: nextNonce, NewSecret: newSecret);
+    }
+
+    public async Task ResetAuthAsync(Guid nodeId, bool rotateSecretNow, CancellationToken ct = default)
+    {
+        var node = await db.Nodes.FirstOrDefaultAsync(n => n.Id == nodeId, ct);
+        if (node is null) return;
+        node.CheckInNonce = null;
+        node.AllowReregistration = true;
+        if (rotateSecretNow) node.PendingSecretRotation = true;
+        await db.SaveChangesAsync(ct);
     }
 
     public async Task<NodeConfigResponse> GetConfigAsync(Guid nodeId, CancellationToken ct = default)
@@ -96,18 +156,53 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         // node is added (install-node.ps1 -StorageRoot/-ArchiveRoot -> RegisterAsync) or on
         // Admin/Nodes. A node with no storage path is served no camera config (below): it must not
         // silently record to some fallback location an admin never chose.
+        // Failover plan phase 1: the direct-streaming / client-endpoint columns come along on the
+        // same single-row read.
         var nodeRoots = await db.Nodes.Where(n => n.Id == nodeId)
-            .Select(n => new { n.StorageRootPath, n.ArchiveRootPath }).FirstOrDefaultAsync(ct);
+            .Select(n => new
+            {
+                n.StorageRootPath, n.ArchiveRootPath,
+                n.DirectStreamingMode, n.AllowInsecureClientEndpoint,
+                n.ClientCertPfxPath, n.ClientCertPfxPassword,
+                n.DisableAiObjectDetection,
+            }).FirstOrDefaultAsync(ct);
         var storageRoot = string.IsNullOrWhiteSpace(nodeRoots?.StorageRootPath) ? null : nodeRoots.StorageRootPath;
         var archiveRoot = string.IsNullOrWhiteSpace(nodeRoots?.ArchiveRootPath) ? null : nodeRoots.ArchiveRootPath;
+        // Failover plan phase 3: "recording only" mode forces AI detection off for every camera this
+        // node serves — its own and any it adopts during a failover.
+        var disableAiDetection = nodeRoots?.DisableAiObjectDetection ?? false;
 
-        var cameras = string.IsNullOrWhiteSpace(storageRoot)
-            ? []
-            : await db.Cameras
-                .Where(c => c.NodeId == nodeId && c.IsEnabled)
-                .Include(c => c.Streams)
-                .Include(c => c.Capabilities)
+        // Failover plan phase 3: the cameras this node should actually be recording right now — its
+        // own (unless it is itself FailedOverAway) plus any it has adopted from a down node that
+        // resolves to it as backup. RecordingNodeResolver drives it off persisted FailoverState only;
+        // RecordingFailoverService is the one writer of that. A node deemed down drops its own cameras
+        // here immediately, so a still-reachable node stops recording them within one reconcile.
+        var failoverStateRows = await db.Nodes.AsNoTracking()
+            .Select(n => new { n.Id, n.FailoverState, n.BackupNodeId }).ToListAsync(ct);
+        var failoverStateById = failoverStateRows.ToDictionary(n => n.Id, n => n.FailoverState);
+        var defaultBackupById = failoverStateRows.ToDictionary(n => n.Id, n => n.BackupNodeId);
+
+        List<Camera> cameras = [];
+        if (!string.IsNullOrWhiteSpace(storageRoot))
+        {
+            var enabledCameraNodes = await db.Cameras.AsNoTracking()
+                .Where(c => c.IsEnabled && c.NodeId != null)
+                .Select(c => new { c.Id, NodeId = c.NodeId!.Value, c.BackupNodeIdOverride })
                 .ToListAsync(ct);
+
+            var effectiveIds = enabledCameraNodes
+                .Where(c => RecordingNodeResolver.Resolve(
+                    c.NodeId, c.BackupNodeIdOverride, failoverStateById, defaultBackupById) == nodeId)
+                .Select(c => c.Id)
+                .ToHashSet();
+
+            if (effectiveIds.Count > 0)
+                cameras = await db.Cameras
+                    .Where(c => effectiveIds.Contains(c.Id))
+                    .Include(c => c.Streams)
+                    .Include(c => c.Capabilities)
+                    .ToListAsync(ct);
+        }
 
         if (string.IsNullOrWhiteSpace(storageRoot))
             logger?.LogWarning("Node {NodeId} has no storage path configured — serving no camera config until one is set on Admin/Nodes.", nodeId);
@@ -126,6 +221,19 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         }
 
         var watermarkPercent = await settings.GetAsync("Storage.WatermarkPercent", 90, ct: ct);
+
+        // Failover plan phase 1: direct-to-node streaming. Per-node DirectStreamingMode /
+        // AllowInsecureClientEndpoint override the matching global LiveView setting (null = inherit).
+        var effectiveDirectMode = !string.IsNullOrWhiteSpace(nodeRoots?.DirectStreamingMode)
+            ? nodeRoots!.DirectStreamingMode!
+            : await settings.GetAsync("LiveView.DirectStreaming", "Proxy", ct: ct);
+        var clientEndpointEnabled = string.Equals(effectiveDirectMode, "Direct", StringComparison.OrdinalIgnoreCase);
+        var clientEndpointAllowInsecure = nodeRoots?.AllowInsecureClientEndpoint
+            ?? await settings.GetAsync("LiveView.AllowInsecureClientEndpoint", false, ct: ct);
+        // Optional operator-set public origin for the node's CORS allow-list — when unset the node
+        // just reflects the request Origin (these routes are MediaToken-gated regardless).
+        var publicOrigin = await settings.GetAsync<string?>("LiveView.PublicOrigin", null, ct: ct);
+
         // M18: the admin-facing toggle for adaptive streaming (see Admin/Settings/LiveView.cshtml).
         // Global only, no per-node/per-camera override — this is a bandwidth/CPU trade-off for the
         // whole deployment, not something that makes sense to vary camera-by-camera.
@@ -143,10 +251,14 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         // own doc comments for why these are deployment-wide rather than per-camera settings.
         var reportIdleDetections = await settings.GetAsync("Detection.ReportIdleDetections", false, ct: ct);
         var aiIdleTimeoutSeconds = await settings.GetAsync("Detection.IdleTimeoutSeconds", 10, ct: ct);
-        // Global detection-quality toggle — jitter rejection in the movement classifier + prompt
-        // span finalization when an object leaves (so a later unrelated same-type object isn't
-        // merged into it). Default on; off is the fast A/B revert. See NodeConfigResponse.
+        // Global detection-quality toggle — prompt span finalization when an object leaves frame
+        // (so a later unrelated same-type object isn't merged into it). Default on; off is the fast
+        // A/B revert. The box-jitter rejection this once also governed is now the per-camera
+        // Detection.RejectMotionJitter, resolved in the camera loop below. See NodeConfigResponse.
         var snapshotMotionAccuracy = await settings.GetAsync("Detection.SnapshotMotionAccuracy", true, ct: ct);
+        // How long a span is held with no Moving instance before the early-finalize above flushes it
+        // (was a hard-coded 5s). Global; 1-10s. See NodeConfigResponse.DepartureGraceSeconds.
+        var departureGraceSeconds = Math.Clamp(await settings.GetAsync("Detection.DepartureGraceSeconds", 5, ct: ct), 1, 10);
         // Node-scoped (Global -> Node, no per-camera override) — one Vision Service process serves
         // every camera on a node from the same loaded model, see NodeConfigResponse.DetectionModelFamily's
         // own doc comment for why that makes this a per-node choice rather than a per-camera one.
@@ -216,6 +328,11 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
                 await settings.GetAsync("Recording.SegmentSeconds", 60, cameraId: c.Id, nodeId: nodeId, ct: ct), 5, 300);
             var aiConfidence = await settings.GetAsync("Detection.Confidence", 0.35, cameraId: c.Id, nodeId: nodeId, ct: ct);
             var aiIou = await settings.GetAsync("Detection.Iou", 0.5, cameraId: c.Id, nodeId: nodeId, ct: ct);
+            // Box-jitter rejection is per-camera (a driveway with a parked vehicle in view needs it;
+            // a street camera doesn't) — off by default, restoring the pre-0.188 movement classifier.
+            var rejectMotionJitter = await settings.GetAsync("Detection.RejectMotionJitter", false, cameraId: c.Id, nodeId: nodeId, ct: ct);
+            var motionJitterPixels = Math.Clamp(
+                await settings.GetAsync("Detection.MotionJitterPixels", 3, cameraId: c.Id, nodeId: nodeId, ct: ct), 1, 15);
             var aiDetectionStreamRole = await settings.GetAsync("AiDetection.StreamRole", "Sub", cameraId: c.Id, nodeId: nodeId, ct: ct);
             // Corrects a camera that misreports its watch stream's orientation (a corridor-mounted
             // device advertising 704x480 while delivering 480x704) before the node builds the
@@ -239,10 +356,10 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
                 // asking the node to start something it can't resolve.
                 CameraIntegrations.ByKey(c.IntegrationKey)?.Key,
                 ResolveIntegrationBaseUri(c), segmentSeconds,
-                c.AiDetectionEnabled, c.MotionDetectionSource?.ToString(),
+                c.AiDetectionEnabled && !disableAiDetection, c.MotionDetectionSource?.ToString(),
                 aiConfidence, aiIou, aiDetectionStreamRole, aiDetectionOrientation, c.ServerMotionEnabled,
                 c.MotionRegionMode.ToString(), c.MotionGridSize, c.MotionGridMask, c.MotionGridSensitivity,
-                archiveEnabled, archiveRetentionDays));
+                archiveEnabled, archiveRetentionDays, rejectMotionJitter, motionJitterPixels));
         }
 
         // Cameras this node has leftover Segments for but doesn't currently record — reassigned to a
@@ -258,6 +375,24 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
                 .Where(s => s.NodeId == nodeId && !assignedCameraIds.Contains(s.CameraId))
                 .Select(s => s.CameraId)
                 .Distinct()
+                .ToListAsync(ct);
+
+        // Failover plan phase 3: the recorder nodes this one is the backup for — via Node.BackupNodeId
+        // or a per-camera Camera.BackupNodeIdOverride — which it must probe for the recording-failover
+        // quorum. Only nodes with a known LAN address are probeable; a node with no LastIpAddress/
+        // LivePort yet simply isn't handed out.
+        var backedUpNodeIds = await db.Nodes.AsNoTracking()
+            .Where(n => n.BackupNodeId == nodeId && n.Id != nodeId)
+            .Select(n => n.Id).ToListAsync(ct);
+        var overrideBackedUpNodeIds = await db.Cameras.AsNoTracking()
+            .Where(c => c.BackupNodeIdOverride == nodeId && c.NodeId != null && c.NodeId != nodeId)
+            .Select(c => c.NodeId!.Value).Distinct().ToListAsync(ct);
+        var partnerIds = backedUpNodeIds.Concat(overrideBackedUpNodeIds).Distinct().ToList();
+        var partnersToProbe = partnerIds.Count == 0
+            ? null
+            : await db.Nodes.AsNoTracking()
+                .Where(n => partnerIds.Contains(n.Id) && n.LastIpAddress != null && n.LivePort != null)
+                .Select(n => new NodePartnerProbeDto(n.Id, n.LastIpAddress!, n.LivePort!.Value))
                 .ToListAsync(ct);
 
         var orphanedCameraDtos = new List<NodeConfigOrphanedCameraDto>();
@@ -279,6 +414,13 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         {
             YoloXSize = yoloXSize, MaxDetectionFps = maxDetectionFps, DFineTensorRtMode = dfineTensorRtMode,
             ArchiveRootPath = archiveRoot, SnapshotMotionAccuracy = snapshotMotionAccuracy,
+            DepartureGraceSeconds = departureGraceSeconds,
+            ClientEndpointEnabled = clientEndpointEnabled,
+            ClientCertPfxPath = string.IsNullOrWhiteSpace(nodeRoots?.ClientCertPfxPath) ? null : nodeRoots!.ClientCertPfxPath,
+            ClientCertPfxPassword = string.IsNullOrWhiteSpace(nodeRoots?.ClientCertPfxPassword) ? null : nodeRoots!.ClientCertPfxPassword,
+            ClientEndpointAllowInsecure = clientEndpointAllowInsecure,
+            WebOrigin = string.IsNullOrWhiteSpace(publicOrigin) ? null : publicOrigin,
+            PartnersToProbe = partnersToProbe,
         };
     }
 
@@ -368,12 +510,20 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
     public async Task RecordHeartbeatAsync(Guid nodeId, long? freeBytes, long? totalBytes, string? version, int? livePort,
         DateTime? nodeSentAtUtc, DateTime serverReceivedUtc, List<string>? detectedEncoders = null,
         List<string>? detectedAccelerators = null, long? archiveFreeBytes = null, long? archiveTotalBytes = null,
-        bool storagePressureActive = false, CancellationToken ct = default)
+        bool storagePressureActive = false, int? clientEndpointReportedPort = null,
+        DateTime? clientEndpointCertNotAfter = null, bool? clientEndpointCertIsSelfSigned = null,
+        string? clientEndpointLastError = null, List<NodePartnerHealthReport>? partnerHealthReports = null,
+        CancellationToken ct = default)
     {
         var skew = ComputeClockSkewSeconds(nodeSentAtUtc, serverReceivedUtc);
         var encodersJson = detectedEncoders is not null ? System.Text.Json.JsonSerializer.Serialize(detectedEncoders) : null;
         // Object detection plan decision 2: same coalesce-preserve shape as encodersJson above.
         var acceleratorsJson = detectedAccelerators is not null ? System.Text.Json.JsonSerializer.Serialize(detectedAccelerators) : null;
+        // Failover plan phase 3: this node's outgoing quorum votes on the partners it backs up. A
+        // current node always sends a list (empty when it probed nothing), so a non-null value here is
+        // the fresh truth and overwrites; an older node sends null and its stored value is preserved.
+        var partnerHealthJson = partnerHealthReports is not null
+            ? System.Text.Json.JsonSerializer.Serialize(partnerHealthReports) : null;
         var now = DateTime.UtcNow;
 
         await db.Nodes.Where(n => n.Id == nodeId).ExecuteUpdateAsync(s => s
@@ -395,7 +545,15 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             .SetProperty(n => n.ClockSkewSeconds, n => skew ?? n.ClockSkewSeconds)
             .SetProperty(n => n.ClockSkewMeasuredAt, n => skew != null ? serverReceivedUtc : n.ClockSkewMeasuredAt)
             .SetProperty(n => n.DetectedEncodersJson, n => encodersJson ?? n.DetectedEncodersJson)
-            .SetProperty(n => n.DetectedAcceleratorsJson, n => acceleratorsJson ?? n.DetectedAcceleratorsJson), ct);
+            .SetProperty(n => n.DetectedAcceleratorsJson, n => acceleratorsJson ?? n.DetectedAcceleratorsJson)
+            // Failover plan phase 1: the node reports the full current truth of its client HTTPS
+            // endpoint every heartbeat (or all-null when it isn't running one / predates this), so a
+            // blind overwrite is right — same as the archive stats above.
+            .SetProperty(n => n.ClientEndpointReportedPort, clientEndpointReportedPort)
+            .SetProperty(n => n.ClientEndpointCertNotAfter, clientEndpointCertNotAfter)
+            .SetProperty(n => n.ClientEndpointCertIsSelfSigned, clientEndpointCertIsSelfSigned)
+            .SetProperty(n => n.ClientEndpointLastError, clientEndpointLastError)
+            .SetProperty(n => n.PartnerHealthReportsJson, n => partnerHealthJson ?? n.PartnerHealthReportsJson), ct);
     }
 
     /// <summary>Every field is coalesce-preserve (`item.X ?? s.X`), not a blind overwrite — M11 added
@@ -853,7 +1011,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
     }
 
     public async Task UpdateAsync(Guid nodeId, string name, string? storageRootPath, AiAccelerator? aiAccelerator = null,
-        string? archiveRootPath = null, CancellationToken ct = default)
+        string? archiveRootPath = null, NodeClientEndpointUpdate? clientEndpoint = null, CancellationToken ct = default)
     {
         var node = await db.Nodes.FirstOrDefaultAsync(n => n.Id == nodeId, ct)
             ?? throw new InvalidOperationException("Node not found.");
@@ -861,7 +1019,49 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         node.StorageRootPath = string.IsNullOrWhiteSpace(storageRootPath) ? null : storageRootPath;
         node.ArchiveRootPath = string.IsNullOrWhiteSpace(archiveRootPath) ? null : archiveRootPath;
         node.AiAccelerator = aiAccelerator;
+
+        // Failover plan phase 1: direct-to-node client endpoint. Null clientEndpoint = caller isn't
+        // touching these (keeps every existing call site unchanged).
+        if (clientEndpoint is { } ce)
+        {
+            node.DirectStreamingMode = string.IsNullOrWhiteSpace(ce.DirectStreamingMode) ? null : ce.DirectStreamingMode;
+            node.AllowInsecureClientEndpoint = ce.AllowInsecureClientEndpoint;
+            node.ClientEndpointHost = string.IsNullOrWhiteSpace(ce.ClientEndpointHost) ? null : ce.ClientEndpointHost.Trim();
+            node.ClientCertPfxPath = string.IsNullOrWhiteSpace(ce.ClientCertPfxPath) ? null : ce.ClientCertPfxPath.Trim();
+            // Write-only, like every other secret field on the admin forms: null = leave as-is,
+            // empty string = clear, a value = set.
+            if (ce.ClientCertPfxPassword is not null)
+                node.ClientCertPfxPassword = ce.ClientCertPfxPassword.Length == 0 ? null : ce.ClientCertPfxPassword;
+
+            // Failover plan phase 2: proxy assignment. The form always submits both dropdowns, so a
+            // null/Guid.Empty value means "no proxy" — a distinct backup that matches the primary is
+            // pointless, so it is dropped.
+            var primary = ce.PrimaryProxyId is { } p && p != Guid.Empty ? p : (Guid?)null;
+            var backup = ce.BackupProxyId is { } b && b != Guid.Empty && b != primary ? b : (Guid?)null;
+            node.PrimaryProxyId = primary;
+            node.BackupProxyId = backup;
+
+            // Failover plan phase 3: recording failover. A backup that is this node itself is
+            // meaningless and dropped. RecordingFailoverService reconciles FailoverState from here on
+            // its own tick — this only sets the configuration, never the live state.
+            node.BackupNodeId = ce.BackupNodeId is { } bn && bn != Guid.Empty && bn != nodeId ? bn : null;
+            node.DisableAiObjectDetection = ce.DisableAiObjectDetection;
+        }
+
         await db.SaveChangesAsync(ct);
+    }
+
+    public async Task SetMaintenanceAsync(Guid nodeId, bool enabled, string? by, CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+        // Only the flag + who/when — RecordingFailoverService is the single writer of FailoverState
+        // and picks this up on its next tick.
+        await db.Nodes.Where(n => n.Id == nodeId).ExecuteUpdateAsync(u => u
+            .SetProperty(n => n.MaintenanceMode, enabled)
+            .SetProperty(n => n.MaintenanceSinceUtc, n => enabled
+                ? (n.MaintenanceMode ? n.MaintenanceSinceUtc : now)
+                : (DateTime?)null)
+            .SetProperty(n => n.MaintenanceBy, n => enabled ? by : null), ct);
     }
 
     public async Task DeleteAsync(Guid nodeId, CancellationToken ct = default)

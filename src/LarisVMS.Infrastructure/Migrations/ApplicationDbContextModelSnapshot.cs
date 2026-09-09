@@ -378,6 +378,9 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.Property<bool>("AiDetectionEnabled")
                         .HasColumnType("bit");
 
+                    b.Property<Guid?>("BackupNodeIdOverride")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
 
@@ -473,6 +476,8 @@ namespace LarisVMS.Infrastructure.Migrations
                         .HasColumnType("nvarchar(200)");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("BackupNodeIdOverride");
 
                     b.HasIndex("Name");
 
@@ -956,6 +961,94 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.ToTable("ExportJobItems");
                 });
 
+            modelBuilder.Entity("LarisVMS.Core.Entities.MediaProxy", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<bool?>("AllowInsecure")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("ApiKeyHash")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<bool?>("CertIsSelfSigned")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("CertNotAfter")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("CertPfxPassword")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("CertPfxPath")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("CheckInNonce")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("Healthy")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Host")
+                        .IsRequired()
+                        .HasMaxLength(253)
+                        .HasColumnType("nvarchar(253)");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<DateTime?>("LastHealthyAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("LastIpAddress")
+                        .HasMaxLength(45)
+                        .HasColumnType("nvarchar(45)");
+
+                    b.Property<DateTime?>("LastSeenAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("NodeHealthReportsJson")
+                        .HasMaxLength(4000)
+                        .HasColumnType("nvarchar(4000)");
+
+                    b.Property<int>("Port")
+                        .HasColumnType("int");
+
+                    b.Property<string>("PreviousApiKeyHash")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<int?>("ReportedPort")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Version")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("MediaProxies");
+                });
+
             modelBuilder.Entity("LarisVMS.Core.Entities.MotionSpan", b =>
                 {
                     b.Property<long>("Id")
@@ -1046,10 +1139,19 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.Property<int?>("AiAccelerator")
                         .HasColumnType("int");
 
+                    b.Property<bool?>("AllowInsecureClientEndpoint")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("AllowReregistration")
+                        .HasColumnType("bit");
+
                     b.Property<string>("ApiKeyHash")
                         .IsRequired()
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime?>("ApiKeyRotatedAt")
+                        .HasColumnType("datetime2");
 
                     b.Property<long?>("ArchiveFreeBytes")
                         .HasColumnType("bigint");
@@ -1063,6 +1165,41 @@ namespace LarisVMS.Infrastructure.Migrations
 
                     b.Property<long?>("ArchiveTotalBytes")
                         .HasColumnType("bigint");
+
+                    b.Property<Guid?>("BackupNodeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("BackupProxyId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("CheckInNonce")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("ClientCertPfxPassword")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("ClientCertPfxPath")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<bool?>("ClientEndpointCertIsSelfSigned")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("ClientEndpointCertNotAfter")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("ClientEndpointHost")
+                        .HasMaxLength(253)
+                        .HasColumnType("nvarchar(253)");
+
+                    b.Property<string>("ClientEndpointLastError")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<int?>("ClientEndpointReportedPort")
+                        .HasColumnType("int");
 
                     b.Property<DateTime?>("ClockSkewMeasuredAt")
                         .HasColumnType("datetime2");
@@ -1081,6 +1218,22 @@ namespace LarisVMS.Infrastructure.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
+                    b.Property<string>("DirectStreamingMode")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<bool>("DisableAiObjectDetection")
+                        .HasColumnType("bit");
+
+                    b.Property<int?>("FailoverReason")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("FailoverSinceUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("FailoverState")
+                        .HasColumnType("int");
+
                     b.Property<string>("LastIpAddress")
                         .HasMaxLength(45)
                         .HasColumnType("nvarchar(45)");
@@ -1091,6 +1244,16 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.Property<int?>("LivePort")
                         .HasColumnType("int");
 
+                    b.Property<string>("MaintenanceBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<bool>("MaintenanceMode")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("MaintenanceSinceUtc")
+                        .HasColumnType("datetime2");
+
                     b.Property<string>("MediaSigningKey")
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
@@ -1100,6 +1263,13 @@ namespace LarisVMS.Infrastructure.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
 
+                    b.Property<string>("PartnerHealthReportsJson")
+                        .HasMaxLength(4000)
+                        .HasColumnType("nvarchar(4000)");
+
+                    b.Property<bool>("PendingSecretRotation")
+                        .HasColumnType("bit");
+
                     b.Property<string>("Platform")
                         .HasMaxLength(50)
                         .HasColumnType("nvarchar(50)");
@@ -1107,6 +1277,12 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.Property<string>("PreviousApiKeyHash")
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
+
+                    b.Property<Guid?>("PrimaryProxyId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("SecretRotationDays")
+                        .HasColumnType("int");
 
                     b.Property<int>("Status")
                         .HasColumnType("int");
@@ -1135,6 +1311,12 @@ namespace LarisVMS.Infrastructure.Migrations
                         .HasColumnType("nvarchar(50)");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("BackupNodeId");
+
+                    b.HasIndex("BackupProxyId");
+
+                    b.HasIndex("PrimaryProxyId");
 
                     b.ToTable("Nodes");
                 });
@@ -1754,6 +1936,11 @@ namespace LarisVMS.Infrastructure.Migrations
 
             modelBuilder.Entity("LarisVMS.Core.Entities.Camera", b =>
                 {
+                    b.HasOne("LarisVMS.Core.Entities.Node", null)
+                        .WithMany()
+                        .HasForeignKey("BackupNodeIdOverride")
+                        .OnDelete(DeleteBehavior.NoAction);
+
                     b.HasOne("LarisVMS.Core.Entities.Node", "Node")
                         .WithMany("Cameras")
                         .HasForeignKey("NodeId")
@@ -1857,6 +2044,30 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.Navigation("EventTagRule");
 
                     b.Navigation("Zone");
+                });
+
+            modelBuilder.Entity("LarisVMS.Core.Entities.Node", b =>
+                {
+                    b.HasOne("LarisVMS.Core.Entities.Node", "BackupNode")
+                        .WithMany()
+                        .HasForeignKey("BackupNodeId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("LarisVMS.Core.Entities.MediaProxy", "BackupProxy")
+                        .WithMany("BackupForNodes")
+                        .HasForeignKey("BackupProxyId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("LarisVMS.Core.Entities.MediaProxy", "PrimaryProxy")
+                        .WithMany("PrimaryForNodes")
+                        .HasForeignKey("PrimaryProxyId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.Navigation("BackupNode");
+
+                    b.Navigation("BackupProxy");
+
+                    b.Navigation("PrimaryProxy");
                 });
 
             modelBuilder.Entity("LarisVMS.Core.Entities.ScheduleWindow", b =>
@@ -1963,6 +2174,13 @@ namespace LarisVMS.Infrastructure.Migrations
             modelBuilder.Entity("LarisVMS.Core.Entities.ExportJob", b =>
                 {
                     b.Navigation("Items");
+                });
+
+            modelBuilder.Entity("LarisVMS.Core.Entities.MediaProxy", b =>
+                {
+                    b.Navigation("BackupForNodes");
+
+                    b.Navigation("PrimaryForNodes");
                 });
 
             modelBuilder.Entity("LarisVMS.Core.Entities.Node", b =>

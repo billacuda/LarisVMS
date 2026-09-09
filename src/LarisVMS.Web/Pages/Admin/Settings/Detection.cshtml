@@ -240,12 +240,60 @@
             <button type="button" class="help-icon" data-help-target="snapshotMotionAccuracyHelp" tabindex="0" aria-label="Help">ℹ️</button>
         </label>
         <div class="help-text-source" id="snapshotMotionAccuracyHelp">
-            On by default. Two related improvements: a stationary object whose detection box wobbles
-            slightly frame-to-frame (a parked car at a distance) no longer counts as "moving" and
-            stops producing stray snapshots; and once a moving object leaves the scene its snapshot is
-            finalized within a few seconds instead of staying open long enough for a later, unrelated
-            object of the same type to be folded into it. Turn it off to compare against the previous
-            behaviour. Global; changing it restarts each camera's detection pipeline.
+            On by default. Once a moving object leaves the scene its snapshot is finalized within a few
+            seconds (see the grace period below) instead of staying open long enough for a later,
+            unrelated object of the same type to be folded into it. Turn it off to compare against the
+            previous behaviour. Global; changing it restarts each camera's detection pipeline.
+        </div>
+    </div>
+
+    <div class="col-12">
+        <label class="form-label">
+            Departure grace (seconds)
+            <button type="button" class="help-icon" data-help-target="departureGraceHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <div class="d-flex align-items-center gap-2">
+            <input asp-for="DepartureGraceSeconds" type="range" min="1" max="10" step="1" class="form-range" id="departureGraceRange" />
+            <output class="text-muted small" style="min-width: 2.5em;" id="departureGraceReadout">@Model.DepartureGraceSeconds</output>
+        </div>
+        <div class="help-text-source" id="departureGraceHelp">
+            How long after an object was last seen moving before its snapshot is finalized as
+            "departed". Only applies while "Snapshot motion accuracy" above is on. Shorter finalizes
+            sooner but risks splitting one object that briefly pauses into two snapshots; longer holds
+            the snapshot open for a later same-type object to merge in. Was a fixed 5 seconds.
+        </div>
+    </div>
+
+    <div class="col-12 form-check">
+        <input asp-for="RejectMotionJitter" type="checkbox" class="form-check-input" />
+        <label asp-for="RejectMotionJitter" class="form-check-label">
+            Reject stationary-object jitter
+            <button type="button" class="help-icon" data-help-target="rejectMotionJitterHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <div class="help-text-source" id="rejectMotionJitterHelp">
+            Off by default, and experimental. Smooths the movement check so a distant parked vehicle
+            whose detection box wobbles frame-to-frame doesn't register as "moving" and stop producing
+            stray snapshots. On a noisier model (e.g. YOLOX-M) it has also been observed to hold
+            genuinely slow-moving objects as idle, so it is opt-in — this is the deployment-wide
+            default; set it per camera on a camera's own Edit page for the ones that actually have a
+            parked vehicle in view. Restarts each camera's detection pipeline.
+        </div>
+    </div>
+
+    <div class="col-12">
+        <label class="form-label">
+            Jitter threshold (pixels)
+            <button type="button" class="help-icon" data-help-target="motionJitterPixelsHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <div class="d-flex align-items-center gap-2">
+            <input asp-for="MotionJitterPixels" type="range" min="1" max="15" step="1" class="form-range" id="motionJitterPixelsRange" />
+            <output class="text-muted small" style="min-width: 2.5em;" id="motionJitterPixelsReadout">@Model.MotionJitterPixels</output>
+        </div>
+        <div class="help-text-source" id="motionJitterPixelsHelp">
+            Minimum real pixel travel of a detection box's centre before it counts as moving. Only
+            applies where "Reject stationary-object jitter" is on. Higher rejects more box wobble but
+            also ignores slower genuine movement; 3 is the previous built-in value. Per-camera
+            overridable on a camera's own Edit page.
         </div>
     </div>
 
@@ -280,16 +328,20 @@
         // getting wrong, and initializing from the slider's own value below (rather than trusting
         // the two to already agree) rules out the readout and the slider ever silently disagreeing.
         (function () {
-            function wireSlider(rangeId, readoutId) {
+            function wireSlider(rangeId, readoutId, transform) {
                 var range = document.getElementById(rangeId);
                 var readout = document.getElementById(readoutId);
                 if (!range || !readout) return;
-                function sync() { readout.textContent = Math.round(range.value * 100); }
+                function sync() { readout.textContent = transform(range.value); }
                 range.addEventListener('input', sync);
                 sync(); // in case the slider's own value differs from what was rendered server-side
             }
-            wireSlider('confidenceRange', 'confidenceReadout');
-            wireSlider('iouRange', 'iouReadout');
+            var asPercent = function (v) { return Math.round(v * 100); };
+            var asInt = function (v) { return Math.round(v); };
+            wireSlider('confidenceRange', 'confidenceReadout', asPercent);
+            wireSlider('iouRange', 'iouReadout', asPercent);
+            wireSlider('departureGraceRange', 'departureGraceReadout', asInt);
+            wireSlider('motionJitterPixelsRange', 'motionJitterPixelsReadout', asInt);
         })();
     </script>
 }

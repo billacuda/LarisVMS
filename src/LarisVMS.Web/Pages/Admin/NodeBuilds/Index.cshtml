@@ -4,12 +4,15 @@
 @{
     ViewData["Title"] = "Node Builds";
 }
-<h1>Recorder node builds</h1>
+<h1>Recorder node &amp; media proxy builds</h1>
 <p class="text-muted">
     Every <code>deploy.ps1</code> run that builds a new recorder-node version registers it here as
-    <strong>Pending</strong>. Approve one to make it the version every recorder node whose reported
-    version is older downloads, verifies, and applies on its own next heartbeat — no more manually
-    re-running <code>build-node.ps1</code> / <code>install-node.ps1</code> on each recorder machine.
+    <strong>Pending</strong> (and, with <code>-BuildProxy</code>, the media proxy build too — its
+    <strong>Platform</strong> is <code>proxy-win-x64</code>). Approve one to make it the version every
+    recorder node or media proxy whose reported version is older downloads, verifies, and applies on
+    its own next check-in — no more manually re-running <code>build-node.ps1</code> /
+    <code>install-node.ps1</code> (or <code>build-proxy.ps1</code> / <code>install-proxy.ps1</code>)
+    on each machine.
     A build with a ✅ under <strong>Vision</strong> also carries a matching
     <code>LarisVMS.Vision.Service.exe</code>, applied alongside the node exe in the same update —
     but only on a node that already has AI detection installed; a node's first-ever Vision Service

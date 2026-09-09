@@ -17,7 +17,12 @@ public enum AlertConditionType
 
     /// <summary>The node's last-reported free space fraction has dropped below the rule's
     /// ThresholdPercent.</summary>
-    NodeStorageLow = 2
+    NodeStorageLow = 2,
+
+    /// <summary>Recording failover activated for a node (LarisVMS failover plan, phase 3) — a quorum
+    /// of voters agreed its service was down, or an admin put it in maintenance, and its cameras
+    /// moved to the backup node. Fires once per failover activation, not per tick.</summary>
+    NodeFailoverActivated = 3
 }
 
 /// <summary>Where an AlertDelivery sends a firing. BrowserPush is deliberately not in this list yet —

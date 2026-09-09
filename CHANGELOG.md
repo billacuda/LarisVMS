@@ -5,7 +5,184 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.195.0] - 2026-09-08
+
+### Changed
+
+- **Detection-box jitter rejection is now opt-in, per camera, and tunable.** The wobble-rejection
+  half of **Admin → Settings → Detection → Snapshot motion accuracy** (added in 0.188.0) was
+  holding parked vehicles idle by over-smoothing the movement check — but on a noisier model
+  (switching YOLOX from L to M) it did the opposite, reporting a parked truck and car as moving
+  all night, worse than before any jitter fix existed. It is now its own setting,
+  **`Detection.RejectMotionJitter`**, **off by default** (restoring the proven pre-0.188 movement
+  classification: a single oldest-vs-newest box-centre comparison), resolvable globally *and per
+  camera* on a camera's own Edit page — turn it on only for the cameras that actually have a
+  parked vehicle in view. Its pixel sensitivity is exposed as **`Detection.MotionJitterPixels`**
+  (1–15, default 3), also global + per-camera.
+- **`Detection.SnapshotMotionAccuracy`** now governs only the other half — finalizing a
+  detection's snapshot promptly once its object leaves frame — and its grace window, previously a
+  hard-coded 5 seconds, is now the **`Detection.DepartureGraceSeconds`** setting (1–10, default 5).
+- Changing any of these four restarts each affected camera's detection pipeline, same as the
+  existing detection settings.
+
+### Fixed
+
+- **A recorder node's primary drive could fill to 100% when its archive volume was unreachable.**
+  The watermark backstop (the "disk is nearly full regardless of settings" pass) tried to *archive*
+  the oldest footage rather than delete it — but a file moved to the archive volume stays on the
+  primary drive until its relocation is confirmed by the server at the end of the sweep, so it freed
+  no space when the drive was actually out of room, and froze entirely when the archive volume was
+  down or rejecting writes. The watermark pass now always **deletes** to free real space and keep the
+  node recording, logs a warning naming how much was deleted (and how much belonged to archive-enabled
+  cameras and is therefore gone for good), and logs an error if the drive is still over the watermark
+  afterwards. The per-sweep "archive volume unreachable" warning now says plainly that aged-out
+  footage will be deleted, not preserved, until the archive volume is restored.
+
+### Note
+
+- Recorder nodes auto-update to this build (Node + Vision Service binaries); no `install-node.ps1`
+  re-run. After upgrade, box-jitter rejection is **off** for every camera — if you had turned
+  "Snapshot motion accuracy" on for it, re-enable it as **Reject stationary-object jitter** only on
+  the cameras that need it (**Admin → Settings → Detection**, or per camera on the camera's Edit
+  page). The prompt snapshot-finalization half of the old toggle is unchanged and still on by
+  default.
+- Schema migration `BumpVersion0_195_0` (version-tracking row only, no table changes) —
+  `dotnet ef database update` / redeploy applies it.
+
+## [0.194.0] - 2026-09-08
+
+### Added
+
+- **Recording failover.** Assign a recorder node a **backup node** on **Admin → Nodes**. If the node
+  goes down, its cameras move to the backup for recording (and live view) until it returns — footage
+  the backup records during the outage stays on the backup and plays back transparently, no
+  migration. Two nodes can back each other up.
+  - The decision is a **quorum**, not one opinion: the backup node, this server, and any media proxy
+    assigned to the node each actively probe its `/health`, and a **majority of the voters that
+    responded** must agree the service is down before anything moves (never fewer than two). A
+    server↔node disagreement across a flaky WAN link changes nothing while the backup, on the same
+    LAN, still sees the node. Verdicts are held across a sustain window to damp flapping.
+  - **Maintenance mode** — a per-node button (behind a confirm dialog) that fails a node's cameras
+    over to its backup immediately and holds them there until you turn it off, even if the node's own
+    health stays green the whole time. If the node has no backup, the dialog warns that recording
+    will stop.
+  - **Recording only** — a per-node switch that turns AI object detection off entirely for that node
+    (its own cameras and any it adopts during a failover). It keeps recording continuously and
+    tagging ONVIF events — the pre-AI behaviour — so a low-power backup node that suddenly picks up
+    many cameras keeps recording rather than collapsing under inference load.
+  - A **hardware-mismatch warning** on the Nodes page when a backup node has different acceleration
+    hardware (or is itself in recording-only mode), and a new **Node failover activated** alert
+    condition on **Admin → Alerts**.
+- Recorder nodes expose an unauthenticated `GET /health` on their LAN port (version, recording
+  camera count, uptime) for the failover quorum probes.
+
+### Note
+
+- Recorder nodes auto-update to this build. Failover needs a backup node assigned on **Admin →
+  Nodes** — nothing changes for a node without one. The tuning defaults (90s to fail over, 120s to
+  fail back) are conservative; a failover briefly interrupts live view for the affected cameras
+  while the stream reconnects through this server.
+
+## [0.193.0] - 2026-09-07
+
+### Added
+
+- **Media proxies auto-update**, exactly like recorder nodes. `deploy.ps1 -BuildProxy` registers
+  each new proxy build on **Admin → Node Builds** (platform `proxy-win-x64`); once an admin approves
+  it, every proxy whose reported version is older downloads it, verifies its SHA-256, and swaps its
+  own binary on its next check-in — no more re-running `install-proxy.ps1` on each relay machine.
+  The proxy package now bundles `LarisVMS.NodeUpdater.exe` (the same detached swap helper the node
+  uses) for this. Controlled by the same **Auto-update recorder nodes and media proxies** setting on
+  **Admin → Settings → Nodes**; an update briefly drops in-flight live/playback connections while
+  the service restarts, and browsers reconnect through the fallback chain in the meantime.
+- **Admin → Media proxies** has a 📋 copy button next to the `install-proxy.ps1` command.
+
+### Fixed
+
+- Turning on archive storage for a node with a large backlog of existing footage could stall: the
+  first sweep tried to report every archived (or deleted) segment to the server in one request and
+  the web host rejected it with **413 Payload Too Large**, so nothing drained. Those reports now go
+  out in batches, and each batch that lands has its work committed before the next is sent.
+
+## [0.192.0] - 2026-09-07
+
+### Added
+
+- **Media proxy tier.** A media proxy is a standalone relay (`LarisVMS.Proxy`) that sits between
+  browsers and recorder nodes for live view and playback — a dumb TLS-terminating pass-through. It
+  holds no camera credentials and no per-node secret. Use it when a proxy machine can hold a real
+  certificate but the recorder nodes can't, when browsers can reach a proxy but not the nodes
+  directly, or just to keep media traffic off this server. Build it with `build-proxy.ps1` (or
+  `deploy.ps1 -BuildProxy`) and install it with `install-proxy.ps1`, which reuses the same
+  registration key a recorder node uses.
+- **Admin → Media proxies** — a proxy shows up here after its first check-in; set its routable host,
+  its certificate (a `.pfx` path/password, or self-signed for testing), and enable it. This server
+  health-checks every proxy every ~15 seconds.
+- On **Admin → Nodes**, each node can be assigned a **primary** and a **backup** media proxy.
+  Browsers are then routed through the first healthy proxy, falling back to direct-to-node (if that
+  node has a client endpoint) and finally to this server. A proxy this server can't health-check is
+  never handed to a client, so assigning one can't break a working stream.
+- Recorder-node live and playback log lines now name the camera, not just its GUID.
+
+## [0.191.0] - 2026-09-06
+
+### Added
+
+- **Direct-to-node streaming.** Live view and playback can now hand the browser a connection
+  straight to the recorder node over HTTPS instead of relaying every byte through this server,
+  taking the central hop out of the media path. It is **off by default**: turn it on globally at
+  **Admin → Settings → Live View → Direct streaming**, or per node on **Admin → Nodes**. A camera
+  whose node has not reported a healthy client endpoint automatically stays on the proxy, so
+  enabling the toggle can't break a stream that isn't ready.
+- Recorder nodes gained an optional second HTTPS listener for that direct traffic.
+  `install-node.ps1` has new switches — `-ClientPort`, `-ClientPfxPath`, `-ClientPfxPassword`,
+  `-ClientAllowInsecure` — and the certificate path/password can also be managed centrally on
+  **Admin → Nodes**. A supplied `.pfx` is hot-reloaded when the file changes, with no node restart.
+- For initial setup and testing only, **Allow insecure client endpoint** lets a node come up on an
+  auto-generated, self-signed certificate. Viewers must click through a one-time browser warning
+  (the live view offers a "trust the recorder" link), and every affected stream is flagged
+  insecure in the UI. Use a real certificate in production.
+- **Admin → Nodes** shows a streaming-relay counter (live streams still relayed, playback segments
+  proxied, bytes) so the proxy-vs-direct change can be measured — the numbers trend toward zero as
+  cameras move to direct. The live player also reports a time-to-first-frame measurement.
+- Recorder nodes log each viewer that attaches to a camera's live stream — camera, client address,
+  whether the connection came straight from a browser (direct) or via this server (proxy), and how
+  long it lasted — plus direct playback fetches. The Content Security Policy is widened at runtime
+  with each node's own client-endpoint origin so a direct `wss://`/`https://` connection isn't
+  blocked (and stays exactly as before when no node has a client endpoint).
+
+### Fixed
+
+- In a fullscreen camera tile, scrolling the mouse wheel over the timeline strip zoomed the video
+  image as well as the timeline. The timeline now consumes those wheel events so only it zooms.
+
+### Note
+
+- Enabling a node's direct client endpoint needs `install-node.ps1` re-run on that node (with
+  `-ClientPort …`). While direct streaming is on, that node's live/playback briefly drops during
+  each auto-update as the second listener restarts — the same short interruption an update already
+  causes for recording.
+
+## [0.190.0] - 2026-09-06
+
+### Added
+
+- Recorder-node check-ins are now replay-hardened. Every heartbeat carries a single-use rolling
+  nonce issued in the previous reply; a replayed heartbeat is rejected and recorded in the audit
+  log as `Node.AuthReplay`. A node whose nonce gets out of sync — a heartbeat reply it never
+  received — keeps resending the stale value and locks itself out; the new **Reset auth** button on
+  **Admin → Nodes** clears it so the node re-syncs on its next check-in. No effect on a healthy node.
+- Bearer-secret rotation for recorder nodes. It is wired end to end but dormant by default: set a
+  node's `SecretRotationDays` above `0` (in the database) to have the server hand that node a fresh
+  secret once the current one reaches that age. The server keeps accepting the previous secret until
+  the node first authenticates with the new one, so a rotation causes no downtime, and a new secret
+  is only ever issued on a heartbeat that already passed the nonce check.
+- One-shot media tokens (playback segment, hover thumbnail, AI-detection snapshot crop, node service
+  restart) now carry a per-request id and are refused on a second use within their 30–60 second
+  lifetime. Live view is unaffected — its token is deliberately reused across the video and overlay
+  sockets. Tokens issued by this build to a not-yet-updated node are accepted without the check, and
+  playback or thumbnails from a node may briefly return an authorization error during the few
+  seconds it takes that node to auto-update to this build.
 
 ## [0.189.0] - 2026-09-06
 

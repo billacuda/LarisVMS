@@ -77,7 +77,26 @@ param(
     # the LAN (plain HTTP, never by a browser directly — see the plan's "Media path" section). Needs
     # an inbound firewall allow rule, added below, or LarisVMS.Web can reach the port but every
     # connection attempt just hangs until it times out — confirmed on a real node.
-    [int]$LivePort             = 8554
+    [int]$LivePort             = 8554,
+
+    # ── Failover plan phase 1: direct-to-node client HTTPS endpoint ────────────────────────────────
+    # 0 (the default) leaves it off. A non-zero port stands up a second Kestrel listener that a
+    # browser can be pointed straight at for live/playback (skipping the central relay), and opens an
+    # inbound firewall rule for it. Written to %ProgramData%\LarisVMS\client-endpoint.json, which
+    # overrides anything the server pushes.
+    [int]$ClientPort           = 0,
+    # Path to the .pfx the client endpoint should present, and its password. Omit both and pass
+    # -ClientAllowInsecure to have the node auto-generate a stable self-signed certificate instead
+    # (setup/testing only). A path/password set on Admin -> Nodes is used when these are omitted.
+    [string]$ClientPfxPath     = '',
+    [string]$ClientPfxPassword = '',
+    # Let the client endpoint come up on a self-signed certificate — viewers click through a browser
+    # warning. Setup/testing only; also requires the matching global toggle on Admin -> Settings ->
+    # Live View before the server will actually route browsers to it.
+    [switch]$ClientAllowInsecure,
+    # FQDN browsers use to reach this node's client endpoint (must match the certificate). Defaults to
+    # the machine name; also settable on Admin -> Nodes.
+    [string]$ClientEndpointHost = ''
 )
 
 Set-StrictMode -Version Latest
@@ -545,6 +564,29 @@ $firewallRuleName = "LarisVMS Node Live View"
 Get-NetFirewallRule -DisplayName $firewallRuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
 New-NetFirewallRule -DisplayName $firewallRuleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort $LivePort | Out-Null
 Write-Ok "Allowed inbound TCP $LivePort"
+
+# ── Failover plan phase 1: direct-to-node client HTTPS endpoint ────────────────────────────────────
+$clientEndpointRuleName = "LarisVMS Node Client Endpoint"
+Get-NetFirewallRule -DisplayName $clientEndpointRuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+if ($ClientPort -gt 0) {
+    Write-Step "Writing client-endpoint.json and firewall rule (TCP $ClientPort)"
+    $clientCfgDir = Join-Path $env:ProgramData 'LarisVMS'
+    New-Item -ItemType Directory -Force -Path $clientCfgDir | Out-Null
+    $clientCfg = [ordered]@{
+        enabled       = $true
+        port          = $ClientPort
+        allowInsecure = [bool]$ClientAllowInsecure
+    }
+    if ($ClientPfxPath)      { $clientCfg.pfxPath = $ClientPfxPath }
+    if ($ClientPfxPassword)  { $clientCfg.pfxPassword = $ClientPfxPassword }
+    if ($ClientEndpointHost) { $clientCfg.host = $ClientEndpointHost }
+    $clientCfg | ConvertTo-Json | Set-Content -Path (Join-Path $clientCfgDir 'client-endpoint.json') -Encoding UTF8
+    New-NetFirewallRule -DisplayName $clientEndpointRuleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort $ClientPort | Out-Null
+    Write-Ok "Client endpoint on TCP $ClientPort ($(if ($ClientAllowInsecure) { 'self-signed / insecure' } elseif ($ClientPfxPath) { 'supplied certificate' } else { 'certificate from server config' }))"
+}
+elseif ($ClientAllowInsecure -or $ClientPfxPath) {
+    Write-Host "    -ClientAllowInsecure / -ClientPfxPath ignored: pass -ClientPort to enable the direct client endpoint." -ForegroundColor Yellow
+}
 
 # ── start ─────────────────────────────────────────────────────────────────────
 

@@ -78,6 +78,12 @@ public class Camera
     /// and probed before it has anywhere to record to.</summary>
     public Guid? NodeId { get; set; }
 
+    /// <summary>Failover plan phase 3: optional per-camera override of <see cref="Node.BackupNodeId"/>
+    /// — the node this one camera fails over to for recording while its primary node is down, when
+    /// that should differ from the primary node's default backup. Null = use the primary node's
+    /// <see cref="Node.BackupNodeId"/>. FK to <see cref="Node"/>, <c>DeleteBehavior.NoAction</c>.</summary>
+    public Guid? BackupNodeIdOverride { get; set; }
+
     public string Name { get; set; } = string.Empty;
 
     public string Host { get; set; } = string.Empty;

@@ -11,12 +11,15 @@ using LarisVMS.Media;
 using LarisVMS.Node.Update;
 using LarisVMS.Onvif.Clients;
 using LarisVMS.Onvif.Soap;
+using LarisVMS.Relay;
 
 namespace LarisVMS.Node;
 
 public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackStorageRoot, int livePort,
     NodeConfig registration, ILoggerFactory loggerFactory, OnvifEventsClient onvifEventsClient,
-    UpdateService updateService, FileLoggerProvider fileLogger) : BackgroundService
+    UpdateService updateService, FileLoggerProvider fileLogger,
+    ClientEndpointConfig clientEndpoint, CertHolder? certHolder,
+    PartnerHealthTracker partnerHealthTracker) : BackgroundService
 {
     private readonly ILogger<NodeWorker> _logger = loggerFactory.CreateLogger<NodeWorker>();
     private string _appliedLogLevel = "Information";
@@ -133,6 +136,13 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     // TryStartFromCacheIfIdle.
     private NodeConfigResponse? _cachedConfig = registration.CachedConfig;
 
+    // The live, on-disk view of this node's own credentials/registration. Distinct from the `registration`
+    // primary-ctor param (a snapshot at process start) because the failover plan's phase 5 lets central
+    // roll two of its fields at runtime: CheckInNonce every heartbeat (5a) and, when rotation is armed,
+    // Secret (5b). Every persisted node.config write goes through this so neither is ever clobbered by
+    // a stale copy. Touched only from the single reconcile loop.
+    private NodeConfig _registration = registration;
+
     // Fetched once, before any RecordingSession can start (see ExecuteAsync) — a real, confirmed bug
     // fix: without this, every node process restart made RecordingSession.RunAsync rescan a camera's
     // *entire* on-disk history with zero memory of what the server already has rows for, re-firing
@@ -165,6 +175,19 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// if it isn't assigned here (or isn't recording yet). Used by the live-view WebSocket endpoint
     /// to attach a viewer to the right session's tee'd live fanout.</summary>
     public RecordingSession? TryGetSession(Guid cameraId) => _active.TryGetValue(cameraId, out var r) ? r.Session : null;
+
+    /// <summary>How many cameras this node currently has a recorder for — reported by the <c>/health</c>
+    /// endpoint (failover plan phase 3) so a partner node / central / proxy probe sees "the service is
+    /// up AND doing its job", not just a socket that accepts. A count of 0 on a node that should be
+    /// recording is still "up" — the caller decides what to make of it.</summary>
+    public int ActiveRecordingCount => _active.Count;
+
+    /// <summary>The camera's configured name from the most recent reconcile, for log lines — or the
+    /// short GUID form when this node hasn't been handed that camera's config yet.</summary>
+    public string CameraDisplayName(Guid cameraId)
+        => _latestCameraConfig.TryGetValue(cameraId, out var c) && !string.IsNullOrWhiteSpace(c.Name)
+            ? c.Name
+            : cameraId.ToString("N")[..8];
 
     // M18 follow-up: the /playback-segment route's partial-fetch fragment index (see
     // Program.cs) — keyed on full file path since a completed segment file never changes, so its
@@ -488,6 +511,10 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             {
                 var config = await api.GetConfigAsync(ct);
                 MediaSigningKey = config.MediaSigningKey;
+                // Failover plan phase 3: hand PartnerProbeService the current list of nodes this one
+                // backs up (it probes their /health on its own cadence; the results ride the next
+                // heartbeat below).
+                partnerHealthTracker.SetPartners(config.PartnersToProbe);
                 var storageRoot = Reconcile(config, ct);
                 PersistConfigCache(config);
                 var usage = DiskSpace.TryGetUsage(storageRoot);
@@ -499,7 +526,21 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                     && 100.0 * (u.TotalBytes - u.FreeBytes) / u.TotalBytes > config.WatermarkPercent;
                 var heartbeat = await api.HeartbeatAsync(new NodeHeartbeatRequest(NodeVersion.Current, usage?.FreeBytes, usage?.TotalBytes, livePort,
                     DateTime.UtcNow, _detectedEncoders?.ToList(), _detectedAccelerators.Select(a => a.ToString()).ToList(),
-                    archiveUsage?.FreeBytes, archiveUsage?.TotalBytes, storagePressure), ct);
+                    archiveUsage?.FreeBytes, archiveUsage?.TotalBytes, storagePressure,
+                    // Failover plan phase 5a: echo the rolling nonce central issued last time.
+                    _registration.CheckInNonce,
+                    // Failover plan phase 1: report the state of the client HTTPS endpoint.
+                    clientEndpoint.Enabled && certHolder is { Current: not null } ? clientEndpoint.Port : null,
+                    certHolder?.Current?.NotAfter.ToUniversalTime(),
+                    certHolder is not null ? certHolder.IsSelfSigned : null,
+                    certHolder?.LastError,
+                    // Failover plan phase 3: this node's /health verdicts on the partners it backs up.
+                    partnerHealthTracker.CurrentReports()), ct);
+
+                // Failover plan phase 5a/5b: fold in the next nonce, and a rotated secret if central
+                // sent one, persisting node.config before switching so a mid-rotation restart can't
+                // strand us on a secret that was never written.
+                ApplyCheckInSecurity(heartbeat);
 
                 // Auto-update: server only ever hands this back when a genuinely newer build exists
                 // for this node's platform and NodeAutoUpdate.Enabled is on (see Program.cs's
@@ -548,13 +589,53 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     private void PersistConfigCache(NodeConfigResponse config)
     {
         _cachedConfig = config;
+        _registration = _registration with { MediaSigningKey = config.MediaSigningKey, CachedConfig = config };
         try
         {
-            NodeConfigStore.Save(registration with { MediaSigningKey = config.MediaSigningKey, CachedConfig = config });
+            NodeConfigStore.Save(_registration);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to persist cached node config to disk — offline resume after a restart won't have this camera list until the next successful reconcile.");
+        }
+    }
+
+    /// <summary>Failover plan phase 5a/5b: applies whatever security material central rolled on this
+    /// heartbeat. The rolling nonce (5a) changes every cycle; a rotated secret (5b) only when rotation
+    /// is armed (Node.SecretRotationDays, off by default) or an admin forced one. node.config is
+    /// written <em>before</em> the in-memory switch and the HTTP client credential swap, so a crash
+    /// between the two can only ever leave us on the <em>old</em> secret — still valid through
+    /// central's grace window (AuthenticateAsync keeps PreviousApiKeyHash until the new one is first
+    /// used) — never on a secret that was never persisted.</summary>
+    private void ApplyCheckInSecurity(NodeHeartbeatResponse heartbeat)
+    {
+        var target = _registration;
+        if (heartbeat.NextNonce is not null && heartbeat.NextNonce != target.CheckInNonce)
+            target = target with { CheckInNonce = heartbeat.NextNonce };
+
+        var secretRotated = heartbeat.NewSecret is not null && heartbeat.NewSecret != target.Secret;
+        if (secretRotated)
+            target = target with { Secret = heartbeat.NewSecret! };
+
+        if (ReferenceEquals(target, _registration)) return; // nothing rolled this cycle
+
+        try
+        {
+            NodeConfigStore.Save(target);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, secretRotated
+                ? "Central rotated this node's bearer secret but node.config could not be written — staying on the current secret (still accepted via central's grace window); the rotation will not be retried until the next one is due."
+                : "Could not persist the new rolling check-in nonce — it will be re-synced on the next successful heartbeat.");
+            return;
+        }
+
+        _registration = target;
+        if (secretRotated)
+        {
+            api.SetCredentials(target.NodeId, target.Secret);
+            _logger.LogInformation("Central rotated this node's bearer secret — switched to the new one.");
         }
     }
 
@@ -1383,7 +1464,8 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         var signature = string.Join('|', watchRtspUri, sourceWidth, sourceHeight, config.AspectMode,
             camera.AiConfidence, camera.AiIou, config.ReportIdleDetections, config.AiIdleTimeoutSeconds,
             watchRole, _resolvedAccelerator, _resolvedDetectionModelFamily, config.DFineWeights, config.YoloXSize,
-            decodeFpsCap, config.GpuPreprocessing, config.DFineTensorRtMode, config.SnapshotMotionAccuracy);
+            decodeFpsCap, config.GpuPreprocessing, config.DFineTensorRtMode, config.SnapshotMotionAccuracy,
+            camera.RejectMotionJitter, camera.MotionJitterPixels, config.DepartureGraceSeconds);
 
         if (_activeVision.TryGetValue(camera.CameraId, out var existing) && existing.ConfigSignature == signature) return; // already watching, unchanged
 
@@ -1403,8 +1485,12 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             // TensorRT engine, so the pipeline must restart.
             config.DFineTensorRtMode,
             // Detection.SnapshotMotionAccuracy — global. In `signature` above: it changes how the
-            // movement classifier and span lifecycle behave, so a change restarts the pipeline.
-            config.SnapshotMotionAccuracy);
+            // span lifecycle behaves, so a change restarts the pipeline.
+            config.SnapshotMotionAccuracy,
+            // Detection.RejectMotionJitter / MotionJitterPixels — per-camera; Detection.DepartureGraceSeconds
+            // — global. All in `signature` above: each changes the movement classifier or span
+            // lifecycle, so a change restarts the pipeline.
+            camera.RejectMotionJitter, camera.MotionJitterPixels, config.DepartureGraceSeconds);
 
         // Never stack two starts for the same camera — see _visionStartsInFlight's own comment.
         if (!_visionStartsInFlight.TryAdd(camera.CameraId, 0)) return;

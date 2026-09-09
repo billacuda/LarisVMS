@@ -8,9 +8,15 @@ namespace LarisVMS.Node;
 /// along so a node that reboots while the central server is unreachable can resume recording from
 /// it immediately instead of sitting idle until the server answers again (see NodeWorker's
 /// reconcile loop). It's stale by definition; a live GetConfigAsync response always supersedes it
-/// the moment one succeeds.</summary>
+/// the moment one succeeds.
+///
+/// CheckInNonce (failover plan phase 5a) is the single-use value the server last handed back
+/// (NodeHeartbeatResponse.NextNonce); the node echoes it on its next heartbeat and persists each new
+/// one here so a restart doesn't lose it and lock the node out. Null until the first heartbeat lands
+/// (or after the server clears it). Secret is rotated in place (phase 5b) — the record is re-saved
+/// with the new value the moment NewSecret arrives.</summary>
 public record NodeConfig(string ServerUrl, Guid NodeId, string Secret, string MediaSigningKey,
-    NodeConfigResponse? CachedConfig = null);
+    NodeConfigResponse? CachedConfig = null, string? CheckInNonce = null);
 
 /// <summary>
 /// Persists the node's registration (server URL, assigned NodeId, and secret) to

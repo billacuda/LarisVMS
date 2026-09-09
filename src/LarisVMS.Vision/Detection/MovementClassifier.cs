@@ -31,21 +31,24 @@ public sealed class MovementClassifierOptions
     /// something a normal detection frame rate would ever reach.</summary>
     public int MaxHistorySamples { get; init; } = 256;
 
-    /// <summary>When true (the default), Moving/Idle is decided from the net displacement between
-    /// <em>lightly smoothed</em> (up to two samples each) endpoints, which must clear both an
-    /// absolute pixel floor (<see cref="MinNetDisplacementPixels"/>) and <see
-    /// cref="MovementThresholdFraction"/> of the box diagonal. When false, the classifier falls
-    /// back to the original single oldest-vs-newest centroid comparison against <see
-    /// cref="MovementThresholdFraction"/> only. This is the "off" path of the
-    /// Detection.SnapshotMotionAccuracy live toggle — a stationary vehicle whose raw detection box
-    /// jitters frame-to-frame could otherwise cross the fractional threshold on a single bad
-    /// sample and register as Moving.</summary>
-    public bool JitterRejectionEnabled { get; init; } = true;
+    /// <summary>When true, Moving/Idle is decided from the net displacement between <em>lightly
+    /// smoothed</em> (up to two samples each) endpoints, which must clear both an absolute pixel
+    /// floor (<see cref="MinNetDisplacementPixels"/>) and <see cref="MovementThresholdFraction"/>
+    /// of the box diagonal. When false (the default), the classifier uses the original single
+    /// oldest-vs-newest centroid comparison against <see cref="MovementThresholdFraction"/> only.
+    /// This is the "on" path of the per-camera Detection.RejectMotionJitter toggle — a stationary
+    /// vehicle whose raw detection box jitters frame-to-frame could otherwise cross the fractional
+    /// threshold on a single bad sample and register as Moving. It is opt-in because on a noisier
+    /// model (e.g. YOLOX-M) the smoothing has also been observed to suppress genuinely slow-moving
+    /// subjects; default off keeps the proven pre-0.188 behaviour.</summary>
+    public bool JitterRejectionEnabled { get; init; }
 
-    /// <summary>Jitter-rejection only: the centroid must also have a net displacement of at least
-    /// this many pixels, regardless of box size. A small/distant box has a small diagonal, so
-    /// <see cref="MovementThresholdFraction"/> alone can be only a handful of pixels — well within
-    /// the frame-to-frame wobble of the raw detection box for a parked car.</summary>
+    /// <summary>Jitter-rejection only (<see cref="JitterRejectionEnabled"/>): the centroid must
+    /// also have a net displacement of at least this many pixels, regardless of box size. A
+    /// small/distant box has a small diagonal, so <see cref="MovementThresholdFraction"/> alone
+    /// can be only a handful of pixels — well within the frame-to-frame wobble of the raw
+    /// detection box for a parked car. Operator-tunable per camera via Detection.MotionJitterPixels
+    /// (1-15); higher rejects more wobble but risks ignoring a genuinely slow mover.</summary>
     public double MinNetDisplacementPixels { get; init; } = 3.0;
 }
 
@@ -133,7 +136,7 @@ public sealed class MovementClassifier(MovementClassifierOptions? options = null
 
         if (!_options.JitterRejectionEnabled)
         {
-            // Original behaviour, kept intact for the Detection.SnapshotMotionAccuracy "off" path.
+            // Original behaviour and the default — the Detection.RejectMotionJitter "off" path.
             if (history.Samples.Count < 2) return MovementState.Idle;
             var first = history.Samples[0].Centroid;
             var last = history.Samples[^1].Centroid;
@@ -155,8 +158,9 @@ public sealed class MovementClassifier(MovementClassifierOptions? options = null
         var net = Distance(startCentroid, endCentroid);
 
         // Moving once the centroid has travelled a real distance across the window: past an
-        // absolute pixel floor (a small/distant box's diagonal is only a handful of px, within the
-        // raw wobble of a parked car's box) and past a fraction of the box diagonal. No
+        // absolute pixel floor (MinNetDisplacementPixels, operator-tunable via
+        // Detection.MotionJitterPixels — a small/distant box's diagonal is only a handful of px,
+        // within the raw wobble of a parked car's box) and past a fraction of the box diagonal. No
         // path-directedness ratio — it rejected genuinely-moving non-rigid subjects (people,
         // animals) whose per-frame box wobble inflated the walked-path length, while a parked
         // vehicle's rigid box sailed through it.

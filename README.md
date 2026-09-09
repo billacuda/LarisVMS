@@ -15,7 +15,7 @@ work on phone, tablet, and desktop.
 
 ---
 
-## **Current version [0.189.0](CHANGELOG.md)**
+## **Current version [0.195.0](CHANGELOG.md)**
 
 ## Stack
 
@@ -94,10 +94,11 @@ logging when nothing's available). Detected objects draw as live, tracked **on-s
 recordings — colored by a small auto-assigned category (Human/Vehicle/Animal/Object) with the specific
 class riding alongside ("Vehicle — car"), and a count on the badge ("Human ×2") when several objects
 of the same type were moving at once. A detected object also gets its own cropped, best-frame
-snapshot image, separate from the ordinary hover-thumbnail cache; a stationary object whose box only
-wobbles isn't treated as moving, and once a moving object leaves it finalizes its own snapshot
-promptly rather than being merged with a later, unrelated object of the same type
-(`Admin → Settings → Detection → Snapshot motion accuracy`). Runs as a sibling process
+snapshot image, separate from the ordinary hover-thumbnail cache; once a moving object leaves it
+finalizes its own snapshot promptly rather than being merged with a later, unrelated object of the
+same type (`Admin → Settings → Detection → Snapshot motion accuracy`, with an adjustable departure
+grace). An opt-in, per-camera jitter rejection (`Detection → Reject stationary-object jitter`) can
+additionally hold a distant parked vehicle whose box only wobbles as idle. Runs as a sibling process
 (`LarisVMS.Vision.Service`) so a site that never enables it pays nothing for the GPU/ONNX Runtime
 dependency, and a bad GPU/driver interaction can never take down recording itself. **Unverified against
 real GPU hardware or an actual camera end-to-end** — see [CHANGELOG.md](CHANGELOG.md).

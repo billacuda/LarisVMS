@@ -6,10 +6,18 @@ namespace LarisVMS.Core.Entities;
 /// A recorder node — a separate Windows Service process (LarisVMS.Node) that owns FFmpeg-based
 /// recording for whichever cameras are assigned to it (Camera.NodeId). Auth is a bearer secret
 /// `{nodeId}:{secret}`, SHA-256 hashed and compared with fixed-time equality by NodeAuthMiddleware —
-/// the same shape as dploid's AgentAuthMiddleware. Secret rotation (PreviousApiKeyHash) and the
-/// nonce/replay hardening dploid's agent protocol has are deliberately not wired up yet; this first
-/// cut is a single long-lived secret per node, which is enough to get 24/7 recording working and
-/// doesn't block adding rotation later without a wire-protocol change.
+/// the same shape as dploid's AgentAuthMiddleware.
+///
+/// Replay hardening (LarisVMS failover plan, phase 5), ported from dploid's agent protocol:
+/// <see cref="CheckInNonce"/> is a single-use rolling value issued in each heartbeat response and
+/// echoed on the next request — a replayed heartbeat is rejected 401. <see cref="PreviousApiKeyHash"/>
+/// is now actually written: on a rotation the current hash moves there and a fresh secret's hash
+/// takes <see cref="ApiKeyHash"/>, giving one grace window where either authenticates
+/// (<see cref="AuthenticateAsync"/> already accepted both). Automatic time-based rotation is gated on
+/// <see cref="SecretRotationDays"/> (0 = never; the plumbing is armed but off by default), and an
+/// admin can force one — or clear a wedged nonce — from the Nodes page ("Reset node auth"). A node
+/// that loses its nonce (a heartbeat response that never arrived) resends the stale one and is locked
+/// out until an admin clears it — the same accepted recovery-by-admin risk dploid's Agent.cs documents.
 /// </summary>
 public class Node
 {
@@ -29,6 +37,42 @@ public class Node
 
     public string ApiKeyHash { get; set; } = string.Empty;
     public string? PreviousApiKeyHash { get; set; }
+
+    /// <summary>Replay hardening (failover plan phase 5a): the single-use nonce this node must echo on
+    /// its next heartbeat. Issued fresh in every heartbeat response (NodeHeartbeatResponse.NextNonce)
+    /// and validated with fixed-time equality; a request whose <c>Nonce</c> doesn't match is a replay
+    /// (or a corrupted store) and gets 401. Null means "never issued one yet" — an older node build
+    /// that doesn't send the field simply never gets replay protection, and a node that presents no
+    /// nonce against a non-null stored one is treated as that same not-yet-upgraded case (allowed, and
+    /// the stored value is cleared) rather than as a replay. Cleared on (re-)registration and by the
+    /// admin "Reset node auth" action. Not encrypted: a rolling 16-byte value with a ~30s useful life
+    /// and no standalone value, same as dploid's Agent.CheckInNonce.</summary>
+    public string? CheckInNonce { get; set; }
+
+    /// <summary>Replay hardening (failover plan phase 5b): when the current secret was last rotated.
+    /// Null = never rotated (still the registration secret). Compared against <see cref="SecretRotationDays"/>
+    /// on each authenticated heartbeat to decide whether to hand back a fresh secret.</summary>
+    public DateTime? ApiKeyRotatedAt { get; set; }
+
+    /// <summary>Replay hardening (failover plan phase 5b): rotate this node's bearer secret once it is
+    /// this many days old. <c>0</c> (the default) disables automatic rotation entirely — the plumbing
+    /// is in place but stays dormant until an operator opts a node (or the global default) in. An
+    /// admin can always force one rotation immediately from the Nodes page regardless of this value.</summary>
+    public int SecretRotationDays { get; set; }
+
+    /// <summary>Replay hardening (failover plan phase 5b): set by the admin "Reset node auth" action
+    /// (rotate-secret variant) so the node's very next authenticated heartbeat is handed a fresh
+    /// secret regardless of <see cref="SecretRotationDays"/>. Cleared the moment that rotation is
+    /// issued.</summary>
+    public bool PendingSecretRotation { get; set; }
+
+    /// <summary>Mirrors dploid's Agent.AllowReregistration. Set by the admin "Reset node auth" action
+    /// as an intent flag alongside clearing the nonce; the reclaim-an-existing-row path in
+    /// RegisterAsync that would consume it is not wired up in this pass (the common recovery — a
+    /// wedged nonce on a node that still has its NodeId+Secret — is handled by the nonce clear alone),
+    /// so for now it is audit/telemetry only.</summary>
+    public bool AllowReregistration { get; set; }
+
     public string? Version { get; set; }
     public string? Platform { get; set; }
     public NodeStatus Status { get; set; } = NodeStatus.Pending;
@@ -76,11 +120,120 @@ public class Node
     public DateTime? ClockSkewMeasuredAt { get; set; }
 
     /// <summary>Port the node's own Kestrel host listens on for media (M5) — plain HTTP, LAN-only,
-    /// reachable only from LarisVMS.Web (see "Media path" in the plan: every browser request is
-    /// proxied through IIS, nothing ever connects to a node directly, so the node never needs its
-    /// own TLS certificate). Combined with LastIpAddress, this is the address LarisVMS.Web dials to
-    /// proxy a live view request through.</summary>
+    /// reachable from LarisVMS.Web, which proxies browser live/playback traffic through it. Combined
+    /// with LastIpAddress, this is the address LarisVMS.Web dials. Since the failover plan's phase 1 a
+    /// browser can <em>also</em> be pointed straight at the node over HTTPS on
+    /// <see cref="ClientEndpointReportedPort"/> — see the fields below.</summary>
     public int? LivePort { get; set; }
+
+    // ── Failover plan phase 1: direct-to-node streaming ──────────────────────────
+    // Admin-editable; nullable string/bool overrides inherit the matching global LiveView setting.
+
+    /// <summary>Per-node override of the global <c>LiveView.DirectStreaming</c> toggle: the enum name
+    /// <c>"Proxy"</c> (relay every byte through LarisVMS.Web, the original behaviour) or
+    /// <c>"Direct"</c> (hand the browser the node's own HTTPS address so live/playback bytes skip the
+    /// central hop). Null = inherit the global setting.</summary>
+    public string? DirectStreamingMode { get; set; }
+
+    /// <summary>Per-node override of the global <c>LiveView.AllowInsecureClientEndpoint</c> flag. When
+    /// effectively true the node's client HTTPS endpoint may come up on an auto-generated self-signed
+    /// certificate (setup/testing only — viewers click through a browser warning), and Web's health
+    /// checks against it skip certificate validation. Null = inherit the global setting.</summary>
+    public bool? AllowInsecureClientEndpoint { get; set; }
+
+    /// <summary>The routable FQDN a browser uses to reach this node's client HTTPS endpoint directly —
+    /// must match the certificate's CN/SAN. Admin-entered; null disables direct mode for this node
+    /// regardless of the toggle (the ticket endpoint falls back to proxy).</summary>
+    public string? ClientEndpointHost { get; set; }
+
+    /// <summary>Filesystem path (on the node host, or a share it can read) to the <c>.pfx</c> the
+    /// client HTTPS endpoint should present. Plain text — a path is not a secret. A local
+    /// <c>client-endpoint.json</c> on the node host overrides this.</summary>
+    public string? ClientCertPfxPath { get; set; }
+
+    /// <summary>Password for <see cref="ClientCertPfxPath"/>. Encrypted at rest
+    /// (EncryptedNullableStringConverter, same as <see cref="MediaSigningKey"/>); pushed to the node
+    /// decrypted over the HTTPS control channel, exactly as camera credentials already are.</summary>
+    public string? ClientCertPfxPassword { get; set; }
+
+    // Heartbeat-reported by the node, informational — drives the Admin/Nodes status/badge and the
+    // ticket endpoint's "is this node's client endpoint actually healthy" fallback check.
+
+    /// <summary>The port the node reports its client HTTPS endpoint is actually listening on, or null
+    /// if it isn't running one.</summary>
+    public int? ClientEndpointReportedPort { get; set; }
+
+    /// <summary>NotAfter of the certificate the node's client endpoint is currently serving. A value
+    /// in the past (or null) means the ticket endpoint should not route clients here.</summary>
+    public DateTime? ClientEndpointCertNotAfter { get; set; }
+
+    /// <summary>True when that certificate is the node's auto-generated self-signed fallback rather
+    /// than a real pfx — every ticket and the Admin node row flag the stream as insecure while so.</summary>
+    public bool? ClientEndpointCertIsSelfSigned { get; set; }
+
+    /// <summary>The last error the node hit standing up or reloading its client endpoint (bad pfx
+    /// path, wrong password, bind failure), or null when it is healthy.</summary>
+    public string? ClientEndpointLastError { get; set; }
+
+    // ── Failover plan phase 2: media proxy assignment ────────────────────────────
+    /// <summary>The media proxy browsers are routed through for this node's cameras, and a backup
+    /// used when the primary is unhealthy. Null = no proxy (go direct to the node's client endpoint,
+    /// phase 1, or through central). FKs to <see cref="MediaProxy"/>; a proxy delete nulls these.</summary>
+    public Guid? PrimaryProxyId { get; set; }
+    public MediaProxy? PrimaryProxy { get; set; }
+    public Guid? BackupProxyId { get; set; }
+    public MediaProxy? BackupProxy { get; set; }
+
+    // ── Failover plan phase 3: recording failover to a backup node ───────────────
+
+    /// <summary>The node that adopts this node's cameras for recording (and live/playback) while this
+    /// node is <see cref="NodeFailoverState.FailedOverAway"/>. Null = this node has no backup, so its
+    /// cameras simply stop recording if it goes down. Two nodes pointing at each other are mutual
+    /// backups. Self-FK, <c>DeleteBehavior.NoAction</c> (a self-referencing nullable FK trips SQL
+    /// Server's multiple-cascade-paths check); <see cref="Camera.BackupNodeIdOverride"/> overrides it
+    /// per camera.</summary>
+    public Guid? BackupNodeId { get; set; }
+    public Node? BackupNode { get; set; }
+
+    /// <summary>Recording-failover state, written only by <c>RecordingFailoverService</c> (quorum) or
+    /// an admin maintenance toggle, read by the recording-node resolver. The hot path never does a
+    /// live health check — it trusts this persisted value.</summary>
+    public NodeFailoverState FailoverState { get; set; } = NodeFailoverState.Normal;
+
+    /// <summary>When the current non-<see cref="NodeFailoverState.Normal"/> stretch began — for the
+    /// Admin UI and audit. Null while <see cref="FailoverState"/> is Normal.</summary>
+    public DateTime? FailoverSinceUtc { get; set; }
+
+    /// <summary>Why this node is <see cref="NodeFailoverState.FailedOverAway"/> — quorum agreed it was
+    /// offline, or an admin put it in maintenance. Null unless FailedOverAway.</summary>
+    public NodeFailoverReason? FailoverReason { get; set; }
+
+    /// <summary>Admin-set: this node is in maintenance. The quorum probe is skipped, its cameras move
+    /// to the backup immediately (<see cref="NodeFailoverReason.Maintenance"/>), and they do not fail
+    /// back until this is turned off — even if the node's own <c>/health</c> is green throughout.</summary>
+    public bool MaintenanceMode { get; set; }
+    public DateTime? MaintenanceSinceUtc { get; set; }
+
+    /// <summary>Display name/email of the admin who last toggled maintenance — audit-trail string,
+    /// same convention as <c>NodeBuildVersion.ApprovedBy</c>.</summary>
+    public string? MaintenanceBy { get; set; }
+
+    /// <summary>"Recording only" mode: when true, <c>NodeService.GetConfigAsync</c> forces
+    /// <c>AiDetectionEnabled = false</c> on every camera DTO for this node — its own cameras and any
+    /// it adopts during a failover — so the Vision Service never starts and a low-power backup node
+    /// that suddenly carries many cameras keeps recording rather than collapsing under inference load.
+    /// ServerMotion, ONVIF event tagging and recording itself are unaffected. Pure server-side DTO
+    /// shaping, no node binary change.</summary>
+    public bool DisableAiObjectDetection { get; set; }
+
+    /// <summary>Failover plan phase 3: this node's <em>outgoing</em> quorum votes — a JSON object
+    /// keyed by the subject node id, each value <c>{ serviceRunning, checkedAtUtc, detail }</c> from
+    /// this node's own <c>/health</c> probe of the nodes it backs up. Written each heartbeat from
+    /// <see cref="LarisVMS.Core.Dtos.NodeHeartbeatRequest.PartnerHealthReports"/>; read by
+    /// <c>RecordingFailoverService</c> which scans every node's (and proxy's) outgoing votes for the
+    /// subject it is evaluating. Not a secret — a stale-tolerant health opinion. Null until this node
+    /// first reports one.</summary>
+    public string? PartnerHealthReportsJson { get; set; }
 
     /// <summary>HMAC key used to sign the short-lived media tokens LarisVMS.Web issues for a live
     /// view request — generated once at registration, encrypted at rest like every other sensitive

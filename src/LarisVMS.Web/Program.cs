@@ -263,9 +263,15 @@ builder.Services.AddScoped<ICameraService, CameraService>();
 builder.Services.AddScoped<ICameraGroupService, CameraGroupService>();
 builder.Services.AddScoped<INodeService, NodeService>();
 builder.Services.AddScoped<INodeBuildService, NodeBuildService>();
+// Failover plan phase 2: standalone relay tier.
+builder.Services.AddScoped<IProxyService, ProxyService>();
 builder.Services.AddScoped<IViewService, ViewService>();
 builder.Services.AddScoped<ITimelineService, TimelineService>();
 builder.Services.AddSingleton<DetectedObjectCategoryColorCache>();
+// Failover plan phase 1: direct-to-node streaming.
+builder.Services.AddScoped<LarisVMS.Web.Services.MediaRoutingService>();
+builder.Services.AddSingleton<LarisVMS.Web.Services.MediaRelayMetrics>();
+builder.Services.AddSingleton<LarisVMS.Web.Middleware.ClientEndpointCspCache>();
 builder.Services.AddSingleton<LarisVMS.Web.Services.DetectionModelDistributor>();
 builder.Services.AddSingleton<LarisVMS.Web.Services.VisionNativeDistributor>();
 builder.Services.AddScoped<IZoneService, ZoneService>();
@@ -318,6 +324,10 @@ builder.Services.AddHostedService<BookmarkRetentionService>();
 builder.Services.AddHostedService<MotionSpanRetentionService>();
 builder.Services.AddHostedService<RoleAssignmentExpirySweepService>();
 builder.Services.AddHostedService<LarisVMS.Web.Services.WebLogLevelInitializer>();
+// Failover plan phase 2: poll each media proxy's /health and write MediaProxy.Healthy.
+builder.Services.AddHostedService<LarisVMS.Web.Services.ProxyHealthMonitor>();
+// Failover plan phase 3: the recording-failover quorum engine — the only writer of Node.FailoverState.
+builder.Services.AddHostedService<LarisVMS.Web.Services.RecordingFailoverService>();
 
 // ── ONVIF HTTP client ────────────────────────────────────────────────────────
 // CameraService takes a Func<HttpClient> rather than IHttpClientFactory directly so
@@ -402,6 +412,8 @@ app.UseAuthentication();
 // placement — it establishes the node principal (via HttpContext.Items, not a ClaimsPrincipal,
 // since these endpoints don't carry [Authorize] policies) independently of the cookie scheme.
 app.UseMiddleware<NodeAuthMiddleware>();
+// Failover plan phase 2: same shape as NodeAuthMiddleware, for /api/proxies/*.
+app.UseMiddleware<ProxyAuthMiddleware>();
 // M20 pass 1: authenticates /api/v1/* via the "X-Api-Key" header — see its own doc comment for why
 // this one *does* build a real ClaimsPrincipal (role claim only, no NameIdentifier) rather than using
 // HttpContext.Items the way NodeAuthMiddleware does.
@@ -430,16 +442,30 @@ nodesApi.MapPost("/register", async (NodeRegisterRequest request, INodeService n
 });
 
 nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest request, INodeService nodeService,
-    INodeBuildService nodeBuildService, ISettingsResolver settings, CancellationToken ct) =>
+    INodeBuildService nodeBuildService, ISettingsResolver settings, IAuditService auditService, CancellationToken ct) =>
 {
     // LastSeenAt/Status/LastIpAddress are already updated by NodeAuthMiddleware's AuthenticateAsync
     // call for every authenticated request. Version/LivePort can only be updated here, not in the
     // middleware — middleware runs before this handler's request body is bound, so it has nothing
     // reported to stamp; this is the one place NodeHeartbeatRequest's fields are actually read.
     var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
+
+    // ── Failover plan phase 5: rolling-nonce replay check + secret rotation ───────────────────────
+    // Runs before any state write below. A replayed heartbeat (a stale echoed nonce) is rejected
+    // outright and gets nothing — not a storage-stats update, not an update offer, not a new nonce.
+    var security = await nodeService.ApplyCheckInSecurityAsync(node.Id, request.Nonce, ct);
+    if (security.ReplayRejected)
+    {
+        await auditService.LogAsync("Node.AuthReplay", null, node.Name, ctx.Connection.RemoteIpAddress?.ToString(),
+            $"{node.Name} ({node.Id}) sent a stale check-in nonce — heartbeat rejected as a possible replay.", ct);
+        return Results.Unauthorized();
+    }
+
     await nodeService.RecordHeartbeatAsync(node.Id, request.FreeBytes, request.TotalBytes, request.Version, request.LivePort,
         request.SentAtUtc, DateTime.UtcNow, request.DetectedEncoders, request.DetectedAccelerators,
-        request.ArchiveFreeBytes, request.ArchiveTotalBytes, request.StoragePressureActive, ct);
+        request.ArchiveFreeBytes, request.ArchiveTotalBytes, request.StoragePressureActive,
+        request.ClientEndpointReportedPort, request.ClientEndpointCertNotAfterUtc,
+        request.ClientEndpointCertIsSelfSigned, request.ClientEndpointLastError, request.PartnerHealthReports, ct);
 
     // ── Auto-update check ────────────────────────────────────────────────
     // Global-only gate (Admin/Settings/Nodes' NodeAutoUpdate.Enabled) — no per-node override for this
@@ -468,7 +494,8 @@ nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest requ
         }
     }
 
-    return Results.Json(new NodeHeartbeatResponse(IntervalSeconds: 30, updateAvailable));
+    return Results.Json(new NodeHeartbeatResponse(IntervalSeconds: 30, updateAvailable,
+        security.NextNonce, security.NewSecret));
 });
 
 // Recorder-node auto-update download — same nodesApi group as everything else here, so it's
@@ -625,6 +652,70 @@ nodesApi.MapPost("/exports/complete", async (HttpContext ctx, List<ExportComplet
     return Results.Ok();
 });
 
+// ── Failover plan phase 2: proxy control plane ──────────────────────────────────────────────────
+// /register is anonymous (the one-time node registration key, reused); the rest is authenticated by
+// ProxyAuthMiddleware, which stashes the MediaProxy on HttpContext.Items.
+var proxiesApi = app.MapGroup("/api/proxies");
+
+proxiesApi.MapPost("/register", async (ProxyRegisterRequest request, IProxyService proxyService, CancellationToken ct) =>
+{
+    try { return Results.Json(await proxyService.RegisterAsync(request, ct)); }
+    catch (UnauthorizedAccessException) { return Results.Unauthorized(); }
+});
+
+proxiesApi.MapPost("/heartbeat", async (HttpContext ctx, ProxyHeartbeatRequest request, IProxyService proxyService,
+    INodeBuildService nodeBuildService, ISettingsResolver settings, IAuditService auditService, CancellationToken ct) =>
+{
+    var proxy = (MediaProxy)ctx.Items[ProxyAuthMiddleware.HttpContextItemKey]!;
+
+    var security = await proxyService.ApplyCheckInSecurityAsync(proxy.Id, request.Nonce, ct);
+    if (security.ReplayRejected)
+    {
+        await auditService.LogAsync("Proxy.AuthReplay", null, proxy.Name, ctx.Connection.RemoteIpAddress?.ToString(),
+            $"{proxy.Name} ({proxy.Id}) sent a stale check-in nonce — heartbeat rejected as a possible replay.", ct);
+        return Results.Unauthorized();
+    }
+
+    await proxyService.RecordHeartbeatAsync(proxy.Id, request.Version, request.SentAtUtc, DateTime.UtcNow,
+        request.ReportedPort, request.CertNotAfterUtc, request.CertIsSelfSigned, request.LastError,
+        request.NodeHealthReports, ct);
+
+    // ── Auto-update check ────────────────────────────────────────────────
+    // Same global-only gate (Admin/Settings/Nodes' NodeAutoUpdate.Enabled) and same approval queue as
+    // recorder nodes — a proxy build is just a NodeBuildVersion with Platform "proxy-win-x64",
+    // registered as Pending by every `deploy.ps1 -BuildProxy` run and only offered once approved.
+    ProxyUpdateInfoDto? updateAvailable = null;
+    if (await settings.GetAsync("NodeAutoUpdate.Enabled", true, ct: ct))
+    {
+        var latestBuild = await nodeBuildService.GetLatestForPlatformAsync("proxy-win-x64", ct);
+        if (latestBuild is not null && NodeVersionComparer.IsNewer(latestBuild.Version, request.Version))
+        {
+            var baseUrl = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
+            updateAvailable = new ProxyUpdateInfoDto(latestBuild.Version,
+                $"{baseUrl}/api/proxies/download/{latestBuild.Id}", latestBuild.Sha256, latestBuild.SizeBytes);
+        }
+    }
+
+    return Results.Json(new ProxyHeartbeatResponse(IntervalSeconds: 30, security.NextNonce, updateAvailable));
+});
+
+// Proxy auto-update download — authenticated by ProxyAuthMiddleware exactly like the rest of
+// /api/proxies/*. Any authenticated proxy can fetch any build; the buildId a proxy was handed already
+// came from the heartbeat handler's own platform-matched lookup above, so there is nothing to
+// re-validate here. Mirrors the recorder node's /api/nodes/download/{buildId}.
+proxiesApi.MapGet("/download/{buildId:guid}", async (Guid buildId, INodeBuildService nodeBuildService, CancellationToken ct) =>
+{
+    var build = await nodeBuildService.GetDownloadInfoAsync(buildId, ct);
+    if (build is null || !File.Exists(build.FilePath)) return Results.NotFound();
+    return Results.File(build.FilePath, "application/octet-stream", "LarisVMS.Proxy.exe");
+});
+
+proxiesApi.MapGet("/config", async (HttpContext ctx, IProxyService proxyService, CancellationToken ct) =>
+{
+    var proxy = (MediaProxy)ctx.Items[ProxyAuthMiddleware.HttpContextItemKey]!;
+    return Results.Json(await proxyService.GetConfigAsync(proxy.Id, ct));
+});
+
 // ── Live view media proxy (M5) ───────────────────────────────────────────────
 // The browser only ever talks to this host, over the cert that already works — never directly to a
 // node (see the plan's "Media path" section for why: nodes never need their own TLS certificate this
@@ -633,7 +724,8 @@ nodesApi.MapPost("/exports/complete", async (HttpContext ctx, List<ExportComplet
 // signed token below is what keeps that port from being wide open to anything else on the LAN that
 // knows the URL shape).
 app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICameraService cameraService,
-    ICameraAccessService cameraAccess, IAuditService auditService, CancellationToken ct) =>
+    ICameraAccessService cameraAccess, IAuditService auditService, LarisVMS.Web.Services.MediaRelayMetrics relayMetrics,
+    LarisVMS.Web.Services.MediaRoutingService routing, CancellationToken ct) =>
 {
     if (!ctx.WebSockets.IsWebSocketRequest)
     {
@@ -656,7 +748,9 @@ app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICame
     }
 
     var camera = await cameraService.GetAsync(cameraId, ct);
-    if (camera?.Node is not { LastIpAddress: { } ip, LivePort: { } port, MediaSigningKey: { } key })
+    // Failover plan phase 3: live follows the camera to its backup node while its primary is down.
+    var effNode = await routing.GetEffectiveRecordingNodeAsync(camera, ct);
+    if (camera is null || effNode is not { LastIpAddress: { } ip, LivePort: { } port, MediaSigningKey: { } key })
     {
         ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
         await ctx.Response.WriteAsync("This camera's node hasn't reported live-view readiness yet " +
@@ -699,7 +793,18 @@ app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICame
     }
 
     using var browserSocket = await ctx.WebSockets.AcceptWebSocketAsync();
-    await ProxyLiveViewAsync(nodeSocket, browserSocket, ct);
+    // Failover plan phase 1: gauge how many live streams are still being relayed through this tier —
+    // with the direct-streaming toggle on, this trends to zero (browsers connect straight to the node
+    // and never reach here).
+    relayMetrics.EnterLiveRelay();
+    try
+    {
+        await ProxyLiveViewAsync(nodeSocket, browserSocket, ct);
+    }
+    finally
+    {
+        relayMetrics.ExitLiveRelay();
+    }
 }).RequireAuthorization("Cameras.View");
 
 // Object detection plan decision 6: live-view box overlay — a separate WS proxy from the video
@@ -708,7 +813,8 @@ app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICame
 // and attaches each box's category color before forwarding — Node and Vision Service both have no
 // database access at all, so this proxy is the only tier that can.
 app.MapGet("/live/{cameraId:guid}/detections", async (HttpContext ctx, Guid cameraId, ICameraService cameraService,
-    ICameraAccessService cameraAccess, DetectedObjectCategoryColorCache colorCache, CancellationToken ct) =>
+    ICameraAccessService cameraAccess, DetectedObjectCategoryColorCache colorCache,
+    LarisVMS.Web.Services.MediaRoutingService routing, CancellationToken ct) =>
 {
     if (!ctx.WebSockets.IsWebSocketRequest)
     {
@@ -725,7 +831,8 @@ app.MapGet("/live/{cameraId:guid}/detections", async (HttpContext ctx, Guid came
     }
 
     var camera = await cameraService.GetAsync(cameraId, ct);
-    if (camera?.Node is not { LastIpAddress: { } ip, LivePort: { } port, MediaSigningKey: { } key })
+    var effNode = await routing.GetEffectiveRecordingNodeAsync(camera, ct);
+    if (camera is null || effNode is not { LastIpAddress: { } ip, LivePort: { } port, MediaSigningKey: { } key })
     {
         ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
         await ctx.Response.WriteAsync("This camera's node hasn't reported live-view readiness yet.");
@@ -759,7 +866,7 @@ app.MapGet("/live/{cameraId:guid}/detections", async (HttpContext ctx, Guid came
 // the editor already has loaded from /api/cameras/{id}/zones) — no per-tick DB augmentation, so this
 // is a pure relay rather than a parse-and-reattach proxy.
 app.MapGet("/live/{cameraId:guid}/motion-zones", async (HttpContext ctx, Guid cameraId, ICameraService cameraService,
-    ICameraAccessService cameraAccess, CancellationToken ct) =>
+    ICameraAccessService cameraAccess, LarisVMS.Web.Services.MediaRoutingService routing, CancellationToken ct) =>
 {
     if (!ctx.WebSockets.IsWebSocketRequest)
     {
@@ -776,7 +883,8 @@ app.MapGet("/live/{cameraId:guid}/motion-zones", async (HttpContext ctx, Guid ca
     }
 
     var camera = await cameraService.GetAsync(cameraId, ct);
-    if (camera?.Node is not { LastIpAddress: { } ip, LivePort: { } port, MediaSigningKey: { } key })
+    var effNode = await routing.GetEffectiveRecordingNodeAsync(camera, ct);
+    if (camera is null || effNode is not { LastIpAddress: { } ip, LivePort: { } port, MediaSigningKey: { } key })
     {
         ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
         await ctx.Response.WriteAsync("This camera's node hasn't reported live-view readiness yet.");
@@ -810,7 +918,8 @@ app.MapGet("/live/{cameraId:guid}/motion-zones", async (HttpContext ctx, Guid ca
 // a real (if short) RTSP session against the camera, which is a configuration-adjacent action
 // (only the zone editor calls this in M8 pass 1), not a passive view.
 app.MapGet("/api/cameras/{cameraId:guid}/snapshot", async (HttpContext ctx, Guid cameraId, ICameraService cameraService,
-    ICameraAccessService cameraAccess, IHttpClientFactory httpFactory, CancellationToken ct) =>
+    ICameraAccessService cameraAccess, IHttpClientFactory httpFactory,
+    LarisVMS.Web.Services.MediaRoutingService routing, CancellationToken ct) =>
 {
     // Configure, not View/Playback — this is the zone editor's own configuration-adjacent capture
     // (see this endpoint's own Cameras.Edit gate below), the same category CameraAccessActions.Ptz
@@ -820,7 +929,8 @@ app.MapGet("/api/cameras/{cameraId:guid}/snapshot", async (HttpContext ctx, Guid
         return Results.Problem("You don't have configuration access to this camera.", statusCode: StatusCodes.Status403Forbidden);
 
     var camera = await cameraService.GetAsync(cameraId, ct);
-    if (camera?.Node is not { LastIpAddress: { } ip, LivePort: { } port, MediaSigningKey: { } key })
+    var effNode = await routing.GetEffectiveRecordingNodeAsync(camera, ct);
+    if (camera is null || effNode is not { LastIpAddress: { } ip, LivePort: { } port, MediaSigningKey: { } key })
     {
         return Results.Problem(
             "This camera's node hasn't reported live-view readiness yet (needs at least one heartbeat since being upgraded to a build with live view).",
@@ -1210,6 +1320,58 @@ app.MapGet("/api/timeline/colors", async (IEventColorService eventColors, Cancel
     return Results.Json(new { motion = palette.MotionColor, recording = palette.RecordingColor });
 }).RequireAuthorization("Cameras.View");
 
+// ── Failover plan phase 1: direct-to-node media tickets ──────────────────────────────────────────
+// The browser resolves a live ticket before opening its video socket. In proxy mode (the default)
+// the ticket just says "carry on connecting to this host's /live" — no behaviour change, and the JS
+// falls back to exactly that if this call fails. In direct mode it hands over a wss:// URL straight
+// to the node plus a 60s MediaToken, and audits Camera.View here (the node's own /live route, which
+// normally logs it, is bypassed). Same RBAC + per-camera narrowing as /live itself.
+app.MapGet("/api/media/live-ticket/{cameraId:guid}", async (HttpContext ctx, Guid cameraId,
+    ICameraService cameraService, ICameraAccessService cameraAccess, LarisVMS.Web.Services.MediaRoutingService routing,
+    IAuditService auditService, CancellationToken ct) =>
+{
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.View, ct);
+    if (accessible is not null && !accessible.Contains(cameraId))
+        return Results.Problem("You don't have access to this camera.", statusCode: StatusCodes.Status403Forbidden);
+
+    var camera = await cameraService.GetAsync(cameraId, ct);
+    // Failover plan phase 3: live follows the camera to its backup node while its primary is
+    // FailedOverAway. The token must be signed with *that* node's key (each node validates against its
+    // own MediaSigningKey), and while failed over the stream goes proxy-through-central — the
+    // direct/proxy-tier optimisation is pinned to the primary node's config, so it is skipped for the
+    // (temporary) failover window rather than routed to a node that may not be in a proxy's list.
+    var effectiveNode = await routing.GetEffectiveRecordingNodeAsync(camera, ct);
+    if (camera is null || effectiveNode is not { LastIpAddress: not null, LivePort: not null, MediaSigningKey: { } key })
+        return Results.Problem("This camera's node hasn't reported live-view readiness yet.",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+
+    var failedOver = effectiveNode.Id != camera.NodeId;
+    var route = failedOver
+        ? LarisVMS.Web.Services.MediaRoute.Proxy
+        : await routing.ResolveAsync(camera.Node, ct);
+    if (route.Mode == LarisVMS.Web.Services.MediaStreamMode.Direct)
+    {
+        await auditService.LogAsync("Camera.View",
+            ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
+            ctx.User.Identity?.Name, ctx.Connection.RemoteIpAddress?.ToString(), camera.Name, ct);
+        var token = MediaToken.Issue(cameraId, key, TimeSpan.FromSeconds(60));
+        return Results.Json(new MediaLiveTicket("direct", route.Insecure,
+            $"wss://{route.DirectHost}:{route.DirectPort}/live/{cameraId}",
+            route.Insecure ? $"https://{route.DirectHost}:{route.DirectPort}/" : null,
+            token, 60));
+    }
+
+    return Results.Json(new MediaLiveTicket("proxy", false, $"/live/{cameraId}", null, null, 0));
+}).RequireAuthorization("Cameras.View");
+
+// Client time-to-first-frame beacon for the direct-vs-proxy A/B — logged, not stored.
+app.MapPost("/api/media/timing", (MediaTimingBeacon beacon, ILoggerFactory loggerFactory) =>
+{
+    loggerFactory.CreateLogger("MediaTiming").LogInformation(
+        "time-to-first-frame camera={CameraId} mode={Mode} ms={Ms:F0}", beacon.CameraId, beacon.Mode, beacon.MsToFirstFrame);
+    return Results.NoContent();
+}).RequireAuthorization("Cameras.View");
+
 // M11: Pages/Index's own 60s AJAX refresh (dashboard.js) — same IDashboardService.GetHealthAsync
 // Pages/Index.cshtml.cs's OnGetAsync itself calls, so the polled data and the server-rendered
 // initial page can never independently drift out of sync. Plain [Authorize] (no specific resource
@@ -1258,7 +1420,8 @@ app.MapPut("/api/preferences/{key}", async (string key, HttpContext ctx, SetPref
 
 app.MapGet("/playback-segment/{cameraId:guid}/{segmentId:long}", async (
     HttpContext ctx, Guid cameraId, long segmentId, ITimelineService timeline, ICameraAccessService cameraAccess,
-    IHttpClientFactory httpFactory, CancellationToken ct) =>
+    IHttpClientFactory httpFactory, LarisVMS.Web.Services.MediaRoutingService routing,
+    LarisVMS.Web.Services.MediaRelayMetrics relayMetrics, CancellationToken ct) =>
 {
     // The group's Playback.View gate says this principal can review *some* camera's footage;
     // CameraAccess narrows it to *this* camera — this is the endpoint that actually streams the
@@ -1277,13 +1440,28 @@ app.MapGet("/playback-segment/{cameraId:guid}/{segmentId:long}", async (
             statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 
-    var token = MediaToken.IssueForSegment(cameraId, segment.FilePath, segment.NodeMediaSigningKey, TimeSpan.FromSeconds(30));
     // M18 follow-up: forwarded as-is, not validated against anything here — same "not part of the
     // token, it only picks where inside an already-authorized file to start" reasoning as /live's own
     // ?role=. The node ignores it entirely (falls back to the whole file) below its own threshold or
     // once no usable fragment index exists, so there's nothing for this tier to double-check.
     var seekSecondsQuery = ctx.Request.Query["seekSeconds"].ToString();
     var seekSecondsPart = string.IsNullOrEmpty(seekSecondsQuery) ? "" : $"&seekSeconds={Uri.EscapeDataString(seekSecondsQuery)}";
+
+    // Failover plan phase 1: direct mode — 302 the browser straight to the node over HTTPS. fetch()
+    // follows the redirect, so playback-player.js needs no change at all; the node sends the CORS
+    // headers the cross-origin read needs (and exposes X-Fragment-Start-Seconds). A fresh
+    // IssueForSegment token per request, exactly as the proxy path mints below — the node's phase-5c
+    // replay cache then makes each one single-use.
+    var route = await routing.ResolveByNodeIdAsync(segment.NodeId, ct);
+    if (route.Mode == LarisVMS.Web.Services.MediaStreamMode.Direct)
+    {
+        var directToken = MediaToken.IssueForSegment(cameraId, segment.FilePath, segment.NodeMediaSigningKey, TimeSpan.FromSeconds(30));
+        return Results.Redirect(
+            $"https://{route.DirectHost}:{route.DirectPort}/playback-segment/{cameraId}" +
+            $"?path={Uri.EscapeDataString(segment.FilePath)}&token={Uri.EscapeDataString(directToken)}{seekSecondsPart}");
+    }
+
+    var token = MediaToken.IssueForSegment(cameraId, segment.FilePath, segment.NodeMediaSigningKey, TimeSpan.FromSeconds(30));
     var nodeUri = $"http://{segment.NodeIp}:{segment.NodeLivePort}/playback-segment/{cameraId}" +
         $"?path={Uri.EscapeDataString(segment.FilePath)}&token={Uri.EscapeDataString(token)}{seekSecondsPart}";
 
@@ -1322,6 +1500,9 @@ app.MapGet("/playback-segment/{cameraId:guid}/{segmentId:long}", async (
     {
         ctx.Response.Headers["X-Fragment-Start-Seconds"] = fragmentStartValues.FirstOrDefault();
     }
+
+    // Failover plan phase 1: count what's still being relayed through this tier for the A/B.
+    relayMetrics.RecordPlaybackProxied(nodeResponse.Content.Headers.ContentLength ?? 0);
 
     return Results.Stream(await nodeResponse.Content.ReadAsStreamAsync(ct), "video/mp4");
 }).RequireAuthorization("Playback.View");

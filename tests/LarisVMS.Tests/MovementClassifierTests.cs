@@ -7,6 +7,12 @@ public class MovementClassifierTests
 {
     private static readonly DateTime BaseTime = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
+    // Jitter rejection is opt-in (Detection.RejectMotionJitter, default off) — the smoothed-endpoint
+    // path is only reached when a camera turns it on. Tests that specifically exercise that path
+    // build their classifier with this.
+    private static MovementClassifier JitterRejecting() =>
+        new(new MovementClassifierOptions { JitterRejectionEnabled = true });
+
     [Fact]
     public void ScoreIsMonotonicInConfidenceAndArea()
     {
@@ -78,7 +84,7 @@ public class MovementClassifierTests
     [Fact]
     public void JitteringStationaryTrackStaysIdle()
     {
-        var classifier = new MovementClassifier();
+        var classifier = JitterRejecting();
 
         // A distant parked vehicle: small box whose centroid wobbles a few pixels each frame with
         // no net travel. The old oldest-vs-newest comparison could catch a single bad endpoint and
@@ -98,7 +104,7 @@ public class MovementClassifierTests
     [Fact]
     public void MovingSubjectWithNoisyBoxIsStillMoving()
     {
-        var classifier = new MovementClassifier();
+        var classifier = JitterRejecting();
 
         // A person/animal walking across frame: the centroid advances ~13px per frame, but the
         // detection box is non-rigid and wobbles up to ~16px each frame (limbs, box breathing).
@@ -120,7 +126,7 @@ public class MovementClassifierTests
     [Fact]
     public void NearStationaryWobbleStaysIdle()
     {
-        var classifier = new MovementClassifier();
+        var classifier = JitterRejecting();
 
         // A mid-size box whose centroid drifts a pixel or two each frame with no net travel — the
         // absolute pixel floor (not just the box-diagonal fraction) must keep this Idle.
@@ -137,12 +143,11 @@ public class MovementClassifierTests
     }
 
     [Fact]
-    public void JitterRejectionDisabledKeepsTheOriginalTwoSampleBehaviour()
+    public void DefaultClassifierUsesTheOriginalTwoSampleBehaviour()
     {
-        var classifier = new MovementClassifier(new MovementClassifierOptions
-        {
-            JitterRejectionEnabled = false,
-        });
+        // Jitter rejection is opt-in now, so the default classifier is the legacy path: two
+        // samples, compare first vs last, no smoothing and no absolute pixel floor.
+        var classifier = new MovementClassifier();
         var box = new SKRectI(0, 0, 50, 50);
 
         classifier.Observe(1, box, 0.8, 1280, 720, BaseTime);
@@ -150,6 +155,34 @@ public class MovementClassifierTests
         var moved = classifier.Observe(1, new SKRectI(200, 0, 250, 50), 0.8, 1280, 720, BaseTime.AddMilliseconds(500));
 
         Assert.Equal(MovementState.Moving, moved.State);
+    }
+
+    [Fact]
+    public void JitterPixelFloorIsHonoured()
+    {
+        // With jitter rejection on, a raised MinNetDisplacementPixels (Detection.MotionJitterPixels)
+        // holds a small, steady drift Idle that a low floor would let through. Smoothed net travel
+        // works out to ~12px — over the default 3px floor, under a 15px one.
+        MovementState low = MovementState.Idle, high = MovementState.Idle;
+        var lowFloor = new MovementClassifier(new MovementClassifierOptions
+        {
+            JitterRejectionEnabled = true, MinNetDisplacementPixels = 3.0,
+        });
+        var highFloor = new MovementClassifier(new MovementClassifierOptions
+        {
+            JitterRejectionEnabled = true, MinNetDisplacementPixels = 15.0,
+        });
+        for (var i = 0; i < 6; i++)
+        {
+            var left = 200 + (i * 3);
+            var box = new SKRectI(left, 300, left + 12, 312); // ~12x12 box, diagonal ~17px
+            var at = BaseTime.AddMilliseconds(i * 200);
+            low = lowFloor.Observe(1, box, 0.6, 1280, 720, at).State;
+            high = highFloor.Observe(1, box, 0.6, 1280, 720, at).State;
+        }
+
+        Assert.Equal(MovementState.Moving, low);
+        Assert.Equal(MovementState.Idle, high);
     }
 
     [Fact]

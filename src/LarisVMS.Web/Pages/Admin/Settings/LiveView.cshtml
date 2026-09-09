@@ -34,6 +34,47 @@
     </div>
 
     <div class="col-12 mt-4">
+        <h5>Direct-to-node streaming</h5>
+        <p class="text-muted small">
+            By default every live stream and every playback byte is relayed through this server. Set
+            this to <strong>Direct</strong> to have browsers connect straight to each recorder node's
+            own HTTPS endpoint instead, taking this server out of the media path. A camera whose node
+            hasn't reported a healthy client endpoint automatically stays on the proxy. Override
+            per-node on <a asp-page="/Admin/Nodes">Nodes</a>.
+        </p>
+    </div>
+    <div class="col-6">
+        <label class="form-label">Mode</label>
+        <select asp-for="DirectStreaming" class="form-select">
+            <option value="Proxy">Proxy (through this server)</option>
+            <option value="Direct">Direct (browser → node)</option>
+        </select>
+    </div>
+    <div class="col-12">
+        <div class="form-check form-switch mt-2">
+            <input class="form-check-input" type="checkbox" asp-for="AllowInsecureClientEndpoint" id="allowInsecureClientEndpoint" />
+            <label class="form-check-label text-danger" for="allowInsecureClientEndpoint">
+                Allow insecure client endpoint
+            </label>
+        </div>
+        <div class="form-text">
+            <strong>Setup / testing only.</strong> Lets a node's direct endpoint come up on an
+            auto-generated self-signed certificate — viewers must click through a browser security
+            warning, and every affected stream is flagged insecure in the UI. Do not leave on in
+            production; use a real certificate (<code>-ClientPfxPath</code> /
+            <strong>Cert pfx path</strong> on the node) instead.
+        </div>
+    </div>
+    <div class="col-8">
+        <label class="form-label">Public origin <span class="text-muted">(optional)</span></label>
+        <input asp-for="PublicOrigin" class="form-control" placeholder="https://vms.example.com" />
+        <div class="form-text">
+            The origin browsers load this app from, pinned as the only allowed CORS origin on nodes'
+            direct routes. Leave blank to let each node reflect the request origin instead.
+        </div>
+    </div>
+
+    <div class="col-12 mt-4">
         <h5>Live/playback port</h5>
         <p class="text-muted small">
             Separates live view and playback traffic (the <code>/live</code> WebSocket relay,

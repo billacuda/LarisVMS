@@ -63,7 +63,11 @@ param(
     [switch]$SkipMigrations,
     [switch]$SkipNodeBuild,
     [switch]$SkipNodeBuildRegistration,
-    [switch]$SkipHealthCheck
+    [switch]$SkipHealthCheck,
+    # Failover plan phase 2: also build the standalone media proxy package (publish\LarisVMS.Proxy\win)
+    # and register it for approval so existing proxies auto-update to it (Platform "proxy-win-x64" on
+    # Admin -> Node Builds). Off by default — most deployments have no proxy tier.
+    [switch]$BuildProxy
 )
 
 Set-StrictMode -Version Latest
@@ -283,6 +287,21 @@ if (-not $SkipNodeBuild) {
     Write-Host "Node package build skipped (-SkipNodeBuild)."
 }
 
+# Failover plan phase 2: the media proxy package. Opt-in (-BuildProxy) — most deployments have no
+# proxy tier, so building (and registering, below) it every deploy would be waste. When it is built,
+# the registration step further down queues it for approval so existing proxies auto-update to it,
+# exactly like the recorder node package.
+if ($BuildProxy) {
+    Write-Step "Building media proxy package"
+    $buildProxyScript = Join-Path $PSScriptRoot 'build-proxy.ps1'
+    $buildProxyArgs = @{ Configuration = $Configuration }
+    if (-not [string]::IsNullOrWhiteSpace($ExtraNodePublishPath)) {
+        $buildProxyArgs['ExtraPublishPath'] = ($ExtraNodePublishPath.TrimEnd('\') + '-proxy')
+    }
+    & $buildProxyScript @buildProxyArgs
+    Write-Ok "Media proxy package built (publish\LarisVMS.Proxy\win)."
+}
+
 # ── stop app pool ─────────────────────────────────────────────────────────────
 
 $hasPool = -not [string]::IsNullOrWhiteSpace($IISAppPoolName)
@@ -446,6 +465,71 @@ VALUES (@Id, @Version, @Platform, @FilePath, @SizeBytes, @Sha256, @VisionFilePat
             # abort an otherwise-good web-tier deploy. Worst case, register the build by hand later
             # or re-run.
             Write-Host "Could not register node build for approval: $_" -ForegroundColor Yellow
+        }
+    }
+
+    # ── register media proxy build for approval ─────────────────────────────
+    # Only when -BuildProxy actually built one this run. Media proxies auto-update exactly like
+    # recorder nodes: the proxy exe is registered as a NodeBuildVersion with Platform
+    # "proxy-win-x64" (no Vision columns — that's node-only), lands as Pending, and no proxy is
+    # offered it until an admin approves it on Admin -> Node Builds. Same idempotency check as the
+    # node registration above so a web-only redeploy doesn't queue an identical build every time.
+    if ($BuildProxy -and -not [string]::IsNullOrWhiteSpace($ConnectionString)) {
+        Write-Step "Registering media proxy build for approval"
+        try {
+            $proxyVersionFile = Join-Path $PSScriptRoot 'publish\LarisVMS.Proxy\proxy-build-version.txt'
+            if (Test-Path $proxyVersionFile) {
+                $proxyVersion = (Get-Content $proxyVersionFile -Raw).Trim()
+            } else {
+                $proxyVersionMatch = Select-String -Path (Join-Path $PSScriptRoot 'src\LarisVMS.Proxy\LarisVMS.Proxy.csproj') -Pattern '<Version>([^<]+)</Version>' | Select-Object -First 1
+                if (-not $proxyVersionMatch) { throw "Could not find <Version> in LarisVMS.Proxy.csproj." }
+                $proxyVersion = $proxyVersionMatch.Matches[0].Groups[1].Value
+            }
+            $proxyPlatform = 'proxy-win-x64'
+            $proxyExePath = Join-Path $PSScriptRoot 'publish\LarisVMS.Proxy\win\LarisVMS.Proxy.exe'
+            if (-not (Test-Path $proxyExePath)) { throw "Built proxy exe not found: $proxyExePath" }
+
+            Add-Type -AssemblyName System.Data
+            $sqlCs = Get-SqlClientConnectionString $ConnectionString
+            $conn = New-Object System.Data.SqlClient.SqlConnection($sqlCs)
+            $conn.Open()
+            try {
+                $checkCmd = $conn.CreateCommand()
+                $checkCmd.CommandText = 'SELECT COUNT(*) FROM NodeBuildVersions WHERE Version = @Version AND Platform = @Platform'
+                $checkCmd.Parameters.AddWithValue('@Version', $proxyVersion) | Out-Null
+                $checkCmd.Parameters.AddWithValue('@Platform', $proxyPlatform) | Out-Null
+                if ([int]$checkCmd.ExecuteScalar() -gt 0) {
+                    Write-Host "Proxy build $proxyVersion ($proxyPlatform) is already registered - skipping."
+                } else {
+                    $nodeBuildsRoot = Join-Path $env:ProgramData 'LarisVMS\node-builds'
+                    New-Item -ItemType Directory -Path $nodeBuildsRoot -Force | Out-Null
+                    $buildId = [guid]::NewGuid()
+                    $storedPath = Join-Path $nodeBuildsRoot "$buildId.exe"
+                    Copy-Item $proxyExePath $storedPath -Force
+                    $hash = (Get-FileHash -Path $storedPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                    $sizeBytes = (Get-Item $storedPath).Length
+
+                    $insertCmd = $conn.CreateCommand()
+                    $insertCmd.CommandText = @'
+INSERT INTO NodeBuildVersions (Id, Version, Platform, FilePath, SizeBytes, Sha256, VisionFilePath, VisionSizeBytes, VisionSha256, UploadedAt, Notes, Status, ApprovedAt, ApprovedBy)
+VALUES (@Id, @Version, @Platform, @FilePath, @SizeBytes, @Sha256, NULL, NULL, NULL, GETUTCDATE(), @Notes, 0, NULL, NULL)
+'@
+                    $insertCmd.Parameters.AddWithValue('@Id', $buildId) | Out-Null
+                    $insertCmd.Parameters.AddWithValue('@Version', $proxyVersion) | Out-Null
+                    $insertCmd.Parameters.AddWithValue('@Platform', $proxyPlatform) | Out-Null
+                    $insertCmd.Parameters.AddWithValue('@FilePath', $storedPath) | Out-Null
+                    $insertCmd.Parameters.AddWithValue('@SizeBytes', $sizeBytes) | Out-Null
+                    $insertCmd.Parameters.AddWithValue('@Sha256', $hash) | Out-Null
+                    $insertCmd.Parameters.AddWithValue('@Notes', "Media proxy build, registered by deploy.ps1 on $(Get-Date -Format 'yyyy-MM-dd HH:mm')") | Out-Null
+                    $insertCmd.ExecuteNonQuery() | Out-Null
+
+                    Write-Ok "Proxy build $proxyVersion ($proxyPlatform) registered as Pending - approve it on Admin -> Node Builds."
+                }
+            } finally {
+                $conn.Close()
+            }
+        } catch {
+            Write-Host "Could not register media proxy build for approval: $_" -ForegroundColor Yellow
         }
     }
 

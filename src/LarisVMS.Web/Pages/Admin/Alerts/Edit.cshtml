@@ -40,6 +40,7 @@
                         <option value="@AlertConditionType.CameraNotReporting">Camera not reporting</option>
                         <option value="@AlertConditionType.NodeOffline">Node offline</option>
                         <option value="@AlertConditionType.NodeStorageLow">Node storage low</option>
+                        <option value="@AlertConditionType.NodeFailoverActivated">Node failover activated</option>
                     </select>
                 </div>
 
@@ -180,8 +181,9 @@
                 var isCamera = value === '@((int)AlertConditionType.CameraNotReporting)';
                 var isNodeOffline = value === '@((int)AlertConditionType.NodeOffline)';
                 var isStorageLow = value === '@((int)AlertConditionType.NodeStorageLow)';
+                var isFailover = value === '@((int)AlertConditionType.NodeFailoverActivated)';
                 cameraField.style.display = isCamera ? '' : 'none';
-                nodeField.style.display = (isNodeOffline || isStorageLow) ? '' : 'none';
+                nodeField.style.display = (isNodeOffline || isStorageLow || isFailover) ? '' : 'none';
                 thresholdField.style.display = isStorageLow ? '' : 'none';
             }
             conditionType.addEventListener('change', update);

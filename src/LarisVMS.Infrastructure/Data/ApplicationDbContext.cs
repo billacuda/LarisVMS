@@ -56,6 +56,8 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<Node> Nodes => Set<Node>();
     public DbSet<Segment> Segments => Set<Segment>();
     public DbSet<NodeBuildVersion> NodeBuildVersions => Set<NodeBuildVersion>();
+    // Failover plan phase 2: standalone relay tier.
+    public DbSet<MediaProxy> MediaProxies => Set<MediaProxy>();
 
     // ── Motion (M8) ──────────────────────────────────────────────────────────
     public DbSet<Zone> Zones => Set<Zone>();
@@ -260,6 +262,12 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.ServerMotionEnabled).HasDefaultValue(true);
             e.HasOne(x => x.Node).WithMany(n => n.Cameras)
                 .HasForeignKey(x => x.NodeId).OnDelete(DeleteBehavior.SetNull);
+            // Failover plan phase 3: per-camera backup-node override. No navigation property and
+            // NoAction — same reasoning as Node's own primary/backup proxy FKs; deleting a node that
+            // some camera names as its override just leaves a dangling id the resolver treats as
+            // "no override" (it looks the node up and finds nothing).
+            e.HasOne<Node>().WithMany()
+                .HasForeignKey(x => x.BackupNodeIdOverride).OnDelete(DeleteBehavior.NoAction);
             e.HasIndex(x => x.Name);
             // Many-to-many, EF-managed shadow join table — a camera can belong to any number of
             // groups (CameraGroupPolicy enforces they all share one Site at the application layer).
@@ -297,6 +305,9 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.ArchiveRootPath).HasMaxLength(500);
             e.Property(x => x.ApiKeyHash).HasMaxLength(200).IsRequired();
             e.Property(x => x.PreviousApiKeyHash).HasMaxLength(200);
+            // Failover plan phase 5a: a base64-encoded 16-byte rolling value — 24 chars, 64 is slack.
+            // Not encrypted (short-lived, no standalone value), same as dploid's Agent.CheckInNonce.
+            e.Property(x => x.CheckInNonce).HasMaxLength(64);
             e.Property(x => x.Version).HasMaxLength(50);
             e.Property(x => x.Platform).HasMaxLength(50);
             e.Property(x => x.LastIpAddress).HasMaxLength(45);
@@ -306,6 +317,51 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             // Plenty for a JSON array of the (at most 4) AiAccelerator names AccelCapabilityProber
             // can ever report — not a secret, no encryption needed.
             e.Property(x => x.DetectedAcceleratorsJson).HasMaxLength(200);
+            // Failover plan phase 1: direct-to-node client HTTPS endpoint. Only the pfx password is a
+            // secret (encrypted, same as MediaSigningKey); a path and an FQDN are not.
+            e.Property(x => x.DirectStreamingMode).HasMaxLength(20);
+            e.Property(x => x.ClientEndpointHost).HasMaxLength(253);
+            e.Property(x => x.ClientCertPfxPath).HasMaxLength(500);
+            e.Property(x => x.ClientCertPfxPassword).HasConversion(new EncryptedNullableStringConverter()).HasMaxLength(500);
+            e.Property(x => x.ClientEndpointLastError).HasMaxLength(500);
+
+            // Failover plan phase 2: primary/backup media proxy. NoAction — two nullable FKs from one
+            // table to another trip SQL Server's "multiple cascade paths" check; ProxyService.DeleteAsync
+            // nulls both columns explicitly before removing a proxy.
+            e.HasOne(x => x.PrimaryProxy).WithMany(p => p.PrimaryForNodes)
+                .HasForeignKey(x => x.PrimaryProxyId).OnDelete(DeleteBehavior.NoAction);
+            e.HasOne(x => x.BackupProxy).WithMany(p => p.BackupForNodes)
+                .HasForeignKey(x => x.BackupProxyId).OnDelete(DeleteBehavior.NoAction);
+
+            // Failover plan phase 3: recording failover to a backup node. Self-referencing nullable
+            // FK — NoAction for the same multiple-cascade-paths reason as the proxy FKs above; a node
+            // delete leaves any BackupNodeId pointing at it dangling, and the resolver treats an
+            // unresolvable backup id as "no backup".
+            e.Property(x => x.MaintenanceBy).HasMaxLength(256);
+            // A JSON object of this node's outgoing quorum votes — one entry per node it backs up,
+            // each a small { running, checkedAt, detail }. Not a secret; a stale-tolerant opinion.
+            e.Property(x => x.PartnerHealthReportsJson).HasMaxLength(4000);
+            e.HasOne(x => x.BackupNode).WithMany()
+                .HasForeignKey(x => x.BackupNodeId).OnDelete(DeleteBehavior.NoAction);
+        });
+
+        // ── MediaProxy (failover plan phase 2) ───────────────────────────────
+        builder.Entity<MediaProxy>(e =>
+        {
+            e.Property(x => x.Name).HasMaxLength(200).IsRequired();
+            e.Property(x => x.Host).HasMaxLength(253).IsRequired();
+            e.Property(x => x.ApiKeyHash).HasMaxLength(200).IsRequired();
+            e.Property(x => x.PreviousApiKeyHash).HasMaxLength(200);
+            e.Property(x => x.CheckInNonce).HasMaxLength(64);
+            e.Property(x => x.CertPfxPath).HasMaxLength(500);
+            // Only the pfx password is a secret — encrypted like Node.MediaSigningKey.
+            e.Property(x => x.CertPfxPassword).HasConversion(new EncryptedNullableStringConverter()).HasMaxLength(500);
+            e.Property(x => x.Version).HasMaxLength(50);
+            e.Property(x => x.LastIpAddress).HasMaxLength(45);
+            e.Property(x => x.LastError).HasMaxLength(500);
+            // Failover plan phase 3: this proxy's outgoing quorum votes, same JSON shape as
+            // Node.PartnerHealthReportsJson.
+            e.Property(x => x.NodeHealthReportsJson).HasMaxLength(4000);
         });
 
         // ── Segment ──────────────────────────────────────────────────────────

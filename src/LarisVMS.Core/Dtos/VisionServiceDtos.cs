@@ -113,14 +113,32 @@ public record VisionStartCameraRequest(
     /// transparently downgrades FP16 to FP32 (with a warning) unless such a file is bundled. Appended
     /// so NodeWorker's positional construction stays stable.</summary>
     string DFineTensorRtMode = "",
-    /// <summary>Detection.SnapshotMotionAccuracy (global) — when true (the default) the movement
-    /// classifier rejects raw-detection-box jitter (a parked vehicle no longer flickers to Moving)
-    /// and a label's span is finalized promptly once its object leaves rather than being held open
-    /// long enough for a later unrelated object of the same type to merge into it. False restores
-    /// the older behaviour exactly, for A/B comparison without a redeploy. Appended so NodeWorker's
-    /// positional construction stays stable; defaults true so an older node build's request still
-    /// gets the improved behaviour.</summary>
-    bool SnapshotMotionAccuracy = true)
+    /// <summary>Detection.SnapshotMotionAccuracy (global) — when true (the default) a label's span
+    /// is finalized promptly once its object leaves frame (no instance classified Moving for
+    /// <see cref="DepartureGraceSeconds"/>) rather than being held open the full
+    /// <see cref="IdleTimeoutSeconds"/>, so a later unrelated object of the same type doesn't merge
+    /// into it. False restores the older behaviour. Appended so NodeWorker's positional construction
+    /// stays stable; defaults true so an older node build's request still gets the improved
+    /// behaviour. (The raw-detection-box jitter rejection this once also governed is now its own
+    /// per-camera <see cref="RejectMotionJitter"/>.)</summary>
+    bool SnapshotMotionAccuracy = true,
+    /// <summary>Detection.RejectMotionJitter (Camera → Node → Global) — when true the movement
+    /// classifier uses smoothed-endpoint net displacement plus an absolute pixel floor
+    /// (<see cref="MotionJitterPixels"/>) so a stationary vehicle whose detection box wobbles
+    /// frame-to-frame stops flickering to Moving. Off by default: on a noisier model it has also
+    /// suppressed genuinely slow movers, so it is opt-in per camera. Appended so NodeWorker's
+    /// positional construction stays stable; defaults false = today's classifier.</summary>
+    bool RejectMotionJitter = false,
+    /// <summary>Detection.MotionJitterPixels (Camera → Node → Global, 1-15) — the absolute
+    /// centroid-travel floor, in pixels, the jitter-rejection path requires before a track counts
+    /// as Moving. Only acted on when <see cref="RejectMotionJitter"/> is true. Appended for stable
+    /// positional construction; defaults 3 (the previous hard-coded value).</summary>
+    int MotionJitterPixels = 3,
+    /// <summary>Detection.DepartureGraceSeconds (global, 1-10) — how long a span with no instance
+    /// classified Moving is held before <see cref="SnapshotMotionAccuracy"/>'s early-finalize
+    /// flushes it as "the object left". Appended for stable positional construction; defaults 5
+    /// (the previous hard-coded value).</summary>
+    int DepartureGraceSeconds = 5)
 {
     /// <summary>What this camera should be called in a log line. The operator's own name when there
     /// is one, otherwise the first block of the camera id — short enough to scan a column of, and

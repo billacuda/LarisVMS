@@ -14,8 +14,16 @@ namespace LarisVMS.Web.Pages.Admin;
 // pages+policies), so the whole page requires edit access rather than only the POST handlers.
 [Authorize("Nodes.Edit")]
 public class NodesModel(INodeService nodeService, ICameraService cameraService, ISettingsResolver settings,
-    IAuditService auditService, IHttpClientFactory httpFactory) : PageModel
+    IAuditService auditService, IHttpClientFactory httpFactory, LarisVMS.Web.Services.MediaRelayMetrics relayMetrics,
+    IProxyService proxyService) : PageModel
 {
+    /// <summary>Failover plan phase 1: the streaming-relay counters, surfaced as a small diagnostics
+    /// line — with direct streaming on these trend to zero.</summary>
+    public LarisVMS.Web.Services.MediaRelayMetrics RelayMetrics => relayMetrics;
+
+    /// <summary>Failover plan phase 2: proxies an admin can assign as a node's primary/backup.</summary>
+    public List<LarisVMS.Core.Entities.MediaProxy> AvailableProxies { get; set; } = [];
+
     public List<Node> Nodes { get; set; } = [];
 
     /// <summary>Survives the redirect after a restart POST so the result is visible on the reloaded
@@ -45,6 +53,11 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
     public Dictionary<Guid, string> DFineTensorRtModeOverride { get; set; } = [];
     public Dictionary<Guid, string> EffectiveDFineTensorRtMode { get; set; } = [];
     public Dictionary<Guid, double?> DaysRemaining { get; set; } = [];
+
+    /// <summary>Failover plan phase 1: the global LiveView.DirectStreaming value, shown as the
+    /// "inherit" option label in each node's per-node override select.</summary>
+    public string GlobalDirectStreaming { get; set; } = "Proxy";
+    public bool GlobalAllowInsecureClientEndpoint { get; set; }
     /// <summary>Archive-storage: per-node archive volume free/total (off Node.Archive*Bytes) and the
     /// "days remaining" estimate for it, plus the per-node archive settings overrides. ArchiveRootPath
     /// is a Node column like StorageRootPath; Enabled/RetentionDays are SettingOverride(Scope.Node)
@@ -121,6 +134,9 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
 
         DaysRemaining = await nodeService.GetEstimatedDaysRemainingAsync();
         ArchiveDaysRemaining = await nodeService.GetArchiveEstimatedDaysRemainingAsync();
+        GlobalDirectStreaming = await settings.GetAsync("LiveView.DirectStreaming", "Proxy");
+        GlobalAllowInsecureClientEndpoint = await settings.GetAsync("LiveView.AllowInsecureClientEndpoint", false);
+        AvailableProxies = (await proxyService.ListAsync()).Where(p => p.Enabled).ToList();
 
         foreach (var n in Nodes)
         {
@@ -150,7 +166,11 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
     public async Task<IActionResult> OnPostUpdateAsync(Guid id, string name, string? storageRootPath, int? retentionDaysOverride,
         string? aiAccelerator, string? modelFamilyOverride, string? dfineWeightsOverride, string? yoloXSizeOverride,
         int? maxFpsOverride, string? aspectModeOverride, string? dfineTensorRtModeOverride,
-        string? archiveRootPath, string? archiveEnabledOverride, int? archiveRetentionDaysOverride)
+        string? archiveRootPath, string? archiveEnabledOverride, int? archiveRetentionDaysOverride,
+        string? directStreamingMode, string? allowInsecureClientEndpoint, string? clientEndpointHost,
+        string? clientCertPfxPath, string? clientCertPfxPassword,
+        string? primaryProxyId, string? backupProxyId,
+        string? backupNodeId, bool disableAiObjectDetection = false)
     {
         try
         {
@@ -188,7 +208,24 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
             // comment for why Auto (not an explicit choice) is the safe default.
             var accelerator = Enum.TryParse<AiAccelerator>(aiAccelerator, out var acc) ? acc : (AiAccelerator?)null;
 
-            await nodeService.UpdateAsync(id, name, storageRootPath, accelerator, archiveRootPath);
+            // Failover plan phase 1: tri-state select ("" inherit / "true" / "false"); pfx password
+            // is write-only — a blank field means "leave as-is".
+            bool? insecureOverride = allowInsecureClientEndpoint switch
+            {
+                "true" => true,
+                "false" => false,
+                _ => null,
+            };
+            Guid? primaryProxy = Guid.TryParse(primaryProxyId, out var pp) ? pp : null;
+            Guid? backupProxy = Guid.TryParse(backupProxyId, out var bp) ? bp : null;
+            Guid? backupNode = Guid.TryParse(backupNodeId, out var bn) ? bn : null;
+            var clientEndpoint = new NodeClientEndpointUpdate(
+                string.IsNullOrWhiteSpace(directStreamingMode) ? null : directStreamingMode,
+                insecureOverride, clientEndpointHost, clientCertPfxPath,
+                string.IsNullOrEmpty(clientCertPfxPassword) ? null : clientCertPfxPassword,
+                primaryProxy, backupProxy, backupNode, disableAiObjectDetection);
+
+            await nodeService.UpdateAsync(id, name, storageRootPath, accelerator, archiveRootPath, clientEndpoint);
             await settings.SetOverrideAsync(SettingScope.Node, id, "Retention.Days",
                 retentionDaysOverride?.ToString(), User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Node, id, "Detection.ModelFamily",
@@ -221,7 +258,16 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
                 AuditDiff.Of("D-FINE TensorRT override", oldDFineTensorRtModeOverride, dfineTensorRtModeOverride),
                 AuditDiff.Of("Archive root", before?.ArchiveRootPath, archiveRootPath),
                 AuditDiff.Of("Archive enabled override", oldArchiveEnabledOverride, archiveEnabledOverride),
-                AuditDiff.Of("Archive retention override", oldArchiveRetentionOverride, archiveRetentionDaysOverride?.ToString()));
+                AuditDiff.Of("Archive retention override", oldArchiveRetentionOverride, archiveRetentionDaysOverride?.ToString()),
+                AuditDiff.Of("Direct streaming mode", before?.DirectStreamingMode, clientEndpoint.DirectStreamingMode),
+                AuditDiff.Of("Allow insecure client endpoint", before?.AllowInsecureClientEndpoint?.ToString(), insecureOverride?.ToString()),
+                AuditDiff.Of("Client endpoint host", before?.ClientEndpointHost, clientEndpointHost),
+                AuditDiff.Of("Client cert pfx path", before?.ClientCertPfxPath, clientCertPfxPath),
+                AuditDiff.Of("Client cert pfx password", null, clientEndpoint.ClientCertPfxPassword is null ? null : "(changed)"),
+                AuditDiff.Of("Primary proxy", before?.PrimaryProxyId?.ToString(), primaryProxy?.ToString()),
+                AuditDiff.Of("Backup proxy", before?.BackupProxyId?.ToString(), backupProxy?.ToString()),
+                AuditDiff.Of("Backup node", before?.BackupNodeId?.ToString(), backupNode?.ToString()),
+                AuditDiff.Of("Recording only (AI off)", before?.DisableAiObjectDetection.ToString(), disableAiObjectDetection.ToString()));
 
             await LogAsync("Node.Update", details is null ? $"{name} ({id})" : $"{name} ({id}) — {details}");
         }
@@ -294,6 +340,49 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
             StatusIsError = true;
         }
 
+        return RedirectToPage();
+    }
+
+    /// <summary>Failover plan phase 5a: recovery for a node locked out because its rolling check-in
+    /// nonce got out of sync (a heartbeat response the node never received — it keeps resending the
+    /// stale nonce, which the server now rejects 401). Clears the stored nonce so the node's next
+    /// check-in is accepted as a not-yet-nonced one and re-syncs. A no-op risk on a healthy node.</summary>
+    public async Task<IActionResult> OnPostResetAuthAsync(Guid id)
+    {
+        var node = (await nodeService.ListAsync()).FirstOrDefault(n => n.Id == id);
+        if (node is null)
+        {
+            StatusMessage = "That node no longer exists.";
+            StatusIsError = true;
+            return RedirectToPage();
+        }
+
+        await nodeService.ResetAuthAsync(id, rotateSecretNow: false);
+        await LogAsync("Node.ResetAuth", $"{node.Name} ({id}) — check-in nonce cleared");
+        StatusMessage = $"{node.Name}: check-in nonce cleared. If it was locked out, it should re-sync within a heartbeat cycle.";
+        StatusIsError = false;
+        return RedirectToPage();
+    }
+
+    /// <summary>Failover plan phase 3: toggle a node into/out of maintenance mode. On = its cameras
+    /// fail over to its backup node on RecordingFailoverService's next tick (~15s) and stay there
+    /// until turned off, regardless of the node's own health. Confirm dialog is client-side.</summary>
+    public async Task<IActionResult> OnPostSetMaintenanceAsync(Guid id, bool enabled)
+    {
+        var node = (await nodeService.ListAsync()).FirstOrDefault(n => n.Id == id);
+        if (node is null)
+        {
+            StatusMessage = "That node no longer exists.";
+            StatusIsError = true;
+            return RedirectToPage();
+        }
+
+        await nodeService.SetMaintenanceAsync(id, enabled, User.Identity?.Name);
+        await LogAsync(enabled ? "Node.MaintenanceEntered" : "Node.MaintenanceExited", $"{node.Name} ({id})");
+        StatusMessage = enabled
+            ? $"{node.Name} is in maintenance — its cameras move to its backup node within ~15 seconds and stay there until you turn maintenance off."
+            : $"{node.Name} left maintenance — its cameras return to it once it is a confirmed-healthy quorum (or immediately if it stayed healthy).";
+        StatusIsError = false;
         return RedirectToPage();
     }
 

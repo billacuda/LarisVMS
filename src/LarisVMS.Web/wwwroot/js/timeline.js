@@ -413,6 +413,10 @@ window.larisvmsTimeline = (function () {
         // never move, so the zoom anchor has to be the same fixed point it's drawn at.
         canvas.addEventListener('wheel', function (e) {
             e.preventDefault();
+            // The timeline canvas owns wheel events over itself: stop them bubbling to an ancestor
+            // that also has a wheel handler — when a tile is fullscreen, fullscreen-tile.js listens
+            // on the container and would otherwise zoom the video image at the same time.
+            e.stopPropagation();
             var zoomFactor = e.deltaY < 0 ? 0.8 : 1.25; // wheel up = zoom in
             rangeMs = Math.min(MAX_RANGE_MS, Math.max(MIN_RANGE_MS, rangeMs * zoomFactor));
             draw();

@@ -4,6 +4,26 @@ using LarisVMS.Core.Enums;
 
 namespace LarisVMS.Core.Interfaces;
 
+/// <summary>Outcome of the replay-hardening step run on every authenticated heartbeat (failover plan
+/// phase 5). <paramref name="ReplayRejected"/> true means the presented nonce was present but wrong —
+/// the heartbeat handler responds 401 and ignores the other two fields. Otherwise
+/// <paramref name="NextNonce"/> is the value the node must echo next time, and
+/// <paramref name="NewSecret"/> is a freshly rotated bearer secret (or null when none is due).</summary>
+public record NodeCheckInSecurity(bool ReplayRejected, string? NextNonce, string? NewSecret);
+
+/// <summary>Failover plan phase 1/2/3: the media-routing and failover fields an admin edits on the
+/// Nodes page — direct-to-node client endpoint (phase 1), primary/backup proxy assignment (phase 2),
+/// and the recording-failover backup node + "recording only" switch (phase 3) — bundled so
+/// <see cref="INodeService.UpdateAsync"/> keeps one optional parameter. Null string/bool = clear
+/// (inherit the global); the form always submits every field, so a null proxy/backup id means "none".
+/// <see cref="ClientCertPfxPassword"/> is write-only — null leaves the stored value untouched, empty
+/// clears it. Maintenance mode is <em>not</em> here — it is its own confirm-gated handler.</summary>
+public record NodeClientEndpointUpdate(
+    string? DirectStreamingMode, bool? AllowInsecureClientEndpoint, string? ClientEndpointHost,
+    string? ClientCertPfxPath, string? ClientCertPfxPassword,
+    Guid? PrimaryProxyId = null, Guid? BackupProxyId = null,
+    Guid? BackupNodeId = null, bool DisableAiObjectDetection = false);
+
 /// <summary>Server-side (LarisVMS.Web) node control plane: registration, auth, config snapshot, and
 /// ingest of segment/status reports from nodes.</summary>
 public interface INodeService
@@ -79,7 +99,10 @@ public interface INodeService
     Task RecordHeartbeatAsync(Guid nodeId, long? freeBytes, long? totalBytes, string? version, int? livePort,
         DateTime? nodeSentAtUtc, DateTime serverReceivedUtc, List<string>? detectedEncoders = null,
         List<string>? detectedAccelerators = null, long? archiveFreeBytes = null, long? archiveTotalBytes = null,
-        bool storagePressureActive = false, CancellationToken ct = default);
+        bool storagePressureActive = false, int? clientEndpointReportedPort = null,
+        DateTime? clientEndpointCertNotAfter = null, bool? clientEndpointCertIsSelfSigned = null,
+        string? clientEndpointLastError = null, List<NodePartnerHealthReport>? partnerHealthReports = null,
+        CancellationToken ct = default);
 
     /// <summary>Rough "days of retention remaining" per node: free bytes divided by that node's
     /// measured write rate over the last 24h. Null for a node with no free-space report yet or no
@@ -104,11 +127,33 @@ public interface INodeService
     /// no global fallback — the Admin/Nodes handler rejects a blank storageRootPath. aiAccelerator
     /// null resolves as Auto — see NodeConfigResponse.AiAccelerator's own doc comment.</summary>
     Task UpdateAsync(Guid nodeId, string name, string? storageRootPath, AiAccelerator? aiAccelerator = null,
-        string? archiveRootPath = null, CancellationToken ct = default);
+        string? archiveRootPath = null, NodeClientEndpointUpdate? clientEndpoint = null, CancellationToken ct = default);
 
     /// <summary>Removes a node. Cameras assigned to it are unassigned (NodeId set null via
     /// DeleteBehavior.SetNull), not deleted — their recording just stops until reassigned.
     /// Segment rows already written by this node are untouched; they're historical recordings, not
     /// node state.</summary>
     Task DeleteAsync(Guid nodeId, CancellationToken ct = default);
+
+    /// <summary>Failover plan phase 5a/5b, run from the heartbeat handler after auth. Validates the
+    /// echoed nonce against the stored one (absent-vs-wrong handled per the plan's rollout note),
+    /// issues the next nonce, and — when <see cref="Node.SecretRotationDays"/> says the current secret
+    /// is old enough, or <see cref="Node.PendingSecretRotation"/> is set — mints and stores a new
+    /// secret (old hash preserved in PreviousApiKeyHash for the grace window). Only ever called for an
+    /// already-authenticated node.</summary>
+    Task<NodeCheckInSecurity> ApplyCheckInSecurityAsync(Guid nodeId, string? presentedNonce, CancellationToken ct = default);
+
+    /// <summary>Failover plan phase 5a: admin recovery for a node whose rolling nonce got wedged (a
+    /// heartbeat response that never arrived). Clears <see cref="Node.CheckInNonce"/> so the node's
+    /// next check-in is accepted as a not-yet-nonced one, sets <see cref="Node.AllowReregistration"/>,
+    /// and — when <paramref name="rotateSecretNow"/> is set — also forces a secret rotation on that
+    /// next check-in.</summary>
+    Task ResetAuthAsync(Guid nodeId, bool rotateSecretNow, CancellationToken ct = default);
+
+    /// <summary>Failover plan phase 3: toggle a node's maintenance mode. When turned on, the node's
+    /// cameras move to its backup node for recording on <c>RecordingFailoverService</c>'s next tick
+    /// (~15s) — the quorum probe is skipped entirely — and stay there, even if the node's own
+    /// <c>/health</c> is green throughout, until this is turned off. <paramref name="by"/> is the
+    /// admin's display name for the audit trail.</summary>
+    Task SetMaintenanceAsync(Guid nodeId, bool enabled, string? by, CancellationToken ct = default);
 }

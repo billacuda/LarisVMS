@@ -4,7 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>0.189.0</Version>
+    <Version>0.195.0</Version>
     <!-- Recorder nodes are self-contained single-file per platform (see build-node.ps1),
          the same shape as dploid.Agent. -->
     <InvariantGlobalization>true</InvariantGlobalization>
@@ -24,6 +24,7 @@
        from wherever the RTSP connections already do: the node, on the camera's own LAN. -->
   <ItemGroup>
     <ProjectReference Include="..\LarisVMS.Core\LarisVMS.Core.csproj" />
+    <ProjectReference Include="..\LarisVMS.Relay\LarisVMS.Relay.csproj" />
     <ProjectReference Include="..\LarisVMS.Media\LarisVMS.Media.csproj" />
     <ProjectReference Include="..\LarisVMS.Onvif\LarisVMS.Onvif.csproj" />
   </ItemGroup>

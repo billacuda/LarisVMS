@@ -98,6 +98,7 @@ public class EditModel(ApplicationDbContext db, ICameraService cameraService, IN
         {
             AlertConditionType.CameraNotReporting when CameraId is null => "Choose a camera.",
             AlertConditionType.NodeOffline when NodeId is null => "Choose a node.",
+            AlertConditionType.NodeFailoverActivated when NodeId is null => "Choose a node.",
             AlertConditionType.NodeStorageLow when NodeId is null => "Choose a node.",
             AlertConditionType.NodeStorageLow when ThresholdPercent is < 1 or > 99 => "Threshold must be between 1 and 99.",
             _ => (string?)null
@@ -131,7 +132,8 @@ public class EditModel(ApplicationDbContext db, ICameraService cameraService, IN
         rule.IsEnabled = IsEnabled;
         rule.ConditionType = ConditionType;
         rule.CameraId = ConditionType == AlertConditionType.CameraNotReporting ? CameraId : null;
-        rule.NodeId = ConditionType is AlertConditionType.NodeOffline or AlertConditionType.NodeStorageLow ? NodeId : null;
+        rule.NodeId = ConditionType is AlertConditionType.NodeOffline or AlertConditionType.NodeStorageLow
+            or AlertConditionType.NodeFailoverActivated ? NodeId : null;
         rule.ThresholdPercent = ConditionType == AlertConditionType.NodeStorageLow ? ThresholdPercent : null;
         rule.CooldownMinutes = CooldownMinutes;
         rule.LastModifiedAt = DateTime.UtcNow;

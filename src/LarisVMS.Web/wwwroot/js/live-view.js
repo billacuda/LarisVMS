@@ -5,6 +5,15 @@
 (function () {
     'use strict';
 
+    // Failover plan phase 1: media-endpoint.js is loaded alongside this file on every page that uses
+    // it. This fallback only matters if that include is ever missed — it keeps live view working
+    // exactly as before (always proxy through this host).
+    var mediaEndpoint = window.larisvmsMediaEndpoint || {
+        resolveLive: function (id) { return Promise.resolve({ mode: 'proxy', videoUrl: '/live/' + encodeURIComponent(id), token: null }); },
+        invalidate: function () { },
+        reportTiming: function () { }
+    };
+
     // H.264 and H.265/HEVC video codec tokens, tried in order within whichever family actually
     // matches the stream — Safari/Chrome/Firefox differ in exactly which profile strings they
     // accept, so cast a reasonably wide net within the family rather than assuming one string works
@@ -439,35 +448,77 @@
                 endSession();
             });
 
-            var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            var roleQuery = role === 'sub' ? '?role=sub' : '';
-            socket = new WebSocket(proto + '//' + location.host + '/live/' + cameraId + roleQuery);
-            socket.binaryType = 'arraybuffer';
-
             statusEl.textContent = 'Connecting…';
+            var connectStartMs = (window.performance && performance.now) ? performance.now() : Date.now();
+            var timingReported = false;
 
-            socket.onmessage = function (evt) {
-                fragmentCount++;
-                if (fragmentCount === 1) {
-                    console.log('[live-view] init segment received,', evt.data.byteLength, 'bytes, mimeType=', mimeType);
-                } else if (fragmentCount <= 5 || fragmentCount % 50 === 0) {
-                    console.log('[live-view] fragment', fragmentCount, ',', evt.data.byteLength, 'bytes, video.readyState=', videoEl.readyState, 'video.paused=', videoEl.paused);
+            // Failover plan phase 1: resolve whether this stream goes through the server (proxy — the
+            // default, and byte-for-byte the old behaviour) or straight to the recorder node (direct).
+            // A missing/failed ticket falls back to the proxy URL, so this can never make live view
+            // worse than before it existed.
+            mediaEndpoint.resolveLive(cameraId).then(function (ticket) {
+                if (closed || ended) return;
+                ticket = ticket || { mode: 'proxy' };
+
+                var url, streamMode = 'proxy';
+                if (ticket.mode === 'direct' && ticket.videoUrl && ticket.token) {
+                    var sep = ticket.videoUrl.indexOf('?') >= 0 ? '&' : '?';
+                    url = ticket.videoUrl + sep + 'token=' + encodeURIComponent(ticket.token) +
+                          (role === 'sub' ? '&role=sub' : '');
+                    streamMode = 'direct';
+                } else {
+                    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    url = proto + '//' + location.host + '/live/' + cameraId + (role === 'sub' ? '?role=sub' : '');
                 }
-                statusEl.textContent = '';
-                pending.push(new Uint8Array(evt.data));
-                appendNext();
-            };
-            socket.onerror = function () {
-                statusEl.textContent = 'Connection error.';
-            };
-            socket.onclose = function (evt) {
-                var wasAlreadyClosed = closed;
-                closed = true;
-                if (!wasAlreadyClosed && statusEl.textContent === '') {
-                    statusEl.textContent = evt.reason || 'Disconnected.';
-                }
-                endSession();
-            };
+
+                socket = new WebSocket(url);
+                socket.binaryType = 'arraybuffer';
+
+                socket.onmessage = function (evt) {
+                    fragmentCount++;
+                    if (fragmentCount === 1) {
+                        console.log('[live-view] init segment received,', evt.data.byteLength, 'bytes, mimeType=', mimeType, 'mode=', streamMode);
+                        if (!timingReported) {
+                            timingReported = true;
+                            var nowMs = (window.performance && performance.now) ? performance.now() : Date.now();
+                            mediaEndpoint.reportTiming(cameraId, streamMode, nowMs - connectStartMs);
+                        }
+                    } else if (fragmentCount <= 5 || fragmentCount % 50 === 0) {
+                        console.log('[live-view] fragment', fragmentCount, ',', evt.data.byteLength, 'bytes, video.readyState=', videoEl.readyState, 'video.paused=', videoEl.paused);
+                    }
+                    statusEl.textContent = '';
+                    pending.push(new Uint8Array(evt.data));
+                    appendNext();
+                };
+                socket.onerror = function () {
+                    statusEl.textContent = 'Connection error.';
+                    if (streamMode === 'direct') {
+                        // Very often an untrusted certificate on the recorder. Drop the cached ticket
+                        // so a retry re-resolves (the operator may have flipped the toggle), and — if
+                        // this was flagged insecure — offer the one-click trust step.
+                        mediaEndpoint.invalidate(cameraId);
+                        if (ticket.insecure && typeof ticket.trustUrl === 'string' &&
+                            ticket.trustUrl.indexOf('https://') === 0 && statusEl) {
+                            statusEl.textContent = 'This camera streams directly from its recorder over an untrusted certificate. ';
+                            var trustLink = document.createElement('a');
+                            trustLink.href = ticket.trustUrl;
+                            trustLink.target = '_blank';
+                            trustLink.rel = 'noopener';
+                            trustLink.textContent = 'Trust the recorder';
+                            statusEl.appendChild(trustLink);
+                            statusEl.appendChild(document.createTextNode(', then reload this page.'));
+                        }
+                    }
+                };
+                socket.onclose = function (evt) {
+                    var wasAlreadyClosed = closed;
+                    closed = true;
+                    if (!wasAlreadyClosed && statusEl.textContent === '') {
+                        statusEl.textContent = evt.reason || 'Disconnected.';
+                    }
+                    endSession();
+                };
+            });
         });
 
         videoEl.play().catch(function (e) {
