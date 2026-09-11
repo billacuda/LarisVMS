@@ -215,7 +215,11 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
         HasScheduleWindow = scheduleWindows.Any(w => w.IsEnabled);
     }
 
-    public async Task<IActionResult> OnPostAsync()
+    /// <summary>Named, not the unnamed OnPostAsync: the form has no explicit action, so a handler-less
+    /// Save posts to the current document URL — which still reads "?handler=Probe" after Re-probe
+    /// (that handler returns Page(), it doesn't redirect). Save would then silently re-probe instead
+    /// of writing. Same fix as Admin/Settings/Detection's own Save.</summary>
+    public async Task<IActionResult> OnPostSaveAsync()
     {
         Nodes = await nodeService.ListAsync();
 

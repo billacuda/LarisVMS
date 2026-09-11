@@ -74,6 +74,10 @@ else
                 {
                     <tr>
                         <form method="post" asp-page-handler="Update" asp-route-id="@n.Id">
+                            @* Stale-save guard — see NodesModel.Snapshot's own doc comment. Round-
+                               tripped verbatim; OnPostUpdateAsync rejects the save outright if this
+                               node's config no longer matches what this hash was computed from. *@
+                            <input type="hidden" name="snapshot" value="@Model.Snapshot.GetValueOrDefault(n.Id)" />
                             <td style="min-width: 12rem;" data-sort-value="@n.Name">
                                 <input name="Name" class="form-control form-control-sm" value="@n.Name" required />
                             </td>

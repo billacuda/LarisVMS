@@ -419,7 +419,9 @@
         </div>
     }
     <div class="col-12">
-        <button type="submit" class="btn btn-primary">@(Model.IsNew ? "Add & probe" : "Save")</button>
+        @* Explicit handler — a handler-less submit posts to the current URL, which still carries
+           "?handler=Probe" after Re-probe and would re-probe rather than save. *@
+        <button type="submit" class="btn btn-primary" asp-page-handler="Save">@(Model.IsNew ? "Add & probe" : "Save")</button>
         @if (!Model.IsNew)
         {
             <button type="submit" asp-page-handler="Probe" class="btn btn-outline-secondary"><span aria-hidden="true">🔍</span> Re-probe</button>

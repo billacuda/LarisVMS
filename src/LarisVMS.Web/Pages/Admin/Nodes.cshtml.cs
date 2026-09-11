@@ -84,6 +84,12 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
     public Dictionary<Guid, int> EffectiveArchiveRetentionDays { get; set; } = [];
     public Dictionary<Guid, int> StaleCameraCountByNode { get; set; } = [];
     public Dictionary<Guid, List<StaleCameraRow>> StaleCamerasByNode { get; set; } = [];
+    /// <summary>Stale-save guard: a hash of every field this page's per-node form can submit, as it
+    /// stood at the moment this GET rendered the row. Round-tripped through a hidden field and
+    /// re-checked against a freshly-read snapshot at the top of OnPostUpdateAsync, before any write
+    /// happens — see that check's own comment for why. Keyed by node id like every other per-node
+    /// dictionary on this page.</summary>
+    public Dictionary<Guid, string> Snapshot { get; set; } = [];
     public string? ErrorMessage { get; set; }
 
     /// <summary>One row of the warning-emoji tooltip's detail list — ClearsAtUtc is when this
@@ -114,6 +120,44 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
         }
         return null;
     }
+
+    /// <summary>Normalizes an int-valued override the same way on both the render side and the
+    /// verify side of the stale-save guard below, so e.g. "010" and "10" (or a null vs. an empty
+    /// string) never register as a spurious mismatch — every int-typed override on this page is only
+    /// ever written by this same handler as a plain <c>int.ToString()</c>, so the two sides always
+    /// agree once both are pushed through the same parse.</summary>
+    private static string NormalizeInt(string? raw) => int.TryParse(raw, out var v) ? v.ToString() : "";
+
+    /// <summary>Stale-save guard (see <see cref="Snapshot"/>): hashes every field this page's per-node
+    /// form can submit into one opaque token. Deliberately excludes anything this form can't edit
+    /// (Status, LastSeenAt, StorageFreeBytes, ...) — those change on every heartbeat independently of
+    /// any admin edit, and including them would make ordinary saves spuriously conflict with a node
+    /// that simply phoned home in between. Also excludes the two write-only secret fields
+    /// (ClientCertPfxPassword, Detection.ExternalInferenceApiKey's own value) since those already use
+    /// "blank means leave alone" rather than "blank means clear" — they were never at risk of the
+    /// silent-clobber bug this guard exists for, so they don't need to gate on it either. U+0001
+    /// separates fields (rather than e.g. ',') since it can't appear in any of these values, and every
+    /// null is folded to the distinct U+0000 sentinel so "null" and "" can never collide.</summary>
+    private static string ComputeSnapshot(params string?[] parts)
+    {
+        var joined = string.Join('\u0001', parts.Select(p => p ?? "\u0000"));
+        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(joined));
+        return Convert.ToHexString(hash);
+    }
+
+    private static string ComputeNodeSnapshot(Node n,
+        string? retentionOverrideRaw, string? modelFamilyOverride, string? dfineWeightsOverride, string? yoloXSizeOverride,
+        string? maxFpsOverrideRaw, string? aspectModeOverride, string? dfineTensorRtModeOverride,
+        string? backendOverride, string? externalUrlOverride, string? externalModelOverride, string? externalInputSizeOverrideRaw,
+        bool hasExternalApiKeyOverride, string? archiveEnabledOverride, string? archiveRetentionOverrideRaw) =>
+        ComputeSnapshot(
+            n.Name, n.StorageRootPath, n.ArchiveRootPath, n.AiAccelerator?.ToString(), n.DisableAiObjectDetection.ToString(),
+            n.DirectStreamingMode, n.AllowInsecureClientEndpoint?.ToString(), n.ClientEndpointHost, n.ClientCertPfxPath,
+            n.PrimaryProxyId?.ToString(), n.BackupProxyId?.ToString(), n.BackupNodeId?.ToString(),
+            NormalizeInt(retentionOverrideRaw), modelFamilyOverride ?? "", dfineWeightsOverride ?? "", yoloXSizeOverride ?? "",
+            NormalizeInt(maxFpsOverrideRaw), aspectModeOverride ?? "", dfineTensorRtModeOverride ?? "",
+            backendOverride ?? "", externalUrlOverride ?? "", externalModelOverride ?? "", NormalizeInt(externalInputSizeOverrideRaw),
+            hasExternalApiKeyOverride.ToString(), archiveEnabledOverride ?? "", NormalizeInt(archiveRetentionOverrideRaw));
 
     public async Task OnGetAsync()
     {
@@ -184,6 +228,14 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
             ExternalInferenceInputSizeOverride[n.Id] = int.TryParse(externalInputSizeOwn, out var eis) ? eis : null;
             HasExternalInferenceApiKeyOverride[n.Id] = !string.IsNullOrEmpty(
                 await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.ExternalInferenceApiKey"));
+
+            // Stale-save guard — see Snapshot's own doc comment. Computed from the exact raw values
+            // just read above (not the parsed/defaulted dictionary values) so it matches byte-for-byte
+            // what OnPostUpdateAsync recomputes from a fresh read at save time.
+            Snapshot[n.Id] = ComputeNodeSnapshot(n, ownOverride, ModelFamilyOverride[n.Id], DFineWeightsOverride[n.Id],
+                YoloXSizeOverride[n.Id], maxFpsOwn, AspectModeOverride[n.Id], DFineTensorRtModeOverride[n.Id],
+                DetectionBackendOverride[n.Id], ExternalInferenceUrlOverride[n.Id], ExternalInferenceModelOverride[n.Id],
+                externalInputSizeOwn, HasExternalInferenceApiKeyOverride[n.Id], ArchiveEnabledOverride[n.Id], archiveRetentionOwn);
         }
     }
 
@@ -196,7 +248,7 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
         string? directStreamingMode, string? allowInsecureClientEndpoint, string? clientEndpointHost,
         string? clientCertPfxPath, string? clientCertPfxPassword,
         string? primaryProxyId, string? backupProxyId,
-        string? backupNodeId, bool disableAiObjectDetection = false)
+        string? backupNodeId, bool disableAiObjectDetection = false, string? snapshot = null)
     {
         try
         {
@@ -278,6 +330,36 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
             var oldExternalInputSizeOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.ExternalInferenceInputSize");
             var oldArchiveEnabledOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Archive.Enabled");
             var oldArchiveRetentionOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Archive.RetentionDays");
+            var oldHasExternalApiKeyOverride = !string.IsNullOrEmpty(
+                await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.ExternalInferenceApiKey"));
+
+            if (before is null)
+            {
+                ErrorMessage = "That node no longer exists.";
+                await OnGetAsync();
+                return Page();
+            }
+
+            // Stale-save guard — see Snapshot's own doc comment on the GET side. Recomputed here from
+            // a fresh read of every field this form can submit, *before* any of them get written, and
+            // compared against the hash the form was rendered with. A mismatch means something else
+            // (another tab, another admin, a reopened/back-navigated page) changed this node's config
+            // since this page was loaded — reject the save outright rather than writing this stale
+            // snapshot's blanks over whatever changed in the meantime. This is what actually caught
+            // the bug where a stale Nodes page silently cleared a working Detection.Backend/external-
+            // service override back to "inherit" on save.
+            var currentSnapshot = ComputeNodeSnapshot(before, oldRetentionOverride, oldModelFamilyOverride,
+                oldDFineWeightsOverride, oldYoloXSizeOverride, oldMaxFpsOverride, oldAspectModeOverride,
+                oldDFineTensorRtModeOverride, oldBackendOverride, oldExternalUrlOverride, oldExternalModelOverride,
+                oldExternalInputSizeOverride, oldHasExternalApiKeyOverride, oldArchiveEnabledOverride, oldArchiveRetentionOverride);
+            if (!string.Equals(snapshot, currentSnapshot, StringComparison.Ordinal))
+            {
+                ErrorMessage = $"{before.Name}'s settings changed (in another tab, or by someone else) since this page " +
+                    "was loaded — nothing was saved, to avoid overwriting that change. Reload the page and re-apply your edit.";
+                await OnGetAsync();
+                return Page();
+            }
+
             // "" (blank/Auto) resolves as null — see NodeConfigResponse.AiAccelerator's own doc
             // comment for why Auto (not an explicit choice) is the safe default.
             var accelerator = Enum.TryParse<AiAccelerator>(aiAccelerator, out var acc) ? acc : (AiAccelerator?)null;

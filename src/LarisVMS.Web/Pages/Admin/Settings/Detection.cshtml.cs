@@ -130,7 +130,13 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         HasStoredExternalApiKey = !string.IsNullOrEmpty(await settings.GetAsync("Detection.ExternalInferenceApiKey", ""));
     }
 
-    public async Task<IActionResult> OnPostAsync()
+    /// <summary>Named rather than the unnamed OnPostAsync (the convention Email's own Save follows)
+    /// because this page has a second handler. The form carries no explicit action, so the browser
+    /// posts it to the current document URL — and after "Test connection" that URL still reads
+    /// <c>?handler=TestConnection</c>. An unnamed Save button inherited that handler, so clicking Save
+    /// right after a successful test silently re-ran the probe: the operator saw a green "Connected…"
+    /// alert, nothing was written, and the next page load was back on the built-in backend.</summary>
+    public async Task<IActionResult> OnPostSaveAsync()
     {
         var by = User.Identity?.Name;
 

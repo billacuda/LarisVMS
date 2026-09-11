@@ -400,7 +400,9 @@
     </fieldset>
 
     <div class="col-12">
-        <button type="submit" class="btn btn-primary"><span aria-hidden="true">💾</span> Save</button>
+        @* Explicit handler: the form has no action, so a handler-less submit posts to whatever URL the
+           browser is on — which is "?handler=TestConnection" after a test, re-probing instead of saving. *@
+        <button type="submit" class="btn btn-primary" asp-page-handler="Save"><span aria-hidden="true">💾</span> Save</button>
     </div>
 </form>
 

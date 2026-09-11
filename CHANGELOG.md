@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.200.0] - 2026-09-11
+
+### Fixed
+
+- **A per-node override on Admin → Nodes could be silently lost on save.** Saving a node's row from a
+  stale copy of the page — a browser tab left open, or reopened via back/forward, from before an
+  override was set — cleared every override field that was blank in that stale snapshot back to
+  "inherit the global default," overwriting whatever had been set there since, with no warning. This
+  is how a working **Detection.Backend → External HTTP service** override (with its URL/model/API
+  key) could vanish and quietly fall back to the built-in model, looking like it had "reset itself."
+  Saving that page now hashes every field the row can edit — name, storage/archive paths, AI
+  accelerator, all Detection.\* and Archive.\* overrides, streaming/failover settings — as of when the
+  page was loaded, and re-checks it against the node's actual current state before writing anything.
+  If anything changed underneath in the meantime, the save is rejected outright (nothing is written)
+  with a message asking you to reload and re-apply the edit, instead of clobbering it.
+
+- **Admin → Settings → AI detection could silently fail to save at all.** Its Save button had no
+  handler of its own, so after clicking "Test connection" (which does carry a handler, leaving the
+  page on `?handler=TestConnection`) the next Save posted right back to that same handler — it
+  re-probed the external service, showed the same "Connected…" success message Save itself never
+  gets, and never actually saved. Any edit made after a test connection — not just the external
+  backend fields, every field on that page — was silently discarded, so a refresh showed the old
+  values (Backend back to Built-in) with no error. The Save button now posts to its own handler, so
+  it always saves regardless of what was clicked before it. The same handler-less-Save bug existed
+  on Cameras → Edit (there, triggered by "Re-probe" instead of "Test connection") and is fixed the
+  same way.
+
+### Note
+
+- Web-only — no recorder node/proxy code changed. `LarisVMS.Node`/`LarisVMS.Proxy`/`LarisVMS.NodeUpdater`
+  still had their base `<Version>` bumped to match, only to satisfy `deploy.ps1`'s version-sync guard.
+  Schema migration `BumpVersion0_200_0` (version-tracking row only) — `dotnet ef database update` /
+  redeploy applies it.
+
 ## [0.199.0] - 2026-09-09
 
 ### Changed
