@@ -279,6 +279,19 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         // Pass 4a — same Global -> Node resolution as the flags above. Moves per-frame preprocessing
         // off the CPU onto whatever accelerator ONNX Runtime is using. Opt-in, default off.
         var gpuPreprocessing = await settings.GetAsync("Detection.GpuPreprocessing", false, nodeId: nodeId, ct: ct);
+        // Detection backend — same node-scoped resolution. "ExternalHttp" swaps the local ONNX
+        // engine for HttpDetectionEngine (each frame POSTed to an operator-run service); "BuiltIn"
+        // (default, or anything unrecognized) keeps the bundled model. The URL/model/input-size
+        // fields are only meaningful for "ExternalHttp"; input size is re-clamped to a positive
+        // multiple of 32 here (stored as a free-form string, so every consumer re-validates).
+        var detectionBackend = await settings.GetAsync("Detection.Backend", "BuiltIn", nodeId: nodeId, ct: ct);
+        var externalInferenceUrl = (await settings.GetAsync("Detection.ExternalInferenceUrl", "", nodeId: nodeId, ct: ct)).Trim();
+        var externalInferenceModel = (await settings.GetAsync("Detection.ExternalInferenceModel", "", nodeId: nodeId, ct: ct)).Trim();
+        var externalInferenceInputSizeRaw = await settings.GetAsync("Detection.ExternalInferenceInputSize", 640, nodeId: nodeId, ct: ct);
+        var externalInferenceInputSize = externalInferenceInputSizeRaw > 0 && externalInferenceInputSizeRaw % 32 == 0
+            ? externalInferenceInputSizeRaw
+            : 640;
+        var externalInferenceApiKey = await settings.GetAsync("Detection.ExternalInferenceApiKey", "", nodeId: nodeId, ct: ct);
         // Deployment-wide minimum log level for nodes + their vision services. Global only.
         var logLevel = await settings.GetAsync("Logging.Level", "Information", ct: ct);
         // Confidence/IoU/stream-role are resolved per camera below (Camera -> Node -> Global,
@@ -415,6 +428,11 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             YoloXSize = yoloXSize, MaxDetectionFps = maxDetectionFps, DFineTensorRtMode = dfineTensorRtMode,
             ArchiveRootPath = archiveRoot, SnapshotMotionAccuracy = snapshotMotionAccuracy,
             DepartureGraceSeconds = departureGraceSeconds,
+            DetectionBackend = detectionBackend,
+            ExternalInferenceUrl = externalInferenceUrl,
+            ExternalInferenceModel = externalInferenceModel,
+            ExternalInferenceInputSize = externalInferenceInputSize,
+            ExternalInferenceApiKey = externalInferenceApiKey,
             ClientEndpointEnabled = clientEndpointEnabled,
             ClientCertPfxPath = string.IsNullOrWhiteSpace(nodeRoots?.ClientCertPfxPath) ? null : nodeRoots!.ClientCertPfxPath,
             ClientCertPfxPassword = string.IsNullOrWhiteSpace(nodeRoots?.ClientCertPfxPassword) ? null : nodeRoots!.ClientCertPfxPassword,

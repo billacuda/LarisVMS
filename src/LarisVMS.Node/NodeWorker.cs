@@ -906,11 +906,19 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         ApplyLogLevel(config.LogLevel);
 
         var anyCameraWantsAiDetection = config.Cameras.Any(c => c.AiDetectionEnabled);
-        if (anyCameraWantsAiDetection && _resolvedAccelerator is not null)
+        // Detection.Backend = "ExternalHttp" runs no local model — every frame is POSTed to an
+        // operator-run service (HttpDetectionEngine) — so it needs the Vision Service *process* but
+        // not a resolved accelerator. This is the one detection path that works on a GPU-less node;
+        // the built-in engine still requires an accelerator, since there's nothing to load a model
+        // onto otherwise.
+        var externalBackend = string.Equals(config.DetectionBackend, "ExternalHttp", StringComparison.OrdinalIgnoreCase);
+        if (anyCameraWantsAiDetection && (_resolvedAccelerator is not null || externalBackend))
         {
             // Tell the sibling process which ONNX Runtime backend to load for this machine — it
-            // restarts itself if this changed since it started (VisionServiceSupervisor).
-            _visionSupervisor.SetPreferredAccelerator(_resolvedAccelerator.Value.ToString());
+            // restarts itself if this changed since it started (VisionServiceSupervisor). For the
+            // external backend on a GPU-less node this resolution is inert (the HTTP engine never
+            // touches ONNX Runtime), so pass "Cpu" purely to hand the child a concrete value.
+            _visionSupervisor.SetPreferredAccelerator((_resolvedAccelerator ?? AiAccelerator.Cpu).ToString());
 
             if (_resolvedAccelerator == AiAccelerator.Nvidia)
             {
@@ -1397,11 +1405,16 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// per-camera-specific ones (no accelerator, no stream matching the configured role).</summary>
     private void ReconcileVision(NodeConfigCameraDto camera, NodeConfigResponse config)
     {
-        if (!camera.AiDetectionEnabled || _resolvedAccelerator is null || !_visionSupervisor.IsRunning)
+        // The external HTTP backend runs no local model, so it needs no accelerator — only the
+        // built-in engine does (see Reconcile's own start gate). Recomputed here rather than passed
+        // down so this per-camera method stays self-contained.
+        var externalBackend = string.Equals(config.DetectionBackend, "ExternalHttp", StringComparison.OrdinalIgnoreCase);
+        var acceleratorReady = _resolvedAccelerator is not null || externalBackend;
+        if (!camera.AiDetectionEnabled || !acceleratorReady || !_visionSupervisor.IsRunning)
         {
             if (_activeVision.TryRemove(camera.CameraId, out _)) _ = StopVisionWatchAsync(camera.CameraId);
 
-            if (camera.AiDetectionEnabled && _resolvedAccelerator is null && _warnedVisionNoAccelerator.TryAdd(camera.CameraId, 0))
+            if (camera.AiDetectionEnabled && !acceleratorReady && _warnedVisionNoAccelerator.TryAdd(camera.CameraId, 0))
             {
                 _logger.LogWarning(
                     "Camera {CameraId} ({Name}) has AI detection enabled but this node has no usable " +
@@ -1465,13 +1478,21 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             camera.AiConfidence, camera.AiIou, config.ReportIdleDetections, config.AiIdleTimeoutSeconds,
             watchRole, _resolvedAccelerator, _resolvedDetectionModelFamily, config.DFineWeights, config.YoloXSize,
             decodeFpsCap, config.GpuPreprocessing, config.DFineTensorRtMode, config.SnapshotMotionAccuracy,
-            camera.RejectMotionJitter, camera.MotionJitterPixels, config.DepartureGraceSeconds);
+            camera.RejectMotionJitter, camera.MotionJitterPixels, config.DepartureGraceSeconds,
+            // Detection.Backend + the external service address/model/input-size/API key: each changes
+            // which engine the pipeline builds (or how it talks to the service), so a change tears
+            // down and rebuilds the pipeline the same way an AspectMode or model-family change does.
+            config.DetectionBackend, config.ExternalInferenceUrl, config.ExternalInferenceModel,
+            config.ExternalInferenceInputSize, config.ExternalInferenceApiKey);
 
         if (_activeVision.TryGetValue(camera.CameraId, out var existing) && existing.ConfigSignature == signature) return; // already watching, unchanged
 
         var request = new VisionStartCameraRequest(
             camera.CameraId, watchRtspUri, sourceWidth, sourceHeight,
-            AccelToFfmpegHwaccel(_resolvedAccelerator.Value), camera.AiConfidence, camera.AiIou,
+            // Null on a GPU-less node running the external backend — VisionSession then decodes in
+            // software, which is fine at Sub-stream resolution.
+            _resolvedAccelerator is { } decodeAccel ? AccelToFfmpegHwaccel(decodeAccel) : null,
+            camera.AiConfidence, camera.AiIou,
             config.ReportIdleDetections, config.AiIdleTimeoutSeconds,
             _resolvedDetectionModelFamily.ToString(), config.DFineWeights, $"http://127.0.0.1:{livePort}",
             config.AspectMode, config.GpuPreprocessing, config.YoloXSize, decodeFpsCap,
@@ -1490,7 +1511,11 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             // Detection.RejectMotionJitter / MotionJitterPixels — per-camera; Detection.DepartureGraceSeconds
             // — global. All in `signature` above: each changes the movement classifier or span
             // lifecycle, so a change restarts the pipeline.
-            camera.RejectMotionJitter, camera.MotionJitterPixels, config.DepartureGraceSeconds);
+            camera.RejectMotionJitter, camera.MotionJitterPixels, config.DepartureGraceSeconds,
+            // Detection.Backend + external service address/model/input-size/API key — node-scoped.
+            // All in `signature` above. Blank/"BuiltIn" for a node on the bundled engine.
+            config.DetectionBackend, config.ExternalInferenceUrl, config.ExternalInferenceModel,
+            config.ExternalInferenceInputSize, config.ExternalInferenceApiKey);
 
         // Never stack two starts for the same camera — see _visionStartsInFlight's own comment.
         if (!_visionStartsInFlight.TryAdd(camera.CameraId, 0)) return;

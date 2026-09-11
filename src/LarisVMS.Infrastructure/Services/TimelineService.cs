@@ -429,14 +429,25 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
         // Pass 2c's footage-coverage guard is deliberately NOT part of this query — see the
         // "does footage still cover this span" block further down, after pagination, for why.
 
-        // Admin-configurable "which event types cameras support" filter (see SnapshotVisibility) —
-        // a custom EventTagRule span is never excluded here, since each rule already carries its own
-        // IsEnabled toggle; only plain motion (no class, no rule) and each DetectionKind are gated.
-        // settings is null in every existing test that doesn't care about this (default constructor
-        // param), which resolves to "everything enabled" — the pre-existing behavior.
+        // Snapshots is an object-detection browser (permanent, not a setting): a card is only ever an
+        // AI-Vision span (DetectedObjectCategoryId), a camera-native ONVIF object-class span
+        // (DetectionKind), or a CustomTag span (EventTagRuleId). A plain-motion / "motion detected"
+        // span — none of those three, including a zone-scoped ServerMotion span — never appears here.
+        // That exclusion sits OUTSIDE the settings guard so a null resolver (most tests) gets it too.
+        // Plain-motion rows still exist and still drive the Playback timeline's motion bands
+        // (GetBucketsAsync / GetGlobalBucketsAsync) and the live-view motion badge
+        // (GetCamerasWithActiveMotionAsync) — all untouched.
+        query = query.Where(m =>
+            m.EventTagRuleId != null || m.DetectionKind != null || m.DetectedObjectCategoryId != null);
+
+        // Admin per-class hide (Admin → Settings → Events → "Snapshots browser"): still useful to
+        // drop a specific camera-native class (e.g. Face) from the browser. Only the closed
+        // DetectionKind enum is gated — a CustomTag rule carries its own IsEnabled toggle, and an
+        // AI-Vision category has no per-type setting and must never be gated here (gating it via the
+        // now-retired Motion toggle was a bug). settings is null in tests that don't care, which
+        // resolves every class to "shown".
         if (settings is not null)
         {
-            var motionEnabled = await settings.GetAsync(SnapshotVisibility.MotionKey, true, ct: ct);
             var disabledKinds = new List<DetectionKind>();
             foreach (var kind in DetectionDisplay.AllKinds)
             {
@@ -444,10 +455,8 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
                     disabledKinds.Add(kind);
             }
 
-            query = query.Where(m =>
-                m.EventTagRuleId != null
-                || (m.DetectionKind != null && !disabledKinds.Contains(m.DetectionKind.Value))
-                || (m.DetectionKind == null && motionEnabled));
+            if (disabledKinds.Count > 0)
+                query = query.Where(m => m.DetectionKind == null || !disabledKinds.Contains(m.DetectionKind.Value));
         }
 
         // Page-level filter (Pages/Snapshots' own toolbar) — a pure narrowing on top of whatever the
@@ -458,15 +467,16 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
         if (kinds is { Count: > 0 })
         {
             var kindSet = kinds.ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var wantMotion = kindSet.Contains("Motion");
             var wantCustomTag = kindSet.Contains(CustomTagKindToken);
             var wantedDetectionKinds = DetectionDisplay.AllKinds.Where(k => kindSet.Contains(k.ToString())).ToList();
             // Object detection plan decision 5: DetectedObjectCategory names are also valid filter
-            // tokens, alongside "Motion"/"CustomTag"/a DetectionKind name. Deliberately NOT
-            // mutually exclusive with wantedDetectionKinds above — "Vehicle" and "Animal" are both a
-            // DetectionKind value *and* one of the small fixed AI category names by design, and a
-            // single "Vehicle" checkbox should match either source's spans, not just whichever one
-            // claimed the token first. Only the two reserved system tokens are excluded.
+            // tokens, alongside "CustomTag"/a DetectionKind name. Deliberately NOT mutually exclusive
+            // with wantedDetectionKinds above — "Vehicle" and "Animal" are both a DetectionKind value
+            // *and* one of the small fixed AI category names by design, and a single "Vehicle"
+            // checkbox should match either source's spans. "CustomTag" and the legacy "Motion" token
+            // (Snapshots no longer lists plain motion — a stale kinds=Motion from a saved pref or
+            // bookmarked URL must be ignored, never read as an AI category literally named "Motion")
+            // are the only reserved tokens excluded.
             var wantedCategoryNames = kindSet
                 .Where(k => !k.Equals("Motion", StringComparison.OrdinalIgnoreCase)
                     && !k.Equals(CustomTagKindToken, StringComparison.OrdinalIgnoreCase))
@@ -475,8 +485,7 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
             query = query.Where(m =>
                 (m.EventTagRuleId != null && wantCustomTag)
                 || (m.DetectionKind != null && wantedDetectionKinds.Contains(m.DetectionKind.Value))
-                || (m.DetectedObjectCategoryId != null && m.DetectedObjectCategory != null && wantedCategoryNames.Contains(m.DetectedObjectCategory.Name))
-                || (m.DetectionKind == null && m.EventTagRuleId == null && m.DetectedObjectCategoryId == null && wantMotion));
+                || (m.DetectedObjectCategoryId != null && m.DetectedObjectCategory != null && wantedCategoryNames.Contains(m.DetectedObjectCategory.Name)));
         }
 
         // Filter-tree narrowing, one level below kinds: excludes a specific "{category}:{label}"

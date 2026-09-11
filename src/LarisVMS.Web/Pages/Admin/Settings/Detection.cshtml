@@ -315,6 +315,91 @@
     </div>
 
     <div class="col-12">
+        <label class="form-label">
+            Detection backend
+            <button type="button" class="help-icon" data-help-target="backendHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <select asp-for="Backend" class="form-select" id="backendSelect">
+            <option value="BuiltIn">Built-in — bundled model on the node's own accelerator (default)</option>
+            <option value="ExternalHttp">External HTTP service — send frames to your own inference server</option>
+        </select>
+        <div class="help-text-source" id="backendHelp">
+            Built-in runs one of the bundled models (YOLOX / D-FINE) on each node's GPU. The external
+            option runs no model on the node at all: every frame is scaled to the model's input size,
+            JPEG-encoded, and POSTed to an inference server you run, which replies with JSON boxes.
+            Use it for models LarisVMS doesn't bundle. Everything downstream — tracking, snapshots,
+            timeline, live overlay — is identical. This is the one detection path that needs no GPU on
+            the node. Per-node setting; changing it restarts each camera's detection pipeline.
+        </div>
+    </div>
+
+    <fieldset class="col-12 border rounded p-3" id="externalBackendFields" style="@(Model.Backend == "ExternalHttp" ? "" : "display:none;")">
+        <legend class="fs-6 text-muted">External inference service</legend>
+
+        <div class="mb-3">
+            <label asp-for="ExternalUrl" class="form-label">Service URL</label>
+            <div class="input-group">
+                <input asp-for="ExternalUrl" type="url" class="form-control" placeholder="http://192.168.1.50:8080" />
+                <button type="submit" class="btn btn-outline-secondary" asp-page-handler="TestConnection" formnovalidate>
+                    Test connection
+                </button>
+            </div>
+            <div class="form-text">Include the port. The service must expose <code>POST /v1/detect</code>, <code>GET /v1/models</code> and <code>GET /healthz</code>.</div>
+        </div>
+
+        <div class="mb-3">
+            <label asp-for="ExternalApiKey" class="form-label">API key</label>
+            <input asp-for="ExternalApiKey" type="password" autocomplete="new-password" class="form-control"
+                   placeholder="@(Model.HasStoredExternalApiKey ? "•••••••• (unchanged — leave blank to keep it)" : "leave blank if the service needs no auth")" />
+            <div class="form-text">
+                Sent as <code>Authorization: Bearer &lt;key&gt;</code> on every request, including "Test connection".
+                A service bound to loopback only (the common case) needs none; SideGlance and most others require
+                one once reachable over the LAN. Never re-shown once saved — type a new value to replace it.
+            </div>
+        </div>
+
+        @if (Model.ProbeHealth is { } h)
+        {
+            <div class="small text-muted mb-2">
+                Service: <strong>@(h.Status ?? "?")</strong>
+                @if (!string.IsNullOrEmpty(h.Version)) { <text>· v@(h.Version)</text> }
+                @if (!string.IsNullOrEmpty(h.Backend)) { <text>· backend @(h.Backend)</text> }
+                @if (h.ModelsReady is { Count: > 0 }) { <text>· @(h.ModelsReady.Count) model(s) ready</text> }
+            </div>
+        }
+
+        <div class="mb-3">
+            <label asp-for="ExternalModel" class="form-label">Model</label>
+            <select asp-for="ExternalModel" class="form-select" id="externalModelSelect">
+                @{
+                    var options = Model.AvailableModels.ToList();
+                    if (options.Count == 0 && !string.IsNullOrEmpty(Model.ExternalModel))
+                    {
+                        <option value="@Model.ExternalModel" data-input-size="@Model.ExternalInputSize" selected>@Model.ExternalModel (saved — Test connection to refresh)</option>
+                    }
+                }
+                @foreach (var m in options)
+                {
+                    <option value="@m.Name" data-input-size="@m.InputSize" selected="@(m.Name == Model.ExternalModel)">
+                        @m.Name — @(m.InputSize)px input@(m.ClassCount is { } cc ? $", {cc} classes" : "")@(string.IsNullOrEmpty(m.Decoder) ? "" : $" ({m.Decoder})")@(string.Equals(m.Status, "ready", StringComparison.OrdinalIgnoreCase) ? "" : $" [{m.Status}]")
+                    </option>
+                }
+            </select>
+            <input asp-for="ExternalInputSize" type="hidden" id="externalInputSize" />
+            <div class="form-text">
+                @if (Model.AvailableModels.Count == 0)
+                {
+                    <text>Click <strong>Test connection</strong> to load the model list from the service.</text>
+                }
+                else
+                {
+                    <text>The model's input size sizes the frames LarisVMS sends. Slice aspect-fitting is delegated to the service.</text>
+                }
+            </div>
+        </div>
+    </fieldset>
+
+    <div class="col-12">
         <button type="submit" class="btn btn-primary"><span aria-hidden="true">💾</span> Save</button>
     </div>
 </form>
@@ -342,6 +427,28 @@
             wireSlider('iouRange', 'iouReadout', asPercent);
             wireSlider('departureGraceRange', 'departureGraceReadout', asInt);
             wireSlider('motionJitterPixelsRange', 'motionJitterPixelsReadout', asInt);
+        })();
+
+        // External-backend section: show its fields only when that backend is selected, and keep the
+        // hidden input-size field in sync with the picked model (each <option> carries its own size,
+        // discovered by "Test connection") so Save always stores the size that matches the model.
+        (function () {
+            var backend = document.getElementById('backendSelect');
+            var fields = document.getElementById('externalBackendFields');
+            var model = document.getElementById('externalModelSelect');
+            var size = document.getElementById('externalInputSize');
+            if (backend && fields) {
+                backend.addEventListener('change', function () {
+                    fields.style.display = backend.value === 'ExternalHttp' ? '' : 'none';
+                });
+            }
+            function syncSize() {
+                if (!model || !size) return;
+                var opt = model.options[model.selectedIndex];
+                var v = opt && opt.getAttribute('data-input-size');
+                if (v) size.value = v;
+            }
+            if (model) { model.addEventListener('change', syncSize); syncSize(); }
         })();
     </script>
 }

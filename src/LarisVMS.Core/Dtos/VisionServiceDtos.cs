@@ -138,7 +138,31 @@ public record VisionStartCameraRequest(
     /// classified Moving is held before <see cref="SnapshotMotionAccuracy"/>'s early-finalize
     /// flushes it as "the object left". Appended for stable positional construction; defaults 5
     /// (the previous hard-coded value).</summary>
-    int DepartureGraceSeconds = 5)
+    int DepartureGraceSeconds = 5,
+    /// <summary>Detection.Backend (node-scoped) — "BuiltIn" (default) runs a bundled ONNX model on
+    /// the local accelerator; "ExternalHttp" runs no local model at all and POSTs each frame to the
+    /// service at <see cref="ExternalInferenceUrl"/> instead (<see cref="LarisVMS.Vision"/>'s
+    /// HttpDetectionEngine). Blank/unrecognized = "BuiltIn". Part of NodeWorker's restart signature.
+    /// Appended so NodeWorker's positional construction stays stable.</summary>
+    string DetectionBackend = "BuiltIn",
+    /// <summary>The external inference service's base URL including port, e.g.
+    /// <c>http://192.168.1.50:8080</c> — only meaningful when <see cref="DetectionBackend"/> is
+    /// "ExternalHttp". HttpDetectionEngine appends <c>/v1/detect?model={ExternalInferenceModel}</c>.
+    /// Blank when the built-in backend is in use.</summary>
+    string ExternalInferenceUrl = "",
+    /// <summary>The model selector passed as <c>?model=</c> to the external service (its own
+    /// <c>GET /v1/models</c> names them) — only meaningful when <see cref="DetectionBackend"/> is
+    /// "ExternalHttp".</summary>
+    string ExternalInferenceModel = "",
+    /// <summary>The external model's square input size (from its <c>/v1/models</c>), which sizes the
+    /// ffmpeg capture buffer and the InferenceProfile/SliceLayout geometry — the external analogue of
+    /// D-FINE's fixed 640 / YOLOX's per-size value. A positive multiple of 32; defaults 640.</summary>
+    int ExternalInferenceInputSize = 640,
+    /// <summary>Sent as <c>Authorization: Bearer {key}</c> on every request to the external service —
+    /// SideGlance (and anything else bound to non-loopback) rejects an unauthenticated request with
+    /// 401. Blank when the service needs no auth (a loopback-bound instance) or the built-in backend
+    /// is in use. Appended last so NodeWorker's positional construction stays stable.</summary>
+    string ExternalInferenceApiKey = "")
 {
     /// <summary>What this camera should be called in a log line. The operator's own name when there
     /// is one, otherwise the first block of the camera id — short enough to scan a column of, and

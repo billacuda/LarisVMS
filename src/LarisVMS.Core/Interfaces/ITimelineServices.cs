@@ -82,15 +82,20 @@ public interface ITimelineService
     /// poll per-camera every dashboard refresh). Null if this camera has no segments yet.</summary>
     Task<ThumbnailInfo?> GetLatestThumbnailInfoAsync(Guid cameraId, CancellationToken ct = default);
 
-    /// <summary>M18: the Snapshots browser's own query — every MotionSpan (any Source), newest
-    /// first, narrowed by an optional camera and/or date range, server-side paged. See SnapshotDto's
-    /// own doc comment for why this reuses MotionSpans directly rather than a new table: every motion
-    /// event is already "tagged" with a zone/rule/detection class, and the image itself is extracted
-    /// from the recording on demand, not captured or stored separately.
+    /// <summary>M18: the Snapshots browser's own query — an object-detection MotionSpan (a
+    /// camera-native DetectionKind, an AI-Vision DetectedObjectCategory, or a CustomTag rule),
+    /// newest first, narrowed by an optional camera and/or date range, server-side paged. Plain
+    /// motion / "motion detected" spans (none of those three set) are never returned — that is
+    /// permanent page behavior, not a setting; those rows still exist and still drive the Playback
+    /// timeline's motion bands and the live-view motion badge. See SnapshotDto's own doc comment for
+    /// why this reuses MotionSpans directly rather than a new table: every detection event is already
+    /// "tagged" with a rule/detection class, and the image itself is extracted from the recording on
+    /// demand, not captured or stored separately.
     ///
-    /// kinds is the page's own event-type filter (checkboxes: "Motion", "CustomTag", or a
-    /// DetectionKind name — see TimelineService.CustomTagKindToken), a pure narrowing on top of
-    /// whatever the admin-level SnapshotVisibility setting already allows. Null/empty means no
+    /// kinds is the page's own event-type filter (checkboxes: "CustomTag" or a DetectionKind /
+    /// AI-category name — see TimelineService.CustomTagKindToken), a pure narrowing on top of the
+    /// object-detection-only base query and the admin-level per-DetectionKind SnapshotVisibility
+    /// toggles. A stale "Motion" token (from a saved pref) is ignored. Null/empty means no
     /// additional narrowing.
     ///
     /// cameraIds null means every camera; a non-null-but-empty collection genuinely narrows to zero

@@ -43,4 +43,27 @@ public class RecordingSessionTeeOutputTests
 
         Assert.Contains("segment_time=30", tee);
     }
+
+    // The live pipe leg emits a fragment at least every 500ms (but not more often than every 200ms)
+    // even mid-GOP, so the browser's SourceBuffer.buffered.end() advances smoothly instead of in
+    // camera-keyframe-sized jumps — see RecordingSession.LiveFragDurationMicros and live-view.js's
+    // latency controller.
+    [Fact]
+    public void PipeLegRequestsSubKeyframeFragmentDuration()
+    {
+        var pipeLeg = RecordingSession.BuildTeeOutputs(60, "out.mp4").Split('|').Single(l => l.Contains("pipe:1"));
+
+        Assert.Contains("frag_duration=500000", pipeLeg);
+        Assert.Contains("min_frag_duration=200000", pipeLeg);
+    }
+
+    // The recording leg must NOT get frag_duration: playback (playback-player.js, Mp4FragmentIndexer)
+    // depends on the recorded segment files fragmenting on keyframes only.
+    [Fact]
+    public void SegmentLegNeverGetsFragDuration()
+    {
+        var segmentLeg = RecordingSession.BuildTeeOutputs(60, @"C:\rec\out.mp4").Split('|').Single(l => l.Contains("f=segment"));
+
+        Assert.DoesNotContain("frag_duration", segmentLeg);
+    }
 }

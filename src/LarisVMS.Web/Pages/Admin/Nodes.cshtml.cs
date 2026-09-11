@@ -52,6 +52,21 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
     /// <summary>Detection.DFineTensorRtMode per-node override — same shape as AspectModeOverride.</summary>
     public Dictionary<Guid, string> DFineTensorRtModeOverride { get; set; } = [];
     public Dictionary<Guid, string> EffectiveDFineTensorRtMode { get; set; } = [];
+    /// <summary>Detection.Backend + the external inference service's URL/model/input-size — same
+    /// per-node override shape as ModelFamilyOverride above (one Vision Service per node, so which
+    /// backend it runs is inherently a per-node choice). The global default lives on
+    /// Admin/Settings/Detection, including the "Test connection" model picker; this page only offers
+    /// plain fields for a node that needs to point at a different service than the deployment
+    /// default.</summary>
+    public Dictionary<Guid, string> DetectionBackendOverride { get; set; } = [];
+    public Dictionary<Guid, string> EffectiveDetectionBackend { get; set; } = [];
+    public Dictionary<Guid, string> ExternalInferenceUrlOverride { get; set; } = [];
+    public Dictionary<Guid, string> ExternalInferenceModelOverride { get; set; } = [];
+    public Dictionary<Guid, int?> ExternalInferenceInputSizeOverride { get; set; } = [];
+    /// <summary>Whether this node has its own external-inference API key override on file — never the
+    /// key itself, same write-only convention as <see cref="Node.ClientCertPfxPassword"/>'s own form
+    /// field: the value is never re-shown once saved, so the row can only report yes/no.</summary>
+    public Dictionary<Guid, bool> HasExternalInferenceApiKeyOverride { get; set; } = [];
     public Dictionary<Guid, double?> DaysRemaining { get; set; } = [];
 
     /// <summary>Failover plan phase 1: the global LiveView.DirectStreaming value, shown as the
@@ -160,12 +175,23 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
             EffectiveAspectMode[n.Id] = await settings.GetAsync("Detection.AspectMode", "Letterbox", nodeId: n.Id);
             DFineTensorRtModeOverride[n.Id] = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.DFineTensorRtMode") ?? "";
             EffectiveDFineTensorRtMode[n.Id] = await settings.GetAsync("Detection.DFineTensorRtMode", "Off", nodeId: n.Id);
+
+            DetectionBackendOverride[n.Id] = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.Backend") ?? "";
+            EffectiveDetectionBackend[n.Id] = await settings.GetAsync("Detection.Backend", "BuiltIn", nodeId: n.Id);
+            ExternalInferenceUrlOverride[n.Id] = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.ExternalInferenceUrl") ?? "";
+            ExternalInferenceModelOverride[n.Id] = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.ExternalInferenceModel") ?? "";
+            var externalInputSizeOwn = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.ExternalInferenceInputSize");
+            ExternalInferenceInputSizeOverride[n.Id] = int.TryParse(externalInputSizeOwn, out var eis) ? eis : null;
+            HasExternalInferenceApiKeyOverride[n.Id] = !string.IsNullOrEmpty(
+                await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.ExternalInferenceApiKey"));
         }
     }
 
     public async Task<IActionResult> OnPostUpdateAsync(Guid id, string name, string? storageRootPath, int? retentionDaysOverride,
         string? aiAccelerator, string? modelFamilyOverride, string? dfineWeightsOverride, string? yoloXSizeOverride,
         int? maxFpsOverride, string? aspectModeOverride, string? dfineTensorRtModeOverride,
+        string? backendOverride, string? externalUrlOverride, string? externalModelOverride, int? externalInputSizeOverride,
+        string? externalApiKeyOverride,
         string? archiveRootPath, string? archiveEnabledOverride, int? archiveRetentionDaysOverride,
         string? directStreamingMode, string? allowInsecureClientEndpoint, string? clientEndpointHost,
         string? clientCertPfxPath, string? clientCertPfxPassword,
@@ -190,6 +216,50 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
                 return Page();
             }
 
+            // Blank means "inherit the global service URL" — same convention every other override on
+            // this page uses. A non-blank value must be a real http(s) URL; same check
+            // Admin/Settings/Detection's own OnPostAsync applies to the global setting.
+            externalUrlOverride = string.IsNullOrWhiteSpace(externalUrlOverride) ? null : externalUrlOverride.Trim().TrimEnd('/');
+            if (externalUrlOverride is not null
+                && (!Uri.TryCreate(externalUrlOverride, UriKind.Absolute, out var externalUri) || externalUri.Scheme is not ("http" or "https")))
+            {
+                ErrorMessage = "The external inference service override must be a full URL like http://192.168.1.50:8080, or blank to inherit.";
+                await OnGetAsync();
+                return Page();
+            }
+            if (externalInputSizeOverride is { } size && (size <= 0 || size % 32 != 0))
+            {
+                ErrorMessage = "The external inference input-size override must be a positive multiple of 32 (e.g. 640), or blank to inherit.";
+                await OnGetAsync();
+                return Page();
+            }
+
+            // A node whose EFFECTIVE backend (this override, or the inherited global default) is
+            // "ExternalHttp" needs an effective URL and model from *somewhere* — either this node's
+            // own overrides or the global Detection settings — or CameraPipelineManager throws
+            // building HttpDetectionEngine ("baseUrl" empty) for every camera on the node and none of
+            // them get watched. Admin/Settings/Detection's own OnPostAsync already guards this
+            // combination for the global values; this is the node-override analogue, since setting
+            // just the backend override here (leaving URL/model blank to "inherit") silently produces
+            // exactly that broken combination if the global URL/model were never actually saved.
+            var effectiveBackend = string.IsNullOrEmpty(backendOverride)
+                ? await settings.GetAsync("Detection.Backend", "BuiltIn")
+                : backendOverride;
+            if (string.Equals(effectiveBackend, "ExternalHttp", StringComparison.OrdinalIgnoreCase))
+            {
+                var effectiveUrl = externalUrlOverride ?? await settings.GetAsync("Detection.ExternalInferenceUrl", "");
+                var effectiveModel = string.IsNullOrWhiteSpace(externalModelOverride)
+                    ? await settings.GetAsync("Detection.ExternalInferenceModel", "")
+                    : externalModelOverride;
+                if (string.IsNullOrEmpty(effectiveUrl) || string.IsNullOrEmpty(effectiveModel))
+                {
+                    ErrorMessage = "This node resolves to the external HTTP backend but has no URL and model to use — " +
+                        "either fill in the URL/model overrides here, or save them on Admin/Settings/Detection first.";
+                    await OnGetAsync();
+                    return Page();
+                }
+            }
+
             // Pre-edit state first, so the entry reports what actually changed — including the
             // per-node retention override, which previously rode along inside this same generic
             // "Node.Update" entry with nothing to indicate it had been touched at all. No secret
@@ -202,6 +272,10 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
             var oldMaxFpsOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.MaxFps");
             var oldAspectModeOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.AspectMode");
             var oldDFineTensorRtModeOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.DFineTensorRtMode");
+            var oldBackendOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.Backend");
+            var oldExternalUrlOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.ExternalInferenceUrl");
+            var oldExternalModelOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.ExternalInferenceModel");
+            var oldExternalInputSizeOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.ExternalInferenceInputSize");
             var oldArchiveEnabledOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Archive.Enabled");
             var oldArchiveRetentionOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Archive.RetentionDays");
             // "" (blank/Auto) resolves as null — see NodeConfigResponse.AiAccelerator's own doc
@@ -240,6 +314,21 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
                 string.IsNullOrEmpty(aspectModeOverride) ? null : aspectModeOverride, User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Node, id, "Detection.DFineTensorRtMode",
                 string.IsNullOrEmpty(dfineTensorRtModeOverride) ? null : dfineTensorRtModeOverride, User.Identity?.Name);
+            await settings.SetOverrideAsync(SettingScope.Node, id, "Detection.Backend",
+                string.IsNullOrEmpty(backendOverride) ? null : backendOverride, User.Identity?.Name);
+            await settings.SetOverrideAsync(SettingScope.Node, id, "Detection.ExternalInferenceUrl",
+                externalUrlOverride, User.Identity?.Name);
+            await settings.SetOverrideAsync(SettingScope.Node, id, "Detection.ExternalInferenceModel",
+                string.IsNullOrEmpty(externalModelOverride) ? null : externalModelOverride, User.Identity?.Name);
+            await settings.SetOverrideAsync(SettingScope.Node, id, "Detection.ExternalInferenceInputSize",
+                externalInputSizeOverride?.ToString(), User.Identity?.Name);
+            // Write-only, same convention as clientCertPfxPassword above: blank means "leave the
+            // existing override (if any) alone", not "clear it" — the field never re-shows a saved
+            // key, so there is no way to distinguish "never touched" from "clear it" otherwise.
+            var externalApiKeyOverrideChanged = !string.IsNullOrWhiteSpace(externalApiKeyOverride);
+            if (externalApiKeyOverrideChanged)
+                await settings.SetOverrideAsync(SettingScope.Node, id, "Detection.ExternalInferenceApiKey",
+                    externalApiKeyOverride!.Trim(), User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Node, id, "Archive.Enabled",
                 string.IsNullOrEmpty(archiveEnabledOverride) ? null : archiveEnabledOverride, User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Node, id, "Archive.RetentionDays",
@@ -256,6 +345,11 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
                 AuditDiff.Of("Max detection fps override", oldMaxFpsOverride, maxFpsOverride?.ToString()),
                 AuditDiff.Of("Aspect fitting override", oldAspectModeOverride, aspectModeOverride),
                 AuditDiff.Of("D-FINE TensorRT override", oldDFineTensorRtModeOverride, dfineTensorRtModeOverride),
+                AuditDiff.Of("Detection backend override", oldBackendOverride, backendOverride),
+                AuditDiff.Of("External inference URL override", oldExternalUrlOverride, externalUrlOverride),
+                AuditDiff.Of("External inference model override", oldExternalModelOverride, externalModelOverride),
+                AuditDiff.Of("External inference input-size override", oldExternalInputSizeOverride, externalInputSizeOverride?.ToString()),
+                AuditDiff.SecretChanged("External inference API key override", externalApiKeyOverrideChanged),
                 AuditDiff.Of("Archive root", before?.ArchiveRootPath, archiveRootPath),
                 AuditDiff.Of("Archive enabled override", oldArchiveEnabledOverride, archiveEnabledOverride),
                 AuditDiff.Of("Archive retention override", oldArchiveRetentionOverride, archiveRetentionDaysOverride?.ToString()),

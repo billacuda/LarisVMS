@@ -5,6 +5,101 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.199.0] - 2026-09-09
+
+### Changed
+
+- **Snapshots now shows detections only.** The Snapshots browser lists AI object detections,
+  camera-native object classes (person / vehicle / face / …), and custom event tags. Plain motion
+  ("motion detected" with no object class) is no longer listed there. Motion is unaffected
+  everywhere else — the Playback timeline still draws its motion bands and live view still shows the
+  motion badge exactly as before, and no motion history is deleted.
+- The **Admin → Settings → Events → "Snapshots browser"** section loses its **Motion** checkbox. The
+  per-class checkboxes (person, vehicle, face, …) still hide those specific detections from the
+  browser.
+
+### Fixed
+
+- An **AI object detection** could be missing from Snapshots if the old "Snapshots browser → Motion"
+  checkbox had been unticked — AI detections were incorrectly gated by that motion toggle.
+
+### Note
+
+- Schema migrations `RetireSnapshotMotionVisibilitySetting` (removes the retired
+  `Snapshots.Enabled.Motion` setting row — no table changes, no motion data touched) and
+  `BumpVersion0_199_0` (version-tracking row only). `dotnet ef database update` / redeploy applies
+  them.
+- Also documented (README): if live video stops streaming in a background Chrome window, launch
+  Chrome with `--disable-backgrounding-occluded-windows --disable-background-timer-throttling`.
+
+## [0.198.0] - 2026-09-09
+
+### Fixed
+
+- **Live view spent its time catching up, pausing, then catching up again** — the "1.5×" badge
+  flickered on and off and playback froze for a beat every few seconds, while recorded playback of
+  the same cameras stayed smooth. Two causes, both fixed:
+  - The recorder's live stream emitted one fMP4 fragment per camera keyframe, so a camera with a
+    2–4 s keyframe interval delivered video to the browser in 2–4 s bursts. The browser's buffered
+    end lurched forward in those same steps while playback advanced smoothly, so the "how far behind
+    live am I" measurement sawtoothed across the catch-up threshold on every keyframe. The live
+    stream (only — recorded segment files are unchanged) is now muxed to flush a fragment about
+    every 500 ms, so it arrives in a smooth trickle.
+  - The client chased the live edge with almost no buffer, correcting with a blunt fixed 1.5× speed
+    boost on a 3 s timer — which overshot to the edge, ran out of buffered video, stalled, and fell
+    behind again. It now positions playback ~2 s behind the live edge on connect (a jitter buffer)
+    and trims speed gently to hold it there (never above 1.25×, occasionally easing below 1.0× to
+    rebuild the buffer) on a 1 s timer. Live view now sits ~2–4 s behind real time and plays
+    continuously; the "catching up" badge appears only during a real sustained catch-up, not once
+    per keyframe. The drift check no longer runs until that initial positioning seek has happened —
+    otherwise a freshly opened tile (sitting at time 0 while the stream is minutes in) read as
+    "hundreds of seconds behind" and tore itself down and reconnected in a tight loop.
+- **A brief network stall on one live tile could corrupt its stream and force a jarring
+  reconnect.** When a viewer's connection couldn't keep up, the node used to drop the oldest queued
+  video fragment, punching an unrecoverable hole into the middle of that browser's stream (which
+  surfaced only as an opaque decode error). The node now closes that one viewer's socket cleanly
+  instead, and the client reconnects fresh — recording and every other viewer are unaffected, as
+  before.
+
+### Note
+
+- Recorder nodes auto-update to this build (Vision Service / node binaries only); no
+  `install-node.ps1` re-run and no settings changes. The live-stream fragment-cadence change takes
+  effect on a camera the next time its recording session restarts (within ~5 minutes of the node
+  updating, or immediately on a manual restart). The client-side changes apply on the next browser
+  reload of the web app.
+- Schema migration `BumpVersion0_198_0` (version-tracking row only, no table changes) —
+  `dotnet ef database update` / redeploy applies it.
+
+## [0.197.0] - 2026-09-09
+
+### Fixed
+
+- **A fast-moving object got no live AI-detection box unless the "Idle" overlay toggle was also
+  on** — on Views → Play with only "Moving" enabled, a car crossing frame stayed boxless even
+  though it still produced a snapshot (proof the pipeline had classified it Moving at least once).
+  Slow movers were fine. The detection pipeline pruned every track's centroid history once per
+  frame against only the tracks that matched a detection *that* frame — but ByteTrack briefly
+  coasts a track (Kalman-predicted, same id) through a missed detection frame so its second
+  association pass can re-acquire it. A moving object is exactly what drops the odd detection frame
+  (motion blur, a fraction-of-a-second occlusion, lower frame-to-frame overlap), so its history was
+  wiped on every gap and `MovementClassifier` re-reported it **Idle** — no live box — until it
+  rebuilt a two-second window of samples, which a fast mover rarely stays on screen long enough to
+  do. Per-track state (movement history, the stable-label arbiter, the snapshot-dedup set) is now
+  pruned against every track ByteTrack still considers alive, including the ones it is coasting for
+  re-acquisition. A moving object now keeps its live box for the whole time it is in frame; parked
+  objects still appear only under "Idle".
+- As a smaller consequence of the same change, a briefly-occluded track no longer re-runs label
+  arbitration from scratch or fires a second eager snapshot when it is re-acquired.
+
+### Note
+
+- Recorder nodes auto-update to this build (Vision Service / node binaries only); no
+  `install-node.ps1` re-run and no settings changes. The fix takes effect on a camera the next time
+  its detection watch starts (within ~5 minutes of the node updating).
+- Schema migration `BumpVersion0_197_0` (version-tracking row only, no table changes) —
+  `dotnet ef database update` / redeploy applies it.
+
 ## [0.196.0] - 2026-09-08
 
 ### Fixed

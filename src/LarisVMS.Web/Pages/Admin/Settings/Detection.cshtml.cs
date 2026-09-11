@@ -2,7 +2,9 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using LarisVMS.Core;
+using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Web.Services;
 
 namespace LarisVMS.Web.Pages.Admin.Settings;
 
@@ -12,7 +14,7 @@ namespace LarisVMS.Web.Pages.Admin.Settings;
 /// UI at all (the Setting rows existed and were already read by NodeService, just never written from
 /// anywhere).</summary>
 [Authorize("Settings.Edit")]
-public class DetectionModel(ISettingsResolver settings, IAuditService auditService) : PageModel
+public class DetectionModel(ISettingsResolver settings, IAuditService auditService, ExternalInferenceProbe externalProbe) : PageModel
 {
     [BindProperty] public double Confidence { get; set; } = 0.35;
     [BindProperty] public double Iou { get; set; } = 0.5;
@@ -71,8 +73,36 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
     /// alike). Restarts each detection pipeline when toggled.</summary>
     [BindProperty] public bool GpuPreprocessing { get; set; }
 
+    // ── External HTTP inference backend (key prefix "Detection.External*", node-scoped) ──────────
+    /// <summary>"BuiltIn" runs a bundled model on the local accelerator; "ExternalHttp" runs no local
+    /// model and POSTs each 640-scaled frame to <see cref="ExternalUrl"/> instead. Node-scoped.</summary>
+    [BindProperty] public string Backend { get; set; } = "BuiltIn";
+    /// <summary>The external service's base URL including its port, e.g. <c>http://192.168.1.50:8080</c>.
+    /// Validated as an absolute http(s) URL. Only meaningful when <see cref="Backend"/> is "ExternalHttp".</summary>
+    [BindProperty] public string? ExternalUrl { get; set; }
+    /// <summary>The model to request (<c>?model=</c>) — chosen from the picklist the "Test connection"
+    /// button discovers via the service's own <c>GET /v1/models</c>.</summary>
+    [BindProperty] public string? ExternalModel { get; set; }
+    /// <summary>The chosen model's square input size, carried in a hidden field the model picklist's
+    /// JS keeps in sync (each option knows its own size). Re-clamped to a positive multiple of 32 on
+    /// save; NodeService re-clamps again since it is stored as a free-form string.</summary>
+    [BindProperty] public int ExternalInputSize { get; set; } = 640;
+    /// <summary>Bearer token for the external service. Never re-populated into the form on load —
+    /// same "blank means unchanged" convention as Email's SmtpPassword/GraphClientSecret — so a blank
+    /// submission only happens when the operator genuinely left it alone; <see cref="HasStoredExternalApiKey"/>
+    /// tells the page whether one is already on file.</summary>
+    [BindProperty] public string? ExternalApiKey { get; set; }
+    public bool HasStoredExternalApiKey { get; private set; }
+
+    /// <summary>Populated only by <see cref="OnPostTestConnectionAsync"/> — the discovered model list
+    /// the picklist renders, plus (best effort) the service's /healthz readout.</summary>
+    public IReadOnlyList<ExternalModelInfo> AvailableModels { get; private set; } = [];
+    public ExternalHealthResponse? ProbeHealth { get; private set; }
+
     public string? SavedMessage { get; set; }
     public bool StatusIsError { get; set; }
+
+    private string? CurrentUserId => User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
 
     public async Task OnGetAsync()
     {
@@ -93,6 +123,11 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         YoloXSize = await settings.GetAsync("Detection.YoloXSize", "S");
         AspectMode = await settings.GetAsync("Detection.AspectMode", "Letterbox");
         GpuPreprocessing = await settings.GetAsync("Detection.GpuPreprocessing", false);
+        Backend = await settings.GetAsync("Detection.Backend", "BuiltIn");
+        ExternalUrl = await settings.GetAsync("Detection.ExternalInferenceUrl", "");
+        ExternalModel = await settings.GetAsync("Detection.ExternalInferenceModel", "");
+        ExternalInputSize = await settings.GetAsync("Detection.ExternalInferenceInputSize", 640);
+        HasStoredExternalApiKey = !string.IsNullOrEmpty(await settings.GetAsync("Detection.ExternalInferenceApiKey", ""));
     }
 
     public async Task<IActionResult> OnPostAsync()
@@ -116,6 +151,11 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         var oldYoloXSize = await settings.GetAsync("Detection.YoloXSize", "S");
         var oldAspectMode = await settings.GetAsync("Detection.AspectMode", "Letterbox");
         var oldGpuPreprocessing = await settings.GetAsync("Detection.GpuPreprocessing", false);
+        var oldBackend = await settings.GetAsync("Detection.Backend", "BuiltIn");
+        var oldExternalUrl = await settings.GetAsync("Detection.ExternalInferenceUrl", "");
+        var oldExternalModel = await settings.GetAsync("Detection.ExternalInferenceModel", "");
+        var oldExternalInputSize = await settings.GetAsync("Detection.ExternalInferenceInputSize", 640);
+        var hadStoredApiKey = !string.IsNullOrEmpty(await settings.GetAsync("Detection.ExternalInferenceApiKey", ""));
 
         // Confidence/IoU are genuinely 0-1 fractions everywhere downstream (YOLO-family thresholds) —
         // clamped here so a stray out-of-range value typed into the form can't reach NodeService/the
@@ -134,6 +174,32 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
             "FP16" => "FP16",
             _ => "Off",
         };
+        Backend = string.Equals(Backend, "ExternalHttp", StringComparison.OrdinalIgnoreCase) ? "ExternalHttp" : "BuiltIn";
+        ExternalUrl = NormalizeExternalUrl(ExternalUrl);
+        ExternalModel = ExternalModel?.Trim() ?? "";
+        // A positive multiple of 32 (InferenceProfile's own requirement); anything else falls back to
+        // the D-FINE/YOLOX default rather than being stored.
+        ExternalInputSize = ExternalInputSize > 0 && ExternalInputSize % 32 == 0 ? ExternalInputSize : 640;
+
+        // A configured external backend needs a URL and a model to be usable — reject the save rather
+        // than let NodeService silently keep the built-in engine because the fields are half-filled.
+        if (Backend == "ExternalHttp" && (string.IsNullOrEmpty(ExternalUrl) || string.IsNullOrEmpty(ExternalModel)))
+        {
+            var editedUrl = ExternalUrl;
+            var editedModel = ExternalModel;
+            var editedSize = ExternalInputSize;
+            var editedApiKey = ExternalApiKey;
+            await OnGetAsync();
+            // Re-apply the just-submitted values so the form keeps the operator's edits.
+            Backend = "ExternalHttp";
+            ExternalUrl = editedUrl;
+            ExternalModel = editedModel;
+            ExternalInputSize = editedSize;
+            ExternalApiKey = editedApiKey;
+            SavedMessage = "Enter the external service URL and pick a model (use \"Test connection\" to discover them) before selecting the external backend.";
+            StatusIsError = true;
+            return Page();
+        }
 
         await settings.SetGlobalAsync("Detection.Confidence", Confidence.ToString("0.####"), by);
         await settings.SetGlobalAsync("Detection.Iou", Iou.ToString("0.####"), by);
@@ -153,6 +219,16 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         await settings.SetGlobalAsync("Detection.YoloXSize", YoloXSize, by);
         await settings.SetGlobalAsync("Detection.AspectMode", AspectMode, by);
         await settings.SetGlobalAsync("Detection.GpuPreprocessing", GpuPreprocessing.ToString(), by);
+        await settings.SetGlobalAsync("Detection.Backend", Backend, by);
+        await settings.SetGlobalAsync("Detection.ExternalInferenceUrl", ExternalUrl ?? "", by);
+        await settings.SetGlobalAsync("Detection.ExternalInferenceModel", ExternalModel ?? "", by);
+        await settings.SetGlobalAsync("Detection.ExternalInferenceInputSize", ExternalInputSize.ToString(), by);
+        // Blank means "unchanged" — the form never re-displays a stored key, so a blank submission
+        // only happens when the operator genuinely left it alone (same convention as Email's
+        // SmtpPassword/GraphClientSecret). There is no "clear" affordance here, same as those fields.
+        var apiKeyChanged = !string.IsNullOrWhiteSpace(ExternalApiKey);
+        if (apiKeyChanged)
+            await settings.SetGlobalAsync("Detection.ExternalInferenceApiKey", ExternalApiKey!.Trim(), by);
 
         var details = AuditDiff.Build(
             AuditDiff.Of("Detection.Confidence", oldConfidence.ToString("0.####"), Confidence.ToString("0.####")),
@@ -171,13 +247,86 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
             AuditDiff.Of("Detection.DFineTensorRtMode", oldDFineTensorRtMode, DFineTensorRtMode),
             AuditDiff.Of("Detection.YoloXSize", oldYoloXSize, YoloXSize),
             AuditDiff.Of("Detection.AspectMode", oldAspectMode, AspectMode),
-            AuditDiff.Of("Detection.GpuPreprocessing", oldGpuPreprocessing.ToString(), GpuPreprocessing.ToString()));
+            AuditDiff.Of("Detection.GpuPreprocessing", oldGpuPreprocessing.ToString(), GpuPreprocessing.ToString()),
+            AuditDiff.Of("Detection.Backend", oldBackend, Backend),
+            AuditDiff.Of("Detection.ExternalInferenceUrl", oldExternalUrl, ExternalUrl ?? ""),
+            AuditDiff.Of("Detection.ExternalInferenceModel", oldExternalModel, ExternalModel ?? ""),
+            AuditDiff.Of("Detection.ExternalInferenceInputSize", oldExternalInputSize.ToString(), ExternalInputSize.ToString()),
+            AuditDiff.SecretChanged("Detection.ExternalInferenceApiKey", apiKeyChanged));
 
         await auditService.LogAsync("Settings.Update",
-            User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, by,
+            CurrentUserId, by,
             HttpContext.Connection.RemoteIpAddress?.ToString(), details);
 
+        // So the form's "unchanged" placeholder reflects a key just saved this request.
+        HasStoredExternalApiKey = hadStoredApiKey || apiKeyChanged;
+        ExternalApiKey = null;
         SavedMessage = "Saved.";
         return Page();
+    }
+
+    /// <summary>"Test connection" — probes the entered (unsaved) service for /healthz + /v1/models so
+    /// the operator can confirm it is reachable and pick a model. Mirrors Email's OnPostTestSendAsync
+    /// and Cameras/Edit's OnPostProbeAsync: try/catch into a message + audit entry, never throws.</summary>
+    public async Task<IActionResult> OnPostTestConnectionAsync(CancellationToken ct)
+    {
+        var by = User.Identity?.Name;
+
+        // The external fields are model-bound from the form; everything else on the page should show
+        // its saved value, so load those and then restore the operator's in-progress external edits.
+        var editedUrl = NormalizeExternalUrl(ExternalUrl);
+        var editedModel = ExternalModel?.Trim() ?? "";
+        // Blank means "use the already-saved key" — same "unchanged" convention the field uses on
+        // Save, so testing right after typing a new key (not yet saved) still authenticates with it.
+        var editedApiKey = string.IsNullOrWhiteSpace(ExternalApiKey) ? null : ExternalApiKey.Trim();
+        await OnGetAsync();
+        Backend = "ExternalHttp";
+        ExternalUrl = editedUrl;
+        ExternalModel = editedModel;
+        var url = editedUrl;
+        var apiKey = editedApiKey ?? await settings.GetAsync("Detection.ExternalInferenceApiKey", "");
+
+        if (string.IsNullOrEmpty(url))
+        {
+            SavedMessage = "Enter the external service URL first (including its port, e.g. http://192.168.1.50:8080).";
+            StatusIsError = true;
+            return Page();
+        }
+
+        var result = await externalProbe.ProbeAsync(url, apiKey, ct);
+        ProbeHealth = result.Health;
+
+        if (result.Error is not null)
+        {
+            await auditService.LogAsync("Settings.DetectionExternalTestFailed", CurrentUserId, by,
+                HttpContext.Connection.RemoteIpAddress?.ToString(), $"{url}: {result.Error}");
+            SavedMessage = result.Error;
+            StatusIsError = true;
+            return Page();
+        }
+
+        AvailableModels = result.Models ?? [];
+        // Keep the previously-chosen model selected if the service still offers it; otherwise take
+        // the first one so the picklist and the hidden input-size field are never left inconsistent.
+        if (AvailableModels.All(m => !string.Equals(m.Name, ExternalModel, StringComparison.Ordinal)))
+            ExternalModel = AvailableModels[0].Name;
+        ExternalInputSize = AvailableModels.First(m => m.Name == ExternalModel).InputSize;
+
+        await auditService.LogAsync("Settings.DetectionExternalTestSucceeded", CurrentUserId, by,
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            $"{url}: {AvailableModels.Count} model(s) — {string.Join(", ", AvailableModels.Select(m => m.Name))}");
+        SavedMessage = $"Connected. {AvailableModels.Count} model(s) available — pick one and Save.";
+        StatusIsError = false;
+        return Page();
+    }
+
+    /// <summary>Trim, drop a trailing slash, and require an absolute http(s) URL — the same shape
+    /// LiveView's PublicOrigin validation uses. Returns "" for blank or invalid input; the caller
+    /// decides whether that is an error in context.</summary>
+    private static string NormalizeExternalUrl(string? raw)
+    {
+        var trimmed = raw?.Trim().TrimEnd('/');
+        if (string.IsNullOrEmpty(trimmed)) return "";
+        return Uri.TryCreate(trimmed, UriKind.Absolute, out var u) && u.Scheme is "http" or "https" ? trimmed : "";
     }
 }

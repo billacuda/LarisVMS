@@ -151,27 +151,37 @@ public sealed class SubLiveSession(SubLiveSessionOptions options, ILogger logger
             CreateNoWindow = true
         };
 
-        // -c copy: Sub arrives from the camera already encoded at a resolution/bitrate the camera
-        // itself chose for exactly this purpose — nothing here re-encodes it. No -f tee: a single
-        // leg has nothing to fan out to, unlike RecordingSession's Main pipeline which also writes
-        // segment files. Same MseMovFlags as RecordingSession's own live leg — both are read by the
-        // identical Mp4BoxScanner-based drain below, and MSE requires default_base_moof either way.
-        string[] args =
-        [
-            "-nostdin", "-rtsp_transport", "tcp", "-timeout", "5000000",
-            "-i", options.RtspUri,
-            "-map", "0:v", "-map", "0:a?",
-            "-c", "copy",
-            "-f", "mp4", "-movflags", MseMovFlags,
-            "pipe:1"
-        ];
-        foreach (var a in args) psi.ArgumentList.Add(a);
+        foreach (var a in BuildFfmpegArgs(options)) psi.ArgumentList.Add(a);
 
         logger.LogInformation("Starting Sub live ffmpeg for {RtspUri}", CredentialScrubber.Scrub(options.RtspUri));
 
         var process = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null.");
         return process;
     }
+
+    /// <summary>internal, not private: the exact arg list is asserted directly in a unit test
+    /// (SubLiveSessionFfmpegArgsTests), the same way MotionSession.BuildFfmpegArgs is — a flag added
+    /// to RecordingSession's live tee leg and not mirrored here (or vice versa) would fail there.
+    ///
+    /// -c copy: Sub arrives from the camera already encoded at a resolution/bitrate the camera
+    /// itself chose for exactly this purpose — nothing here re-encodes it. No -f tee: a single leg
+    /// has nothing to fan out to, unlike RecordingSession's Main pipeline which also writes segment
+    /// files. Same MseMovFlags and same frag_duration/min_frag_duration as RecordingSession's own
+    /// live tee leg (BuildTeeOutputs) — this stream is read by the identical Mp4BoxScanner-based
+    /// drain and the identical live-view.js MSE consumer, so the fragment cadence must match: without
+    /// frag_duration a fragment is one whole camera GOP, which live-view.js's latency controller
+    /// reads as sawtoothing drift.</summary>
+    internal static IReadOnlyList<string> BuildFfmpegArgs(SubLiveSessionOptions options) =>
+    [
+        "-nostdin", "-rtsp_transport", "tcp", "-timeout", "5000000",
+        "-i", options.RtspUri,
+        "-map", "0:v", "-map", "0:a?",
+        "-c", "copy",
+        "-f", "mp4", "-movflags", MseMovFlags,
+        "-frag_duration", LiveFragDurationMicros.ToString(),
+        "-min_frag_duration", LiveMinFragDurationMicros.ToString(),
+        "pipe:1"
+    ];
 
     // "+frag_keyframe+empty_moov+default_base_moof" — same flags, same constant value, as
     // RecordingSession.MseMovFlags. Not shared by reference (that one is private to RecordingSession)
@@ -180,6 +190,13 @@ public sealed class SubLiveSession(SubLiveSessionOptions options, ILogger logger
     // internals for a constant. Both are exercised by the exact same real browser MSE consumer
     // (live-view.js), so any drift here would surface immediately as "this tile never plays."
     private const string MseMovFlags = "+frag_keyframe+empty_moov+default_base_moof";
+
+    // Same values, same reasoning, as RecordingSession.LiveFragDurationMicros /
+    // LiveMinFragDurationMicros — duplicated for the same reason as MseMovFlags above. Flush an fMP4
+    // fragment at least every 500ms (but not more often than every 200ms) instead of only at each
+    // camera keyframe, so live-view.js's buffered.end() advances smoothly rather than in GOP jumps.
+    private const int LiveFragDurationMicros = 500_000;
+    private const int LiveMinFragDurationMicros = 200_000;
 
     /// <summary>Same box-boundary-driven drain as RecordingSession.DrainStdoutAsync, minus the tee/
     /// recording concerns — this is the whole output, not one leg of it. See that method's own

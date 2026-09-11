@@ -374,7 +374,24 @@ public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? Stor
     /// as "the object left frame". Was a hard-coded 5s in CameraDetectionPipeline. Threaded into
     /// every VisionStartCameraRequest and part of NodeWorker's restart signature. Appended last so
     /// the positional NodeService construction stays stable; defaults 5 = the previous constant.</summary>
-    int DepartureGraceSeconds = 5);
+    int DepartureGraceSeconds = 5,
+    /// <summary>Detection.Backend (node-scoped, "BuiltIn"/"ExternalHttp") plus the external
+    /// service's address, model, and model input size — resolved Node &rarr; Global like
+    /// DetectionModelFamily. "ExternalHttp" makes the Vision Service run no local model: it decodes +
+    /// tracks + reports exactly as before, but each frame is POSTed to
+    /// <see cref="ExternalInferenceUrl"/> and the JSON boxes come back through HttpDetectionEngine.
+    /// This is the one detection path that needs no local accelerator, so NodeWorker starts the
+    /// Vision Service for it even on a GPU-less node. All appended last so the positional NodeService
+    /// construction stays stable; defaults keep an older node on the built-in engine.</summary>
+    string DetectionBackend = "BuiltIn",
+    string ExternalInferenceUrl = "",
+    string ExternalInferenceModel = "",
+    int ExternalInferenceInputSize = 640,
+    /// <summary>Bearer token for the external service (Authorization header on every /v1/detect
+    /// call) — resolved Node &rarr; Global like the fields above. Blank when the service needs no
+    /// auth or the built-in backend is in use. Appended last so the positional NodeService
+    /// construction stays stable.</summary>
+    string ExternalInferenceApiKey = "");
 
 /// <summary>One completed MotionSpan, batch-reported the same way SegmentReportItem is — see
 /// NodeService.RecordMotionSpansAsync for why plain REST + EF insert is enough here despite the

@@ -65,4 +65,37 @@ public static class BgraOps
         }
     }
 
+    /// <summary>JPEG-encodes a whole <paramref name="frameW"/>×<paramref name="frameH"/> BGRA8888
+    /// buffer at full size (no crop, no downscale) — the payload the external HTTP inference backend
+    /// (<see cref="HttpDetectionEngine"/>) POSTs for every frame. JPEG rather than the WebP the
+    /// snapshot path uses: it is what every off-the-shelf inference server decodes without a codec
+    /// dependency, and the frame is already at the model's own input size so there is nothing to
+    /// resize. Throws on a malformed buffer or an encode failure — the caller turns that into a
+    /// skipped frame, the same way a failed inference is handled.</summary>
+    public static byte[] EncodeWholeFrameJpeg(byte[] bgra, int frameW, int frameH, int quality)
+    {
+        if (frameW <= 0 || frameH <= 0)
+            throw new ArgumentOutOfRangeException(nameof(frameW), "Frame dimensions must be positive.");
+        if (bgra.Length < (long)frameW * frameH * 4)
+            throw new ArgumentException(
+                $"BGRA buffer is {bgra.Length} bytes, need at least {(long)frameW * frameH * 4} for {frameW}x{frameH}.", nameof(bgra));
+
+        var info = new SKImageInfo(frameW, frameH, SKColorType.Bgra8888, SKAlphaType.Opaque);
+        var handle = GCHandle.Alloc(bgra, GCHandleType.Pinned);
+        try
+        {
+            using var bitmap = new SKBitmap();
+            if (!bitmap.InstallPixels(info, handle.AddrOfPinnedObject(), info.RowBytes))
+                throw new InvalidOperationException("SKBitmap.InstallPixels rejected the BGRA frame buffer.");
+
+            using var image = SKImage.FromBitmap(bitmap);
+            using var data = image.Encode(SKEncodedImageFormat.Jpeg, quality)
+                ?? throw new InvalidOperationException("SKImage.Encode returned no JPEG data.");
+            return data.ToArray();
+        }
+        finally
+        {
+            handle.Free();
+        }
+    }
 }

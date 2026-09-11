@@ -121,14 +121,13 @@
     }
 
     // One watched camera's live byte stream is one continuous fMP4 fanout with no per-fragment
-    // resync markers — the node's LiveViewerHandler deliberately drops the *oldest* buffered
-    // fragment (not the newest) when a slow client can't keep up, so a stalled network connection
-    // doesn't back-pressure the recording pipeline itself. That's the right tradeoff for recording,
-    // but it means a client that falls behind (confirmed cause: roaming between mesh WiFi access
-    // points) gets a gap in the middle of its byte stream, which corrupts everything after it for
+    // resync markers, so a gap in the middle of the byte stream corrupts everything after it for
     // this SourceBuffer — there is no getting the same session decodable again once that happens,
-    // only starting a fresh one (new init segment, clean MediaSource). `start()` is the auto-retrying
-    // wrapper every caller should use; `startSession()` is one single attempt.
+    // only starting a fresh one (new init segment, clean MediaSource). The node's LiveViewerHandler
+    // avoids ever splicing such a gap: when a slow client can't keep up (confirmed cause: roaming
+    // between mesh WiFi access points) it closes the socket cleanly (code 1008) rather than dropping
+    // a fragment, so recovery is always a clean reconnect rather than a corrupt stream. `start()` is
+    // the auto-retrying wrapper every caller should use; `startSession()` is one single attempt.
     // M18: `role` is 'main' (default, omitted from the URL) or 'sub' — which of the camera's two
     // live-fMP4 sources (see NodeWorker.ReconcileLiveSub) this tile's WebSocket asks the node for.
     // Purely a quality/bandwidth choice, not a security boundary (see Program.cs's own /live route
@@ -180,22 +179,36 @@
         };
     }
 
-    // How far behind its own live edge a tile is allowed to fall before being pulled forward. Well
-    // clear of the normal sub-second lag between "bytes appended" and "frame decoded" (so ordinary
-    // healthy playback never triggers a correction), but tight enough that a reconnected tile visibly
-    // rejoins its neighbors rather than staying a beat behind.
-    var DRIFT_THRESHOLD_SECONDS = 3;
-    var DRIFT_CHECK_INTERVAL_MS = 3000;
-    // Below this, catch-up stops and playbackRate returns to normal — deliberately smaller than
-    // DRIFT_THRESHOLD_SECONDS so a tile settles just inside the "acceptable" band rather than
-    // oscillating in and out of catch-up right at the threshold.
-    var CATCHUP_STOP_THRESHOLD_SECONDS = 0.75;
-    var CATCHUP_PLAYBACK_RATE = 1.5;
+    // Live view runs currentTime a deliberate, fixed distance behind buffered.end() (the "live
+    // edge") rather than chasing the edge itself. The recorder's live leg now emits an fMP4 fragment
+    // roughly every 500ms (RecordingSession.LiveFragDurationMicros), but a fresh keyframe fragment
+    // can still be up to a GOP of video, so buffered.end() advances in small bursts; holding ~2s of
+    // slack means a burst never leaves currentTime past the end of what's buffered (which would
+    // stall on `waiting` with nothing to play). This is a few seconds of added latency traded for
+    // not oscillating between a speed-up and a stall — the old code chased the edge with a hard
+    // playbackRate=1.5 and starved the buffer on every keyframe.
+    var TARGET_LATENCY_SECONDS = 2.0;
+    // Half-width of the no-correction band around the target. Inside +/- this of the target, the
+    // rate stays exactly 1.0 — a tile only corrects once it has drifted meaningfully off target, so
+    // it isn't perpetually nudging the rate a hair either way.
+    var LATENCY_DEADBAND_SECONDS = 0.75;
+    // playbackRate delta per second of error beyond the dead-band, then clamped. Gentle by design:
+    // the correction is spread over many 1s ticks through already-decodable data, so there is no
+    // discontinuity and no risk of landing off a keyframe (the failure mode of every seek-based
+    // correction previously tried here — see the comment block above driftTimer).
+    var CATCHUP_RATE_GAIN = 0.15;
+    var CATCHUP_MAX_RATE = 1.25;   // behind target -> speed up, but never jarringly
+    var CATCHUP_MIN_RATE = 0.90;   // too close to the edge -> ease off so the buffer rebuilds
+    var DRIFT_CHECK_INTERVAL_MS = 1000;
     // Beyond this, a playbackRate catch-up would take too long to be worth it (confirmed cause:
     // browsers throttle setInterval on a backgrounded/unfocused tab, so a real gap of a minute or
-    // more can go undetected until the tab regains focus) — falls back to a hard seek instead, same
-    // as the stall-recovery path below.
+    // more can go undetected until the tab regains focus) — falls back to ending the session, same
+    // as the stall-recovery path below, so start()'s retry wrapper rebuilds cleanly at the edge.
     var HARD_RESYNC_THRESHOLD_SECONDS = 15;
+    // The badge is for sustained, visible catch-up only — not the ordinary sub-1.05x trims the
+    // controller makes constantly — so it needs both a minimum rate and a couple of ticks at it.
+    var CATCHUP_BADGE_MIN_RATE = 1.05;
+    var CATCHUP_BADGE_SUSTAIN_TICKS = 2;
 
     // Runs exactly one session attempt and returns its stop() function. `onEnded` fires exactly
     // once, however the session stops — explicit stop() call, decode error, or WebSocket
@@ -215,11 +228,13 @@
             videoEl.addEventListener(type, handler);
         }
 
-        // "Catching up" badge (catchup-badge.js), shown while this tile is running at
-        // CATCHUP_PLAYBACK_RATE to close a drift gap. The tile's positioned container is the
+        // "Catching up" badge (catchup-badge.js), shown while this tile is running above 1.0x to
+        // close a drift gap; the label is the current rate. The tile's positioned container is the
         // video's parent — same element createFreezeOverlay overlays onto.
-        function showCatchupBadge() {
-            if (window.larisvmsCatchupBadge) window.larisvmsCatchupBadge.show(videoEl.parentElement, CATCHUP_PLAYBACK_RATE + '×');
+        function showCatchupBadge(rate) {
+            if (!window.larisvmsCatchupBadge) return;
+            var label = rate ? (Math.round(rate * 100) / 100) + '×' : 'catching up';
+            window.larisvmsCatchupBadge.show(videoEl.parentElement, label);
         }
         function hideCatchupBadge() {
             if (window.larisvmsCatchupBadge) window.larisvmsCatchupBadge.hide(videoEl.parentElement);
@@ -264,8 +279,9 @@
         var sourceBuffer = null;
         var pending = [];
         var closed = false;
-        var seekedToLiveEdge = false;
         var driftTimer = null;
+        var initialSeekDone = false;
+        var catchupTicks = 0;
 
         // An appendBuffer failure is never recoverable for this session (a torn-down/replaced
         // MediaSource throws "removed from parent media source" on the very next call, and retrying
@@ -344,21 +360,39 @@
             // so a late joiner's first buffered range typically starts well past 0. MSE won't advance
             // readyState past HAVE_METADATA (no error, just stuck) until currentTime falls inside a
             // buffered range, so without this a live-view session silently never plays: data arrives
-            // and appendBuffer never throws, but nothing is ever positioned where it's buffered. Seeks
-            // once, the first time any range becomes buffered, to the start of the newest range (the
-            // most recently appended data, i.e. as close to "live" as what's arrived so far allows).
-            sourceBuffer.addEventListener('updateend', function () {
-                if (seekedToLiveEdge || sourceBuffer.buffered.length === 0) return;
-                seekedToLiveEdge = true;
-                jumpToLiveEdge('seeked to live edge');
-            });
+            // and appendBuffer never throws, but nothing is ever positioned where it's buffered.
+            //
+            // Seeks once, the first time any range is buffered, to TARGET_LATENCY_SECONDS behind that
+            // range's end — never to the edge itself (no buffer headroom, stalls on the first
+            // keyframe burst). rangeStart is always keyframe-aligned (a browser only ever buffers a
+            // range starting from a keyframe), so when less than TARGET_LATENCY_SECONDS is buffered
+            // yet, max() collapses the target to rangeStart — exactly jumpToLiveEdge()'s old
+            // keyframe-safe anchor — and the drift controller eases back toward the 2s target as the
+            // buffer fills. This is NOT the mid-playback seek-near-the-end that regressed before (see
+            // the comment block above driftTimer): it is a single seek at session start into one
+            // contiguous range whose start is a keyframe, the same thing playback-player.js does on
+            // every segment load. Must run before the driftTimer does anything (it early-returns
+            // until initialSeekDone) — otherwise a late joiner sitting at currentTime=0 while
+            // buffered.end() is minutes in reads as "hundreds of seconds behind" and the hard-resync
+            // branch tears the session down on the first tick, forever.
+            function doInitialSeek() {
+                if (initialSeekDone || closed || ended || sourceBuffer.buffered.length === 0) return;
+                var last = sourceBuffer.buffered.length - 1;
+                var rangeStart = sourceBuffer.buffered.start(last);
+                var rangeEnd = sourceBuffer.buffered.end(last);
+                initialSeekDone = true;
+                var target = Math.max(rangeStart, rangeEnd - TARGET_LATENCY_SECONDS);
+                console.log('[live-view] initial seek, currentTime=', videoEl.currentTime, '-> ', target,
+                    'buffered=', rangeStart, '-', rangeEnd);
+                videoEl.currentTime = target;
+            }
+            sourceBuffer.addEventListener('updateend', doInitialSeek);
             // Ongoing counterpart to the one-time seek above: the buffered range is a sliding window
-            // (the browser evicts old data as new fragments arrive, and the node's own slow-client
-            // handling drops the *oldest* buffered fragment when a viewer falls behind — see this
-            // function's own header comment), so currentTime can drift into now-evicted territory
-            // later in a long-running session too, not just at startup. When that happens playback
-            // stalls with no error and no visible frame (MSE has genuinely nothing buffered at that
-            // position) until either the browser's own gap-jump heuristics kick in on their own
+            // (the browser evicts old data as new fragments arrive), so currentTime can drift into
+            // now-evicted territory later in a long-running session too, not just at startup — e.g.
+            // if a rate trim below never quite keeps pace with real network lag. When that happens
+            // playback stalls with no error and no visible frame (MSE has genuinely nothing buffered
+            // at that position) until either the browser's own gap-jump heuristics kick in on their
             // schedule, or — on some browsers — never, leaving the tile blank indefinitely. `waiting`
             // fires whenever playback can't continue at the current position; only treat it as a gap
             // to jump across if currentTime is truly outside every buffered range — a `waiting` fired
@@ -394,12 +428,15 @@
             //      Root cause of the *large* corrections that triggered it: a backgrounded/unfocused
             //      browser tab throttles setInterval, so drift can grow to tens of seconds between
             //      ticks with nothing wrong on the wire.
-            // Fix: never seek to correct ordinary drift. Speed up playback instead, so the decoder
-            // catches up frame-by-frame through real, already-decodable data — zero discontinuity,
-            // so zero risk of landing off a keyframe. Only beyond HARD_RESYNC_THRESHOLD_SECONDS
-            // (drift too large for a catch-up to close in reasonable time) does this fall back to a
-            // hard seek — reusing jumpToLiveEdge()'s buffered.start() target, the same anchor the
-            // stall-recovery path below already relies on being safe.
+            // Fix: never seek to correct ordinary drift. Hold currentTime a fixed TARGET_LATENCY_
+            // SECONDS behind buffered.end() and trim playbackRate gently toward that target — the
+            // decoder eases in or out through real, already-decodable data, zero discontinuity, zero
+            // risk of landing off a keyframe. The target being a positive offset (not ~0) is what
+            // gives a keyframe burst room to land without starving the buffer, which is what caused
+            // the old speed-up/stall oscillation. Only beyond HARD_RESYNC_THRESHOLD_SECONDS (drift
+            // too large for a rate trim to close in reasonable time — almost always a backgrounded
+            // tab whose throttled timer let a huge gap build) does this end the session and let
+            // start()'s retry wrapper rebuild cleanly at the edge.
             driftTimer = setInterval(function () {
                 // Ownership guard, first thing: this same <video> element gets handed to a completely
                 // different player when a tile/cell is toggled into playback mode (playback-player.js
@@ -408,35 +445,48 @@
                 // theoretical: leaked timers kept seeking the element while the playback player owned
                 // it, producing exactly the interleaved multi-position "loop" this guard prevents.
                 if (closed || ended || videoEl.src !== objectUrl) return;
+                // Never run the controller (least of all the hard-resync branch below) before the
+                // one-time initial seek has positioned currentTime — until then it's at 0 while
+                // buffered.end() is minutes in, which reads as a huge false "drift".
+                if (!initialSeekDone) return;
                 if (videoEl.paused || sourceBuffer.buffered.length === 0) return;
                 var lastRange = sourceBuffer.buffered.length - 1;
                 var liveEdge = sourceBuffer.buffered.end(lastRange);
                 var drift = liveEdge - videoEl.currentTime;
+
                 if (drift > HARD_RESYNC_THRESHOLD_SECONDS) {
-                    // Deliberately NOT a seek. Every seek-based correction tried here has been a
-                    // regression: jumpToLiveEdge() targets buffered.start(), which is *behind*
-                    // currentTime whenever currentTime is already inside the buffered range (the case
-                    // here) — that made drift worse and re-fired forever, needing a page refresh to
-                    // clear. Seeking near buffered.end() instead isn't keyframe-safe and threw real
-                    // decode errors. Drift this large means this session is unrecoverably behind
-                    // (typically a long-backgrounded tab whose throttled timer let a huge gap build);
-                    // ending it hands off to start()'s existing retry wrapper, which builds a fresh
-                    // MediaSource that begins cleanly at the live edge — the one path already proven
-                    // to recover correctly.
+                    // Deliberately NOT a seek — every seek-based correction tried here regressed (see
+                    // the comment block above). Ending the session hands off to start()'s retry
+                    // wrapper, which builds a fresh MediaSource that begins cleanly near the edge.
                     console.log('[live-view] ' + drift.toFixed(1) + 's behind live edge — too far to catch up, restarting session');
                     videoEl.playbackRate = 1;
                     hideCatchupBadge();
                     closed = true;
                     if (socket) { try { socket.close(); } catch (e2) {} }
                     endSession();
-                } else if (drift > DRIFT_THRESHOLD_SECONDS) {
-                    if (videoEl.playbackRate !== CATCHUP_PLAYBACK_RATE) {
+                    return;
+                }
+
+                // Proportional trim around the target, inside gentle clamps. error > 0 => behind
+                // target => speed up; error < 0 => drifted too close to the edge => slow below 1.0
+                // so the buffer rebuilds. Inside the dead-band the rate is exactly 1.0.
+                var error = drift - TARGET_LATENCY_SECONDS;
+                var desiredRate = 1;
+                if (error > LATENCY_DEADBAND_SECONDS) {
+                    desiredRate = Math.min(CATCHUP_MAX_RATE, 1 + CATCHUP_RATE_GAIN * (error - LATENCY_DEADBAND_SECONDS));
+                } else if (error < -LATENCY_DEADBAND_SECONDS) {
+                    desiredRate = Math.max(CATCHUP_MIN_RATE, 1 + CATCHUP_RATE_GAIN * (error + LATENCY_DEADBAND_SECONDS));
+                }
+                if (Math.abs(videoEl.playbackRate - desiredRate) > 0.01) videoEl.playbackRate = desiredRate;
+
+                // Badge only on sustained real catch-up, not the constant sub-1.05x trims.
+                if (desiredRate >= CATCHUP_BADGE_MIN_RATE) {
+                    if (++catchupTicks === CATCHUP_BADGE_SUSTAIN_TICKS) {
                         console.log('[live-view] catching up to live edge (' + drift.toFixed(1) + 's behind)');
-                        videoEl.playbackRate = CATCHUP_PLAYBACK_RATE;
-                        showCatchupBadge();
                     }
-                } else if (drift < CATCHUP_STOP_THRESHOLD_SECONDS && videoEl.playbackRate !== 1) {
-                    videoEl.playbackRate = 1;
+                    if (catchupTicks >= CATCHUP_BADGE_SUSTAIN_TICKS) showCatchupBadge(desiredRate);
+                } else {
+                    catchupTicks = 0;
                     hideCatchupBadge();
                 }
             }, DRIFT_CHECK_INTERVAL_MS);
@@ -513,6 +563,10 @@
                 socket.onclose = function (evt) {
                     var wasAlreadyClosed = closed;
                     closed = true;
+                    // 1008 (policy violation) is the node telling us this viewer fell behind and it
+                    // closed rather than splice a gap into the stream — see this function's header
+                    // comment. start()'s retry wrapper reconnects with a fresh init segment.
+                    if (evt.code === 1008) console.log('[live-view] server dropped us for falling behind — reconnecting');
                     if (!wasAlreadyClosed && statusEl.textContent === '') {
                         statusEl.textContent = evt.reason || 'Disconnected.';
                     }

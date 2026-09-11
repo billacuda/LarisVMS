@@ -81,6 +81,9 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     private readonly DetectionModelFamily _modelFamily;
     private readonly DFineWeights _dfineWeights;
     private readonly YoloXSize _yoloXSize;
+    // Non-null only for Detection.Backend = "ExternalHttp" — bypasses the whole local-model path in
+    // DetectionEngineFactory.Create and builds an HttpDetectionEngine instead.
+    private readonly ExternalDetectionConfig? _externalConfig;
     private readonly ILoggerFactory _loggerFactory;
 
     private readonly ByteTracker _tracker;
@@ -267,11 +270,21 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         // actual network decode size (and, for Letterbox, the pre-pad scale+pad geometry) from them.
         // Built once here and shared by both VisionSession (ffmpeg's own filter target) and the
         // detection engine (box decode) so the two can never disagree about the transform.
+        // Detection.Backend = "ExternalHttp": no local model runs at all — every frame is JPEG-
+        // encoded and POSTed to the operator-run service (HttpDetectionEngine), which also does the
+        // slice tiling + cross-seam merge when Slice mode is on. No accelerator, no nv12, no
+        // TensorRT — always a plain BGRA capture buffer, sized to the external model's own input
+        // size (request.ExternalInferenceInputSize, already validated to a positive multiple of 32).
+        var external = string.Equals(request.DetectionBackend, "ExternalHttp", StringComparison.OrdinalIgnoreCase);
+
         // YOLOX sizes decode at their own fixed input size (416 for nano/tiny, 640 otherwise) — must
-        // match the pinned ONNX export; D-FINE keeps InferenceProfile's 640 default.
-        var networkSize = modelFamily == DetectionModelFamily.YoloX
-            ? DetectionModelCatalog.GetYoloXNetworkSize(yoloXSize)
-            : InferenceProfile.DefaultNetworkSize;
+        // match the pinned ONNX export; D-FINE keeps InferenceProfile's 640 default. The external
+        // backend uses whatever square its chosen model reports.
+        var networkSize = external
+            ? request.ExternalInferenceInputSize
+            : modelFamily == DetectionModelFamily.YoloX
+                ? DetectionModelCatalog.GetYoloXNetworkSize(yoloXSize)
+                : InferenceProfile.DefaultNetworkSize;
 
         _sourceWidth = request.Width;
         _sourceHeight = request.Height;
@@ -283,16 +296,18 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         if (aspectMode == AspectMode.Slice)
         {
             // See this class's own doc comment for why Slice mode has no single square
-            // InferenceProfile and always forces GPU preprocessing regardless of the
-            // Detection.GpuPreprocessing setting's own value (there is no CPU fallback for it).
-            // _profile becomes the shared per-slice *identity* decode profile every slice's raw
-            // output goes through — degenerate (Stretch, network-size square), the same instance
-            // for every slice, never a per-camera transform.
+            // InferenceProfile and (for the built-in engine) always forces GPU preprocessing
+            // regardless of the Detection.GpuPreprocessing setting — there is no CPU fallback for
+            // cutting slices on the accelerator. The external backend is the exception: it doesn't
+            // cut slices here at all (it sends the whole capture buffer + a tile plan and the
+            // service tiles + merges), so it takes a plain BGRA capture buffer like every other
+            // external request. _profile is still the degenerate per-slice identity profile
+            // (unused by HttpDetectionEngine, which maps through _sliceLayout directly).
             _sliceLayout = SliceLayout.Create(request.Width, request.Height, networkSize);
             _profile = InferenceProfile.Create(networkSize, networkSize, AspectMode.Stretch, networkSize);
             captureWidth = _sliceLayout.CaptureWidth;
             captureHeight = _sliceLayout.CaptureHeight;
-            gpuPreprocessing = true;
+            gpuPreprocessing = !external;
             letterboxGeometry = null; // a plain scale to CaptureWidth x CaptureHeight, no pad at all
 
             // Nothing logged the resolved geometry before, which made every question about slicing
@@ -321,7 +336,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             // otherwise BGRA (W*H*4) and the engine packs it on the CPU. Forced off for YOLOX —
             // OnnxPreprocessHead's non-sliced head is D-FINE-shaped (/255 RGB); a plain (non-Slice)
             // YOLOX variant was never needed once slicing shipped its own.
-            gpuPreprocessing = request.GpuPreprocessing && modelFamily == DetectionModelFamily.DFine;
+            gpuPreprocessing = !external && request.GpuPreprocessing && modelFamily == DetectionModelFamily.DFine;
             letterboxGeometry = aspectMode == AspectMode.Letterbox
                 ? new LetterboxGeometry(_profile.ScaledWidth, _profile.ScaledHeight, _profile.PadLeft, _profile.PadTop)
                 : null;
@@ -357,9 +372,10 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         // as-is. FP16 additionally runs the mixed-precision *.fp16.onnx model (decoder kept in FP32 —
         // resolvedModelPath already points at it) and turns on trt_layer_norm_fp32_fallback as a
         // second line of defence.
-        var (enableTensorRt, tensorRtPrecision, layerNormFp32Fallback) =
-            (serviceOptions.EnableTensorRt, serviceOptions.TensorRtPrecision, false);
-        if (modelFamily == DetectionModelFamily.DFine)
+        var (enableTensorRt, tensorRtPrecision, layerNormFp32Fallback) = external
+            ? (false, serviceOptions.TensorRtPrecision, false) // no local ONNX session at all
+            : (serviceOptions.EnableTensorRt, serviceOptions.TensorRtPrecision, false);
+        if (!external && modelFamily == DetectionModelFamily.DFine)
         {
             (enableTensorRt, tensorRtPrecision, layerNormFp32Fallback) = dfineTensorRtMode.Trim().ToLowerInvariant() switch
             {
@@ -395,12 +411,24 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         // identical inputs via the same helper) purely so EngineBuildGate can probe the cache for
         // *this* variant before any engine exists. If the two ever disagreed the only casualty is a
         // wrong warm/cold log line, never a wrong engine. Applied as a second step so BatchSize comes
-        // from the options actually built above rather than a copy of its default.
-        _engineOptions = _engineOptions with
+        // from the options actually built above rather than a copy of its default. Skipped for the
+        // external backend — there is no .onnx path to key a TensorRT cache off, and EngineBuildGate
+        // never logs a cache state for it (EnableTensorRt is false).
+        if (!external)
         {
-            TensorRtCacheKey = OrtSessionFactory.TensorRtCacheKeyFor(
-                resolvedModelPath, _profile, _sliceLayout, _engineOptions.BatchSize, gpuPreprocessing),
-        };
+            _engineOptions = _engineOptions with
+            {
+                TensorRtCacheKey = OrtSessionFactory.TensorRtCacheKeyFor(
+                    resolvedModelPath, _profile, _sliceLayout, _engineOptions.BatchSize, gpuPreprocessing),
+            };
+        }
+
+        // Everything HttpDetectionEngine needs beyond what DetectionEngineFactory.Create already
+        // takes — resolved here so InferenceLoopAsync's engine build is a single call either way.
+        _externalConfig = external
+            ? new ExternalDetectionConfig(request.ExternalInferenceUrl, request.ExternalInferenceModel,
+                _sourceWidth, _sourceHeight, http, request.ExternalInferenceApiKey)
+            : null;
 
         // Per-family tracker tuning, anchored to this camera's own detection confidence — see
         // ByteTrackOptions.ForFamily for why the tracker's gates must follow the configured
@@ -468,7 +496,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             engine = await Task.Run(() => EngineBuildGate.Build(
                 _request.DisplayName, _engineOptions,
                 () => DetectionEngineFactory.Create(_modelFamily, _dfineWeights, _yoloXSize,
-                    _engineOptions, _profile, _loggerFactory, _sliceLayout),
+                    _engineOptions, _profile, _loggerFactory, _sliceLayout, _externalConfig),
                 _logger, ct), ct);
         }
         catch (OperationCanceledException) { return; }
@@ -504,8 +532,12 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             List<YoloDotNet.Models.ObjectDetection> detections;
             try
             {
-                detections = _sliceLayout is { } layout
-                    ? MergeSliceDetections(layout, ((ISlicedDetectionEngine)engine).DetectSliced(frame, _request.Confidence))
+                // The external backend does its own tiling + cross-seam merge service-side and
+                // returns one already-merged list (HttpDetectionEngine implements IDetectionEngine
+                // only, never ISlicedDetectionEngine), so it always goes through the plain
+                // engine.Detect path even in Slice mode.
+                detections = _sliceLayout is { } layout && engine is ISlicedDetectionEngine sliced
+                    ? MergeSliceDetections(layout, sliced.DetectSliced(frame, _request.Confidence))
                     : engine.Detect(frame, _request.Confidence, _request.Iou);
             }
             catch (Exception ex)
@@ -539,14 +571,17 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             // than the moment the boxes actually describe (a systematic "the object already moved"
             // error on every snapshot). See CapturedFrame's own doc comment.
             var now = captured.Value.CapturedUtc;
-            // IDetection.Id is nullable at the interface level (an untracked detection has none),
-            // but every detection ByteTracker.Update actually returns has already had a real track
-            // id written into it (see ByteTracker.Update's own final step) — the null-filter here is
-            // defensive, not an expected case.
-            var activeTrackIds = tracked.Where(d => d.Id.HasValue).Select(d => d.Id!.Value).ToHashSet();
-            _movement.Prune(activeTrackIds);
-            _labelArbiter.Prune(activeTrackIds);
-            _snapshottedTrackIds.RemoveWhere(id => !activeTrackIds.Contains(id));
+            // Prune per-track state against every track ByteTrack still considers alive (emitted this
+            // frame OR briefly lost and being coasted for re-acquisition), not just this frame's
+            // matched detections. _tracker.Update only returns tracks matched to a detection this
+            // frame, so a moving object that drops a single detection frame (motion blur, a partial
+            // occlusion — exactly what fast movers do) would otherwise have its whole centroid
+            // history wiped here and be re-reported Idle, with no live overlay box, until it rebuilds
+            // a MovementWindow's worth of samples. See ByteTracker.LiveTrackIds.
+            var liveTrackIds = _tracker.LiveTrackIds;
+            _movement.Prune(liveTrackIds);
+            _labelArbiter.Prune(liveTrackIds);
+            _snapshottedTrackIds.RemoveWhere(id => !liveTrackIds.Contains(id));
 
             var seenLabels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var liveBoxes = new List<VisionLiveDetectionBox>(tracked.Count);
@@ -977,12 +1012,15 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         }
         if (union is not { } unionRect || unionRect.Width < 2 || unionRect.Height < 2) return;
 
-        // Always nv12 — Slice mode has no BGRA path (mandatory GPU preprocessing, see this class's
-        // own doc comment). Nv12Ops.CropToWebp applies its own margin + frame clamp, so it gets the
-        // raw union directly (no separate ComputeCropRect step, unlike the BGRA branch of
+        // nv12 for the built-in GPU-preprocessed path, BGRA for the external backend (which has no
+        // nv12 path). Both crop helpers apply their own margin + frame clamp, so they get the raw
+        // union directly (no separate ComputeCropRect step, unlike the BGRA branch of
         // TrySubFrameSnapshot). No whole-frame guard — see TrySubFrameSnapshot for why covering every
         // moving object wins over a tighter single-object crop.
-        var image = Nv12Ops.CropToWebp(frame, layout.CaptureWidth, layout.CaptureHeight, ClampTo(unionRect, content), EagerCropWebpQuality);
+        var clamped = ClampTo(unionRect, content);
+        var image = _frameIsNv12
+            ? Nv12Ops.CropToWebp(frame, layout.CaptureWidth, layout.CaptureHeight, clamped, EagerCropWebpQuality)
+            : BgraOps.CropRectToWebp(frame, layout.CaptureWidth, layout.CaptureHeight, clamped, EagerCropWebpQuality);
         if (image is null) return;
 
         _ = PostEagerCropAsync(nowUtc, image);

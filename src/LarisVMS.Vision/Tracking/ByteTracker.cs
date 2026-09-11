@@ -120,6 +120,35 @@ public sealed class ByteTracker
     private int NextTrackId() => ++_nextTrackId;
 
     /// <summary>
+    /// Every track ByteTrack still considers alive after the most recent <see cref="Update{T}"/>: the
+    /// ones it emitted this frame plus the ones it is coasting through a brief gap (state Lost, kept
+    /// for up to <c>_maxTimeLost</c> frames so the second association pass can re-acquire them
+    /// without issuing a new id).
+    ///
+    /// A caller that keeps its own per-track state (centroid history, a stable label, an "already
+    /// snapshotted" marker) must prune against this — not against <see cref="Update{T}"/>'s return
+    /// value, which omits a track the instant it misses one detection frame. Pruning on the return
+    /// value alone makes a single dropped frame (motion blur on a fast object, a partial occlusion)
+    /// look identical to the track ending.
+    /// </summary>
+    public IReadOnlySet<int> LiveTrackIds
+    {
+        get
+        {
+            var ids = new HashSet<int>();
+            foreach (var track in _tracked)
+            {
+                if (track.TrackId != 0) ids.Add(track.TrackId);
+            }
+            foreach (var track in _lost)
+            {
+                if (track.TrackId != 0) ids.Add(track.TrackId);
+            }
+            return ids;
+        }
+    }
+
+    /// <summary>
     /// Assigns stable track IDs to this frame's detections, writing them into
     /// <see cref="IDetection.Id"/> and <see cref="IDetection.Tail"/>.
     ///

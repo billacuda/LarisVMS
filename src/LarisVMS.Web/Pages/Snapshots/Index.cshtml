@@ -15,11 +15,12 @@
 }
 <h1>Snapshots <span id="snapshotLoadStatus" class="badge bg-secondary ms-2 d-none fw-normal"></span></h1>
 <p class="text-muted">
-    Every motion event, browsable as a thumbnail — zones, camera-pushed motion, custom tags, and
-    detected objects all appear here. Each thumbnail is pulled live from the recording itself, and a
-    card disappears once its own footage ages out of retention, so what's shown here can always be
-    played back.
+    Every detection, browsable as a thumbnail — AI object detections, camera-native object classes,
+    and custom event tags. Plain motion isn't listed here (it's still on the Playback timeline). Each
+    thumbnail is pulled live from the recording itself, and a card disappears once its own footage
+    ages out of retention, so what's shown here can always be played back.
 </p>
+
 
 @* data-remember-filters: these selections survive navigating away and coming back, or a refresh —
    see remember-filters.js. The Clear link below carries data-clear-filters so clearing actually
@@ -96,10 +97,6 @@
     <aside class="snapshot-filter-tree" style="min-width: 15rem; max-width: 18rem;">
         <div class="d-flex flex-column gap-1">
             <div class="form-check mb-0">
-                <input type="checkbox" class="form-check-input" id="kind-motion" name="kinds" value="Motion" checked="@Model.IsKindChecked("Motion")" form="snapshotFilterForm" />
-                <label class="form-check-label small" for="kind-motion">🌀 Motion</label>
-            </div>
-            <div class="form-check mb-0">
                 <input type="checkbox" class="form-check-input" id="kind-customtag" name="kinds" value="@IndexModel.CustomTagToken" checked="@Model.IsKindChecked(IndexModel.CustomTagToken)" form="snapshotFilterForm" />
                 <label class="form-check-label small" for="kind-customtag">🏷️ Custom tags</label>
             </div>
@@ -149,7 +146,7 @@
     <div class="flex-grow-1">
     @if (Model.Results.Items.Count == 0)
     {
-        <p class="text-muted">No motion events found@(Model.Mode != "all" || Model.From is not null || Model.To is not null ? " for this filter." : " yet.")</p>
+        <p class="text-muted">No detections found@(Model.Mode != "all" || Model.From is not null || Model.To is not null ? " for this filter." : " yet.")</p>
     }
     else
     {

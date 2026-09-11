@@ -186,6 +186,54 @@ public class MovementClassifierTests
     }
 
     [Fact]
+    public void MovingTrackKeptAcrossAFrameGapStaysMoving()
+    {
+        // The pipeline calls Prune every frame with the tracks ByteTrack still considers alive. A
+        // fast mover that drops one detection frame is briefly absent from Update's output but still
+        // alive (coasting, Lost) — so it must remain in the pruned-keep set, and its centroid
+        // history must survive the gap. If it does, the frame it is re-acquired on still classifies
+        // Moving rather than falling back to Idle (no live overlay box) until it rebuilds a window.
+        var classifier = new MovementClassifier();
+
+        MovementState state = MovementState.Idle;
+        for (var i = 0; i < 4; i++)
+        {
+            var box = new SKRectI(i * 40, 0, i * 40 + 50, 50); // steady ~40px/frame travel
+            state = classifier.Observe(1, box, 0.8, 1280, 720, BaseTime.AddMilliseconds(i * 200)).State;
+        }
+        Assert.Equal(MovementState.Moving, state);
+
+        // Frame with no detection for track 1 — ByteTrack still lists it as alive, so Prune keeps it.
+        classifier.Prune(new HashSet<int> { 1 });
+
+        // Re-acquired the next frame, history intact -> still Moving.
+        var reacquired = classifier.Observe(1, new SKRectI(200, 0, 250, 50), 0.8, 1280, 720,
+            BaseTime.AddMilliseconds(1000));
+        Assert.Equal(MovementState.Moving, reacquired.State);
+    }
+
+    [Fact]
+    public void MovingTrackPrunedDuringAGapFallsBackToIdle()
+    {
+        // The pre-fix behaviour, pinned so the contract above is unambiguous: pruning the track
+        // during the gap (as the old current-frame-only key did) wipes its history, and the
+        // re-acquired frame has only one sample -> Idle.
+        var classifier = new MovementClassifier();
+
+        for (var i = 0; i < 4; i++)
+        {
+            var box = new SKRectI(i * 40, 0, i * 40 + 50, 50);
+            classifier.Observe(1, box, 0.8, 1280, 720, BaseTime.AddMilliseconds(i * 200));
+        }
+
+        classifier.Prune(new HashSet<int>()); // track 1 dropped from the keep-set
+
+        var reacquired = classifier.Observe(1, new SKRectI(200, 0, 250, 50), 0.8, 1280, 720,
+            BaseTime.AddMilliseconds(1000));
+        Assert.Equal(MovementState.Idle, reacquired.State);
+    }
+
+    [Fact]
     public void DisplacementOutsideTheWindowIsForgotten()
     {
         var classifier = new MovementClassifier(new MovementClassifierOptions

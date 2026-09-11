@@ -96,7 +96,14 @@ public sealed class CameraPipelineManager : IAsyncDisposable
 
         var modelKey = $"{family}|{dfineWeights}|{yoloXSize}|{(dfineFp16Mixed ? "fp16" : "std")}";
         var http = _httpClientFactory.CreateClient(nameof(CameraDetectionPipeline));
-        var resolvedModelPath = await ResolveModelPathCachedAsync(modelKey, family, dfineWeights, yoloXSize, dfineFp16Mixed, request.NodeCallbackBaseUrl, http);
+
+        // Detection.Backend = "ExternalHttp": no local .onnx is loaded — the pipeline builds an
+        // HttpDetectionEngine from the request's ExternalInference* fields instead — so there is no
+        // model path to resolve (and no accelerator needed; this backend runs on a GPU-less node).
+        var external = string.Equals(request.DetectionBackend, "ExternalHttp", StringComparison.OrdinalIgnoreCase);
+        var resolvedModelPath = external
+            ? string.Empty
+            : await ResolveModelPathCachedAsync(modelKey, family, dfineWeights, yoloXSize, dfineFp16Mixed, request.NodeCallbackBaseUrl, http);
 
         var pipeline = new CameraDetectionPipeline(request, _options, _ffmpegPath, resolvedModelPath, family, dfineWeights, yoloXSize, aspectMode, dfineTensorRtMode, http, _loggerFactory);
         _pipelines[request.CameraId] = pipeline;

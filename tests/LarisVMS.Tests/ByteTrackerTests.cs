@@ -84,6 +84,47 @@ public sealed class ByteTrackerTests
     }
 
     [Fact]
+    public void LiveTrackIds_IncludesATrackThatMissedTheCurrentFrameButIsStillCoasting()
+    {
+        // The distinction Update{T}'s return value cannot express: a track that produced no
+        // detection this frame is absent from the return list but still alive (Lost, coasting via
+        // Kalman) and will be re-acquired with its original id. A caller pruning its own per-track
+        // state — MovementClassifier's centroid history, the label arbiter, the snapshot-dedup set —
+        // must key off LiveTrackIds so one dropped frame doesn't look like the track ending.
+        var tracker = new ByteTracker();
+
+        var f1 = tracker.Update([FakeDetection.Box(100, 100, 50, 80)]);
+        var f2 = tracker.Update([FakeDetection.Box(110, 100, 50, 80)]);
+        Assert.Single(f2);
+        var trackedId = f2[0].Id!.Value;
+
+        var f3 = tracker.Update(Array.Empty<FakeDetection>()); // object briefly invisible
+
+        Assert.Empty(f3);
+        Assert.Contains(trackedId, tracker.LiveTrackIds);
+
+        var f4 = tracker.Update([FakeDetection.Box(130, 100, 50, 80)]);
+        Assert.Single(f4);
+        Assert.Equal(trackedId, f4[0].Id);
+    }
+
+    [Fact]
+    public void LiveTrackIds_DropsATrackOnceItIsRetiredBeyondTheBuffer()
+    {
+        var tracker = new ByteTracker(new ByteTrackOptions { TrackBuffer = 3, FrameRate = 30 });
+
+        var f1 = tracker.Update([FakeDetection.Box(100, 100, 50, 80)]);
+        var originalId = f1[0].Id!.Value;
+
+        for (var i = 0; i < 6; i++)
+        {
+            tracker.Update(Array.Empty<FakeDetection>());
+        }
+
+        Assert.DoesNotContain(originalId, tracker.LiveTrackIds);
+    }
+
+    [Fact]
     public void LostBeyondTrackBuffer_GetsNewIdOnReturn()
     {
         // The mirror image of the previous test: once a track has been Lost for longer than the

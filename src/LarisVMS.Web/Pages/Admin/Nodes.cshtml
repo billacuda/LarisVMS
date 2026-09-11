@@ -204,6 +204,36 @@ else
                                     <option value="FP32" selected="@(Model.DFineTensorRtModeOverride.GetValueOrDefault(n.Id) == "FP32")">FP32</option>
                                     <option value="FP16" disabled="@(Model.DFineTensorRtModeOverride.GetValueOrDefault(n.Id) != "FP16")" selected="@(Model.DFineTensorRtModeOverride.GetValueOrDefault(n.Id) == "FP16")">FP16 (not yet available)</option>
                                 </select>
+                                @* Detection.Backend + the external inference service — same per-node
+                                   override shape as the selects above. The URL/model picker with live
+                                   "Test connection" discovery lives on Admin/Settings/Detection (the
+                                   global default); this is a plain override for a node that needs to
+                                   point at a different service. *@
+                                @{ var backendOv = Model.DetectionBackendOverride.GetValueOrDefault(n.Id); }
+                                <select name="backendOverride" class="form-select form-select-sm mt-1"
+                                        title="Which detection backend this node runs — blank inherits the global setting">
+                                    <option value="" selected="@(string.IsNullOrEmpty(backendOv))">
+                                        (inherit backend — currently @Model.EffectiveDetectionBackend.GetValueOrDefault(n.Id, "BuiltIn"))
+                                    </option>
+                                    <option value="BuiltIn" selected="@(backendOv == "BuiltIn")">Built-in</option>
+                                    <option value="ExternalHttp" selected="@(backendOv == "ExternalHttp")">External HTTP service</option>
+                                </select>
+                                <input name="externalUrlOverride" class="form-control form-control-sm mt-1"
+                                       value="@Model.ExternalInferenceUrlOverride.GetValueOrDefault(n.Id)"
+                                       placeholder="service URL override (inherit)"
+                                       title="Only used when the backend above resolves to External HTTP. Blank inherits the global URL from Admin/Settings/Detection." />
+                                <input name="externalModelOverride" class="form-control form-control-sm mt-1"
+                                       value="@Model.ExternalInferenceModelOverride.GetValueOrDefault(n.Id)"
+                                       placeholder="model override (inherit)"
+                                       title="Only used when the backend above resolves to External HTTP. Blank inherits the global model." />
+                                <input type="number" name="externalInputSizeOverride" class="form-control form-control-sm mt-1" min="32" step="32"
+                                       value="@(Model.ExternalInferenceInputSizeOverride.GetValueOrDefault(n.Id)?.ToString())"
+                                       placeholder="input size override (inherit)"
+                                       title="The overridden model's square input size in pixels — must be a positive multiple of 32. Blank inherits the global value." />
+                                <input name="externalApiKeyOverride" type="password" autocomplete="new-password"
+                                       class="form-control form-control-sm mt-1"
+                                       placeholder="@(Model.HasExternalInferenceApiKeyOverride.GetValueOrDefault(n.Id) ? "API key override (unchanged)" : "API key override (inherit)")"
+                                       title="Only used when the backend above resolves to External HTTP. Blank leaves this alone — inherits the global key unless one was set here before. Write-only: never re-shown once saved." />
                             </td>
                             <td data-sort-value="@(n.LastSeenAt?.Ticks ?? 0)">
                                 @if (n.LastSeenAt is { } seen)

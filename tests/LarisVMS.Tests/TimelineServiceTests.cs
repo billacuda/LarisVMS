@@ -987,8 +987,11 @@ public class TimelineServiceTests
     // ── GetSnapshotsAsync (M18: Snapshots browser) ───────────────────────────
 
     [Fact]
-    public async Task SnapshotWithAZoneUsesTheZonesNameAndThePlainMotionColor()
+    public async Task AZoneScopedServerMotionSpanIsNotShownOnTheSnapshotsPage()
     {
+        // Snapshots is object-detection-only now: a plain ServerMotion span, even one scoped to a
+        // zone, carries no DetectionKind/DetectedObjectCategory/EventTagRule and never appears here
+        // (it still drives the Playback timeline's motion bands — see the bucket tests above).
         var (db, cameraId, _) = await SeedCameraAsync(withSnapshotCoverage: true);
         var zone = new Zone { Id = Guid.NewGuid(), CameraId = cameraId, Name = "Front Yard", Kind = ZoneKind.ServerMotion };
         db.Zones.Add(zone);
@@ -1003,10 +1006,7 @@ public class TimelineServiceTests
         var service = new TimelineService(db, DefaultPalette);
         var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
 
-        var s = Assert.Single(page.Items);
-        Assert.Equal("Front Yard", s.Label);
-        Assert.Equal(EventColors.DefaultMotion, s.ColorHex);
-        Assert.Equal("cam-1", s.CameraName);
+        Assert.Empty(page.Items);
     }
 
     [Fact]
@@ -1062,16 +1062,23 @@ public class TimelineServiceTests
     }
 
     [Fact]
-    public async Task PlainMotionSnapshotAlsoSamplesFromTheStartOfThePreRollNotTheMidpoint()
+    public async Task CustomTagSnapshotSamplesFromTheStartOfThePreRollNotTheMidpoint()
     {
-        // Explicit user ask: plain motion gets the exact same treatment as a detection now — a
-        // camera-pushed motion event can have the same cooldown-inflated span length a detection
-        // does, so the span's own midpoint is no more reliable there either.
+        // A custom event-tag span (no classified object) gets no "subject already on-frame at
+        // StartUtc" guarantee, so it samples from the recording's own pre-roll lead-in rather than
+        // the span's own midpoint — same as plain motion used to, before Snapshots stopped listing
+        // plain motion at all.
         var (db, cameraId, _) = await SeedCameraAsync(withSnapshotCoverage: true);
+        var rule = new EventTagRule
+        {
+            Id = Guid.NewGuid(), CameraId = cameraId, Name = "Package", StartTopic = "tns1:Custom/Start",
+            ColorHex = "#ff9800", DrivesRecording = false, IsEnabled = true
+        };
+        db.EventTagRules.Add(rule);
         var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
         db.MotionSpans.Add(new MotionSpan
         {
-            CameraId = cameraId, Source = MotionSource.ServerMotion,
+            CameraId = cameraId, Source = MotionSource.CustomTag, EventTagRuleId = rule.Id,
             StartUtc = start, EndUtc = start.AddSeconds(30), Score = 0.5
         });
         await db.SaveChangesAsync();
@@ -1088,11 +1095,18 @@ public class TimelineServiceTests
         // The exact scenario reported live: a 3s pre-roll should land the snapshot 2s before
         // StartUtc (3s pre-roll minus the 1s margin lands the candidate 2s early), not at some
         // hardcoded value — confirms the per-camera setting is actually read, not just the default.
+        // A custom-tag span (no classified object) is the one that uses the pre-roll sample point.
         var (db, cameraId, _) = await SeedCameraAsync(withSnapshotCoverage: true);
+        var rule = new EventTagRule
+        {
+            Id = Guid.NewGuid(), CameraId = cameraId, Name = "Package", StartTopic = "tns1:Custom/Start",
+            ColorHex = "#ff9800", DrivesRecording = false, IsEnabled = true
+        };
+        db.EventTagRules.Add(rule);
         var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
         db.MotionSpans.Add(new MotionSpan
         {
-            CameraId = cameraId, Source = MotionSource.ServerMotion,
+            CameraId = cameraId, Source = MotionSource.CustomTag, EventTagRuleId = rule.Id,
             StartUtc = start, EndUtc = start.AddSeconds(30), Score = 0.5
         });
         await db.SaveChangesAsync();
@@ -1153,21 +1167,66 @@ public class TimelineServiceTests
     }
 
     [Fact]
-    public async Task SnapshotWithNoZoneRuleOrDetectionFallsBackToPlainMotionLabel()
+    public async Task PlainMotionSpansAreNeverShownOnTheSnapshotsPage()
     {
+        // Permanent behavior: Snapshots lists detections only. A ServerMotion span (with or without a
+        // zone) and a camera "motion detected" CameraEvent span with no object class never appear;
+        // only the camera-native DetectionKind span does.
         var (db, cameraId, _) = await SeedCameraAsync(withSnapshotCoverage: true);
+        var zone = new Zone { Id = Guid.NewGuid(), CameraId = cameraId, Name = "Yard", Kind = ZoneKind.ServerMotion };
+        db.Zones.Add(zone);
         var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
-        db.MotionSpans.Add(new MotionSpan
-        {
-            CameraId = cameraId, Source = MotionSource.CameraEvent,
-            StartUtc = start, EndUtc = start.AddSeconds(30), Score = 1.0
-        });
+        db.MotionSpans.AddRange(
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.ServerMotion, ZoneId = zone.Id, StartUtc = start, EndUtc = start.AddSeconds(5), Score = 0.5 },
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start.AddMinutes(1), EndUtc = start.AddMinutes(1).AddSeconds(5), Score = 0.5 },
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human, StartUtc = start.AddMinutes(2), EndUtc = start.AddMinutes(2).AddSeconds(5), Score = 1.0 });
         await db.SaveChangesAsync();
 
         var service = new TimelineService(db, DefaultPalette);
         var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
 
-        Assert.Equal("Motion", Assert.Single(page.Items).Label);
+        Assert.Equal("Human", Assert.Single(page.Items).Label);
+    }
+
+    [Fact]
+    public async Task AnAiVisionSpanIsShownEvenWhenEveryPerClassSnapshotToggleIsOff()
+    {
+        // The per-DetectionKind "Snapshots.Enabled.{kind}" toggles gate camera-native ONVIF classes
+        // only — an AI-Vision detection has no per-type setting and must never be hidden by them
+        // (it used to be wrongly gated by the now-retired "Snapshots.Enabled.Motion" toggle).
+        var (db, cameraId, _) = await SeedCameraAsync(withSnapshotCoverage: true);
+        var vehicle = new DetectedObjectCategory { Id = Guid.NewGuid(), Name = "Vehicle", ColorHex = "#3366cc", FirstSeenUtc = DateTime.UtcNow };
+        db.DetectedObjectCategories.Add(vehicle);
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.Add(new MotionSpan
+        {
+            CameraId = cameraId, Source = MotionSource.AiDetection, DetectedObjectCategoryId = vehicle.Id,
+            DetectedObjectLabel = "car", StartUtc = start, EndUtc = start.AddSeconds(5)
+        });
+        await db.SaveChangesAsync();
+
+        var everyKindOff = DetectionDisplay.AllKinds.ToDictionary(k => SnapshotVisibility.DetectionKey(k), _ => false);
+        var service = new TimelineService(db, DefaultPalette, new StubSettingsResolver(values: everyKindOff));
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
+
+        Assert.True(Assert.Single(page.Items).IsAiDetection);
+    }
+
+    [Fact]
+    public async Task ThePerDetectionKindSnapshotToggleStillHidesThatClass()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync(withSnapshotCoverage: true);
+        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        db.MotionSpans.AddRange(
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Face, StartUtc = start, EndUtc = start.AddSeconds(5) },
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human, StartUtc = start.AddMinutes(1), EndUtc = start.AddMinutes(1).AddSeconds(5) });
+        await db.SaveChangesAsync();
+
+        var faceOff = new StubSettingsResolver(values: new() { [SnapshotVisibility.DetectionKey(DetectionKind.Face)] = false });
+        var service = new TimelineService(db, DefaultPalette, faceOff);
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
+
+        Assert.Equal("Human", Assert.Single(page.Items).Label);
     }
 
     [Fact]
@@ -1176,37 +1235,19 @@ public class TimelineServiceTests
         var (db, cameraId, _) = await SeedCameraAsync(withSnapshotCoverage: true);
         var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
         db.MotionSpans.AddRange(
-            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start, EndUtc = start.AddSeconds(1) },
-            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start.AddMinutes(5), EndUtc = start.AddMinutes(5).AddSeconds(1) },
-            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start.AddMinutes(2), EndUtc = start.AddMinutes(2).AddSeconds(1) });
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human, StartUtc = start, EndUtc = start.AddSeconds(1) },
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human, StartUtc = start.AddMinutes(5), EndUtc = start.AddMinutes(5).AddSeconds(1) },
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human, StartUtc = start.AddMinutes(2), EndUtc = start.AddMinutes(2).AddSeconds(1) });
         await db.SaveChangesAsync();
 
         var service = new TimelineService(db, DefaultPalette);
         var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
 
-        // Default 10s pre-roll (no real settings resolver in play) minus the 1s margin: -9s off each
-        // span's own StartUtc.
+        // A classified span samples at StartUtc + 1s (the subject is already on-frame at StartUtc —
+        // no pre-roll). Order is newest-first by StartUtc.
         Assert.Equal(
-            [start.AddMinutes(5).AddSeconds(-9), start.AddMinutes(2).AddSeconds(-9), start.AddSeconds(-9)],
+            [start.AddMinutes(5).AddSeconds(1), start.AddMinutes(2).AddSeconds(1), start.AddSeconds(1)],
             page.Items.Select(i => i.AtUtc));
-    }
-
-    [Fact]
-    public async Task SnapshotAtUtcSamplesFromThePreRollNotTheSpanMidpoint()
-    {
-        var (db, cameraId, _) = await SeedCameraAsync(withSnapshotCoverage: true);
-        var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
-        db.MotionSpans.Add(new MotionSpan
-        {
-            CameraId = cameraId, Source = MotionSource.CameraEvent,
-            StartUtc = start, EndUtc = start.AddSeconds(20)
-        });
-        await db.SaveChangesAsync();
-
-        var service = new TimelineService(db, DefaultPalette);
-        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24);
-
-        Assert.Equal(start.AddSeconds(-9), Assert.Single(page.Items).AtUtc);
     }
 
     [Fact]
@@ -1255,13 +1296,19 @@ public class TimelineServiceTests
     }
 
     [Fact]
-    public async Task PlayFromUtcIsPreRollEarlierThanStartUtcForAPlainMotionSpan()
+    public async Task PlayFromUtcIsPreRollEarlierThanStartUtcForACustomTagSpan()
     {
         var (db, cameraId, _) = await SeedCameraAsync(withSnapshotCoverage: true);
+        var rule = new EventTagRule
+        {
+            Id = Guid.NewGuid(), CameraId = cameraId, Name = "Package", StartTopic = "tns1:Custom/Start",
+            ColorHex = "#ff9800", DrivesRecording = false, IsEnabled = true
+        };
+        db.EventTagRules.Add(rule);
         var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
         db.MotionSpans.Add(new MotionSpan
         {
-            CameraId = cameraId, Source = MotionSource.ServerMotion,
+            CameraId = cameraId, Source = MotionSource.CustomTag, EventTagRuleId = rule.Id,
             StartUtc = start, EndUtc = start.AddSeconds(30)
         });
         await db.SaveChangesAsync();
@@ -1271,7 +1318,7 @@ public class TimelineServiceTests
 
         var item = Assert.Single(page.Items);
         Assert.Equal(start.AddSeconds(-10), item.PlayFromUtc);
-        Assert.Equal(start.AddSeconds(-9), item.AtUtc); // AtUtc's own branch is untouched
+        Assert.Equal(start.AddSeconds(-9), item.AtUtc); // an unclassified (custom-tag) span samples from the pre-roll
     }
 
     [Fact]
@@ -1303,7 +1350,7 @@ public class TimelineServiceTests
         {
             db.MotionSpans.Add(new MotionSpan
             {
-                CameraId = cameraId, Source = MotionSource.CameraEvent,
+                CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human,
                 StartUtc = start.AddMinutes(i), EndUtc = start.AddMinutes(i).AddSeconds(1)
             });
         }
@@ -1324,9 +1371,9 @@ public class TimelineServiceTests
         var otherCameraId = Guid.NewGuid();
         var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
         db.MotionSpans.AddRange(
-            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start, EndUtc = start.AddSeconds(1) },
-            new MotionSpan { CameraId = otherCameraId, Source = MotionSource.CameraEvent, StartUtc = start, EndUtc = start.AddSeconds(1) },
-            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start.AddDays(-10), EndUtc = start.AddDays(-10).AddSeconds(1) });
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human, StartUtc = start, EndUtc = start.AddSeconds(1) },
+            new MotionSpan { CameraId = otherCameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human, StartUtc = start, EndUtc = start.AddSeconds(1) },
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human, StartUtc = start.AddDays(-10), EndUtc = start.AddDays(-10).AddSeconds(1) });
         await db.SaveChangesAsync();
 
         var service = new TimelineService(db, DefaultPalette);
@@ -1334,7 +1381,7 @@ public class TimelineServiceTests
 
         var s = Assert.Single(page.Items);
         Assert.Equal(cameraId, s.CameraId);
-        Assert.Equal(start.AddSeconds(-9), s.AtUtc); // default 10s pre-roll minus the 1s margin
+        Assert.Equal(start.AddSeconds(1), s.AtUtc); // a classified span samples at StartUtc + 1s
     }
 
     [Fact]
@@ -1343,7 +1390,7 @@ public class TimelineServiceTests
         using var db = NewDb();
         var cameraId = Guid.NewGuid(); // never added to db.Cameras
         var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
-        db.MotionSpans.Add(new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start, EndUtc = start.AddSeconds(1) });
+        db.MotionSpans.Add(new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human, StartUtc = start, EndUtc = start.AddSeconds(1) });
         // The query-time footage guard (pass 2c) keys off CameraId alone, not a Camera row's
         // existence — a Segment for this same (deleted) camera id still counts as covering footage.
         // Must actually overlap the span's own window (the guard is overlap-based, not just
@@ -1374,7 +1421,6 @@ public class TimelineServiceTests
         };
         db.EventTagRules.Add(rule);
         db.MotionSpans.AddRange(
-            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start, EndUtc = start.AddSeconds(1) }, // plain motion
             new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human, StartUtc = start.AddMinutes(1), EndUtc = start.AddMinutes(1).AddSeconds(1) },
             new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Vehicle, StartUtc = start.AddMinutes(2), EndUtc = start.AddMinutes(2).AddSeconds(1) },
             new MotionSpan { CameraId = cameraId, Source = MotionSource.CustomTag, EventTagRuleId = rule.Id, StartUtc = start.AddMinutes(3), EndUtc = start.AddMinutes(3).AddSeconds(1) });
@@ -1387,7 +1433,7 @@ public class TimelineServiceTests
     }
 
     [Fact]
-    public async Task SnapshotsKindsFilterCanIncludeMotionAndCustomTagsTogether()
+    public async Task SnapshotsKindsFilterCanNarrowToCustomTagsOnly()
     {
         var (db, cameraId, _) = await SeedCameraAsync(withSnapshotCoverage: true);
         var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
@@ -1398,15 +1444,14 @@ public class TimelineServiceTests
         };
         db.EventTagRules.Add(rule);
         db.MotionSpans.AddRange(
-            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start, EndUtc = start.AddSeconds(1) },
             new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human, StartUtc = start.AddMinutes(1), EndUtc = start.AddMinutes(1).AddSeconds(1) },
             new MotionSpan { CameraId = cameraId, Source = MotionSource.CustomTag, EventTagRuleId = rule.Id, StartUtc = start.AddMinutes(3), EndUtc = start.AddMinutes(3).AddSeconds(1) });
         await db.SaveChangesAsync();
 
         var service = new TimelineService(db, DefaultPalette);
-        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24, kinds: ["Motion", TimelineService.CustomTagKindToken]);
+        var page = await service.GetSnapshotsAsync(null, null, null, 1, 24, kinds: [TimelineService.CustomTagKindToken]);
 
-        Assert.Equal(2, page.Items.Count);
+        Assert.Equal("Package", Assert.Single(page.Items).Label);
         Assert.DoesNotContain(page.Items, i => i.Label == "Human");
     }
 
@@ -1415,11 +1460,11 @@ public class TimelineServiceTests
     {
         var (db, cameraId, _) = await SeedCameraAsync(withSnapshotCoverage: true);
         var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
-        db.MotionSpans.Add(new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start, EndUtc = start.AddSeconds(1) });
+        db.MotionSpans.Add(new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human, StartUtc = start, EndUtc = start.AddSeconds(1) });
         await db.SaveChangesAsync();
 
         var service = new TimelineService(db, DefaultPalette);
-        // An explicitly empty (but non-null) set narrows to nothing — distinct from null, which means
+        // A kinds set that matches no seeded span narrows to nothing — distinct from null, which means
         // the filter was never touched and shows everything.
         var page = await service.GetSnapshotsAsync(null, null, null, 1, 24, kinds: ["Vehicle"]);
 
@@ -1536,8 +1581,7 @@ public class TimelineServiceTests
         var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
         db.MotionSpans.AddRange(
             new MotionSpan { CameraId = cameraId, Source = MotionSource.AiDetection, DetectedObjectCategoryId = vehicle.Id, DetectedObjectLabel = "car", StartUtc = start, EndUtc = start.AddSeconds(1) },
-            new MotionSpan { CameraId = cameraId, Source = MotionSource.AiDetection, DetectedObjectCategoryId = animal.Id, DetectedObjectLabel = "dog", StartUtc = start.AddMinutes(1), EndUtc = start.AddMinutes(1).AddSeconds(1) },
-            new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start.AddMinutes(2), EndUtc = start.AddMinutes(2).AddSeconds(1) }); // plain motion
+            new MotionSpan { CameraId = cameraId, Source = MotionSource.AiDetection, DetectedObjectCategoryId = animal.Id, DetectedObjectLabel = "dog", StartUtc = start.AddMinutes(1), EndUtc = start.AddMinutes(1).AddSeconds(1) });
         await db.SaveChangesAsync();
 
         var service = new TimelineService(db, DefaultPalette);
@@ -1691,7 +1735,7 @@ public class TimelineServiceTests
         // OFFSET/FETCH page boundaries among tied rows are undefined and could duplicate or skip rows.
         for (var i = 0; i < 5; i++)
         {
-            db.MotionSpans.Add(new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start, EndUtc = start.AddSeconds(1), Score = i });
+            db.MotionSpans.Add(new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human, StartUtc = start, EndUtc = start.AddSeconds(1), Score = i });
         }
         await db.SaveChangesAsync();
 
@@ -1717,7 +1761,7 @@ public class TimelineServiceTests
         using var db = NewDb();
         var cameraId = Guid.NewGuid(); // no Segment rows for this camera at all
         var start = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
-        db.MotionSpans.Add(new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start, EndUtc = start.AddSeconds(1) });
+        db.MotionSpans.Add(new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human, StartUtc = start, EndUtc = start.AddSeconds(1) });
         await db.SaveChangesAsync();
 
         var service = new TimelineService(db, DefaultPalette);
@@ -1739,7 +1783,7 @@ public class TimelineServiceTests
             CameraId = cameraId, NodeId = nodeId, StreamRole = CameraStreamRole.Main,
             StartUtc = start.AddSeconds(5), EndUtc = start.AddSeconds(35), FilePath = "later-segment.mp4"
         });
-        db.MotionSpans.Add(new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, StartUtc = start, EndUtc = start.AddSeconds(1) });
+        db.MotionSpans.Add(new MotionSpan { CameraId = cameraId, Source = MotionSource.CameraEvent, DetectionKind = DetectionKind.Human, StartUtc = start, EndUtc = start.AddSeconds(1) });
         await db.SaveChangesAsync();
 
         var service = new TimelineService(db, DefaultPalette);

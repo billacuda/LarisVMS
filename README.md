@@ -15,7 +15,7 @@ work on phone, tablet, and desktop.
 
 ---
 
-## **Current version [0.196.0](CHANGELOG.md)**
+## **Current version [0.199.0](CHANGELOG.md)**
 
 ## Stack
 
@@ -360,6 +360,18 @@ New-Item -Path "IIS:\SslBindings\0.0.0.0!8443" -Value $cert
 Then set the matching port number in `Admin → Settings → Security`. Once set, live/playback routes
 stop responding on the management port and every other route stops responding on the new one; leave
 the setting blank to go back to everything sharing whatever port(s) IIS already binds.
+
+### Live view pauses in a background Chrome window
+
+Chrome throttles timers and can suspend video in a window that isn't focused or visible, so a live
+grid left on a second monitor may freeze and then race to catch up when you switch back to it. Start
+Chrome with these flags to disable that:
+
+```
+chrome.exe --disable-backgrounding-occluded-windows --disable-background-timer-throttling
+```
+
+Append them to the **Target** of your Chrome shortcut, after `...\chrome.exe`.
 
 ### Email (`Admin → Settings → Email`)
 

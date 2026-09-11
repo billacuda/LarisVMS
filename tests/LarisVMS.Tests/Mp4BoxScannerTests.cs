@@ -122,6 +122,51 @@ public class Mp4BoxScannerTests
         Assert.Equal(first.Length, Mp4BoxScanner.TryFindFragmentEnd(buffer));
     }
 
+    // With the live pipe leg now muxed at frag_duration=500ms, a single PipeReader read commonly
+    // holds many small keyframe-less fragments back to back. DrainStdoutAsync peels them off one at a
+    // time in a loop; this proves the scan keeps finding exactly one boundary per iteration and
+    // never runs the slices together.
+    [Fact]
+    public void PeelsOffManySmallFragmentsOneAtATime()
+    {
+        var fragments = Enumerable.Range(0, 12)
+            .Select(i => Concat(Box("moof", 24), Box("mdat", 40 + i))) // varied sizes so an off-by-one would misalign
+            .ToArray();
+        var buffer = Concat(fragments);
+
+        var consumed = 0;
+        foreach (var expected in fragments)
+        {
+            var end = Mp4BoxScanner.TryFindFragmentEnd(buffer.AsSpan(consumed));
+            Assert.Equal(expected.Length, end);
+            consumed += end!.Value;
+        }
+        Assert.Equal(buffer.Length, consumed);
+        Assert.Null(Mp4BoxScanner.TryFindFragmentEnd(buffer.AsSpan(consumed)));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(7)]
+    [InlineData(50)]
+    public void PeelsOffManySmallFragmentsAcrossSegmentSplits(int chunk)
+    {
+        var fragments = Enumerable.Range(0, 10)
+            .Select(i => Concat(Box("moof", 24), Box("mdat", 32 + i)))
+            .ToArray();
+        var whole = Concat(fragments);
+
+        var consumed = 0;
+        foreach (var expected in fragments)
+        {
+            var remaining = whole[consumed..];
+            var end = Mp4BoxScanner.TryFindFragmentEnd(Segmented(remaining, chunk));
+            Assert.Equal(expected.Length, end);
+            consumed += (int)end!.Value;
+        }
+        Assert.Equal(whole.Length, consumed);
+    }
+
     [Fact]
     public void HandlesA64BitMdatSize()
     {

@@ -5,27 +5,30 @@
 .DESCRIPTION
     Steps performed:
       1. Validates administrator privileges
-      2. Resolves IIS destination path and app pool from the provided parameters
-      3. Restores dotnet local tools (dotnet-ef)
-      4. Reads the connection string from setup-generated.json at the destination
+      2. Guards against the recorder node / media proxy base <Version> drifting behind the release
+         actually being deployed — see "Version sync guard" below. Skippable with
+         -SkipVersionSyncCheck.
+      3. Resolves IIS destination path and app pool from the provided parameters
+      4. Restores dotnet local tools (dotnet-ef)
+      5. Reads the connection string from setup-generated.json at the destination
          (or use -ConnectionString to override)
-      5. Guards against a misconfigured storage root — see "Storage root guard" below
-      6. Builds and publishes the web project
-      7. Builds the recorder node package (build-node.ps1) so publish\LarisVMS.Node\win — and,
+      6. Guards against a misconfigured storage root — see "Storage root guard" below
+      7. Builds and publishes the web project
+      8. Builds the recorder node package (build-node.ps1) so publish\LarisVMS.Node\win — and,
          if -ExtraNodePublishPath is given, that second location too — stays current with every
          deploy instead of only when someone remembers to run build-node.ps1 by hand. Skippable
          with -SkipNodeBuild.
-      8. Registers that build with LarisVMS.Web's node-build-approval queue (Admin -> Node Builds)
+      9. Registers that build with LarisVMS.Web's node-build-approval queue (Admin -> Node Builds)
          as Pending, writing straight to the server's own node-builds folder and database — no
          browser upload, so no IIS request-size limit to hit. A no-op if this exact version/platform
          is already registered. Skippable with -SkipNodeBuildRegistration (implied by -SkipNodeBuild).
-      9. Stops the IIS app pool
-     10. Applies any pending EF Core migrations
-     11. Copies published files to the IIS site, preserving setup-generated.json,
+     10. Stops the IIS app pool
+     11. Applies any pending EF Core migrations
+     12. Copies published files to the IIS site, preserving setup-generated.json,
          appsettings.Production.json, data-protection-keys\, and every recording/spool/export
          directory
-     12. Starts the IIS app pool (always, even on failure)
-     13. Probes /health once the pool is back up
+     13. Starts the IIS app pool (always, even on failure)
+     14. Probes /health once the pool is back up
 
     This script deploys LarisVMS.Web to IIS and (by default) refreshes the node install package
     alongside it — recorder nodes are still separate Windows Services installed with
@@ -56,6 +59,9 @@ param(
     # every clone of this repo.
     [string]$ExtraNodePublishPath = '',
     [string]$NodeCsprojPath       = (Join-Path $PSScriptRoot 'src\LarisVMS.Node\LarisVMS.Node.csproj'),
+    [string]$ProxyCsprojPath      = (Join-Path $PSScriptRoot 'src\LarisVMS.Proxy\LarisVMS.Proxy.csproj'),
+    [string]$NodeUpdaterCsprojPath = (Join-Path $PSScriptRoot 'src\LarisVMS.NodeUpdater\LarisVMS.NodeUpdater.csproj'),
+    [string]$ChangelogPath       = (Join-Path $PSScriptRoot 'CHANGELOG.md'),
     # The node package now bundles every ONNX Runtime backend and picks one at runtime per machine
     # (see build-node.ps1) — there is no accelerator to choose at build time. -SkipNodeVision still
     # builds a recording-only package with no AI detection at all.
@@ -64,6 +70,9 @@ param(
     [switch]$SkipNodeBuild,
     [switch]$SkipNodeBuildRegistration,
     [switch]$SkipHealthCheck,
+    # See "Version sync guard" below — bypass only for a deliberate, already-understood mismatch
+    # (e.g. hand-testing an old node package against a newer server).
+    [switch]$SkipVersionSyncCheck,
     # Failover plan phase 2: also build the standalone media proxy package (publish\LarisVMS.Proxy\win)
     # and register it for approval so existing proxies auto-update to it (Platform "proxy-win-x64" on
     # Admin -> Node Builds). Off by default — most deployments have no proxy tier.
@@ -126,6 +135,65 @@ function Get-IISSiteByUrl([string]$SiteUrl) {
 $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw "This script must be run as Administrator (required for IIS management)."
+}
+
+# ── version sync guard ────────────────────────────────────────────────────────
+# LarisVMS.Node/LarisVMS.Proxy/LarisVMS.NodeUpdater each hand-maintain their own base <Version> (the
+# "0.199" build-node.ps1/build-proxy.ps1 append a monotonic build number onto), the same way
+# LarisVMS.Web's own release version is hand-maintained as a BumpVersion*.cs EF migration + a new
+# CHANGELOG.md entry — there is no single file MSBuild could just share across all four. Nothing
+# enforced them staying in lockstep, so LarisVMS.Node and LarisVMS.Proxy quietly fell two releases
+# behind CHANGELOG.md before anyone noticed (0.197.0 published while the server moved on to 0.199.0)
+# — recorder nodes and proxies kept auto-updating just fine (NodeVersionComparer only ever compares
+# a node/proxy against the newest *registered NodeBuildVersion*, never against the server's own
+# release number), so nothing broke, but every build shipped since 0.198.0 quietly excluded them.
+# This is deploy.ps1's own choke point for the node/proxy release step (see step 8/9 above), so it's
+# also the right place to catch the two drifting apart again before this deploy ships another one.
+if (-not $SkipVersionSyncCheck) {
+    Write-Step "Checking recorder node / media proxy version is in sync with this release"
+
+    if (-not (Test-Path $ChangelogPath)) {
+        Write-Host "CHANGELOG.md not found at '$ChangelogPath' - skipping version sync guard."
+    } else {
+        $changelogMatch = Select-String -Path $ChangelogPath -Pattern '^## \[(\d+\.\d+\.\d+)\]' | Select-Object -First 1
+        if (-not $changelogMatch) {
+            throw "Could not find a '## [X.Y.Z]' release heading at the top of '$ChangelogPath'."
+        }
+        $releaseVersion = $changelogMatch.Matches[0].Groups[1].Value
+
+        function Get-CsprojVersion([string]$Path) {
+            $m = Select-String -Path $Path -Pattern '<Version>([^<]+)</Version>' | Select-Object -First 1
+            if (-not $m) { throw "Could not find <Version> in '$Path'." }
+            return $m.Matches[0].Groups[1].Value.Trim()
+        }
+
+        # NodeUpdater ships bundled with both the node and the proxy, publish-time -p:Version
+        # overridden to whichever of the other two's base version built it (see build-node.ps1 /
+        # build-proxy.ps1) — its own <Version> never reaches a shipped binary, but it is still
+        # checked here so a `dotnet build`/F5 of it in isolation doesn't show a stale number either.
+        $toCheck = @(
+            @{ Name = 'LarisVMS.Node';        Path = $NodeCsprojPath },
+            @{ Name = 'LarisVMS.Proxy';       Path = $ProxyCsprojPath },
+            @{ Name = 'LarisVMS.NodeUpdater'; Path = $NodeUpdaterCsprojPath }
+        )
+        $mismatches = @()
+        foreach ($entry in $toCheck) {
+            $version = Get-CsprojVersion $entry.Path
+            if ($version -ne $releaseVersion) {
+                $mismatches += "  - $($entry.Name): <Version>$version</Version> in '$($entry.Path)' (expected $releaseVersion)"
+            }
+        }
+
+        if ($mismatches.Count -gt 0) {
+            throw "This release is $releaseVersion (CHANGELOG.md) but the following projects still have an " +
+                  "older base <Version>:`n$($mismatches -join "`n")`n" +
+                  "Bump them to $releaseVersion before deploying, or pass -SkipVersionSyncCheck if this is " +
+                  "deliberate."
+        }
+        Write-Ok "Node/Proxy/NodeUpdater base version matches this release ($releaseVersion)."
+    }
+} else {
+    Write-Host "Skipping version sync guard (-SkipVersionSyncCheck)."
 }
 
 # ── resolve IIS target ────────────────────────────────────────────────────────
@@ -481,8 +549,8 @@ VALUES (@Id, @Version, @Platform, @FilePath, @SizeBytes, @Sha256, @VisionFilePat
             if (Test-Path $proxyVersionFile) {
                 $proxyVersion = (Get-Content $proxyVersionFile -Raw).Trim()
             } else {
-                $proxyVersionMatch = Select-String -Path (Join-Path $PSScriptRoot 'src\LarisVMS.Proxy\LarisVMS.Proxy.csproj') -Pattern '<Version>([^<]+)</Version>' | Select-Object -First 1
-                if (-not $proxyVersionMatch) { throw "Could not find <Version> in LarisVMS.Proxy.csproj." }
+                $proxyVersionMatch = Select-String -Path $ProxyCsprojPath -Pattern '<Version>([^<]+)</Version>' | Select-Object -First 1
+                if (-not $proxyVersionMatch) { throw "Could not find <Version> in '$ProxyCsprojPath'." }
                 $proxyVersion = $proxyVersionMatch.Matches[0].Groups[1].Value
             }
             $proxyPlatform = 'proxy-win-x64'

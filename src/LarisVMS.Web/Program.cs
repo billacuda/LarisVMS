@@ -349,6 +349,13 @@ builder.Services.AddHttpClient("onvif", client => client.Timeout = TimeSpan.From
 builder.Services.AddScoped<Func<HttpClient>>(sp =>
     () => sp.GetRequiredService<IHttpClientFactory>().CreateClient("onvif"));
 
+// The "Test connection" button on the AI-detection settings page — a short timeout so an operator
+// typing a wrong address gets a fast "unreachable" rather than a 100s hang. Only ever used to probe
+// an operator-entered LAN inference service (GET /healthz + /v1/models).
+builder.Services.AddHttpClient(LarisVMS.Web.Services.ExternalInferenceProbe.HttpClientName,
+    client => client.Timeout = TimeSpan.FromSeconds(5));
+builder.Services.AddSingleton<LarisVMS.Web.Services.ExternalInferenceProbe>();
+
 // ── Health checks ─────────────────────────────────────────────────────────────
 builder.Services.AddHealthChecks()
     .AddCheck<DbHealthCheck>("database", failureStatus: HealthStatus.Unhealthy);

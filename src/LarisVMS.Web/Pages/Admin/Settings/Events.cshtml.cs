@@ -32,12 +32,9 @@ public class EventsModel(IEventColorService eventColors, ISettingsResolver setti
     /// positioning classes in the browser.</summary>
     [BindProperty] public string EventBadgeCornerValue { get; set; } = EventBadgeCorner.Default;
 
-    /// <summary>M18: whether plain motion (no class, no custom tag) appears in the Snapshots browser.
-    /// Doesn't affect the timeline or live badges — those always draw every span regardless of this
-    /// setting, which is scoped to Snapshots only.</summary>
-    [BindProperty] public bool MotionSnapshotsEnabled { get; set; } = true;
-
-    /// <summary>Per-class Snapshots visibility, same keyed-by-enum-name shape as DetectionColors.</summary>
+    /// <summary>Per-class Snapshots visibility (camera-native DetectionKind only), same
+    /// keyed-by-enum-name shape as DetectionColors. Plain motion is never listed on Snapshots and is
+    /// not configurable; the timeline and live badges always draw every span regardless.</summary>
     [BindProperty] public Dictionary<string, bool> DetectionSnapshotsEnabled { get; set; } = [];
 
     public string? SavedMessage { get; set; }
@@ -65,7 +62,6 @@ public class EventsModel(IEventColorService eventColors, ISettingsResolver setti
             k => current.Detections.TryGetValue(k, out var hex) ? hex : null);
         EventBadgeCornerValue = EventBadgeCorner.Normalize(await settings.GetRawAsync(EventBadgeCornerKey));
 
-        MotionSnapshotsEnabled = await settings.GetAsync(SnapshotVisibility.MotionKey, true);
         DetectionSnapshotsEnabled = new Dictionary<string, bool>();
         foreach (var kind in DetectionDisplay.AllKinds)
             DetectionSnapshotsEnabled[kind.ToString()] = await settings.GetAsync(SnapshotVisibility.DetectionKey(kind), true);
@@ -111,9 +107,6 @@ public class EventsModel(IEventColorService eventColors, ISettingsResolver setti
         await settings.SetGlobalAsync(EventBadgeCornerKey, badgeCorner, by);
         EventBadgeCornerValue = badgeCorner;
 
-        var oldMotionSnapshots = await settings.GetAsync(SnapshotVisibility.MotionKey, true);
-        await settings.SetGlobalAsync(SnapshotVisibility.MotionKey, MotionSnapshotsEnabled.ToString(), by);
-
         var oldDetectionSnapshots = new Dictionary<DetectionKind, bool>();
         foreach (var kind in DetectionDisplay.AllKinds)
         {
@@ -134,7 +127,6 @@ public class EventsModel(IEventColorService eventColors, ISettingsResolver setti
             fields.Add(AuditDiff.Of(DetectionDisplay.Label(kind), oldHex ?? "(default)", newHex ?? "(default)"));
         }
         fields.Add(AuditDiff.Of(EventBadgeCornerKey, oldBadgeCorner, badgeCorner));
-        fields.Add(AuditDiff.Of("Snapshots: Motion", oldMotionSnapshots.ToString(), MotionSnapshotsEnabled.ToString()));
         foreach (var kind in DetectionDisplay.AllKinds)
         {
             DetectionSnapshotsEnabled.TryGetValue(kind.ToString(), out var newEnabled);

@@ -691,8 +691,9 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
         const int MaxInitSegmentBytes = 4 * 1024 * 1024;
 
         // A fragment that never completes means the stream is malformed (or isn't fMP4 at all).
-        // Bounded so that can't grow without limit; generously above any real fragment, which is at
-        // most one GOP of video under this pipeline's -frag_keyframe muxing.
+        // Bounded so that can't grow without limit; generously above any real fragment. The pipe leg
+        // is muxed with frag_duration (BuildTeeOutputs / LiveFragDurationMicros) so a fragment is now
+        // ~500ms of video, well under one GOP — this limit stays as the malformed-stream backstop.
         const int MaxFragmentBytes = 32 * 1024 * 1024;
 
         // Read through a PipeReader rather than Stream.ReadAsync into an array of our own. The pipe
@@ -834,12 +835,27 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
     internal static string BuildTeeOutputs(int segmentSeconds, string outputPattern) => string.Join('|',
         $"[f=segment:segment_time={segmentSeconds}:segment_atclocktime=1:reset_timestamps=1:strftime=1:" +
         $"segment_format=mp4:segment_format_options=movflags={MseMovFlags}]{EscapeForTee(outputPattern)}",
-        $"[f=mp4:movflags={MseMovFlags}]pipe:1");
+        $"[f=mp4:movflags={MseMovFlags}:frag_duration={LiveFragDurationMicros}:" +
+        $"min_frag_duration={LiveMinFragDurationMicros}]pipe:1");
 
     /// <summary>The mov muxer flags every leg must use. Both legs are consumed by MSE (live view
     /// reads the pipe, playback reads the recorded files), and MSE requires default_base_moof on
     /// both — see the commentary in StartFfmpeg for what happens when a leg is missing it.</summary>
     private const string MseMovFlags = "+frag_keyframe+empty_moov+default_base_moof";
+
+    /// <summary>Live pipe leg only: flush an fMP4 fragment at least this often (microseconds) even
+    /// mid-GOP, instead of only at each camera keyframe. Without it, a camera with a 2-4s keyframe
+    /// interval delivers one big fragment every 2-4s, so the browser's SourceBuffer.buffered.end()
+    /// lurches forward in GOP-sized steps while currentTime advances smoothly — live-view.js read
+    /// that sawtooth as "drift" and oscillated between a 1.5x catch-up and a starved-buffer stall.
+    /// +frag_keyframe stays set in <see cref="MseMovFlags"/> (the muxer then flushes on whichever
+    /// comes first), so every keyframe still starts a fresh fragment and a late-joining viewer's
+    /// first decodable frame is still at most one GOP away. min_frag_duration keeps camera packet
+    /// timing jitter from producing a burst of tiny fragments. The segment/recording leg is
+    /// deliberately NOT given these — playback (playback-player.js, Mp4FragmentIndexer) depends on
+    /// the recorded files fragmenting on keyframes only.</summary>
+    private const int LiveFragDurationMicros = 500_000;
+    private const int LiveMinFragDurationMicros = 200_000;
 
     private static string EscapeForTee(string path) => path.Replace('\\', '/').Replace(":", "\\:");
 
