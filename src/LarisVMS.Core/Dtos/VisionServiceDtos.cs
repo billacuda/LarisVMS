@@ -162,7 +162,23 @@ public record VisionStartCameraRequest(
     /// SideGlance (and anything else bound to non-loopback) rejects an unauthenticated request with
     /// 401. Blank when the service needs no auth (a loopback-bound instance) or the built-in backend
     /// is in use. Appended last so NodeWorker's positional construction stays stable.</summary>
-    string ExternalInferenceApiKey = "")
+    string ExternalInferenceApiKey = "",
+    /// <summary>Detection.SnapshotMarginPercent (global, 0-100) — see
+    /// <c>NodeConfigResponse.SnapshotMarginPercent</c>'s own doc comment for the full rationale.
+    /// Read fresh by <c>CameraDetectionPipeline.TrySubFrameSnapshot</c> on every eager crop; carried
+    /// here (rather than resolved once and baked into <c>InferenceProfile</c>) purely so a change
+    /// restarts the pipeline the same consistent way every other Detection.* setting in this record
+    /// does. Appended last so NodeWorker's positional construction stays stable; defaults 12 = the
+    /// previous hard-coded value.</summary>
+    int SnapshotMarginPercent = 12,
+    /// <summary>Detection.ExternalInferenceTransport — see
+    /// <c>NodeConfigResponse.ExternalInferenceTransport</c>'s own doc comment. Only meaningful when
+    /// <see cref="DetectionBackend"/> is "ExternalHttp"; parsed by <c>CameraDetectionPipeline</c>
+    /// right alongside <see cref="DetectionBackend"/> itself, not here — kept a raw string through
+    /// the whole node → Vision Service pipe the same way <see cref="DetectionBackend"/> is. Appended
+    /// last so NodeWorker's positional construction stays stable; defaults "Auto" so an older node
+    /// build keeps today's JPEG transport.</summary>
+    string ExternalInferenceTransport = "Auto")
 {
     /// <summary>What this camera should be called in a log line. The operator's own name when there
     /// is one, otherwise the first block of the camera id — short enough to scan a column of, and

@@ -125,6 +125,35 @@ public class ExternalDetectionMapperTests
         }
     }
 
+    /// <summary>Pins the exact <c>slice=</c> query-string shape <c>HttpDetectionEngine</c> sends and
+    /// SideGlance's own <c>TryParseSliceQuery</c> parses: comma-separated <c>XxY</c> tile origins,
+    /// full_width/full_height omitted (the service defaults those to the submitted image's own
+    /// decoded dimensions — see <see cref="ExternalDetectionMapper.FormatSliceQuery"/>'s own doc
+    /// comment for why repeating them would add nothing).</summary>
+    [Fact]
+    public void FormatSliceQuery_JoinsTileOriginsAsXxYPairs()
+    {
+        var spec = new ExternalSliceSpec(1280, 640,
+        [
+            new ExternalSliceTile(0, 0),
+            new ExternalSliceTile(320, 0),
+            new ExternalSliceTile(640, 0),
+        ]);
+
+        Assert.Equal("0x0,320x0,640x0", ExternalDetectionMapper.FormatSliceQuery(spec));
+    }
+
+    [Fact]
+    public void FormatSliceQuery_RoundTripsThroughBuildSliceSpec()
+    {
+        var layout = SliceLayout.Create(1920, 1080, 640);
+
+        var query = ExternalDetectionMapper.FormatSliceQuery(ExternalDetectionMapper.BuildSliceSpec(layout));
+
+        var expected = string.Join(',', layout.Slices.Select(s => $"{s.X}x{s.Y}"));
+        Assert.Equal(expected, query);
+    }
+
     [Fact]
     public void ResponseJson_MatchesTheDocumentedContractShape()
     {

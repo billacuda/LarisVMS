@@ -13,17 +13,6 @@ namespace LarisVMS.Core.Dtos;
 // (the /v1/detect request + response) and LarisVMS.Web's ExternalInferenceProbe (the /healthz +
 // /v1/models "test connection" button). Neither references the other.
 
-/// <summary>Body of <c>POST {baseUrl}/v1/detect?model=NAME&amp;format=array</c>. The image is sent
-/// base64 inside the JSON (rather than as raw <c>image/*</c> bytes) because the raw-bytes form of
-/// the endpoint carries no way to pass <see cref="ConfidenceThreshold"/>/<see cref="IouThreshold"/>
-/// or a <see cref="Slice"/> descriptor — and slicing is a first-class requirement here. The +33%
-/// base64 overhead is immaterial on the LAN hop this always is.</summary>
-public record ExternalDetectRequest(
-    [property: JsonPropertyName("image")] string Image,
-    [property: JsonPropertyName("confidence_threshold")] double ConfidenceThreshold,
-    [property: JsonPropertyName("iou_threshold")] double IouThreshold,
-    [property: JsonPropertyName("slice")] ExternalSliceSpec? Slice = null);
-
 /// <summary>An explicit slice/tile plan for one submitted image — the exact geometry
 /// <see cref="LarisVMS.Vision"/>'s <c>SliceLayout</c> already computes for the built-in Slice mode,
 /// handed to the external service so it tiles + runs each tile + merges seam-straddling detections
@@ -66,23 +55,54 @@ public record ExternalModelsResponse(
 /// <summary>Per-model status from <c>/v1/models</c>. <see cref="InputSize"/> is the one field
 /// LarisVMS must persist alongside the chosen model name — it sizes the ffmpeg capture buffer and
 /// the <c>InferenceProfile</c>/<c>SliceLayout</c> geometry, and must be a positive multiple of 32
-/// for the profile to accept it.</summary>
+/// for the profile to accept it.
+///
+/// Wire names are snake_case (<c>input_size</c>/<c>class_count</c>/<c>batch_mode</c>), matching
+/// SideGlance's actual serializer (<c>SideGlanceJson.Options</c>, <c>JsonNamingPolicy.SnakeCaseLower</c>)
+/// rather than the camelCase this record used to declare. <see cref="System.Text.Json.JsonSerializerOptions.PropertyNameCaseInsensitive"/>
+/// (set on every deserialize call site — see <c>ExternalInferenceProbe</c>/<c>HttpDetectionEngine</c>)
+/// only ignores letter case, not the underscore, so the two spellings never matched: <see cref="InputSize"/>
+/// silently always fell back to its 640 default regardless of what the service actually reported,
+/// and a non-640 model was rejected on every single frame with a 400 from SideGlance's
+/// <c>RequireSquareInput</c> — a config error that read as a permanently broken inference engine.
+/// Fixed here rather than papered over with a second case-insensitive alias, because the wire
+/// contract should say what the service actually sends. See <c>ExternalInferenceDtoWireTests</c>
+/// for the round-trip test (serialize with SideGlance's real naming policy, deserialize through
+/// these records) that would have caught this.</summary>
 public record ExternalModelInfo(
     [property: JsonPropertyName("name")] string Name,
     [property: JsonPropertyName("status")] string? Status = null,
     [property: JsonPropertyName("decoder")] string? Decoder = null,
-    [property: JsonPropertyName("inputSize")] int InputSize = 640,
-    [property: JsonPropertyName("classCount")] int? ClassCount = null,
-    [property: JsonPropertyName("batchMode")] string? BatchMode = null);
+    [property: JsonPropertyName("input_size")] int InputSize = 640,
+    [property: JsonPropertyName("class_count")] int? ClassCount = null,
+    [property: JsonPropertyName("batch_mode")] string? BatchMode = null,
+    /// <summary>What a raw <c>/v1/detect</c> body may be beyond a compressed image — SideGlance's
+    /// <c>pixels_yuv420sp</c>/<c>pixels_bgra32</c>/etc tokens (see its own README) — shown on the
+    /// Detection settings page so an operator can tell whether picking
+    /// <c>Detection.ExternalInferenceTransport = PixelsYuv420</c>/<c>PixelsBgra</c> is even possible
+    /// against this service before trying it. Null on an older/non-advertising service — that
+    /// service still works fine on the always-supported "Jpeg" transport, it just can't be told apart
+    /// from one that only forgot to answer, so the settings page treats null the same as "unknown,"
+    /// not "unsupported."</summary>
+    [property: JsonPropertyName("input_modes")] IReadOnlyList<string>? InputModes = null);
 
 /// <summary><c>GET {baseUrl}/healthz</c> — surfaced verbatim by the "Test connection" result panel
-/// so an operator can see the service is up, which build it is, and whether its models loaded.</summary>
+/// so an operator can see the service is up, which build it is, and whether its models loaded.
+///
+/// <see cref="ModelsReady"/>/<see cref="ModelsFailed"/> are counts, matching SideGlance's actual
+/// <c>HealthDto(... int ModelsReady, int ModelsFailed)</c> — this record used to declare them as
+/// <c>IReadOnlyList&lt;string&gt;?</c>, a type SideGlance's integers can never deserialize into, so
+/// every <c>/healthz</c> probe threw a <see cref="System.Text.Json.JsonException"/> that
+/// <c>ExternalInferenceProbe.GetStringOrNullAsync</c> swallows by design (health is best-effort
+/// context, not the point of the probe) — the health panel simply stayed empty with no error
+/// surfaced anywhere. See <see cref="ExternalModelInfo"/>'s own doc comment for the sibling bug in
+/// the same wire contract, and <c>ExternalInferenceDtoWireTests</c> for the regression test.</summary>
 public record ExternalHealthResponse(
     [property: JsonPropertyName("status")] string? Status = null,
     [property: JsonPropertyName("version")] string? Version = null,
     [property: JsonPropertyName("backend")] string? Backend = null,
-    [property: JsonPropertyName("models_ready")] IReadOnlyList<string>? ModelsReady = null,
-    [property: JsonPropertyName("models_failed")] IReadOnlyList<string>? ModelsFailed = null);
+    [property: JsonPropertyName("models_ready")] int? ModelsReady = null,
+    [property: JsonPropertyName("models_failed")] int? ModelsFailed = null);
 
 /// <summary>Result of <c>ExternalInferenceProbe.ProbeAsync</c> — the "test connection + discover
 /// models" call the Detection settings page makes. Never throws: <see cref="Error"/> is a short

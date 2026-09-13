@@ -102,14 +102,23 @@ public static class Nv12Ops
     /// <see cref="SnapshotImageCapture.ComputeCropRect"/>, converts just that region of the nv12
     /// frame to RGB (BT.601), downscales so the longer edge is at most
     /// <see cref="SnapshotImageCapture.MaxDimension"/>, and WebP-encodes (<paramref name="quality"/>
-    /// 0-100). Region-sized, not frame-sized — the Skia cost is trivial. Null on any failure.</summary>
-    public static byte[]? CropToWebp(byte[] src, int srcW, int srcH, SKRectI boxPx, int quality)
+    /// 0-100). Region-sized, not frame-sized — the Skia cost is trivial. Null on any failure.
+    /// <paramref name="marginFraction"/> defaults to <see cref="SnapshotImageCapture.DefaultMarginFraction"/>
+    /// (30%) for source compatibility, but every caller in this codebase now passes the operator's
+    /// own Detection.SnapshotMarginPercent explicitly (see
+    /// <c>CameraDetectionPipeline.TrySubFrameSnapshot</c>/<c>TrySliceSnapshot</c>) — before this,
+    /// this path silently used the 30% default while <see cref="BgraOps.CropRectToWebp"/>'s caller
+    /// margined its rect at 12% (or, in slice mode, not at all), so the two crop helpers disagreed
+    /// on how much context a snapshot showed depending only on which pixel format the frame
+    /// happened to be in.</summary>
+    public static byte[]? CropToWebp(byte[] src, int srcW, int srcH, SKRectI boxPx, int quality,
+        double marginFraction = SnapshotImageCapture.DefaultMarginFraction)
     {
         try
         {
             var (cx, cy, cw, ch) = SnapshotImageCapture.ComputeCropRect(
                 boxPx.Left / (double)srcW, boxPx.Top / (double)srcH,
-                boxPx.Width / (double)srcW, boxPx.Height / (double)srcH, srcW, srcH);
+                boxPx.Width / (double)srcW, boxPx.Height / (double)srcH, srcW, srcH, marginFraction);
 
             using var region = RegionToBitmap(src, srcW, srcH, cx, cy, cw, ch);
             var scale = Math.Min(1.0, SnapshotImageCapture.MaxDimension / (double)Math.Max(cw, ch));

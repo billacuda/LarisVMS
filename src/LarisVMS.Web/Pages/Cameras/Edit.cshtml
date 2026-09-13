@@ -342,6 +342,33 @@
         </div>
         <div class="col-6">
             <label class="form-label">
+                Detection frame rate override (fps)
+                <button type="button" class="help-icon" data-help-target="maxFpsHelp" tabindex="0" aria-label="Help">ℹ️</button>
+            </label>
+            <div class="d-flex align-items-center gap-2">
+                <div class="form-check form-check-inline mb-0">
+                    <input type="checkbox" class="form-check-input" id="maxFpsOverrideToggle"
+                           checked="@(Model.MaxFpsOverride.HasValue)" />
+                    <label class="form-check-label small" for="maxFpsOverrideToggle">Override</label>
+                </div>
+                <input type="range" name="MaxFpsOverride" id="maxFpsOverrideSlider" min="0" max="30" step="1" class="form-range"
+                       value="@(Model.MaxFpsOverride ?? Model.EffectiveMaxFps)"
+                       disabled="@(!Model.MaxFpsOverride.HasValue)" />
+                @{ var maxFpsShown = Model.MaxFpsOverride ?? Model.EffectiveMaxFps; }
+                <output class="text-muted small" style="min-width: 3.5em;" id="maxFpsOverrideReadout">@(maxFpsShown == 0 ? "no cap" : maxFpsShown.ToString())</output>
+            </div>
+            <div class="help-text-source" id="maxFpsHelp">
+                Ceiling on how many frames per second reach the detection model for this camera —
+                whichever backend serves it. A camera that only needs to catch a parked-vehicle alert
+                has no use for the same rate a busy street camera needs to track fast-moving traffic;
+                every frame above what a camera actually needs is wasted decode/preprocess/inference
+                cost, on this node and, over the external HTTP backend, on the far side of the network
+                too. 0 = no cap (decode rate). Unchecked "Override" inherits the node's/global setting
+                from <a asp-page="/Admin/Settings/Detection">AI Detection settings</a>.
+            </div>
+        </div>
+        <div class="col-6">
+            <label class="form-label">
                 Motion detection source
                 <button type="button" class="help-icon" data-help-target="motionSourceHelp" tabindex="0" aria-label="Help">ℹ️</button>
             </label>
@@ -549,12 +576,15 @@ else if (Model.VideoSourceToken is { } channelToken)
         // wrong, and initializing from the slider's own value below (rather than trusting the two to
         // already agree) rules out the readout and the slider ever silently disagreeing.
         (function () {
-            function wireOverride(toggleId, rangeId, readoutId, transform) {
+            function wireOverride(toggleId, rangeId, readoutId, transform, zeroLabel) {
                 var toggle = document.getElementById(toggleId);
                 var range = document.getElementById(rangeId);
                 var readout = document.getElementById(readoutId);
                 if (!toggle || !range || !readout) return;
-                function sync() { readout.textContent = transform(range.value); }
+                function sync() {
+                    var value = transform(range.value);
+                    readout.textContent = zeroLabel && value === 0 ? zeroLabel : value;
+                }
                 range.addEventListener('input', sync);
                 toggle.addEventListener('change', function () {
                     range.disabled = !toggle.checked;
@@ -571,6 +601,7 @@ else if (Model.VideoSourceToken is { } channelToken)
             wireOverride('confidenceOverrideToggle', 'confidenceOverrideSlider', 'confidenceOverrideReadout', asPercent);
             wireOverride('iouOverrideToggle', 'iouOverrideSlider', 'iouOverrideReadout', asPercent);
             wireOverride('jitterPixelsOverrideToggle', 'jitterPixelsOverrideSlider', 'jitterPixelsOverrideReadout', asInt);
+            wireOverride('maxFpsOverrideToggle', 'maxFpsOverrideSlider', 'maxFpsOverrideReadout', asInt, 'no cap');
         })();
     </script>
 }

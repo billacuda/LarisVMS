@@ -5,8 +5,9 @@ using YoloDotNet.Models;
 namespace LarisVMS.Vision.Inference;
 
 /// <summary>
-/// Pure translation between the external HTTP inference contract (<see cref="ExternalDetectRequest"/>
-/// / <see cref="ExternalDetectionResult"/>) and this codebase's own detection shape — the same job
+/// Pure translation between the external HTTP inference contract (the raw-body request
+/// <see cref="HttpDetectionEngine"/> sends / <see cref="ExternalDetectionResult"/>) and this
+/// codebase's own detection shape — the same job
 /// <see cref="DFineDecoder"/> does for D-FINE's raw tensors, and verified the same way (fixed inputs
 /// in, expected <see cref="SKRectI"/>s out), so <see cref="HttpDetectionEngine"/> keeps no geometry
 /// logic of its own and every downstream consumer (ByteTracker, MovementClassifier, CocoCategoryMap,
@@ -30,6 +31,19 @@ public static class ExternalDetectionMapper
         var tiles = new List<ExternalSliceTile>(layout.Slices.Count);
         foreach (var t in layout.Slices) tiles.Add(new ExternalSliceTile(t.X, t.Y));
         return new ExternalSliceSpec(layout.CaptureWidth, layout.CaptureHeight, tiles);
+    }
+
+    /// <summary>Formats <paramref name="spec"/>'s tiles as <see cref="HttpDetectionEngine"/>'s raw-body
+    /// request's own <c>slice=</c> query value — <c>X1xY1,X2xY2,...</c>. <see cref="ExternalSliceSpec.FullWidth"/>/
+    /// <see cref="ExternalSliceSpec.FullHeight"/> are deliberately not included: the service defaults
+    /// an omitted full width/height to the submitted image's own decoded dimensions, which for this
+    /// engine's capture buffer always exactly equals them anyway (see <see cref="BuildSliceSpec"/>'s
+    /// own doc comment) — repeating them in every request would be pure overhead.</summary>
+    public static string FormatSliceQuery(ExternalSliceSpec spec)
+    {
+        ArgumentNullException.ThrowIfNull(spec);
+        return string.Join(',', spec.Tiles.Select(t => string.Create(
+            System.Globalization.CultureInfo.InvariantCulture, $"{t.X}x{t.Y}")));
     }
 
     /// <summary>Maps a plain (non-sliced) response — boxes in the submitted square's own pixel space,

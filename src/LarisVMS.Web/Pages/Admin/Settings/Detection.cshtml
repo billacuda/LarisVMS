@@ -264,6 +264,27 @@
         </div>
     </div>
 
+    <div class="col-12">
+        <label class="form-label">
+            Snapshot crop margin (%)
+            <button type="button" class="help-icon" data-help-target="snapshotMarginHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <div class="d-flex align-items-center gap-2">
+            <input asp-for="SnapshotMarginPercent" type="range" min="0" max="100" step="1" class="form-range" id="snapshotMarginRange" />
+            <output class="text-muted small" style="min-width: 2.5em;" id="snapshotMarginReadout">@Model.SnapshotMarginPercent</output>
+        </div>
+        <div class="help-text-source" id="snapshotMarginHelp">
+            How much extra room the live snapshot crop keeps around a detected object, as a percentage
+            of the object's own box size — 0 crops exactly to the reported box, higher shows more of
+            the surrounding scene so it's clear where the object is relative to what's around it.
+            Applies the same way regardless of detection backend (built-in or an external service).
+            Was a fixed 12%. Restarts each camera's detection pipeline. Does not affect the separate
+            still-frame crop taken from recorded video for the snapshot gallery, which keeps its own
+            larger margin (it also has to absorb some timing drift between the live and recorded
+            streams, not just leave room to look at).
+        </div>
+    </div>
+
     <div class="col-12 form-check">
         <input asp-for="RejectMotionJitter" type="checkbox" class="form-check-input" />
         <label asp-for="RejectMotionJitter" class="form-check-label">
@@ -364,7 +385,8 @@
                 Service: <strong>@(h.Status ?? "?")</strong>
                 @if (!string.IsNullOrEmpty(h.Version)) { <text>· v@(h.Version)</text> }
                 @if (!string.IsNullOrEmpty(h.Backend)) { <text>· backend @(h.Backend)</text> }
-                @if (h.ModelsReady is { Count: > 0 }) { <text>· @(h.ModelsReady.Count) model(s) ready</text> }
+                @if (h.ModelsReady is { } ready) { <text>· @ready model(s) ready</text> }
+                @if (h.ModelsFailed is { } failed and > 0) { <text>· @failed failed</text> }
             </div>
         }
 
@@ -380,7 +402,9 @@
                 }
                 @foreach (var m in options)
                 {
-                    <option value="@m.Name" data-input-size="@m.InputSize" selected="@(m.Name == Model.ExternalModel)">
+                    <option value="@m.Name" data-input-size="@m.InputSize"
+                        data-input-modes="@string.Join(',', m.InputModes ?? [])"
+                        selected="@(m.Name == Model.ExternalModel)">
                         @m.Name — @(m.InputSize)px input@(m.ClassCount is { } cc ? $", {cc} classes" : "")@(string.IsNullOrEmpty(m.Decoder) ? "" : $" ({m.Decoder})")@(string.Equals(m.Status, "ready", StringComparison.OrdinalIgnoreCase) ? "" : $" [{m.Status}]")
                     </option>
                 }
@@ -395,6 +419,22 @@
                 {
                     <text>The model's input size sizes the frames LarisVMS sends. Slice aspect-fitting is delegated to the service.</text>
                 }
+            </div>
+        </div>
+
+        <div class="mb-3">
+            <label asp-for="ExternalTransport" class="form-label">Transport</label>
+            <select asp-for="ExternalTransport" class="form-select" id="externalTransportSelect">
+                <option value="Auto" selected="@(Model.ExternalTransport == "Auto")">Auto (JPEG for now)</option>
+                <option value="Jpeg" selected="@(Model.ExternalTransport == "Jpeg")">JPEG — works with any service</option>
+                <option value="PixelsYuv420" selected="@(Model.ExternalTransport == "PixelsYuv420")">Raw YUV 4:2:0 — no JPEG codec, ~10x the bandwidth</option>
+                <option value="PixelsBgra" selected="@(Model.ExternalTransport == "PixelsBgra")">Raw BGRA — no JPEG codec, ~4x the bandwidth</option>
+            </select>
+            <div class="form-text" id="externalTransportHint">
+                Skips the JPEG encode/decode round trip on a loopback or LAN service that supports it —
+                use <strong>Test connection</strong> to check what the selected model actually
+                advertises before picking a raw mode; an unsupported choice degrades to errors on
+                every frame, not a graceful fallback.
             </div>
         </div>
     </fieldset>
@@ -428,6 +468,7 @@
             wireSlider('confidenceRange', 'confidenceReadout', asPercent);
             wireSlider('iouRange', 'iouReadout', asPercent);
             wireSlider('departureGraceRange', 'departureGraceReadout', asInt);
+            wireSlider('snapshotMarginRange', 'snapshotMarginReadout', asInt);
             wireSlider('motionJitterPixelsRange', 'motionJitterPixelsReadout', asInt);
         })();
 
@@ -451,6 +492,34 @@
                 if (v) size.value = v;
             }
             if (model) { model.addEventListener('change', syncSize); syncSize(); }
+
+            // Warns (without blocking Save — the operator may be configuring ahead of a service
+            // upgrade) when the selected transport isn't in the selected model's own advertised
+            // input_modes. A model with no input_modes at all (older/non-advertising service, or
+            // nothing probed yet) shows no warning either way — "unknown" isn't "unsupported".
+            var transport = document.getElementById('externalTransportSelect');
+            var hint = document.getElementById('externalTransportHint');
+            var defaultHint = hint ? hint.textContent.trim() : '';
+            var wireName = { PixelsYuv420: 'pixels_yuv420sp', PixelsBgra: 'pixels_bgra32' };
+            function syncTransportHint() {
+                if (!transport || !hint || !model) return;
+                var needed = wireName[transport.value];
+                if (!needed) { hint.textContent = defaultHint; hint.classList.remove('text-warning'); return; }
+                var opt = model.options[model.selectedIndex];
+                var modes = (opt && opt.getAttribute('data-input-modes')) || '';
+                if (!modes) { hint.textContent = defaultHint; hint.classList.remove('text-warning'); return; }
+                var supported = modes.split(',').indexOf(needed) !== -1;
+                if (supported) {
+                    hint.textContent = 'The selected model advertises ' + needed + ' — this transport should work.';
+                    hint.classList.remove('text-warning');
+                } else {
+                    hint.textContent = 'The selected model did NOT advertise ' + needed + ' on the last Test connection — this will fail on every frame until the service supports it.';
+                    hint.classList.add('text-warning');
+                }
+            }
+            if (transport) { transport.addEventListener('change', syncTransportHint); }
+            if (model) { model.addEventListener('change', syncTransportHint); }
+            syncTransportHint();
         })();
     </script>
 }

@@ -259,6 +259,10 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         // How long a span is held with no Moving instance before the early-finalize above flushes it
         // (was a hard-coded 5s). Global; 1-10s. See NodeConfigResponse.DepartureGraceSeconds.
         var departureGraceSeconds = Math.Clamp(await settings.GetAsync("Detection.DepartureGraceSeconds", 5, ct: ct), 1, 10);
+        // Global only (no per-camera override yet — every camera on a node shares one visual-context
+        // preference the same way DepartureGraceSeconds does). 0-100; see NodeConfigResponse's own
+        // doc comment for why this is deliberately backend-agnostic.
+        var snapshotMarginPercent = Math.Clamp(await settings.GetAsync("Detection.SnapshotMarginPercent", 12, ct: ct), 0, 100);
         // Node-scoped (Global -> Node, no per-camera override) — one Vision Service process serves
         // every camera on a node from the same loaded model, see NodeConfigResponse.DetectionModelFamily's
         // own doc comment for why that makes this a per-node choice rather than a per-camera one.
@@ -292,6 +296,10 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             ? externalInferenceInputSizeRaw
             : 640;
         var externalInferenceApiKey = await settings.GetAsync("Detection.ExternalInferenceApiKey", "", nodeId: nodeId, ct: ct);
+        // "Auto" (default) / "Jpeg" / "PixelsYuv420" / "PixelsBgra" — see NodeConfigResponse's own
+        // doc comment. Stored and threaded as a free-form string like DetectionBackend; every
+        // consumer downstream re-validates rather than trusting this column.
+        var externalInferenceTransport = await settings.GetAsync("Detection.ExternalInferenceTransport", "Auto", nodeId: nodeId, ct: ct);
         // Deployment-wide minimum log level for nodes + their vision services. Global only.
         var logLevel = await settings.GetAsync("Logging.Level", "Information", ct: ct);
         // Confidence/IoU/stream-role are resolved per camera below (Camera -> Node -> Global,
@@ -346,6 +354,13 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             var rejectMotionJitter = await settings.GetAsync("Detection.RejectMotionJitter", false, cameraId: c.Id, nodeId: nodeId, ct: ct);
             var motionJitterPixels = Math.Clamp(
                 await settings.GetAsync("Detection.MotionJitterPixels", 3, cameraId: c.Id, nodeId: nodeId, ct: ct), 1, 15);
+            // Detection.MaxFps, per camera — same Camera -> Node -> Global chain (and the same key)
+            // as the node-scoped maxDetectionFps above; a camera-level override here wins, otherwise
+            // this resolves to that same node/global value. A driveway camera that never needs 10 fps
+            // of detection is pure CPU/GPU profit on both this node and whichever external inference
+            // service it talks to; a busy street camera keeps the node default. See
+            // NodeConfigCameraDto.MaxFps.
+            var maxFps = await settings.GetAsync("Detection.MaxFps", 10, cameraId: c.Id, nodeId: nodeId, ct: ct);
             var aiDetectionStreamRole = await settings.GetAsync("AiDetection.StreamRole", "Sub", cameraId: c.Id, nodeId: nodeId, ct: ct);
             // Corrects a camera that misreports its watch stream's orientation (a corridor-mounted
             // device advertising 704x480 while delivering 480x704) before the node builds the
@@ -372,7 +387,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
                 c.AiDetectionEnabled && !disableAiDetection, c.MotionDetectionSource?.ToString(),
                 aiConfidence, aiIou, aiDetectionStreamRole, aiDetectionOrientation, c.ServerMotionEnabled,
                 c.MotionRegionMode.ToString(), c.MotionGridSize, c.MotionGridMask, c.MotionGridSensitivity,
-                archiveEnabled, archiveRetentionDays, rejectMotionJitter, motionJitterPixels));
+                archiveEnabled, archiveRetentionDays, rejectMotionJitter, motionJitterPixels, maxFps));
         }
 
         // Cameras this node has leftover Segments for but doesn't currently record — reassigned to a
@@ -428,11 +443,13 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             YoloXSize = yoloXSize, MaxDetectionFps = maxDetectionFps, DFineTensorRtMode = dfineTensorRtMode,
             ArchiveRootPath = archiveRoot, SnapshotMotionAccuracy = snapshotMotionAccuracy,
             DepartureGraceSeconds = departureGraceSeconds,
+            SnapshotMarginPercent = snapshotMarginPercent,
             DetectionBackend = detectionBackend,
             ExternalInferenceUrl = externalInferenceUrl,
             ExternalInferenceModel = externalInferenceModel,
             ExternalInferenceInputSize = externalInferenceInputSize,
             ExternalInferenceApiKey = externalInferenceApiKey,
+            ExternalInferenceTransport = externalInferenceTransport,
             ClientEndpointEnabled = clientEndpointEnabled,
             ClientCertPfxPath = string.IsNullOrWhiteSpace(nodeRoots?.ClientCertPfxPath) ? null : nodeRoots!.ClientCertPfxPath,
             ClientCertPfxPassword = string.IsNullOrWhiteSpace(nodeRoots?.ClientCertPfxPassword) ? null : nodeRoots!.ClientCertPfxPassword,

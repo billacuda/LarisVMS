@@ -237,7 +237,21 @@ public record NodeConfigCameraDto(Guid CameraId, string Name, string? Username, 
     /// pre-0.188 movement classifier; MotionJitterPixels (1-15, default 3) is the absolute
     /// centroid-travel floor the rejection path requires, only acted on when the toggle is on.
     /// Appended last so the positional NodeService construction stays stable.</summary>
-    bool RejectMotionJitter = false, int MotionJitterPixels = 3);
+    bool RejectMotionJitter = false, int MotionJitterPixels = 3,
+    /// <summary>Detection.MaxFps for this camera (Camera &rarr; Node &rarr; Global, same chain
+    /// AiConfidence resolves through) — the ceiling on how many frames per second reach the
+    /// detection model, whichever backend serves it (built-in or, via Detection.Backend=ExternalHttp,
+    /// an external service). Was node-scoped only (<see cref="NodeConfigResponse.MaxDetectionFps"/>),
+    /// shared by every camera on the node regardless of how much detection traffic that specific
+    /// camera actually needs — a driveway camera watched for a parked-car alert has no use for the
+    /// same 10 fps a busy street camera needs to track fast-moving vehicles, and every frame above
+    /// what a camera actually needs is pure wasted decode/preprocess/inference cost on both this node
+    /// and, for the external backend, the far side of the network too. 0 = no cap (decode-rate), same
+    /// as the node-scoped setting. Defaults 10 = <see cref="NodeConfigResponse.MaxDetectionFps"/>'s
+    /// own default, so an older, not-yet-updated node build's deserialization lands on the same
+    /// ceiling it always had. Appended last so the positional NodeService construction stays
+    /// stable.</summary>
+    int MaxFps = 10);
 /// <summary>A camera this node has leftover Segments for but is no longer assigned to record
 /// (reassigned to a different node, or deleted) — StorageManager's orphaned-folder sweep uses
 /// RetentionDays here so leftover footage still ages out on the same schedule it always would have,
@@ -391,7 +405,41 @@ public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? Stor
     /// call) — resolved Node &rarr; Global like the fields above. Blank when the service needs no
     /// auth or the built-in backend is in use. Appended last so the positional NodeService
     /// construction stays stable.</summary>
-    string ExternalInferenceApiKey = "");
+    string ExternalInferenceApiKey = "",
+    /// <summary>Detection.SnapshotMarginPercent (global, 0-100) — how much extra room the eager
+    /// sub-frame snapshot crop (<c>CameraDetectionPipeline.TrySubFrameSnapshot</c>'s
+    /// <c>BgraOps.CropRectToWebp</c>/<c>Nv12Ops.CropToWebp</c> call) keeps on every side of the
+    /// reported box, as a percentage of the box's own width/height (never below a small
+    /// frame-relative floor — see <c>SnapshotImageCapture.ComputeCropRect</c>'s own doc comment,
+    /// which this same margin math reuses). Was a hard-coded 12 in CameraDetectionPipeline; a
+    /// raised value shows more surrounding scene, useful when the configured detection model
+    /// (built-in or, via Detection.Backend=ExternalHttp, an external one) reports boxes tighter
+    /// than an operator wants to see with no context around them. Deliberately NOT backend-specific
+    /// — the crop already reads whatever <c>IDetectionEngine</c> returned, same as every other
+    /// consumer past that seam, so this setting is the lever regardless of which backend is why the
+    /// crop looks tight. Does not affect the segment-seek snapshot crop
+    /// (<c>SnapshotImageCapture.DefaultMarginFraction</c>, 30%), which keeps its own larger,
+    /// separately-justified default: that crop also absorbs Sub/Main stream timing drift, not just
+    /// visual context, so a smaller value there risks clipping the object rather than just showing
+    /// less scenery. Threaded into every VisionStartCameraRequest and part of NodeWorker's restart
+    /// signature. Appended last so the positional NodeService construction stays stable; defaults
+    /// 12 = the previous constant.</summary>
+    int SnapshotMarginPercent = 12,
+    /// <summary>Detection.ExternalInferenceTransport — "Auto" (default) / "Jpeg" / "PixelsYuv420" /
+    /// "PixelsBgra", resolved Node &rarr; Global like the other Detection.* fields, meaningful only
+    /// when DetectionBackend is "ExternalHttp". "Jpeg" is today's only behaviour: ffmpeg emits BGRA,
+    /// HttpDetectionEngine JPEG-encodes every frame. "PixelsYuv420"/"PixelsBgra" instead let ffmpeg
+    /// emit nv12 (the same output GpuPreprocessing already produces for the built-in engine) and send
+    /// those raw bytes straight to the external service — no JPEG encode on this side, no JPEG decode
+    /// on SideGlance's, at the cost of ~10x the payload size (614 KB nv12 vs ~60 KB JPEG per 640&#178;
+    /// frame), so it only makes sense on a loopback or LAN external service. "Auto" resolves to
+    /// "PixelsYuv420" only when the probed service actually advertises `pixels_yuv420sp` in its
+    /// `GET /v1/models` `input_modes` (see ExternalInferenceProbe) — an unprobed or older/non-
+    /// advertising service keeps "Auto" on "Jpeg", so this is a strictly opt-in bandwidth trade, never
+    /// a silent behaviour change for an existing deployment. Appended last so the positional
+    /// NodeService construction stays stable; defaults "Auto" so an older node keeps today's JPEG
+    /// path until the operator (or a successful probe) actually asks for something else.</summary>
+    string ExternalInferenceTransport = "Auto");
 
 /// <summary>One completed MotionSpan, batch-reported the same way SegmentReportItem is — see
 /// NodeService.RecordMotionSpansAsync for why plain REST + EF insert is enough here despite the

@@ -5,6 +5,120 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Relicensed from MIT to Apache-2.0.** Sibling project SideGlance is relicensing from AGPL-3.0 to
+  Apache-2.0 at the same time, so code, config conventions, and design patterns (starting with
+  SideGlance's model-descriptor/decoder system) can now be shared freely between the two repos —
+  previously the AGPL boundary on SideGlance's side meant sharing could only flow one way (as a
+  manual, rewritten port). This does not change the license of any model weights a user supplies
+  (e.g. Ultralytics YOLOv8/11/26 weights remain AGPL-3.0 and are still excluded from anything this
+  project bundles or exports, regardless of this project's own license).
+
+### Added
+
+- **Stage 4: the external HTTP inference backend can skip its JPEG codec entirely.** New
+  `Detection.ExternalInferenceTransport` setting (Admin → Settings → Detection, node-scoped,
+  `Auto`/`Jpeg`/`PixelsYuv420`/`PixelsBgra`): `PixelsYuv420` makes ffmpeg emit nv12 for the external
+  backend (the same output `Detection.GpuPreprocessing` already produces for the built-in engine) and
+  `HttpDetectionEngine` sends those bytes straight to SideGlance's `pixels_yuv420sp` raw-pixel
+  `/v1/detect` form — no JPEG encode on this side, no JPEG decode on SideGlance's, at ~10x JPEG's
+  payload size (so only sane on loopback/LAN). `PixelsBgra` skips the JPEG codec too without any
+  ffmpeg/pipeline change at all — the capture buffer stays BGRA, just sent raw (`pixels_bgra32`) at
+  ~4x JPEG's size — a middle-ground reference mode for a loopback service where bandwidth is free.
+  `Auto` (the default) currently always resolves to `Jpeg`: real capability-based auto-negotiation
+  (checking the probed service's own `input_modes` and picking accordingly) is deliberately not
+  implemented yet, so `Auto` is honestly just today's safe default under a name that leaves room for
+  that later without another settings migration. The "Test connection" model picklist now shows each
+  model's advertised `input_modes`, and the settings page warns (without blocking Save) when the
+  chosen transport isn't in the selected model's own advertised list. Slice mode works with either
+  raw-pixel transport unchanged — SideGlance's raw-pixel endpoint accepts the same `slice=` tile plan
+  as its JPEG form, so nothing about the tiling/merge story changes, only the wire bytes. New tests:
+  `Detect_with_pixels_yuv420_transport_sends_the_raw_nv12_body_with_layout_query_params`,
+  `Detect_with_pixels_bgra_transport_sends_the_raw_bgra_body_with_layout_query_params`,
+  `Detect_default_transport_still_sends_jpeg` (`HttpDetectionEngineRequestTests.cs`). Requires
+  SideGlance's own raw-pixel `/v1/detect` support (its [Unreleased] entry) — an older SideGlance
+  rejects an unrecognized `layout=` query value with a 400 naming the field, a clean failure rather
+  than a silent one, so picking a raw transport against an unpatched service fails loudly on the
+  first frame instead of degrading quietly.
+
+- `HttpDetectionEngine.LastInferenceMilliseconds` (the whole `Detect` round trip, unchanged in
+  meaning) is now split into `LastEncodeMilliseconds` (JPEG-encode share) and
+  `LastTransportMilliseconds` (POST + response read/parse/map share), both surfaced on the
+  per-camera cadence log line as `Encode {ms} ms, transport {ms} ms.` when the external HTTP backend
+  is active. Built to attribute the gap between SideGlance's own reported `last_run_ms` (a few
+  milliseconds — see its CHANGELOG's matching per-stage timing entry) and the much larger round trip
+  this line already logged: `transport` minus SideGlance's own `last_read_ms + last_decode_ms +
+  last_pack_ms + last_run_ms + last_postprocess_ms` (from its `GET /v1/models`) is network + server
+  queueing time neither side previously named. No behavior change — pure measurement.
+
+### Changed
+
+- The external HTTP inference backend's detect traffic now uses its own named `HttpClient`
+  (`CameraPipelineManager.ExternalInferenceHttpClientName`), separate from the one that carries the
+  Node callbacks (`POST /detections`, `/detections/crop`). Previously both shared one connection
+  pool, so a 5-second-timeout detect request piling up against a slow or overloaded external
+  inference service competed for connections with report traffic that has nothing to do with it.
+
+- **The external HTTP inference backend (`Detection.Backend = "ExternalHttp"`) no longer sends
+  base64-encoded JSON.** Every frame now goes out as the raw JPEG bytes, with confidence/iou/slice
+  carried as query parameters instead of JSON body fields (SideGlance's own raw-bytes endpoint
+  gained the ability to accept them there in the same release — see its CHANGELOG). This removes a
+  `Convert.ToBase64String` allocation, a JSON serialization, and the associated intermediate buffers
+  from every single detection request; the JPEG bytes SkiaSharp already produced are now the request
+  body directly, with no encoding step in between. Requires SideGlance to have the query-parameter
+  raw-body support (its own [Unreleased] entry) — this is a coordinated upgrade, not a
+  negotiated/backward-compatible one: an older, unpatched standalone SideGlance instance would
+  receive the confidence/iou/slice fields as ordinary (and, in its old code, silently ignored) query
+  parameters, running every request at the model's own default thresholds and never activating slice
+  mode even when the camera pipeline is configured for it — a silent behavior change, not a clean
+  error, for exactly the deployment shape (external inference + Slice mode) this whole effort started
+  from. Upgrade SideGlance alongside this build. New `HttpDetectionEngineRequestTests.cs` pins the
+  actual request shape end-to-end (content type, query parameters, the slice value format, the
+  bearer header) — no prior test exercised the real HTTP request `HttpDetectionEngine` sends at all.
+
+- **Detection frame-rate cap (`Detection.MaxFps`) is now per-camera**, not just node-wide. Every
+  camera on a node previously shared one ffmpeg `fps=` ceiling regardless of how much detection
+  traffic that specific camera actually needed — a driveway camera watched only for a parked-vehicle
+  alert paid the same decode/preprocess/inference cost per frame as a busy street camera tracking
+  fast-moving traffic. Resolves Camera → Node → Global, the same chain `Detection.Confidence`/
+  `Detection.MotionJitterPixels` already use, with a new override control on Cameras → Edit
+  (0 = no cap, same convention the existing node-wide setting already had). A camera-level override
+  reduces cost on both this node (ffmpeg decode/scale, preprocess) and, for the external HTTP
+  backend, the far side of the network too — the only lever in this whole effort that reduces cost
+  on both sides of that boundary at once. Covered by new tests
+  (`NodeServiceMaxFpsTests`) pinning the Camera → Node → Global resolution and confirming a
+  camera-scoped override doesn't leak onto its siblings or displace the neighbouring positional
+  fields in `NodeConfigCameraDto` (a long tail of same-typed `int` parameters where a misplaced
+  argument compiles fine and silently sends the wrong value to the wrong field).
+
+### Fixed
+
+- **The external HTTP inference backend's model picklist silently ignored the service's real input
+  size, and the health probe always failed.** `ExternalModelInfo`'s `inputSize`/`classCount`/
+  `batchMode` were declared as camelCase JSON properties, but SideGlance's actual serializer emits
+  snake_case (`input_size`/`class_count`/`batch_mode`) — `PropertyNameCaseInsensitive` only ignores
+  letter case, not the underscore, so the two spellings never matched and `InputSize` silently fell
+  back to its 640 default no matter what the connected model actually reported. A model configured
+  at any other input size (SideGlance's example config ships models up to 1280) had every single
+  frame rejected with a 400 from the far side, indistinguishable in the logs from a permanently
+  broken engine. Separately, `ExternalHealthResponse.ModelsReady`/`ModelsFailed` were typed as
+  string lists against SideGlance's actual integer counts, so every `/healthz` probe threw and was
+  silently swallowed (by design, as best-effort context) — the "Test connection" health line never
+  rendered for a real service. Both DTOs now match SideGlance's actual wire shapes; the
+  previously-dead health-count display on Admin → Settings → AI detection now renders. Covered by a
+  new round-trip test that serializes with SideGlance's real naming policy before deserializing
+  through these DTOs, replacing fixtures that had encoded the mismatch as expected behavior.
+
+- **A snapshot taken while running the external (SideGlance) backend in Slice mode had no context
+  margin at all** — cropped exactly to the union of reported detection boxes, tighter than every
+  other combination of backend and pixel format, which used a 12% or (nv12) 30% margin depending on
+  path. Unified under a new `Detection.SnapshotMarginPercent` setting (Admin → Settings → AI
+  detection, default 12 = the previous non-slice default), applied identically to both the BGRA and
+  nv12 crop helpers in both the plain and sliced eager-snapshot paths, regardless of backend.
+
 ## [0.200.0] - 2026-09-11
 
 ### Fixed

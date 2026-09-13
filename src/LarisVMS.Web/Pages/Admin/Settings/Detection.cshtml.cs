@@ -46,6 +46,15 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
     /// <see cref="SnapshotMotionAccuracy"/>'s early-finalize flushes it as "the object left frame".
     /// Global; was a fixed 5s. Key "Detection.DepartureGraceSeconds".</summary>
     [BindProperty] public int DepartureGraceSeconds { get; set; } = 5;
+    /// <summary>Global, 0-100. How much extra room the eager sub-frame snapshot crop keeps around a
+    /// reported box, as a percentage of the box's own size, so a viewer can see where the object is
+    /// relative to what's around it rather than a razor-tight crop on just the box. Deliberately the
+    /// same value regardless of Backend (built-in or ExternalHttp) — see
+    /// NodeConfigResponse.SnapshotMarginPercent's own doc comment for the inconsistency this setting
+    /// replaces (the two pixel formats used to disagree, and Slice mode with the external backend
+    /// used no margin at all). Does not affect the separate, larger-by-design segment-seek crop
+    /// margin (30%), which also compensates for Sub/Main stream timing drift.</summary>
+    [BindProperty] public int SnapshotMarginPercent { get; set; } = 12;
     /// <summary>Node-scoped ceiling on frames/sec per camera reaching the model. The Vision Service
     /// still decodes the Sub stream in real time; an ffmpeg fps= filter drops the surplus before
     /// inference so the GPU idles between frames. 0 = no cap. 10 is plenty for object tracking.</summary>
@@ -93,6 +102,11 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
     /// tells the page whether one is already on file.</summary>
     [BindProperty] public string? ExternalApiKey { get; set; }
     public bool HasStoredExternalApiKey { get; private set; }
+    /// <summary>"Auto" (default, today's JPEG behaviour) / "Jpeg" / "PixelsYuv420" / "PixelsBgra" —
+    /// see <c>ExternalInferenceTransport</c>'s own doc comment on the Vision side. Picking a raw-pixel
+    /// mode only makes sense once "Test connection" confirms the service advertises the matching
+    /// <c>pixels_*</c> token in its <c>input_modes</c> (surfaced per model in <see cref="AvailableModels"/>).</summary>
+    [BindProperty] public string ExternalTransport { get; set; } = "Auto";
 
     /// <summary>Populated only by <see cref="OnPostTestConnectionAsync"/> — the discovered model list
     /// the picklist renders, plus (best effort) the service's /healthz readout.</summary>
@@ -116,6 +130,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         RejectMotionJitter = await settings.GetAsync("Detection.RejectMotionJitter", false);
         MotionJitterPixels = await settings.GetAsync("Detection.MotionJitterPixels", 3);
         DepartureGraceSeconds = await settings.GetAsync("Detection.DepartureGraceSeconds", 5);
+        SnapshotMarginPercent = await settings.GetAsync("Detection.SnapshotMarginPercent", 12);
         MaxFps = await settings.GetAsync("Detection.MaxFps", 10);
         ModelFamily = await settings.GetAsync("Detection.ModelFamily", "Auto");
         DFineWeights = await settings.GetAsync("Detection.DFineWeights", "Obj2Coco");
@@ -128,6 +143,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         ExternalModel = await settings.GetAsync("Detection.ExternalInferenceModel", "");
         ExternalInputSize = await settings.GetAsync("Detection.ExternalInferenceInputSize", 640);
         HasStoredExternalApiKey = !string.IsNullOrEmpty(await settings.GetAsync("Detection.ExternalInferenceApiKey", ""));
+        ExternalTransport = await settings.GetAsync("Detection.ExternalInferenceTransport", "Auto");
     }
 
     /// <summary>Named rather than the unnamed OnPostAsync (the convention Email's own Save follows)
@@ -150,6 +166,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         var oldRejectMotionJitter = await settings.GetAsync("Detection.RejectMotionJitter", false);
         var oldMotionJitterPixels = await settings.GetAsync("Detection.MotionJitterPixels", 3);
         var oldDepartureGraceSeconds = await settings.GetAsync("Detection.DepartureGraceSeconds", 5);
+        var oldSnapshotMarginPercent = await settings.GetAsync("Detection.SnapshotMarginPercent", 12);
         var oldMaxFps = await settings.GetAsync("Detection.MaxFps", 10);
         var oldModelFamily = await settings.GetAsync("Detection.ModelFamily", "Auto");
         var oldDFineWeights = await settings.GetAsync("Detection.DFineWeights", "Obj2Coco");
@@ -162,6 +179,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         var oldExternalModel = await settings.GetAsync("Detection.ExternalInferenceModel", "");
         var oldExternalInputSize = await settings.GetAsync("Detection.ExternalInferenceInputSize", 640);
         var hadStoredApiKey = !string.IsNullOrEmpty(await settings.GetAsync("Detection.ExternalInferenceApiKey", ""));
+        var oldExternalTransport = await settings.GetAsync("Detection.ExternalInferenceTransport", "Auto");
 
         // Confidence/IoU are genuinely 0-1 fractions everywhere downstream (YOLO-family thresholds) —
         // clamped here so a stray out-of-range value typed into the form can't reach NodeService/the
@@ -171,6 +189,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         IdleTimeoutSeconds = Math.Max(0, IdleTimeoutSeconds);
         MotionJitterPixels = Math.Clamp(MotionJitterPixels, 1, 15);
         DepartureGraceSeconds = Math.Clamp(DepartureGraceSeconds, 1, 10);
+        SnapshotMarginPercent = Math.Clamp(SnapshotMarginPercent, 0, 100);
         MaxFps = Math.Clamp(MaxFps, 0, 60);
         // Only three values are meaningful downstream (CameraDetectionPipeline's switch); anything
         // else lands on "Off" there anyway, so normalize a stray form value rather than store it.
@@ -186,6 +205,15 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         // A positive multiple of 32 (InferenceProfile's own requirement); anything else falls back to
         // the D-FINE/YOLOX default rather than being stored.
         ExternalInputSize = ExternalInputSize > 0 && ExternalInputSize % 32 == 0 ? ExternalInputSize : 640;
+        // Only four values are meaningful downstream (ExternalInferenceTransportExtensions.Parse);
+        // normalize a stray form value to "Auto" rather than store garbage.
+        ExternalTransport = ExternalTransport?.Trim() switch
+        {
+            "Jpeg" => "Jpeg",
+            "PixelsYuv420" => "PixelsYuv420",
+            "PixelsBgra" => "PixelsBgra",
+            _ => "Auto",
+        };
 
         // A configured external backend needs a URL and a model to be usable — reject the save rather
         // than let NodeService silently keep the built-in engine because the fields are half-filled.
@@ -195,6 +223,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
             var editedModel = ExternalModel;
             var editedSize = ExternalInputSize;
             var editedApiKey = ExternalApiKey;
+            var editedTransport = ExternalTransport;
             await OnGetAsync();
             // Re-apply the just-submitted values so the form keeps the operator's edits.
             Backend = "ExternalHttp";
@@ -202,6 +231,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
             ExternalModel = editedModel;
             ExternalInputSize = editedSize;
             ExternalApiKey = editedApiKey;
+            ExternalTransport = editedTransport;
             SavedMessage = "Enter the external service URL and pick a model (use \"Test connection\" to discover them) before selecting the external backend.";
             StatusIsError = true;
             return Page();
@@ -217,6 +247,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         await settings.SetGlobalAsync("Detection.RejectMotionJitter", RejectMotionJitter.ToString(), by);
         await settings.SetGlobalAsync("Detection.MotionJitterPixels", MotionJitterPixels.ToString(), by);
         await settings.SetGlobalAsync("Detection.DepartureGraceSeconds", DepartureGraceSeconds.ToString(), by);
+        await settings.SetGlobalAsync("Detection.SnapshotMarginPercent", SnapshotMarginPercent.ToString(), by);
         await settings.SetGlobalAsync("Detection.MaxFps", MaxFps.ToString(), by);
         // RfDetr still renders disabled (no decoder); ModelFamily is "Auto", "DFine" or "YoloX" here.
         await settings.SetGlobalAsync("Detection.ModelFamily", ModelFamily, by);
@@ -229,6 +260,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         await settings.SetGlobalAsync("Detection.ExternalInferenceUrl", ExternalUrl ?? "", by);
         await settings.SetGlobalAsync("Detection.ExternalInferenceModel", ExternalModel ?? "", by);
         await settings.SetGlobalAsync("Detection.ExternalInferenceInputSize", ExternalInputSize.ToString(), by);
+        await settings.SetGlobalAsync("Detection.ExternalInferenceTransport", ExternalTransport, by);
         // Blank means "unchanged" — the form never re-displays a stored key, so a blank submission
         // only happens when the operator genuinely left it alone (same convention as Email's
         // SmtpPassword/GraphClientSecret). There is no "clear" affordance here, same as those fields.
@@ -247,6 +279,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
             AuditDiff.Of("Detection.RejectMotionJitter", oldRejectMotionJitter.ToString(), RejectMotionJitter.ToString()),
             AuditDiff.Of("Detection.MotionJitterPixels", oldMotionJitterPixels.ToString(), MotionJitterPixels.ToString()),
             AuditDiff.Of("Detection.DepartureGraceSeconds", oldDepartureGraceSeconds.ToString(), DepartureGraceSeconds.ToString()),
+            AuditDiff.Of("Detection.SnapshotMarginPercent", oldSnapshotMarginPercent.ToString(), SnapshotMarginPercent.ToString()),
             AuditDiff.Of("Detection.MaxFps", oldMaxFps.ToString(), MaxFps.ToString()),
             AuditDiff.Of("Detection.ModelFamily", oldModelFamily, ModelFamily),
             AuditDiff.Of("Detection.DFineWeights", oldDFineWeights, DFineWeights),
@@ -258,6 +291,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
             AuditDiff.Of("Detection.ExternalInferenceUrl", oldExternalUrl, ExternalUrl ?? ""),
             AuditDiff.Of("Detection.ExternalInferenceModel", oldExternalModel, ExternalModel ?? ""),
             AuditDiff.Of("Detection.ExternalInferenceInputSize", oldExternalInputSize.ToString(), ExternalInputSize.ToString()),
+            AuditDiff.Of("Detection.ExternalInferenceTransport", oldExternalTransport, ExternalTransport),
             AuditDiff.SecretChanged("Detection.ExternalInferenceApiKey", apiKeyChanged));
 
         await auditService.LogAsync("Settings.Update",

@@ -11,7 +11,11 @@ namespace LarisVMS.Vision.Inference;
 public sealed record ExternalDetectionConfig(string BaseUrl, string Model, int SourceWidth, int SourceHeight, HttpClient Http,
     /// <summary>Sent as <c>Authorization: Bearer {ApiKey}</c> on every request — null/empty when the
     /// service needs no auth (e.g. a loopback-bound instance).</summary>
-    string? ApiKey = null);
+    string? ApiKey = null,
+    /// <summary>How the frame is sent — see <see cref="Inference.ExternalInferenceTransport"/>.
+    /// Defaults to the always-safe <c>Jpeg</c> so a caller that doesn't care doesn't have to know this
+    /// parameter exists.</summary>
+    ExternalInferenceTransport Transport = ExternalInferenceTransport.Jpeg);
 
 /// <summary>
 /// Constructs the right <see cref="IDetectionEngine"/> for a resolved DetectionModelFamily —
@@ -43,7 +47,8 @@ public static class DetectionEngineFactory
         if (external is not null)
         {
             return new HttpDetectionEngine(external.BaseUrl, external.Model, profile, sliceLayout,
-                external.SourceWidth, external.SourceHeight, external.Http, external.ApiKey, loggerFactory.CreateLogger<HttpDetectionEngine>());
+                external.SourceWidth, external.SourceHeight, external.Http, external.ApiKey,
+                loggerFactory.CreateLogger<HttpDetectionEngine>(), external.Transport);
         }
 
         return family switch

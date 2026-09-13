@@ -299,7 +299,7 @@ py -m venv .venv
 ```
 
 Only permissively-licensed weights are exported — Ultralytics YOLOv8/11/26 are deliberately excluded,
-since their weights are AGPL-3.0 and this project is MIT.
+since their weights are AGPL-3.0 and this project is Apache-2.0.
 
 > **A node's *first* AI detection install needs a manual `install-node.ps1` run.** Recorder
 > auto-update only replaces binaries that are already present, so it will keep an existing

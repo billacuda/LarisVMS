@@ -7,6 +7,15 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.Configure<VisionServiceOptions>(builder.Configuration.GetSection("Vision"));
 builder.Services.AddHttpClient(nameof(CameraDetectionPipeline));
+// Detection.Backend = "ExternalHttp" traffic (one POST per frame, per camera, at up to MaxFps) gets
+// its own named client rather than sharing nameof(CameraDetectionPipeline)'s connection pool with
+// the Node callbacks (POST /detections, /detections/crop) — a 5s-timeout detect request piling up
+// against a slow external service used to compete for connections with report traffic that has
+// nothing to do with it. PooledConnectionLifetime keeps connections cycling (a long-lived detect
+// connection shouldn't outlive a DNS change on the far side); the default idle timeout is fine at
+// this request rate.
+builder.Services.AddHttpClient(CameraPipelineManager.ExternalInferenceHttpClientName)
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(5) });
 builder.Services.AddSingleton<CameraPipelineManager>();
 
 // This process has never had its own log file — its console output is captured by

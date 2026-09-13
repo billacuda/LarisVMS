@@ -18,6 +18,13 @@ namespace LarisVMS.Vision.Service;
 /// </summary>
 public sealed class CameraPipelineManager : IAsyncDisposable
 {
+    /// <summary>Named <see cref="HttpClient"/> for Detection.Backend = "ExternalHttp" traffic only —
+    /// registered separately from <c>nameof(CameraDetectionPipeline)</c> (which still carries the
+    /// Node callbacks, POST /detections and /detections/crop) so a slow or overloaded external
+    /// inference service's connections don't compete with report traffic that has nothing to do
+    /// with it. See this constant's registration in Program.cs for the connection-pool settings.</summary>
+    public const string ExternalInferenceHttpClientName = "ExternalInferenceDetect";
+
     private readonly VisionServiceOptions _options;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILoggerFactory _loggerFactory;
@@ -104,8 +111,11 @@ public sealed class CameraPipelineManager : IAsyncDisposable
         var resolvedModelPath = external
             ? string.Empty
             : await ResolveModelPathCachedAsync(modelKey, family, dfineWeights, yoloXSize, dfineFp16Mixed, request.NodeCallbackBaseUrl, http);
+        // Only resolved for the backend that actually needs it — see ExternalInferenceHttpClientName's
+        // own doc comment for why this is a separate client from the Node-callback one above.
+        var externalHttp = external ? _httpClientFactory.CreateClient(ExternalInferenceHttpClientName) : null;
 
-        var pipeline = new CameraDetectionPipeline(request, _options, _ffmpegPath, resolvedModelPath, family, dfineWeights, yoloXSize, aspectMode, dfineTensorRtMode, http, _loggerFactory);
+        var pipeline = new CameraDetectionPipeline(request, _options, _ffmpegPath, resolvedModelPath, family, dfineWeights, yoloXSize, aspectMode, dfineTensorRtMode, http, _loggerFactory, externalHttp);
         _pipelines[request.CameraId] = pipeline;
         _logger.LogInformation("Started watching camera {Camera} (id {CameraId}, {Width}x{Height}, hwaccel: {Hwaccel}).",
             request.DisplayName, request.CameraId, request.Width, request.Height, request.HardwareAcceleration ?? "none");

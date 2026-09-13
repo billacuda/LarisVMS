@@ -60,6 +60,12 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
     /// <summary>Detection.MotionJitterPixels for this camera (1-15), or null to inherit — same
     /// nullable-override shape as ConfidenceOverride.</summary>
     [BindProperty] public int? MotionJitterPixelsOverride { get; set; }
+    /// <summary>Detection.MaxFps for this camera, or null to inherit the node/global ceiling — same
+    /// nullable-override shape as ConfidenceOverride/MotionJitterPixelsOverride. A camera that only
+    /// needs to catch a parked-vehicle alert has no use for the same frame rate a busy street camera
+    /// needs, and every frame above what it actually needs is wasted decode/preprocess/inference cost
+    /// on this node and, for the external HTTP backend, on the far side of the network too.</summary>
+    [BindProperty] public int? MaxFpsOverride { get; set; }
 
     public bool IsNew => Id is null;
 
@@ -88,6 +94,7 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
     public string EffectiveAiDetectionOrientation { get; set; } = "Auto";
     public bool EffectiveRejectMotionJitter { get; set; }
     public int EffectiveMotionJitterPixels { get; set; } = 3;
+    public int EffectiveMaxFps { get; set; } = 10;
     /// <summary>Whether this camera has at least one enabled ServerMotion zone — Motion mode does
     /// nothing without one (NodeWorker falls back to recording everything, logging a warning) so
     /// the Edit page can surface that up front instead of the operator discovering it in node logs.</summary>
@@ -205,6 +212,10 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
         MotionJitterPixelsOverride = int.TryParse(ownJitterPixels, out var jitterPixels) ? jitterPixels : null;
         EffectiveMotionJitterPixels = await settings.GetAsync("Detection.MotionJitterPixels", 3, cameraId: cameraId, nodeId: nodeId);
 
+        var ownMaxFps = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "Detection.MaxFps");
+        MaxFpsOverride = int.TryParse(ownMaxFps, out var maxFps) ? maxFps : null;
+        EffectiveMaxFps = await settings.GetAsync("Detection.MaxFps", 10, cameraId: cameraId, nodeId: nodeId);
+
         var zones = await zoneService.ListAsync(cameraId);
         HasServerMotionZone = zones.Any(z => z.Kind == ZoneKind.ServerMotion && z.IsEnabled);
 
@@ -304,6 +315,10 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
             var clampedJitterPixelsOverride = MotionJitterPixelsOverride is { } jp ? Math.Clamp(jp, 1, 15) : (int?)null;
             await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Detection.MotionJitterPixels",
                 clampedJitterPixelsOverride?.ToString(), User.Identity?.Name);
+            // Same 0-60 clamp Admin/Settings/Detection applies to the global default; 0 = no cap.
+            var clampedMaxFpsOverride = MaxFpsOverride is { } mf ? Math.Clamp(mf, 0, 60) : (int?)null;
+            await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Detection.MaxFps",
+                clampedMaxFpsOverride?.ToString(), User.Identity?.Name);
             return RedirectToPage("Index");
         }
         catch (Exception ex)

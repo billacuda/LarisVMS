@@ -1469,9 +1469,11 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
 
         // Detection frame-rate cap: only apply an fps= filter when the probed Sub rate is genuinely
         // above the ceiling — an unknown or already-low rate is left alone so ffmpeg never duplicates
-        // frames up to the target (which would *add* inference work).
-        var decodeFpsCap = config.MaxDetectionFps > 0 && watchStream.Fps is { } fps && fps > config.MaxDetectionFps
-            ? config.MaxDetectionFps
+        // frames up to the target (which would *add* inference work). camera.MaxFps is per-camera
+        // (Camera -> Node -> Global), so this reads the node-wide default when nothing camera-scoped
+        // overrides it — the same value config.MaxDetectionFps carried before it existed.
+        var decodeFpsCap = camera.MaxFps > 0 && watchStream.Fps is { } fps && fps > camera.MaxFps
+            ? camera.MaxFps
             : 0;
 
         var signature = string.Join('|', watchRtspUri, sourceWidth, sourceHeight, config.AspectMode,
@@ -1483,7 +1485,15 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             // which engine the pipeline builds (or how it talks to the service), so a change tears
             // down and rebuilds the pipeline the same way an AspectMode or model-family change does.
             config.DetectionBackend, config.ExternalInferenceUrl, config.ExternalInferenceModel,
-            config.ExternalInferenceInputSize, config.ExternalInferenceApiKey);
+            config.ExternalInferenceInputSize, config.ExternalInferenceApiKey,
+            // Detection.ExternalInferenceTransport — changes whether ffmpeg emits BGRA or nv12 for
+            // the external backend (via gpuPreprocessing) and how HttpDetectionEngine formats its
+            // request, so a change restarts the pipeline the same as DetectionBackend itself.
+            config.ExternalInferenceTransport,
+            // Detection.SnapshotMarginPercent — global. Cosmetic-only (the eager crop's context
+            // margin), but included here for the same restart-on-any-Detection.*-change consistency
+            // every other field in this signature follows.
+            config.SnapshotMarginPercent);
 
         if (_activeVision.TryGetValue(camera.CameraId, out var existing) && existing.ConfigSignature == signature) return; // already watching, unchanged
 
@@ -1515,7 +1525,11 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             // Detection.Backend + external service address/model/input-size/API key — node-scoped.
             // All in `signature` above. Blank/"BuiltIn" for a node on the bundled engine.
             config.DetectionBackend, config.ExternalInferenceUrl, config.ExternalInferenceModel,
-            config.ExternalInferenceInputSize, config.ExternalInferenceApiKey);
+            config.ExternalInferenceInputSize, config.ExternalInferenceApiKey,
+            // Detection.SnapshotMarginPercent — global; see the field's own doc comment.
+            config.SnapshotMarginPercent,
+            // Detection.ExternalInferenceTransport — node-scoped; see the field's own doc comment.
+            config.ExternalInferenceTransport);
 
         // Never stack two starts for the same camera — see _visionStartsInFlight's own comment.
         if (!_visionStartsInFlight.TryAdd(camera.CameraId, 0)) return;

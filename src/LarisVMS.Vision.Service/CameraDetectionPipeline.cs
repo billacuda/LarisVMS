@@ -242,7 +242,13 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
 
     public CameraDetectionPipeline(VisionStartCameraRequest request, VisionServiceOptions serviceOptions,
         string resolvedFfmpegPath, string resolvedModelPath, DetectionModelFamily modelFamily, DFineWeights dfineWeights,
-        YoloXSize yoloXSize, AspectMode aspectMode, string dfineTensorRtMode, HttpClient http, ILoggerFactory loggerFactory)
+        YoloXSize yoloXSize, AspectMode aspectMode, string dfineTensorRtMode, HttpClient http, ILoggerFactory loggerFactory,
+        // Only non-null for Detection.Backend = "ExternalHttp" — see
+        // CameraPipelineManager.ExternalInferenceHttpClientName's own doc comment for why detect
+        // traffic uses its own HttpClient rather than sharing `http` (the Node-callback one) the way
+        // it used to. Read once below, at _externalConfig's construction; not worth keeping as a
+        // field since nothing else in this class needs it.
+        HttpClient? externalHttp = null)
     {
         _request = request;
         _http = http;
@@ -276,6 +282,13 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         // TensorRT — always a plain BGRA capture buffer, sized to the external model's own input
         // size (request.ExternalInferenceInputSize, already validated to a positive multiple of 32).
         var external = string.Equals(request.DetectionBackend, "ExternalHttp", StringComparison.OrdinalIgnoreCase);
+        // Only meaningful when external — parsed here (not stored raw) for the same reason
+        // DetectionBackend itself is parsed at this one call site rather than compared as a string
+        // everywhere it matters. See ExternalInferenceTransport's own doc comment for what each value
+        // does; "Auto" and anything unrecognized both resolve to Jpeg (today's only behaviour).
+        var externalTransport = external
+            ? ExternalInferenceTransportExtensions.Parse(request.ExternalInferenceTransport)
+            : ExternalInferenceTransport.Jpeg;
 
         // YOLOX sizes decode at their own fixed input size (416 for nano/tiny, 640 otherwise) — must
         // match the pinned ONNX export; D-FINE keeps InferenceProfile's 640 default. The external
@@ -301,13 +314,17 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             // cutting slices on the accelerator. The external backend is the exception: it doesn't
             // cut slices here at all (it sends the whole capture buffer + a tile plan and the
             // service tiles + merges), so it takes a plain BGRA capture buffer like every other
-            // external request. _profile is still the degenerate per-slice identity profile
-            // (unused by HttpDetectionEngine, which maps through _sliceLayout directly).
+            // external request UNLESS ExternalInferenceTransport.PixelsYuv420 is configured, in which
+            // case it takes nv12 instead — SideGlance's own raw-pixel /v1/detect branch accepts a
+            // slice= tile plan on the raw-pixel form exactly the same as the JPEG one, so nothing
+            // about the tiling/merge story changes, only the wire bytes. _profile is still the
+            // degenerate per-slice identity profile (unused by HttpDetectionEngine, which maps
+            // through _sliceLayout directly).
             _sliceLayout = SliceLayout.Create(request.Width, request.Height, networkSize);
             _profile = InferenceProfile.Create(networkSize, networkSize, AspectMode.Stretch, networkSize);
             captureWidth = _sliceLayout.CaptureWidth;
             captureHeight = _sliceLayout.CaptureHeight;
-            gpuPreprocessing = !external;
+            gpuPreprocessing = external ? externalTransport == ExternalInferenceTransport.PixelsYuv420 : true;
             letterboxGeometry = null; // a plain scale to CaptureWidth x CaptureHeight, no pad at all
 
             // Nothing logged the resolved geometry before, which made every question about slicing
@@ -335,8 +352,13 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             // engine's merged head does the colour convert + normalize on the accelerator;
             // otherwise BGRA (W*H*4) and the engine packs it on the CPU. Forced off for YOLOX —
             // OnnxPreprocessHead's non-sliced head is D-FINE-shaped (/255 RGB); a plain (non-Slice)
-            // YOLOX variant was never needed once slicing shipped its own.
-            gpuPreprocessing = !external && request.GpuPreprocessing && modelFamily == DetectionModelFamily.DFine;
+            // YOLOX variant was never needed once slicing shipped its own. The external backend
+            // reuses the same nv12-vs-BGRA fork for an entirely different reason — there is no ONNX
+            // preprocessing head involved at all, "nv12" here means only "send SideGlance
+            // pixels_yuv420sp instead of a JPEG" (ExternalInferenceTransport.PixelsYuv420).
+            gpuPreprocessing = external
+                ? externalTransport == ExternalInferenceTransport.PixelsYuv420
+                : request.GpuPreprocessing && modelFamily == DetectionModelFamily.DFine;
             letterboxGeometry = aspectMode == AspectMode.Letterbox
                 ? new LetterboxGeometry(_profile.ScaledWidth, _profile.ScaledHeight, _profile.PadLeft, _profile.PadTop)
                 : null;
@@ -427,7 +449,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         // takes — resolved here so InferenceLoopAsync's engine build is a single call either way.
         _externalConfig = external
             ? new ExternalDetectionConfig(request.ExternalInferenceUrl, request.ExternalInferenceModel,
-                _sourceWidth, _sourceHeight, http, request.ExternalInferenceApiKey)
+                _sourceWidth, _sourceHeight, externalHttp ?? http, request.ExternalInferenceApiKey, externalTransport)
             : null;
 
         // Per-family tracker tuning, anchored to this camera's own detection confidence — see
@@ -892,19 +914,27 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             ? string.Empty
             : $" {failures} frame(s) failed inference in this window (first one logged in full above).";
 
+        // Only the external-HTTP backend has an encode/transport split to report — a local ONNX
+        // engine's LastInferenceMilliseconds is already the whole cost, nothing to break down
+        // further. Added to attribute the gap between SideGlance's own last_run_ms (GET /v1/models)
+        // and the much larger round trip this line already logged.
+        var transportSummary = _engine is HttpDetectionEngine http
+            ? $" Encode {http.LastEncodeMilliseconds ?? 0:F1} ms, transport {http.LastTransportMilliseconds ?? 0:F1} ms."
+            : string.Empty;
+
         _logger.LogInformation(
             "Camera {Camera} detection cadence over {Seconds:F0}s: capture {CaptureFps:F1} fps, " +
             "inference {InferenceFps:F1} fps, {Dropped} frame(s) dropped ({DropPercent:F0}%), " +
             "last inference {InferenceMs:F1} ms. Peak {PeakDetections} detection(s)/frame -> " +
             "{PeakTracked} tracked, best raw score {BestScore:F2} (tracker needs {NewTrackThreshold:F2} " +
             "to start a track). Live boxes now: {LiveBoxes}. Process-wide over the same window: " +
-            "{Gen2} gen2 collection(s), {AllocatedMbPerSec:F0} MB/s allocated.{SliceSummary}{FailureSummary}",
+            "{Gen2} gen2 collection(s), {AllocatedMbPerSec:F0} MB/s allocated.{SliceSummary}{FailureSummary}{TransportSummary}",
             _request.DisplayName, seconds, deltaPublished / seconds, deltaConsumed / seconds,
             deltaPublished - deltaConsumed,
             deltaPublished == 0 ? 0 : (deltaPublished - deltaConsumed) * 100.0 / deltaPublished,
             _engine?.LastInferenceMilliseconds ?? 0,
             peakDetections, peakTracked, bestScore, _trackerNewTrackThreshold, liveSummary,
-            deltaGen2, deltaAllocated / seconds / (1024.0 * 1024.0), sliceSummary, failureSummary);
+            deltaGen2, deltaAllocated / seconds / (1024.0 * 1024.0), sliceSummary, failureSummary, transportSummary);
     }
 
     /// <summary>Pass G: crops one JPEG from the frame the model just ran on, covering the union of
@@ -951,24 +981,31 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             }
             if (union is not { } unionRect || unionRect.Width < 2 || unionRect.Height < 2) return;
 
-            // Small margin (a same-frame crop has no cross-stream drift to hide — see
-            // SnapshotImageCapture.DefaultMarginFraction's doc comment), then never outside the real
-            // image (a wide margin would otherwise reach into the letterbox bars).
+            // Margin (a same-frame crop has no cross-stream drift to hide — see
+            // SnapshotImageCapture.DefaultMarginFraction's doc comment for the segment-seek crop's
+            // different, larger default), then never outside the real image (a wide margin would
+            // otherwise reach into the letterbox bars). Operator-configurable — see
+            // Detection.SnapshotMarginPercent's own doc comment (NodeConfigResponse) for why this is
+            // deliberately the same value the nv12 branch below is given, rather than each pixel
+            // format defaulting independently the way they used to.
+            var marginFraction = Math.Clamp(_request.SnapshotMarginPercent, 0, 100) / 100.0;
             var (mcx, mcy, mcw, mch) = SnapshotImageCapture.ComputeCropRect(
                 unionRect.Left / (double)_profile.NetworkWidth, unionRect.Top / (double)_profile.NetworkHeight,
                 unionRect.Width / (double)_profile.NetworkWidth, unionRect.Height / (double)_profile.NetworkHeight,
-                _profile.NetworkWidth, _profile.NetworkHeight, marginFraction: 0.12);
+                _profile.NetworkWidth, _profile.NetworkHeight, marginFraction);
             var crop = ClampTo(new SKRectI(mcx, mcy, mcx + mcw, mcy + mch), content);
             if (crop.Width < 2 || crop.Height < 2) return;
 
             // BGRA path takes the final (margined, content-clamped) rect; the nv12 path reuses
-            // Nv12Ops.CropToWebp, which applies its own margin + frame clamp, so it gets the raw
-            // union instead. nv12 only happens with GpuPreprocessing on (D-FINE only, off by default).
+            // Nv12Ops.CropToWebp, which computes its own margin internally (it needs the raw,
+            // unmargined union so it can clamp against its own frame dimensions), so it gets the raw
+            // union instead — but the same marginFraction, so the two agree. nv12 only happens with
+            // GpuPreprocessing on (D-FINE only, off by default).
             // No whole-frame guard: covering every moving object is the point even when they're at
-            // opposite edges — the union of the real detection boxes plus a 12% margin, clamped to
+            // opposite edges — the union of the real detection boxes plus a margin, clamped to
             // the content rect, is never worse than a full-frame grab.
             var image = _frameIsNv12
-                ? Nv12Ops.CropToWebp(frame, _profile.NetworkWidth, _profile.NetworkHeight, ClampTo(unionRect, content), EagerCropWebpQuality)
+                ? Nv12Ops.CropToWebp(frame, _profile.NetworkWidth, _profile.NetworkHeight, ClampTo(unionRect, content), EagerCropWebpQuality, marginFraction)
                 : BgraOps.CropRectToWebp(frame, _profile.NetworkWidth, _profile.NetworkHeight, crop, EagerCropWebpQuality);
             if (image is null) return;
 
@@ -1013,14 +1050,25 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         if (union is not { } unionRect || unionRect.Width < 2 || unionRect.Height < 2) return;
 
         // nv12 for the built-in GPU-preprocessed path, BGRA for the external backend (which has no
-        // nv12 path). Both crop helpers apply their own margin + frame clamp, so they get the raw
-        // union directly (no separate ComputeCropRect step, unlike the BGRA branch of
-        // TrySubFrameSnapshot). No whole-frame guard — see TrySubFrameSnapshot for why covering every
-        // moving object wins over a tighter single-object crop.
+        // nv12 path). Both get the same operator-configured margin (Detection.SnapshotMarginPercent):
+        // Nv12Ops.CropToWebp computes its own margined rect internally from the raw union, so it
+        // takes marginFraction directly; the BGRA branch has no such internal step (CropRectToWebp
+        // just clamps whatever rect it's given), so it must be margined here first — this used to be
+        // skipped entirely in slice mode, which is why an external/SideGlance snapshot in Slice mode
+        // came out cropped to the bare detection-box union with no context at all, tighter than the
+        // non-sliced path's already-tighter-than-nv12 12% margin. No whole-frame guard — see
+        // TrySubFrameSnapshot for why covering every moving object wins over a tighter single-object
+        // crop.
+        var marginFraction = Math.Clamp(_request.SnapshotMarginPercent, 0, 100) / 100.0;
         var clamped = ClampTo(unionRect, content);
+        var (mcx, mcy, mcw, mch) = SnapshotImageCapture.ComputeCropRect(
+            clamped.Left / (double)layout.CaptureWidth, clamped.Top / (double)layout.CaptureHeight,
+            clamped.Width / (double)layout.CaptureWidth, clamped.Height / (double)layout.CaptureHeight,
+            layout.CaptureWidth, layout.CaptureHeight, marginFraction);
+        var bgraCrop = ClampTo(new SKRectI(mcx, mcy, mcx + mcw, mcy + mch), content);
         var image = _frameIsNv12
-            ? Nv12Ops.CropToWebp(frame, layout.CaptureWidth, layout.CaptureHeight, clamped, EagerCropWebpQuality)
-            : BgraOps.CropRectToWebp(frame, layout.CaptureWidth, layout.CaptureHeight, clamped, EagerCropWebpQuality);
+            ? Nv12Ops.CropToWebp(frame, layout.CaptureWidth, layout.CaptureHeight, clamped, EagerCropWebpQuality, marginFraction)
+            : BgraOps.CropRectToWebp(frame, layout.CaptureWidth, layout.CaptureHeight, bgraCrop, EagerCropWebpQuality);
         if (image is null) return;
 
         _ = PostEagerCropAsync(nowUtc, image);
