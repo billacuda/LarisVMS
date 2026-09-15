@@ -11,6 +11,13 @@ namespace LarisVMS.Core.Enums;
 /// still declared-only — DetectionEngineFactory throws "not yet implemented" and
 /// DetectionModelSelection.Choose falls it back to DFine. Adding RF-DETR later is "implement a
 /// decoder + un-disable an admin-picker option," not an enum/schema migration.
+///
+/// <see cref="Custom"/> is the model-agnostic path: instead of one of the three hardcoded
+/// architectures above, run whichever model <c>Detection.LocalModelName</c> names from the models
+/// directory (<c>C:\ProgramData\LarisVMS\models</c>), decoded via whatever
+/// <c>LarisVMS.Vision.Models.ModelDiscovery</c> resolved for it (embedded ONNX metadata, or a
+/// same-basename JSON sidecar) rather than a hand-written engine class — see
+/// <c>LarisVMS.Vision.Inference.GenericOnnxEngine</c>.
 /// </summary>
 public enum DetectionModelFamily
 {
@@ -19,4 +26,5 @@ public enum DetectionModelFamily
     DFine = 1,
     RfDetr = 2,
     YoloX = 3,
+    Custom = 4,
 }

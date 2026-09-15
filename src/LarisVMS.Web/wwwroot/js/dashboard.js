@@ -55,6 +55,18 @@
         return '<span class="badge text-bg-danger">Not reporting</span>';
     }
 
+    // Orthogonal to statusBadge above — a camera can be recording fine while its AI-detection engine
+    // is still cold-building a TensorRT engine (minutes on first start), or has failed to build at all.
+    // Rendered as a second, separate badge rather than folded into statusBadge's own logic, since
+    // recording health and detection-engine health are two different things a camera can independently
+    // be fine or not-fine at. Empty string (nothing rendered) when neither flag is set — the common
+    // case once a camera's engine has finished its one-time build.
+    function detectionBadge(r) {
+        if (r.engineBuildFailed) return ' <span class="badge text-bg-danger" title="AI detection failed to start — check the vision log">AI detection failed</span>';
+        if (r.isEngineBuilding) return ' <span class="badge text-bg-info"><span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Starting AI detection…</span>';
+        return '';
+    }
+
     function nodeCell(r) {
         if (!r.nodeAssigned) return '<span class="text-muted">unassigned</span>';
         var badgeClass = r.nodeOnline ? 'text-bg-success' : 'text-bg-secondary';
@@ -88,7 +100,7 @@
             '<td class="thumb-col">' + thumbHtml + '</td>' +
             '<td><a href="/Cameras/Edit/' + r.cameraId + '">' + escapeHtml(r.cameraName) + '</a></td>' +
             '<td>' + nodeCell(r) + '</td>' +
-            '<td>' + statusBadge(r) + '</td>' +
+            '<td>' + statusBadge(r) + detectionBadge(r) + '</td>' +
             '<td class="text-end" data-sort-value="' + (fps !== null ? fps : '') + '">' + (fps !== null ? fps : '—') + '</td>' +
             '<td class="text-end" data-sort-value="' + (bitrate !== null ? bitrate : '') + '">' + (bitrate !== null ? bitrate.toLocaleString() + ' kbps' : '—') + '</td>' +
             '<td data-sort-value="' + (r.audioSampleRateHz !== null && r.audioSampleRateHz !== undefined ? r.audioSampleRateHz : '') + '">' + audioCell(r) + '</td>' +

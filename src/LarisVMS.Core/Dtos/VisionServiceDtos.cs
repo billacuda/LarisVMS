@@ -178,7 +178,13 @@ public record VisionStartCameraRequest(
     /// the whole node → Vision Service pipe the same way <see cref="DetectionBackend"/> is. Appended
     /// last so NodeWorker's positional construction stays stable; defaults "Auto" so an older node
     /// build keeps today's JPEG transport.</summary>
-    string ExternalInferenceTransport = "Auto")
+    string ExternalInferenceTransport = "Auto",
+    /// <summary>The model name a model-agnostic ("Custom") pipeline should load — see
+    /// <c>NodeConfigResponse.LocalModelName</c>'s own doc comment. Only meaningful when
+    /// <see cref="ModelFamily"/> is "Custom". Appended last so NodeWorker's positional construction
+    /// stays stable; blank default means an older node never sends this and Vision Service simply
+    /// never sees a "Custom" ModelFamily from it.</summary>
+    string LocalModelName = "")
 {
     /// <summary>What this camera should be called in a log line. The operator's own name when there
     /// is one, otherwise the first block of the camera id — short enough to scan a column of, and

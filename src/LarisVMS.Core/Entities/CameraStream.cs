@@ -31,6 +31,14 @@ public class CameraStream
     /// going offline) instead of a silently frozen last-known number.</summary>
     public DateTime? HealthReportedAt { get; set; }
 
+    /// <summary>This camera's AI-detection engine build state, from NodeWorker's own
+    /// <c>_visionCameraStatus</c> (Vision Service's <c>GET /cameras/status</c>) — see
+    /// <c>StreamInfoReportItem.IsEngineBuilding</c>'s own doc comment. Both null when AI detection
+    /// isn't running for this camera at all; the Dashboard shows a spinner/failure badge only when
+    /// one of these is true.</summary>
+    public bool? IsEngineBuilding { get; set; }
+    public bool? EngineBuildFailed { get; set; }
+
     public bool HasAudio { get; set; }
 
     /// <summary>Codec name and sample rate of the audio track as ffmpeg reported it when it last

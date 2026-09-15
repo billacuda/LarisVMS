@@ -7,17 +7,134 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.203.0] - 2026-09-14
+
+### Fixed
+
+- **Fixed incorrect detections on Slice-mode cameras introduced in the previous release.** After
+  0.202.0 shipped cross-tile label-agnostic merging, two issues showed up in production: objects
+  standing at a camera's true image edge (not a tile seam) could be wrongly absorbed into an unrelated
+  neighboring object and disappear entirely, and a fast-path detection mode introduced in the same
+  release could silently mislabel where a detection actually was. Cross-tile merging is now gated by
+  a semantic category check (visually similar classes may still merge; unrelated classes never do,
+  regardless of geometry), the seam-vs-true-frame-edge check is now aware of which tile it's looking
+  at, and the fast detection path now numerically verifies its own output against a guaranteed-correct
+  fallback before ever being used, falling back automatically if that check doesn't pass. Also fixed a
+  pre-existing (not new) case where an object clipped by one tile but seen whole by its neighbor could
+  show up as a stray extra box alongside the correct one.
+
+## [0.202.0] - 2026-09-14
+
+### Fixed
+
+- **Added better support for reading metadata from ONNX models.** A model dropped into
+  `C:\ProgramData\LarisVMS\models` could come back "metadata not found" even when it carried enough of
+  its own embedded information to be usable without a sidecar. `ModelDiscovery` now recognizes more
+  real-world embedded-metadata conventions, and falls back to the ONNX graph's own declared input size
+  when available — so more models resolve without a hand-written sidecar. A model with genuinely no
+  usable embedded information still correctly requires one.
+- **`Custom` ONNX models can now be used on cameras configured for the Slice aspect mode.** Previously
+  every such camera failed outright — Slice mode threw an error unconditionally for any `Custom` model,
+  making the whole feature unusable on a camera fleet where every camera uses it. Detection now runs
+  one pass per tile, cropped from the captured frame, which works correctly regardless of how the
+  underlying model was exported — unlike the built-in detection models, an arbitrary user-supplied
+  model can't be assumed to support a batched forward pass safely.
+- **Fixed duplicate and split detections on Slice-mode cameras when two tiles disagreed on an object's
+  class.** An object straddling a tile boundary (or sitting in the overlap between two tiles) is
+  sometimes classified slightly differently by each tile — visually similar classes are the common
+  case. Reuniting an object's detections across tiles previously required both tiles to agree on the
+  exact class first, so a disagreement showed up as either two overlapping boxes with different labels,
+  or two never-reunited half-boxes instead of the object's true full extent. Tiles are now reunited by
+  geometry alone, keeping whichever tile's classification was more confident.
+
+### Added
+
+- **Custom ONNX models on Slice-mode cameras can now automatically use a faster, single-pass detection
+  path when the model itself was exported to support it**, instead of always falling back to one pass
+  per tile — with an automatic, transparent fallback to the safe per-tile path if the model turns out
+  not to actually support it. Nothing to configure: this is detected from the model file itself at
+  load time, and the node's own log states which path a given model got.
+
+## [0.201.0] - 2026-09-13
+
 ### Changed
 
 - **Relicensed from MIT to Apache-2.0.** Sibling project SideGlance is relicensing from AGPL-3.0 to
   Apache-2.0 at the same time, so code, config conventions, and design patterns (starting with
   SideGlance's model-descriptor/decoder system) can now be shared freely between the two repos —
   previously the AGPL boundary on SideGlance's side meant sharing could only flow one way (as a
-  manual, rewritten port). This does not change the license of any model weights a user supplies
-  (e.g. Ultralytics YOLOv8/11/26 weights remain AGPL-3.0 and are still excluded from anything this
-  project bundles or exports, regardless of this project's own license).
+  manual, rewritten port). This does not change the license of any model weights a user supplies —
+  a model's own weights carry whatever license they came with regardless of this project's license.
 
 ### Added
+
+- **The dashboard shows a spinner while a camera's AI-detection engine is still cold-building.**
+  `CameraDetectionPipeline.IsEngineBuilding` (derived, no new state) is now surfaced end-to-end: Vision
+  Service's new `GET /cameras/status`, polled by `NodeWorker` and folded into each camera's existing
+  health report, persisted on two new nullable `CameraStream` columns (`IsEngineBuilding`,
+  `EngineBuildFailed` — new `AddCameraStreamEngineStatus` migration), and rendered by `dashboard.js` as
+  a second badge alongside the existing recording-status one (a spinner while building, a failure badge
+  if it never started) — orthogonal to recording health, since a camera can be recording fine while its
+  detection engine is still compiling a TensorRT engine for the first time.
+- **Settings changes reach a running camera pipeline in seconds, not up to 30.** Saving a detection
+  setting on `Admin → Settings → Detection` or its per-node override on `Admin → Nodes` now triggers a
+  new `POST /reconcile-now` on the affected node(s) (fire-and-forget, never blocking the save) which
+  wakes `NodeWorker`'s reconcile loop immediately instead of waiting out its own 30-second timer. The
+  actual hot-swap (comparing each camera's config signature, rebuilding its detection pipeline if it
+  changed) is unchanged — only how soon the loop gets around to running it. A node that's briefly
+  unreachable is unaffected: its normal 30s poll remains the correctness backstop.
+- **AI-detection backend dropdown: CUDA / TensorRT / DirectML / OpenVINO / CPU / MIGraphX (placeholder).**
+  Fixes a real bug along the way: `VisionBackendResolver` previously mapped both "Intel" and "AMD"
+  accelerator choices to DirectML, so OpenVINO — already fully implemented, including its own backend
+  folder and session-factory support — was reachable only via a hand-set environment variable, never
+  from the UI. `AiAccelerator` gains `TensorRt` and `OpenVino` (additive, not renames, so a node on an
+  older build during a rolling upgrade can't misparse either as anything worse than a safe `Auto`
+  fall-back) and a `MIGraphX` placeholder for AMD's newer-generation accelerator: it's selectable now,
+  but `AccelSelection.Choose` always resolves it to "no accelerator" and the Admin UI shows a
+  "future feature" notice instead of any backend work. `TensorRt` reuses the CUDA native build and
+  turns TensorRT on for *any* local engine via a new `Vision__EnableTensorRt` env var
+  (`VisionServiceSupervisor.SetEnableTensorRt`) — previously only D-FINE could use TensorRT at all.
+  `OpenVino` forces the explicit OpenVINO backend via a new `Vision__Backend` env var
+  (`VisionServiceSupervisor.SetBackendOverride`). "Intel" is dropped from the rendered dropdown (its
+  old, buggy DirectML behavior is superseded by explicitly picking DirectML or OpenVINO) but the enum
+  value is kept for wire/DB back-compat with an already-persisted node.
+- **D-FINE FP16 via TensorRT is enabled, with automatic FP32 fallback on overflow.** The previously
+  disabled `Detection.DFineTensorRtMode = FP16` option (both the global setting and its per-node
+  override) now runs — the plain FP32 model under `trt_fp16_enable` with D-FINE's LayerNorm subgraphs
+  kept in FP32 (`trt_layer_norm_fp32_fallback`) as a mitigation for the transformer-activation overflow
+  FP16 can otherwise cause. If a camera's engine still overflows (a frame decoding to zero detections
+  with non-finite raw output — previously only logged), `CameraDetectionPipeline` now detects it via
+  the new `DFineEngine.HasNonFiniteOverflow` latch and rebuilds that camera's engine at FP32
+  automatically in the background (never blocking the capture/detect loop) — no admin action needed.
+  This supersedes the separate, still-blocked mixed-precision `*.fp16.onnx` export mechanism (no
+  working conversion toolchain produces one), which remains in the code but is no longer what FP16
+  means here.
+- **Model-agnostic local detection: a new `Custom` `Detection.ModelFamily` runs any ONNX model dropped
+  into `C:\ProgramData\LarisVMS\models`**, decoded via metadata read straight from the model (embedded
+  ONNX `metadata_props`, all graph outputs) or a same-basename JSON sidecar (`yolox-s.onnx` +
+  `yolox-s.json`) when that's missing or incomplete — one dispatch mechanism covers several common
+  detection head formats plus D-FINE's two-output `logits`/`pred_boxes` signature, the latter routed
+  through the existing `DFineDecoder` behind the same interface rather than a second bespoke decoder.
+  New `LarisVMS.Vision.Models` namespace (`ModelDescriptor`, `ModelDiscovery`, `OnnxModelInfo`,
+  `DecoderKind`) and `LarisVMS.Vision.Inference.Decoders`, ported and adapted from sibling project
+  SideGlance's own descriptor/decoder system, now legal to share since both repos are Apache-2.0. A
+  model whose metadata/sidecar can't be resolved is still listed (never hidden) with a plain-language
+  warning rather than silently dropped. This first pass (`GenericOnnxEngine`) is single-frame/
+  CPU-preprocessing only — no batch or Slice-mode support yet (see its own doc comment for why
+  generalizing those without a real model to verify against was deferred).
+- **New `Detection.LocalModelName` setting** (Camera → Node → Global chain like every other
+  `Detection.*` field) selects which discovered model a `Custom`-family pipeline loads. Admin/Nodes and
+  Admin/Settings/Detection both offer a free-typed field with a live "Refresh models" action (a new
+  `NodeControlClient` service proxies each node's own new `GET /vision/models`, itself a signed proxy
+  of Vision Service's new `GET /models`) that populates a datalist and shows any resolution warning
+  inline; the global page fans this out across every online node and shows which ones actually have a
+  given model, since a default isn't necessarily present everywhere.
+- **Models are no longer bundled into the node package.** `C:\ProgramData\LarisVMS\models` (the same
+  `%ProgramData%\LarisVMS` root the TensorRT cache already uses) is now the standard, writable,
+  per-machine models directory — `build-node.ps1` no longer copies `models\*.onnx` into the build
+  output, and `install-node.ps1` creates the folder (and prints a reminder when it's empty) instead.
+  Drop a `.onnx` file in directly; an optional same-basename `.json` sidecar fills any gaps its own
+  metadata doesn't cover.
 
 - **Stage 4: the external HTTP inference backend can skip its JPEG codec entirely.** New
   `Detection.ExternalInferenceTransport` setting (Admin → Settings → Detection, node-scoped,

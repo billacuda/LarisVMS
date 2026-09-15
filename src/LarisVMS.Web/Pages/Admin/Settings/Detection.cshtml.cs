@@ -8,13 +8,21 @@ using LarisVMS.Web.Services;
 
 namespace LarisVMS.Web.Pages.Admin.Settings;
 
+/// <summary>One local (descriptor-driven or catalog) model name, merged across however many online
+/// nodes <see cref="DetectionModel.OnPostRefreshLocalModelsAsync"/> found it on — a global default
+/// isn't necessarily present on every machine, so the picklist shows that rather than silently
+/// picking whichever node answered first.</summary>
+public sealed record MergedLocalModel(string Name, string? Decoder, int? InputSize, IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> AvailableOnNodes);
+
 /// <summary>Global AI-detection defaults — the base of the Camera &rarr; Node &rarr; Global chain a
 /// per-camera override on Cameras/Edit falls back to for Confidence/IoU/StreamRole. Split into its
 /// own tab the same way Recording's own settings were, since none of these previously had any admin
 /// UI at all (the Setting rows existed and were already read by NodeService, just never written from
 /// anywhere).</summary>
 [Authorize("Settings.Edit")]
-public class DetectionModel(ISettingsResolver settings, IAuditService auditService, ExternalInferenceProbe externalProbe) : PageModel
+public class DetectionModel(ISettingsResolver settings, IAuditService auditService, ExternalInferenceProbe externalProbe,
+    INodeService nodeService, NodeControlClient nodeControlClient) : PageModel
 {
     [BindProperty] public double Confidence { get; set; } = 0.35;
     [BindProperty] public double Iou { get; set; } = 0.5;
@@ -72,6 +80,11 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
     /// meaningful when the family resolves to YOLOX; the node fetches the chosen ONNX from the server
     /// on first use (YOLOX models aren't bundled).</summary>
     [BindProperty] public string YoloXSize { get; set; } = "S";
+    /// <summary>Node-scoped like ModelFamily — only meaningful when ModelFamily resolves to "Custom".
+    /// The name of a model <c>LarisVMS.Vision.Models.ModelDiscovery</c> found in a node's own
+    /// <c>C:\ProgramData\LarisVMS\models</c>; see <see cref="OnPostRefreshLocalModelsAsync"/> for how
+    /// the picklist below is populated.</summary>
+    [BindProperty] public string LocalModelName { get; set; } = "";
     /// <summary>Detection/hardware-acceleration overhaul, pass 1 — node-scoped like ModelFamily
     /// above (Admin/Nodes carries the per-node override), not this page's other global-default
     /// fields' Camera-override sibling. Only "Letterbox"/"Stretch" are implemented; AspectMatched
@@ -113,6 +126,11 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
     public IReadOnlyList<ExternalModelInfo> AvailableModels { get; private set; } = [];
     public ExternalHealthResponse? ProbeHealth { get; private set; }
 
+    /// <summary>Populated only by <see cref="OnPostRefreshLocalModelsAsync"/> — every model name found
+    /// on at least one online node's /vision/models, merged (a model present on several nodes appears
+    /// once, with every node it was found on listed).</summary>
+    public IReadOnlyList<MergedLocalModel> AvailableLocalModels { get; private set; } = [];
+
     public string? SavedMessage { get; set; }
     public bool StatusIsError { get; set; }
 
@@ -136,6 +154,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         DFineWeights = await settings.GetAsync("Detection.DFineWeights", "Obj2Coco");
         DFineTensorRtMode = await settings.GetAsync("Detection.DFineTensorRtMode", "Off");
         YoloXSize = await settings.GetAsync("Detection.YoloXSize", "S");
+        LocalModelName = await settings.GetAsync("Detection.LocalModelName", "");
         AspectMode = await settings.GetAsync("Detection.AspectMode", "Letterbox");
         GpuPreprocessing = await settings.GetAsync("Detection.GpuPreprocessing", false);
         Backend = await settings.GetAsync("Detection.Backend", "BuiltIn");
@@ -172,6 +191,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         var oldDFineWeights = await settings.GetAsync("Detection.DFineWeights", "Obj2Coco");
         var oldDFineTensorRtMode = await settings.GetAsync("Detection.DFineTensorRtMode", "Off");
         var oldYoloXSize = await settings.GetAsync("Detection.YoloXSize", "S");
+        var oldLocalModelName = await settings.GetAsync("Detection.LocalModelName", "");
         var oldAspectMode = await settings.GetAsync("Detection.AspectMode", "Letterbox");
         var oldGpuPreprocessing = await settings.GetAsync("Detection.GpuPreprocessing", false);
         var oldBackend = await settings.GetAsync("Detection.Backend", "BuiltIn");
@@ -254,6 +274,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         await settings.SetGlobalAsync("Detection.DFineWeights", DFineWeights, by);
         await settings.SetGlobalAsync("Detection.DFineTensorRtMode", DFineTensorRtMode, by);
         await settings.SetGlobalAsync("Detection.YoloXSize", YoloXSize, by);
+        await settings.SetGlobalAsync("Detection.LocalModelName", LocalModelName ?? "", by);
         await settings.SetGlobalAsync("Detection.AspectMode", AspectMode, by);
         await settings.SetGlobalAsync("Detection.GpuPreprocessing", GpuPreprocessing.ToString(), by);
         await settings.SetGlobalAsync("Detection.Backend", Backend, by);
@@ -285,6 +306,7 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
             AuditDiff.Of("Detection.DFineWeights", oldDFineWeights, DFineWeights),
             AuditDiff.Of("Detection.DFineTensorRtMode", oldDFineTensorRtMode, DFineTensorRtMode),
             AuditDiff.Of("Detection.YoloXSize", oldYoloXSize, YoloXSize),
+            AuditDiff.Of("Detection.LocalModelName", oldLocalModelName, LocalModelName),
             AuditDiff.Of("Detection.AspectMode", oldAspectMode, AspectMode),
             AuditDiff.Of("Detection.GpuPreprocessing", oldGpuPreprocessing.ToString(), GpuPreprocessing.ToString()),
             AuditDiff.Of("Detection.Backend", oldBackend, Backend),
@@ -302,6 +324,52 @@ public class DetectionModel(ISettingsResolver settings, IAuditService auditServi
         HasStoredExternalApiKey = hadStoredApiKey || apiKeyChanged;
         ExternalApiKey = null;
         SavedMessage = "Saved.";
+
+        // A global default affects every node, so trigger all of them — fire-and-forget, exactly like
+        // the per-node override save on Admin/Nodes: this should take effect promptly rather than
+        // waiting out each node's own 30s reconcile poll, but a slow/unreachable node must never hold
+        // up this page's own response, and that 30s poll remains the correctness backstop regardless.
+        foreach (var node in await nodeService.ListAsync())
+            _ = nodeControlClient.TriggerReconcileAsync(node);
+
+        return Page();
+    }
+
+    /// <summary>"Refresh models" for the model-agnostic (Custom) family — fans out to every node's own
+    /// <c>GET /vision/models</c> (via <see cref="NodeControlClient"/>, in parallel) and merges the
+    /// results by name, since a global default isn't necessarily present on every machine. Mirrors
+    /// <see cref="OnPostTestConnectionAsync"/>'s "load the saved page, then restore the operator's
+    /// in-progress edit" shape.</summary>
+    public async Task<IActionResult> OnPostRefreshLocalModelsAsync(CancellationToken ct)
+    {
+        var editedLocalModelName = LocalModelName;
+        await OnGetAsync();
+        LocalModelName = editedLocalModelName;
+
+        var nodes = await nodeService.ListAsync();
+        var perNode = await Task.WhenAll(nodes.Select(async n => (Node: n, Models: await nodeControlClient.GetVisionModelsAsync(n, ct))));
+
+        var merged = new Dictionary<string, MergedLocalModel>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (node, models) in perNode)
+        {
+            foreach (var m in models)
+            {
+                if (merged.TryGetValue(m.Name, out var existing))
+                {
+                    merged[m.Name] = existing with { AvailableOnNodes = [.. existing.AvailableOnNodes, node.Name] };
+                }
+                else
+                {
+                    merged[m.Name] = new MergedLocalModel(m.Name, m.Decoder, m.InputSize, m.Warnings, [node.Name]);
+                }
+            }
+        }
+
+        AvailableLocalModels = [.. merged.Values.OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase)];
+        SavedMessage = AvailableLocalModels.Count == 0
+            ? "No models found on any online node — drop an .onnx file into C:\\ProgramData\\LarisVMS\\models on a node, then refresh again."
+            : $"Found {AvailableLocalModels.Count} model(s) across {perNode.Count(p => p.Models.Count > 0)} node(s).";
+        StatusIsError = AvailableLocalModels.Count == 0;
         return Page();
     }
 

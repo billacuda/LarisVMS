@@ -15,7 +15,7 @@ work on phone, tablet, and desktop.
 
 ---
 
-## **Current version [0.200.0](CHANGELOG.md)**
+## **Current version [0.201.0](CHANGELOG.md)**
 
 ## Stack
 
@@ -284,22 +284,46 @@ missing`) and the node falls back to DirectML:
   An `FP16` option exists but is disabled — a straight FP16 cast overflows D-FINE's transformer
   decoder and the mixed-precision model that would avoid it isn't producible with current tooling.
 
-A detection model is also required: `build-node.ps1` bundles whatever `.onnx` files are in `models/`
-at the repo root into the node package, and a node with no model can't detect anything. No model is
-committed to this repo — export one with [`tools/export-models/`](tools/export-models/), which needs
-**[Python](https://www.python.org/downloads/)** on whichever machine does the export. That's normally
-the build machine rather than a recorder node, since the exported `.onnx` travels inside the package
-(a node only needs Python of its own if cuDNN is installed there via pip, above):
+A detection model is also required, and models are **never bundled** into the node package —
+`install-node.ps1` creates `C:\ProgramData\LarisVMS\models` on the node itself, and a node with
+nothing in that folder can't detect anything until you drop a `.onnx` file in. Two ways to get one:
 
-```powershell
-cd tools\export-models
-py -m venv .venv
-.venv\Scripts\python -m pip install -r requirements.txt
-.venv\Scripts\python export.py
-```
+- **Built-in D-FINE/YOLOX**: export one with [`tools/export-models/`](tools/export-models/) (needs
+  **[Python](https://www.python.org/downloads/)** wherever you run it, then copy the resulting `.onnx`
+  onto the node yourself — the export step no longer places it directly into a build):
 
-Only permissively-licensed weights are exported — Ultralytics YOLOv8/11/26 are deliberately excluded,
-since their weights are AGPL-3.0 and this project is Apache-2.0.
+  ```powershell
+  cd tools\export-models
+  py -m venv .venv
+  .venv\Scripts\python -m pip install -r requirements.txt
+  .venv\Scripts\python export.py
+  ```
+
+  Only permissively-licensed weights are exported this way — Ultralytics YOLOv8/11/26 are deliberately
+  excluded, since their weights are AGPL-3.0 and this project is Apache-2.0.
+
+- **Any other ONNX model** (`Detection.ModelFamily = Custom`): drop any `.onnx` file into
+  `C:\ProgramData\LarisVMS\models` directly. If its own embedded metadata is enough to tell how it
+  presents objects/boxes (decoder kind, input size, labels), it just works; otherwise add a
+  same-basename JSON sidecar (`yourmodel.onnx` + `yourmodel.json`) supplying whatever's missing — see
+  `LarisVMS.Vision.Models.ModelDescriptor`. `Admin → Settings → Detection` (and the per-node override
+  on `Admin → Nodes`) has a "Refresh models" action that lists everything found, flagging anything
+  still unresolved rather than hiding it. This is how a model under a different (even copyleft)
+  license can be used — LarisVMS never bundles or redistributes it, the operator supplies it directly,
+  same isolation principle sibling project SideGlance uses for its own operator-supplied weights.
+
+  > **A `Custom` model on a camera using `AspectMode.Slice` defaults to one forward pass per tile on
+  > the CPU-cropped path, not one batched GPU pass** — unlike the built-in D-FINE/YOLOX engines, an
+  > arbitrary user-supplied export can't be *assumed* to tolerate a batch dimension greater than 1
+  > internally. A plain Ultralytics ONNX export (`model.export(format="onnx")`) hardcodes batch=1 in
+  > its graph for exactly this reason. If instead you export with a genuinely dynamic batch axis
+  > (Ultralytics: `model.export(format="onnx", dynamic=True)`), LarisVMS notices the model's own
+  > declared input batch dimension isn't fixed at 1 and **automatically attempts** the same one-pass
+  > GPU-native batched path the built-in engines use, falling back to the CPU-per-tile path only if
+  > ONNX Runtime actually rejects the resulting graph (a loud, immediate error at load time — never a
+  > silent wrong answer, which is what makes attempting this safe). Check the node's own log at load
+  > time for `GPU-native batched Slice mode built successfully` vs. `falling back to the CPU-per-tile
+  > path` to see which one a given model actually got.
 
 > **A node's *first* AI detection install needs a manual `install-node.ps1` run.** Recorder
 > auto-update only replaces binaries that are already present, so it will keep an existing

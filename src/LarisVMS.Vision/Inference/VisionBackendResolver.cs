@@ -143,7 +143,17 @@ public static class VisionBackendResolver
         {
             chosen = _requestedAccelerator.ToLowerInvariant() switch
             {
-                "nvidia" => ResolveNvidia(logger),
+                // TensorRt is layered on the same CUDA native build as plain Nvidia — TensorRT itself
+                // is turned on via EngineOptions.EnableTensorRt (VisionServiceSupervisor.SetEnableTensorRt
+                // -> Vision__EnableTensorRt), not a separate backend folder.
+                "nvidia" or "tensorrt" => ResolveNvidia(logger),
+                // Explicit OpenVINO — previously only reachable via the separate backendOverride
+                // parameter above, never from a node's own AiAccelerator choice (the bug "amd" this
+                // preserves for AMD; "intel" used to fall into this same DirectML case too, which was
+                // the mislabeling AiAccelerator.OpenVino now fixes).
+                "openvino" => HasBackendFolder(VisionBackend.OpenVino)
+                    ? VisionBackend.OpenVino
+                    : Fallback(VisionBackend.OpenVino, MissingFolderReason("OpenVINO")),
                 "intel" or "amd" => HasBackendFolder(VisionBackend.DirectMl)
                     ? VisionBackend.DirectMl
                     : Fallback(VisionBackend.DirectMl, MissingFolderReason("DirectML")),

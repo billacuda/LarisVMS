@@ -450,9 +450,10 @@ if (Test-Path $UpdaterBinaryPath) {
 }
 if ($hasVision) {
     # Everything the package ships beside LarisVMS.Vision.Service.exe: the exe, the loose managed
-    # assemblies (Microsoft.ML.OnnxRuntime.dll, YoloDotNet, ...), the onnxruntime-backends\ tree
+    # assemblies (Microsoft.ML.OnnxRuntime.dll, YoloDotNet, ...), and the onnxruntime-backends\ tree
     # (every native ONNX Runtime build — cuda/directml/openvino/cpu — each with its own onnxruntime.dll
-    # and provider natives; VisionBackendResolver picks one at runtime), and models\.
+    # and provider natives; VisionBackendResolver picks one at runtime). Models are handled separately
+    # below — they are never bundled, so there is no models\ in the package to copy.
     $visionSourceDir = Split-Path $VisionBinaryPath -Parent
     Copy-ItemWithRetry (Join-Path $visionSourceDir 'LarisVMS.Vision.Service.*') $InstallDir
     Copy-ItemWithRetry (Join-Path $visionSourceDir '*.dll') $InstallDir
@@ -462,9 +463,13 @@ if ($hasVision) {
     } else {
         Write-Host "WARNING: onnxruntime-backends\ not found beside LarisVMS.Vision.Service.exe - AI detection will not run. Rebuild the package with build-node.ps1." -ForegroundColor Yellow
     }
-    $modelsSourceDir = Join-Path $visionSourceDir 'models'
-    if (Test-Path $modelsSourceDir) {
-        Copy-ItemWithRetry $modelsSourceDir $InstallDir
+    # Models are never bundled into the package (see build-node.ps1) — they live in this shared,
+    # writable, per-machine location instead, so an upgrade never overwrites an operator-supplied
+    # model and a fresh install always has somewhere to drop one into.
+    $modelsDir = Join-Path $env:ProgramData 'LarisVMS\models'
+    New-Item -ItemType Directory -Force -Path $modelsDir | Out-Null
+    if (-not (Get-ChildItem $modelsDir -Filter '*.onnx' -File -ErrorAction SilentlyContinue)) {
+        Write-Host "    No .onnx models found in $modelsDir yet — AI detection won't have anything to run until you drop one in (with an optional same-basename .json sidecar if its own metadata isn't enough). See tools/export-models/ for how to obtain one." -ForegroundColor Yellow
     }
 }
 Write-Ok "Files installed"

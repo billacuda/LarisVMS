@@ -63,12 +63,122 @@ public class SliceMergeTests
     }
 
     [Fact]
-    public void DifferentLabelsNeverMergeRegardlessOfOverlap()
+    public void DifferentLabelsStillMergeOnHighIoU_KeepingTheHigherConfidenceLabel()
     {
+        // Confirmed in production: the same physical vehicle straddling a slice's overlap zone is
+        // sometimes classified "car" by one slice and "truck" by the other, producing two nearly
+        // identical stacked boxes instead of one. Label agreement is not required to merge — only
+        // geometry — and the merged result keeps whichever side had the higher confidence.
+        var car = new SliceMerge.Candidate(new SKRectI(100, 100, 200, 300), 0.9, "car", TouchesSliceEdge: true);
+        var truck = new SliceMerge.Candidate(new SKRectI(102, 100, 202, 300), 0.6, "truck", TouchesSliceEdge: true);
+
+        var merged = SliceMerge.Merge([car, truck]);
+
+        var result = Assert.Single(merged);
+        Assert.Equal("car", result.Label);
+        Assert.Equal(0.9, result.Confidence);
+    }
+
+    [Fact]
+    public void DifferentLabelsMergeViaTheSeamRuleTooWhenBothTouchAnEdge()
+    {
+        // Same geometry as CarWiderThanTheOverlap_MergesViaTheSeamRuleDespiteLowIoU, but the two
+        // slices disagreed on the vehicle's class as well as clipping it — both problems reported
+        // together in production for the same camera. The seam rule must still reunite the fragments
+        // and keep the higher-confidence label for the merged box.
+        var fromTile0 = new SliceMerge.Candidate(new SKRectI(490, 100, 640, 300), 0.72, "truck", TouchesSliceEdge: true);
+        var fromTile1 = new SliceMerge.Candidate(new SKRectI(540, 100, 790, 300), 0.68, "car", TouchesSliceEdge: true);
+
+        var merged = SliceMerge.Merge([fromTile0, fromTile1]);
+
+        var result = Assert.Single(merged);
+        Assert.Equal(new SKRectI(490, 100, 790, 300), result.Box);
+        Assert.Equal("truck", result.Label);
+        Assert.Equal(0.72, result.Confidence);
+    }
+
+    [Fact]
+    public void DifferentCategoriesNeverMergeEvenOnFullOverlapAndBothEdgeFlagged()
+    {
+        // The direct regression test: a person and a car resolve to different CocoCategoryMap
+        // categories (Human vs Vehicle), so they must never merge regardless of geometry — even the
+        // worst case (identical boxes, both marked as touching a slice edge) that would otherwise
+        // satisfy both the IoU and seam rules. This is what actually broke in production once
+        // cross-label merging became blanket-permissive: an unrelated object standing at a slice's
+        // true frame border (falsely flagged as edge-touching — see CameraDetectionPipeline's own
+        // TouchesSliceEdge fix) could be absorbed into a neighboring object and simply disappear.
         var person = new SliceMerge.Candidate(new SKRectI(100, 100, 200, 300), 0.9, "person", TouchesSliceEdge: true);
         var car = new SliceMerge.Candidate(new SKRectI(100, 100, 200, 300), 0.8, "car", TouchesSliceEdge: true);
 
         var merged = SliceMerge.Merge([person, car]);
+
+        Assert.Equal(2, merged.Count);
+    }
+
+    [Fact]
+    public void ObjectCategoryCatchAllRequiresExactLabelMatch()
+    {
+        // "backpack" and "chair" both fall through CocoCategoryMap's catch-all "Object" bucket, which
+        // is not a real semantic group (see CocoCategoryMap's and SliceMerge's own doc comments) — two
+        // different Object-bucket labels must not merge just because both landed in the catch-all,
+        // even on full overlap with both edge-flagged.
+        var backpack = new SliceMerge.Candidate(new SKRectI(100, 100, 200, 300), 0.9, "backpack", TouchesSliceEdge: true);
+        var chair = new SliceMerge.Candidate(new SKRectI(100, 100, 200, 300), 0.8, "chair", TouchesSliceEdge: true);
+
+        var merged = SliceMerge.Merge([backpack, chair]);
+
+        Assert.Equal(2, merged.Count);
+    }
+
+    [Fact]
+    public void ObjectCategoryCatchAllStillMergesOnExactLabelMatch()
+    {
+        // The same catch-all bucket, but the same exact label — must still merge like any other
+        // duplicate sighting (this is the pre-cross-label-merging behavior, preserved for Object).
+        var a = new SliceMerge.Candidate(new SKRectI(100, 100, 200, 300), 0.9, "backpack", TouchesSliceEdge: true);
+        var b = new SliceMerge.Candidate(new SKRectI(102, 100, 202, 300), 0.6, "backpack", TouchesSliceEdge: true);
+
+        var merged = SliceMerge.Merge([a, b]);
+
+        Assert.Single(merged);
+    }
+
+    [Fact]
+    public void OneSidedlyClippedFragmentMergesIntoTheWholeBoxSeenByTheNeighboringSlice()
+    {
+        // The pre-existing half-box case (not introduced by cross-label merging): one slice clips the
+        // object (edge-flagged), but the neighboring slice reports it whole, comfortably inside its
+        // own overlap band (not touching that slice's own edge, so not edge-flagged). The two-sided
+        // seam rule can't fire (only one side is flagged), and plain IoU under-scores a small fragment
+        // against a much bigger whole box — so without the one-sided rule this fragment would survive
+        // as a stray extra box next to the correct one.
+        var wholeBox = new SliceMerge.Candidate(new SKRectI(500, 100, 800, 300), 0.85, "truck", TouchesSliceEdge: false);
+        var clippedFragment = new SliceMerge.Candidate(new SKRectI(500, 100, 640, 300), 0.55, "car", TouchesSliceEdge: true);
+
+        // Confirm the premise: this fragment is almost entirely contained in the whole box (the
+        // one-sided rule's own high bar) but the two share low mutual IoU (small fragment vs. big box).
+        Assert.True(Nms.IoU(wholeBox.Box, clippedFragment.Box) < 0.5);
+
+        var merged = SliceMerge.Merge([wholeBox, clippedFragment], out var stats);
+
+        var result = Assert.Single(merged);
+        Assert.Equal(wholeBox.Box, result.Box); // the fragment is already fully inside the whole box
+        Assert.Equal("truck", result.Label); // higher confidence wins
+        Assert.Equal(1, stats.OneSidedSeamAbsorbed);
+        Assert.Equal(0, stats.SeamAbsorbed);
+    }
+
+    [Fact]
+    public void OneSidedSeamRuleRequiresNearlyFullContainmentNotJustPartialOverlap()
+    {
+        // The one-sided rule's threshold is deliberately much stricter than the two-sided seam rule's
+        // — a fragment merely overlapping a neighboring object by a modest amount (not almost entirely
+        // contained) must not merge, or two genuinely separate objects near a seam could wrongly merge
+        // with only one edge-flag to go on.
+        var wholeBox = new SliceMerge.Candidate(new SKRectI(500, 100, 800, 300), 0.85, "truck", TouchesSliceEdge: false);
+        var partiallyOverlapping = new SliceMerge.Candidate(new SKRectI(750, 100, 900, 300), 0.55, "car", TouchesSliceEdge: true);
+
+        var merged = SliceMerge.Merge([wholeBox, partiallyOverlapping]);
 
         Assert.Equal(2, merged.Count);
     }

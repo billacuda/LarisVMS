@@ -149,6 +149,16 @@
                         {
                             <span class="badge text-bg-danger">Not reporting</span>
                         }
+                        @* Orthogonal to the badge above — see dashboard.js's detectionBadge for why this is a
+                           second, separate badge rather than folded into the recording-status one. *@
+                        @if (r.EngineBuildFailed == true)
+                        {
+                            <text> </text><span class="badge text-bg-danger" title="AI detection failed to start — check the vision log">AI detection failed</span>
+                        }
+                        else if (r.IsEngineBuilding == true)
+                        {
+                            <text> </text><span class="badge text-bg-info"><span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Starting AI detection&hellip;</span>
+                        }
                     </td>
                     <td class="text-end" data-sort-value="@(r.HealthFresh ? r.Fps : null)">@(r.HealthFresh ? r.Fps?.ToString() ?? "—" : "—")</td>
                     <td class="text-end" data-sort-value="@(r.HealthFresh ? r.BitrateKbps : null)">@(r.HealthFresh && r.BitrateKbps is { } kbps ? $"{kbps:N0} kbps" : "—")</td>

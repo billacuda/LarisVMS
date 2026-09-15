@@ -40,6 +40,15 @@ public sealed class VisionServiceSupervisor(string nodeInstallDirectory, string 
     // value no longer matches.
     private string _preferredAccelerator = "Auto";
     private string? _startedAccelerator;
+
+    // AiAccelerator.TensorRt/OpenVino refinements — same "chosen once at child startup, restart on
+    // change" reasoning as _preferredAccelerator above, just two more env vars rather than folding
+    // into that one string (Vision__EnableTensorRt/Vision__Backend are genuinely separate
+    // VisionServiceOptions/VisionBackendResolver knobs, not alternate spellings of the accelerator).
+    private bool _enableTensorRt;
+    private bool? _startedEnableTensorRt;
+    private string? _backendOverride;
+    private string? _startedBackendOverride;
     private readonly HttpClient _http = new() { BaseAddress = new Uri($"http://127.0.0.1:{Port}/"), Timeout = TimeSpan.FromSeconds(5) };
 
     // Windows job object holding the child, created once and deliberately never closed for the
@@ -110,6 +119,8 @@ public sealed class VisionServiceSupervisor(string nodeInstallDirectory, string 
         psi.EnvironmentVariables["Vision__FfmpegPath"] = ffmpegPath;
         psi.EnvironmentVariables["Vision__LogLevel"] = _logLevel;
         psi.EnvironmentVariables["Vision__PreferredAccelerator"] = _preferredAccelerator;
+        if (_enableTensorRt) psi.EnvironmentVariables["Vision__EnableTensorRt"] = "true";
+        if (!string.IsNullOrWhiteSpace(_backendOverride)) psi.EnvironmentVariables["Vision__Backend"] = _backendOverride;
 
         var process = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null.");
         AssignToKillOnCloseJob(process);
@@ -118,6 +129,8 @@ public sealed class VisionServiceSupervisor(string nodeInstallDirectory, string 
 
         _process = process;
         _startedAccelerator = _preferredAccelerator;
+        _startedEnableTensorRt = _enableTensorRt;
+        _startedBackendOverride = _backendOverride;
         logger.LogInformation("Started LarisVMS.Vision.Service (PID {Pid}) on port {Port}, preferred accelerator {Accelerator}.",
             process.Id, Port, _preferredAccelerator);
     }
@@ -137,6 +150,43 @@ public sealed class VisionServiceSupervisor(string nodeInstallDirectory, string 
             logger.LogInformation(
                 "Node accelerator changed from {Old} to {New} — restarting LarisVMS.Vision.Service to pick up the matching backend.",
                 _startedAccelerator, normalized);
+            Stop();
+        }
+    }
+
+    /// <summary>Turns TensorRT on for every local engine (not just D-FINE) via
+    /// <c>Vision__EnableTensorRt</c> — set when the node's resolved accelerator is
+    /// <see cref="LarisVMS.Core.Enums.AiAccelerator.TensorRt"/>. Same restart-on-change shape as
+    /// <see cref="SetPreferredAccelerator"/>: the flag is only read at child startup.</summary>
+    public void SetEnableTensorRt(bool enabled)
+    {
+        if (enabled == _enableTensorRt) return;
+
+        _enableTensorRt = enabled;
+        if (_process is { HasExited: false } && _startedEnableTensorRt is { } started && started != enabled)
+        {
+            logger.LogInformation(
+                "TensorRT preference changed to {Enabled} — restarting LarisVMS.Vision.Service.", enabled);
+            Stop();
+        }
+    }
+
+    /// <summary>Forces a specific ONNX Runtime backend via <c>Vision__Backend</c> — set to
+    /// <c>"openvino"</c> when the node's resolved accelerator is
+    /// <see cref="LarisVMS.Core.Enums.AiAccelerator.OpenVino"/>, null otherwise (falls through to the
+    /// vendor-based resolution <see cref="SetPreferredAccelerator"/> drives). Same restart-on-change
+    /// shape as the other setters here.</summary>
+    public void SetBackendOverride(string? backend)
+    {
+        var normalized = string.IsNullOrWhiteSpace(backend) ? null : backend.Trim();
+        if (normalized == _backendOverride) return;
+
+        _backendOverride = normalized;
+        if (_process is { HasExited: false } && _startedBackendOverride != normalized)
+        {
+            logger.LogInformation(
+                "Backend override changed from {Old} to {New} — restarting LarisVMS.Vision.Service.",
+                _startedBackendOverride ?? "(none)", normalized ?? "(none)");
             Stop();
         }
     }

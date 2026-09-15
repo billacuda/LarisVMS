@@ -439,7 +439,16 @@ public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? Stor
     /// a silent behaviour change for an existing deployment. Appended last so the positional
     /// NodeService construction stays stable; defaults "Auto" so an older node keeps today's JPEG
     /// path until the operator (or a successful probe) actually asks for something else.</summary>
-    string ExternalInferenceTransport = "Auto");
+    string ExternalInferenceTransport = "Auto",
+    /// <summary>Detection.LocalModelName — the name of a model discovered by
+    /// <c>LarisVMS.Vision.Models.ModelDiscovery</c> in the node's own
+    /// <c>C:\ProgramData\LarisVMS\models</c> directory, resolved Node &rarr; Global like the other
+    /// Detection.* fields. Blank (the default) means "use the legacy DetectionModelFamily/
+    /// DFineWeights/YoloXSize triple" — this field only takes over when non-blank, and only when
+    /// DetectionModelFamily itself resolves to "Custom" (see DetectionModelSelection.Choose). Appended
+    /// last so the positional NodeService construction stays stable; blank default keeps an older node
+    /// on its existing family/weights/size selection with no behavior change.</summary>
+    string LocalModelName = "");
 
 /// <summary>One completed MotionSpan, batch-reported the same way SegmentReportItem is — see
 /// NodeService.RecordMotionSpansAsync for why plain REST + EF insert is enough here despite the
@@ -518,4 +527,12 @@ public record SegmentRelocateRequest(List<SegmentRelocateItem> Items);
 /// preserves whatever is already stored.</summary>
 public record StreamInfoReportItem(Guid CameraId, string StreamRole, int? Width, int? Height, string? Codec,
     int? Fps = null, int? BitrateKbps = null, int? ReconnectCount = null,
-    string? AudioCodec = null, int? AudioSampleRateHz = null);
+    string? AudioCodec = null, int? AudioSampleRateHz = null,
+    /// <summary>Section H: this camera's AI-detection engine build state, from the Vision Service's
+    /// own <c>GET /cameras/status</c> (via NodeWorker's <c>_visionCameraStatus</c>) — null when AI
+    /// detection isn't running for this camera at all (no accelerator, disabled, or an older node
+    /// build that doesn't send this), in which case the Dashboard shows neither badge. Both null and
+    /// both false read the same to the Dashboard ("nothing to report"); coalesce-preserve like every
+    /// other optional field here, so a report that only carries Fps/BitrateKbps doesn't clobber a
+    /// previously-reported engine state back to unknown.</summary>
+    bool? IsEngineBuilding = null, bool? EngineBuildFailed = null);

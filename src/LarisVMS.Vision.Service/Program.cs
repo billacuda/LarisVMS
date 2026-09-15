@@ -1,6 +1,7 @@
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Logging;
 using LarisVMS.Vision.Inference;
+using LarisVMS.Vision.Models;
 using LarisVMS.Vision.Service;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -104,6 +105,18 @@ app.MapPost("/cameras/{cameraId:guid}/start", async (Guid cameraId, VisionStartC
 // against this and re-issues a start for anything missing — the only way it can now learn that a
 // pipeline's engine build failed, since that happens after /start has already returned 200.
 app.MapGet("/cameras", (CameraPipelineManager manager) => Results.Ok(manager.WatchedCameraIds()));
+
+// Richer per-camera state for the Dashboard's "still starting AI detection" spinner — NodeWorker
+// polls this and folds it into each camera's StreamInfoReportItem. Deliberately separate from /cameras
+// above, which must keep returning a bare Guid list.
+app.MapGet("/cameras/status", (CameraPipelineManager manager) => Results.Ok(manager.GetCameraStatuses()));
+
+// The model-agnostic dropdown's data source — every .onnx ModelDiscovery finds in this node's models
+// directory, with whatever descriptor/decoder it resolved (or a warning if it didn't). Node's own
+// GET /vision/models proxies this for Admin's Detection.LocalModelName picker.
+app.MapGet("/models", (CameraPipelineManager manager) => Results.Ok(manager.ListDiscoveredModels()
+    .Select(m => new DiscoveredModelDto(m.Name, m.Descriptor?.Decoder.ToString(), m.Descriptor?.InputSize, m.Source.ToString(), m.Warnings))
+    .ToList()));
 
 app.MapPost("/cameras/{cameraId:guid}/stop", async (Guid cameraId, CameraPipelineManager manager) =>
 {

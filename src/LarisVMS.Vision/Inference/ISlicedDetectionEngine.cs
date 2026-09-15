@@ -4,20 +4,23 @@ namespace LarisVMS.Vision.Inference;
 
 /// <summary>
 /// Detection/hardware-acceleration overhaul, pass 4: optional capability for
-/// <see cref="LarisVMS.Core.Enums.AspectMode.Slice"/>'s GPU-native path. The engine's own
-/// accelerator-side head (<see cref="OnnxPreprocessHead.MergeSliced"/>) already cuts one whole,
-/// non-square captured frame into N overlapping <c>networkSize</c>-square slices and batches them
-/// *inside* the ONNX graph — so <see cref="DetectSliced"/> takes exactly **one** nv12 buffer, the
-/// whole <c>SliceLayout.CaptureWidth</c>×<c>CaptureHeight</c> frame, never pre-cut by the caller —
-/// and returns one detection list per slice, in <c>SliceLayout.Slices</c> order.
+/// <see cref="LarisVMS.Core.Enums.AspectMode.Slice"/>. Every implementation takes exactly **one**
+/// nv12 buffer, the whole <c>SliceLayout.CaptureWidth</c>×<c>CaptureHeight</c> frame, never pre-cut
+/// by the caller — and returns one detection list per slice, in <c>SliceLayout.Slices</c> order.
+/// *How* the frame gets cut into slices is each implementation's own concern and differs by engine:
+/// <see cref="DFineEngine"/>/<see cref="YoloXEngine"/> merge an accelerator-side head
+/// (<see cref="OnnxPreprocessHead.MergeSliced"/>) that cuts and batches all N slices *inside* the
+/// ONNX graph in one forward pass — verified safe only for those two specific, hand-checked exports,
+/// so there is deliberately no CPU fallback for either of them (see their own constructors).
+/// <see cref="GenericOnnxEngine"/> (an arbitrary user-supplied model) instead crops each tile out of
+/// the nv12 buffer on the CPU and runs N separate batch-1 forward passes — slower, but correct
+/// regardless of whether the model's own graph tolerates a batch dimension greater than 1, which
+/// can't be safely assumed for a model this codebase has never seen before.
 ///
 /// Deliberately a different shape from <see cref="IBatchDetectionEngine.DetectBatch"/>, not a reuse
 /// of it: that method's whole contract is N *already separately-sized* images the caller hands in
-/// one by one; here there is only ever one physical frame, and the batching is an internal graph
-/// detail the caller never sees or manages. Only implemented when the engine was built with a
-/// <c>SliceLayout</c> and GPU preprocessing on — Slice mode requires GPU preprocessing (see
-/// <see cref="CameraDetectionPipeline"/>'s own doc comment) precisely so this path exists instead of
-/// a CPU fallback that would defeat the point of doing the slice on the accelerator at all.
+/// one by one; here there is only ever one physical frame, and how it becomes N results is an
+/// implementation detail the caller never manages.
 /// </summary>
 public interface ISlicedDetectionEngine
 {

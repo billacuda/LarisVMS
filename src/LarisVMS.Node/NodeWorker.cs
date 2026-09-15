@@ -85,6 +85,11 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     // the pipeline the previous one was still setting up.
     private readonly ConcurrentDictionary<Guid, byte> _visionStartsInFlight = new();
 
+    // Section H: per-camera engine-build state, refreshed every reconcile by
+    // RefreshVisionCameraStatusesAsync and read by EnqueueHealthReports — the Dashboard's "still
+    // starting AI detection" spinner data source.
+    private readonly ConcurrentDictionary<Guid, VisionCameraStatusDto> _visionCameraStatus = new();
+
     /// <summary>Same client this worker's own reconcile loop uses to start/stop watching a camera —
     /// exposed so DetectionOverlayHandler (decision 6's live-view box overlay) can poll
     /// GET /cameras/{id}/detections without opening a second HttpClient against the same base
@@ -96,6 +101,22 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     // Node-wide (not per-camera) — set once the first time DetectionModelSelection.Choose actually
     // substitutes D-FINE for an unimplemented family, so the log isn't repeated every reconcile.
     private bool _warnedDetectionModelFallback;
+
+    // Lets an admin save on Web (Detection settings or a per-node override) hit /reconcile-now on
+    // this node instead of waiting up to 30s for ReconcileLoopAsync's own timer — the hot-swap logic
+    // itself (ReconcileVision's signature comparison -> StartOrReplaceAsync) is unchanged, only how
+    // soon the loop gets around to re-running it. A 1-count semaphore: multiple requests to reconcile
+    // "now" before the loop actually wakes just collapse into one wake, which is exactly what's wanted
+    // (Release() below no-ops via the try/catch once the loop is already about to run).
+    private readonly SemaphoreSlim _reconcileNowSignal = new(0, 1);
+
+    /// <summary>Wakes <see cref="ReconcileLoopAsync"/> immediately instead of waiting out its current
+    /// 30s delay — called from the node's own <c>POST /reconcile-now</c> endpoint.</summary>
+    public void RequestImmediateReconcile()
+    {
+        try { _reconcileNowSignal.Release(); }
+        catch (SemaphoreFullException) { /* a wake is already pending — nothing more to do */ }
+    }
 
     // M8 pass 2: each camera's SegmentCompleted handler (see HandleSegmentCompleted) fires from
     // that camera's own RecordingSession.RunAsync task, so multiple cameras can call in
@@ -559,7 +580,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 TryStartFromCacheIfIdle(ct);
             }
 
-            try { await Task.Delay(TimeSpan.FromSeconds(30), ct); }
+            try { await Task.WhenAny(Task.Delay(TimeSpan.FromSeconds(30), ct), _reconcileNowSignal.WaitAsync(ct)); }
             catch (OperationCanceledException) { break; }
         }
     }
@@ -716,9 +737,11 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         foreach (var (cameraId, recorder) in _active)
         {
             var session = recorder.Session;
+            _visionCameraStatus.TryGetValue(cameraId, out var visionStatus);
             _pendingStreamInfo.Enqueue(new StreamInfoReportItem(
                 cameraId, "Main", Width: null, Height: null, Codec: null,
-                Fps: session.CurrentFps, BitrateKbps: session.CurrentBitrateKbps, ReconnectCount: session.TotalReconnectCount));
+                Fps: session.CurrentFps, BitrateKbps: session.CurrentBitrateKbps, ReconnectCount: session.TotalReconnectCount,
+                IsEngineBuilding: visionStatus?.IsEngineBuilding, EngineBuildFailed: visionStatus?.EngineBuildFailed));
         }
     }
 
@@ -919,8 +942,13 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             // external backend on a GPU-less node this resolution is inert (the HTTP engine never
             // touches ONNX Runtime), so pass "Cpu" purely to hand the child a concrete value.
             _visionSupervisor.SetPreferredAccelerator((_resolvedAccelerator ?? AiAccelerator.Cpu).ToString());
+            // TensorRt/OpenVino are refinements layered on top of the vendor-based backend choice
+            // above (see AiAccelerator's own doc comment) — reachable only via these two extra env
+            // vars, not the accelerator name itself.
+            _visionSupervisor.SetEnableTensorRt(_resolvedAccelerator == AiAccelerator.TensorRt);
+            _visionSupervisor.SetBackendOverride(_resolvedAccelerator == AiAccelerator.OpenVino ? "openvino" : null);
 
-            if (_resolvedAccelerator == AiAccelerator.Nvidia)
+            if (_resolvedAccelerator is AiAccelerator.Nvidia or AiAccelerator.TensorRt)
             {
                 // Pull the big CUDA provider DLL from the server if this NVIDIA node doesn't have it
                 // yet (fire-and-forget; the Vision Service resolves to DirectML until it lands).
@@ -934,6 +962,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
 
             _visionSupervisor.EnsureRunning();
             PruneStaleVisionWatches();
+            RefreshVisionCameraStatuses();
         }
         else
         {
@@ -1493,7 +1522,12 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             // Detection.SnapshotMarginPercent — global. Cosmetic-only (the eager crop's context
             // margin), but included here for the same restart-on-any-Detection.*-change consistency
             // every other field in this signature follows.
-            config.SnapshotMarginPercent);
+            config.SnapshotMarginPercent,
+            // Detection.LocalModelName — only meaningful when _resolvedDetectionModelFamily is
+            // "Custom", but included unconditionally like DFineWeights/YoloXSize above: a change
+            // (picking a different discovered model) means a different .onnx/decoder, so it must
+            // restart the pipeline the same way switching DFineWeights does.
+            config.LocalModelName);
 
         if (_activeVision.TryGetValue(camera.CameraId, out var existing) && existing.ConfigSignature == signature) return; // already watching, unchanged
 
@@ -1529,7 +1563,10 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             // Detection.SnapshotMarginPercent — global; see the field's own doc comment.
             config.SnapshotMarginPercent,
             // Detection.ExternalInferenceTransport — node-scoped; see the field's own doc comment.
-            config.ExternalInferenceTransport);
+            config.ExternalInferenceTransport,
+            // Detection.LocalModelName — only acted on by CameraPipelineManager when ModelFamily is
+            // "Custom"; see NodeConfigResponse.LocalModelName's own doc comment.
+            config.LocalModelName);
 
         // Never stack two starts for the same camera — see _visionStartsInFlight's own comment.
         if (!_visionStartsInFlight.TryAdd(camera.CameraId, 0)) return;
@@ -1547,7 +1584,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// hwaccel pairing exists for them.</summary>
     private static string? AccelToFfmpegHwaccel(AiAccelerator accelerator) => accelerator switch
     {
-        AiAccelerator.Nvidia => "cuda",
+        AiAccelerator.Nvidia or AiAccelerator.TensorRt => "cuda",
         _ => null
     };
 
@@ -1598,6 +1635,43 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     {
         if (_activeVision.IsEmpty) return;
         _ = PruneStaleVisionWatchesAsync();
+    }
+
+    /// <summary>Per-camera engine-build state (Section H's Dashboard spinner), refreshed every
+    /// reconcile alongside <see cref="PruneStaleVisionWatches"/> — same "poll Vision Service's own
+    /// state, tolerate it being briefly unreachable" shape as that method. Read by
+    /// <see cref="EnqueueHealthReports"/> when building each camera's <see cref="StreamInfoReportItem"/>.</summary>
+    private void RefreshVisionCameraStatuses()
+    {
+        if (_activeVision.IsEmpty) return;
+        _ = RefreshVisionCameraStatusesAsync();
+    }
+
+    private async Task RefreshVisionCameraStatusesAsync()
+    {
+        List<VisionCameraStatusDto>? statuses;
+        try
+        {
+            statuses = await _visionHttp.GetFromJsonAsync<List<VisionCameraStatusDto>>("/cameras/status");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not read the Vision Service's per-camera status — leaving this node's view unchanged.");
+            return;
+        }
+        if (statuses is null) return;
+
+        var seen = new HashSet<Guid>();
+        foreach (var status in statuses)
+        {
+            seen.Add(status.CameraId);
+            _visionCameraStatus[status.CameraId] = status;
+        }
+        // Drop stale entries for cameras Vision Service no longer reports at all (stopped/reassigned) —
+        // otherwise EnqueueHealthReports would keep reporting a last-known status for a camera that
+        // isn't being watched any more.
+        foreach (var cameraId in _visionCameraStatus.Keys.Except(seen).ToList())
+            _visionCameraStatus.TryRemove(cameraId, out _);
     }
 
     private async Task PruneStaleVisionWatchesAsync()

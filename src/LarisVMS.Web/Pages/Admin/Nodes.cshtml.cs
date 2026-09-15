@@ -15,7 +15,7 @@ namespace LarisVMS.Web.Pages.Admin;
 [Authorize("Nodes.Edit")]
 public class NodesModel(INodeService nodeService, ICameraService cameraService, ISettingsResolver settings,
     IAuditService auditService, IHttpClientFactory httpFactory, LarisVMS.Web.Services.MediaRelayMetrics relayMetrics,
-    IProxyService proxyService) : PageModel
+    IProxyService proxyService, LarisVMS.Web.Services.NodeControlClient nodeControlClient) : PageModel
 {
     /// <summary>Failover plan phase 1: the streaming-relay counters, surfaced as a small diagnostics
     /// line — with direct streaming on these trend to zero.</summary>
@@ -43,6 +43,12 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
     public Dictionary<Guid, string> ModelFamilyOverride { get; set; } = [];
     public Dictionary<Guid, string> DFineWeightsOverride { get; set; } = [];
     public Dictionary<Guid, string> YoloXSizeOverride { get; set; } = [];
+    /// <summary>Detection.LocalModelName per-node override — only acted on when ModelFamilyOverride
+    /// (or the inherited default) resolves to "Custom". Same per-node override shape as the fields
+    /// above; free-typed rather than a hard-constrained select since the model that name refers to
+    /// lives on the node itself, not something this page's own GET can enumerate without probing it
+    /// (see the "Refresh models" button / OnGetLocalModelsAsync).</summary>
+    public Dictionary<Guid, string> LocalModelNameOverride { get; set; } = [];
     public Dictionary<Guid, int?> MaxFpsOverride { get; set; } = [];
     public Dictionary<Guid, string> EffectiveModelFamily { get; set; } = [];
     /// <summary>Detection/hardware-acceleration overhaul, pass 1 — same per-node override shape as
@@ -149,7 +155,8 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
         string? retentionOverrideRaw, string? modelFamilyOverride, string? dfineWeightsOverride, string? yoloXSizeOverride,
         string? maxFpsOverrideRaw, string? aspectModeOverride, string? dfineTensorRtModeOverride,
         string? backendOverride, string? externalUrlOverride, string? externalModelOverride, string? externalInputSizeOverrideRaw,
-        bool hasExternalApiKeyOverride, string? archiveEnabledOverride, string? archiveRetentionOverrideRaw) =>
+        bool hasExternalApiKeyOverride, string? archiveEnabledOverride, string? archiveRetentionOverrideRaw,
+        string? localModelNameOverride = null) =>
         ComputeSnapshot(
             n.Name, n.StorageRootPath, n.ArchiveRootPath, n.AiAccelerator?.ToString(), n.DisableAiObjectDetection.ToString(),
             n.DirectStreamingMode, n.AllowInsecureClientEndpoint?.ToString(), n.ClientEndpointHost, n.ClientCertPfxPath,
@@ -157,7 +164,8 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
             NormalizeInt(retentionOverrideRaw), modelFamilyOverride ?? "", dfineWeightsOverride ?? "", yoloXSizeOverride ?? "",
             NormalizeInt(maxFpsOverrideRaw), aspectModeOverride ?? "", dfineTensorRtModeOverride ?? "",
             backendOverride ?? "", externalUrlOverride ?? "", externalModelOverride ?? "", NormalizeInt(externalInputSizeOverrideRaw),
-            hasExternalApiKeyOverride.ToString(), archiveEnabledOverride ?? "", NormalizeInt(archiveRetentionOverrideRaw));
+            hasExternalApiKeyOverride.ToString(), archiveEnabledOverride ?? "", NormalizeInt(archiveRetentionOverrideRaw),
+            localModelNameOverride ?? "");
 
     public async Task OnGetAsync()
     {
@@ -212,6 +220,7 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
             ModelFamilyOverride[n.Id] = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.ModelFamily") ?? "";
             DFineWeightsOverride[n.Id] = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.DFineWeights") ?? "";
             YoloXSizeOverride[n.Id] = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.YoloXSize") ?? "";
+            LocalModelNameOverride[n.Id] = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.LocalModelName") ?? "";
             var maxFpsOwn = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.MaxFps");
             MaxFpsOverride[n.Id] = int.TryParse(maxFpsOwn, out var mf) ? mf : null;
             EffectiveModelFamily[n.Id] = await settings.GetAsync("Detection.ModelFamily", "Auto", nodeId: n.Id);
@@ -235,8 +244,23 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
             Snapshot[n.Id] = ComputeNodeSnapshot(n, ownOverride, ModelFamilyOverride[n.Id], DFineWeightsOverride[n.Id],
                 YoloXSizeOverride[n.Id], maxFpsOwn, AspectModeOverride[n.Id], DFineTensorRtModeOverride[n.Id],
                 DetectionBackendOverride[n.Id], ExternalInferenceUrlOverride[n.Id], ExternalInferenceModelOverride[n.Id],
-                externalInputSizeOwn, HasExternalInferenceApiKeyOverride[n.Id], ArchiveEnabledOverride[n.Id], archiveRetentionOwn);
+                externalInputSizeOwn, HasExternalInferenceApiKeyOverride[n.Id], ArchiveEnabledOverride[n.Id], archiveRetentionOwn,
+                LocalModelNameOverride[n.Id]);
         }
+    }
+
+    /// <summary>The "Refresh models" button's fetch target — proxies this node's own
+    /// <c>GET /vision/models</c> via <see cref="LarisVMS.Web.Services.NodeControlClient"/>, so the
+    /// Detection.LocalModelName field's datalist and warning line reflect what
+    /// <c>LarisVMS.Vision.Models.ModelDiscovery</c> actually found on the node just now, not whatever
+    /// was true the last time this page was loaded.</summary>
+    public async Task<IActionResult> OnGetLocalModelsAsync(Guid id, CancellationToken ct)
+    {
+        var node = (await nodeService.ListAsync()).FirstOrDefault(n => n.Id == id);
+        if (node is null) return new JsonResult(Array.Empty<object>());
+
+        var models = await nodeControlClient.GetVisionModelsAsync(node, ct);
+        return new JsonResult(models);
     }
 
     public async Task<IActionResult> OnPostUpdateAsync(Guid id, string name, string? storageRootPath, int? retentionDaysOverride,
@@ -248,7 +272,8 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
         string? directStreamingMode, string? allowInsecureClientEndpoint, string? clientEndpointHost,
         string? clientCertPfxPath, string? clientCertPfxPassword,
         string? primaryProxyId, string? backupProxyId,
-        string? backupNodeId, bool disableAiObjectDetection = false, string? snapshot = null)
+        string? backupNodeId, bool disableAiObjectDetection = false, string? snapshot = null,
+        string? localModelNameOverride = null)
     {
         try
         {
@@ -330,6 +355,7 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
             var oldExternalInputSizeOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.ExternalInferenceInputSize");
             var oldArchiveEnabledOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Archive.Enabled");
             var oldArchiveRetentionOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Archive.RetentionDays");
+            var oldLocalModelNameOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.LocalModelName");
             var oldHasExternalApiKeyOverride = !string.IsNullOrEmpty(
                 await settings.GetOwnOverrideAsync(SettingScope.Node, id, "Detection.ExternalInferenceApiKey"));
 
@@ -351,7 +377,8 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
             var currentSnapshot = ComputeNodeSnapshot(before, oldRetentionOverride, oldModelFamilyOverride,
                 oldDFineWeightsOverride, oldYoloXSizeOverride, oldMaxFpsOverride, oldAspectModeOverride,
                 oldDFineTensorRtModeOverride, oldBackendOverride, oldExternalUrlOverride, oldExternalModelOverride,
-                oldExternalInputSizeOverride, oldHasExternalApiKeyOverride, oldArchiveEnabledOverride, oldArchiveRetentionOverride);
+                oldExternalInputSizeOverride, oldHasExternalApiKeyOverride, oldArchiveEnabledOverride, oldArchiveRetentionOverride,
+                oldLocalModelNameOverride);
             if (!string.Equals(snapshot, currentSnapshot, StringComparison.Ordinal))
             {
                 ErrorMessage = $"{before.Name}'s settings changed (in another tab, or by someone else) since this page " +
@@ -390,6 +417,8 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
                 string.IsNullOrEmpty(dfineWeightsOverride) ? null : dfineWeightsOverride, User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Node, id, "Detection.YoloXSize",
                 string.IsNullOrEmpty(yoloXSizeOverride) ? null : yoloXSizeOverride, User.Identity?.Name);
+            await settings.SetOverrideAsync(SettingScope.Node, id, "Detection.LocalModelName",
+                string.IsNullOrEmpty(localModelNameOverride) ? null : localModelNameOverride, User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Node, id, "Detection.MaxFps",
                 maxFpsOverride?.ToString(), User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Node, id, "Detection.AspectMode",
@@ -424,6 +453,7 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
                 AuditDiff.Of("Detection model override", oldModelFamilyOverride, modelFamilyOverride),
                 AuditDiff.Of("D-FINE weights override", oldDFineWeightsOverride, dfineWeightsOverride),
                 AuditDiff.Of("YOLOX size override", oldYoloXSizeOverride, yoloXSizeOverride),
+                AuditDiff.Of("Local model name override", oldLocalModelNameOverride, localModelNameOverride),
                 AuditDiff.Of("Max detection fps override", oldMaxFpsOverride, maxFpsOverride?.ToString()),
                 AuditDiff.Of("Aspect fitting override", oldAspectModeOverride, aspectModeOverride),
                 AuditDiff.Of("D-FINE TensorRT override", oldDFineTensorRtModeOverride, dfineTensorRtModeOverride),
@@ -446,6 +476,13 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
                 AuditDiff.Of("Recording only (AI off)", before?.DisableAiObjectDetection.ToString(), disableAiObjectDetection.ToString()));
 
             await LogAsync("Node.Update", details is null ? $"{name} ({id})" : $"{name} ({id}) — {details}");
+
+            // Fire-and-forget, deliberately not awaited: a saved override should take effect promptly
+            // rather than waiting out this node's own 30s reconcile poll, but a slow/unreachable node
+            // must never hold up this page's own redirect — that 30s poll remains the correctness
+            // backstop if this call doesn't land. CancellationToken.None (not HttpContext.RequestAborted),
+            // since the call should keep running after this response is sent, not be cancelled by it.
+            _ = nodeControlClient.TriggerReconcileAsync(before);
         }
         catch (Exception ex)
         {
@@ -453,6 +490,7 @@ public class NodesModel(INodeService nodeService, ICameraService cameraService, 
             await OnGetAsync();
             return Page();
         }
+
         return RedirectToPage();
     }
 

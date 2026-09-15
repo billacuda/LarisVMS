@@ -44,7 +44,8 @@ public class DashboardService(ICameraService cameraService, ICameraAccessService
             return new CameraHealthRow(c.Id, c.Name, c.IsEnabled,
                 c.Node?.Name, nodeOnline, c.NodeId is not null,
                 main?.Fps, main?.BitrateKbps, main?.ReconnectCount, main?.HealthReportedAt, healthFresh,
-                main?.AudioCodec, main?.AudioSampleRateHz);
+                main?.AudioCodec, main?.AudioSampleRateHz,
+                main?.IsEngineBuilding, main?.EngineBuildFailed);
         }).ToList();
 
         var recordingCount = rows.Count(r => r.CameraEnabled && r.HealthFresh);

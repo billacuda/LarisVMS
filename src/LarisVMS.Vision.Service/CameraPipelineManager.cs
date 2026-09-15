@@ -3,6 +3,7 @@ using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Enums;
 using LarisVMS.Media;
 using LarisVMS.Vision.Inference;
+using LarisVMS.Vision.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -78,28 +79,15 @@ public sealed class CameraPipelineManager : IAsyncDisposable
             ? (_options.DFineTensorRtMode ?? "Off")
             : request.DFineTensorRtMode;
 
-        // FP16 for D-FINE needs a mixed-precision *.fp16.onnx model (backbone FP16, decoder FP32) —
-        // a straight FP16 cast overflows D-FINE's transformer decoder. No conversion toolchain
-        // produces a correct one yet, so FP16 is bundled-model-gated: it activates automatically if
-        // a *.fp16.onnx is present in the models directory, and otherwise transparently runs FP32
-        // TensorRT with a warning. Everything downstream (catalog filename, engine cache key, the
-        // trt_layer_norm_fp32_fallback belt) is already wired for when that model exists.
-        var dfineFp16Mixed = false;
-        if (family == DetectionModelFamily.DFine && _options.EnableTensorRt
-            && dfineTensorRtMode.Trim().Equals("FP16", StringComparison.OrdinalIgnoreCase))
-        {
-            var mixedName = DetectionModelCatalog.GetFileName(family, dfineWeights, yoloXSize, dfineFp16Mixed: true);
-            dfineFp16Mixed = File.Exists(Path.Combine(ModelsDirectory(_options.ModelPath), mixedName));
-            if (!dfineFp16Mixed)
-            {
-                _logger.LogWarning(
-                    "Detection.DFineTensorRtMode is FP16 for camera {Camera} but no mixed-precision model " +
-                    "({MixedName}) is bundled — running D-FINE on FP32 TensorRT instead. FP16 for D-FINE is not " +
-                    "yet available (a straight FP16 cast overflows its transformer decoder).",
-                    request.DisplayName, mixedName);
-                dfineTensorRtMode = "FP32";
-            }
-        }
+        // FP16 for D-FINE now means "run the plain FP32 .onnx under trt_fp16_enable=1 +
+        // trt_layer_norm_fp32_fallback=1" (the TensorRT-level mitigation) — not a separate
+        // mixed-precision *.fp16.onnx export. That mixed-precision file mechanism
+        // (DetectionModelCatalog's dfineFp16Mixed parameter) remains in the code but is no longer
+        // triggered from here: no working conversion toolchain produces a correct one, and the
+        // TensorRT-level path plus CameraDetectionPipeline's automatic overflow-to-FP32 rebuild
+        // (DFineEngine.HasNonFiniteOverflow) supersede it. See the D-FINE FP16 section of the
+        // LarisVMS+SideGlance planning notes.
+        const bool dfineFp16Mixed = false;
 
         var modelKey = $"{family}|{dfineWeights}|{yoloXSize}|{(dfineFp16Mixed ? "fp16" : "std")}";
         var http = _httpClientFactory.CreateClient(nameof(CameraDetectionPipeline));
@@ -108,17 +96,62 @@ public sealed class CameraPipelineManager : IAsyncDisposable
         // HttpDetectionEngine from the request's ExternalInference* fields instead — so there is no
         // model path to resolve (and no accelerator needed; this backend runs on a GPU-less node).
         var external = string.Equals(request.DetectionBackend, "ExternalHttp", StringComparison.OrdinalIgnoreCase);
-        var resolvedModelPath = external
-            ? string.Empty
-            : await ResolveModelPathCachedAsync(modelKey, family, dfineWeights, yoloXSize, dfineFp16Mixed, request.NodeCallbackBaseUrl, http);
+
+        // DetectionModelFamily.Custom: the model comes from Detection.LocalModelName + ModelDiscovery
+        // instead of the hardcoded family/weights/size catalog — resolved separately below rather than
+        // through ResolveModelPathCachedAsync, since a Custom model's path and its resolved decoder
+        // both come from the same scan and must travel together.
+        DiscoveredModel? customModel = null;
+        string resolvedModelPath;
+        if (external)
+        {
+            resolvedModelPath = string.Empty;
+        }
+        else if (family == DetectionModelFamily.Custom)
+        {
+            customModel = ResolveCustomModel(request.LocalModelName);
+            if (customModel is null)
+            {
+                throw new InvalidOperationException(
+                    $"Detection.ModelFamily is \"Custom\" for camera {request.DisplayName} but " +
+                    $"Detection.LocalModelName (\"{request.LocalModelName}\") does not name a usable model in " +
+                    $"{ModelsDirectory(_options.ModelPath)} — check Admin > Nodes for a metadata/sidecar warning.");
+            }
+            resolvedModelPath = customModel.OnnxPath;
+        }
+        else
+        {
+            resolvedModelPath = await ResolveModelPathCachedAsync(modelKey, family, dfineWeights, yoloXSize, dfineFp16Mixed, request.NodeCallbackBaseUrl, http);
+        }
         // Only resolved for the backend that actually needs it — see ExternalInferenceHttpClientName's
         // own doc comment for why this is a separate client from the Node-callback one above.
         var externalHttp = external ? _httpClientFactory.CreateClient(ExternalInferenceHttpClientName) : null;
 
-        var pipeline = new CameraDetectionPipeline(request, _options, _ffmpegPath, resolvedModelPath, family, dfineWeights, yoloXSize, aspectMode, dfineTensorRtMode, http, _loggerFactory, externalHttp);
+        var pipeline = new CameraDetectionPipeline(request, _options, _ffmpegPath, resolvedModelPath, family, dfineWeights, yoloXSize, aspectMode, dfineTensorRtMode, http, _loggerFactory, externalHttp, customModel);
         _pipelines[request.CameraId] = pipeline;
         _logger.LogInformation("Started watching camera {Camera} (id {CameraId}, {Width}x{Height}, hwaccel: {Hwaccel}).",
             request.DisplayName, request.CameraId, request.Width, request.Height, request.HardwareAcceleration ?? "none");
+    }
+
+    /// <summary>Lists every model <see cref="ModelDiscovery"/> finds in this node's models directory,
+    /// for the <c>GET /models</c> endpoint the Admin dropdown (via Node's <c>/vision/models</c> proxy)
+    /// probes. Rescanned on every call rather than cached — this is an on-demand admin action (page
+    /// load, "refresh models"), not a hot path, so a rescan's cost (reading every .onnx's header) is
+    /// worth paying for always-current results (a model dropped in seconds ago shows up immediately).</summary>
+    public IReadOnlyList<DiscoveredModel> ListDiscoveredModels() =>
+        ModelDiscovery.Scan(ModelsDirectory(_options.ModelPath), _logger);
+
+    /// <summary>Resolves Detection.LocalModelName against this node's models directory for a Custom-
+    /// family pipeline. Null when the name is blank, not found, or found but unusable (no valid
+    /// descriptor/decoder) — the caller (<see cref="StartOrReplaceAsync"/>) turns that into a clear
+    /// startup failure rather than a confusing downstream one.</summary>
+    private DiscoveredModel? ResolveCustomModel(string localModelName)
+    {
+        if (string.IsNullOrWhiteSpace(localModelName)) return null;
+
+        var found = ModelDiscovery.Scan(ModelsDirectory(_options.ModelPath), _logger)
+            .FirstOrDefault(m => string.Equals(m.Name, localModelName, StringComparison.OrdinalIgnoreCase));
+        return found is { IsUsable: true } ? found : null;
     }
 
     /// <summary>
@@ -156,11 +189,25 @@ public sealed class CameraPipelineManager : IAsyncDisposable
         }
     }
 
+    /// <summary>The default, always-exists-or-creatable location models live in —
+    /// <c>C:\ProgramData\LarisVMS\models</c>, the same %ProgramData%\LarisVMS root the TensorRT cache
+    /// and vision log already use (see <see cref="OrtSessionFactory.ResolveTensorRtCachePath"/>).
+    /// Models are never bundled into the package here on — an operator drops <c>.onnx</c> files (and
+    /// optional same-basename <c>.json</c> sidecars) into this folder directly; see
+    /// <see cref="Models.ModelDiscovery"/>.</summary>
+    public static string DefaultModelsDirectory =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "models");
+
     private static string ModelsDirectory(string configuredPath)
     {
+        // An unrooted configured path resolves against the shared ProgramData models directory, not
+        // the app's own install directory — models are operator-managed data, not something the
+        // package ships (see DefaultModelsDirectory's own doc comment). Only the file name of a
+        // relative configured path is honored (the default "models/model.onnx" means "the standard
+        // location", not a "models" subfolder underneath it — that whole folder now *is* "models").
         var configured = Path.IsPathRooted(configuredPath)
             ? configuredPath
-            : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, configuredPath));
+            : Path.Combine(DefaultModelsDirectory, Path.GetFileName(configuredPath));
         return Path.GetDirectoryName(configured)
             ?? throw new InvalidOperationException($"Configured model path '{configuredPath}' has no directory.");
     }
@@ -229,23 +276,21 @@ public sealed class CameraPipelineManager : IAsyncDisposable
     internal static string ResolveModelPath(string configuredPath, DetectionModelFamily family, DFineWeights dfineWeights,
         YoloXSize yoloXSize, ILogger logger, bool dfineFp16Mixed = false)
     {
-        // Relative to the app's own directory, not the current working directory: this is a fact
-        // about where the package's files live, and the process is launched by NodeWorker's
-        // supervisor rather than from a shell whose cwd means anything.
+        // An unrooted configured path resolves against the shared ProgramData models directory (see
+        // DefaultModelsDirectory's own doc comment) — models are never bundled into the package, so
+        // there is nothing "relative to the app's own directory" to resolve against any more.
         string ToAbsolute(string path) =>
-            Path.IsPathRooted(path) ? path : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, path));
+            Path.IsPathRooted(path) ? path : Path.Combine(DefaultModelsDirectory, Path.GetFileName(path));
 
         var configured = ToAbsolute(configuredPath);
         if (File.Exists(configured)) return configured;
 
         var directory = Path.GetDirectoryName(configured);
-        if (directory is null || !Directory.Exists(directory))
+        if (directory is null)
         {
-            throw new FileNotFoundException(
-                $"No detection model directory at '{directory ?? configuredPath}'. Fetch a model with " +
-                "tools/export-models/fetch_dfine.py and rebuild the node package with build-node.ps1 so it " +
-                "gets bundled.");
+            throw new FileNotFoundException($"Configured model path '{configuredPath}' has no directory.");
         }
+        Directory.CreateDirectory(directory); // first run on a fresh install — the operator drops files in after.
 
         var wantedFileName = DetectionModelCatalog.GetFileName(family, dfineWeights, yoloXSize, dfineFp16Mixed);
         var wantedPath = Path.Combine(directory, wantedFileName);
@@ -277,14 +322,14 @@ public sealed class CameraPipelineManager : IAsyncDisposable
         {
             throw new FileNotFoundException(
                 $"No detection model found in '{directory}' — expected '{wantedFileName}' for the configured " +
-                $"{family}/{dfineWeights} selection. Fetch it with tools/export-models/fetch_dfine.py and " +
-                "rebuild the node package with build-node.ps1 so it gets bundled.");
+                $"{family}/{dfineWeights} selection. Drop the .onnx file into {directory} (models are no longer " +
+                "bundled with the node package) — see tools/export-models for how to obtain one.");
         }
 
         var chosen = candidates[0];
         logger.LogWarning(
             "Expected model '{Wanted}' for the configured {Family}/{Weights} selection was not found in " +
-            "'{Directory}' — falling back to the alphabetically-first bundled .onnx ({Chosen}) out of " +
+            "'{Directory}' — falling back to the alphabetically-first .onnx found there ({Chosen}) out of " +
             "{Count} found ({Models}). This is likely a stale or incomplete package — re-run fetch_dfine.py " +
             "and rebuild.", wantedFileName, family, dfineWeights, directory, Path.GetFileName(chosen),
             candidates.Length, string.Join(", ", candidates.Select(Path.GetFileName)));
@@ -309,6 +354,12 @@ public sealed class CameraPipelineManager : IAsyncDisposable
     /// running but will never infer. Both show up here as an absent camera id.</summary>
     public IReadOnlyList<Guid> WatchedCameraIds() =>
         [.. _pipelines.Where(p => !p.Value.EngineBuildFailed).Select(p => p.Key)];
+
+    /// <summary>Per-camera engine-build state for the Dashboard's "still starting AI detection"
+    /// spinner — a separate, richer endpoint from <see cref="WatchedCameraIds"/> above, which must
+    /// keep returning a bare id list for <c>NodeWorker.PruneStaleVisionWatchesAsync</c>.</summary>
+    public IReadOnlyList<Core.Dtos.VisionCameraStatusDto> GetCameraStatuses() =>
+        [.. _pipelines.Select(p => new Core.Dtos.VisionCameraStatusDto(p.Key, p.Value.IsEngineBuilding, p.Value.EngineBuildFailed))];
 
     /// <summary>Null when this camera isn't currently being watched — the caller (Node's own
     /// /live/{cameraId}/detections WS relay) treats that the same as "no boxes right now" rather

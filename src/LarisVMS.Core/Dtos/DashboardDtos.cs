@@ -10,7 +10,14 @@ namespace LarisVMS.Core.Dtos;
 public record CameraHealthRow(Guid CameraId, string CameraName, bool CameraEnabled,
     string? NodeName, bool NodeOnline, bool NodeAssigned,
     int? Fps, int? BitrateKbps, int? ReconnectCount, DateTime? HealthReportedAt, bool HealthFresh,
-    string? AudioCodec, int? AudioSampleRateHz);
+    string? AudioCodec, int? AudioSampleRateHz,
+    /// <summary>This camera's AI-detection engine build state (Section H) — see
+    /// <c>CameraStream.IsEngineBuilding</c>'s own doc comment. Both null/false means "nothing to
+    /// report" (AI detection isn't running for this camera, or an older node build never sent it);
+    /// dashboard.js renders a spinner or failure badge only when one is true. Orthogonal to recording
+    /// health above — a camera can be recording fine while its detection engine is still cold-building
+    /// a TensorRT engine.</summary>
+    bool? IsEngineBuilding = null, bool? EngineBuildFailed = null);
 
 public record DashboardHealthDto(List<CameraHealthRow> Rows,
     int RecordingCount, int NotReportingCount, int DisabledCount,

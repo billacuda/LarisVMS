@@ -335,17 +335,29 @@ public sealed class DFineEngine : IDetectionEngine, IBatchDetectionEngine, ISlic
         return results;
     }
 
+    /// <summary>One-way latch: once a non-finite output is seen, stays true for this engine's whole
+    /// lifetime (rebuilding at FP32 supersedes it with a brand-new engine rather than resetting this
+    /// one). <see cref="CameraDetectionPipeline"/>'s inference loop polls this after every
+    /// <see cref="Detect"/>/<see cref="DetectBatch"/>/<see cref="DetectSliced"/> call and, the first
+    /// time it's set while running FP16, rebuilds the engine at FP32 automatically.</summary>
+    public bool HasNonFiniteOverflow => Volatile.Read(ref _hasNonFiniteOverflow) != 0;
+    private int _hasNonFiniteOverflow;
+
     /// <summary>
     /// Called only when a frame decoded to zero detections: if the raw model output holds any NaN/Inf
     /// value, every candidate was silently dropped by <see cref="DFineDecoder"/> (a NaN fails every
     /// comparison, then clamps to a degenerate box). That is the signature of the TensorRT FP16
     /// builder overflowing on D-FINE's transformer activations — otherwise invisible, since no
-    /// exception is thrown. Throttled so a persistently broken engine logs once per interval, not
-    /// once per frame.
+    /// exception is thrown. Latches <see cref="HasNonFiniteOverflow"/> immediately (once, forever);
+    /// the log itself stays throttled so a persistently broken engine logs once per interval, not once
+    /// per frame — the actual fix (an automatic FP32 rebuild) happens in CameraDetectionPipeline, not
+    /// here, so this only ever reports what was observed, never what it did about it.
     /// </summary>
     private void WarnIfNonFinite(ReadOnlySpan<float> logits, ReadOnlySpan<float> boxes)
     {
         if (!HasNonFinite(logits) && !HasNonFinite(boxes)) return;
+
+        Interlocked.Exchange(ref _hasNonFiniteOverflow, 1);
 
         var now = DateTime.UtcNow;
         if (now - _lastNonFiniteWarnUtc < NonFiniteWarnInterval) return;
@@ -353,8 +365,7 @@ public sealed class DFineEngine : IDetectionEngine, IBatchDetectionEngine, ISlic
 
         _logger.LogWarning(
             "D-FINE inference produced non-finite (NaN/Inf) logits or boxes — every detection was dropped. " +
-            "This is the TensorRT FP16-overflow signature for D-FINE. Set Detection.DFineTensorRtMode to FP32 " +
-            "(or Off) for this node in Admin > Settings > Detection, or its per-node override on Admin > Nodes.");
+            "This is the TensorRT FP16-overflow signature for D-FINE.");
     }
 
     private static bool HasNonFinite(ReadOnlySpan<float> values)

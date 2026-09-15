@@ -51,6 +51,7 @@
             <option value="Auto">Auto (YOLOX)</option>
             <option value="YoloX">YOLOX</option>
             <option value="DFine">D-FINE (experimental)</option>
+            <option value="Custom">Custom (a model dropped into C:\ProgramData\LarisVMS\models)</option>
             <option value="RfDetr" disabled>RF-DETR (not yet available)</option>
         </select>
         <div class="help-text-source" id="modelFamilyHelp">
@@ -106,26 +107,72 @@
     </div>
     <div class="col-12">
         <label class="form-label">
+            Local model name
+            <button type="button" class="help-icon" data-help-target="localModelNameHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <div class="input-group">
+            <select asp-for="LocalModelName" class="form-select" id="localModelNameSelect">
+                <option value="">(none selected)</option>
+                @{
+                    var localOptions = Model.AvailableLocalModels.ToList();
+                    if (localOptions.All(m => m.Name != Model.LocalModelName) && !string.IsNullOrEmpty(Model.LocalModelName))
+                    {
+                        <option value="@Model.LocalModelName" selected>@Model.LocalModelName (saved — Refresh models to check it's still available)</option>
+                    }
+                }
+                @foreach (var m in localOptions)
+                {
+                    <option value="@m.Name" selected="@(m.Name == Model.LocalModelName)">
+                        @m.Name — @(m.Decoder ?? "unresolved")@(m.InputSize is { } s ? $" ({s}x{s})" : "")@(m.Warnings.Count > 0 ? " ⚠️ metadata incomplete" : "") · on: @string.Join(", ", m.AvailableOnNodes)
+                    </option>
+                }
+            </select>
+            <button type="submit" class="btn btn-outline-secondary" asp-page-handler="RefreshLocalModels" formnovalidate>Refresh models</button>
+        </div>
+        @if (Model.AvailableLocalModels.Any(m => m.Warnings.Count > 0))
+        {
+            <div class="form-text">
+                @foreach (var m in Model.AvailableLocalModels.Where(m => m.Warnings.Count > 0))
+                {
+                    <div class="text-warning">⚠️ <strong>@m.Name</strong>: @string.Join(" ", m.Warnings)</div>
+                }
+            </div>
+        }
+        <div class="help-text-source" id="localModelNameHelp">
+            Only meaningful when the detection model above is set to Custom. Names a model dropped
+            into <code>C:\ProgramData\LarisVMS\models</code> on a node — its decoder and input size
+            are read from the model's own metadata, or from a same-named <code>.json</code> sidecar
+            when that's missing or incomplete. "Refresh models" asks every online node what it found;
+            a model listed with a warning is still usable to select but won't actually run detection
+            until the warning is resolved (usually by adding a sidecar). A global default here isn't
+            necessarily present on every node — check the "on:" list. Per-node override on
+            <a asp-page="/Admin/Nodes">manage nodes</a>.
+        </div>
+    </div>
+    <div class="col-12">
+        <label class="form-label">
             D-FINE TensorRT
             <button type="button" class="help-icon" data-help-target="dfineTensorRtHelp" tabindex="0" aria-label="Help">ℹ️</button>
         </label>
         <select asp-for="DFineTensorRtMode" class="form-select">
             <option value="Off">Off — plain CUDA (default)</option>
             <option value="FP32">FP32 — TensorRT, graph fusion + kernel selection</option>
-            <option value="FP16" disabled="@(Model.DFineTensorRtMode != "FP16")">FP16 — not yet available (needs a calibrated model)</option>
+            <option value="FP16">FP16 — TensorRT, half-precision (fastest, auto-falls back to FP32)</option>
         </select>
         <div class="help-text-source" id="dfineTensorRtHelp">
             Only applies when the detection model is D-FINE <em>and</em> the node has TensorRT enabled
             (the machine-local <code>Vision:EnableTensorRt</code> setting) with the TensorRT 10.x SDK
             installed — it does nothing on a node without those. <strong>FP32</strong> runs D-FINE
             through TensorRT for graph fusion and kernel selection with no FP16 math — a safe speedup
-            over plain CUDA. <strong>FP16</strong> is not selectable yet: D-FINE is a transformer and a
-            straight FP16 cast overflows its decoder (a camera that suddenly reports nothing), and the
-            mixed-precision model that would avoid that can't be produced with current tooling. The
-            setting and per-node override are in place so FP16 activates automatically once a
-            <code>*.fp16.onnx</code> model is bundled. This is a per-node setting; changing it
-            recompiles the TensorRT engine, which takes several minutes on the first start per camera
-            resolution. A per-node override is on <a asp-page="/Admin/Nodes">manage nodes</a>.
+            over plain CUDA. <strong>FP16</strong> runs the same plain model at half precision for the
+            fastest inference, with D-FINE's LayerNorm subgraphs kept in FP32 to protect against the
+            transformer-activation overflow FP16 can otherwise cause. If a camera's engine still
+            overflows anyway, the Vision Service detects it automatically (a frame decoding to zero
+            detections with non-finite raw output) and rebuilds that camera's engine at FP32 in the
+            background — no admin action needed, though that camera reports no detections for the
+            short rebuild window. This is a per-node setting; changing it recompiles the TensorRT
+            engine, which takes several minutes on the first start per camera resolution. A per-node
+            override is on <a asp-page="/Admin/Nodes">manage nodes</a>.
         </div>
     </div>
     <div class="col-12">

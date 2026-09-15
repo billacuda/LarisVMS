@@ -273,6 +273,10 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         var aspectMode = await settings.GetAsync("Detection.AspectMode", "Letterbox", nodeId: nodeId, ct: ct);
         var detectionModelFamily = await settings.GetAsync("Detection.ModelFamily", "Auto", nodeId: nodeId, ct: ct);
         var dfineWeights = await settings.GetAsync("Detection.DFineWeights", "Obj2Coco", nodeId: nodeId, ct: ct);
+        // The model-agnostic path — a name from LarisVMS.Vision.Models.ModelDiscovery's scan of this
+        // node's C:\ProgramData\LarisVMS\models, only meaningful when detectionModelFamily is
+        // "Custom". Same node-scoped resolution as the family/weights fields above.
+        var localModelName = await settings.GetAsync("Detection.LocalModelName", "", nodeId: nodeId, ct: ct);
         // YOLOX model size — same node-scoped resolution; only meaningful when the family is YoloX.
         var yoloXSize = await settings.GetAsync("Detection.YoloXSize", "S", nodeId: nodeId, ct: ct);
         // How D-FINE uses TensorRT ("Off" / "FP32" / "FP16") — same node-scoped resolution; only
@@ -450,6 +454,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             ExternalInferenceInputSize = externalInferenceInputSize,
             ExternalInferenceApiKey = externalInferenceApiKey,
             ExternalInferenceTransport = externalInferenceTransport,
+            LocalModelName = localModelName,
             ClientEndpointEnabled = clientEndpointEnabled,
             ClientCertPfxPath = string.IsNullOrWhiteSpace(nodeRoots?.ClientCertPfxPath) ? null : nodeRoots!.ClientCertPfxPath,
             ClientCertPfxPassword = string.IsNullOrWhiteSpace(nodeRoots?.ClientCertPfxPassword) ? null : nodeRoots!.ClientCertPfxPassword,
@@ -619,6 +624,8 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
                     .SetProperty(s => s.ReconnectCount, s => item.ReconnectCount ?? s.ReconnectCount)
                     .SetProperty(s => s.AudioCodec, s => item.AudioCodec ?? s.AudioCodec)
                     .SetProperty(s => s.AudioSampleRateHz, s => item.AudioSampleRateHz ?? s.AudioSampleRateHz)
+                    .SetProperty(s => s.IsEngineBuilding, s => item.IsEngineBuilding ?? s.IsEngineBuilding)
+                    .SetProperty(s => s.EngineBuildFailed, s => item.EngineBuildFailed ?? s.EngineBuildFailed)
                     .SetProperty(s => s.HealthReportedAt, s => item.Fps != null ? now : s.HealthReportedAt), ct);
         }
     }

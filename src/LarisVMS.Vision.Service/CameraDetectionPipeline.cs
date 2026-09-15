@@ -8,6 +8,7 @@ using LarisVMS.Media;
 using LarisVMS.Vision.Capture;
 using LarisVMS.Vision.Detection;
 using LarisVMS.Vision.Inference;
+using LarisVMS.Vision.Models;
 using LarisVMS.Vision.Tracking;
 using Microsoft.Extensions.Logging;
 
@@ -34,13 +35,17 @@ namespace LarisVMS.Vision.Service;
 /// a label's reported span always cites whichever specific sighting was clearest across every
 /// instance of it, not just whichever track happened to be observed last.
 ///
-/// Detection/hardware-acceleration overhaul, pass 4 (<see cref="AspectMode.Slice"/>): mandatorily
-/// GPU-preprocessed — there is deliberately no CPU fallback for cutting slices. Slicing exists
-/// specifically to put more real pixels on target than Letterbox's black-bar padding allows, and
-/// cutting a captured frame into slices on the CPU (decode → download → crop N times → re-upload)
-/// is exactly the "CPU back-and-forth" the accelerator-side slice (a Slice+Concat pair merged into
-/// the model's own ONNX graph, see <see cref="OnnxPreprocessHead.MergeSliced"/>) exists to avoid.
-/// A node with no usable GPU simply cannot run Slice mode — it can still run Letterbox/Stretch.
+/// Detection/hardware-acceleration overhaul, pass 4 (<see cref="AspectMode.Slice"/>): the capture
+/// side is mandatorily nv12 (<c>gpuPreprocessing</c> forced true below for any non-external Slice
+/// camera) — ffmpeg always hands the engine one whole nv12 frame, never pre-cut. What each engine
+/// does with that frame differs: the built-in <see cref="DFineEngine"/>/<see cref="YoloXEngine"/>
+/// cut and batch all N slices *inside* the ONNX graph on the accelerator (a Slice+Concat pair merged
+/// in via <see cref="OnnxPreprocessHead.MergeSliced"/>) with deliberately no CPU fallback, since that
+/// rewrite is only verified safe for those two specific exports. A descriptor-driven
+/// <see cref="GenericOnnxEngine"/> (Custom family — an arbitrary user-supplied model whose graph's
+/// own batch-dynamism can't be assumed) instead crops each tile out of the same nv12 frame on the
+/// CPU and runs N separate forward passes — see <see cref="ISlicedDetectionEngine"/>'s own doc
+/// comment.
 /// </summary>
 public sealed class CameraDetectionPipeline : IAsyncDisposable
 {
@@ -77,10 +82,19 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     // badly enough that the tee muxer blocked and recording *and* live view stopped together (see
     // EngineBuildGate for the other half of that fix). Null until the build completes.
     private volatile IDetectionEngine? _engine;
-    private readonly EngineOptions _engineOptions;
+    // Not readonly: a D-FINE FP16-overflow rebuild (see TriggerDFineFp32RebuildIfNeeded) replaces this
+    // with an FP32 copy once, so the cache key / precision fields it carries reflect whichever engine
+    // _engine currently points at. Only ever written from the inference loop's own async flow (the
+    // constructor, then at most once more from the rebuild task it kicks off), never concurrently.
+    private EngineOptions _engineOptions;
+    // Interlocked-guarded one-way latch: at most one FP32 rebuild per pipeline lifetime, even if
+    // WarnIfNonFinite's overflow latch is (harmlessly) observed more than once before the rebuild
+    // finishes swapping _engine out.
+    private int _dfineFp32RebuildStarted;
     private readonly DetectionModelFamily _modelFamily;
     private readonly DFineWeights _dfineWeights;
     private readonly YoloXSize _yoloXSize;
+    private readonly DiscoveredModel? _customModel;
     // Non-null only for Detection.Backend = "ExternalHttp" — bypasses the whole local-model path in
     // DetectionEngineFactory.Create and builds an HttpDetectionEngine instead.
     private readonly ExternalDetectionConfig? _externalConfig;
@@ -142,6 +156,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     private int[]? _cadenceSliceDetections;
     private int _cadenceIouAbsorbed;
     private int _cadenceSeamAbsorbed;
+    private int _cadenceOneSidedSeamAbsorbed;
     private int _cadenceSpanningMerges;
 
     // Inference failures are counted rather than logged per frame. A persistent fault (a wrong
@@ -248,7 +263,12 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         // traffic uses its own HttpClient rather than sharing `http` (the Node-callback one) the way
         // it used to. Read once below, at _externalConfig's construction; not worth keeping as a
         // field since nothing else in this class needs it.
-        HttpClient? externalHttp = null)
+        HttpClient? externalHttp = null,
+        // Only non-null when modelFamily is DetectionModelFamily.Custom — the model
+        // request.LocalModelName resolved to, via CameraPipelineManager.ResolveCustomModel
+        // (ModelDiscovery.Scan). Threaded straight through to DetectionEngineFactory.Create in
+        // InferenceLoopAsync.
+        DiscoveredModel? customModel = null)
     {
         _request = request;
         _http = http;
@@ -384,6 +404,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         _modelFamily = modelFamily;
         _dfineWeights = dfineWeights;
         _yoloXSize = yoloXSize;
+        _customModel = customModel;
         _loggerFactory = loggerFactory;
 
         // D-FINE (a DETR/transformer) is fragile under the TensorRT builder in a way YOLOX (the CNN
@@ -391,9 +412,12 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         // that DFineDecoder silently drops as zero detections. Detection.DFineTensorRtMode (resolved
         // in CameraPipelineManager: the server-pushed value, else this machine's own local setting)
         // gates it for this family only; every other family follows EnableTensorRt/TensorRtPrecision
-        // as-is. FP16 additionally runs the mixed-precision *.fp16.onnx model (decoder kept in FP32 —
-        // resolvedModelPath already points at it) and turns on trt_layer_norm_fp32_fallback as a
-        // second line of defence.
+        // as-is. FP16 runs the plain (single-precision) model under trt_fp16_enable and turns on
+        // trt_layer_norm_fp32_fallback as a mitigation (D-FINE's own LayerNorm subgraphs stay FP32
+        // even under FP16). If that mitigation isn't enough for a given camera, the inference loop
+        // detects the resulting non-finite output at runtime and rebuilds that camera's engine at
+        // FP32 automatically — see DFineEngine.HasNonFiniteOverflow and
+        // TriggerDFineFp32RebuildIfNeeded below.
         var (enableTensorRt, tensorRtPrecision, layerNormFp32Fallback) = external
             ? (false, serviceOptions.TensorRtPrecision, false) // no local ONNX session at all
             : (serviceOptions.EnableTensorRt, serviceOptions.TensorRtPrecision, false);
@@ -472,6 +496,12 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     public bool EngineBuildFailed => _engineBuildFailed;
     private volatile bool _engineBuildFailed;
 
+    /// <summary>True from construction until <see cref="InferenceLoopAsync"/> either assigns
+    /// <see cref="_engine"/> or sets <see cref="_engineBuildFailed"/> — the "capturing but not yet
+    /// inferring" window a cold TensorRT engine build (minutes) creates. Derived, not a separate
+    /// latch: both fields it reads are already volatile/thread-safe to read from any thread.</summary>
+    public bool IsEngineBuilding => _engine is null && !_engineBuildFailed;
+
     /// <summary>What to call this camera in a log line — see VisionStartCameraRequest.DisplayName.
     /// Exposed so CameraPipelineManager can name a camera it is disposing, where only the id is in
     /// hand (VisionStopCameraRequest carries nothing else).</summary>
@@ -518,7 +548,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             engine = await Task.Run(() => EngineBuildGate.Build(
                 _request.DisplayName, _engineOptions,
                 () => DetectionEngineFactory.Create(_modelFamily, _dfineWeights, _yoloXSize,
-                    _engineOptions, _profile, _loggerFactory, _sliceLayout, _externalConfig),
+                    _engineOptions, _profile, _loggerFactory, _sliceLayout, _externalConfig, _customModel),
                 _logger, ct), ct);
         }
         catch (OperationCanceledException) { return; }
@@ -551,6 +581,12 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             if (captured is null) break; // cancelled or disposed
             var frame = captured.Value.Frame;
 
+            // Re-synced immediately before use, not once at the top of the loop: a background FP32
+            // rebuild (TriggerDFineFp32RebuildIfNeeded) can swap and dispose the old engine at any
+            // time, including during the (possibly long) TakeAsync wait above — re-checking only
+            // before TakeAsync would let this call land on an already-disposed session.
+            engine = _engine ?? engine;
+
             List<YoloDotNet.Models.ObjectDetection> detections;
             try
             {
@@ -561,6 +597,12 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
                 detections = _sliceLayout is { } layout && engine is ISlicedDetectionEngine sliced
                     ? MergeSliceDetections(layout, sliced.DetectSliced(frame, _request.Confidence))
                     : engine.Detect(frame, _request.Confidence, _request.Iou);
+
+                // D-FINE FP16 TensorRT overflow: kicked off in the background (never awaited here) so
+                // a minutes-long cold FP32 engine build never freezes this camera's own capture/detect
+                // loop — see TriggerDFineFp32RebuildIfNeeded's own doc comment.
+                if (engine is DFineEngine { HasNonFiniteOverflow: true } dfine)
+                    TriggerDFineFp32RebuildIfNeeded(dfine, ct);
             }
             catch (Exception ex)
             {
@@ -760,12 +802,80 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         }
     }
 
+    /// <summary>Fires (at most once per pipeline lifetime) the background FP32 rebuild once
+    /// <paramref name="dfine"/> has latched <see cref="DFineEngine.HasNonFiniteOverflow"/> — the
+    /// TensorRT FP16 builder overflowing D-FINE's transformer activations, the automatic counterpart
+    /// to <see cref="DFineEngine.WarnIfNonFinite"/>'s log line. Never awaited by the caller: a cold
+    /// TensorRT engine build is minutes, and blocking the per-frame inference loop on it would freeze
+    /// this camera's own capture/detect cycle for that whole window (other cameras are unaffected —
+    /// each has its own loop — but this one would otherwise sit idle rather than continuing to run,
+    /// zero-detection, against the still-overflowing engine until the swap is ready).</summary>
+    private void TriggerDFineFp32RebuildIfNeeded(DFineEngine dfine, CancellationToken ct)
+    {
+        if (!string.Equals(_engineOptions.TensorRtPrecision, "FP16", StringComparison.OrdinalIgnoreCase)) return;
+        if (Interlocked.CompareExchange(ref _dfineFp32RebuildStarted, 1, 0) != 0) return;
+
+        _logger.LogWarning(
+            "D-FINE FP16 TensorRT overflow detected for camera {Camera} — rebuilding the detection engine at " +
+            "FP32 in the background. Detections stay empty on this camera until the rebuild completes.",
+            _request.DisplayName);
+
+        _ = RebuildDFineAtFp32Async(dfine, ct);
+    }
+
+    private async Task RebuildDFineAtFp32Async(DFineEngine overflowing, CancellationToken ct)
+    {
+        var fp32Options = _engineOptions with { TensorRtPrecision = "FP32", TensorRtLayerNormFp32Fallback = false };
+        try
+        {
+            var newEngine = await Task.Run(() => EngineBuildGate.Build(
+                _request.DisplayName, fp32Options,
+                () => DetectionEngineFactory.Create(_modelFamily, _dfineWeights, _yoloXSize,
+                    fp32Options, _profile, _loggerFactory, _sliceLayout, _externalConfig, _customModel),
+                _logger, ct), ct);
+
+            _engineOptions = fp32Options;
+            _engine = newEngine;
+            // Only disposed after the swap — engine.Detect (this loop, or a slice call already in
+            // flight against the old instance) must never see a disposed session mid-call.
+            overflowing.Dispose();
+            _logger.LogInformation(
+                "D-FINE engine for camera {Camera} rebuilt at FP32 after an FP16 overflow — detections should " +
+                "resume on the next frame.", _request.DisplayName);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Failed to rebuild the D-FINE engine at FP32 for camera {Camera} after an FP16 overflow — " +
+                "continuing on the original (overflowing) engine, which will keep reporting zero detections.",
+                _request.DisplayName);
+        }
+    }
+
     // Local-pixel coordinates within this margin of a slice's own edge, along the axis
     // SliceLayout.Slices overlap on, count as "the model's own view of this object was itself cut
     // off by the tile boundary" — see SliceMerge.Candidate.TouchesSliceEdge's own doc comment. A
     // couple of pixels of tolerance for rounding, not zero: DFineDecoder/YoloXDecoder both round to
     // the nearest integer pixel when clamping a box to the network size.
     private const int SliceEdgeMarginPx = 2;
+
+    /// <summary>Whether slice <paramref name="sliceIndex"/>'s own edge nearest <paramref name="box"/>
+    /// is a genuine seam (bordering another slice) rather than the camera's true outer frame border.
+    /// Confirmed root cause of a production regression: the first slice's leading edge and the last
+    /// slice's trailing edge border nothing, so an object standing at the camera's real image edge was
+    /// previously flagged as "seam-clipped" just like a real fragment — and <see cref="SliceMerge"/>'s
+    /// seam rule (which no longer requires a matching label) could then absorb an unrelated
+    /// neighboring object into it. Only the edge that actually has a neighbor on that side counts.</summary>
+    internal static bool TouchesSliceEdge(SliceLayout layout, int sliceIndex, SKRectI box)
+    {
+        var lastIndex = layout.Slices.Count - 1;
+        var touchesLeading = sliceIndex > 0
+            && (layout.IsLandscape ? box.Left : box.Top) <= SliceEdgeMarginPx;
+        var touchesTrailing = sliceIndex < lastIndex
+            && (layout.IsLandscape ? box.Right : box.Bottom) >= layout.NetworkSize - SliceEdgeMarginPx;
+        return touchesLeading || touchesTrailing;
+    }
 
     /// <summary>Detection/hardware-acceleration overhaul, pass 4: maps every slice's own local-pixel
     /// detections into this camera's global source-pixel space (<see cref="SliceLayout.MapSliceBoxToSource"/>,
@@ -785,9 +895,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             foreach (var d in perSlice[i])
             {
                 var box = d.BoundingBox; // local pixel space, 0..NetworkSize (this slice's own square)
-                var touchesEdge = layout.IsLandscape
-                    ? box.Left <= SliceEdgeMarginPx || box.Right >= layout.NetworkSize - SliceEdgeMarginPx
-                    : box.Top <= SliceEdgeMarginPx || box.Bottom >= layout.NetworkSize - SliceEdgeMarginPx;
+                var touchesEdge = TouchesSliceEdge(layout, i, box);
 
                 var (nx0, ny0, nx1, ny1) = layout.MapSliceBoxToSource(i,
                     box.Left / (double)layout.NetworkSize, box.Top / (double)layout.NetworkSize,
@@ -807,6 +915,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         var merged = SliceMerge.Merge(candidates, out var mergeStats);
         _cadenceIouAbsorbed += mergeStats.IouAbsorbed;
         _cadenceSeamAbsorbed += mergeStats.SeamAbsorbed;
+        _cadenceOneSidedSeamAbsorbed += mergeStats.OneSidedSeamAbsorbed;
 
         var results = new List<YoloDotNet.Models.ObjectDetection>(merged.Count);
         foreach (var m in merged)
@@ -900,11 +1009,12 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         {
             sliceSummary =
                 $" Slices: raw detection(s) per slice [{string.Join(", ", perSlice)}], merged {_cadenceIouAbsorbed} by " +
-                $"overlap and {_cadenceSeamAbsorbed} across a seam, {_cadenceSpanningMerges} reported box(es) too wide " +
-                $"for any one slice.";
+                $"overlap, {_cadenceSeamAbsorbed} across a seam, and {_cadenceOneSidedSeamAbsorbed} one-sided across a " +
+                $"seam, {_cadenceSpanningMerges} reported box(es) too wide for any one slice.";
             Array.Clear(perSlice);
             _cadenceIouAbsorbed = 0;
             _cadenceSeamAbsorbed = 0;
+            _cadenceOneSidedSeamAbsorbed = 0;
             _cadenceSpanningMerges = 0;
         }
 

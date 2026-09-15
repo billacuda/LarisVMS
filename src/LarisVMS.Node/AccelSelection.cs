@@ -25,6 +25,11 @@ public static class AccelSelection
     {
         if (desired == AiAccelerator.Cpu) return AiAccelerator.Cpu; // always resolvable — no hardware detection needed to run on CPU
 
+        // MIGraphX is a placeholder (AMD's next-gen accelerator) — no build work exists for it, so it
+        // always resolves to "nothing" rather than silently running some other backend under a label
+        // that doesn't match. The Admin UI shows a "future feature" notice for this choice instead.
+        if (desired == AiAccelerator.MIGraphX) return null;
+
         if (desired == AiAccelerator.Auto)
         {
             foreach (var candidate in AutoPriority)
@@ -33,6 +38,13 @@ public static class AccelSelection
             }
             return null;
         }
+
+        // TensorRt/OpenVino are additive refinements of the Nvidia/Intel vendor detection above, not
+        // separate hardware families of their own — TensorRt needs an Nvidia GPU (same CUDA native
+        // build, TensorRT layered on top via VisionServiceSupervisor.SetEnableTensorRt); OpenVino
+        // needs an Intel GPU (the explicit OpenVINO backend, superseding the old Intel->DirectML bug).
+        if (desired == AiAccelerator.TensorRt) return detected.Contains(AiAccelerator.Nvidia) ? AiAccelerator.TensorRt : null;
+        if (desired == AiAccelerator.OpenVino) return detected.Contains(AiAccelerator.Intel) ? AiAccelerator.OpenVino : null;
 
         // An explicit non-Cpu choice is only honored if that specific hardware was actually detected.
         return detected.Contains(desired) ? desired : null;

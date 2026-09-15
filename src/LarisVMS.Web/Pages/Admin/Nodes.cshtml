@@ -130,13 +130,22 @@ else
                                    DetectedAcceleratorsJson (below) reports actually present on this
                                    node; an explicit choice is only honored if that hardware is
                                    actually detected — see NodeWorker/AccelSelection. *@
-                                <select name="aiAccelerator" class="form-select form-select-sm">
+                                @* Explicit list rather than an Enum.GetValues loop, so each backend gets a real label
+                                   (not the bare enum name) and "Intel" (superseded by the explicit OpenVINO choice
+                                   below — it used to silently run DirectML) stays out of the rendered list while
+                                   its enum value is kept for wire/DB back-compat with an already-persisted node. *@
+                                <select name="aiAccelerator" class="form-select form-select-sm" data-accel-select="@n.Id">
                                     <option value="" selected="@(n.AiAccelerator is null)">Auto</option>
-                                    @foreach (var accel in Enum.GetValues<LarisVMS.Core.Enums.AiAccelerator>().Where(a => a != LarisVMS.Core.Enums.AiAccelerator.Auto))
-                                    {
-                                        <option value="@accel" selected="@(n.AiAccelerator == accel)">@accel</option>
-                                    }
+                                    <option value="Nvidia" selected="@(n.AiAccelerator == LarisVMS.Core.Enums.AiAccelerator.Nvidia)">CUDA</option>
+                                    <option value="TensorRt" selected="@(n.AiAccelerator == LarisVMS.Core.Enums.AiAccelerator.TensorRt)">TensorRT</option>
+                                    <option value="Amd" selected="@(n.AiAccelerator == LarisVMS.Core.Enums.AiAccelerator.Amd)">DirectML</option>
+                                    <option value="OpenVino" selected="@(n.AiAccelerator == LarisVMS.Core.Enums.AiAccelerator.OpenVino)">OpenVINO</option>
+                                    <option value="Cpu" selected="@(n.AiAccelerator == LarisVMS.Core.Enums.AiAccelerator.Cpu)">CPU</option>
+                                    <option value="MIGraphX" selected="@(n.AiAccelerator == LarisVMS.Core.Enums.AiAccelerator.MIGraphX)">MIGraphX (AMD) — future feature</option>
                                 </select>
+                                <div class="form-text text-warning" data-migraphx-notice="@n.Id" hidden="@(n.AiAccelerator != LarisVMS.Core.Enums.AiAccelerator.MIGraphX)">
+                                    MIGraphX is not implemented yet — this node runs no AI-detection backend until a different choice is selected.
+                                </div>
                                 @{
                                     var detectedAccelerators = string.IsNullOrEmpty(n.DetectedAcceleratorsJson)
                                         ? []
@@ -168,8 +177,29 @@ else
                                     <option value="Auto" selected="@(Model.ModelFamilyOverride.GetValueOrDefault(n.Id) == "Auto")">Auto (YOLOX)</option>
                                     <option value="YoloX" selected="@(Model.ModelFamilyOverride.GetValueOrDefault(n.Id) == "YoloX")">YOLOX</option>
                                     <option value="DFine" selected="@(Model.ModelFamilyOverride.GetValueOrDefault(n.Id) == "DFine")">D-FINE (experimental)</option>
+                                    <option value="Custom" selected="@(Model.ModelFamilyOverride.GetValueOrDefault(n.Id) == "Custom")">Custom (a model dropped into C:\ProgramData\LarisVMS\models)</option>
                                     <option value="RfDetr" disabled>RF-DETR (not yet available)</option>
                                 </select>
+                                @* Model-agnostic path — only acted on when the family above resolves to
+                                   "Custom". Refresh probes this node's own /vision/models (via
+                                   NodeControlClient) and repopulates this select with whatever
+                                   ModelDiscovery found in this node's models directory. The saved
+                                   override (if any) is always kept as an option even before a refresh,
+                                   or if a refresh doesn't find it (e.g. the node is offline right now),
+                                   so saving this form never silently drops it. *@
+                                @{ var savedLocalModel = Model.LocalModelNameOverride.GetValueOrDefault(n.Id); }
+                                <div class="input-group input-group-sm mt-1">
+                                    <select name="localModelNameOverride" class="form-select form-select-sm" data-local-model-select="@n.Id"
+                                            title="Detection.LocalModelName override — only used when the model family above resolves to Custom">
+                                        <option value="" selected="@string.IsNullOrEmpty(savedLocalModel)">(inherit local model name)</option>
+                                        @if (!string.IsNullOrEmpty(savedLocalModel))
+                                        {
+                                            <option value="@savedLocalModel" selected data-saved="true">@savedLocalModel (saved)</option>
+                                        }
+                                    </select>
+                                    <button type="button" class="btn btn-outline-secondary btn-sm" data-refresh-local-models="@n.Id">Refresh models</button>
+                                </div>
+                                <div class="form-text" data-local-models-status="@n.Id"></div>
                                 @{ var yls = Model.YoloXSizeOverride.GetValueOrDefault(n.Id); }
                                 <select name="yoloXSizeOverride" class="form-select form-select-sm mt-1" title="YOLOX model size (only used when the family resolves to YOLOX)">
                                     <option value="" selected="@(string.IsNullOrEmpty(yls))">(inherit YOLOX size)</option>
@@ -206,7 +236,7 @@ else
                                     </option>
                                     <option value="Off" selected="@(Model.DFineTensorRtModeOverride.GetValueOrDefault(n.Id) == "Off")">Off (plain CUDA)</option>
                                     <option value="FP32" selected="@(Model.DFineTensorRtModeOverride.GetValueOrDefault(n.Id) == "FP32")">FP32</option>
-                                    <option value="FP16" disabled="@(Model.DFineTensorRtModeOverride.GetValueOrDefault(n.Id) != "FP16")" selected="@(Model.DFineTensorRtModeOverride.GetValueOrDefault(n.Id) == "FP16")">FP16 (not yet available)</option>
+                                    <option value="FP16" selected="@(Model.DFineTensorRtModeOverride.GetValueOrDefault(n.Id) == "FP16")">FP16 (auto-falls back to FP32 on overflow)</option>
                                 </select>
                                 @* Detection.Backend + the external inference service — same per-node
                                    override shape as the selects above. The URL/model picker with live
@@ -521,4 +551,74 @@ else
         leftover footage ages out of retention (which is what clears the warning on its own, with
         nothing to do here) — see <a asp-page="/Cameras/Index">Cameras</a> for which ones.
     </p>
+}
+
+@section Scripts {
+    <script>
+        // MIGraphX is a placeholder entry (AMD's next-gen accelerator, not implemented yet) — show/hide
+        // the "future feature" notice live as the operator changes the selection, not just on page load.
+        document.querySelectorAll('[data-accel-select]').forEach(function (select) {
+            select.addEventListener('change', function () {
+                var notice = document.querySelector('[data-migraphx-notice="' + select.getAttribute('data-accel-select') + '"]');
+                if (notice) notice.hidden = select.value !== 'MIGraphX';
+            });
+        });
+
+        // Model-agnostic ("Custom" family) local-model picker: "Refresh models" probes this node's
+        // own /vision/models (via a GET page handler that itself proxies through NodeControlClient)
+        // and repopulates the <select> with what LarisVMS.Vision.Models.ModelDiscovery found, showing
+        // a warning next to any model whose metadata/sidecar didn't resolve rather than hiding it.
+        document.querySelectorAll('[data-refresh-local-models]').forEach(function (btn) {
+            btn.addEventListener('click', async function () {
+                var id = btn.getAttribute('data-refresh-local-models');
+                var status = document.querySelector('[data-local-models-status="' + id + '"]');
+                var select = document.querySelector('[data-local-model-select="' + id + '"]');
+                btn.disabled = true;
+                status.textContent = 'Refreshing…';
+                try {
+                    var resp = await fetch('?handler=LocalModels&id=' + encodeURIComponent(id), { headers: { 'Accept': 'application/json' } });
+                    if (!resp.ok) { status.textContent = 'Could not reach this node.'; return; }
+                    var models = await resp.json();
+                    var previousValue = select.value;
+
+                    // Rebuild from scratch: keep "(inherit)", drop the old "(saved)" placeholder (the
+                    // refreshed list supersedes it), add one <option> per discovered model.
+                    select.innerHTML = '';
+                    var inheritOpt = document.createElement('option');
+                    inheritOpt.value = '';
+                    inheritOpt.textContent = '(inherit local model name)';
+                    select.appendChild(inheritOpt);
+
+                    models.forEach(function (m) {
+                        var opt = document.createElement('option');
+                        opt.value = m.name;
+                        var label = m.name + ' — ' + (m.decoder || 'unresolved');
+                        if (m.inputSize) label += ' (' + m.inputSize + 'x' + m.inputSize + ')';
+                        if (m.warnings && m.warnings.length > 0) label += ' \u26a0\ufe0f ' + m.warnings.join(' ');
+                        opt.textContent = label;
+                        select.appendChild(opt);
+                    });
+
+                    // Keep whatever was selected before the refresh if it's still there — or, if the
+                    // refresh didn't find it (e.g. it was only ever a "(saved)" placeholder for a node
+                    // that was offline), re-add it rather than silently losing the current selection.
+                    if (previousValue && ![...select.options].some(function (o) { return o.value === previousValue; })) {
+                        var keepOpt = document.createElement('option');
+                        keepOpt.value = previousValue;
+                        keepOpt.textContent = previousValue + ' (saved — not found on this refresh)';
+                        select.appendChild(keepOpt);
+                    }
+                    select.value = previousValue;
+
+                    status.textContent = models.length === 0
+                        ? 'No models found on this node (or it is unreachable) — drop an .onnx file into C:\\ProgramData\\LarisVMS\\models.'
+                        : models.length + ' model(s) found.';
+                } catch (e) {
+                    status.textContent = 'Could not reach this node.';
+                } finally {
+                    btn.disabled = false;
+                }
+            });
+        });
+    </script>
 }

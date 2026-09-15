@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net;
+using System.Net.Http.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
@@ -838,6 +839,79 @@ app.MapPost("/restart", async (HttpContext ctx, NodeWorker worker, SeenTokenCach
     }
 
     await ctx.Response.WriteAsync("Restarting.");
+});
+
+// Wakes NodeWorker's reconcile loop immediately instead of waiting up to 30s for its own timer — the
+// hot-swap logic (ReconcileVision's signature comparison -> CameraPipelineManager.StartOrReplaceAsync)
+// is unchanged, this only shortens how soon the loop gets around to re-running it. Same signed-token/
+// anti-replay shape as /restart, but far simpler: no process restart, no updater dependency, so a
+// briefly-unreachable node just means the 30s poll remains the correctness backstop.
+app.MapPost("/reconcile-now", async (HttpContext ctx, NodeWorker worker, SeenTokenCache seenTokens) =>
+{
+    var token = ExtractToken(ctx);
+    var currentKey = worker.MediaSigningKey;
+    if (currentKey is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
+        return;
+    }
+    if (!MediaToken.TryValidateNodeControl(token, "reconcile-now", currentKey, out var tokenError, out var tokenJti))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync(tokenError);
+        return;
+    }
+    if (!seenTokens.TryConsume(tokenJti))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync("token already used");
+        return;
+    }
+
+    worker.RequestImmediateReconcile();
+    await ctx.Response.WriteAsync("Reconciling.");
+});
+
+// Proxies Vision Service's own GET /models — the data source for Admin's Detection.LocalModelName
+// dropdown (Admin/Nodes.cshtml probes this directly; Admin/Settings/Detection.cshtml.cs fans it out
+// across every online node). Same signed-token/anti-replay shape as /restart, but read-only and far
+// simpler — no process restart, no updater dependency, and a Vision-Service-unreachable node just
+// means detection is off/not yet installed, not a real error worth a 5xx.
+app.MapGet("/vision/models", async (HttpContext ctx, NodeWorker worker, SeenTokenCache seenTokens) =>
+{
+    var token = ExtractToken(ctx);
+    var currentKey = worker.MediaSigningKey;
+    if (currentKey is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
+        return;
+    }
+    if (!MediaToken.TryValidateNodeControl(token, "vision-models", currentKey, out var tokenError, out var tokenJti))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync(tokenError);
+        return;
+    }
+    if (!seenTokens.TryConsume(tokenJti))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync("token already used");
+        return;
+    }
+
+    try
+    {
+        var models = await worker.VisionHttpClient.GetFromJsonAsync<List<DiscoveredModelDto>>("/models");
+        await ctx.Response.WriteAsJsonAsync(models ?? []);
+    }
+    catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+    {
+        // Vision Service isn't running (no AI detection installed/enabled on this node) — an empty
+        // list reads the same as "no models found", not an error, to the Admin picker.
+        await ctx.Response.WriteAsJsonAsync(Array.Empty<DiscoveredModelDto>());
+    }
 });
 
 // Export trigger — POSTed by LarisVMS.Web's ExportJobDispatcher, never reached by a browser
