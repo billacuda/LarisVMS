@@ -27,8 +27,8 @@
     var nav = await PermissionService.GetGrantedAsync(User);
     var isAuthenticated = User.Identity?.IsAuthenticated == true;
     // Each button's check matches the [Authorize] on the page it links to exactly — see the comment
-    // beside each <li> below for which page's policy it mirrors. A button is only ever hidden, never
-    // disabled: a user who can't act on a page shouldn't see a dead link inviting them to try.
+    // beside each nav item below for which page's policy it mirrors. A button is only ever hidden,
+    // never disabled: a user who can't act on a page shouldn't see a dead link inviting them to try.
     var showLive = nav.Has("Cameras", "View");
     var showPlayback = nav.Has("Playback", "View");
     var showExports = nav.Has("Exports", "View");
@@ -48,8 +48,18 @@
     var showPlugins = nav.Has("Plugins", "View");
     var showAlerts = nav.Has("Alerts", "Edit");
     var showApiKeys = nav.Has("ApiKeys", "Edit");
-    // An empty dropdown toggle with nothing inside it is worse than no dropdown at all.
-    var showAdminDropdown = showSettings || showPlugins || showAlerts || showApiKeys || showNodes;
+    // The sidebar's single "Settings" item replaces the old navbar dropdown; Nodes/Logs/Plugins/
+    // Alerts/API keys move from top-level nav buttons into cards on that hub page (Pages/Admin/
+    // Settings/Index.cshtml) instead, so this is now "can reach the hub at all", not "expand a
+    // dropdown of buttons" — same OR of every gate the hub could show a card for.
+    var showSettingsHub = showSettings || showPlugins || showAlerts || showApiKeys || showNodes || showLogs;
+
+    // Sidebar active-item state — the old top navbar never marked a current page, but a persistent
+    // sidebar reads as broken without one telling you where you are.
+    var currentPath = Context.Request.Path.Value ?? "/";
+    bool IsActive(string prefix) => prefix == "/"
+        ? currentPath == "/"
+        : currentPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
 }
 <!DOCTYPE html>
 <html lang="en" data-bs-theme="light">
@@ -58,20 +68,34 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>@ViewData["Title"] - @pageTitle</title>
     <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/theme.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
     @if (branding.PrimaryColor is not null || branding.AccentColor is not null || branding.FontStack is not null)
     {
         <style>
+            @* --lv-accent is what the sidebar's active item, buttons, links, and every other themed
+               control in theme.css actually read — --bs-primary/--bs-link-color are kept in step
+               alongside it for any plain Bootstrap component that still reads them directly (see
+               theme.css's own comment on which components do). *@
             @if (branding.PrimaryColor is { } primary)
             {
-                @Html.Raw($":root {{ --bs-primary: {primary}; --bs-link-color: {primary}; }}")
+                @Html.Raw($":root {{ --lv-accent: {primary}; --bs-primary: {primary}; --bs-link-color: {primary}; }}")
                 @Html.Raw($".btn-primary {{ --bs-btn-bg: {primary}; --bs-btn-border-color: {primary}; }}")
             }
             @* Accent drives the one place a second brand color reads as deliberate rather than
-               decorative: the navbar. Left alone when unset, so the default dark navbar stands. *@
+               decorative: previously the whole dark navbar, now just the sidebar's brand/logo strip
+               — NOT the whole .lv-side surface, which must keep following --lv-surface so the
+               sidebar still turns light/dark with the rest of the app. A fixed, always-on brand
+               color is fine for a small logo header (many apps keep that constant across themes);
+               it broke the toggle when it covered the entire sidebar instead. Left alone when unset,
+               so the default light/dark brand strip stands. *@
             @if (branding.AccentColor is { } accent)
             {
-                @Html.Raw($"#mainNav {{ background-color: {accent} !important; }}")
+                @* White brand text matches this field's original contract from the old dark navbar
+                   (its nav-link text was always white, so an admin already picked a color that reads
+                   well with white — same assumption carried over, just scoped to this smaller strip
+                   instead of computing contrast against an arbitrary chosen color). *@
+                @Html.Raw($".lv-brand {{ background-color: {accent} !important; }} .lv-brand-text, .lv-brand-sub {{ color: #fff !important; }}")
             }
             @if (branding.FontStack is { } fontStack)
             {
@@ -94,133 +118,94 @@
     @await RenderSectionAsync("Styles", required: false)
 </head>
 <body>
-    <nav class="navbar navbar-expand-sm navbar-dark bg-dark mb-3" id="mainNav">
-        <div class="container-fluid">
-            <a class="navbar-brand d-flex align-items-center gap-2" href="/">
+    <div class="lv-shell">
+        @* Emoji, not an icon font: this app has no icon library and already uses bare emoji as its
+           de facto icon system (🟢/🔴 camera state, ⚠️ warnings, 🌙/☀️ theme). aria-hidden on each one
+           so a screen reader announces "Live", not "satellite antenna Live".
+           Every item below is permission-gated — see the `show*` booleans computed above — so an
+           anonymous visitor (the Login page uses this same layout) or a Viewer-role user sees only
+           what they can actually do something with, not a wall of dead links.
+           `collapse d-lg-block` (not the old navbar's mobile-only collapse) is what makes this a
+           permanent sidebar at desktop widths and an off-canvas panel toggled by the topbar's
+           hamburger button below on narrow ones — Bootstrap's own collapse plugin (already loaded)
+           drives both, no new JS. *@
+        <aside class="lv-side collapse d-lg-block" id="lvSidebar">
+            <div class="lv-brand">
                 @if (branding.LogoDataUri is { } logo)
                 {
-                    @* Height-capped so any uploaded aspect ratio fits the navbar without resizing it;
-                       alt is empty because the brand name sits right beside it — announcing both
-                       would just repeat the same thing to a screen reader. *@
-                    <img src="@logo" alt="" style="max-height: 28px; width: auto;" />
+                    <img src="@logo" alt="" />
                 }
-                <span>@pageTitle</span>
-            </a>
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMenu"
-                    aria-controls="navMenu" aria-expanded="false" aria-label="Toggle navigation">
-                <span class="navbar-toggler-icon"></span>
-            </button>
-            @* Emoji, not an icon font: this app has no icon library and already uses bare emoji as
-               its de facto icon system (🟢/🔴 camera state, ⚠️ warnings, 🌙/☀️ theme). aria-hidden on
-               each one so a screen reader announces "Live", not "satellite antenna Live".
-               Every item below is permission-gated — see the `show*` booleans computed above — so an
-               anonymous visitor (the Login page uses this same layout) or a Viewer-role user sees
-               only what they can actually do something with, not a wall of dead links. *@
-            <div class="collapse navbar-collapse" id="navMenu">
-                <ul class="navbar-nav me-auto">
-                    @* Bare [Authorize] — any authenticated user, no specific resource/action. *@
-                    @if (isAuthenticated)
-                    {
-                        <li class="nav-item"><a class="nav-link" href="/"><span aria-hidden="true">🏠︎</span> Dashboard</a></li>
-                    }
-                    @* Live/Index requires Cameras.View, same as the Cameras list below. *@
-                    @if (showLive)
-                    {
-                        <li class="nav-item"><a class="nav-link" href="/Live"><span aria-hidden="true">📡</span> Live</a></li>
-                    }
-                    @if (showPlayback)
-                    {
-                        <li class="nav-item"><a class="nav-link" href="/Playback"><span aria-hidden="true">▶️</span> Playback</a></li>
-                    }
-                    @if (showExports)
-                    {
-                        <li class="nav-item"><a class="nav-link" href="/Exports"><span aria-hidden="true">🎬</span> Exports</a></li>
-                    }
-                    @if (showBookmarks)
-                    {
-                        <li class="nav-item"><a class="nav-link" href="/Bookmarks"><span aria-hidden="true">🔖</span> Bookmarks</a></li>
-                    }
-                    @if (showSnapshots)
-                    {
-                        <li class="nav-item"><a class="nav-link" href="/Snapshots"><span aria-hidden="true">📸</span> Snapshots</a></li>
-                    }
-                    @if (showViews)
-                    {
-                        <li class="nav-item"><a class="nav-link" href="/Views"><span aria-hidden="true">🖼️</span> Views</a></li>
-                    }
-                    @if (showCameras)
-                    {
-                        <li class="nav-item"><a class="nav-link" href="/Cameras"><span aria-hidden="true">📷</span> Cameras</a></li>
-                    }
-                    @* Its own top-level button, promoted out of the Admin dropdown — fleet monitoring
-                       is something an operator checks routinely, not an occasional administrative
-                       task, and it's gated by Nodes.Edit same as before (Admin/Nodes.cshtml.cs's own
-                       comment explains why this page uses one combined Edit permission rather than
-                       splitting View/Edit the way most other resources don't either). *@
-                    @if (showNodes)
-                    {
-                        <li class="nav-item"><a class="nav-link" href="/Admin/Nodes"><span aria-hidden="true">🔗</span> Nodes</a></li>
-                    }
-                    @* Its own top-level button rather than another item buried in the Admin dropdown
-                       — logs are something everyone with access checks routinely, not an occasional
-                       administrative task, and the dropdown was getting crowded (nine items) with
-                       several pages nobody could find without already knowing they existed. Branding,
-                       Event Colors, Backups, and the standalone Settings page moved into Settings'
-                       own tabs instead of shrinking this list by only one. *@
-                    @if (showLogs)
-                    {
-                        <li class="nav-item"><a class="nav-link" href="/Logs"><span aria-hidden="true">📜</span> Logs</a></li>
-                    }
-                    @if (showAdminDropdown)
-                    {
-                        <li class="nav-item dropdown">
-                            <a class="nav-link dropdown-toggle" href="#" id="adminNavDropdown" role="button"
-                               data-bs-toggle="dropdown" aria-expanded="false"><span aria-hidden="true">⚙️</span> Admin</a>
-                            <ul class="dropdown-menu dropdown-menu-dark" aria-labelledby="adminNavDropdown">
-                                @if (showSettings)
-                                {
-                                    <li><a class="dropdown-item" href="/Admin/Settings">Settings</a></li>
-                                }
-                                @if (showPlugins)
-                                {
-                                    <li><a class="dropdown-item" href="/Admin/Plugins">Plugins</a></li>
-                                }
-                                @if (showAlerts)
-                                {
-                                    <li><a class="dropdown-item" href="/Admin/Alerts">Alerts</a></li>
-                                }
-                                @if (showApiKeys)
-                                {
-                                    <li><a class="dropdown-item" href="/Admin/ApiKeys">API Keys</a></li>
-                                }
-                                @if (showNodes)
-                                {
-                                    <li><a class="dropdown-item" href="/Admin/Proxies">Media proxies</a></li>
-                                }
-                            </ul>
-                        </li>
-                    }
-                </ul>
-                <ul class="navbar-nav me-2">
-                    <li class="nav-item">
-                        <button class="btn btn-sm btn-outline-light" id="themeToggle" type="button"
-                                onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme"><span id="themeIcon" aria-hidden="true">🌙</span></button>
-                    </li>
-                </ul>
-                <partial name="_LoginPartial" />
+                <div>
+                    <div class="lv-brand-text">@pageTitle</div>
+                    <div class="lv-brand-sub">Video Management</div>
+                </div>
             </div>
-        </div>
-    </nav>
+            <nav class="lv-nav">
+                @* Bare [Authorize] — any authenticated user, no specific resource/action. *@
+                @if (isAuthenticated)
+                {
+                    <a class="lv-navitem@(IsActive("/") ? " active" : "")" href="/"><span aria-hidden="true">🏠︎</span> Dashboard</a>
+                }
+                @* Live/Index requires Cameras.View, same as the Cameras list below. *@
+                @if (showLive)
+                {
+                    <a class="lv-navitem@(IsActive("/Live") ? " active" : "")" href="/Live"><span aria-hidden="true">📡</span> Live</a>
+                }
+                @if (showPlayback)
+                {
+                    <a class="lv-navitem@(IsActive("/Playback") ? " active" : "")" href="/Playback"><span aria-hidden="true">▶️</span> Playback</a>
+                }
+                @if (showExports)
+                {
+                    <a class="lv-navitem@(IsActive("/Exports") ? " active" : "")" href="/Exports"><span aria-hidden="true">🎬</span> Exports</a>
+                }
+                @if (showBookmarks)
+                {
+                    <a class="lv-navitem@(IsActive("/Bookmarks") ? " active" : "")" href="/Bookmarks"><span aria-hidden="true">🔖</span> Bookmarks</a>
+                }
+                @if (showSnapshots)
+                {
+                    <a class="lv-navitem@(IsActive("/Snapshots") ? " active" : "")" href="/Snapshots"><span aria-hidden="true">📸</span> Snapshots</a>
+                }
+                @if (showViews)
+                {
+                    <a class="lv-navitem@(IsActive("/Views") ? " active" : "")" href="/Views"><span aria-hidden="true">🖼️</span> Views</a>
+                }
+                @if (showCameras)
+                {
+                    <a class="lv-navitem@(IsActive("/Cameras") ? " active" : "")" href="/Cameras"><span aria-hidden="true">📷</span> Cameras</a>
+                }
+                @* Single "Settings" item replaces the old Admin dropdown + top-level Nodes/Logs
+                   buttons — see Pages/Admin/Settings/Index.cshtml, which links out to every
+                   permission-gated destination those used to. *@
+                @if (showSettingsHub)
+                {
+                    <a class="lv-navitem@(IsActive("/Admin/Settings") ? " active" : "")" href="/Admin/Settings"><span aria-hidden="true">⚙️</span> Settings</a>
+                }
+            </nav>
+            <div class="lv-side-foot">
+                &copy; @DateTime.UtcNow.Year @pageTitle @(_version is not null ? $"v{_version}" : "")
+            </div>
+        </aside>
 
-    <main role="main" class="container-fluid px-4">
-        @RenderBody()
-    </main>
+        <div class="lv-main">
+            <div class="lv-topbar" id="lvTopbar">
+                <button class="btn btn-outline-secondary d-lg-none" type="button" data-bs-toggle="collapse"
+                        data-bs-target="#lvSidebar" aria-controls="lvSidebar" aria-expanded="false" aria-label="Toggle navigation">
+                    <span aria-hidden="true">☰</span>
+                </button>
+                <div class="lv-topbar-right ms-auto">
+                    <button class="lv-darktoggle" id="themeToggle" type="button"
+                            onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme"><span id="themeIcon" aria-hidden="true">🌙</span></button>
+                    <partial name="_LoginPartial" />
+                </div>
+            </div>
 
-    <footer class="border-top footer text-muted mt-4">
-        <div class="container-fluid px-4 py-2">
-            &copy; @DateTime.UtcNow.Year @pageTitle @(_version is not null ? $"v{_version}" : "")
+            <main role="main" class="lv-content">
+                @RenderBody()
+            </main>
         </div>
-    </footer>
+    </div>
 
     <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js" asp-append-version="true"></script>
     @* Loaded before anything that reads/writes a user preference, including theme.js and

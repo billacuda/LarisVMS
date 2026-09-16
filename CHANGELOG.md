@@ -7,6 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.205.0] - 2026-09-15
+
+### Added
+
+- **New Settings hub** (`Admin → Settings`, `Pages/Admin/Settings/Index.cshtml`) — a permission-gated
+  card grid replacing the old navbar's "Admin" dropdown plus the top-level Nodes/Logs nav buttons.
+  Every card links to the same real, independently-`[Authorize]`d page those used to; nothing moved,
+  it's just reachable from one sidebar item instead of three.
+
+### Changed
+
+- **Reworked the web UI's visual theme**: the top navbar is now a sidebar + topbar shell
+  (`Pages/Shared/_Layout.cshtml`), and colors/typography/zero-radius styling are layered over the
+  existing Bootstrap 5.3 install via CSS variable overrides (`wwwroot/css/theme.css`) rather than
+  replacing Bootstrap. Every other page's markup, forms, modals, dropdowns, and JS-driven widgets are
+  unchanged — only the shell and the recolor are new.
+- `install-web.ps1` now falls back to `-LegacyIisConfigPath` (default `E:\Sites\LarisVMS\setup-generated.json`,
+  `deploy.ps1`'s own default `-DestinationPath`) when `-InstallDir` has no `setup-generated.json` of
+  its own yet, and warns loudly (`Write-Warning`, not a `Write-Host` easy to miss in installer output)
+  instead of silently skipping migrations and node-build/proxy-build registration.
+
+### Fixed
+
+- **Sidebar didn't follow the light/dark toggle when a Branding `AccentColor` was already
+  configured** — the override was applied to the whole sidebar background with `!important`, pinning
+  it to that one fixed color in every theme. Scoped to just the brand/logo strip instead, which is
+  small enough to reasonably stay a fixed brand color across themes the way the old dark navbar's
+  brand link always did.
+- `.btn-primary`'s hover/active states reached for the accent color ramp's 600/700 steps, which
+  *invert* direction in dark mode (those steps are for text sitting on a tinted fill, not a solid
+  button fill) — hovering or pressing a primary button in dark mode made it turn lighter instead of
+  darker. Now computed via `color-mix()` relative to the current accent, so it behaves the same in
+  both themes.
+- Added the `--bs-*-rgb` companion variables (`body-bg`/`secondary-bg`/`tertiary-bg`/`emphasis-color`)
+  alongside their hex overrides, so Bootstrap utilities that read the RGB form for opacity math
+  (`.bg-body-secondary`, `.bg-body-tertiary`, table hover tint) match the new theme instead of falling
+  back to Bootstrap's own defaults.
+- Cameras list's capability badges (AI detection, PTZ, Talk, Meta, I/O) used Bootstrap's
+  `text-bg-light`, which ignores the theme attribute entirely — switched to a theme-aware background.
+- The Setup wizard had no dark mode support at all (no toggle, `theme.css` not even linked) — added.
+- Fullscreen "kiosk" mode on `Views/Play` stopped hiding the app shell — it targeted the old navbar's
+  `#mainNav` id, removed along with the navbar itself. Retargeted to the new sidebar/topbar ids.
+
+## [0.204.0] - 2026-09-15
+
+### Changed
+
+- **LarisVMS.Web no longer requires IIS.** It now self-hosts Kestrel directly as its own Windows
+  Service, the same way the recorder node already does. Install or upgrade with the new
+  `install-web.ps1` script instead of `deploy.ps1` and a manually-configured IIS site (`deploy.ps1`
+  still works for existing IIS deployments during the transition, but is deprecated). Supports both a
+  domain/service account for SQL Server Integrated Security and SQL Authentication under `LocalSystem`
+  — see the README's "Installing / upgrading" section. The HTTPS certificate comes from
+  `Kestrel:Certificates:Default:Path`/`:Password` in `appsettings.Production.json`, hot-reloaded from
+  a file share every 60 seconds the same way the node's own client endpoint already works, falling
+  back to a self-signed certificate when none is configured yet so a fresh install is always reachable
+  at its setup wizard. The live/playback custom-port setting (Admin → Settings → Live View) now opens
+  its own Kestrel listener directly instead of relying on a manually-added IIS site binding — changing
+  it requires restarting the service to take effect.
+
+### Fixed
+
+- **Fixed several real-world issues surfaced by the IIS → Kestrel migration above, all specific to
+  self-hosting Kestrel directly (IIS/ANCM never exposed the app to any of these).**
+  - Live/playback/snapshots could break intermittently: self-hosted Kestrel's dual-stack `ListenAnyIP`
+    socket reports an IPv4 client's address in IPv4-mapped-IPv6 form (`::ffff:10.0.0.5`), which every
+    media-proxy code path was embedding straight into a node connection URL. `NodeAuthMiddleware` and
+    `ProxyAuthMiddleware` now unmap it before it's ever stored as `Node.LastIpAddress` (new
+    `IpAllowListPolicy.Unmap` helper, reusing that class's existing unmapping logic).
+  - The live-view bounding-box overlay (`/live/{cameraId}/detections`) could silently never connect:
+    once a browser has an HTTP/2 connection open to the management port (from the page and its own API
+    calls), Chrome multiplexes a same-origin WebSocket onto it via HTTP/2's "extended CONNECT" instead
+    of opening a fresh HTTP/1.1 connection — and Kestrel answered that with a bare 405, since this
+    configuration doesn't support HTTP/2 WebSockets. The direct-to-node video socket was never affected
+    (each node is a fresh origin with no prior HTTP/2 connection for the browser to prefer reusing).
+    Kestrel's listeners are now restricted to HTTP/1.1, which is what IIS always effectively presented
+    to the app anyway.
+  - `appsettings.Production.json.example` was never actually included in a published build — the Web
+    SDK's implicit content glob only picks up `*.json`, not `*.json.example` — so `install-web.ps1`'s
+    "seed `appsettings.Production.json` from the example on a fresh install" step had nothing to seed
+    from. Now published via an explicit `Content` item.
+  - `install-node.ps1` unconditionally deleted the client-endpoint firewall rule (direct-to-node video)
+    on every run, only recreating it when `-ClientPort` was passed. A plain re-run to change an
+    unrelated setting (e.g. `-ServerUrl`) silently left the endpoint listening but unreachable from
+    outside. It now only touches that rule when `-ClientPort` is explicitly given, matching
+    `-ServiceCredential`'s existing "omit to leave it alone" behavior.
+
 ## [0.203.0] - 2026-09-14
 
 ### Fixed

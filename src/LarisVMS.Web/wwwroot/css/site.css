@@ -16,29 +16,137 @@ body {
     font-size: 0.85rem;
 }
 
-/* Navbar links at full strength rather than Bootstrap's muted default. `.navbar-dark` renders
-   .nav-link at rgba(255,255,255,.55) and only brightens to .75 on hover — which reads as every nav
-   item being disabled, and dims the emoji icons along with the text (an emoji is a color glyph, but
-   an alpha in `color` still composites the whole glyph against the bar). Full white at rest, with
-   hover carried by a slight color shift instead of a brightness one, so hover is still legible
-   feedback without rest state having to be dimmed to make room for it.
+/* ══════════════════════════════════════════════════════════════════════════
+   App shell — sidebar + topbar (Pages/Shared/_Layout.cshtml). New custom
+   markup with no Bootstrap equivalent; everything inside .lv-content is
+   ordinary Bootstrap-themed page content (see wwwroot/css/theme.css for the
+   token overrides that reskin it). Tokens (--lv-*) are defined per light/dark
+   mode in theme.css.
+   ══════════════════════════════════════════════════════════════════════ */
+.lv-shell {
+    display: flex;
+    min-height: 100vh;
+    background: var(--lv-bg);
+    color: var(--lv-text);
+}
 
-   Deliberately targeting the same specificity Bootstrap uses (.navbar-dark .navbar-nav .nav-link)
-   rather than reaching for !important, so page-level styling can still override this if it ever
-   needs to. .show/.active are included because Bootstrap styles those separately too — without
-   them, an open Admin dropdown or the current page's own link would fall back to the muted value
-   this exists to remove. */
-.navbar-dark .navbar-nav .nav-link,
-.navbar-dark .navbar-nav .nav-link.show,
-.navbar-dark .navbar-nav .nav-link.active {
+.lv-side {
+    width: 232px;
+    flex: none;
+    background: var(--lv-surface);
+    border-right: 2px solid var(--lv-divider);
+    display: flex;
+    flex-direction: column;
+}
+
+.lv-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    min-height: 68px;
+    border-bottom: 2px solid var(--lv-divider);
+}
+
+.lv-brand img {
+    width: 40px;
+    height: 40px;
+    object-fit: contain;
+    flex: none;
+}
+
+.lv-brand-text {
+    font-weight: 800;
+    font-size: 16px;
+    letter-spacing: -0.01em;
+    line-height: 1.1;
+}
+
+.lv-brand-sub {
+    font-size: 10px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    opacity: .5;
+}
+
+.lv-nav {
+    display: flex;
+    flex-direction: column;
+    padding: 14px 10px;
+    gap: 2px;
+}
+
+.lv-navitem {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    font-weight: 600;
+    font-size: 13.5px;
+    color: var(--lv-text);
+    text-decoration: none;
+    border: 1px solid transparent;
+}
+
+.lv-navitem:hover {
+    background: var(--lv-accent-100);
+}
+
+.lv-navitem.active {
+    background: var(--lv-accent);
     color: #fff;
 }
 
-.navbar-dark .navbar-nav .nav-link:hover,
-.navbar-dark .navbar-nav .nav-link:focus {
-    /* Bootstrap's own blue-200 — clearly a change, but close enough to white that the bar doesn't
-       flicker in brightness as the pointer crosses it. */
-    color: #9ec5fe;
+.lv-side-foot {
+    margin-top: auto;
+    padding: 14px 18px;
+    border-top: 2px solid var(--lv-divider);
+    font-size: 11px;
+    opacity: .55;
+}
+
+.lv-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.lv-topbar {
+    min-height: 68px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    padding: 12px 28px;
+    gap: 16px;
+    border-bottom: 2px solid var(--lv-divider);
+}
+
+.lv-topbar-right {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.lv-darktoggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--lv-divider);
+    background: transparent;
+    cursor: pointer;
+    color: var(--lv-text);
+}
+
+.lv-darktoggle:hover {
+    background: var(--lv-accent-100);
+}
+
+.lv-content {
+    padding: 28px 32px 48px;
+    flex: 1;
 }
 
 /* Per-user column picker (column-picker.js) — a native <details> disclosure rather than a Bootstrap

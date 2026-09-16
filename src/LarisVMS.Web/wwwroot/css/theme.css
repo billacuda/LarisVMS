@@ -1,0 +1,192 @@
+/* Modernist theme — recolors/retypes the vendored Bootstrap 5.3 install without touching any
+   page's markup. Two kinds of override live here:
+   1. Bootstrap's own runtime custom properties (body bg/color, border color, border-radius, font),
+      which its dist CSS already reads live from `:root` — a plain variable override is enough.
+   2. Bootstrap 5.3 bakes its "primary" color into literal hex per component at build time (e.g.
+      `.btn-primary{--bs-btn-bg:#0d6efd;...}`) rather than deriving it from `--bs-primary` at
+      runtime, so those selectors need direct overrides below — same pattern the Branding feature
+      in _Layout.cshtml already uses for `.btn-primary`, just applied as the shipped default and
+      extended to the other primary-colored interactive states (focus rings, checked checkboxes,
+      pagination, active nav/dropdown/list items, progress bars). Branding's own inline <style>
+      block loads after this file, so an admin's chosen color still wins. */
+
+@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&display=swap');
+
+:root {
+    --bs-font-sans-serif: "Archivo", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --bs-body-font-family: var(--bs-font-sans-serif);
+
+    --bs-body-bg: #f3f2f2;
+    --bs-body-bg-rgb: 243, 242, 242;
+    --bs-body-color: #201e1d;
+    --bs-secondary-bg: #eae9e9;
+    --bs-secondary-bg-rgb: 234, 233, 233;
+    --bs-tertiary-bg: #eae9e9;
+    --bs-tertiary-bg-rgb: 234, 233, 233;
+    --bs-emphasis-color: #201e1d;
+    --bs-emphasis-color-rgb: 32, 30, 29;
+    --bs-border-color: color-mix(in srgb, #201e1d 25%, transparent);
+    --bs-border-color-translucent: color-mix(in srgb, #201e1d 15%, transparent);
+
+    --bs-link-color: #2f7ab5;
+    --bs-link-color-rgb: 47, 122, 181;
+    --bs-link-hover-color: #184e7d;
+    --bs-link-hover-color-rgb: 24, 78, 125;
+
+    --bs-primary: #2f7ab5;
+    --bs-primary-rgb: 47, 122, 181;
+
+    /* Modernist is a zero-radius system — every Bootstrap component derives its own radius from
+       these, so this alone squares off buttons/cards/badges/inputs/modals/alerts app-wide. */
+    --bs-border-radius: 0;
+    --bs-border-radius-sm: 0;
+    --bs-border-radius-lg: 0;
+    --bs-border-radius-xl: 0;
+    --bs-border-radius-2xl: 0;
+    --bs-border-radius-pill: 0;
+
+    /* App shell tokens (sidebar/topbar in _Layout.cshtml, styled in site.css) — kept separate from
+       the --bs-* names above since the shell is custom markup, not a Bootstrap component. */
+    --lv-bg: #f3f2f2;
+    --lv-surface: #eae9e9;
+    --lv-text: #201e1d;
+    --lv-divider: color-mix(in srgb, #201e1d 40%, transparent);
+    --lv-accent: #2f7ab5;
+    --lv-accent-100: #eaf3fa;
+    --lv-accent-200: #cfe4f2;
+    --lv-accent-600: #2569a0;
+    --lv-accent-700: #184e7d;
+}
+
+[data-bs-theme="dark"] {
+    --bs-body-bg: #15171c;
+    --bs-body-bg-rgb: 21, 23, 28;
+    --bs-body-color: #eef0f2;
+    --bs-secondary-bg: #1d2027;
+    --bs-secondary-bg-rgb: 29, 32, 39;
+    --bs-tertiary-bg: #1d2027;
+    --bs-tertiary-bg-rgb: 29, 32, 39;
+    --bs-emphasis-color: #eef0f2;
+    --bs-emphasis-color-rgb: 238, 240, 242;
+    --bs-border-color: color-mix(in srgb, #eef0f2 22%, transparent);
+    --bs-border-color-translucent: color-mix(in srgb, #eef0f2 14%, transparent);
+
+    --bs-link-color: #5fa8dd;
+    --bs-link-color-rgb: 95, 168, 221;
+    --bs-link-hover-color: #a9d4f0;
+    --bs-link-hover-color-rgb: 169, 212, 240;
+
+    --bs-primary: #5fa8dd;
+    --bs-primary-rgb: 95, 168, 221;
+
+    --lv-bg: #15171c;
+    --lv-surface: #1d2027;
+    --lv-text: #eef0f2;
+    --lv-divider: color-mix(in srgb, #eef0f2 22%, transparent);
+    --lv-accent: #5fa8dd;
+    --lv-accent-100: #16324a;
+    --lv-accent-200: #1c3f5c;
+    --lv-accent-600: #7fbce8;
+    --lv-accent-700: #a9d4f0;
+}
+
+/* — primary-colored Bootstrap component states that are baked to hex at build time — */
+
+.btn-primary {
+    /* Hover/active darken relative to the *current* accent via color-mix rather than reaching for
+       the accent-600/700 ramp steps — those steps are for text sitting on a tinted fill (readme:
+       "the dark steps (700-900) for text on tinted fills… and pressed states" — a light-mode-shaped
+       description) and the mockup's own dark-mode ramp deliberately inverts them to stay legible as
+       text on a dark ground, so accent-600/700 are *lighter* than the base accent in dark mode. Used
+       as a solid button fill instead of text, that inversion made hovering/pressing a primary button
+       in dark mode turn it lighter and harder to read against white — the opposite of the intended
+       "darken on press" feedback. color-mix sidesteps the ramp's direction entirely: it darkens
+       whatever --lv-accent currently resolves to, so the behavior is identical in both themes. */
+    --bs-btn-color: #fff;
+    --bs-btn-bg: var(--lv-accent);
+    --bs-btn-border-color: var(--lv-accent);
+    --bs-btn-hover-color: #fff;
+    --bs-btn-hover-bg: color-mix(in srgb, var(--lv-accent) 85%, black);
+    --bs-btn-hover-border-color: color-mix(in srgb, var(--lv-accent) 85%, black);
+    --bs-btn-active-color: #fff;
+    --bs-btn-active-bg: color-mix(in srgb, var(--lv-accent) 70%, black);
+    --bs-btn-active-border-color: color-mix(in srgb, var(--lv-accent) 70%, black);
+    --bs-btn-disabled-bg: var(--lv-accent);
+    --bs-btn-disabled-border-color: var(--lv-accent);
+    --bs-btn-focus-shadow-rgb: var(--bs-primary-rgb);
+}
+
+.btn-outline-primary {
+    --bs-btn-color: var(--lv-accent);
+    --bs-btn-border-color: var(--lv-accent);
+    --bs-btn-hover-color: #fff;
+    --bs-btn-hover-bg: var(--lv-accent);
+    --bs-btn-hover-border-color: var(--lv-accent);
+    --bs-btn-active-color: #fff;
+    --bs-btn-active-bg: var(--lv-accent);
+    --bs-btn-active-border-color: var(--lv-accent);
+    --bs-btn-disabled-color: var(--lv-accent);
+    --bs-btn-disabled-border-color: var(--lv-accent);
+    --bs-btn-focus-shadow-rgb: var(--bs-primary-rgb);
+}
+
+.bg-primary { background-color: var(--lv-accent) !important; }
+.text-primary { color: var(--lv-accent) !important; }
+.border-primary { border-color: var(--lv-accent) !important; }
+.text-bg-primary { background-color: var(--lv-accent) !important; color: #fff !important; }
+
+.alert-primary {
+    --bs-alert-color: var(--lv-accent-700);
+    --bs-alert-bg: var(--lv-accent-100);
+    --bs-alert-border-color: var(--lv-accent-200);
+}
+
+.form-control:focus,
+.form-select:focus {
+    border-color: var(--lv-accent);
+    box-shadow: 0 0 0 .25rem color-mix(in srgb, var(--lv-accent) 25%, transparent);
+}
+
+.form-check-input:checked {
+    background-color: var(--lv-accent);
+    border-color: var(--lv-accent);
+}
+
+.form-check-input:focus {
+    border-color: var(--lv-accent);
+    box-shadow: 0 0 0 .25rem color-mix(in srgb, var(--lv-accent) 25%, transparent);
+}
+
+.form-range::-webkit-slider-thumb { background-color: var(--lv-accent); }
+.form-range::-moz-range-thumb { background-color: var(--lv-accent); }
+
+.page-link { color: var(--lv-accent); }
+.page-item.active .page-link {
+    background-color: var(--lv-accent);
+    border-color: var(--lv-accent);
+}
+
+.dropdown-item.active,
+.dropdown-item:active {
+    background-color: var(--lv-accent);
+}
+
+.nav-pills .nav-link.active,
+.nav-pills .show > .nav-link {
+    background-color: var(--lv-accent);
+}
+
+.list-group-item.active {
+    background-color: var(--lv-accent);
+    border-color: var(--lv-accent);
+}
+
+.progress-bar { background-color: var(--lv-accent); }
+
+/* Modernist calls for a deliberate, always-accent-colored focus ring rather than the browser
+   default — applied globally since it costs nothing on elements that already define their own
+   (the rules above win by specificity where both would otherwise apply). */
+:focus-visible {
+    outline: 2px solid var(--lv-accent);
+    outline-offset: 2px;
+}

@@ -1,4 +1,30 @@
 @page
 @model LarisVMS.Web.Pages.Admin.Settings.IndexModel
 @{
+    ViewData["Title"] = "Settings";
+}
+<div class="d-flex align-items-center gap-2 mb-3">
+    <h1 class="mb-0">Settings</h1>
+</div>
+
+@if (Model.Cards.Count == 0)
+{
+    <p class="text-muted">Nothing here yet — you don't currently hold a permission that unlocks any settings area.</p>
+}
+else
+{
+    <div class="row g-3">
+        @foreach (var card in Model.Cards)
+        {
+            <div class="col-6 col-md-4 col-lg-3">
+                <a href="@card.Href" class="card h-100 text-decoration-none text-body">
+                    <div class="card-body">
+                        <div class="fs-4 mb-2" aria-hidden="true">@card.Icon</div>
+                        <div class="card-title fw-bold mb-1">@card.Title</div>
+                        <p class="card-text text-muted small mb-0">@card.Description</p>
+                    </div>
+                </a>
+            </div>
+        }
+    </div>
 }

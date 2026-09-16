@@ -571,8 +571,16 @@ New-NetFirewallRule -DisplayName $firewallRuleName -Direction Inbound -Action Al
 Write-Ok "Allowed inbound TCP $LivePort"
 
 # ── Failover plan phase 1: direct-to-node client HTTPS endpoint ────────────────────────────────────
+# The client port can also be enabled entirely server-side (Admin -> Nodes' ClientEndpoint fields,
+# via NodeConfig.CachedConfig) with no -ClientPort ever passed here — a real, supported setup, not a
+# corner case. Only touch the firewall rule (and client-endpoint.json) when -ClientPort is explicitly
+# given on *this* invocation, mirroring -ServiceCredential's own "omit to leave it alone" behavior
+# above: a plain re-run to change an unrelated setting (e.g. -ServerUrl) must never silently delete a
+# firewall rule protecting a client endpoint this script itself didn't set up, or one from a previous
+# run's -ClientPort that's still in effect. Confirmed live as exactly this failure: re-running with a
+# new -ServerUrl and no -ClientPort deleted the rule and never recreated it, leaving the endpoint
+# listening but silently unreachable (dropped packets, not a fast refusal) until it was added back.
 $clientEndpointRuleName = "LarisVMS Node Client Endpoint"
-Get-NetFirewallRule -DisplayName $clientEndpointRuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
 if ($ClientPort -gt 0) {
     Write-Step "Writing client-endpoint.json and firewall rule (TCP $ClientPort)"
     $clientCfgDir = Join-Path $env:ProgramData 'LarisVMS'
@@ -586,6 +594,9 @@ if ($ClientPort -gt 0) {
     if ($ClientPfxPassword)  { $clientCfg.pfxPassword = $ClientPfxPassword }
     if ($ClientEndpointHost) { $clientCfg.host = $ClientEndpointHost }
     $clientCfg | ConvertTo-Json | Set-Content -Path (Join-Path $clientCfgDir 'client-endpoint.json') -Encoding UTF8
+    # Idempotent remove-then-add so re-running with a *changed* -ClientPort replaces the old rule
+    # instead of leaving a stale one alongside the new one — same pattern as the live-view rule above.
+    Get-NetFirewallRule -DisplayName $clientEndpointRuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
     New-NetFirewallRule -DisplayName $clientEndpointRuleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort $ClientPort | Out-Null
     Write-Ok "Client endpoint on TCP $ClientPort ($(if ($ClientAllowInsecure) { 'self-signed / insecure' } elseif ($ClientPfxPath) { 'supplied certificate' } else { 'certificate from server config' }))"
 }

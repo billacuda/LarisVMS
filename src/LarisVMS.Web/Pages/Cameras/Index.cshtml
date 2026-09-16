@@ -112,7 +112,7 @@ else
                             @if (c.AiDetectionEnabled)
                             {
                                 var streamRole = Model.EffectiveAiDetectionStreamRole.GetValueOrDefault(c.Id, "Sub");
-                                <span class="badge text-bg-light border ms-1" title="AI object detection is watching this camera's @streamRole stream">🤖 @streamRole</span>
+                                <span class="badge bg-body-secondary text-body border ms-1" title="AI object detection is watching this camera's @streamRole stream">🤖 @streamRole</span>
                             }
                         </td>
                         <td>@c.Host</td>
@@ -155,10 +155,10 @@ else
                         <td>
                             @if (c.Capabilities is { } cap2)
                             {
-                                if (cap2.HasPtz) { <span class="badge text-bg-light border me-1" title="PTZ">PTZ</span> }
-                                if (cap2.HasAudioOut) { <span class="badge text-bg-light border me-1" title="Two-way audio">Talk</span> }
-                                if (cap2.HasAnalyticsMetadata) { <span class="badge text-bg-light border me-1" title="Analytics metadata">Meta</span> }
-                                if (cap2.HasRelayOutputs || cap2.HasDigitalInputs) { <span class="badge text-bg-light border me-1" title="Relay / digital I/O">I/O</span> }
+                                if (cap2.HasPtz) { <span class="badge bg-body-secondary text-body border me-1" title="PTZ">PTZ</span> }
+                                if (cap2.HasAudioOut) { <span class="badge bg-body-secondary text-body border me-1" title="Two-way audio">Talk</span> }
+                                if (cap2.HasAnalyticsMetadata) { <span class="badge bg-body-secondary text-body border me-1" title="Analytics metadata">Meta</span> }
+                                if (cap2.HasRelayOutputs || cap2.HasDigitalInputs) { <span class="badge bg-body-secondary text-body border me-1" title="Relay / digital I/O">I/O</span> }
                             }
                         </td>
                         <td>@c.Streams.Count</td>

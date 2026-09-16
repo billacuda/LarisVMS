@@ -36,10 +36,11 @@ public class LiveViewModel(ISettingsResolver settings, IAuditService auditServic
     /// (those routes are token-authorized regardless).</summary>
     [BindProperty] public string? PublicOrigin { get; set; }
 
-    /// <summary>Null/0 (the default) means every route stays reachable on whatever port(s) IIS
-    /// already binds — the feature only starts separating traffic once an admin sets a real port
-    /// here <em>and</em> adds a matching IIS site binding for it (this setting alone can't open a
-    /// new listening socket under IIS in-process hosting).</summary>
+    /// <summary>Null/0 (the default) means every route stays reachable on whatever port the service's
+    /// main HTTPS listener binds. Setting a port here opens a second Kestrel HTTPS listener dedicated
+    /// to live/playback traffic — useful for firewalling the two differently. <strong>Changing this
+    /// setting requires restarting the LarisVMS Web Windows Service to take effect</strong> — the
+    /// listener is opened once, at service startup, not dynamically.</summary>
     [BindProperty] public int? CustomPort { get; set; }
 
     public string? SavedMessage { get; set; }

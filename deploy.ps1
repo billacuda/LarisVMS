@@ -1,5 +1,9 @@
 ﻿<#
 .SYNOPSIS
+    DEPRECATED - superseded by install-web.ps1 (self-hosted Kestrel Windows Service). This script
+    only works against an IIS-hosted deployment and will be removed once install-web.ps1 is proven in
+    production. Use install-web.ps1 for any new install or upgrade.
+
     Deploy LarisVMS's web tier to IIS - applies EF migrations, publishes the web app.
 
 .DESCRIPTION

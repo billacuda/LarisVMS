@@ -764,7 +764,7 @@ window.larisvmsViewPlay = (function () {
         syncConfidenceEnabled();
     }
 
-    function wireKiosk(kioskBtnId, navElId, toolbarElId) {
+    function wireKiosk(kioskBtnId, navElId, toolbarElId, shellTopbarElId) {
         var btn = document.getElementById(kioskBtnId);
         if (!btn) return;
         btn.addEventListener('click', function () {
@@ -775,10 +775,14 @@ window.larisvmsViewPlay = (function () {
             var isFullscreen = !!document.fullscreenElement;
             var nav = document.getElementById(navElId);
             var toolbar = document.getElementById(toolbarElId);
+            // The app shell's own topbar (search/theme-toggle/account) sits above the toolbar — kiosk
+            // mode reclaims that strip too, same as the sidebar beside it.
+            var shellTopbar = shellTopbarElId ? document.getElementById(shellTopbarElId) : null;
             // The kiosk button lives in the toolbar being hidden here — the browser's own Esc
             // shortcut is what exits fullscreen while it's gone, same as any other fullscreen page.
             if (nav) nav.style.display = isFullscreen ? 'none' : '';
             if (toolbar) toolbar.style.display = isFullscreen ? 'none' : '';
+            if (shellTopbar) shellTopbar.style.display = isFullscreen ? 'none' : '';
             // Hiding the nav and toolbar just handed the grid ~100px of height it didn't have a
             // moment ago (and takes it back on exit) — re-fit rather than leave the view sized for
             // the wrong window. Not a re-render: nothing about the tiles themselves changed.
@@ -882,7 +886,7 @@ window.larisvmsViewPlay = (function () {
             resizeTimer = setTimeout(applyFittedRowHeight, 150);
         });
 
-        wireKiosk(o.kioskBtnId, o.navElId, o.toolbarElId);
+        wireKiosk(o.kioskBtnId, o.navElId, o.toolbarElId, o.shellTopbarElId);
         wireCameraPicker(o);
         wireDetectionToggles(o);
         if (o.isTour) wireTour(o.tourViewIds, o.tourIndex, o.tourIntervalSeconds);

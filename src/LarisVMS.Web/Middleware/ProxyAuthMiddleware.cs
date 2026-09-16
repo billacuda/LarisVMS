@@ -1,5 +1,6 @@
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Web.Services;
 
 namespace LarisVMS.Web.Middleware;
 
@@ -38,9 +39,10 @@ public class ProxyAuthMiddleware(RequestDelegate next)
             return;
         }
 
+        // Unmapped for the same reason as NodeAuthMiddleware — see IpAllowListPolicy.Unmap.
         var proxy = await proxyService.AuthenticateAsync(
             token[..separator], token[(separator + 1)..],
-            context.Connection.RemoteIpAddress?.ToString(), context.RequestAborted);
+            IpAllowListPolicy.Unmap(context.Connection.RemoteIpAddress), context.RequestAborted);
         if (proxy is null)
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;

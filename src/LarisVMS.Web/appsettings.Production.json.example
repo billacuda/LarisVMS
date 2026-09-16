@@ -1,0 +1,14 @@
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Server=.;Database=LarisVMS;Integrated Security=true;TrustServerCertificate=true"
+  },
+  "Kestrel": {
+    "Certificates": {
+      "Default": {
+        "Path": "\\\\fileshare\\certs\\larisvms.pfx",
+        "Password": "REPLACE_WITH_PFX_PASSWORD"
+      }
+    },
+    "HttpsPort": 8444
+  }
+}

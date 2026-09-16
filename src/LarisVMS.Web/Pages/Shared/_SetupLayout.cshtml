@@ -8,9 +8,25 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>@ViewData["Title"] - LarisVMS Setup</title>
     <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/theme.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+    <script>
+        // Anti-flash: same mechanism as Pages/Shared/_Layout.cshtml — applies the stored theme (or
+        // the system preference, when unset) before first paint, so Setup follows a preference set
+        // once the rest of the app is reachable instead of always rendering light.
+        (function () {
+            var t = localStorage.getItem('larisvms.theme');
+            if (t === 'dark' || t === 'light') {
+                document.documentElement.setAttribute('data-bs-theme', t);
+            } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                document.documentElement.setAttribute('data-bs-theme', 'dark');
+            }
+        })();
+    </script>
 </head>
 <body class="bg-body-tertiary">
+    <button class="lv-darktoggle position-absolute top-0 end-0 m-3" id="themeToggle" type="button"
+            onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme"><span id="themeIcon" aria-hidden="true">🌙</span></button>
     <div class="container" style="max-width: 640px; margin-top: 4rem;">
         <h1 class="mb-4 text-center">LarisVMS Setup</h1>
         <div class="card shadow-sm">
@@ -20,5 +36,7 @@
         </div>
     </div>
     <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js" asp-append-version="true"></script>
+    <script src="~/js/user-preferences.js" asp-append-version="true"></script>
+    <script src="~/js/theme.js" asp-append-version="true"></script>
 </body>
 </html>

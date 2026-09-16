@@ -10,12 +10,12 @@ namespace LarisVMS.Web.Middleware;
 /// configured media port is refused too. Refused with 404, not 403 or a redirect: a probe on the
 /// wrong port should learn nothing about what exists on the other one.
 ///
-/// This only enforces which port a request must arrive on — it does not itself open a new listening
-/// socket. Under IIS in-process hosting, the actual socket bindings are IIS's own site bindings, set
-/// up separately (IIS Manager or an extra <c>New-WebBinding</c> in deploy.ps1/the setup docs); this
-/// middleware assumes that binding already exists once an admin sets the port here, the same way
-/// every other IIS-hosted-app port story works. Left unset (the default), every route stays reachable
-/// on whatever port(s) IIS already binds, exactly as before this feature existed.
+/// This only enforces which port a request must arrive on — it does not itself open the second
+/// listening socket. Under self-hosted Kestrel, Program.cs reads this same setting synchronously at
+/// startup (before the DI container exists) and opens a matching second Kestrel listener if it's set
+/// — see Program.cs's "LiveView.CustomPort" block. Changing the setting takes effect on the next
+/// service restart, not immediately. Left unset (the default), every route stays reachable on
+/// whatever port the main listener binds, exactly as before this feature existed.
 /// </summary>
 public class PortSegmentationMiddleware(RequestDelegate next)
 {

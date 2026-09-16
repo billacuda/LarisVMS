@@ -91,12 +91,12 @@
         </label>
         <input asp-for="CustomPort" type="number" min="1" max="65535" class="form-control" placeholder="(none — everything on the same port)" />
         <div class="help-text-source" id="customPortHelp">
-            Setting this alone doesn't open a new listening port — IIS's own site bindings do that.
-            Add a matching <code>New-WebBinding</code> for this port on the same site first (see the
-            README), <strong>then</strong> set it here. Once set, live/playback routes stop
-            responding on the management port, and every other route stops responding on this one.
-            Leave blank to disable — everything goes back to sharing whatever port(s) IIS already
-            binds.
+            Setting this opens a second HTTPS listener on this port, using the same certificate as the
+            main site. <strong>Requires restarting the LarisVMS Web service to take effect</strong> —
+            the listener is opened once at service startup, not dynamically. Once restarted,
+            live/playback routes stop responding on the management port, and every other route stops
+            responding on this one. Leave blank to disable — everything goes back to sharing the main
+            port.
         </div>
     </div>
 

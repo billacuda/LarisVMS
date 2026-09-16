@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -27,6 +28,7 @@ using LarisVMS.Infrastructure.Repositories;
 using LarisVMS.Infrastructure.Security;
 using LarisVMS.Infrastructure.Services;
 using LarisVMS.Onvif.Soap;
+using LarisVMS.Relay;
 using LarisVMS.Web.Auth;
 using LarisVMS.Web.Health;
 using LarisVMS.Web.Helpers;
@@ -35,21 +37,33 @@ using LarisVMS.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Self-hosted Kestrel, no IIS/ANCM in front — pins ContentRootPath to AppContext.BaseDirectory (among
+// other SCM-friendly defaults) so relative paths (setup-generated.json, wwwroot, appsettings.*.json)
+// resolve correctly under the Windows Service's own working directory. Must run before anything below
+// that depends on content root. A no-op outside an actual Windows Service (e.g. local `dotnet run`).
+builder.Host.UseWindowsService(o => o.ServiceName = "LarisVMS Web");
+// Belt-and-suspenders: install-web.ps1 sets ASPNETCORE_ENVIRONMENT=Production on the service's own
+// registry Environment value (the primary mechanism — see install-web.ps1). This only fires if that's
+// ever missing on an installed service; a local `dotnet run`/F5 session is never IsWindowsService(),
+// so ordinary Development-mode local dev is unaffected.
+if (Microsoft.Extensions.Hosting.WindowsServices.WindowsServiceHelpers.IsWindowsService()
+    && Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") is null)
+    builder.Environment.EnvironmentName = Environments.Production;
+
 // ── Log capture (M11) ────────────────────────────────────────────────────────
 // Generic Host's default provider is console-only — invisible once the process isn't attached to a
-// terminal (IIS's own AspNetCoreModule redirect (web.config's stdoutLogFile) only captures raw
-// Console output and ASP.NET Core Module's own diagnostics, not structured ILogger lines). Writes
-// into the same ".\logs" directory IIS already proves writable by running under this exact app pool
-// identity, with an "app-" prefix so its daily files never collide with IIS's own "stdout_*" ones.
-// LogsRetentionService (registered below) sweeps files older than its retention window.
+// terminal (a Windows Service has no console anyone will ever see, the same reasoning LarisVMS.Node's
+// own FileLoggerProvider registration already uses). Writes into ".\logs" (relative to
+// AppContext.BaseDirectory — see LogPaths), proven writable by install-web.ps1 under this exact
+// service identity, with an "app-" prefix. LogsRetentionService (registered below) sweeps files older
+// than its retention window.
 var webFileLogger = new FileLoggerProvider(
     LogPaths.AppLogsDirectory(builder.Configuration), "app", LogLevel.Information);
 LarisVMS.Web.Services.WebLogLevel.Provider = webFileLogger;
 builder.Logging.AddProvider(webFileLogger);
 // Framework request-pipeline noise, the Hosting.Lifetime startup banner, and EF Core's per-statement
 // SQL echo (the Logs page's "Executed DbCommand" flood) — hidden while the deployment-wide log level
-// is Information or higher, back at Debug/Trace. Same treatment as the node/vision service. (Kestrel
-// isn't in play under IIS in-process, but the filters are harmless and keep parity.)
+// is Information or higher, back at Debug/Trace. Same treatment as the node/vision service.
 var frameworkLogFilter = FrameworkLogFilter.HiddenUnlessDebug(webFileLogger);
 builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting", frameworkLogFilter);
 builder.Logging.AddFilter("Microsoft.AspNetCore.Routing", frameworkLogFilter);
@@ -86,8 +100,9 @@ builder.Services.AddDbContext<ApplicationDbContext>((provider, options) =>
 // ── Data Protection ───────────────────────────────────────────────────────────
 // Protects auth cookies and, via SecretProtection, camera/SMB credentials and node media signing
 // keys at rest. SetApplicationName is explicit rather than derived from the content root path, so
-// moving/renaming the IIS site doesn't silently change the key isolation scope. deploy.ps1 excludes
-// this folder from its /MIR mirror — see deploy.ps1 and the README's "Data at rest" section.
+// moving/reinstalling the service to a new directory doesn't silently change the key isolation scope.
+// install-web.ps1 excludes this folder from its copy — see install-web.ps1 and the README's
+// "Data at rest" section.
 //
 // Deliberately still "Rcordr" — never renamed to "NidusVMS" and not renamed to "LarisVMS" either:
 // this string is the key-ring isolation discriminator, not a display name — it's baked into every
@@ -137,7 +152,7 @@ builder.Services.ConfigureApplicationCookie(options =>
     // regardless of what any role is configured for, generous enough that "0 = never expire" on
     // every one of a user's roles behaves as advertised rather than silently capping out here.
     // SlidingExpiration still renews it on activity, same as before.
-    options.ExpireTimeSpan = TimeSpan.FromDays(397); // just past a year — IIS/browser cookie norms
+    options.ExpireTimeSpan = TimeSpan.FromDays(397); // just past a year — common browser cookie norms
     options.SlidingExpiration = true;
     options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
 
@@ -365,6 +380,95 @@ builder.Services.AddRazorPages(options =>
 {
     options.Conventions.AllowAnonymousToFolder("/Setup");
 });
+
+// ── LiveView.CustomPort: open a matching second Kestrel listener ────────────────
+// PortSegmentationMiddleware only ever gatekept which port a request must arrive on — under IIS the
+// actual second socket was a manually-added IIS site binding. Self-hosted Kestrel has no IIS to bind
+// to, so this reads the same DB-backed setting synchronously here, before the DI container/
+// ISettingsResolver exist, and opens the matching listener itself below. Best-effort: pre-setup there
+// is no Settings table yet, and a transient DB hiccup here shouldn't crash startup — worst case the
+// custom port just doesn't come up until the next successful restart. "Change requires a service
+// restart" — same accepted model as ClientEndpointConfig/SegmentSeconds elsewhere in this codebase;
+// see PortSegmentationMiddleware's and LiveViewModel.CustomPort's doc comments.
+int? webMediaPort = null;
+var earlyConnectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+if (!string.IsNullOrWhiteSpace(earlyConnectionString))
+{
+    try
+    {
+        using var earlyConn = new SqlConnection(earlyConnectionString);
+        earlyConn.Open();
+        using var earlyCmd = earlyConn.CreateCommand();
+        earlyCmd.CommandText = "SELECT Value FROM Settings WHERE [Key] = @Key";
+        earlyCmd.Parameters.AddWithValue("@Key", PortSegmentationMiddleware.SettingKey);
+        if (earlyCmd.ExecuteScalar() is string rawMediaPort
+            && int.TryParse(rawMediaPort, out var parsedMediaPort) && parsedMediaPort is > 0 and <= 65535)
+            webMediaPort = parsedMediaPort;
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException)
+    {
+        Console.Error.WriteLine($"Could not read {PortSegmentationMiddleware.SettingKey} at startup: {ex.Message}");
+    }
+}
+
+// ── Kestrel / HTTPS certificate ──────────────────────────────────────────────
+// Self-hosted Kestrel — mirrors LarisVMS.Node's own client-endpoint block (Program.cs there) using
+// the exact same CertHolder/CertHolderOptions/CertWatcherService from LarisVMS.Relay, unchanged.
+// Path/Password read from the standard ASP.NET Core Kestrel convention
+// (Kestrel:Certificates:Default:Path/:Password) so the config shape is immediately recognizable, even
+// though the actual load/hot-reload is this hand-rolled CertHolder, not Kestrel's own (non-hot-
+// reloading) cert binding.
+var pfxPath = builder.Configuration["Kestrel:Certificates:Default:Path"];
+var pfxPassword = builder.Configuration["Kestrel:Certificates:Default:Password"];
+var certLogger = webFileLogger.CreateLogger("Certificate");
+var selfSignedPfxPath = Path.Combine(
+    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "web.selfsigned.pfx");
+// AllowInsecure: true — a fresh install has no real cert configured yet, and ConfigureKestrel below
+// only opens a listener when a certificate actually loaded, so refusing the self-signed fallback would
+// leave a brand-new install completely unreachable (no way to even get to the setup wizard). Matches
+// Node's own default behavior; the admin swaps in a real cert and restarts whenever ready.
+var certHolder = new CertHolder(
+    new CertHolderOptions(pfxPath, pfxPassword, AllowInsecure: true, Environment.MachineName, selfSignedPfxPath),
+    certLogger);
+if (certHolder.Load())
+    Console.WriteLine($"HTTPS certificate loaded ({(certHolder.IsSelfSigned ? "self-signed" : "supplied certificate")}) — NotAfter {certHolder.Current!.NotAfter:u}.");
+else
+    Console.Error.WriteLine($"No HTTPS certificate available: {certHolder.LastError}");
+
+var httpsPort = builder.Configuration.GetValue<int?>("Kestrel:HttpsPort") ?? 8444;
+builder.WebHost.ConfigureKestrel(o =>
+{
+    // IIS's own requestFiltering maxAllowedContentLength silently provided a ceiling on request size
+    // before — that ceiling disappears once Kestrel hosts directly unless set explicitly here.
+    o.Limits.MaxRequestBodySize = 2L * 1024 * 1024 * 1024; // 2 GiB — matches current export/upload usage
+    // HTTP/1.1 only — confirmed live that Chrome, once it has an HTTP/2 connection open to this origin
+    // (from the page/API calls), tries to multiplex a new WebSocket onto it via HTTP/2's "extended
+    // CONNECT" (RFC 8441) instead of opening a fresh HTTP/1.1 connection for the classic Upgrade
+    // handshake — and this Kestrel configuration answers that CONNECT attempt with a bare 405,
+    // silently killing /live/{cameraId}/detections (the one WS route sharing this origin/port with
+    // heavy other HTTP/2 traffic; the direct-to-node video WS never hits this because each node origin
+    // has no prior HTTP/2 connection for Chrome to prefer reusing). IIS/ANCM in-process hosting never
+    // exposed the app to this at all — the browser's own ALPN negotiation terminated at IIS, not here.
+    // Restricting to Http1 forces every WS handshake through the universally-reliable classic Upgrade
+    // path instead of relying on HTTP/2 WebSocket support this configuration doesn't actually have.
+    if (certHolder.Current is not null)
+        o.ListenAnyIP(httpsPort, lo => lo.UseHttps(h =>
+        {
+            h.ServerCertificateSelector = (_, _) => certHolder.Current;
+        }).Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http1);
+    if (webMediaPort is { } mediaPort && certHolder.Current is not null)
+        o.ListenAnyIP(mediaPort, lo => lo.UseHttps(h =>
+        {
+            h.ServerCertificateSelector = (_, _) => certHolder.Current;
+        }).Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http1);
+});
+builder.Services.AddSingleton(certHolder);
+if (certHolder.Current is not null)
+    builder.Services.AddSingleton<IHostedService>(sp => new CertWatcherService(
+        certHolder, sp.GetRequiredService<ILoggerFactory>().CreateLogger<CertWatcherService>()));
+// UseHttpsRedirection below would otherwise have to infer the port from IServerAddressesFeature —
+// explicit is safer now that it's not the standard 443.
+builder.Services.Configure<Microsoft.AspNetCore.HttpsPolicy.HttpsRedirectionOptions>(o => o.HttpsPort = httpsPort);
 
 var app = builder.Build();
 

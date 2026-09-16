@@ -29,6 +29,7 @@ temp/
 setup-generated.json
 appsettings.*.json
 !appsettings.Development.json.example
+!appsettings.Production.json.example
 
 # Node service local state (DPAPI/AES-encrypted, machine-specific)
 node.config

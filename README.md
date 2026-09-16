@@ -22,8 +22,9 @@ work on phone, tablet, and desktop.
 - ASP.NET Core 10, Razor Pages
 - EF Core 10 + SQL Server
 - Bootstrap 5 + GridStack, vendored locally (`wwwroot/lib/`), no build step and no CDN dependency
-- IIS InProcess hosting for the web app; recording runs in a separate Windows Service ("node") so it
-  survives IIS app pool recycles — see the architecture plan for why
+- Self-hosted Kestrel, running as its own Windows Service ("LarisVMS Web") — no IIS dependency;
+  recording runs in a separate Windows Service ("node") the same way, so it survives independently of
+  the web tier's own restarts
 - FFmpeg (installed per node, not bundled — `winget install ffmpeg`) for RTSP ingest, recording, and transcode fallback
 
 ## Status
@@ -42,8 +43,8 @@ instead of deleted, with its own retention — and if the primary volume fills p
 archive-enabled camera's oldest footage is moved to the archive volume while there is headroom,
 falling back to deletion only when the primary volume is critically full or the archive volume is
 unreachable. Playback, thumbnails and export work transparently from either volume. Also: browser live view
-(`Pages/Live`) proxied through IIS with no direct browser-to-node connection and no certificate
-needed on the node — all verified end-to-end against real Amcrest cameras, including killing the
+(`Pages/Live`) proxied through this server with no direct browser-to-node connection and no
+certificate needed on the node — all verified end-to-end against real Amcrest cameras, including killing the
 recording process and the node process mid-recording and confirming both recover cleanly. Live view
 connects automatically for every camera on page load, plays both H.264 and HEVC natively with audio,
 auto-reconnects on its own after a dropped session, and can be toggled per-tile into playback mode
@@ -65,8 +66,8 @@ correction, each resolving its own recordings/gaps independently.
 with pre/post-roll, ONVIF PullPoint event ingestion, user-configurable event tag rules (with an
 optional "drives recording" gate and a custom timeline color), and a live motion indicator badge —
 plus four recording modes per camera (`Continuous`, `Motion`, `Schedule`, `Event`), completing the
-milestone's original design. Recorder nodes **auto-update themselves**: `deploy.ps1` registers each
-build it produces as Pending on `Admin → Node Builds`, and once approved, every node whose reported
+milestone's original design. Recorder nodes **auto-update themselves**: `install-web.ps1` registers
+each build it produces as Pending on `Admin → Node Builds`, and once approved, every node whose reported
 version is older downloads, verifies (SHA-256), and swaps its own binary on its next heartbeat — no
 manual `install-node.ps1` re-run needed for an ordinary version bump (a service-identity change, like
 the LarisVMS rename, is the one case that still needs a manual reinstall). Multi-camera video export
@@ -232,12 +233,12 @@ There is **one** node package for every machine. It bundles the DirectML and CPU
 backends plus the small CUDA files; the Vision Service picks one at startup for whatever hardware the
 node detected — CUDA for an NVIDIA GPU when the CUDA Toolkit is present, otherwise DirectML (any
 Direct3D 12 GPU: NVIDIA, AMD, Intel), otherwise CPU. The large CUDA provider library
-(`onnxruntime_providers_cuda.dll`, ~320 MB) is **not** in the package — `deploy.ps1` seeds it into
+(`onnxruntime_providers_cuda.dll`, ~320 MB) is **not** in the package — `install-web.ps1` seeds it into
 the server and an NVIDIA node downloads it once, so CPU/DirectML-only installs don't carry it.
-`deploy.ps1` / `build-node.ps1` take no accelerator flag:
+`install-web.ps1` / `build-node.ps1` take no accelerator flag:
 
 ```powershell
-.\deploy.ps1     -IISSiteName "LarisVMS"
+.\install-web.ps1
 .\build-node.ps1                            # -SkipVision for a recording-only package
 ```
 
@@ -334,56 +335,100 @@ failure names its own cause in the node's log at `C:\ProgramData\LarisVMS\logs\n
 
 ## Quick start
 
-1. Create an IIS site pointing at an empty folder (e.g. `E:\Sites\LarisVMS`)
-2. Create an app pool set to **No Managed Code**
-3. Set the app pool identity to a service account with access to your SQL Server (permissions are
-   granted automatically on database creation, via `db_owner`)
-4. Run the deploy script (must be Administrator):
+1. Have a SQL Server reachable from this machine (Integrated Security or SQL Authentication — both
+   supported, see "Installing / upgrading" below)
+2. Publish and install as a Windows Service (must be Administrator):
 
    ```powershell
-   .\deploy.ps1 -IISSiteName "LarisVMS" -IISAppPoolName "LarisVMS"
+   dotnet publish src\LarisVMS.Web\LarisVMS.Web.csproj -c Release -o publish\LarisVMS.Web
+   .\install-web.ps1
+   # Domain/service account (recommended for SQL Integrated Security):
+   .\install-web.ps1 -ServiceCredential (Get-Credential)
    ```
 
-5. Browse to the site — the setup wizard opens automatically and walks through database, admin
-   account, storage location, recorder node registration, and branding (the wizard sets an initial
-   name and color; everything else, including the logo, is editable later at
-   `Admin → Settings → Branding`)
+3. Edit `C:\Program Files\LarisVMS\Web\appsettings.Production.json` (seeded from the tracked
+   `.example` file on first install) with your real certificate path/password, then restart the
+   service — it runs on a self-signed certificate in the meantime, so it's reachable either way:
 
-## Deploy script
+   ```powershell
+   Restart-Service LarisVMSWeb
+   ```
+
+4. Browse to `https://<host>:8444/` (or whatever `-HttpsPort` you passed) — the setup wizard opens
+   automatically and walks through database, admin account, storage location, recorder node
+   registration, and branding (the wizard sets an initial name and color; everything else, including
+   the logo, is editable later at `Admin → Settings → Branding`)
+
+## Installing / upgrading
 
 ```powershell
-# By IIS site name (reads the connection string from setup-generated.json at the site root)
-.\deploy.ps1 -IISSiteName "LarisVMS"
+# Fresh install, LocalSystem (works with SQL Authentication, or Integrated Security once the
+# machine's own computer account is granted a SQL login)
+.\install-web.ps1
 
-# By full URL (also resolves virtual applications under a site)
-.\deploy.ps1 -IISSiteUrl "https://larisvms.example.com"
+# Fresh install under a domain/service account (needed for Integrated Security against a domain SQL
+# instance)
+.\install-web.ps1 -ServiceCredential (Get-Credential)
 
-# Skip migrations (e.g. before the wizard has run)
-.\deploy.ps1 -IISSiteName "LarisVMS" -SkipMigrations
+# Upgrade an existing install — omit -ServiceCredential to leave the existing service account
+# untouched; appsettings.Production.json / setup-generated.json are never overwritten
+.\install-web.ps1
+
+# Skip migrations (e.g. before the setup wizard has run)
+.\install-web.ps1 -SkipMigrations
 ```
 
-`deploy.ps1` never deletes recordings: it refuses to run if the configured storage root resolves
-under the IIS site directory, and excludes `recordings/`, `spool/`, `exports/`, and
-`data-protection-keys/` from its mirror regardless.
+`install-web.ps1` never deletes recordings or machine-specific config: it refuses to run if a node's
+configured storage root resolves under the install directory, and excludes `setup-generated.json`,
+`appsettings.Production.json`, `appsettings.Development.json`, `data-protection-keys/`, and every
+recording/spool/export directory from its file copy.
+
+`deploy.ps1` (the old IIS-based deploy script) still works for an existing IIS deployment during the
+transition, but is deprecated — use `install-web.ps1` for any new install or upgrade.
+
+**Migrating an existing IIS deployment to `install-web.ps1`**: the first run at a new `-InstallDir`
+has no `setup-generated.json` of its own yet, so `install-web.ps1` falls back to
+`-LegacyIisConfigPath` (default `E:\Sites\LarisVMS\setup-generated.json`, `deploy.ps1`'s own default
+`-DestinationPath`) to find the connection string. If your old IIS site lived somewhere else, either
+pass `-LegacyIisConfigPath <path>`, pass `-ConnectionString` directly, or copy `setup-generated.json`
+into the new `-InstallDir` yourself before running. Skipping this silently skips **both** migrations
+and node-build/media-proxy-build registration (a build still compiles, it just never shows up as
+Pending on Admin → Node Builds) — watch installer output for a `WARNING:` about no connection string
+being found.
+
+## Certificates
+
+`Kestrel:Certificates:Default:Path`/`:Password` in `appsettings.Production.json` point at a `.pfx`
+file — typically on a file share an external ACME renewal script writes to. The service polls that
+path every 60 seconds and hot-swaps a changed certificate in with no restart needed for a routine
+renewal (the same mechanism the recorder node's own client HTTPS endpoint already uses). A plain
+service restart also picks up a newer certificate immediately, without waiting for the next poll. No
+certificate configured yet? The service still comes up on an auto-generated self-signed certificate
+(browsers show a warning) so the setup wizard is always reachable.
+
+Kestrel's listeners are HTTP/1.1 only, deliberately — a browser that already has an HTTP/2 connection
+open to this site (from the page and its own API calls) will try to multiplex a same-origin WebSocket
+onto it via HTTP/2's "extended CONNECT" instead of opening a fresh HTTP/1.1 connection, which this
+server doesn't support and answers with a 405, silently breaking the live-view bounding-box overlay.
+Restricting to HTTP/1.1 forces every WebSocket through the classic Upgrade handshake instead, which is
+what IIS always effectively presented to the app anyway.
 
 ### Live/playback on a separate port
 
-`Admin → Settings → Security` can move live view and playback traffic (`/live`,
+`Admin → Settings → Live View` can move live view and playback traffic (`/live`,
 `/playback-segment`, `/playback-thumbnail`, `/export-download`, camera snapshots) onto a port of its
 own, away from the management interface — useful for firewalling the two differently, or exposing
-only one beyond the LAN. Setting it there only tells the app which port to expect that traffic on; it
-doesn't open a socket. Add a real IIS binding for the same site first:
+only one beyond the LAN. Setting a port there opens a second HTTPS listener on that port, using the
+same certificate as the main site. **This takes effect on the next service restart, not
+immediately:**
 
 ```powershell
-New-WebBinding -Name "LarisVMS" -Protocol https -Port 8443 -IPAddress "*"
-# then bind the same TLS certificate the management port already uses to the new one, e.g.:
-$cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object Subject -match "larisvms.example.com"
-New-Item -Path "IIS:\SslBindings\0.0.0.0!8443" -Value $cert
+Restart-Service LarisVMSWeb
 ```
 
-Then set the matching port number in `Admin → Settings → Security`. Once set, live/playback routes
-stop responding on the management port and every other route stops responding on the new one; leave
-the setting blank to go back to everything sharing whatever port(s) IIS already binds.
+Once restarted, live/playback routes stop responding on the management port and every other route
+stops responding on the new one; leave the setting blank to go back to everything sharing the main
+port.
 
 ### Live view pauses in a background Chrome window
 
@@ -442,8 +487,8 @@ than a guess.
   Protection key ring at `%ProgramData%\LarisVMS\keys`. Losing this key ring makes every encrypted
   value unrecoverable — include it in whatever backs up the server, and never delete it as part of a
   deploy.
-- `setup-generated.json` (site root) holds the plaintext database connection string and branding.
-  It is machine-specific, gitignored, and must never be committed.
+- `setup-generated.json` (install directory) holds the plaintext database connection string and
+  branding. It is machine-specific, gitignored, and must never be committed.
 
 ## Solution layout
 
@@ -453,7 +498,7 @@ src/
   LarisVMS.Onvif            ONVIF SOAP clients, WS-Discovery
   LarisVMS.Media            FFmpeg process supervision, segment detection
   LarisVMS.Infrastructure   EF Core, auth, setup, settings resolution, node control plane
-  LarisVMS.Web              Razor Pages host (IIS) + node control plane API
+  LarisVMS.Web              Razor Pages host (self-hosted Kestrel, Windows Service) + node control plane API
   LarisVMS.Node              recorder Windows Service — 24/7 recording
   LarisVMS.NodeUpdater       detached helper that swaps the node's binary during an auto-update
   LarisVMS.Vision            AI detection capture/inference/tracking — GPU/ONNX Runtime deps live here,

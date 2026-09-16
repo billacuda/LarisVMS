@@ -1,5 +1,6 @@
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Web.Services;
 
 namespace LarisVMS.Web.Middleware;
 
@@ -42,7 +43,11 @@ public class NodeAuthMiddleware(RequestDelegate next)
         var nodeId = token[..separator];
         var secret = token[(separator + 1)..];
 
-        var remoteIp = context.Connection.RemoteIpAddress?.ToString();
+        // Unmapped from IPv4-mapped-IPv6 form ("::ffff:x.x.x.x") before it's stored as Node.LastIpAddress
+        // — self-hosted Kestrel's dual-stack ListenAnyIP socket reports every IPv4 client this way
+        // (IIS never did), and every media-proxy path builds a plain "http://{ip}:{port}/..." URL
+        // straight from that stored value. See IpAllowListPolicy.Unmap's own doc comment.
+        var remoteIp = IpAllowListPolicy.Unmap(context.Connection.RemoteIpAddress);
         var node = await nodeService.AuthenticateAsync(nodeId, secret, remoteIp, context.RequestAborted);
         if (node is null)
         {

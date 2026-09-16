@@ -63,4 +63,18 @@ public static class IpAllowListPolicy
         // rather than risk an exception taking the whole request pipeline down.
         return networks.Any(n => n.BaseAddress.AddressFamily == candidate.AddressFamily && n.Contains(candidate));
     }
+
+    /// <summary>Unmaps an IPv4-mapped-IPv6 address ("::ffff:10.0.0.5") back to plain IPv4 before it's
+    /// stored or used to build a URL — same reasoning as <see cref="IsAllowed"/> above, but for every
+    /// other place a Node/MediaProxy's remote IP gets captured (NodeAuthMiddleware, ProxyAuthMiddleware).
+    /// A dual-stack Kestrel <c>ListenAnyIP</c> socket reports every IPv4 client this way; IIS never did,
+    /// so this normalization was never needed before self-hosted Kestrel. Every downstream consumer
+    /// (live/playback/snapshot proxying, node control calls, failover probing) builds a plain
+    /// "http://{ip}:{port}/..." URL straight from the stored value — an unmapped "::ffff:x.x.x.x"
+    /// there is simply not a valid host in that string, breaking the connection outright.</summary>
+    public static string? Unmap(IPAddress? remoteIp)
+    {
+        if (remoteIp is null) return null;
+        return (remoteIp.IsIPv4MappedToIPv6 ? remoteIp.MapToIPv4() : remoteIp).ToString();
+    }
 }
