@@ -8,5 +8,5 @@ namespace LarisVMS.Web.Pages.Logs;
 /// already handles that on the very next request.</summary>
 public class IndexModel : PageModel
 {
-    public IActionResult OnGet() => RedirectToPage("AuditLogs");
+    public IActionResult OnGet() => Redirect("/Logs/AuditLogs");
 }

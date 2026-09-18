@@ -132,7 +132,7 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
         if (id is not null)
         {
             var camera = await cameraService.GetAsync(id.Value);
-            if (camera is null) return RedirectToPage("Index");
+            if (camera is null) return Redirect("/Cameras");
 
             Name = camera.Name;
             DeviceServiceUri = camera.DeviceServiceUri;
@@ -319,7 +319,7 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
             var clampedMaxFpsOverride = MaxFpsOverride is { } mf ? Math.Clamp(mf, 0, 60) : (int?)null;
             await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Detection.MaxFps",
                 clampedMaxFpsOverride?.ToString(), User.Identity?.Name);
-            return RedirectToPage("Index");
+            return Redirect("/Cameras");
         }
         catch (Exception ex)
         {
@@ -330,7 +330,7 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
 
     public async Task<IActionResult> OnPostSplitChannelsAsync()
     {
-        if (Id is null) return RedirectToPage("Index");
+        if (Id is null) return Redirect("/Cameras");
 
         try
         {
@@ -349,7 +349,7 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
 
     public async Task<IActionResult> OnPostProbeAsync()
     {
-        if (Id is null) return RedirectToPage("Index");
+        if (Id is null) return Redirect("/Cameras");
 
         var summary = await cameraService.ProbeAsync(Id.Value);
         ProbeMessage = summary.Error is null
@@ -392,7 +392,7 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
             await cameraService.DeleteAsync(Id.Value);
             await LogAsync("Camera.Delete", $"{camera?.Name ?? "?"} ({Id})");
         }
-        return RedirectToPage("Index");
+        return Redirect("/Cameras");
     }
 
     private Task LogAsync(string action, string details) =>

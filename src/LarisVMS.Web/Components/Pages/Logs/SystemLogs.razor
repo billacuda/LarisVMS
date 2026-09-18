@@ -1,0 +1,117 @@
+@page "/Logs/SystemLogs"
+@attribute [Authorize("SystemLogs.View")]
+@using LarisVMS.Web.Helpers
+@inject IConfiguration Configuration
+
+<PageTitle>System Logs - @AppName</PageTitle>
+
+<h1>Logs</h1>
+<LogsTabs ActiveKey="SystemLogs" />
+
+<p class="text-muted">
+    This app's own application log (not the audit trail — see the Audit Logs tab above for who did
+    what). Recorder node logs live on each node's own machine under
+    <code>%ProgramData%\LarisVMS\logs</code> — not shown here. Path and retention are configurable
+    on <a href="/Admin/Settings/Logs">Admin &rarr; Settings &rarr; Logs</a>.
+</p>
+
+@if (!string.IsNullOrEmpty(ErrorMessage))
+{
+    <div class="alert alert-warning">@ErrorMessage</div>
+}
+else
+{
+    <form method="get" class="row g-2 mb-3">
+        <div class="col-auto">
+            <select name="date" class="form-select form-select-sm" onchange="this.form.submit()">
+                @foreach (var d in AvailableDates)
+                {
+                    <option value="@d" selected="@(d == SelectedDate)">@d</option>
+                }
+            </select>
+        </div>
+        <div class="col-auto">
+            <input type="text" name="q" value="@Query" class="form-control form-control-sm" placeholder="Filter lines..." style="width: 20rem;" />
+        </div>
+        <div class="col-auto">
+            <button type="submit" class="btn btn-sm btn-primary">Filter</button>
+        </div>
+        <div class="col-auto">
+            <a href="/Logs/SystemLogs?date=@SelectedDate" class="btn btn-sm btn-outline-secondary">Clear filter</a>
+        </div>
+    </form>
+
+    @if (Truncated)
+    {
+        <p class="text-muted small">Showing the last 1000 matching lines only.</p>
+    }
+
+    <pre class="bg-body-tertiary p-2 small" style="max-height: 70vh; overflow-y: auto; white-space: pre-wrap;">@string.Join("\n", Lines)</pre>
+
+    @if (Lines.Count == 0)
+    {
+        <p class="text-muted">No lines match.</p>
+    }
+}
+
+@code {
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+
+    private const int MaxLines = 1000;
+
+    [SupplyParameterFromQuery(Name = "date")] private string? Date { get; set; }
+    [SupplyParameterFromQuery(Name = "q")] private string? Query { get; set; }
+
+    private List<string> AvailableDates { get; set; } = [];
+    private string? SelectedDate { get; set; }
+    private List<string> Lines { get; set; } = [];
+    private bool Truncated { get; set; }
+    private string? ErrorMessage { get; set; }
+
+    private string LogsDir => LogPaths.AppLogsDirectory(Configuration);
+
+    protected override void OnInitialized()
+    {
+        if (!Directory.Exists(LogsDir))
+        {
+            ErrorMessage = "No log files yet.";
+            return;
+        }
+
+        AvailableDates = Directory.EnumerateFiles(LogsDir, "app-*.log")
+            .Select(p => Path.GetFileNameWithoutExtension(p).Replace("app-", ""))
+            .OrderDescending()
+            .ToList();
+
+        if (AvailableDates.Count == 0)
+        {
+            ErrorMessage = "No log files yet.";
+            return;
+        }
+
+        SelectedDate = Date is not null && AvailableDates.Contains(Date) ? Date : AvailableDates[0];
+        var path = Path.Combine(LogsDir, $"app-{SelectedDate}.log");
+
+        List<string> allLines;
+        try
+        {
+            // FileShare.ReadWrite on the writer side (FileLoggerProvider) is what makes reading
+            // today's still-being-appended file safe to do concurrently.
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+            allLines = [];
+            while (reader.ReadLine() is { } line) allLines.Add(line);
+        }
+        catch (IOException ex)
+        {
+            ErrorMessage = $"Could not read {path}: {ex.Message}";
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(Query))
+            allLines = allLines.Where(l => l.Contains(Query, StringComparison.OrdinalIgnoreCase)).ToList();
+
+        Truncated = allLines.Count > MaxLines;
+        Lines = allLines.Count > MaxLines ? allLines[^MaxLines..] : allLines;
+    }
+}

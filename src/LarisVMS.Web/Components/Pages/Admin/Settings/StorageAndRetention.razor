@@ -1,0 +1,133 @@
+@page "/Admin/Settings/StorageAndRetention"
+@attribute [Authorize("Retention.Edit")]
+@using System.Security.Claims
+@using LarisVMS.Core
+@using LarisVMS.Core.Interfaces
+@inject ISettingsResolver Settings
+@inject IAuditService AuditService
+
+<PageTitle>Storage and retention settings - @AppName</PageTitle>
+
+<h1>Settings</h1>
+<SettingsTabs ActiveKey="StorageAndRetention" />
+
+<p class="text-muted">
+    Storage <strong>paths</strong> are set per recorder node on
+    <a href="/Admin/Nodes">Admin &rarr; Nodes</a> (each node writes to its own volume, and
+    optionally archives to a second one). The values here are the retention/watermark/archive-policy
+    defaults — override per node on Admin &rarr; Nodes, or per camera on that camera's edit page; a
+    camera-level override wins over its node's, which wins over the global defaults here.
+</p>
+
+@if (!string.IsNullOrEmpty(SavedMessage))
+{
+    <div class="alert alert-success">@SavedMessage</div>
+}
+
+<EditForm Model="this" FormName="storage-retention-settings" OnSubmit="HandleSaveAsync" class="row g-3" style="max-width: 560px;">
+    <div class="col-12">
+        <label class="form-label">
+            Global retention (days)
+            <button type="button" class="help-icon" data-help-target="retentionHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <InputNumber @bind-Value="RetentionDays" min="0" class="form-control" />
+        <div class="help-text-source" id="retentionHelp">0 = keep forever unless a node/camera override says otherwise.</div>
+    </div>
+    <div class="col-12">
+        <label class="form-label">
+            Watermark (% of volume used)
+            <button type="button" class="help-icon" data-help-target="watermarkHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <InputNumber @bind-Value="WatermarkPercent" min="1" max="99" class="form-control" />
+        <div class="help-text-source" id="watermarkHelp">
+            When a node's storage volume passes this usage, its oldest unlocked segments across every
+            camera on that node are archived early (or, if archiving is unavailable, deleted) to keep
+            the disk under the limit — a hard backstop, not a preference.
+        </div>
+    </div>
+
+    <hr class="col-12 mt-2" />
+    <div class="col-12">
+        <h2 class="h5">Archive storage tier</h2>
+        <p class="text-muted small mb-2">
+            A secondary volume (SMB share or USB drive) for older footage. When primary retention
+            would delete a segment and archiving is enabled, the recorder <strong>moves</strong> the
+            file to that node's archive volume instead and keeps it until the archive retention below
+            is hit — measured from when the footage was originally recorded. The archive volume path
+            is set per node on <a href="/Admin/Nodes">Admin &rarr; Nodes</a>. Override the
+            settings below per node or per camera the same way as the retention above.
+        </p>
+    </div>
+    <div class="col-12">
+        <div class="form-check">
+            <InputCheckbox @bind-Value="ArchiveEnabled" class="form-check-input" id="archiveEnabled" />
+            <label class="form-check-label" for="archiveEnabled">Enable archiving by default</label>
+        </div>
+    </div>
+    <div class="col-12">
+        <label class="form-label">
+            Archive retention (days)
+            <button type="button" class="help-icon" data-help-target="archiveRetentionHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <InputNumber @bind-Value="ArchiveRetentionDays" min="0" class="form-control" />
+        <div class="help-text-source" id="archiveRetentionHelp">
+            How long footage stays on the archive volume, counted from its original recording date.
+            0 = keep forever unless a node/camera override says otherwise.
+        </div>
+    </div>
+
+    <div class="col-12">
+        <button type="submit" class="btn btn-primary"><span aria-hidden="true">💾</span> Save</button>
+    </div>
+</EditForm>
+
+@code {
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    [SupplyParameterFromForm(FormName = "storage-retention-settings")] private int RetentionDays { get; set; } = 30;
+    [SupplyParameterFromForm(FormName = "storage-retention-settings")] private int WatermarkPercent { get; set; } = 90;
+    [SupplyParameterFromForm(FormName = "storage-retention-settings")] private bool ArchiveEnabled { get; set; }
+    [SupplyParameterFromForm(FormName = "storage-retention-settings")] private int ArchiveRetentionDays { get; set; }
+
+    private string? SavedMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        RetentionDays = await Settings.GetAsync("Retention.Days", 30);
+        WatermarkPercent = await Settings.GetAsync("Storage.WatermarkPercent", 90);
+        ArchiveEnabled = await Settings.GetAsync("Archive.Enabled", false);
+        ArchiveRetentionDays = await Settings.GetAsync("Archive.RetentionDays", 0);
+    }
+
+    private async Task HandleSaveAsync()
+    {
+        var user = AuthenticationStateTask is not null
+            ? (await AuthenticationStateTask).User
+            : new ClaimsPrincipal(new ClaimsIdentity());
+        var by = user.Identity?.Name;
+
+        var oldRetentionDays = await Settings.GetAsync("Retention.Days", 30);
+        var oldWatermarkPercent = await Settings.GetAsync("Storage.WatermarkPercent", 90);
+        var oldArchiveEnabled = await Settings.GetAsync("Archive.Enabled", false);
+        var oldArchiveRetentionDays = await Settings.GetAsync("Archive.RetentionDays", 0);
+
+        await Settings.SetGlobalAsync("Retention.Days", RetentionDays.ToString(), by);
+        await Settings.SetGlobalAsync("Storage.WatermarkPercent", WatermarkPercent.ToString(), by);
+        await Settings.SetGlobalAsync("Archive.Enabled", ArchiveEnabled.ToString(), by);
+        await Settings.SetGlobalAsync("Archive.RetentionDays", ArchiveRetentionDays.ToString(), by);
+
+        var details = AuditDiff.Build(
+            AuditDiff.Of("Retention.Days", oldRetentionDays.ToString(), RetentionDays.ToString()),
+            AuditDiff.Of("Storage.WatermarkPercent", oldWatermarkPercent.ToString(), WatermarkPercent.ToString()),
+            AuditDiff.Of("Archive.Enabled", oldArchiveEnabled.ToString(), ArchiveEnabled.ToString()),
+            AuditDiff.Of("Archive.RetentionDays", oldArchiveRetentionDays.ToString(), ArchiveRetentionDays.ToString()));
+
+        await AuditService.LogAsync("Settings.Update",
+            user.FindFirst(ClaimTypes.NameIdentifier)?.Value, by,
+            HttpContext?.Connection.RemoteIpAddress?.ToString(), details);
+
+        SavedMessage = "Saved.";
+    }
+}

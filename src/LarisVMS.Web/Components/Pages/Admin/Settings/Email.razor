@@ -1,0 +1,475 @@
+@page "/Admin/Settings/Email"
+@attribute [Authorize("Settings.Edit")]
+@using System.ComponentModel.DataAnnotations
+@using System.Security.Claims
+@using System.Text.Json
+@using LarisVMS.Core
+@using LarisVMS.Core.Entities
+@using LarisVMS.Core.Enums
+@using Microsoft.AspNetCore.DataProtection
+@using Microsoft.EntityFrameworkCore
+@using LarisVMS.Core.Interfaces
+@using LarisVMS.Infrastructure.Data
+@using LarisVMS.Infrastructure.Email
+@using LarisVMS.Web.Services
+@inject ApplicationDbContext Db
+@inject IEmailService EmailService
+@inject IAuditService AuditService
+@inject OAuthConnectProviderFactory OAuthFactory
+@inject IDataProtectionProvider Dp
+@inject NavigationManager NavigationManager
+
+<PageTitle>Email - @AppName</PageTitle>
+
+<h1>Settings</h1>
+<SettingsTabs ActiveKey="Email" />
+
+<p class="text-muted">
+    The outbound sender alert notifications (M15) will send through.
+</p>
+
+@if (!string.IsNullOrEmpty(SavedMessage))
+{
+    <div class="alert alert-success">@SavedMessage</div>
+}
+@if (!string.IsNullOrEmpty(ErrorMessage))
+{
+    <div class="alert alert-danger">@ErrorMessage</div>
+}
+
+<EditForm Model="this" FormName="email-settings" OnSubmit="HandleSubmitAsync">
+    <div class="card mb-3">
+        <div class="card-header fw-semibold">Sender</div>
+        <div class="card-body">
+            <div class="form-check form-switch mb-3">
+                <InputCheckbox @bind-Value="IsEnabled" class="form-check-input" id="isEnabled" />
+                <label class="form-check-label" for="isEnabled">Email enabled</label>
+            </div>
+            <div class="row g-3">
+                <div class="col-sm-4">
+                    <label class="form-label">Provider</label>
+                    <select name="Provider" id="provider" class="form-select">
+                        <option value="@EmailProviderType.Smtp" selected="@(Provider == EmailProviderType.Smtp)">SMTP</option>
+                        <option value="@EmailProviderType.Graph" selected="@(Provider == EmailProviderType.Graph)">Microsoft Graph</option>
+                        <option value="@EmailProviderType.Gmail" selected="@(Provider == EmailProviderType.Gmail)">Gmail</option>
+                    </select>
+                </div>
+                <div class="col-sm-4">
+                    <label class="form-label">From address</label>
+                    <InputText type="email" @bind-Value="FromAddress" class="form-control" placeholder="alerts@example.com" />
+                </div>
+                <div class="col-sm-4">
+                    <label class="form-label">From name</label>
+                    <InputText @bind-Value="FromName" class="form-control" placeholder="LarisVMS" />
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-3" id="smtpCard">
+        <div class="card-header fw-semibold">SMTP</div>
+        <div class="card-body">
+            <div class="row g-3">
+                <div class="col-sm-6">
+                    <label class="form-label">Host</label>
+                    <InputText @bind-Value="SmtpHost" class="form-control" placeholder="smtp.example.com" />
+                </div>
+                <div class="col-sm-3">
+                    <label class="form-label">Port</label>
+                    <InputNumber @bind-Value="SmtpPort" class="form-control" min="1" max="65535" />
+                </div>
+                <div class="col-sm-3 d-flex align-items-end">
+                    <div class="form-check">
+                        <InputCheckbox @bind-Value="SmtpUseSsl" class="form-check-input" id="smtpUseSsl" />
+                        <label class="form-check-label" for="smtpUseSsl">Use SSL/TLS</label>
+                    </div>
+                </div>
+                <div class="col-sm-6">
+                    <label class="form-label">Username</label>
+                    <InputText @bind-Value="SmtpUsername" class="form-control" autocomplete="off" />
+                </div>
+                <div class="col-sm-6">
+                    <label class="form-label">Password</label>
+                    <InputText type="password" @bind-Value="SmtpPassword" class="form-control" autocomplete="new-password"
+                           placeholder="@(HasStoredSmtpPassword ? "•••••••• (leave blank to keep)" : "")" />
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-3" id="graphCard">
+        <div class="card-header fw-semibold">Microsoft Graph</div>
+        <div class="card-body">
+            <p class="text-muted small">
+                App-only auth (client-credentials flow) against an Entra app registration granted the
+                <code>Mail.Send</code> application permission — no per-user consent or refresh token.
+            </p>
+            <div class="row g-3">
+                <div class="col-sm-6">
+                    <label class="form-label">Tenant ID</label>
+                    <InputText @bind-Value="GraphTenantId" class="form-control" autocomplete="off" />
+                </div>
+                <div class="col-sm-6">
+                    <label class="form-label">Client ID</label>
+                    <InputText @bind-Value="GraphClientId" class="form-control" autocomplete="off" />
+                </div>
+                <div class="col-sm-6">
+                    <label class="form-label">Client secret</label>
+                    <InputText type="password" @bind-Value="GraphClientSecret" class="form-control" autocomplete="new-password"
+                           placeholder="@(HasStoredGraphClientSecret ? "•••••••• (leave blank to keep)" : "")" />
+                </div>
+                <div class="col-sm-6">
+                    <label class="form-label">Shared mailbox (optional)</label>
+                    <InputText type="email" @bind-Value="GraphSharedMailbox" class="form-control" placeholder="Defaults to the from address" />
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-3" id="gmailCard">
+        <div class="card-header fw-semibold">Gmail</div>
+        <div class="card-body">
+            <p class="text-muted small">
+                Per-user OAuth2 against a Google Cloud project's OAuth client — needs a one-time
+                consent redirect. Enter the Client ID/Secret and Gmail address below, save, then
+                connect.
+            </p>
+            @if (IsGmailConnected)
+            {
+                <div class="alert alert-success py-2">Connected.</div>
+            }
+            <div class="row g-3">
+                <div class="col-sm-6">
+                    <label class="form-label">Client ID</label>
+                    <InputText @bind-Value="GmailClientId" class="form-control" autocomplete="off" />
+                </div>
+                <div class="col-sm-6">
+                    <label class="form-label">Client secret</label>
+                    <InputText type="password" @bind-Value="GmailClientSecret" class="form-control" autocomplete="new-password"
+                           placeholder="@(HasStoredGmailClientSecret ? "•••••••• (leave blank to keep)" : "")" />
+                </div>
+                <div class="col-sm-6">
+                    <label class="form-label">Gmail address</label>
+                    <InputText type="email" @bind-Value="GmailEmailAddress" class="form-control" placeholder="alerts@gmail.com" />
+                </div>
+                <div class="col-sm-6 d-flex align-items-end">
+                    <button type="submit" name="Action" value="ConnectGmail" class="btn btn-outline-primary">
+                        Save and connect to Google
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header fw-semibold">Test</div>
+        <div class="card-body">
+            <div class="row g-3 align-items-end">
+                <div class="col-sm-6">
+                    <label class="form-label">Send a test email to</label>
+                    <InputText type="email" @bind-Value="TestRecipient" class="form-control" placeholder="you@example.com" />
+                </div>
+                <div class="col-auto">
+                    <button type="submit" name="Action" value="TestSend" class="btn btn-outline-primary">
+                        Save and send test
+                    </button>
+                </div>
+            </div>
+            <div class="form-text">Saves the form above first, then sends through it — a test always
+                reflects exactly what's stored, not an unsaved edit.</div>
+        </div>
+    </div>
+
+    <div class="mt-3">
+        <button type="submit" name="Action" value="Save" class="btn btn-primary">Save</button>
+    </div>
+</EditForm>
+
+<SectionContent SectionName="PageScripts">
+    <script>
+        (function () {
+            var provider = document.getElementById('provider');
+            var cards = {
+                '@((int)EmailProviderType.Smtp)': document.getElementById('smtpCard'),
+                '@((int)EmailProviderType.Graph)': document.getElementById('graphCard'),
+                '@((int)EmailProviderType.Gmail)': document.getElementById('gmailCard')
+            };
+            if (!provider) return;
+
+            function update() {
+                Object.keys(cards).forEach(function (key) {
+                    cards[key].style.display = key === provider.value ? '' : 'none';
+                });
+            }
+            provider.addEventListener('change', update);
+            update();
+        })();
+    </script>
+</SectionContent>
+
+@code {
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    private IDataProtector Protector => Dp.CreateProtector("EmailOAuthState");
+
+    [SupplyParameterFromForm(FormName = "email-settings")] private bool IsEnabled { get; set; }
+    [SupplyParameterFromForm(FormName = "email-settings")] private EmailProviderType Provider { get; set; } = EmailProviderType.Smtp;
+    [SupplyParameterFromForm(FormName = "email-settings")] private string FromAddress { get; set; } = string.Empty;
+    [SupplyParameterFromForm(FormName = "email-settings")] private string FromName { get; set; } = string.Empty;
+
+    [SupplyParameterFromForm(FormName = "email-settings")] private string SmtpHost { get; set; } = string.Empty;
+    [SupplyParameterFromForm(FormName = "email-settings")] private int SmtpPort { get; set; } = 587;
+    [SupplyParameterFromForm(FormName = "email-settings")] private bool SmtpUseSsl { get; set; } = true;
+    [SupplyParameterFromForm(FormName = "email-settings")] private string? SmtpUsername { get; set; }
+    [SupplyParameterFromForm(FormName = "email-settings")] private string? SmtpPassword { get; set; }
+    private bool HasStoredSmtpPassword { get; set; }
+
+    [SupplyParameterFromForm(FormName = "email-settings")] private string GraphTenantId { get; set; } = string.Empty;
+    [SupplyParameterFromForm(FormName = "email-settings")] private string GraphClientId { get; set; } = string.Empty;
+    [SupplyParameterFromForm(FormName = "email-settings")] private string? GraphClientSecret { get; set; }
+    [SupplyParameterFromForm(FormName = "email-settings")] private string? GraphSharedMailbox { get; set; }
+    private bool HasStoredGraphClientSecret { get; set; }
+
+    [SupplyParameterFromForm(FormName = "email-settings")] private string GmailClientId { get; set; } = string.Empty;
+    [SupplyParameterFromForm(FormName = "email-settings")] private string? GmailClientSecret { get; set; }
+    [SupplyParameterFromForm(FormName = "email-settings")] private string? GmailEmailAddress { get; set; }
+    private bool HasStoredGmailClientSecret { get; set; }
+    private bool IsGmailConnected { get; set; }
+
+    [SupplyParameterFromForm(FormName = "email-settings")] private string? TestRecipient { get; set; }
+
+    // Blazor EditForm has no equivalent to Razor Pages' asp-page-handler multi-handler buttons — this
+    // is the native HTML substitute: each submit button carries its own name="Action" value="...",
+    // and only the clicked button's pair is included in the POST (standard browser behavior,
+    // independent of Blazor), so HandleSubmitAsync below can dispatch on it. A plain @onclick on a
+    // type="button" would NOT work here — Static SSR has no live circuit to dispatch a non-form click
+    // event to, only real form submissions.
+    [SupplyParameterFromForm(FormName = "email-settings")] private string? Action { get; set; }
+
+    // Admin/OAuthCallback.cshtml.cs (still classic Razor Pages) redirects back here after the Gmail
+    // OAuth round trip with the result in the query string, not TempData — this component doesn't
+    // participate in TempData at all. See that page's own SucceedRedirect/Fail helpers.
+    [SupplyParameterFromQuery(Name = "statusMessage")] private string? StatusMessage { get; set; }
+    [SupplyParameterFromQuery(Name = "statusIsError")] private bool StatusIsError { get; set; }
+
+    private string? SavedMessage;
+    private string? ErrorMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+
+        if (!string.IsNullOrEmpty(StatusMessage))
+        {
+            if (StatusIsError) ErrorMessage = StatusMessage;
+            else SavedMessage = StatusMessage;
+        }
+    }
+
+    private async Task<ClaimsPrincipal> CurrentUserAsync() => AuthenticationStateTask is not null
+        ? (await AuthenticationStateTask).User
+        : new ClaimsPrincipal(new ClaimsIdentity());
+
+    private async Task HandleSubmitAsync()
+    {
+        switch (Action)
+        {
+            case "TestSend": await HandleTestSendAsync(); break;
+            case "ConnectGmail": await HandleConnectGmailAsync(); break;
+            default: await SaveInternalAsync(); break;
+        }
+    }
+
+    /// <summary>Returns true on success. Sets ErrorMessage and returns false otherwise — mirrors the
+    /// old page's OnPostSaveAsync, factored out so TestSend/ConnectGmail can call it first (a test
+    /// send or OAuth connect should exercise exactly what was just persisted, not an unsaved edit).</summary>
+    private async Task<bool> SaveInternalAsync()
+    {
+        ErrorMessage = null;
+
+        if (string.IsNullOrWhiteSpace(FromAddress) || !new EmailAddressAttribute().IsValid(FromAddress))
+        {
+            ErrorMessage = "Enter a valid \"from\" email address.";
+            return false;
+        }
+        if (IsEnabled)
+        {
+            var providerError = Provider switch
+            {
+                EmailProviderType.Smtp when string.IsNullOrWhiteSpace(SmtpHost) =>
+                    "An SMTP host is required while email is enabled.",
+                EmailProviderType.Graph when string.IsNullOrWhiteSpace(GraphTenantId) || string.IsNullOrWhiteSpace(GraphClientId) =>
+                    "A Graph tenant ID and client ID are required while email is enabled.",
+                EmailProviderType.Gmail when string.IsNullOrWhiteSpace(GmailClientId) =>
+                    "A Gmail Client ID is required while email is enabled.",
+                _ => (string?)null
+            };
+            if (providerError is not null)
+            {
+                ErrorMessage = providerError;
+                return false;
+            }
+        }
+
+        var user = await CurrentUserAsync();
+        var currentUserId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        var currentUserName = user.Identity?.Name;
+        var remoteIp = HttpContext?.Connection.RemoteIpAddress?.ToString();
+
+        var settings = await GetOrCreateAsync();
+        var fields = new List<AuditDiff.Field>
+        {
+            AuditDiff.Of("Enabled", settings.IsEnabled.ToString(), IsEnabled.ToString()),
+            AuditDiff.Of("Provider", settings.Provider.ToString(), Provider.ToString()),
+            AuditDiff.Of("FromAddress", settings.FromAddress, FromAddress.Trim()),
+            AuditDiff.Of("FromName", settings.FromName, FromName.Trim()),
+            AuditDiff.Of("SmtpHost", settings.SmtpHost, SmtpHost.Trim()),
+            AuditDiff.Of("SmtpPort", settings.SmtpPort.ToString(), SmtpPort.ToString()),
+            AuditDiff.Of("SmtpUseSsl", settings.SmtpUseSsl.ToString(), SmtpUseSsl.ToString()),
+            AuditDiff.Of("SmtpUsername", settings.SmtpUsername, SmtpUsername?.Trim()),
+            AuditDiff.Of("GraphTenantId", settings.GraphTenantId, GraphTenantId.Trim()),
+            AuditDiff.Of("GraphClientId", settings.GraphClientId, GraphClientId.Trim()),
+            AuditDiff.Of("GraphSharedMailbox", settings.GraphSharedMailbox, GraphSharedMailbox?.Trim()),
+            AuditDiff.Of("GmailClientId", settings.GmailClientId, GmailClientId.Trim()),
+            AuditDiff.Of("GmailEmailAddress", settings.GmailEmailAddress, GmailEmailAddress?.Trim())
+        };
+
+        settings.IsEnabled = IsEnabled;
+        settings.Provider = Provider;
+        settings.FromAddress = FromAddress.Trim();
+        settings.FromName = FromName.Trim();
+        settings.SmtpHost = SmtpHost.Trim();
+        settings.SmtpPort = SmtpPort;
+        settings.SmtpUseSsl = SmtpUseSsl;
+        settings.SmtpUsername = string.IsNullOrWhiteSpace(SmtpUsername) ? null : SmtpUsername.Trim();
+        settings.GraphTenantId = string.IsNullOrWhiteSpace(GraphTenantId) ? null : GraphTenantId.Trim();
+        settings.GraphClientId = string.IsNullOrWhiteSpace(GraphClientId) ? null : GraphClientId.Trim();
+        settings.GraphSharedMailbox = string.IsNullOrWhiteSpace(GraphSharedMailbox) ? null : GraphSharedMailbox.Trim();
+        settings.GmailClientId = string.IsNullOrWhiteSpace(GmailClientId) ? null : GmailClientId.Trim();
+        settings.GmailEmailAddress = string.IsNullOrWhiteSpace(GmailEmailAddress) ? null : GmailEmailAddress.Trim();
+
+        // Blank means "unchanged" — the form never re-displays a stored secret, so a blank
+        // submission only happens when the admin genuinely left it alone.
+        if (!string.IsNullOrWhiteSpace(SmtpPassword))
+        {
+            fields.Add(AuditDiff.SecretChanged("SmtpPassword", true));
+            settings.SmtpPassword = SmtpPassword;
+        }
+        if (!string.IsNullOrWhiteSpace(GraphClientSecret))
+        {
+            fields.Add(AuditDiff.SecretChanged("GraphClientSecret", true));
+            settings.GraphClientSecret = GraphClientSecret;
+        }
+        if (!string.IsNullOrWhiteSpace(GmailClientSecret))
+        {
+            fields.Add(AuditDiff.SecretChanged("GmailClientSecret", true));
+            settings.GmailClientSecret = GmailClientSecret;
+        }
+        settings.LastModifiedAt = DateTime.UtcNow;
+        settings.LastModifiedBy = currentUserName;
+
+        await Db.SaveChangesAsync();
+
+        var details = AuditDiff.Build([.. fields]);
+        if (details is not null)
+            await AuditService.LogAsync("Settings.EmailUpdate", currentUserId, currentUserName, remoteIp, details);
+
+        SavedMessage = "Saved.";
+        await LoadAsync();
+        return true;
+    }
+
+    private async Task HandleTestSendAsync()
+    {
+        if (!await SaveInternalAsync()) return;
+
+        if (string.IsNullOrWhiteSpace(TestRecipient) || !new EmailAddressAttribute().IsValid(TestRecipient))
+        {
+            ErrorMessage = "Enter a valid recipient address to send the test to.";
+            return;
+        }
+
+        var user = await CurrentUserAsync();
+        var currentUserId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        var currentUserName = user.Identity?.Name;
+        var remoteIp = HttpContext?.Connection.RemoteIpAddress?.ToString();
+
+        try
+        {
+            await EmailService.SendAsync(TestRecipient.Trim(), "LarisVMS test email",
+                "<p>This is a test email from LarisVMS to verify this account's outbound configuration.</p>");
+            await AuditService.LogAsync("Settings.EmailTestSendSucceeded", currentUserId, currentUserName, remoteIp, TestRecipient.Trim());
+            SavedMessage = $"Test email sent to {TestRecipient.Trim()}.";
+        }
+        catch (Exception ex)
+        {
+            await AuditService.LogAsync("Settings.EmailTestSendFailed", currentUserId, currentUserName, remoteIp,
+                $"{TestRecipient.Trim()}: {ex.Message}");
+            ErrorMessage = $"Test email failed: {ex.Message}";
+        }
+
+        await LoadAsync();
+    }
+
+    /// <summary>Saves the form first (same reasoning as test-send), then redirects the browser to
+    /// Google's consent screen. Requires the Client ID/Secret to already be on the row — Google needs
+    /// them to be told apart from any other app, so there's nothing to connect until they're saved.</summary>
+    private async Task HandleConnectGmailAsync()
+    {
+        if (!await SaveInternalAsync()) return;
+
+        var settings = await Db.EmailSettings.FirstOrDefaultAsync();
+        if (settings is null || string.IsNullOrWhiteSpace(settings.GmailClientId) || string.IsNullOrWhiteSpace(settings.GmailClientSecret))
+        {
+            ErrorMessage = "Enter a Gmail Client ID and Client Secret and save before connecting.";
+            await LoadAsync();
+            return;
+        }
+
+        // No Razor Pages IUrlHelper here — NavigationManager.BaseUri already carries the correct
+        // scheme/host for this Blazor Web App request.
+        var redirectUri = $"{NavigationManager.BaseUri}Admin/OAuthCallback";
+        var state = Protector.Protect(JsonSerializer.Serialize(new EmailOAuthState(EmailProviderType.Gmail, DateTime.UtcNow)));
+        var authorizationUrl = OAuthFactory.Get(EmailProviderType.Gmail).BuildAuthorizationUrl(settings.GmailClientId, redirectUri, state);
+
+        // forceLoad: true — a genuine cross-origin redirect to Google's consent screen, not an
+        // in-app route, so enhanced navigation must not try to intercept it.
+        NavigationManager.NavigateTo(authorizationUrl, forceLoad: true);
+    }
+
+    private async Task<EmailSettings> GetOrCreateAsync()
+    {
+        var settings = await Db.EmailSettings.FirstOrDefaultAsync();
+        if (settings is not null) return settings;
+
+        settings = new EmailSettings { Id = Guid.NewGuid() };
+        Db.EmailSettings.Add(settings);
+        return settings;
+    }
+
+    private async Task LoadAsync()
+    {
+        var settings = await Db.EmailSettings.FirstOrDefaultAsync();
+        if (settings is null) return;
+
+        IsEnabled = settings.IsEnabled;
+        Provider = settings.Provider;
+        FromAddress = settings.FromAddress;
+        FromName = settings.FromName;
+        SmtpHost = settings.SmtpHost ?? string.Empty;
+        SmtpPort = settings.SmtpPort;
+        SmtpUseSsl = settings.SmtpUseSsl;
+        SmtpUsername = settings.SmtpUsername;
+        HasStoredSmtpPassword = !string.IsNullOrEmpty(settings.SmtpPassword);
+        GraphTenantId = settings.GraphTenantId ?? string.Empty;
+        GraphClientId = settings.GraphClientId ?? string.Empty;
+        GraphSharedMailbox = settings.GraphSharedMailbox;
+        HasStoredGraphClientSecret = !string.IsNullOrEmpty(settings.GraphClientSecret);
+        GmailClientId = settings.GmailClientId ?? string.Empty;
+        GmailEmailAddress = settings.GmailEmailAddress;
+        HasStoredGmailClientSecret = !string.IsNullOrEmpty(settings.GmailClientSecret);
+        IsGmailConnected = !string.IsNullOrEmpty(settings.GmailRefreshToken);
+    }
+}

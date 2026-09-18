@@ -1,0 +1,22 @@
+@* Blazor port of Pages/Admin/Settings/Permissions/_PermissionsTabs.cshtml — same shape as
+   LogsTabs.razor. Plain <a href> links, works across still-Razor-Pages and already-migrated tabs
+   alike. *@
+<ul class="nav nav-pills mb-3">
+    @foreach (var (key, href, label) in Tabs)
+    {
+        <li class="nav-item">
+            <a class="nav-link @(key == ActiveKey ? "active" : "")" href="@href">@label</a>
+        </li>
+    }
+</ul>
+
+@code {
+    [Parameter, EditorRequired] public string ActiveKey { get; set; } = "";
+
+    private static readonly (string Key, string Href, string Label)[] Tabs =
+    [
+        ("Matrix", "/Admin/Settings/Permissions/Matrix", "Permissions Matrix"),
+        ("Roles", "/Admin/Settings/Permissions/Roles", "Roles"),
+        ("Users", "/Admin/Settings/Permissions/Users", "Users")
+    ];
+}

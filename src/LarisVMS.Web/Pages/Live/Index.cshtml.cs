@@ -3,23 +3,23 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Web.Pages.Views;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 
 namespace LarisVMS.Web.Pages.Live;
 
-/// <summary>Pure redirect page — Views are now the only live-viewing surface (the old flat
-/// all-cameras grid was removed; a user who wants "all cameras" creates a View containing every
-/// camera). Sends the viewer straight to the last-watched view, falling back to the first view, or a
-/// "create one" prompt when none exist yet.
-///
-/// The redirect itself now happens server-side, reading the "lastViewId" user preference (M14) —
-/// previously a client-side redirect reading localStorage, which meant the choice was per-browser
-/// and reset on a new device. Server-side also means Views.Count == 0 never briefly flashes this
-/// page's own markup before a client script fires; there's no client script left to fire.</summary>
+/// <summary>Renders the last-watched (or first) View's live grid directly — Views are the only
+/// live-viewing surface (the old flat all-cameras grid was removed; a user who wants "all cameras"
+/// creates a View containing every camera). Used to redirect to /Views/Play/{id} instead; changed
+/// to render the same content in place (via the shared PlayViewModelBuilder) so the browser's URL
+/// stays at /Live and the sidebar's "Live" item highlights correctly — a real HTTP redirect meant
+/// the URL always genuinely ended up under /Views/Play, so "Views" (accurately) highlighted instead.</summary>
 [Authorize("Cameras.View")]
-public class IndexModel(IViewService viewService, IUserPreferenceService preferences) : PageModel
+public class IndexModel(IViewService viewService, IUserPreferenceService preferences,
+    PlayViewModelBuilder playViewModelBuilder) : PageModel
 {
     public List<View> Views { get; set; } = [];
+    public PlayViewModel? Vm { get; set; }
 
     public async Task<IActionResult> OnGetAsync(CancellationToken ct)
     {
@@ -33,6 +33,12 @@ public class IndexModel(IViewService viewService, IUserPreferenceService prefere
             ? savedId
             : Views[0].Id;
 
-        return RedirectToPage("/Views/Play", new { id = target });
+        Vm = await playViewModelBuilder.BuildAsync(target, User, HttpContext.Connection.RemoteIpAddress?.ToString(), ct);
+        // The saved/first view vanished between ListVisibleToAsync above and the builder's own
+        // lookup (deleted concurrently, vanishingly rare) — fall back to the views list rather than
+        // a dead page.
+        if (Vm is null) return RedirectToPage("/Views/Index");
+
+        return Page();
     }
 }

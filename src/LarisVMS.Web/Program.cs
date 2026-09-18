@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net.WebSockets;
+using System.Text;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Authorization;
@@ -281,6 +282,9 @@ builder.Services.AddScoped<INodeBuildService, NodeBuildService>();
 // Failover plan phase 2: standalone relay tier.
 builder.Services.AddScoped<IProxyService, ProxyService>();
 builder.Services.AddScoped<IViewService, ViewService>();
+// Shared between Views/Play and Live/Index (which renders the same view content directly instead
+// of redirecting to Views/Play — see PlayViewModelBuilder's own doc comment).
+builder.Services.AddScoped<LarisVMS.Web.Pages.Views.PlayViewModelBuilder>();
 builder.Services.AddScoped<ITimelineService, TimelineService>();
 builder.Services.AddSingleton<DetectedObjectCategoryColorCache>();
 // Failover plan phase 1: direct-to-node streaming.
@@ -380,6 +384,15 @@ builder.Services.AddRazorPages(options =>
 {
     options.Conventions.AllowAnonymousToFolder("/Setup");
 });
+
+// Blazor migration (Phase 0): Razor Pages and Razor Components coexist during the incremental
+// per-page migration below — AddRazorPages/MapRazorPages above stays for every page not yet
+// converted. Static SSR is the default render mode for every migrated page (matches Razor Pages'
+// per-request DI scope exactly); AddInteractiveServerComponents only makes InteractiveServer
+// available to opt into per-component, it doesn't apply it app-wide.
+builder.Services.AddRazorComponents()
+    .AddInteractiveServerComponents();
+builder.Services.AddCascadingAuthenticationState();
 
 // ── LiveView.CustomPort: open a matching second Kestrel listener ────────────────
 // PortSegmentationMiddleware only ever gatekept which port a request must arrive on — under IIS the
@@ -531,13 +544,37 @@ app.UseMiddleware<ProxyAuthMiddleware>();
 // HttpContext.Items the way NodeAuthMiddleware does.
 app.UseMiddleware<ApiKeyAuthMiddleware>();
 app.UseAuthorization();
+// Must come after UseRouting/UseAuthorization, before endpoint mapping — required by Blazor's
+// enhanced forms (AntiforgeryToken) and by ordinary Razor Pages POST handlers alike.
+app.UseAntiforgery();
 
 app.MapRazorPages();
+app.MapRazorComponents<LarisVMS.Web.Components.App>()
+    .AddInteractiveServerRenderMode();
 app.MapHealthChecks("/health").AllowAnonymous();
 
 // ── Node control plane ──────────────────────────────────────────────────────
 // /register is anonymous (authenticates with the one-time registration key in the body instead);
 // every other route is authenticated by NodeAuthMiddleware above and reads the Node it attached to
+// ── Admin node vision-models fetch (Phase 2 Blazor migration) ────────────────
+// Ported from NodesModel.OnGetLocalModelsAsync (Pages/Admin/Nodes.cshtml.cs) when that page moved to
+// Components/Pages/Admin/Nodes.razor — Razor Pages' second-GET-handler convention (?handler=
+// LocalModels) has no Blazor equivalent. A separate group from nodesApi just below on purpose: this
+// one is reached by an admin's own browser/cookie session (Nodes.Edit), nodesApi is reached by a
+// recorder node itself via its own bearer token (NodeAuthMiddleware) — different principal types
+// entirely, so this must never be mounted under /api/nodes/*.
+var adminNodesApi = app.MapGroup("/api/admin/nodes").RequireAuthorization("Nodes.Edit");
+
+adminNodesApi.MapGet("/{id:guid}/vision-models", async (Guid id, INodeService nodeService,
+    LarisVMS.Web.Services.NodeControlClient nodeControlClient, CancellationToken ct) =>
+{
+    var node = (await nodeService.ListAsync(ct)).FirstOrDefault(n => n.Id == id);
+    if (node is null) return Results.Json(Array.Empty<object>());
+
+    var models = await nodeControlClient.GetVisionModelsAsync(node, ct);
+    return Results.Json(models);
+});
+
 // HttpContext.Items rather than from a ClaimsPrincipal.
 var nodesApi = app.MapGroup("/api/nodes");
 
@@ -1529,6 +1566,49 @@ app.MapPut("/api/preferences/{key}", async (string key, HttpContext ctx, SetPref
     await preferences.SetAsync(userId, key, request.Value, ct);
     return Results.NoContent();
 }).RequireAuthorization();
+
+// ── Audit log CSV export (Phase 2 Blazor migration) ──────────────────────────
+// Ported from AuditLogsModel.OnGetExportAsync (Pages/Logs/AuditLogs.cshtml.cs) when that page moved
+// to Components/Pages/Logs/AuditLogs.razor — Razor Pages' second-GET-handler convention
+// (?handler=Export) has no Blazor equivalent, so this became a real minimal-API endpoint instead of
+// a mechanical port. Both policies required (AND, via the params-array overload), matching the old
+// page's combined check: [Authorize("Logs.View")] on the page itself, plus an inline Logs.Export
+// check inside the handler.
+app.MapGet("/api/logs/audit/export", async (HttpContext ctx, string? q, string? actor, string? from, string? to,
+    ApplicationDbContext db, CancellationToken ct) =>
+{
+    var query = db.AuditLogs.AsNoTracking().AsQueryable();
+
+    if (!string.IsNullOrWhiteSpace(q))
+        query = query.Where(l => l.Action.Contains(q) || (l.Details != null && l.Details.Contains(q)));
+
+    if (!string.IsNullOrWhiteSpace(actor))
+        query = query.Where(l => l.UserName != null && l.UserName.Contains(actor));
+
+    // OccurredAt is UTC, while from/to come from a date picker that means a *local* day — see
+    // LocalDateFilter for the offset bug this fixes.
+    if (LocalDateFilter.StartOfDayUtc(from) is { } fromUtc)
+        query = query.Where(l => l.OccurredAt >= fromUtc);
+    if (LocalDateFilter.EndOfDayUtc(to) is { } toUtc)
+        query = query.Where(l => l.OccurredAt <= toUtc);
+
+    var logs = await query.OrderByDescending(l => l.OccurredAt).ToListAsync(ct);
+
+    static string CsvField(string? value) => $"\"{(value ?? string.Empty).Replace("\"", "\"\"")}\"";
+
+    var csv = new StringBuilder("Time (UTC),Action,User,IP Address,Details\n");
+    foreach (var log in logs)
+    {
+        csv.Append(CsvField(log.OccurredAt.ToString("O"))).Append(',')
+            .Append(CsvField(log.Action)).Append(',')
+            .Append(CsvField(log.UserName)).Append(',')
+            .Append(CsvField(log.IpAddress)).Append(',')
+            .Append(CsvField(log.Details)).Append('\n');
+    }
+
+    return Results.File(Encoding.UTF8.GetBytes(csv.ToString()), "text/csv",
+        $"audit-log-{DateTime.UtcNow:yyyyMMdd-HHmmss}.csv");
+}).RequireAuthorization("Logs.View", "Logs.Export");
 
 app.MapGet("/playback-segment/{cameraId:guid}/{segmentId:long}", async (
     HttpContext ctx, Guid cameraId, long segmentId, ITimelineService timeline, ICameraAccessService cameraAccess,

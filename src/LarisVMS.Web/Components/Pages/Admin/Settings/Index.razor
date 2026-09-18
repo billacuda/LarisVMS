@@ -1,0 +1,78 @@
+@page "/Admin/Settings"
+@using System.Security.Claims
+@using LarisVMS.Core.Interfaces
+@inject IPermissionService PermissionService
+
+<PageTitle>Settings - @AppName</PageTitle>
+
+<div class="d-flex align-items-center gap-2 mb-3">
+    <h1 class="mb-0">Settings</h1>
+</div>
+
+@if (Cards.Count == 0)
+{
+    <p class="text-muted">Nothing here yet — you don't currently hold a permission that unlocks any settings area.</p>
+}
+else
+{
+    <div class="row g-3">
+        @foreach (var card in Cards)
+        {
+            <div class="col-6 col-md-4 col-lg-3">
+                <a href="@card.Href" class="card h-100 text-decoration-none text-body">
+                    <div class="card-body">
+                        <div class="fs-4 mb-2" aria-hidden="true">@card.Icon</div>
+                        <div class="card-title fw-bold mb-1">@card.Title</div>
+                        <p class="card-text text-muted small mb-0">@card.Description</p>
+                    </div>
+                </a>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+
+    private record CardInfo(string Href, string Icon, string Title, string Description);
+
+    private List<CardInfo> Cards { get; set; } = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = AuthenticationStateTask is not null
+            ? (await AuthenticationStateTask).User
+            : new ClaimsPrincipal(new ClaimsIdentity());
+
+        var nav = await PermissionService.GetGrantedAsync(user);
+        var showSettings = nav.Has("Settings", "Edit");
+        var all = new (string Href, string Icon, string Title, string Description, bool Visible)[]
+        {
+            ("/Cameras", "📷", "Cameras", "Add, edit, and stream-configure connected cameras.", nav.Has("Cameras", "View")),
+            ("/Admin/Nodes", "🔌", "Nodes", "LarisNode NVR instances, capacity, and pairing.", nav.Has("Nodes", "Edit")),
+            ("/Admin/NodeBuilds", "🏗️", "Node builds", "Approval queue for recorder-node builds.", nav.Has("Nodes", "Edit")),
+            ("/Admin/Proxies", "🔗", "Media proxies", "Relay endpoints for remote and low-bandwidth streams.", nav.Has("Nodes", "Edit")),
+            ("/Logs", "📜", "Logs", "System, audit, and diagnostic log streams.", nav.Has("Logs", "View") || nav.Has("SystemLogs", "View")),
+            ("/Admin/Plugins", "🧩", "Plugins", "Installed camera integration providers and their versions.", nav.Has("Plugins", "View")),
+            ("/Admin/Settings/Backups", "💾", "Backups", "Configuration snapshots and restore points.", nav.Has("Backups", "Edit")),
+            ("/Admin/Settings/Branding", "🎨", "Branding", "Logo, colors, and login-screen customization.", showSettings),
+            ("/Admin/Settings/Permissions/Users", "👤", "Users", "Accounts, invitations, and login history.", nav.Has("Users", "Edit")),
+            ("/Admin/Settings/Permissions/Roles", "🛡️", "Roles", "Named role definitions assigned to users.", showSettings),
+            ("/Admin/Settings/Permissions/Matrix", "🗂️", "Permissions matrix", "Cross-reference roles against permitted actions.", showSettings),
+            ("/Admin/Settings/CameraAccess", "🗝️", "Camera access", "Per-role/user camera and group visibility.", showSettings),
+            ("/Admin/Settings/Detection", "🤖", "AI detection", "Detection models, zones, and per-node engine settings.", showSettings),
+            ("/Admin/Settings/Email", "✉️", "Email", "SMTP relay and notification templates.", showSettings),
+            ("/Admin/Settings/Events", "🏷️", "Events", "Event-tag colors and rule defaults.", showSettings),
+            ("/Admin/Settings/LiveView", "🖥️", "Live view", "Default grid layout, overlays, and stream quality.", showSettings),
+            ("/Admin/Settings/Logs", "📝", "Log settings", "Retention, verbosity, and remote log forwarding.", showSettings),
+            ("/Admin/Settings/Nodes", "🖧", "Node settings", "Per-node defaults for new LarisNode instances.", showSettings),
+            ("/Admin/Settings/Recording", "🎥", "Recording settings", "Codec, bitrate, and continuous vs. motion recording.", showSettings),
+            ("/Admin/Settings/Security", "🔒", "Security settings", "IP allow lists and live/playback port configuration.", showSettings),
+            ("/Admin/Settings/StorageAndRetention", "🗄️", "Storage & retention", "Disk pools, retention windows, and archiving.", nav.Has("Retention", "Edit")),
+            ("/Admin/Alerts", "⚠️", "Alerts", "Alert rules, channels, and thresholds.", nav.Has("Alerts", "Edit")),
+            ("/Admin/ApiKeys", "🔑", "API keys", "Issue and revoke integration credentials.", nav.Has("ApiKeys", "Edit")),
+        };
+        Cards = [.. all.Where(c => c.Visible).Select(c => new CardInfo(c.Href, c.Icon, c.Title, c.Description))];
+    }
+}

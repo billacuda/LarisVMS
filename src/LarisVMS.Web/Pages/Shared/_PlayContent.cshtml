@@ -1,0 +1,69 @@
+@* Shared between Views/Play.cshtml and Live/Index.cshtml — see PlayViewModelBuilder's own doc
+   comment for why. asp-page below is deliberately absolute (/Views/Index, not "Index") since this
+   partial's own "current page" isn't fixed to one route. *@
+@using LarisVMS.Web.Helpers
+@model LarisVMS.Web.Pages.Views.PlayViewModel
+<div class="d-flex justify-content-between align-items-center mb-2" id="viewPlayToolbar">
+    <h1 class="mb-0 h4">@Model.Name</h1>
+    <div class="d-flex gap-2 align-items-center">
+        @if (Model.Views.Count > 0)
+        {
+            <select class="form-select form-select-sm" style="width:auto;" id="viewPlayPicker"
+                    title="Switch view" aria-label="Switch view"
+                    onchange="if (this.value) location.href = '/Views/Play/' + this.value;">
+                @* Camera count in the label, so switching views is a choice between "House (6)" and
+                   "Yard (2)" rather than between two bare names. Counts cells, matching the Cameras
+                   column on Views/Index — the two would otherwise disagree for a view that places
+                   the same camera in more than one cell. *@
+                @foreach (var v in Model.Views)
+                {
+                    <option value="@v.Id" selected="@(v.Id == Model.CurrentViewId ? "selected" : null)">@v.Name (@ViewLayout.CountCells(v.LayoutJson))</option>
+                }
+            </select>
+        }
+        @* Watch one camera directly, no saved View needed — explicit user ask. A <select> can't hold
+           a filter box, so this is a <details> popover instead, same convention _ColumnPicker.cshtml
+           already establishes for "small filterable list in a dropdown" on this app's other pages.
+           Populated/filtered/wired by view-play.js's wireCameraPicker, from the same Model.Cameras
+           feed (already CameraAccess-narrowed) the player itself consumes — nothing here can offer a
+           camera the viewer isn't already allowed to watch. *@
+        @if (Model.Cameras.Count > 0)
+        {
+            <details class="d-inline-block position-relative" id="cameraPickerDetails">
+                <summary class="btn btn-sm btn-outline-secondary" style="list-style:none; cursor:pointer;">
+                    <span aria-hidden="true">📷</span> Camera
+                </summary>
+                <div class="position-absolute end-0 mt-1 p-2 bg-body border rounded shadow"
+                     style="z-index:1000; width:16rem; max-height:20rem; overflow-y:auto;">
+                    <input type="search" class="form-control form-control-sm mb-2" id="cameraPickerFilter"
+                           placeholder="Filter cameras…" aria-label="Filter cameras" autocomplete="off" />
+                    <div id="cameraPickerList" class="list-group list-group-flush"></div>
+                </div>
+            </details>
+        }
+        @* AI detection bounding-box overlay (live-view.js's startDetectionOverlay) — a pure
+           client-side toggle, all off by default: nothing is drawn and no /detections WebSocket
+           is opened for any tile until Moving or Idle is switched on. Confidence only decorates
+           boxes that are already being drawn, so it is disabled while both of those are off —
+           see wireDetectionToggles for that dependency. All three persist per user (server-backed
+           preferences, not localStorage) so they survive a refresh and a sign-in elsewhere. *@
+        <div class="d-flex align-items-center gap-3 small" id="detectionToggleGroup" title="AI detection boxes">
+            <div class="form-check form-switch form-check-inline mb-0 me-0">
+                <input class="form-check-input" type="checkbox" role="switch" id="detectionShowMoving">
+                <label class="form-check-label" for="detectionShowMoving">Moving</label>
+            </div>
+            <div class="form-check form-switch form-check-inline mb-0 me-0">
+                <input class="form-check-input" type="checkbox" role="switch" id="detectionShowIdle">
+                <label class="form-check-label" for="detectionShowIdle">Idle</label>
+            </div>
+            <div class="form-check form-switch form-check-inline mb-0 me-0">
+                <input class="form-check-input" type="checkbox" role="switch" id="detectionShowConfidence" disabled>
+                <label class="form-check-label" for="detectionShowConfidence">Confidence</label>
+            </div>
+        </div>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="kioskBtn" title="Toggle fullscreen kiosk mode">⛶ Fullscreen</button>
+        <a class="btn btn-sm btn-outline-secondary" asp-page="/Views/Index">Back to views</a>
+    </div>
+</div>
+
+<div id="viewPlayGrid"></div>

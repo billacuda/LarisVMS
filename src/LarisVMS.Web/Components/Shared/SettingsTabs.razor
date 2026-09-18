@@ -1,0 +1,33 @@
+@* Blazor port of Pages/Admin/Settings/_SettingsTabs.cshtml — kept in sync manually as tabs migrate
+   off Razor Pages one at a time. Plain <a href> links (not asp-page), so navigating to a
+   still-Razor-Pages tab or an already-migrated Blazor one both just work. *@
+<ul class="nav nav-tabs mb-3 flex-wrap">
+    @foreach (var (key, href, label) in Tabs)
+    {
+        <li class="nav-item">
+            <a class="nav-link @(key == ActiveKey ? "active" : "")" href="@href">@label</a>
+        </li>
+    }
+</ul>
+
+@code {
+    [Parameter, EditorRequired] public string ActiveKey { get; set; } = "";
+
+    private static readonly (string Key, string Href, string Label)[] Tabs =
+    [
+        ("Backups", "/Admin/Settings/Backups", "💾 Backups"),
+        ("Branding", "/Admin/Settings/Branding", "🎨 Branding"),
+        ("CameraAccess", "/Admin/Settings/CameraAccess", "🗝️ Camera Access"),
+        ("Cameras", "/Admin/Settings/Cameras", "📷 Cameras"),
+        ("Detection", "/Admin/Settings/Detection", "🤖 AI Detection"),
+        ("Email", "/Admin/Settings/Email", "✉️ Email"),
+        ("Events", "/Admin/Settings/Events", "🏷️ Events"),
+        ("LiveView", "/Admin/Settings/LiveView", "🖥️ Live View"),
+        ("Logs", "/Admin/Settings/Logs", "📝 Logs"),
+        ("Nodes", "/Admin/Settings/Nodes", "🔌 Nodes"),
+        ("Permissions", "/Admin/Settings/Permissions/Matrix", "🛡️ Permissions"),
+        ("Recording", "/Admin/Settings/Recording", "🎥 Recording"),
+        ("Security", "/Admin/Settings/Security", "🔒 Security"),
+        ("StorageAndRetention", "/Admin/Settings/StorageAndRetention", "🗄️ Storage and Retention")
+    ];
+}

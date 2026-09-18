@@ -1,0 +1,146 @@
+@page "/Logs/AuditLogs"
+@attribute [Authorize("Logs.View")]
+@using LarisVMS.Core.Entities
+@using LarisVMS.Infrastructure.Data
+@using LarisVMS.Web.Helpers
+@using Microsoft.EntityFrameworkCore
+@inject ApplicationDbContext Db
+@inject IAuthorizationService AuthorizationService
+
+<PageTitle>Audit Logs - @AppName</PageTitle>
+
+<h1>Logs</h1>
+<LogsTabs ActiveKey="AuditLogs" />
+
+<p class="text-muted">
+    Who did what and when — logins, camera/node/settings changes, and exports. Retention is
+    configurable on <a href="/Admin/Settings/Logs">Admin &rarr; Settings &rarr; Logs</a>
+    (kept forever by default).
+</p>
+
+@* Selections survive navigating away and refreshing — see remember-filters.js. *@
+<form method="get" class="row g-2 mb-3" data-remember-filters="auditlogs">
+    <div class="col-md-3">
+        <input type="text" name="q" value="@Query" class="form-control form-control-sm" placeholder="Search action or details..." />
+    </div>
+    <div class="col-md-2">
+        <input type="text" name="actor" value="@ActorFilter" class="form-control form-control-sm" placeholder="Actor username..." />
+    </div>
+    <div class="col-md-2">
+        <input type="date" name="from" value="@From" class="form-control form-control-sm" />
+    </div>
+    <div class="col-md-2">
+        <input type="date" name="to" value="@To" class="form-control form-control-sm" />
+    </div>
+    <div class="col-md-1">
+        <button type="submit" class="btn btn-sm btn-primary w-100">Filter</button>
+    </div>
+    <div class="col-md-1">
+        <a href="/Logs/AuditLogs" class="btn btn-sm btn-outline-secondary w-100" data-clear-filters>Clear</a>
+    </div>
+    @if (CanExport)
+    {
+        <div class="col-md-1">
+            <a href="/api/logs/audit/export?q=@Uri.EscapeDataString(Query ?? "")&actor=@Uri.EscapeDataString(ActorFilter ?? "")&from=@Uri.EscapeDataString(From ?? "")&to=@Uri.EscapeDataString(To ?? "")"
+               class="btn btn-sm btn-outline-secondary w-100">Export CSV</a>
+        </div>
+    }
+</form>
+
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Time</th>
+                    <th>Action</th>
+                    <th>Actor</th>
+                    <th>Details</th>
+                    <th>IP</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var log in Logs)
+                {
+                    <tr>
+                        <td class="small text-muted text-nowrap" title="@log.OccurredAt.ToString("u")">@log.OccurredAt.ToLocalTime().ToString("g")</td>
+                        <td class="small font-monospace">@log.Action</td>
+                        <td class="small">@(log.UserName ?? log.UserId ?? "system")</td>
+                        <td class="small">@log.Details</td>
+                        <td class="small text-muted">@log.IpAddress</td>
+                    </tr>
+                }
+                @if (Logs.Count == 0)
+                {
+                    <tr><td colspan="5" class="text-center text-muted py-3">No audit log entries found.</td></tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@* Each filter value is escaped here — Query/ActorFilter are free-text search input, and an unescaped
+   "&" or "#" in either would otherwise corrupt the query string carrying it. *@
+<PaginationControls Model="@(new PaginationViewModel(CurrentPage, TotalPages, PageUrl))" />
+
+@code {
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+
+    private const int PageSize = 50;
+
+    [SupplyParameterFromQuery(Name = "q")] private string? Query { get; set; }
+    [SupplyParameterFromQuery(Name = "actor")] private string? ActorFilter { get; set; }
+    [SupplyParameterFromQuery(Name = "from")] private string? From { get; set; }
+    [SupplyParameterFromQuery(Name = "to")] private string? To { get; set; }
+    [SupplyParameterFromQuery(Name = "pageNumber")] private int PageNumber { get; set; }
+
+    private List<AuditLog> Logs { get; set; } = [];
+    private int CurrentPage { get; set; } = 1;
+    private int TotalPages { get; set; }
+    private bool CanExport { get; set; }
+
+    // Absolute path, not a bare "?query" — see Snapshots/Index.razor's SnapshotPageUrl for why
+    // (App.razor's <base href="/"> resolves a relative query-only href against "/", not this page).
+    private string PageUrl(int p) =>
+        $"/Logs/AuditLogs?q={Uri.EscapeDataString(Query ?? "")}&actor={Uri.EscapeDataString(ActorFilter ?? "")}" +
+        $"&from={Uri.EscapeDataString(From ?? "")}&to={Uri.EscapeDataString(To ?? "")}&pageNumber={p}";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = AuthenticationStateTask is not null
+            ? (await AuthenticationStateTask).User
+            : new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity());
+        CanExport = (await AuthorizationService.AuthorizeAsync(user, "Logs.Export")).Succeeded;
+
+        CurrentPage = PageNumber < 1 ? 1 : PageNumber;
+
+        var query = FilteredQuery();
+
+        var total = await query.CountAsync();
+        TotalPages = Math.Max(1, (int)Math.Ceiling(total / (double)PageSize));
+        if (CurrentPage > TotalPages) CurrentPage = TotalPages;
+
+        Logs = await query.OrderByDescending(l => l.OccurredAt)
+            .Skip((CurrentPage - 1) * PageSize).Take(PageSize).ToListAsync();
+    }
+
+    private IQueryable<AuditLog> FilteredQuery()
+    {
+        var query = Db.AuditLogs.AsNoTracking().AsQueryable();
+
+        if (!string.IsNullOrWhiteSpace(Query))
+            query = query.Where(l => l.Action.Contains(Query) || (l.Details != null && l.Details.Contains(Query)));
+
+        if (!string.IsNullOrWhiteSpace(ActorFilter))
+            query = query.Where(l => l.UserName != null && l.UserName.Contains(ActorFilter));
+
+        if (LocalDateFilter.StartOfDayUtc(From) is { } fromUtc)
+            query = query.Where(l => l.OccurredAt >= fromUtc);
+
+        if (LocalDateFilter.EndOfDayUtc(To) is { } toUtc)
+            query = query.Where(l => l.OccurredAt <= toUtc);
+
+        return query;
+    }
+}

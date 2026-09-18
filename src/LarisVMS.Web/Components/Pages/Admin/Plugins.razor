@@ -1,0 +1,107 @@
+@page "/Admin/Plugins"
+@attribute [Authorize("Plugins.View")]
+@using LarisVMS.Core
+@using LarisVMS.Core.Interfaces
+@inject ICameraService CameraService
+
+<PageTitle>Plugins - @AppName</PageTitle>
+
+<h1 class="h3 mb-3">Plugins</h1>
+
+<p class="text-muted">
+    Camera integrations cover what ONVIF can't express. Each one declares which makes and models it
+    handles, and a camera picks one up automatically from the make and model it reports while being
+    probed — there is nothing to install or switch on here. Providers ship compiled into this build,
+    so this list changes only with an application update, and each carries its own version because a
+    provider changes when its vendor's API does, not on this application's release schedule.
+</p>
+
+@if (PluginRows.Count == 0)
+{
+    <p class="text-muted">This build ships no camera integrations.</p>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-hover align-middle" id="pluginsTable" data-sortable>
+            <thead>
+                <tr>
+                    <th>Plugin</th>
+                    <th>Key</th>
+                    <th>Version</th>
+                    <th class="text-end" data-sort-numeric>Cameras</th>
+                    <th data-no-sort>Using it</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var p in PluginRows)
+                {
+                    <tr>
+                        <td>
+                            <div>@p.DisplayName</div>
+                            <div class="text-muted small">@p.Summary</div>
+                        </td>
+                        <td><code>@p.Key</code></td>
+                        <td>@p.Version</td>
+                        <td class="text-end" data-sort-value="@p.CameraNames.Count">@p.CameraNames.Count</td>
+                        <td>
+                            @if (p.CameraNames.Count == 0)
+                            {
+                                <span class="text-muted">no cameras matched</span>
+                            }
+                            else
+                            {
+                                <span class="small">@string.Join(", ", p.CameraNames)</span>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@if (OrphanedCameraNames.Count > 0)
+{
+    @* A camera row can outlive the provider that set it — the registry tolerates this deliberately
+       and degrades to "no integration" rather than breaking node config generation, which means it
+       otherwise happens completely silently. *@
+    <div class="alert alert-warning">
+        <strong>Some cameras reference a plugin this build doesn't have.</strong>
+        They're recording normally but get no vendor events until the plugin returns or they're
+        re-probed: @string.Join(", ", OrphanedCameraNames)
+    </div>
+}
+
+@code {
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+
+    private record PluginRow(string Key, string DisplayName, string Version, string Summary, List<string> CameraNames);
+
+    private List<PluginRow> PluginRows { get; set; } = [];
+
+    /// <summary>Cameras whose stored IntegrationKey matches no provider in this build — a real
+    /// possibility the registry explicitly tolerates (a downgrade, or a provider removed in a later
+    /// version), which degrades to "no integration" silently at runtime. Surfaced here because
+    /// silent is exactly what makes it hard to notice.</summary>
+    private List<string> OrphanedCameraNames { get; set; } = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var cameras = await CameraService.ListAsync();
+
+        PluginRows = CameraIntegrations.All
+            .Select(p => new PluginRow(p.Key, p.DisplayName, p.Version, p.Summary,
+                cameras.Where(c => string.Equals(c.IntegrationKey, p.Key, StringComparison.OrdinalIgnoreCase))
+                       .Select(c => c.Name)
+                       .OrderBy(n => n)
+                       .ToList()))
+            .ToList();
+
+        OrphanedCameraNames = cameras
+            .Where(c => !string.IsNullOrWhiteSpace(c.IntegrationKey) && CameraIntegrations.ByKey(c.IntegrationKey) is null)
+            .Select(c => c.Name)
+            .OrderBy(n => n)
+            .ToList();
+    }
+}

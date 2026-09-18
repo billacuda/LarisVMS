@@ -1,0 +1,205 @@
+@page "/"
+@attribute [Authorize]
+@using System.Globalization
+@using LarisVMS.Core.Interfaces
+@inject IDashboardService DashboardService
+
+<PageTitle>Dashboard - @AppName</PageTitle>
+
+<div class="d-flex align-items-center gap-2 mb-3">
+    <h1 class="mb-0">Dashboard</h1>
+    @* dashboard.js's poll() fills this in ("Updated h:mm:ss a") after every successful refresh —
+       server-rendered blank so a JS-disabled/failed-to-load page doesn't show a stale claim. *@
+    <span id="dashboardRefreshStatus" class="text-muted small"></span>
+</div>
+
+<div class="row g-3 mb-3" id="dashboardSummary">
+    <div class="col-6 col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <div class="display-6" id="dashRecordingCount">@RecordingCount</div>
+                <div class="text-muted small">Recording</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <div class="display-6 @(NotReportingCount > 0 ? "text-danger" : "")" id="dashNotReportingCount">@NotReportingCount</div>
+                <div class="text-muted small">Not reporting</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <div class="display-6 text-muted" id="dashDisabledCount">@DisabledCount</div>
+                <div class="text-muted small">Disabled</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <div class="display-6 @(NodesOnlineCount < NodesTotalCount ? "text-danger" : "")" id="dashNodesOnline">@NodesOnlineCount / @NodesTotalCount</div>
+                <div class="text-muted small">Nodes online</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+    @* Persisted server-side (see user-preferences.js) so the choice survives a reload and follows the
+       signed-in user across devices — same convention as the theme toggle. Kept as its own switch
+       rather than folded into the generic column picker: showing a thumbnail is a heavier per-row
+       network fetch, not just a display toggle on data already present. *@
+    <div class="form-check form-switch mb-0">
+        <input class="form-check-input" type="checkbox" role="switch" id="dashboardThumbToggle">
+        <label class="form-check-label" for="dashboardThumbToggle">Show thumbnails</label>
+    </div>
+    <div class="d-flex align-items-center gap-2">
+        <label class="form-label small mb-0" for="dashboardPageSize">Rows per page</label>
+        <select id="dashboardPageSize" class="form-select form-select-sm" style="width: auto;" data-paginate-size-for="dashboardTable">
+            <option value="10">10</option>
+            <option value="20" selected>20</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+            <option value="all">All</option>
+        </select>
+        <ColumnPicker TableId="dashboardTable" />
+    </div>
+</div>
+
+<style>
+    /* Column stays structurally present at all times (see the toggle's own comment above) — hiding
+       it is purely visual. Both the header and every row's cell share this class. */
+    #dashboardTable.hide-thumb-col .thumb-col { display: none; }
+</style>
+
+<p class="text-muted" id="dashboardEmptyMessage" style="@(Rows.Count == 0 ? "" : "display:none;")">
+    No cameras yet — add one from <a href="/Cameras">Cameras</a>.
+</p>
+
+<div class="table-responsive" id="dashboardTableWrap" style="@(Rows.Count == 0 ? "display:none;" : "")">
+    <table class="table table-hover align-middle hide-thumb-col" id="dashboardTable" data-sortable data-paginate data-column-picker>
+        <thead>
+            <tr>
+                <th class="thumb-col" data-no-sort>Thumbnail</th>
+                <th>Camera</th>
+                <th data-col="node">Node</th>
+                <th data-no-sort>Status</th>
+                <th class="text-end" data-sort-numeric data-col="fps">FPS</th>
+                <th class="text-end" data-sort-numeric data-col="bitrate">Bitrate</th>
+                @* Sorted by sample rate, the only numeric part of the cell. *@
+                <th data-sort-numeric data-col="audio">Audio</th>
+                <th class="text-end" data-sort-numeric data-col="reconnects">Reconnects</th>
+                <th data-sort-numeric data-col="lastreport">Last report</th>
+            </tr>
+        </thead>
+        <tbody id="dashboardTableBody">
+            @foreach (var r in Rows)
+            {
+                <tr data-camera-id="@r.CameraId">
+                    <td class="thumb-col"></td>
+                    <td><a href="/Cameras/Edit/@r.CameraId">@r.CameraName</a></td>
+                    <td>
+                        @if (!r.NodeAssigned)
+                        {
+                            <span class="text-muted">unassigned</span>
+                        }
+                        else
+                        {
+                            @r.NodeName
+                            <span class="badge @(r.NodeOnline ? "text-bg-success" : "text-bg-secondary") ms-1">@(r.NodeOnline ? "online" : "offline")</span>
+                        }
+                    </td>
+                    <td>
+                        @if (!r.CameraEnabled)
+                        {
+                            <span class="badge text-bg-secondary">Disabled</span>
+                        }
+                        else if (!r.NodeAssigned)
+                        {
+                            <span class="badge text-bg-warning">No node</span>
+                        }
+                        else if (r.HealthFresh)
+                        {
+                            <span class="badge text-bg-success">Recording</span>
+                        }
+                        else
+                        {
+                            <span class="badge text-bg-danger">Not reporting</span>
+                        }
+                        @if (r.EngineBuildFailed == true)
+                        {
+                            <text> </text><span class="badge text-bg-danger" title="AI detection failed to start — check the vision log">AI detection failed</span>
+                        }
+                        else if (r.IsEngineBuilding == true)
+                        {
+                            <text> </text><span class="badge text-bg-info"><span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Starting AI detection&hellip;</span>
+                        }
+                    </td>
+                    <td class="text-end" data-sort-value="@(r.HealthFresh ? r.Fps : null)">@(r.HealthFresh ? r.Fps?.ToString() ?? "—" : "—")</td>
+                    <td class="text-end" data-sort-value="@(r.HealthFresh ? r.BitrateKbps : null)">@(r.HealthFresh && r.BitrateKbps is { } kbps ? $"{kbps:N0} kbps" : "—")</td>
+                    <td data-sort-value="@r.AudioSampleRateHz">@AudioSummary(r.AudioCodec, r.AudioSampleRateHz)</td>
+                    <td class="text-end" data-sort-value="@r.ReconnectCount">@(r.ReconnectCount?.ToString() ?? "—")</td>
+                    @* ApplicationDbContext's UtcDateTimeConverter already guarantees Kind=Utc here. *@
+                    <td class="small text-muted" data-sort-value="@(r.HealthReportedAt.HasValue ? new DateTimeOffset(r.HealthReportedAt.Value).ToUnixTimeMilliseconds() : 0)">
+                        @if (r.HealthReportedAt is { } reported)
+                        {
+                            <span title="@reported.ToString("u")">@reported.ToLocalTime().ToString("g")</span>
+                        }
+                        else
+                        {
+                            <span>never</span>
+                        }
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+    <div data-paginate-controls-for="dashboardTable" class="mt-2"></div>
+</div>
+
+@* Renders after App.razor's global helper scripts (user-preferences.js etc.) via SectionOutlet,
+   not inline here — dashboard.js depends on larisvmsPreferences already existing. *@
+<SectionContent SectionName="PageScripts">
+    <script src="/js/dashboard.js"></script>
+</SectionContent>
+
+@code {
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+
+    private List<LarisVMS.Core.Dtos.CameraHealthRow> Rows { get; set; } = [];
+    private int RecordingCount { get; set; }
+    private int NotReportingCount { get; set; }
+    private int DisabledCount { get; set; }
+    private int NodesOnlineCount { get; set; }
+    private int NodesTotalCount { get; set; }
+
+    [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = AuthenticationStateTask is not null
+            ? (await AuthenticationStateTask).User
+            : new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity());
+
+        var health = await DashboardService.GetHealthAsync(user);
+        Rows = health.Rows;
+        RecordingCount = health.RecordingCount;
+        NotReportingCount = health.NotReportingCount;
+        DisabledCount = health.DisabledCount;
+        NodesOnlineCount = health.NodesOnlineCount;
+        NodesTotalCount = health.NodesTotalCount;
+    }
+
+    // dashboard.js has to render the identical string for the same row (this markup is only the
+    // pre-JS fallback — see dashboard.js's own header), so the two must agree exactly.
+    private static string AudioSummary(string? codec, int? sampleRateHz)
+    {
+        if (string.IsNullOrWhiteSpace(codec)) return "—";
+        if (sampleRateHz is not { } hz) return codec;
+        return $"{codec} {(hz / 1000.0).ToString("0.#", CultureInfo.InvariantCulture)} kHz";
+    }
+}

@@ -1,0 +1,340 @@
+@page "/Cameras"
+@attribute [Authorize("Cameras.View")]
+@using LarisVMS.Core.Entities
+@using LarisVMS.Core.Enums
+@using LarisVMS.Core.Interfaces
+@inject ICameraService CameraService
+@inject INodeService NodeService
+@inject ISettingsResolver Settings
+@inject ICameraAccessService CameraAccess
+@inject IServiceScopeFactory ScopeFactory
+
+<PageTitle>Cameras - @AppName</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1>Cameras</h1>
+    <div>
+        <a class="btn btn-outline-secondary" href="/Cameras/Groups">Groups</a>
+        <a class="btn btn-primary" href="/Cameras/Discover">Discover</a>
+        <a class="btn btn-primary" href="/Cameras/Edit">Add manually</a>
+    </div>
+</div>
+
+@if (Cameras.Count == 0)
+{
+    <p class="text-muted">No cameras yet. Use <a href="/Cameras/Discover">Discover</a> to scan the LAN, or add one manually.</p>
+}
+else
+{
+    <div class="row g-2 align-items-center mb-2">
+        <div class="col-sm-4">
+            <input type="search" class="form-control" data-filter-table="camerasTable"
+                   placeholder="Filter by name, host, group, node&hellip;" />
+        </div>
+        <div class="col-sm-auto d-flex align-items-center gap-2">
+            <label class="form-label small mb-0" for="camerasPageSize">Rows per page</label>
+            <select id="camerasPageSize" class="form-select form-select-sm" style="width: auto;" data-paginate-size-for="camerasTable">
+                <option value="10">10</option>
+                <option value="25" selected>25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="all">All</option>
+            </select>
+        </div>
+        <div class="col-sm-auto ms-sm-auto">
+            <ColumnPicker TableId="camerasTable" />
+        </div>
+    </div>
+
+    @* This form has no visible fields of its own — the node <select>, the Reassign button, and every
+       row's checkbox below all point at it via the HTML5 form="reassignCamerasForm" attribute instead
+       of DOM nesting, since the table already has its own per-row forms (Toggle/Probe) and nested
+       <form> elements are invalid HTML with unpredictable submit behavior. This is standard HTML
+       cross-DOM form association — the browser collects every input naming this form's id regardless
+       of where it sits in the document, so [SupplyParameterFromForm] reads it the same as any other
+       form post. *@
+    <EditForm Model="this" FormName="reassign-cameras" OnValidSubmit="HandleReassignAsync" id="reassignCamerasForm">
+    </EditForm>
+
+    <div class="d-flex align-items-center gap-2 mb-2">
+        <select name="NodeId" form="reassignCamerasForm" class="form-select form-select-sm" style="max-width: 16rem;">
+            <option value="">(unassign)</option>
+            @foreach (var n in Nodes)
+            {
+                <option value="@n.Id">@n.Name</option>
+            }
+        </select>
+        <button type="submit" form="reassignCamerasForm" class="btn btn-sm btn-outline-primary" id="bulkReassignBtn" disabled>
+            Reassign selected to node
+        </button>
+        <span id="bulkSelectedCount" class="text-muted small"></span>
+    </div>
+
+    <div class="table-responsive">
+        <table class="table table-hover align-middle" id="camerasTable" data-sortable data-paginate data-column-picker>
+            <thead>
+                <tr>
+                    <th data-no-sort><input type="checkbox" class="form-check-input" id="selectAllCameras" /></th>
+                    <th data-no-sort>Status</th>
+                    <th>Name</th>
+                    <th data-col="host">Host</th>
+                    <th data-no-sort data-col="https">HTTPS</th>
+                    <th data-col="group">Group</th>
+                    <th data-col="node">Node</th>
+                    <th data-col="model">Manufacturer / Model</th>
+                    <th data-col="profiles">Profiles</th>
+                    <th data-col="capabilities">Capabilities</th>
+                    <th data-sort-numeric data-col="streams">Streams</th>
+                    <th data-sort-numeric data-col="storage">Storage used</th>
+                    <th data-sort-numeric data-col="retention">Retention</th>
+                    <th data-col="probed">Last probed</th>
+                    <th data-no-sort></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var c in Cameras)
+                {
+                    var staleNodeIds = StaleSegmentNodeIds.GetValueOrDefault(c.Id);
+                    <tr>
+                        <td><input type="checkbox" class="form-check-input camera-select" name="Ids" form="reassignCamerasForm" value="@c.Id" /></td>
+                        <td>
+                            @* FormName unique per row — see probe-camera's own copy of this comment below. *@
+                            <EditForm Model="this" FormName="@($"toggle-camera-enabled-{c.Id}")" OnValidSubmit="HandleToggleEnabledAsync" class="d-inline">
+                                <input type="hidden" name="Id" value="@c.Id" />
+                                <button type="submit" class="btn btn-sm btn-link p-0 border-0 text-decoration-none" style="font-size: 1.1rem; line-height: 1;"
+                                        title="@(c.IsEnabled ? "Enabled — click to disable" : "Disabled — click to enable")">
+                                    @(c.IsEnabled ? "🟢" : "🔴")
+                                </button>
+                            </EditForm>
+                        </td>
+                        <td>
+                            <a href="/Cameras/Edit/@c.Id">@c.Name</a>
+                            @if (c.VideoSourceToken is { } channelToken)
+                            {
+                                <span class="ms-1" title="One lens of a multi-sensor device (video source @channelToken) — its other channels are separate cameras in this list">🔀</span>
+                            }
+                            @if (LarisVMS.Core.CameraIntegrations.ByKey(c.IntegrationKey) is { } integration)
+                            {
+                                <span class="ms-1" title="@integration.DisplayName — this camera uses a vendor integration alongside ONVIF">🧩</span>
+                            }
+                            @if (staleNodeIds is { Count: > 0 })
+                            {
+                                var staleNames = string.Join(", ", staleNodeIds.Select(id => Nodes.FirstOrDefault(n => n.Id == id)?.Name ?? "a deleted node"));
+                                <span class="ms-1" title="Has recordings still on @staleNames — no longer this camera's assigned node">⚠️</span>
+                            }
+                            @if (c.AiDetectionEnabled)
+                            {
+                                var streamRole = EffectiveAiDetectionStreamRole.GetValueOrDefault(c.Id, "Sub");
+                                <span class="badge bg-body-secondary text-body border ms-1" title="AI object detection is watching this camera's @streamRole stream">🤖 @streamRole</span>
+                            }
+                        </td>
+                        <td>@c.Host</td>
+                        <td>
+                            @* DeviceServiceUri is stored with its scheme (http:// or https://) — AddAsync/
+                               UpdateAsync both validate it as an absolute URI before saving, so parsing it
+                               back out here is safe rather than tracking a second, separately-settable
+                               "use HTTPS" flag that could drift from what the URL itself actually says. *@
+                            @if (Uri.TryCreate(c.DeviceServiceUri, UriKind.Absolute, out var deviceUri) && deviceUri.Scheme == Uri.UriSchemeHttps)
+                            {
+                                <span title="This camera's device service URL uses HTTPS">🔒</span>
+                            }
+                        </td>
+                        <td>@(c.Groups.Count > 0 ? string.Join(", ", c.Groups.Select(g => g.Name)) : "—")</td>
+                        <td>
+                            @if (c.Node is { } node)
+                            {
+                                <a href="/Admin/Nodes">@node.Name</a>
+                            }
+                            else
+                            {
+                                <span class="text-muted" title="No node assigned — this camera won't record">unassigned</span>
+                            }
+                        </td>
+                        <td>@c.Manufacturer @c.Model</td>
+                        <td>
+                            @if (c.Capabilities is { } cap)
+                            {
+                                if (cap.ProfileS) { <span class="badge text-bg-primary me-1">S</span> }
+                                if (cap.ProfileT) { <span class="badge text-bg-primary me-1">T</span> }
+                                if (cap.ProfileG) { <span class="badge text-bg-primary me-1">G</span> }
+                                if (cap.ProfileM) { <span class="badge text-bg-primary me-1">M</span> }
+                            }
+                            else
+                            {
+                                <span class="text-muted">not probed</span>
+                            }
+                        </td>
+                        <td>
+                            @if (c.Capabilities is { } cap2)
+                            {
+                                if (cap2.HasPtz) { <span class="badge bg-body-secondary text-body border me-1" title="PTZ">PTZ</span> }
+                                if (cap2.HasAudioOut) { <span class="badge bg-body-secondary text-body border me-1" title="Two-way audio">Talk</span> }
+                                if (cap2.HasAnalyticsMetadata) { <span class="badge bg-body-secondary text-body border me-1" title="Analytics metadata">Meta</span> }
+                                if (cap2.HasRelayOutputs || cap2.HasDigitalInputs) { <span class="badge bg-body-secondary text-body border me-1" title="Relay / digital I/O">I/O</span> }
+                            }
+                        </td>
+                        <td>@c.Streams.Count</td>
+                        <td data-sort-value="@StorageUsedBytes.GetValueOrDefault(c.Id)">
+                            @ByteFormat.Format(StorageUsedBytes.GetValueOrDefault(c.Id))
+                            @if (c.QuotaBytes is { } quota)
+                            {
+                                <span class="text-muted">/ @ByteFormat.Format(quota)</span>
+                            }
+                        </td>
+                        <td data-sort-value="@EffectiveRetentionDays.GetValueOrDefault(c.Id, 30)">@EffectiveRetentionDays.GetValueOrDefault(c.Id, 30) day(s)</td>
+                        <td data-sort-value="@(c.LastProbedAt?.Ticks ?? 0)">
+                            @if (c.LastProbedAt is { } probed)
+                            {
+                                <span title="@probed.ToString("u")">@probed.ToLocalTime().ToString("g")</span>
+                            }
+                            else
+                            {
+                                <span class="text-muted">never</span>
+                            }
+                        </td>
+                        <td class="text-end text-nowrap">
+                            <a class="btn btn-sm btn-outline-secondary" href="/Cameras/Zones/@c.Id" title="Zones" aria-label="Zones"><span aria-hidden="true">🚧</span></a>
+                            <a class="btn btn-sm btn-outline-secondary" href="/Cameras/EventTags/@c.Id" title="Event tags" aria-label="Event tags"><span aria-hidden="true">🏷️</span></a>
+                            <a class="btn btn-sm btn-outline-secondary" href="/Cameras/Schedule/@c.Id" title="Schedule" aria-label="Schedule"><span aria-hidden="true">🗓️</span></a>
+                            @* FormName must be unique per rendered row, not shared — Blazor throws
+                               "more than one named submit event with the name X" otherwise. Read
+                               from HttpContext.Request.Form in the handler instead of
+                               [SupplyParameterFromForm], which needs a compile-time constant name. *@
+                            <EditForm Model="this" FormName="@($"probe-camera-{c.Id}")" OnValidSubmit="HandleProbeAsync" class="d-inline">
+                                <input type="hidden" name="ProbeId" value="@c.Id" />
+                                <button type="submit" class="btn btn-sm btn-outline-secondary" title="Re-probe" aria-label="Re-probe"><span aria-hidden="true">🔍</span></button>
+                            </EditForm>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    <div data-paginate-controls-for="camerasTable" class="mt-2"></div>
+}
+
+<SectionContent SectionName="PageScripts">
+    <script>
+        (function () {
+            var selectAll = document.getElementById('selectAllCameras');
+            var reassignBtn = document.getElementById('bulkReassignBtn');
+            var countLabel = document.getElementById('bulkSelectedCount');
+            var reassignForm = document.getElementById('reassignCamerasForm');
+            if (!selectAll || !reassignBtn || !reassignForm) return;
+
+            function checkboxes() {
+                return Array.prototype.slice.call(document.querySelectorAll('.camera-select'));
+            }
+
+            function updateBulkState() {
+                var checked = checkboxes().filter(function (cb) { return cb.checked; });
+                reassignBtn.disabled = checked.length === 0;
+                countLabel.textContent = checked.length > 0 ? checked.length + ' selected' : '';
+            }
+
+            selectAll.addEventListener('change', function () {
+                checkboxes().forEach(function (cb) { cb.checked = selectAll.checked; });
+                updateBulkState();
+            });
+
+            document.addEventListener('change', function (e) {
+                if (e.target.classList && e.target.classList.contains('camera-select')) updateBulkState();
+            });
+
+            reassignForm.addEventListener('submit', function (e) {
+                if (checkboxes().filter(function (cb) { return cb.checked; }).length === 0) e.preventDefault();
+            });
+        })();
+    </script>
+</SectionContent>
+
+@code {
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    private List<Camera> Cameras { get; set; } = [];
+    private List<Node> Nodes { get; set; } = [];
+    private Dictionary<Guid, long> StorageUsedBytes { get; set; } = [];
+    private Dictionary<Guid, int> EffectiveRetentionDays { get; set; } = [];
+    private Dictionary<Guid, string> EffectiveAiDetectionStreamRole { get; set; } = [];
+    private Dictionary<Guid, List<Guid>> StaleSegmentNodeIds { get; set; } = [];
+
+    // Read from the raw form (not [SupplyParameterFromForm], which needs a compile-time constant
+    // FormName) — toggle-camera-enabled/probe-camera each have a unique per-row FormName now.
+    private Guid Id { get; set; }
+    private Guid ProbeId { get; set; }
+    [SupplyParameterFromForm(FormName = "reassign-cameras")] private List<Guid>? Ids { get; set; }
+    [SupplyParameterFromForm(FormName = "reassign-cameras")] private Guid? NodeId { get; set; }
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var user = AuthenticationStateTask is not null
+            ? (await AuthenticationStateTask).User
+            : new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity());
+
+        Cameras = await CameraService.ListAsync();
+
+        // Narrows to whatever CameraAccess grants this principal for View — null means unrestricted
+        // (Administrator, an All-scope grant, or — the common case for every deployment that has never
+        // touched this feature — zero CameraAccess rows at all for this user/their roles).
+        var accessible = await CameraAccess.GetAccessibleCameraIdsAsync(user, CameraAccessActions.View);
+        if (accessible is not null) Cameras = Cameras.Where(c => accessible.Contains(c.Id)).ToList();
+
+        Nodes = await NodeService.ListAsync();
+        StorageUsedBytes = await CameraService.GetStorageUsageAsync();
+        StaleSegmentNodeIds = await CameraService.GetStaleSegmentNodeIdsAsync();
+
+        // Independent per-camera settings reads, run concurrently via per-camera DI scopes — same
+        // pattern as Snapshots/Index.razor, needed here for the same reason: a slow OnInitializedAsync
+        // actively blocks navigating away under Blazor's enhanced navigation.
+        var retentionScopes = Cameras.Select(c => (Camera: c, Scope: ScopeFactory.CreateScope())).ToList();
+        try
+        {
+            var retentionTasks = retentionScopes.Select(async x =>
+            {
+                var resolver = x.Scope.ServiceProvider.GetRequiredService<ISettingsResolver>();
+                var days = await resolver.GetAsync("Retention.Days", 30, cameraId: x.Camera.Id, nodeId: x.Camera.NodeId);
+                string? streamRole = null;
+                if (x.Camera.AiDetectionEnabled)
+                    streamRole = await resolver.GetAsync("AiDetection.StreamRole", "Sub", cameraId: x.Camera.Id, nodeId: x.Camera.NodeId);
+                return (x.Camera.Id, Days: days, StreamRole: streamRole);
+            }).ToList();
+
+            await Task.WhenAll(retentionTasks);
+
+            foreach (var t in retentionTasks)
+            {
+                var (id, days, streamRole) = await t;
+                EffectiveRetentionDays[id] = days;
+                if (streamRole is not null) EffectiveAiDetectionStreamRole[id] = streamRole;
+            }
+        }
+        finally
+        {
+            foreach (var x in retentionScopes) x.Scope.Dispose();
+        }
+    }
+
+    private async Task HandleToggleEnabledAsync()
+    {
+        Id = Guid.TryParse(HttpContext?.Request.Form["Id"].ToString(), out var id) ? id : Guid.Empty;
+        await CameraService.ToggleEnabledAsync(Id);
+        await LoadAsync();
+    }
+
+    private async Task HandleProbeAsync()
+    {
+        ProbeId = Guid.TryParse(HttpContext?.Request.Form["ProbeId"].ToString(), out var probeId) ? probeId : Guid.Empty;
+        await CameraService.ProbeAsync(ProbeId);
+        await LoadAsync();
+    }
+
+    private async Task HandleReassignAsync()
+    {
+        await NodeService.ReassignCamerasAsync(Ids ?? [], NodeId);
+        await LoadAsync();
+    }
+}

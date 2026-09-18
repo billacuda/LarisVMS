@@ -10,7 +10,7 @@
     {
         <div class="btn-group">
             <a class="btn btn-outline-secondary" asp-page="Zones" asp-route-id="@Model.Id">Zones</a>
-            <a class="btn btn-outline-secondary" asp-page="EventTags" asp-route-id="@Model.Id">Event tags</a>
+            <a class="btn btn-outline-secondary" href="/Cameras/EventTags/@Model.Id">Event tags</a>
         </div>
     }
 </div>
@@ -67,7 +67,7 @@
                 }
             </div>
             <div class="form-text">
-                <a asp-page="Groups">Manage groups &rarr;</a>
+                <a href="/Cameras/Groups">Manage groups &rarr;</a>
             </div>
         </div>
     }
@@ -82,7 +82,7 @@
         </select>
         @if (Model.Nodes.Count == 0)
         {
-            <div class="form-text">No nodes have registered yet — see <a asp-page="/Admin/Nodes">Admin &rarr; Nodes</a>.</div>
+            <div class="form-text">No nodes have registered yet — see <a href="/Admin/Nodes">Admin &rarr; Nodes</a>.</div>
         }
     </div>
     <div class="col-6">
@@ -133,7 +133,7 @@
                 recording date — set this higher than other cameras to keep this one archived longer.
                 0 = keep forever. Blank inherits the node's/global setting.
                 Archiving is currently @(Model.EffectiveArchiveEnabled ? "on" : "off") for this camera
-                (set on <a asp-page="/Admin/Nodes">the node</a> or <a asp-page="/Admin/Settings/StorageAndRetention">globally</a>).
+                (set on <a href="/Admin/Nodes">the node</a> or <a href="/Admin/Settings/StorageAndRetention">globally</a>).
             </div>
         </div>
         <div class="col-6">
@@ -190,7 +190,7 @@
                 <div class="form-text text-warning">
                     No enabled event tag rule has "Drives recording" checked yet — Event mode keeps
                     everything until one exists
-                    (<a asp-page="EventTags" asp-route-id="@Model.Id">set one up</a>). Unlike Motion
+                    (<a href="/Cameras/EventTags/@Model.Id">set one up</a>). Unlike Motion
                     mode, Event mode ignores Motion zones and the built-in motion classifier entirely
                     — only a driving rule's own trigger counts.
                 </div>
@@ -201,7 +201,7 @@
                     <button type="button" class="help-icon" data-help-target="eventModeHelp" tabindex="0" aria-label="Help">ℹ️ About Event mode</button>
                     <div class="help-text-source" id="eventModeHelp">
                         Event mode keeps a segment only if a driving
-                        (<a asp-page="EventTags" asp-route-id="@Model.Id">event tag rule</a>) fired within
+                        (<a href="/Cameras/EventTags/@Model.Id">event tag rule</a>) fired within
                         its pre/post-roll window — not any activity, unlike Motion mode.
                         <strong>Unverified against a real camera</strong> — see CHANGELOG.
                     </div>
@@ -219,7 +219,7 @@
             </div>
             <div class="help-text-source" id="aiDetectionHelp">
                 Which hardware accelerator actually runs detection is a per-node setting, not chosen
-                here (<a asp-page="/Admin/Nodes">manage nodes</a>). If the assigned node has none
+                here (<a href="/Admin/Nodes">manage nodes</a>). If the assigned node has none
                 available, this is logged once and every other detection path already configured for
                 this camera keeps working unaffected.
             </div>
@@ -236,7 +236,7 @@
             </select>
             <div class="help-text-source" id="aiStreamRoleHelp">
                 Which of this camera's streams AI detection watches. Global default is set on
-                <a asp-page="/Admin/Settings/Detection">AI Detection settings</a>.
+                <a href="/Admin/Settings/Detection">AI Detection settings</a>.
             </div>
         </div>
         <div class="col-6">
@@ -276,7 +276,7 @@
             <div class="help-text-source" id="aiConfidenceHelp">
                 Minimum detection score for this camera specifically — e.g. a camera prone to
                 misdetecting a stationary object may need a higher threshold. Unchecked "Override"
-                inherits the node's/global setting from <a asp-page="/Admin/Settings/Detection">AI Detection settings</a>.
+                inherits the node's/global setting from <a href="/Admin/Settings/Detection">AI Detection settings</a>.
             </div>
         </div>
         <div class="col-6">
@@ -297,7 +297,7 @@
             </div>
             <div class="help-text-source" id="aiIouHelp">
                 Overlap threshold for merging duplicate boxes, for this camera specifically. Unchecked
-                "Override" inherits the node's/global setting from <a asp-page="/Admin/Settings/Detection">AI Detection settings</a>.
+                "Override" inherits the node's/global setting from <a href="/Admin/Settings/Detection">AI Detection settings</a>.
             </div>
         </div>
         <div class="col-6">
@@ -314,7 +314,7 @@
                 Turn this On for a camera that has a parked vehicle in view whose box wobble is being
                 reported as motion. It smooths the movement check so frame-to-frame box jitter doesn't
                 count as moving — but can also hold a genuinely slow-moving object as idle, so it is
-                off by default. Global default on <a asp-page="/Admin/Settings/Detection">AI Detection settings</a>.
+                off by default. Global default on <a href="/Admin/Settings/Detection">AI Detection settings</a>.
             </div>
         </div>
         <div class="col-6">
@@ -337,7 +337,7 @@
                 Minimum real pixel travel before a box counts as moving — only used when jitter
                 rejection is on for this camera. Higher rejects more wobble but ignores slower genuine
                 movement. Unchecked "Override" inherits the node's/global setting from
-                <a asp-page="/Admin/Settings/Detection">AI Detection settings</a>.
+                <a href="/Admin/Settings/Detection">AI Detection settings</a>.
             </div>
         </div>
         <div class="col-6">
@@ -364,7 +364,7 @@
                 every frame above what a camera actually needs is wasted decode/preprocess/inference
                 cost, on this node and, over the external HTTP backend, on the far side of the network
                 too. 0 = no cap (decode rate). Unchecked "Override" inherits the node's/global setting
-                from <a asp-page="/Admin/Settings/Detection">AI Detection settings</a>.
+                from <a href="/Admin/Settings/Detection">AI Detection settings</a>.
             </div>
         </div>
         <div class="col-6">
@@ -455,7 +455,7 @@
             <button type="submit" asp-page-handler="Delete" class="btn btn-outline-danger"
                     onclick="return confirm('Delete this camera?');">Delete</button>
         }
-        <a asp-page="Index" class="btn btn-link">Cancel</a>
+        <a href="/Cameras" class="btn btn-link">Cancel</a>
     </div>
 </form>
 
@@ -486,7 +486,7 @@ else if (Model.VideoSourceToken is { } channelToken)
         <span aria-hidden="true">🔀</span>
         One channel of a multi-sensor device — this camera records only video source
         <code>@channelToken</code>. Its sibling channels are separate cameras on the
-        <a asp-page="Index">Cameras</a> list.
+        <a href="/Cameras">Cameras</a> list.
     </p>
 }
 

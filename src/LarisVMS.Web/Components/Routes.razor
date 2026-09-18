@@ -1,0 +1,30 @@
+@inject NavigationManager Nav
+
+<Router AppAssembly="typeof(Program).Assembly">
+    <Found Context="routeData">
+        <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(MainLayout)">
+            @* Belt-and-suspenders: an unauthenticated Static SSR request is already redirected by the
+               normal cookie-auth challenge in the ASP.NET Core middleware pipeline before this ever
+               renders. This only fires for a render-tree-level auth failure that middleware didn't
+               already catch, mirroring the Identity-scaffolded Blazor template's own RedirectToLogin
+               pattern. *@
+            <NotAuthorized>
+                @{ RedirectToLogin(); }
+            </NotAuthorized>
+        </AuthorizeRouteView>
+    </Found>
+    <NotFound>
+        <PageTitle>Not found</PageTitle>
+        <LayoutView Layout="typeof(MainLayout)">
+            <p>Sorry, there's nothing at this address.</p>
+        </LayoutView>
+    </NotFound>
+</Router>
+
+@code {
+    private void RedirectToLogin()
+    {
+        var returnUrl = new Uri(Nav.Uri).PathAndQuery;
+        Nav.NavigateTo($"/Identity/Account/Login?ReturnUrl={Uri.EscapeDataString(returnUrl)}", forceLoad: true);
+    }
+}

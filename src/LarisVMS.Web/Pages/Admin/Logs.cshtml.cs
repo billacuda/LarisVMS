@@ -9,5 +9,5 @@ namespace LarisVMS.Web.Pages.Admin;
 /// Admin/Retention's own stub.</summary>
 public class LogsModel : PageModel
 {
-    public IActionResult OnGet() => RedirectToPage("/Logs/AuditLogs");
+    public IActionResult OnGet() => Redirect("/Logs/AuditLogs");
 }

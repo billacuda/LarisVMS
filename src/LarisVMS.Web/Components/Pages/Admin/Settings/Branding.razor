@@ -1,0 +1,249 @@
+@page "/Admin/Settings/Branding"
+@attribute [Authorize("Settings.Edit")]
+@using System.Security.Claims
+@using LarisVMS.Core
+@using LarisVMS.Core.Interfaces
+@inject IBrandingService BrandingService
+@inject IAuditService AuditService
+
+<PageTitle>Branding - @AppName</PageTitle>
+
+<h1>Settings</h1>
+<SettingsTabs ActiveKey="Branding" />
+
+<p class="text-muted">
+    Applies across the whole site — every page's navbar, footer, links and buttons, including the
+    sign-in page. Anything left blank falls back to the built-in default, so you can brand only the
+    parts you care about.
+</p>
+
+@if (!string.IsNullOrEmpty(SavedMessage))
+{
+    <div class="alert alert-success">@SavedMessage</div>
+}
+@if (!string.IsNullOrEmpty(ErrorMessage))
+{
+    <div class="alert alert-danger">@ErrorMessage</div>
+}
+
+<EditForm Model="this" FormName="branding-settings" OnSubmit="HandleSaveAsync" class="row g-3" style="max-width: 560px;">
+    <div class="col-12">
+        <label class="form-label" for="AppNameField">
+            Application name
+            <button type="button" class="help-icon" data-help-target="appNameHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <InputText @bind-Value="FormAppName" id="AppNameField" class="form-control" maxlength="100" />
+        <div class="help-text-source" id="appNameHelp">Shown in the navbar, the browser tab title and the footer.</div>
+    </div>
+
+    <div class="col-sm-6">
+        <label class="form-label" for="PrimaryColor">
+            Primary color
+            <button type="button" class="help-icon" data-help-target="primaryColorHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <div class="input-group">
+            @* The color input is the picker; the text input is what actually posts, so a value can
+               also be pasted in exactly (and so an empty value stays empty — a color input can't
+               represent "unset", it always reports a color). *@
+            <input type="color" class="form-control form-control-color" id="PrimaryColorPicker"
+                   value="@(PrimaryColor ?? "#0d6efd")" title="Pick a primary color"
+                   aria-label="Pick a primary color" />
+            <InputText @bind-Value="PrimaryColor" id="PrimaryColor" class="form-control" placeholder="#0d6efd"
+                   pattern="^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$" />
+        </div>
+        <div class="help-text-source" id="primaryColorHelp">Buttons and links. Blank = Bootstrap default blue.</div>
+    </div>
+
+    <div class="col-sm-6">
+        <label class="form-label" for="AccentColor">
+            Navbar color
+            <button type="button" class="help-icon" data-help-target="accentColorHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <div class="input-group">
+            <input type="color" class="form-control form-control-color" id="AccentColorPicker"
+                   value="@(AccentColor ?? "#212529")" title="Pick a navbar color"
+                   aria-label="Pick a navbar color" />
+            <InputText @bind-Value="AccentColor" id="AccentColor" class="form-control" placeholder="#212529"
+                   pattern="^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$" />
+        </div>
+        <div class="help-text-source" id="accentColorHelp">Blank = the default dark navbar.</div>
+    </div>
+
+    <div class="col-12">
+        <label class="form-label" for="FontKey">
+            Font
+            <button type="button" class="help-icon" data-help-target="fontHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        @* Plain <select>, not InputSelect — see Detection.razor's own copy of this comment: InputSelect
+           needs a live interactive circuit to apply its value, which this Static SSR page doesn't have. *@
+        <select name="FontKey" id="FontKey" class="form-select">
+            <option value="" selected="@string.IsNullOrEmpty(FontKey)">Default (Bootstrap)</option>
+            @foreach (var (key, label) in FontChoices)
+            {
+                <option value="@key" selected="@(key == FontKey)">@label</option>
+            }
+        </select>
+        <div class="help-text-source" id="fontHelp">
+            A fixed list of widely-available font stacks — no web fonts are downloaded, and no
+            custom CSS is accepted.
+        </div>
+    </div>
+
+    <div class="col-12">
+        <label class="form-label" for="LogoFile">
+            Logo
+            <button type="button" class="help-icon" data-help-target="logoHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <div class="d-flex align-items-center gap-3 mb-2">
+            <img id="logoPreview" src="@(LogoDataUri ?? "")" alt="Current logo preview"
+                 class="border rounded bg-body-tertiary p-1"
+                 style="max-height: 48px; width: auto; @(LogoDataUri is null ? "display:none;" : "")" />
+            <span id="logoEmpty" class="text-muted small @(LogoDataUri is null ? "" : "d-none")">No logo set.</span>
+        </div>
+        <input type="file" id="LogoFile" class="form-control" accept="image/png,image/jpeg,image/gif,image/webp" />
+        <div class="help-text-source" id="logoHelp">
+            PNG, JPEG, GIF or WebP, under @(MaxLogoBytes / 1024)KB. Shown beside the app name in
+            the navbar, scaled to fit. SVG isn't accepted, since an SVG file can carry script.
+        </div>
+        @if (LogoDataUri is not null)
+        {
+            <div class="form-check mt-2">
+                <InputCheckbox @bind-Value="RemoveLogo" class="form-check-input" id="RemoveLogo" />
+                <label class="form-check-label" for="RemoveLogo">Remove the current logo</label>
+            </div>
+        }
+        @* The image never travels as a file upload — it's read client-side and posted as a data URI
+           in this hidden field, which is also exactly how it's stored. That keeps the whole feature
+           free of filesystem writes and upload plumbing. *@
+        <InputText @bind-Value="LogoDataUri" type="hidden" id="LogoDataUri" />
+    </div>
+
+    <div class="col-12">
+        <button type="submit" class="btn btn-primary"><span aria-hidden="true">💾</span> Save</button>
+    </div>
+</EditForm>
+
+<SectionContent SectionName="PageScripts">
+    <script>
+        (function () {
+            // Keeps each color picker and its text input in step, in both directions.
+            function linkColor(pickerId, textId) {
+                var picker = document.getElementById(pickerId);
+                var text = document.getElementById(textId);
+                if (!picker || !text) return;
+                picker.addEventListener('input', function () { text.value = picker.value; });
+                text.addEventListener('input', function () {
+                    if (/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(text.value)) picker.value = text.value;
+                });
+            }
+            linkColor('PrimaryColorPicker', 'PrimaryColor');
+            linkColor('AccentColorPicker', 'AccentColor');
+
+            var file = document.getElementById('LogoFile');
+            var hidden = document.getElementById('LogoDataUri');
+            var preview = document.getElementById('logoPreview');
+            var empty = document.getElementById('logoEmpty');
+            var maxBytes = @MaxLogoBytes;
+
+            if (file) {
+                file.addEventListener('change', function () {
+                    var chosen = file.files && file.files[0];
+                    if (!chosen) return;
+                    var reader = new FileReader();
+                    reader.onload = function () {
+                        // Checked against the encoded length, since that's what actually gets stored
+                        // and re-sent on every page render — not the raw file size, which is ~25%
+                        // smaller and would let an over-cap value through to be rejected server-side.
+                        if (reader.result.length > maxBytes) {
+                            alert('That image is too large once encoded. Please use one under ' +
+                                Math.floor(maxBytes / 1024) + 'KB.');
+                            file.value = '';
+                            return;
+                        }
+                        hidden.value = reader.result;
+                        preview.src = reader.result;
+                        preview.style.display = '';
+                        if (empty) empty.classList.add('d-none');
+                    };
+                    reader.readAsDataURL(chosen);
+                });
+            }
+        })();
+    </script>
+</SectionContent>
+
+@code {
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    // Named differently from the cascading AppName above — this one is the form field being edited.
+    [SupplyParameterFromForm(FormName = "branding-settings")] private string FormAppName { get; set; } = BrandingOptions.DefaultAppName;
+    [SupplyParameterFromForm(FormName = "branding-settings")] private string? PrimaryColor { get; set; }
+    [SupplyParameterFromForm(FormName = "branding-settings")] private string? AccentColor { get; set; }
+    [SupplyParameterFromForm(FormName = "branding-settings")] private string? FontKey { get; set; }
+    [SupplyParameterFromForm(FormName = "branding-settings")] private string? LogoDataUri { get; set; }
+    [SupplyParameterFromForm(FormName = "branding-settings")] private bool RemoveLogo { get; set; }
+
+    private string? SavedMessage;
+    private string? ErrorMessage;
+
+    // Fully qualified throughout: this component's own generated class is also named "Branding"
+    // (from Branding.razor), which shadows LarisVMS.Core.Branding for unqualified lookups here.
+    private static IReadOnlyList<(string Key, string Label)> FontChoices => LarisVMS.Core.Branding.FontChoices;
+    private static int MaxLogoBytes => LarisVMS.Core.Branding.MaxLogoDataUriLength;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var current = await BrandingService.GetAsync();
+        FormAppName = current.AppName;
+        PrimaryColor = current.PrimaryColor;
+        AccentColor = current.AccentColor;
+        LogoDataUri = current.LogoDataUri;
+        FontKey = current.FontKey;
+    }
+
+    private async Task HandleSaveAsync()
+    {
+        var before = await BrandingService.GetAsync();
+
+        // Validated here as well as in the service so the form can actually tell the user *which*
+        // field it rejected, rather than silently dropping it to null on save.
+        if (!string.IsNullOrWhiteSpace(PrimaryColor) && LarisVMS.Core.Branding.NormalizeColor(PrimaryColor) is null)
+            ErrorMessage = "Primary color must be a hex value like #0d6efd.";
+        else if (!string.IsNullOrWhiteSpace(AccentColor) && LarisVMS.Core.Branding.NormalizeColor(AccentColor) is null)
+            ErrorMessage = "Accent color must be a hex value like #212529.";
+        else if (!RemoveLogo && !string.IsNullOrWhiteSpace(LogoDataUri) && LarisVMS.Core.Branding.NormalizeLogoDataUri(LogoDataUri) is null)
+            ErrorMessage = $"The logo must be a PNG, JPEG, GIF or WebP image under {MaxLogoBytes / 1024}KB. " +
+                "SVG isn't accepted, since an SVG can carry script.";
+
+        if (ErrorMessage is not null) return;
+
+        var user = AuthenticationStateTask is not null
+            ? (await AuthenticationStateTask).User
+            : new ClaimsPrincipal(new ClaimsIdentity());
+
+        var updated = new BrandingOptions(FormAppName, PrimaryColor, AccentColor,
+            RemoveLogo ? null : LogoDataUri, FontKey);
+        await BrandingService.SaveAsync(updated, user.Identity?.Name);
+
+        // The logo is diffed as changed-or-not rather than by value — a base64 image in the audit
+        // trail's Details column would be unreadable and enormous.
+        var details = AuditDiff.Build(
+            AuditDiff.Of("App name", before.AppName, LarisVMS.Core.Branding.NormalizeAppName(FormAppName)),
+            AuditDiff.Of("Primary color", before.PrimaryColor, LarisVMS.Core.Branding.NormalizeColor(PrimaryColor)),
+            AuditDiff.Of("Accent color", before.AccentColor, LarisVMS.Core.Branding.NormalizeColor(AccentColor)),
+            AuditDiff.Of("Font", before.FontKey, LarisVMS.Core.Branding.NormalizeFontKey(FontKey)),
+            AuditDiff.Of("Logo", before.LogoDataUri is null ? "(none)" : "(set)",
+                updated.LogoDataUri is null ? "(none)" : "(set)"));
+
+        await AuditService.LogAsync("Branding.Update",
+            user.FindFirst(ClaimTypes.NameIdentifier)?.Value,
+            user.Identity?.Name, HttpContext?.Connection.RemoteIpAddress?.ToString(), details);
+
+        SavedMessage = "Branding saved.";
+        await LoadAsync();
+    }
+}

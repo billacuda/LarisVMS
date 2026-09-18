@@ -1,0 +1,13 @@
+@* Port of Pages/Shared/_ColumnPicker.cshtml. column-picker.js finds this by [data-column-picker-for]
+   and fills in .column-picker-menu itself — nothing here changes to add/remove a toggleable column,
+   since that's driven entirely by which <th> elements in the target table carry data-col. *@
+<details class="column-picker d-inline-block position-relative" data-column-picker-for="@TableId">
+    <summary class="btn btn-sm btn-outline-secondary">
+        <span aria-hidden="true">☰</span> Columns
+    </summary>
+    <div class="column-picker-menu"></div>
+</details>
+
+@code {
+    [Parameter, EditorRequired] public string TableId { get; set; } = "";
+}

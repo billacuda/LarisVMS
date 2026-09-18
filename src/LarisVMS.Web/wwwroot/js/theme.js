@@ -41,7 +41,16 @@
         applyTheme(next);
     };
 
-    updateThemeIcon();
+    // Exposed so blazor-chrome-sync.js can re-run this after every Blazor enhanced navigation —
+    // this script itself only runs once, on the true first page load (App.razor's own <script> tags
+    // live outside the region enhanced nav re-executes; only a page's own SectionContent-declared
+    // scripts get that treatment). Each fresh Static SSR response's own markup starts at
+    // data-bs-theme="light" (the server has no way to read localStorage), so without a re-apply
+    // hook the theme would silently revert to light on every in-app navigation. Harmless to call
+    // redundantly on the true first load too, where the <head> anti-flash script already set the
+    // same value.
+    window.larisvmsTheme = { reapply: function () { applyTheme(getStoredTheme()); } };
+    applyTheme(getStoredTheme());
 
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () {
         if (getStoredTheme() === 'auto') applyTheme('auto');

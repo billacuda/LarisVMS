@@ -1,0 +1,208 @@
+@page "/Admin/Settings/Security"
+@attribute [Authorize("Settings.Edit")]
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authentication.OpenIdConnect
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.Extensions.Options
+@using LarisVMS.Core
+@using LarisVMS.Core.Entities
+@using LarisVMS.Core.Interfaces
+@using LarisVMS.Infrastructure.Data
+@using LarisVMS.Web.Auth
+@using LarisVMS.Web.Middleware
+@using LarisVMS.Web.Services
+@inject ISettingsResolver Settings
+@inject ApplicationDbContext Db
+@inject IOptionsMonitorCache<OpenIdConnectOptions> OidcOptionsCache
+@inject IAuditService AuditService
+
+<PageTitle>Security settings - @AppName</PageTitle>
+
+<h1>Settings</h1>
+<SettingsTabs ActiveKey="Security" />
+
+@if (!string.IsNullOrEmpty(SavedMessage))
+{
+    <div class="alert alert-success">@SavedMessage</div>
+}
+@if (!string.IsNullOrEmpty(ErrorMessage))
+{
+    <div class="alert alert-danger">@ErrorMessage</div>
+}
+
+<p class="text-muted">
+    One IP or CIDR block per line (e.g. <code>10.0.0.5</code> or <code>10.0.0.0/24</code>); lines
+    starting with <code>#</code> are ignored. Leave a list blank to leave it unrestricted — that's the
+    default. A management/API list that would exclude the address you're saving from is refused rather
+    than applied.
+</p>
+
+<EditForm Model="this" FormName="security-settings" OnSubmit="HandleSaveAsync" class="row g-3" style="max-width: 720px;">
+    <div class="col-12">
+        <label class="form-label">
+            Management / API
+            <button type="button" class="help-icon" data-help-target="mgmtListHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <InputTextArea @bind-Value="ManagementAllowList" class="form-control font-monospace" rows="6"
+                  placeholder="10.0.0.0/24&#10;192.168.1.50&#10;# office VPN"></InputTextArea>
+        <div class="help-text-source" id="mgmtListHelp">Everything except live view and playback — the admin UI, and the REST API.</div>
+    </div>
+
+    <div class="col-12">
+        <label class="form-label">
+            Live View / Playback
+            <button type="button" class="help-icon" data-help-target="liveViewListHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <InputTextArea @bind-Value="LiveViewAllowList" class="form-control font-monospace" rows="6"
+                  placeholder="10.0.0.0/24"></InputTextArea>
+        <div class="help-text-source" id="liveViewListHelp">
+            The <code>/live</code> WebSocket relay, <code>/playback-segment</code>,
+            <code>/playback-thumbnail</code>, <code>/export-download</code>, and camera snapshots.
+        </div>
+    </div>
+
+    <div class="col-12 mt-4">
+        <h5>
+            Entra ID sign-in
+            <button type="button" class="help-icon" data-help-target="entraHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </h5>
+        <div class="help-text-source" id="entraHelp">
+            "Sign in with Microsoft" on the Login page, for an existing account only — it signs in to
+            an account already created on <a href="/Admin/Settings/Permissions/Users">Admin &rarr;
+            Users</a> whose email matches, and never creates one. Register an app in Entra with redirect
+            URI <code>https://@(HttpContext?.Request.Host)/signin-oidc</code>, then enter its details below.
+            Takes effect immediately — no restart needed.
+        </div>
+    </div>
+    <div class="col-12">
+        <div class="form-check form-switch">
+            <InputCheckbox @bind-Value="EntraEnabled" class="form-check-input" id="entraEnabled" />
+            <label class="form-check-label" for="entraEnabled">Enabled</label>
+        </div>
+    </div>
+    <div class="col-sm-6">
+        <label class="form-label">Tenant ID</label>
+        <InputText @bind-Value="EntraTenantId" class="form-control font-monospace" placeholder="00000000-0000-0000-0000-000000000000" />
+    </div>
+    <div class="col-sm-6">
+        <label class="form-label">Client ID</label>
+        <InputText @bind-Value="EntraClientId" class="form-control font-monospace" placeholder="00000000-0000-0000-0000-000000000000" />
+    </div>
+    <div class="col-sm-6">
+        <label class="form-label">Client secret</label>
+        <InputText @bind-Value="EntraClientSecret" type="password" class="form-control" autocomplete="off"
+               placeholder="@(HasStoredEntraClientSecret ? "•••••••• (unchanged if left blank)" : "")" />
+    </div>
+
+    <div class="col-12">
+        <button type="submit" class="btn btn-primary"><span aria-hidden="true">💾</span> Save</button>
+    </div>
+</EditForm>
+
+@code {
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    [SupplyParameterFromForm(FormName = "security-settings")] private string ManagementAllowList { get; set; } = string.Empty;
+    [SupplyParameterFromForm(FormName = "security-settings")] private string LiveViewAllowList { get; set; } = string.Empty;
+    [SupplyParameterFromForm(FormName = "security-settings")] private bool EntraEnabled { get; set; }
+    [SupplyParameterFromForm(FormName = "security-settings")] private string? EntraTenantId { get; set; }
+    [SupplyParameterFromForm(FormName = "security-settings")] private string? EntraClientId { get; set; }
+    // Blank on save means "leave unchanged" — same convention EmailSettings' own secret fields use,
+    // since the real value is never round-tripped back to the browser.
+    [SupplyParameterFromForm(FormName = "security-settings")] private string? EntraClientSecret { get; set; }
+    private bool HasStoredEntraClientSecret { get; set; }
+
+    private string? SavedMessage;
+    private string? ErrorMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        ManagementAllowList = await Settings.GetRawAsync(IpAllowListMiddleware.ManagementSettingKey) ?? string.Empty;
+        LiveViewAllowList = await Settings.GetRawAsync(IpAllowListMiddleware.LiveViewSettingKey) ?? string.Empty;
+
+        var entra = await Db.EntraSsoSettings.AsNoTracking().FirstOrDefaultAsync();
+        EntraEnabled = entra?.IsEnabled ?? false;
+        EntraTenantId = entra?.TenantId;
+        EntraClientId = entra?.ClientId;
+        HasStoredEntraClientSecret = !string.IsNullOrEmpty(entra?.ClientSecret);
+    }
+
+    private async Task HandleSaveAsync()
+    {
+        var management = IpAllowListPolicy.Parse(ManagementAllowList);
+        var liveView = IpAllowListPolicy.Parse(LiveViewAllowList);
+        var invalid = management.InvalidLines.Concat(liveView.InvalidLines).ToList();
+        if (invalid.Count > 0)
+        {
+            ErrorMessage = $"Not a valid IP or CIDR block: {string.Join(", ", invalid)}";
+            return;
+        }
+
+        // This page is itself management traffic — refuse a management-list save that would lock out
+        // the very request making it, rather than the documented-but-unhelpful "no built-in recovery"
+        // outcome. Only the management list can do this to this page; the live/playback list has no
+        // bearing on reaching Admin > Settings at all.
+        var remoteIp = HttpContext?.Connection.RemoteIpAddress;
+        if (!IpAllowListPolicy.IsAllowed(remoteIp, management.Networks))
+        {
+            ErrorMessage = $"Not saved — the management/API list you entered would block your own address ({remoteIp}). Add it to the list first.";
+            return;
+        }
+
+        var entra = await Db.EntraSsoSettings.FirstOrDefaultAsync();
+        var hadStoredSecret = !string.IsNullOrEmpty(entra?.ClientSecret);
+        if (EntraEnabled && (string.IsNullOrWhiteSpace(EntraTenantId) || string.IsNullOrWhiteSpace(EntraClientId)
+            || (!hadStoredSecret && string.IsNullOrWhiteSpace(EntraClientSecret))))
+        {
+            ErrorMessage = "Enter a Tenant ID, Client ID, and Client Secret before enabling Entra sign-in.";
+            HasStoredEntraClientSecret = hadStoredSecret;
+            return;
+        }
+
+        var user = AuthenticationStateTask is not null
+            ? (await AuthenticationStateTask).User
+            : new ClaimsPrincipal(new ClaimsIdentity());
+        var by = user.Identity?.Name;
+        var oldManagement = await Settings.GetRawAsync(IpAllowListMiddleware.ManagementSettingKey) ?? string.Empty;
+        var oldLiveView = await Settings.GetRawAsync(IpAllowListMiddleware.LiveViewSettingKey) ?? string.Empty;
+        var oldEntraEnabled = entra?.IsEnabled ?? false;
+
+        await Settings.SetGlobalAsync(IpAllowListMiddleware.ManagementSettingKey, ManagementAllowList, by);
+        await Settings.SetGlobalAsync(IpAllowListMiddleware.LiveViewSettingKey, LiveViewAllowList, by);
+
+        var isNewEntraRow = entra is null;
+        entra ??= new EntraSsoSettings { Id = Guid.NewGuid() };
+        entra.IsEnabled = EntraEnabled;
+        entra.TenantId = string.IsNullOrWhiteSpace(EntraTenantId) ? null : EntraTenantId.Trim();
+        entra.ClientId = string.IsNullOrWhiteSpace(EntraClientId) ? null : EntraClientId.Trim();
+        if (!string.IsNullOrWhiteSpace(EntraClientSecret)) entra.ClientSecret = EntraClientSecret;
+        entra.LastModifiedAt = DateTime.UtcNow;
+        entra.LastModifiedBy = by;
+        if (isNewEntraRow) Db.EntraSsoSettings.Add(entra);
+        await Db.SaveChangesAsync();
+
+        // Forces EntraOidcOptionsConfigurator to re-run on the next sign-in challenge instead of
+        // reusing whatever it resolved (and IOptionsMonitorCache cached) last time — see its own doc
+        // comment for why this is what makes a saved change take effect with no app restart needed.
+        OidcOptionsCache.TryRemove(EntraOidcOptionsConfigurator.SchemeName);
+
+        var details = AuditDiff.Build(
+            AuditDiff.Of("Management/API allow list", oldManagement, ManagementAllowList),
+            AuditDiff.Of("Live View/playback allow list", oldLiveView, LiveViewAllowList),
+            AuditDiff.Of("Entra sign-in enabled", oldEntraEnabled.ToString(), EntraEnabled.ToString()),
+            AuditDiff.SecretChanged("Entra client secret", !string.IsNullOrWhiteSpace(EntraClientSecret)));
+
+        await AuditService.LogAsync("Settings.Update",
+            user.FindFirst(ClaimTypes.NameIdentifier)?.Value, by,
+            HttpContext?.Connection.RemoteIpAddress?.ToString(), details);
+
+        // Never echoed back — same "blank means unchanged, the real value never round-trips to the
+        // browser" convention EmailSettings' own secret fields use.
+        EntraClientSecret = null;
+        HasStoredEntraClientSecret = !string.IsNullOrEmpty(entra.ClientSecret);
+
+        SavedMessage = "Saved.";
+    }
+}

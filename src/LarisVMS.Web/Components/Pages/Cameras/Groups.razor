@@ -1,0 +1,383 @@
+@page "/Cameras/Groups"
+@attribute [Authorize("CameraGroups.Edit")]
+@using LarisVMS.Core.Entities
+@using LarisVMS.Core.Interfaces
+@inject ICameraGroupService GroupService
+@inject ICameraService CameraService
+@inject IAuditService AuditService
+@inject NavigationManager NavigationManager
+
+<PageTitle>Camera groups - @AppName</PageTitle>
+
+<h1>Camera groups</h1>
+<p class="text-muted">
+    Sites / buildings / floors — used to organize cameras, to scope settings overrides, and as the
+    scope a role's <a href="/Admin/Settings/CameraAccess">Camera Access</a> grant narrows down to.
+    A camera can belong to any number of groups, as long as they're all under the same top-level site.
+    <strong>There's no separate "site" field to set</strong> — a group's site is simply whichever
+    top-level group (no parent) it descends from; add one with "Parent" left as "(top level)" below
+    to create a new site, or a sub-group under an existing one for a building/floor within it.
+</p>
+
+@if (!string.IsNullOrEmpty(ErrorMessage))
+{
+    <div class="alert alert-danger">@ErrorMessage</div>
+}
+@if (!string.IsNullOrEmpty(SavedMessage))
+{
+    <div class="alert alert-success">@SavedMessage</div>
+}
+
+<div class="card mb-4" style="max-width: 640px;">
+    <div class="card-header fw-semibold">Add group</div>
+    <div class="card-body">
+        <EditForm Model="this" FormName="create-group" OnValidSubmit="HandleCreateAsync" class="row g-2">
+            <div class="col-12">
+                <label class="form-label">New group name</label>
+                <InputText @bind-Value="NewName" class="form-control" required />
+            </div>
+            <div class="col-12">
+                <label class="form-label">Parent</label>
+                @* Plain <select>, not InputSelect: Blazor's built-in InputSelect binds Nullable<Guid>
+                   through client-side BindConverter machinery with no established precedent in this
+                   codebase for that exact type — a plain name="NewParentId" element instead binds via
+                   [SupplyParameterFromForm]'s server-side ASP.NET Core model binder, which maps a blank
+                   submitted value to null the same well-established way plain form/query binding
+                   always has. *@
+                <select name="NewParentId" class="form-select">
+                    <option value="">(top level)</option>
+                    @foreach (var g in GroupRows)
+                    {
+                        <option value="@g.Id">@g.Name</option>
+                    }
+                </select>
+            </div>
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary"><span aria-hidden="true">➕</span> Add group</button>
+            </div>
+        </EditForm>
+    </div>
+</div>
+
+@foreach (var g in GroupRows)
+{
+    var members = Cameras.Where(c => c.Groups.Any(mg => mg.Id == g.Id)).OrderBy(c => c.Name).ToList();
+    var isBuiltIn = g.Id == CameraGroup.AllCamerasId;
+    var bodyId = $"group-body-{g.Id}";
+
+    <div class="card mb-3" style="max-width: 640px; margin-left: @(Depth(g) * 1.75)rem;">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <button type="button" class="btn btn-link text-decoration-none p-0 fw-semibold group-collapse-toggle"
+                    data-bs-toggle="collapse" data-bs-target="#@bodyId" aria-expanded="true">
+                <span class="group-collapse-icon" aria-hidden="true">▾</span> @g.Name
+                <span class="text-muted small fw-normal">(@members.Count)</span>
+            </button>
+            @if (!isBuiltIn)
+            {
+                @* FormName unique per row — Blazor throws "more than one named submit event with the
+                   name X" when a loop reuses a shared FormName. *@
+                <EditForm Model="this" FormName="@($"delete-group-{g.Id}")" OnValidSubmit="HandleDeleteAsync" class="d-inline">
+                    <input type="hidden" name="Id" value="@g.Id" />
+                    <button type="submit" class="btn btn-sm btn-outline-danger"
+                            onclick="return confirm('Delete this group?');"><span aria-hidden="true">🗑️</span> Delete</button>
+                </EditForm>
+            }
+        </div>
+        <div class="collapse show" id="@bodyId">
+            <div class="card-body">
+                @if (isBuiltIn)
+                {
+                    <p class="text-muted small mb-0">
+                        Built in — every camera is automatically a member (@members.Count total).
+                        Nothing to manage here; membership follows camera creation/deletion on its own.
+                    </p>
+                }
+                else
+                {
+                    @if (members.Count == 0)
+                    {
+                        <p class="text-muted small mb-2">No cameras in this group yet.</p>
+                    }
+                    else
+                    {
+                        <ul class="list-group list-group-flush mb-2">
+                            @foreach (var c in members)
+                            {
+                                <li class="list-group-item d-flex justify-content-between align-items-center px-0">
+                                    <span>@c.Name</span>
+                                    <EditForm Model="this" FormName="@($"remove-camera-{c.Id}-{g.Id}")" OnValidSubmit="HandleRemoveCameraAsync" class="d-inline">
+                                        <input type="hidden" name="RemoveCameraId" value="@c.Id" />
+                                        <input type="hidden" name="RemoveGroupId" value="@g.Id" />
+                                        <button type="submit" class="btn btn-sm btn-outline-secondary">Remove</button>
+                                    </EditForm>
+                                </li>
+                            }
+                        </ul>
+                    }
+
+                    <button type="button" class="btn btn-sm btn-primary manage-cameras-btn" data-bs-toggle="modal" data-bs-target="#manageCamerasModal"
+                            data-group-id="@g.Id" data-group-name="@g.Name"
+                            data-member-ids="@string.Join(",", members.Select(m => m.Id))">
+                        Manage cameras
+                    </button>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@if (GroupRows.Count == 0)
+{
+    <p class="text-muted">No groups yet — add one above.</p>
+}
+
+<div class="modal fade" id="manageCamerasModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-scrollable">
+        <div class="modal-content">
+            <EditForm Model="this" FormName="set-group-cameras" OnValidSubmit="HandleSetGroupCamerasAsync">
+                <input type="hidden" name="ManageGroupId" id="manageCamerasGroupId" />
+                <div class="modal-header">
+                    <h5 class="modal-title">Cameras in <span id="manageCamerasGroupName"></span></h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    @if (Cameras.Count == 0)
+                    {
+                        <p class="text-muted mb-0">No cameras exist yet.</p>
+                    }
+                    else
+                    {
+                        <p class="text-muted small">
+                            Checking a camera already in a group under a different site will fail —
+                            see each camera's current group(s) below.
+                        </p>
+                        @foreach (var c in Cameras)
+                        {
+                            <div class="form-check">
+                                <input class="form-check-input manage-cameras-checkbox" type="checkbox" name="ManageCameraIds"
+                                       value="@c.Id" id="managecam-@c.Id" data-camera-id="@c.Id" />
+                                @{ var otherGroups = c.Groups.Where(cg => cg.Id != CameraGroup.AllCamerasId).ToList(); }
+                                <label class="form-check-label" for="managecam-@c.Id">
+                                    @c.Name
+                                    @if (otherGroups.Count > 0)
+                                    {
+                                        <span class="text-muted small">(currently: @string.Join(", ", otherGroups.Select(cg => cg.Name)))</span>
+                                    }
+                                </label>
+                            </div>
+                        }
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+</div>
+
+<style>
+    /* Rotates the collapse chevron to match Bootstrap's own aria-expanded state on the toggle
+       button — set automatically by the collapse plugin, no extra JS needed to track it. */
+    .group-collapse-icon { display: inline-block; transition: transform .15s ease-in-out; }
+    .group-collapse-toggle[aria-expanded="false"] .group-collapse-icon { transform: rotate(-90deg); }
+</style>
+
+<SectionContent SectionName="PageScripts">
+    <script>
+        // The one shared modal above is reused for every group's "Manage cameras" button rather than
+        // rendering N modals (one per group) with N full copies of the camera checkbox list — its
+        // show.bs.modal listener reads which group was clicked from the triggering button's own data
+        // attributes and (re)populates the form's hidden groupId, heading, and checkbox states before
+        // Bootstrap actually shows it.
+        (function () {
+            var modal = document.getElementById('manageCamerasModal');
+            if (!modal) return;
+
+            modal.addEventListener('show.bs.modal', function (event) {
+                var btn = event.relatedTarget;
+                if (!btn) return;
+
+                var groupId = btn.getAttribute('data-group-id');
+                var groupName = btn.getAttribute('data-group-name');
+                var memberIds = (btn.getAttribute('data-member-ids') || '').split(',').filter(Boolean);
+
+                document.getElementById('manageCamerasGroupId').value = groupId;
+                document.getElementById('manageCamerasGroupName').textContent = groupName;
+
+                modal.querySelectorAll('.manage-cameras-checkbox').forEach(function (cb) {
+                    cb.checked = memberIds.indexOf(cb.getAttribute('data-camera-id')) !== -1;
+                });
+            });
+        })();
+    </script>
+</SectionContent>
+
+@code {
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+
+    [SupplyParameterFromForm(FormName = "create-group")] private string NewName { get; set; } = string.Empty;
+    [SupplyParameterFromForm(FormName = "create-group")] private Guid? NewParentId { get; set; }
+
+    // Read from the raw form, not [SupplyParameterFromForm] — delete-group/remove-camera each have a
+    // unique per-row FormName now, which the attribute can't express (it needs a compile-time
+    // constant).
+    private Guid Id { get; set; }
+
+    [SupplyParameterFromForm(FormName = "set-group-cameras")] private Guid ManageGroupId { get; set; }
+    [SupplyParameterFromForm(FormName = "set-group-cameras")] private List<Guid>? ManageCameraIds { get; set; }
+
+    private Guid RemoveCameraId { get; set; }
+    private Guid RemoveGroupId { get; set; }
+
+    // Message-survives-a-redirect substitute for TempData, which has no Blazor equivalent — see the
+    // migration plan's Phase 2 notes. Delete/SetGroupCameras/RemoveCamera all navigate back to this
+    // same bare URL after mutating (even with no message to show) specifically so a manual refresh
+    // right after never re-triggers the browser's POST-resubmit warning — this is a frequently
+    // repeat-clicked admin page.
+    [SupplyParameterFromQuery(Name = "statusMessage")] private string? StatusMessage { get; set; }
+    [SupplyParameterFromQuery(Name = "statusIsError")] private bool StatusIsError { get; set; }
+
+    private List<CameraGroup> GroupRows { get; set; } = [];
+
+    /// <summary>Every camera, loaded once per request — the "manage this group's cameras" popup and
+    /// the per-group member list both read from this rather than each issuing their own query.</summary>
+    private List<Camera> Cameras { get; set; } = [];
+
+    private string? ErrorMessage;
+    private string? SavedMessage;
+
+    public static int Depth(CameraGroup group) => group.MaterializedPath.Count(c => c == '/') - 1;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+
+        if (!string.IsNullOrEmpty(StatusMessage))
+        {
+            if (StatusIsError) ErrorMessage = StatusMessage;
+            else SavedMessage = StatusMessage;
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        GroupRows = await GroupService.GetTreeAsync();
+        Cameras = (await CameraService.ListAsync()).OrderBy(c => c.Name).ToList();
+    }
+
+    private void NavigateBare(string? message = null, bool isError = false)
+    {
+        var url = message is null
+            ? "/Cameras/Groups"
+            : $"/Cameras/Groups?statusMessage={Uri.EscapeDataString(message)}&statusIsError={isError}";
+        NavigationManager.NavigateTo(url);
+    }
+
+    private async Task HandleCreateAsync()
+    {
+        await GroupService.CreateAsync(NewName, NewParentId);
+        await LoadAsync();
+    }
+
+    private async Task HandleDeleteAsync()
+    {
+        Id = Guid.TryParse(HttpContext?.Request.Form["Id"].ToString(), out var id) ? id : Guid.Empty;
+        try
+        {
+            await GroupService.DeleteAsync(Id);
+            NavigateBare();
+        }
+        catch (InvalidOperationException ex)
+        {
+            NavigateBare(ex.Message, isError: true);
+        }
+    }
+
+    /// <summary>Sets exactly which cameras belong to one group — the "Manage cameras" popup's Save
+    /// action (checkbox per camera, multi-select). Diffs the submitted set against current membership
+    /// and, for each camera whose membership in *this* group actually changed, rewrites its full group
+    /// list via SetCameraGroupsAsync (add/remove just this one group, keep its others) — a camera can
+    /// belong to several groups, so this must never blindly overwrite the whole list with just what's
+    /// checked here. A camera whose new set would span more than one site is skipped with its own
+    /// error rather than aborting the whole batch, so an admin fixing one mistake doesn't lose every
+    /// other change in the same save.</summary>
+    private async Task HandleSetGroupCamerasAsync()
+    {
+        var groupId = ManageGroupId;
+        var cameraIds = ManageCameraIds ?? [];
+
+        var group = GroupRows.FirstOrDefault(g => g.Id == groupId);
+        if (group is null) { NavigateBare("That group no longer exists.", isError: true); return; }
+
+        var currentMemberIds = Cameras.Where(c => c.Groups.Any(g => g.Id == groupId)).Select(c => c.Id).ToHashSet();
+        var targetMemberIds = cameraIds.ToHashSet();
+        var changedCameraIds = targetMemberIds.Except(currentMemberIds).Concat(currentMemberIds.Except(targetMemberIds)).ToList();
+
+        var user = HttpContextUser;
+        var currentUserId = user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        var currentUserName = user.Identity?.Name;
+        var remoteIp = HttpContext?.Connection.RemoteIpAddress?.ToString();
+
+        var errors = new List<string>();
+        var changedCount = 0;
+
+        foreach (var cameraId in changedCameraIds)
+        {
+            var camera = Cameras.FirstOrDefault(c => c.Id == cameraId);
+            if (camera is null) continue;
+
+            var newGroupIds = camera.Groups.Select(g => g.Id).ToHashSet();
+            var adding = targetMemberIds.Contains(cameraId);
+            if (adding) newGroupIds.Add(groupId); else newGroupIds.Remove(groupId);
+
+            try
+            {
+                await CameraService.SetCameraGroupsAsync(cameraId, newGroupIds.ToList());
+                changedCount++;
+                await AuditService.LogAsync("Camera.Update", currentUserId, currentUserName, remoteIp,
+                    $"{camera.Name} ({camera.Id}) — Group: {(adding ? "added" : "removed")} \"{group.Name}\"");
+            }
+            catch (InvalidOperationException ex)
+            {
+                errors.Add($"{camera.Name}: {ex.Message}");
+            }
+        }
+
+        string? message = null;
+        var isError = false;
+        if (errors.Count > 0) { message = string.Join(" ", errors); isError = true; }
+        else if (changedCount > 0) { message = $"Updated \"{group.Name}\" — {changedCount} camera(s) changed."; }
+
+        NavigateBare(message, isError);
+    }
+
+    /// <summary>Quick single-camera removal from the group card's own member list, without opening
+    /// the full "Manage cameras" popup — keeps every other group membership that camera has.</summary>
+    private async Task HandleRemoveCameraAsync()
+    {
+        var removeForm = HttpContext?.Request.Form;
+        RemoveCameraId = Guid.TryParse(removeForm?["RemoveCameraId"].ToString(), out var rcid) ? rcid : Guid.Empty;
+        RemoveGroupId = Guid.TryParse(removeForm?["RemoveGroupId"].ToString(), out var rgid) ? rgid : Guid.Empty;
+        var camera = Cameras.FirstOrDefault(c => c.Id == RemoveCameraId);
+        if (camera is null) { NavigateBare("That camera no longer exists.", isError: true); return; }
+
+        var user = HttpContextUser;
+        var currentUserId = user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        var currentUserName = user.Identity?.Name;
+        var remoteIp = HttpContext?.Connection.RemoteIpAddress?.ToString();
+
+        var newGroupIds = camera.Groups.Select(g => g.Id).Where(id => id != RemoveGroupId).ToList();
+        await CameraService.SetCameraGroupsAsync(RemoveCameraId, newGroupIds);
+        await AuditService.LogAsync("Camera.Update", currentUserId, currentUserName, remoteIp,
+            $"{camera.Name} ({camera.Id}) — Group: removed");
+
+        NavigateBare($"\"{camera.Name}\" removed from its group.");
+    }
+
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    private System.Security.Claims.ClaimsPrincipal HttpContextUser =>
+        HttpContext?.User ?? new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity());
+}

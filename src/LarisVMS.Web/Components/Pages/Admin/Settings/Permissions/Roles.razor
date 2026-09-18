@@ -1,0 +1,412 @@
+@page "/Admin/Settings/Permissions/Roles"
+@attribute [Authorize("Settings.Edit")]
+@using System.Security.Claims
+@using LarisVMS.Core
+@using LarisVMS.Core.Entities
+@using LarisVMS.Core.Enums
+@using LarisVMS.Core.Interfaces
+@using LarisVMS.Infrastructure.Data
+@using LarisVMS.Web.Services
+@using Microsoft.AspNetCore.Identity
+@using Microsoft.EntityFrameworkCore
+@inject ApplicationDbContext Db
+@inject RoleManager<IdentityRole> RoleManagerService
+@inject ISettingsResolver Settings
+@inject IAuditService AuditService
+
+<PageTitle>Permissions — Roles - @AppName</PageTitle>
+
+<h1>Settings</h1>
+<SettingsTabs ActiveKey="Permissions" />
+<PermissionsTabs ActiveKey="Roles" />
+
+<p class="text-muted">
+    Create, rename, and delete roles, and set each one's scope tier, auto-expiry, and PTZ priority.
+    Grant permissions on the <a href="/Admin/Settings/Permissions/Matrix">Permissions Matrix</a>
+    tab, and camera-level scoping on <a href="/Admin/Settings/CameraAccess">Camera Access</a>.
+</p>
+
+@if (!string.IsNullOrEmpty(SavedMessage))
+{
+    <div class="alert alert-success">@SavedMessage</div>
+}
+@if (!string.IsNullOrEmpty(ErrorMessage))
+{
+    <div class="alert alert-danger">@ErrorMessage</div>
+}
+
+<div class="card mb-3">
+    <div class="card-header fw-semibold">Add a role</div>
+    <div class="card-body">
+        <EditForm Model="this" FormName="create-role" OnValidSubmit="HandleCreateAsync" class="row g-3">
+            <div class="col-sm-6">
+                <label class="form-label">Name</label>
+                <InputText @bind-Value="NewRoleName" class="form-control" placeholder="e.g. Operator" />
+            </div>
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary">Add role</button>
+            </div>
+        </EditForm>
+    </div>
+</div>
+
+<style>
+    .role-caret { display: inline-block; transition: transform .15s ease; }
+    .card-header[aria-expanded="true"] .role-caret { transform: rotate(90deg); }
+</style>
+
+@foreach (var role in RoleRows)
+{
+    var bodyId = $"role-body-{role.Id}";
+    <div class="card mb-3">
+        <div class="card-header fw-semibold d-flex justify-content-between align-items-center" role="button"
+             style="cursor:pointer" data-bs-toggle="collapse" data-bs-target="#@bodyId"
+             aria-expanded="false" aria-controls="@bodyId">
+            <span>
+                <span class="role-caret me-1">▶</span>
+                @role.Name
+                @if (role.IsSystemRole) { <span class="badge text-bg-secondary ms-1">built-in</span> }
+                <span class="text-muted fw-normal">(@role.UserCount user@(role.UserCount == 1 ? "" : "s"))</span>
+            </span>
+        </div>
+        <div class="collapse" id="@bodyId">
+        <div class="card-body">
+            @* FormName unique per row — see delete-role's own copy of this comment below. *@
+            <EditForm Model="this" FormName="@($"save-role-{role.Id}")" OnValidSubmit="HandleSaveAsync">
+                <input type="hidden" name="SaveRoleId" value="@role.Id" />
+                <div class="row g-3 mb-3">
+                    <div class="col-sm-6">
+                        <label class="form-label">Name</label>
+                        <input type="text" name="SaveName" class="form-control" value="@role.Name" readonly="@role.IsProtected" />
+                    </div>
+                </div>
+
+                @if (role.IsProtected)
+                {
+                    <p class="text-muted small mb-0">
+                        The Super Admin role always holds every permission at organization scope, never
+                        expires, and always pre-empts every other PTZ priority — none of that is
+                        editable here.
+                    </p>
+                }
+                else
+                {
+                    <div class="row g-3 mb-3">
+                        <div class="col-sm-4">
+                            <label class="form-label">Max scope tier</label>
+                            <select name="SaveMaxScopeTier" class="form-select">
+                                @foreach (RoleScopeTier tier in Enum.GetValues<RoleScopeTier>())
+                                {
+                                    <option value="@((int)tier)" selected="@(tier == role.MaxScopeTier)">@tier</option>
+                                }
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="row g-3 mb-3 align-items-end">
+                        <div class="col-sm-3">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" name="SaveAutoExpires" value="true"
+                                       id="expires-@role.Id" checked="@role.AutoExpires" />
+                                <label class="form-check-label" for="expires-@role.Id">Auto-expires</label>
+                            </div>
+                        </div>
+                        <div class="col-sm-4">
+                            <label class="form-label">
+                                Default expiry (minutes)
+                                <button type="button" class="help-icon" data-help-target="expiryHelp-@role.Id" tabindex="0" aria-label="Help">ℹ️</button>
+                            </label>
+                            <input type="number" min="1" name="SaveDefaultExpiryMinutes" class="form-control"
+                                   value="@role.DefaultExpiryMinutes" />
+                            <div class="help-text-source" id="expiryHelp-@role.Id">e.g. 480 = 8h shift, 1440 = 24h, 43200 = 30d.</div>
+                        </div>
+                    </div>
+
+                    <div class="row g-3 mb-3">
+                        <div class="col-sm-4">
+                            <label class="form-label">PTZ priority level</label>
+                            <input type="number" min="1" max="9999" name="SavePtzPriorityLevel" class="form-control"
+                                   value="@role.PtzPriorityLevel" placeholder="(none — no PTZ arbitration)" />
+                        </div>
+                        <div class="col-sm-4">
+                            <label class="form-label">PTZ lockout (seconds)</label>
+                            <input type="number" min="0" name="SavePtzLockoutSeconds" class="form-control"
+                                   value="@role.PtzLockoutSeconds" />
+                        </div>
+                    </div>
+                }
+
+                <div class="row g-3 mb-3">
+                    <div class="col-sm-4">
+                        <label class="form-label">
+                            Session lifetime (hours)
+                            <button type="button" class="help-icon" data-help-target="sessionHelp-@role.Id" tabindex="0" aria-label="Help">ℹ️</button>
+                        </label>
+                        <input type="number" min="0" name="SaveSessionLifetimeHours" class="form-control"
+                               value="@role.SessionLifetimeHours" />
+                        <div class="help-text-source" id="sessionHelp-@role.Id">0 = never expire.</div>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-primary btn-sm">Save</button>
+            </EditForm>
+            @* Razor Pages' formaction="?handler=Delete" (one shared <form>, a second button routing to
+               a different handler) has no Blazor EditForm equivalent — split into its own adjacent
+               form instead, same net effect. *@
+            @if (!role.IsProtected)
+            {
+                @* FormName must be unique per row, not shared — Blazor throws "more than one named
+                   submit event with the name X" otherwise. Handlers below read straight off
+                   HttpContext.Request.Form since [SupplyParameterFromForm] needs a compile-time
+                   constant FormName. *@
+                <EditForm Model="this" FormName="@($"delete-role-{role.Id}")" OnValidSubmit="HandleDeleteAsync" class="d-inline">
+                    <input type="hidden" name="DeleteRoleId" value="@role.Id" />
+                    <button type="submit" class="btn btn-outline-danger btn-sm"
+                            onclick="@(role.UserCount > 0 ? "return false;" : "return confirm('Delete role \"" + role.Name + "\"?');")"
+                            disabled="@(role.UserCount > 0)"
+                            title="@(role.UserCount > 0 ? "Move its users to another role first." : null)">
+                        Delete
+                    </button>
+                </EditForm>
+            }
+        </div>
+        </div>
+    </div>
+}
+
+@code {
+    private sealed record RoleRow(
+        string Id, string Name, string? Tag, bool IsProtected, bool IsSystemRole, int UserCount,
+        RoleScopeTier MaxScopeTier, bool AutoExpires, int? DefaultExpiryMinutes,
+        int? PtzPriorityLevel, int? PtzLockoutSeconds, int SessionLifetimeHours);
+
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    private ClaimsPrincipal User => HttpContext?.User ?? new ClaimsPrincipal(new ClaimsIdentity());
+    private string? CurrentUserId => User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+    private string? CurrentUserName => User.Identity?.Name;
+    private string? RemoteIp => HttpContext?.Connection.RemoteIpAddress?.ToString();
+
+    [SupplyParameterFromForm(FormName = "create-role")] private string NewRoleName { get; set; } = string.Empty;
+
+    // Read from the raw form, not [SupplyParameterFromForm] — save-role/delete-role each have a
+    // unique per-row FormName now, which the attribute can't express (it needs a compile-time
+    // constant).
+    private string? SaveRoleId { get; set; }
+    private string? SaveName { get; set; }
+    private string? SaveMaxScopeTierRaw { get; set; }
+    private bool SaveAutoExpires { get; set; }
+    private int? SaveDefaultExpiryMinutes { get; set; }
+    private int? SavePtzPriorityLevel { get; set; }
+    private int? SavePtzLockoutSeconds { get; set; }
+    private int SaveSessionLifetimeHours { get; set; }
+
+    private string? DeleteRoleId { get; set; }
+
+    private List<RoleRow> RoleRows { get; set; } = [];
+    private string? SavedMessage;
+    private string? ErrorMessage;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var roles = await Db.Roles.OrderBy(r => r.Name).ToListAsync();
+        var profiles = await Db.RoleProfiles.ToDictionaryAsync(p => p.RoleId);
+        var userCounts = await Db.UserRoles
+            .GroupBy(ur => ur.RoleId)
+            .Select(g => new { RoleId = g.Key, Count = g.Count() })
+            .ToListAsync();
+
+        RoleRows = [];
+        foreach (var r in roles)
+        {
+            var profile = profiles.GetValueOrDefault(r.Id);
+            var hours = await Settings.GetAsync(SessionLifetimePolicy.SettingKey(r.Id), SessionLifetimePolicy.DefaultHours);
+            RoleRows.Add(new RoleRow(
+                r.Id,
+                r.Name ?? r.Id,
+                profile?.Tag,
+                RoleManagementPolicy.IsProtected(profile?.Tag),
+                profile?.IsSystemRole ?? false,
+                userCounts.FirstOrDefault(c => c.RoleId == r.Id)?.Count ?? 0,
+                profile?.MaxScopeTier ?? RoleScopeTier.Group,
+                profile?.AutoExpires ?? false,
+                profile?.DefaultExpiryMinutes,
+                profile?.PtzPriorityLevel,
+                profile?.PtzLockoutSeconds,
+                hours));
+        }
+    }
+
+    private async Task HandleCreateAsync()
+    {
+        var name = NewRoleName.Trim();
+        if (string.IsNullOrEmpty(name))
+        {
+            ErrorMessage = "Enter a role name.";
+            await LoadAsync();
+            return;
+        }
+        if (await RoleManagerService.RoleExistsAsync(name))
+        {
+            ErrorMessage = $"A role named \"{name}\" already exists.";
+            await LoadAsync();
+            return;
+        }
+
+        var result = await RoleManagerService.CreateAsync(new IdentityRole(name));
+        if (!result.Succeeded)
+        {
+            ErrorMessage = string.Join(" ", result.Errors.Select(e => e.Description));
+            await LoadAsync();
+            return;
+        }
+
+        await AuditService.LogAsync("Role.Create", CurrentUserId, CurrentUserName, RemoteIp, name);
+        SavedMessage = $"Role \"{name}\" created.";
+        await LoadAsync();
+    }
+
+    private async Task HandleSaveAsync()
+    {
+        var saveForm = HttpContext?.Request.Form;
+        SaveRoleId = saveForm?["SaveRoleId"].ToString();
+        SaveName = saveForm?["SaveName"].ToString();
+        SaveMaxScopeTierRaw = saveForm?["SaveMaxScopeTier"].ToString();
+        SaveAutoExpires = saveForm?["SaveAutoExpires"].ToString() == "true";
+        SaveDefaultExpiryMinutes = int.TryParse(saveForm?["SaveDefaultExpiryMinutes"].ToString(), out var dem) ? dem : null;
+        SavePtzPriorityLevel = int.TryParse(saveForm?["SavePtzPriorityLevel"].ToString(), out var ppl) ? ppl : null;
+        SavePtzLockoutSeconds = int.TryParse(saveForm?["SavePtzLockoutSeconds"].ToString(), out var pls) ? pls : null;
+        SaveSessionLifetimeHours = int.TryParse(saveForm?["SaveSessionLifetimeHours"].ToString(), out var slh) ? slh : 0;
+
+        var roleId = SaveRoleId ?? "";
+        var role = await RoleManagerService.FindByIdAsync(roleId);
+        if (role is null)
+        {
+            ErrorMessage = "That role no longer exists.";
+            await LoadAsync();
+            return;
+        }
+
+        var profile = await Db.RoleProfiles.FirstOrDefaultAsync(p => p.RoleId == role.Id);
+        var isProtected = RoleManagementPolicy.IsProtected(profile?.Tag);
+        var fields = new List<AuditDiff.Field>();
+
+        var newName = (SaveName ?? string.Empty).Trim();
+        if (!string.Equals(role.Name, newName, StringComparison.Ordinal))
+        {
+            if (!RoleManagementPolicy.CanRename(profile?.Tag))
+            {
+                ErrorMessage = "The Super Admin role can't be renamed.";
+                await LoadAsync();
+                return;
+            }
+            if (string.IsNullOrEmpty(newName))
+            {
+                ErrorMessage = "Role name can't be blank.";
+                await LoadAsync();
+                return;
+            }
+            if (await RoleManagerService.RoleExistsAsync(newName))
+            {
+                ErrorMessage = $"A role named \"{newName}\" already exists.";
+                await LoadAsync();
+                return;
+            }
+            fields.Add(AuditDiff.Of("Name", role.Name, newName));
+            role.Name = newName;
+            await RoleManagerService.UpdateAsync(role);
+        }
+
+        var maxScopeTier = Enum.TryParse<RoleScopeTier>(SaveMaxScopeTierRaw, out var mst) ? mst : RoleScopeTier.Group;
+
+        // Scope tier / auto-expiry / PTZ aren't editable for the protected role — it's always
+        // Org-scoped, never expires, and its PTZ priority is fixed at the top of the range.
+        if (!isProtected)
+        {
+            var isNewProfile = profile is null;
+            profile ??= new RoleProfile { RoleId = role.Id, IsSystemRole = false };
+
+            var clampedExpiry = SaveAutoExpires ? Math.Max(1, SaveDefaultExpiryMinutes ?? 0) : (int?)null;
+            var clampedPriority = SavePtzPriorityLevel is { } pr ? Math.Clamp(pr, 1, 9999) : (int?)null;
+            var clampedLockout = clampedPriority is not null ? Math.Max(0, SavePtzLockoutSeconds ?? 0) : (int?)null;
+
+            if (!isNewProfile)
+            {
+                if (profile.MaxScopeTier != maxScopeTier)
+                    fields.Add(AuditDiff.Of("Max scope tier", profile.MaxScopeTier.ToString(), maxScopeTier.ToString()));
+                if (profile.AutoExpires != SaveAutoExpires || profile.DefaultExpiryMinutes != clampedExpiry)
+                    fields.Add(AuditDiff.Of("Auto-expiry",
+                        profile.AutoExpires ? $"{profile.DefaultExpiryMinutes}m" : "never",
+                        SaveAutoExpires ? $"{clampedExpiry}m" : "never"));
+                if (profile.PtzPriorityLevel != clampedPriority || profile.PtzLockoutSeconds != clampedLockout)
+                    fields.Add(AuditDiff.Of("PTZ priority/lockout",
+                        profile.PtzPriorityLevel is { } op ? $"{op}/{profile.PtzLockoutSeconds}s" : "none",
+                        clampedPriority is { } np ? $"{np}/{clampedLockout}s" : "none"));
+            }
+
+            profile.MaxScopeTier = maxScopeTier;
+            profile.AutoExpires = SaveAutoExpires;
+            profile.DefaultExpiryMinutes = clampedExpiry;
+            profile.PtzPriorityLevel = clampedPriority;
+            profile.PtzLockoutSeconds = clampedLockout;
+
+            if (isNewProfile) Db.RoleProfiles.Add(profile);
+            await Db.SaveChangesAsync();
+        }
+
+        var oldHours = await Settings.GetAsync(SessionLifetimePolicy.SettingKey(role.Id), SessionLifetimePolicy.DefaultHours);
+        var clampedHours = Math.Max(0, SaveSessionLifetimeHours);
+        if (clampedHours != oldHours)
+        {
+            await Settings.SetGlobalAsync(SessionLifetimePolicy.SettingKey(role.Id), clampedHours.ToString(), User.Identity?.Name);
+            fields.Add(AuditDiff.Of("Session lifetime (hours)", oldHours.ToString(), clampedHours.ToString()));
+        }
+
+        var details = AuditDiff.Build([.. fields]);
+        if (details is not null)
+            await AuditService.LogAsync("Role.Update", CurrentUserId, CurrentUserName, RemoteIp, details);
+
+        SavedMessage = "Saved.";
+        await LoadAsync();
+    }
+
+    private async Task HandleDeleteAsync()
+    {
+        DeleteRoleId = HttpContext?.Request.Form["DeleteRoleId"].ToString();
+        var roleId = DeleteRoleId ?? "";
+        var role = await RoleManagerService.FindByIdAsync(roleId);
+        if (role is null)
+        {
+            await LoadAsync();
+            return;
+        }
+
+        var profile = await Db.RoleProfiles.FirstOrDefaultAsync(p => p.RoleId == role.Id);
+        var userCount = await Db.UserRoles.CountAsync(ur => ur.RoleId == role.Id);
+        if (!RoleManagementPolicy.CanDelete(profile?.Tag, userCount))
+        {
+            ErrorMessage = RoleManagementPolicy.IsProtected(profile?.Tag)
+                ? "The Super Admin role can't be deleted."
+                : $"\"{role.Name}\" still has {userCount} user(s) assigned — move them to another role first.";
+            await LoadAsync();
+            return;
+        }
+
+        Db.Permissions.RemoveRange(Db.Permissions.Where(p => p.RoleId == role.Id));
+        Db.CameraAccesses.RemoveRange(Db.CameraAccesses.Where(a =>
+            a.PrincipalType == CameraAccessPrincipalType.Role && a.PrincipalId == role.Id));
+        Db.RoleAssignmentExpiries.RemoveRange(Db.RoleAssignmentExpiries.Where(a => a.RoleId == role.Id));
+        if (profile is not null) Db.RoleProfiles.Remove(profile);
+        await Db.SaveChangesAsync();
+
+        var name = role.Name;
+        await RoleManagerService.DeleteAsync(role);
+        await AuditService.LogAsync("Role.Delete", CurrentUserId, CurrentUserName, RemoteIp, name);
+
+        SavedMessage = $"Role \"{name}\" deleted.";
+        await LoadAsync();
+    }
+}

@@ -1,0 +1,218 @@
+@page "/Admin/Settings/Permissions/Matrix"
+@attribute [Authorize("Settings.Edit")]
+@using System.Security.Claims
+@using LarisVMS.Core
+@using LarisVMS.Core.Auth
+@using LarisVMS.Core.Entities
+@using LarisVMS.Core.Interfaces
+@using LarisVMS.Infrastructure.Data
+@using LarisVMS.Web.Services
+@using Microsoft.EntityFrameworkCore
+@inject ApplicationDbContext Db
+@inject IAuditService AuditService
+
+<PageTitle>Permissions Matrix - @AppName</PageTitle>
+
+<h1>Settings</h1>
+<SettingsTabs ActiveKey="Permissions" />
+<PermissionsTabs ActiveKey="Matrix" />
+
+<p class="text-muted">
+    Which Resource×Action pairs each role grants. The Super Admin role (marked
+    <span class="badge text-bg-secondary">built-in</span>) always holds every permission and isn't
+    editable here. Camera-level scoping is separate — see
+    <a href="/Admin/Settings/CameraAccess">Camera Access</a> — and each role's scope tier, expiry,
+    and PTZ priority live on the <a href="/Admin/Settings/Permissions/Roles">Roles</a> tab. Live
+    view, PTZ, two-way audio, playback, export, and camera-edit access are all further narrowed
+    per-camera or per-site on the Camera Access page — a checkbox here only controls whether a role
+    can use the feature at all, not which cameras it reaches.
+</p>
+
+@if (!string.IsNullOrEmpty(SavedMessage))
+{
+    <div class="alert alert-success">@SavedMessage</div>
+}
+@if (!string.IsNullOrEmpty(ErrorMessage))
+{
+    <div class="alert alert-danger">@ErrorMessage</div>
+}
+
+@if (RoleColumns.Count == 0)
+{
+    <p class="text-muted">No roles exist yet.</p>
+}
+else
+{
+    @* One empty form per editable role column — checkboxes below reference these by id via the HTML
+       `form` attribute (standard cross-DOM form association, independent of Blazor — the browser
+       collects any input naming a form's id into that form's POST regardless of DOM nesting), so a
+       single shared table can hold every role's own independent submit without nesting <form>
+       elements inside table cells. All columns share one FormName ("matrix-save", Bookmarks-style) —
+       only the one actually submitted contributes its RoleId/Permissions to any given request. *@
+    @foreach (var col in RoleColumns.Where(c => !c.IsProtected))
+    {
+        @* FormName unique per column — Blazor throws "more than one named submit event with the name
+           X" when a loop reuses a shared FormName. Handler reads the raw form directly since
+           [SupplyParameterFromForm] needs a compile-time constant FormName. *@
+        <EditForm Model="this" FormName="@($"matrix-save-{col.Id}")" OnValidSubmit="HandleSaveAsync" id="@($"form-{col.Id}")">
+            <input type="hidden" name="RoleId" value="@col.Id" />
+        </EditForm>
+    }
+
+    <div class="table-responsive">
+        <table class="table table-sm align-middle mb-3">
+            <thead class="table-light">
+                <tr>
+                    <th>Permission</th>
+                    @foreach (var col in RoleColumns)
+                    {
+                        <th class="text-center text-nowrap">
+                            @col.Name
+                            @if (col.IsProtected) { <span class="badge text-bg-secondary ms-1">built-in</span> }
+                        </th>
+                    }
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var entry in Catalog)
+                {
+                    <tr>
+                        <td class="text-nowrap">
+                            <span class="font-monospace">@(entry.Resource).@(entry.Action)</span>
+                            <div class="text-muted small">@entry.Label</div>
+                        </td>
+                        @foreach (var col in RoleColumns)
+                        {
+                            <td class="text-center">
+                                @if (col.IsProtected)
+                                {
+                                    <span class="text-success" title="Always granted">✓</span>
+                                }
+                                else
+                                {
+                                    var key = $"{entry.Resource}|{entry.Action}";
+                                    var isChecked = GrantedByRoleId[col.Id].Contains((entry.Resource, entry.Action));
+                                    <input class="form-check-input" type="checkbox" name="Permissions" value="@key"
+                                           form="@($"form-{col.Id}")" checked="@isChecked" />
+                                }
+                            </td>
+                        }
+                    </tr>
+                }
+                <tr>
+                    <td class="fw-semibold">Save</td>
+                    @foreach (var col in RoleColumns)
+                    {
+                        <td class="text-center">
+                            @if (!col.IsProtected)
+                            {
+                                <button type="submit" form="@($"form-{col.Id}")" class="btn btn-sm btn-primary">Save</button>
+                            }
+                            else
+                            {
+                                <span class="text-muted">—</span>
+                            }
+                        </td>
+                    }
+                </tr>
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private sealed record RoleColumn(string Id, string Name, bool IsProtected);
+
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    private ClaimsPrincipal User => HttpContext?.User ?? new ClaimsPrincipal(new ClaimsIdentity());
+    private string? CurrentUserId => User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+    private string? CurrentUserName => User.Identity?.Name;
+    private string? RemoteIp => HttpContext?.Connection.RemoteIpAddress?.ToString();
+
+    // Read from the raw form, not [SupplyParameterFromForm] — matrix-save has a unique per-column
+    // FormName now, which the attribute can't express (it needs a compile-time constant).
+    private string? RoleId { get; set; }
+    private List<string>? Permissions { get; set; }
+
+    private IReadOnlyList<PermissionCatalog.Entry> Catalog => PermissionCatalog.All;
+    private List<RoleColumn> RoleColumns { get; set; } = [];
+    private Dictionary<string, HashSet<(string Resource, string Action)>> GrantedByRoleId { get; set; } = [];
+
+    private string? SavedMessage;
+    private string? ErrorMessage;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var roles = await Db.Roles.OrderBy(r => r.Name).ToListAsync();
+        var profiles = await Db.RoleProfiles.ToDictionaryAsync(p => p.RoleId);
+        var permissionRows = await Db.Permissions.ToListAsync();
+
+        RoleColumns = roles
+            .Select(r => new RoleColumn(r.Id, r.Name ?? r.Id, RoleManagementPolicy.IsProtected(profiles.GetValueOrDefault(r.Id)?.Tag)))
+            .ToList();
+
+        GrantedByRoleId = roles.ToDictionary(
+            r => r.Id,
+            r => permissionRows.Where(p => p.RoleId == r.Id).Select(p => (p.Resource, p.Action)).ToHashSet());
+    }
+
+    private async Task HandleSaveAsync()
+    {
+        var matrixForm = HttpContext?.Request.Form;
+        RoleId = matrixForm?["RoleId"].ToString();
+        Permissions = matrixForm?["Permissions"].ToArray().Where(v => v is not null).Select(v => v!).ToList();
+
+        var roleId = RoleId ?? "";
+        var role = await Db.Roles.FirstOrDefaultAsync(r => r.Id == roleId);
+        if (role is null)
+        {
+            ErrorMessage = "That role no longer exists.";
+            await LoadAsync();
+            return;
+        }
+
+        var profile = await Db.RoleProfiles.FirstOrDefaultAsync(p => p.RoleId == roleId);
+        if (RoleManagementPolicy.IsProtected(profile?.Tag))
+        {
+            ErrorMessage = "The Super Admin role always holds every permission and its matrix can't be edited here.";
+            await LoadAsync();
+            return;
+        }
+
+        var existingRows = await Db.Permissions.Where(p => p.RoleId == roleId).ToListAsync();
+        var existingPairs = existingRows.Select(p => (p.Resource, p.Action));
+        var submittedPairs = (Permissions ?? [])
+            .Select(p => p.Split('|', 2))
+            .Where(parts => parts.Length == 2)
+            .Select(parts => (Resource: parts[0], Action: parts[1]))
+            .Where(pair => Catalog.Any(e => e.Resource == pair.Resource && e.Action == pair.Action))
+            .ToList();
+
+        var (toAdd, toRemove) = RoleManagementPolicy.DiffPermissions(existingPairs, submittedPairs);
+        foreach (var (resource, action) in toRemove)
+            Db.Permissions.Remove(existingRows.First(p => p.Resource == resource && p.Action == action));
+        foreach (var (resource, action) in toAdd)
+            Db.Permissions.Add(new Permission
+            {
+                Id = Guid.NewGuid(), RoleId = roleId, Resource = resource, Action = action, IsSystemPermission = false
+            });
+
+        if (toAdd.Count > 0 || toRemove.Count > 0)
+        {
+            var beforeList = string.Join(", ", existingPairs.Select(p => $"{p.Resource}.{p.Action}").OrderBy(s => s));
+            var afterList = string.Join(", ", submittedPairs.Select(p => $"{p.Resource}.{p.Action}").OrderBy(s => s));
+            await Db.SaveChangesAsync();
+
+            var details = AuditDiff.Build(AuditDiff.Of($"{role.Name} permissions", beforeList, afterList));
+            if (details is not null)
+                await AuditService.LogAsync("Role.Update", CurrentUserId, CurrentUserName, RemoteIp, details);
+        }
+
+        SavedMessage = $"Saved \"{role.Name}\".";
+        await LoadAsync();
+    }
+}

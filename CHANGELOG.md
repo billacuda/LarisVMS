@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.206.0] - 2026-09-18
+
+### Changed
+
+- **Blazor migration Phase 2**: `Cameras/Index`, `Cameras/Groups`, `Logs/AuditLogs`,
+  `Admin/Settings/Email`, `Admin/Settings/Detection`, `Admin/Nodes`, and the Permissions area
+  (`Matrix`/`Roles`/`Users`) all moved from Razor Pages to Blazor components, completing every
+  multi-handler-form page in the app. Two Razor Pages second-handler routes with no Blazor
+  equivalent were carved into real minimal-API endpoints instead: audit log CSV export
+  (`GET /api/logs/audit/export`) and a node's local-model list for the AI Detection picker
+  (`GET /api/admin/nodes/{id}/vision-models`, cookie-authenticated — distinct from the
+  node-bearer-authenticated `/api/nodes/*` group).
+
+### Fixed
+
+- **Snapshots' and Audit Logs' pagination links silently landed on the Dashboard.** Both built
+  their "next page" links as a bare `?query` string; the app shell's `<base href="/">` (required
+  for Blazor) makes the browser resolve a relative query-only link against the site root, not the
+  current page, per standard URL-resolution rules. Both now build an absolute path instead
+  (`/Snapshots?...`, `/Logs/AuditLogs?...`).
+- **The Snapshots filter checkboxes stopped surviving a refresh or a new login.** The page moved to
+  Blazor's enhanced navigation, which patches the DOM client-side instead of doing a full page
+  load — `remember-filters.js` only ever ran on `DOMContentLoaded`, so it silently stopped running
+  on every in-app navigation after the first. Now also hooks Blazor's `'enhancedload'` event, the
+  same mechanism already used for the sidebar/theme fix.
+- **Every Blazor form on the site returned HTTP 400 or an unhandled-exception error page** —
+  three separate, compounding bugs surfaced by testing Phase 2 in production:
+  - Every form posted **two** antiforgery tokens (one auto-emitted by `<EditForm FormName="...">`,
+    one from an extra, unnecessary explicit `<AntiforgeryToken />`), which the server read as one
+    corrupt value and rejected outright. Removed the redundant tag from all 34 affected forms
+    across 20 pages — including `Bookmarks/Index`, left over from an earlier phase and never
+    actually exercised in production before now.
+  - Any page that reused one `FormName` across a list of rows (recorder nodes, cameras, roles,
+    users, permission-matrix columns, bookmarks) made Blazor reject the whole page outright
+    ("more than one named submit event with the name…"). Every per-row form now gets a name unique
+    to that row, with the handler reading the row's own posted values off `HttpContext.Request.Form`
+    instead of `[SupplyParameterFromForm]` (which requires a compile-time constant name).
+  - Every `<select>` built with Blazor's `InputSelect` component silently reset to its first option
+    after every save, even though the save itself was persisting correctly — confirmed by reading
+    the value straight back from the database while the UI still showed the old selection.
+    `InputSelect` depends on a live interactive circuit's JS to apply the current value to the DOM;
+    none of these pages run in an interactive render mode, so that step never happened and the
+    raw HTML never marked the right `<option>` as `selected`. Replaced with plain `<select>` markup
+    (`selected="@(...)"` per option) everywhere it was used — AI Detection's eleven dropdowns plus
+    one each on Branding, Email, Events, Live View, Logs, and Recording.
+
 ## [0.205.0] - 2026-09-15
 
 ### Added

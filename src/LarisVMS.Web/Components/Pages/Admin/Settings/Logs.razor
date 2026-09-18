@@ -1,0 +1,164 @@
+@page "/Admin/Settings/Logs"
+@attribute [Authorize("Settings.Edit")]
+@using System.Security.Claims
+@using LarisVMS.Core
+@using LarisVMS.Core.Interfaces
+@using LarisVMS.Core.Logging
+@using LarisVMS.Web.Helpers
+@using LarisVMS.Web.Services
+@inject ISettingsResolver Settings
+@inject IAuditService AuditService
+@inject IConfiguration Configuration
+
+<PageTitle>Log settings - @AppName</PageTitle>
+
+<h1>Settings</h1>
+<SettingsTabs ActiveKey="Logs" />
+
+@if (!string.IsNullOrEmpty(SavedMessage))
+{
+    <div class="alert alert-success">@SavedMessage</div>
+}
+
+<EditForm Model="this" FormName="log-settings" OnSubmit="HandleSaveAsync" class="row g-3" style="max-width: 640px;">
+    <div class="col-12">
+        <label class="form-label">
+            Minimum log level
+            <button type="button" class="help-icon" data-help-target="logLevelHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <select name="LogLevel" class="form-select">
+            @foreach (var level in LogLevelOptions)
+            {
+                <option value="@level" selected="@(level == LogLevel)">@level</option>
+            }
+        </select>
+        <div class="help-text-source" id="logLevelHelp">
+            The lowest level written to the log files, everywhere: this server, every recorder node,
+            and every node's detection service. <strong>Information</strong> is the default;
+            <strong>Debug</strong> or <strong>Trace</strong> turn on the detailed per-frame /
+            per-request diagnostics for troubleshooting, at the cost of much larger log files.
+            Framework request-pipeline chatter stays quiet regardless. Takes effect without a restart
+            — this server immediately, nodes on their next check-in (about 30 seconds).
+        </div>
+    </div>
+
+    <div class="col-12">
+        <label class="form-label">
+            Application (system) log retention (days)
+            <button type="button" class="help-icon" data-help-target="sysLogHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <InputNumber @bind-Value="LogRetentionDays" min="0" class="form-control" />
+        <div class="help-text-source" id="sysLogHelp">
+            How long the <a href="/Logs/SystemLogs">System Logs</a> tab keeps this server's daily
+            log files. <strong>0 keeps them forever.</strong> Takes effect on the next sweep (every
+            six hours) — no restart needed. A recorder node sweeps its own logs on its own fixed
+            schedule; this setting does not reach them.
+        </div>
+    </div>
+
+    <div class="col-12">
+        <label class="form-label">
+            Audit log retention (days)
+            <button type="button" class="help-icon" data-help-target="auditLogHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <InputNumber @bind-Value="AuditLogRetentionDays" min="0" class="form-control" />
+        <div class="help-text-source" id="auditLogHelp">
+            How long the <a href="/Logs/AuditLogs">Audit Logs</a> tab keeps entries.
+            <strong>0 keeps them forever</strong> — the default, since the audit trail is a compliance
+            record most video-surveillance jurisdictions expect kept, not disposable debug output like
+            the application log above. Opt into a bounded window only if you know you want one.
+        </div>
+    </div>
+
+    <div class="col-12">
+        <label class="form-label">
+            System log path
+            <button type="button" class="help-icon" data-help-target="logPathHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <input class="form-control font-monospace" value="@LogPath" disabled />
+        <div class="help-text-source" id="logPathHelp">
+            @if (ConfiguredLogPathOverride is null)
+            {
+                <text>
+                    Not editable here — the application log is written before this app's settings
+                    database is reachable, specifically so a startup failure still gets recorded. To
+                    change it, set <code>Logs:Path</code> in <code>appsettings.json</code> (or the
+                    <code>LarisVMS__Logs__Path</code> environment variable) and restart.
+                </text>
+            }
+            else
+            {
+                <text>Set via the <code>Logs:Path</code> configuration key. Change it there and restart to move it again.</text>
+            }
+        </div>
+    </div>
+
+    <div class="col-12">
+        <button type="submit" class="btn btn-primary"><span aria-hidden="true">💾</span> Save</button>
+    </div>
+</EditForm>
+
+@code {
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    [SupplyParameterFromForm(FormName = "log-settings")] private int LogRetentionDays { get; set; } = LogsRetentionService.DefaultRetentionDays;
+    [SupplyParameterFromForm(FormName = "log-settings")] private int AuditLogRetentionDays { get; set; } = AuditLogRetentionService.DefaultRetentionDays;
+    [SupplyParameterFromForm(FormName = "log-settings")] private string LogLevel { get; set; } = "Information";
+
+    private static string[] LogLevelOptions => LogLevels.Selectable;
+
+    private string LogPath { get; set; } = string.Empty;
+    private string? ConfiguredLogPathOverride { get; set; }
+
+    private string? SavedMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        LogRetentionDays = await Settings.GetAsync(LogsRetentionService.RetentionDaysKey, LogsRetentionService.DefaultRetentionDays);
+        AuditLogRetentionDays = await Settings.GetAsync(AuditLogRetentionService.RetentionDaysKey, AuditLogRetentionService.DefaultRetentionDays);
+        LogLevel = await Settings.GetAsync("Logging.Level", "Information");
+        LogPath = LogPaths.AppLogsDirectory(Configuration);
+        ConfiguredLogPathOverride = Configuration[LogPaths.ConfigKey];
+    }
+
+    private async Task HandleSaveAsync()
+    {
+        var user = AuthenticationStateTask is not null
+            ? (await AuthenticationStateTask).User
+            : new ClaimsPrincipal(new ClaimsIdentity());
+        var by = user.Identity?.Name;
+
+        var oldLogRetention = await Settings.GetAsync(LogsRetentionService.RetentionDaysKey, LogsRetentionService.DefaultRetentionDays);
+        var oldAuditRetention = await Settings.GetAsync(AuditLogRetentionService.RetentionDaysKey, AuditLogRetentionService.DefaultRetentionDays);
+        var oldLogLevel = await Settings.GetAsync("Logging.Level", "Information");
+
+        var newLogRetention = Math.Max(0, LogRetentionDays);
+        var newAuditRetention = Math.Max(0, AuditLogRetentionDays);
+        var newLogLevel = LogLevels.Selectable.Contains(LogLevel, StringComparer.OrdinalIgnoreCase) ? LogLevel : "Information";
+        await Settings.SetGlobalAsync(LogsRetentionService.RetentionDaysKey, newLogRetention.ToString(), by);
+        await Settings.SetGlobalAsync(AuditLogRetentionService.RetentionDaysKey, newAuditRetention.ToString(), by);
+        await Settings.SetGlobalAsync("Logging.Level", newLogLevel, by);
+        LogRetentionDays = newLogRetention;
+        AuditLogRetentionDays = newAuditRetention;
+        LogLevel = newLogLevel;
+
+        // Web tier follows immediately; nodes + their vision services pick it up on their next
+        // reconcile (~30s) and apply it without a restart.
+        WebLogLevel.Apply(newLogLevel);
+
+        var details = AuditDiff.Build(
+            AuditDiff.Of(LogsRetentionService.RetentionDaysKey, oldLogRetention.ToString(), newLogRetention.ToString()),
+            AuditDiff.Of(AuditLogRetentionService.RetentionDaysKey, oldAuditRetention.ToString(), newAuditRetention.ToString()),
+            AuditDiff.Of("Logging.Level", oldLogLevel, newLogLevel));
+
+        await AuditService.LogAsync("Settings.Update",
+            user.FindFirst(ClaimTypes.NameIdentifier)?.Value, by,
+            HttpContext?.Connection.RemoteIpAddress?.ToString(), details);
+
+        SavedMessage = "Saved.";
+        LogPath = LogPaths.AppLogsDirectory(Configuration);
+        ConfiguredLogPathOverride = Configuration[LogPaths.ConfigKey];
+    }
+}

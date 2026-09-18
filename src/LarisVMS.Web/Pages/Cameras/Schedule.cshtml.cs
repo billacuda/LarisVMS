@@ -19,7 +19,7 @@ public class ScheduleModel(ICameraService cameraService) : PageModel
     public async Task<IActionResult> OnGetAsync(Guid id)
     {
         var camera = await cameraService.GetAsync(id);
-        if (camera is null) return RedirectToPage("Index");
+        if (camera is null) return Redirect("/Cameras");
 
         CameraId = id;
         CameraName = camera.Name;

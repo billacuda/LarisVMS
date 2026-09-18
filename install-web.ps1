@@ -68,6 +68,7 @@ param(
     [string]$ProxyCsprojPath       = (Join-Path $PSScriptRoot 'src\LarisVMS.Proxy\LarisVMS.Proxy.csproj'),
     [string]$NodeUpdaterCsprojPath = (Join-Path $PSScriptRoot 'src\LarisVMS.NodeUpdater\LarisVMS.NodeUpdater.csproj'),
     [string]$ChangelogPath         = (Join-Path $PSScriptRoot 'CHANGELOG.md'),
+    [string]$MigrationsPath        = (Join-Path $PSScriptRoot 'src\LarisVMS.Infrastructure\Migrations'),
     [switch]$SkipNodeVision,
     [switch]$SkipMigrations,
     [switch]$SkipBuild,
@@ -127,8 +128,14 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 # ── version sync guard ────────────────────────────────────────────────────────
 # Identical reasoning/logic to deploy.ps1's own guard — see that script's comment for the full
 # history. Kept here too since install-web.ps1 now owns the node/proxy release step this guards.
+#
+# Also checks LarisVMS.Web's own <Version> and that a matching AppVersions "BumpVersionX_Y_Z"
+# migration exists — the footer version shown in the app (Pages/Shared/_Layout.cshtml) is read from
+# the AppVersions table, not from the assembly's own Version, so a release that bumps the changelog
+# and every csproj but forgets the data migration ships a binary that never reports the new version
+# in the UI even though everything else about the release is correct (this happened for 0.205.0).
 if (-not $SkipVersionSyncCheck) {
-    Write-Step "Checking recorder node / media proxy version is in sync with this release"
+    Write-Step "Checking web/node/proxy version is in sync with this release"
 
     if (-not (Test-Path $ChangelogPath)) {
         Write-Host "CHANGELOG.md not found at '$ChangelogPath' - skipping version sync guard."
@@ -146,6 +153,7 @@ if (-not $SkipVersionSyncCheck) {
         }
 
         $toCheck = @(
+            @{ Name = 'LarisVMS.Web';         Path = $WebProject },
             @{ Name = 'LarisVMS.Node';        Path = $NodeCsprojPath },
             @{ Name = 'LarisVMS.Proxy';       Path = $ProxyCsprojPath },
             @{ Name = 'LarisVMS.NodeUpdater'; Path = $NodeUpdaterCsprojPath }
@@ -158,13 +166,26 @@ if (-not $SkipVersionSyncCheck) {
             }
         }
 
+        # The in-app footer version comes from the AppVersions table (seeded by a per-release
+        # BumpVersionX_Y_Z EF Core migration), not from any assembly's Version — so it needs its own
+        # check independent of the csproj comparison above.
+        $migrationName = "BumpVersion$($releaseVersion -replace '\.', '_')"
+        $migrationExists = (Test-Path $MigrationsPath) -and
+            (Get-ChildItem $MigrationsPath -Filter "*_$migrationName.cs" -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -notlike '*.Designer.cs' } | Select-Object -First 1)
+        if (-not $migrationExists) {
+            $mismatches += "  - AppVersions migration: no '$migrationName' migration found under '$MigrationsPath' " +
+                "(the in-app footer version is read from the AppVersions table, not the assembly, so it will " +
+                "stay on the previous release without this)"
+        }
+
         if ($mismatches.Count -gt 0) {
-            throw "This release is $releaseVersion (CHANGELOG.md) but the following projects still have an " +
-                  "older base <Version>:`n$($mismatches -join "`n")`n" +
-                  "Bump them to $releaseVersion before deploying, or pass -SkipVersionSyncCheck if this is " +
+            throw "This release is $releaseVersion (CHANGELOG.md) but the following are not in sync:`n" +
+                  "$($mismatches -join "`n")`n" +
+                  "Bump/add them for $releaseVersion before deploying, or pass -SkipVersionSyncCheck if this is " +
                   "deliberate."
         }
-        Write-Ok "Node/Proxy/NodeUpdater base version matches this release ($releaseVersion)."
+        Write-Ok "Web/Node/Proxy/NodeUpdater version and the AppVersions migration match this release ($releaseVersion)."
     }
 } else {
     Write-Host "Skipping version sync guard (-SkipVersionSyncCheck)."

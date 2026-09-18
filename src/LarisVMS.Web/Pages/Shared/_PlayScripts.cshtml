@@ -1,0 +1,58 @@
+@* Shared between Views/Play.cshtml and Live/Index.cshtml — see PlayViewModelBuilder's own doc
+   comment. Kept as its own partial (not folded into _PlayContent) so each host page can still
+   include it from inside its own @section Scripts { } — sections aren't collected from within a
+   <partial> in the body, they have to be declared at the hosting page's own top level, matching
+   how _Layout.cshtml positions all page scripts after the global ones. *@
+@using System.Text.Json
+@using LarisVMS.Core.Enums
+@model LarisVMS.Web.Pages.Views.PlayViewModel
+@{
+    var camerasJson = JsonSerializer.Serialize(Model.Cameras.Select(c =>
+    {
+        var main = c.Streams.FirstOrDefault(s => s.Role == CameraStreamRole.Main);
+        // M18: the Sub stream's own codec/audio, carried separately from Main's rather than assumed
+        // to match it — see live-view.js's pickMimeType doc comment for the same mismatch class on
+        // the Main path.
+        var sub = c.Streams.FirstOrDefault(s => s.Role == CameraStreamRole.Sub && s.IsEnabled);
+        return new { id = c.Id, name = c.Name, codec = main?.Codec, hasAudio = main?.HasAudio ?? false,
+            hasPtz = c.Capabilities != null && c.Capabilities.HasPtz,
+            hasSub = sub != null, subCodec = sub?.Codec, subHasAudio = sub?.HasAudio ?? false,
+            width = main?.Width, height = main?.Height };
+    }));
+}
+<script src="~/js/aspect-ratio.js" asp-append-version="true"></script>
+<script src="~/js/audio-controls.js" asp-append-version="true"></script>
+<script src="~/js/ptz-controls.js" asp-append-version="true"></script>
+<script src="~/js/catchup-badge.js" asp-append-version="true"></script>
+<script src="~/js/media-endpoint.js" asp-append-version="true"></script>
+<script src="~/js/live-view.js" asp-append-version="true"></script>
+<script src="~/js/fullscreen-tile.js" asp-append-version="true"></script>
+<script src="~/js/timeline.js" asp-append-version="true"></script>
+<script src="~/js/playback-player.js" asp-append-version="true"></script>
+<script src="~/js/view-play.js" asp-append-version="true"></script>
+<script>
+    window.larisvmsViewPlay.init({
+        layoutJson: @Html.Raw(JsonSerializer.Serialize(Model.LayoutJson)),
+        cameras: @Html.Raw(camerasJson),
+        currentViewId: @Html.Raw(JsonSerializer.Serialize(Model.CurrentViewId.ToString())),
+        singleCameraId: @Html.Raw(Model.SingleCameraId is { } sc ? JsonSerializer.Serialize(sc.ToString()) : "null"),
+        cameraPickerDetailsId: 'cameraPickerDetails',
+        cameraPickerFilterId: 'cameraPickerFilter',
+        cameraPickerListId: 'cameraPickerList',
+        detectionShowMovingId: 'detectionShowMoving',
+        detectionShowIdleId: 'detectionShowIdle',
+        detectionShowConfidenceId: 'detectionShowConfidence',
+        gridElId: 'viewPlayGrid',
+        badgeCorner: @Html.Raw(JsonSerializer.Serialize(Model.EventBadgeCornerValue)),
+        adaptiveStreamingEnabled: @Html.Raw(Model.AdaptiveStreamingEnabled ? "true" : "false"),
+        kioskBtnId: 'kioskBtn',
+        navElId: 'lvSidebar',
+        shellTopbarElId: 'lvTopbar',
+        toolbarElId: 'viewPlayToolbar',
+        isTour: @Html.Raw(Model.IsTour ? "true" : "false"),
+        tourViewIds: @Html.Raw(JsonSerializer.Serialize(Model.TourViewIds)),
+        tourIndex: @Model.TourIndex,
+        tourIntervalSeconds: @Model.TourIntervalSeconds
+    });
+    window.larisvmsLiveView.startMotionIndicatorPolling(5000);
+</script>

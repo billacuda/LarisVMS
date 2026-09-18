@@ -1,0 +1,1344 @@
+@page "/Admin/Nodes"
+@attribute [Authorize("Nodes.Edit")]
+@using LarisVMS.Core
+@using LarisVMS.Core.Entities
+@using LarisVMS.Core.Enums
+@using LarisVMS.Core.Interfaces
+@using LarisVMS.Core.Security
+@using LarisVMS.Web.Helpers
+@using LarisVMS.Web.Services
+@inject INodeService NodeService
+@inject ICameraService CameraService
+@inject ISettingsResolver Settings
+@inject IAuditService AuditService
+@inject IHttpClientFactory HttpFactory
+@inject MediaRelayMetrics RelayMetrics
+@inject IProxyService ProxyService
+@inject NodeControlClient NodeControlClient
+@inject IServiceScopeFactory ScopeFactory
+@inject NavigationManager NavigationManager
+
+<PageTitle>Nodes - @AppName</PageTitle>
+
+<h1>Recorder nodes</h1>
+<p class="text-muted">
+    Recording runs in a separate Windows Service ("node") per the architecture plan, not inside this
+    IIS-hosted app, so it survives app pool recycles and deploys. Install a node with
+    <code>install-node.ps1</code> using the registration key from
+    <a href="/Admin/Settings/Nodes">Admin &rarr; Settings &rarr; Nodes</a>. Once
+    installed, a node updates itself once a build registered by <code>deploy.ps1</code> is approved
+    on <a href="/Admin/NodeBuilds/Index">Admin &rarr; Node Builds</a> — no re-running the install
+    script on every recorder machine.
+</p>
+
+@if (!string.IsNullOrEmpty(ErrorMessage))
+{
+    <div class="alert alert-danger">@ErrorMessage</div>
+}
+
+@if (!string.IsNullOrEmpty(StatusMessage))
+{
+    <div class="alert @(StatusIsError ? "alert-danger" : "alert-success")" role="status">@StatusMessage</div>
+}
+
+@if (NodeRows.Count == 0)
+{
+    <p class="text-muted">No nodes have registered yet.</p>
+}
+else
+{
+    <div class="row g-2 align-items-center mb-2">
+        <div class="col-sm-4">
+            <input type="search" class="form-control" data-filter-table="nodesTable"
+                   placeholder="Filter by name, IP, platform&hellip;" />
+        </div>
+        <div class="col-sm-auto d-flex align-items-center gap-2">
+            <label class="form-label small mb-0" for="nodesPageSize">Rows per page</label>
+            <select id="nodesPageSize" class="form-select form-select-sm" style="width: auto;" data-paginate-size-for="nodesTable">
+                <option value="10">10</option>
+                <option value="25" selected>25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="all">All</option>
+            </select>
+        </div>
+    </div>
+
+    @* One empty, properly-nested form per node row — HandleUpdateAsync's own fields all live in
+       their natural <td> positions inside the table below and associate via the HTML5 form="..."
+       attribute (cross-DOM association, not literal DOM nesting), the same proven pattern as
+       Matrix.razor's per-role-column forms and Cameras/Index.razor's bulk-reassign form.
+       A <form>/<EditForm> element can't validly wrap several <td> cells directly under a <tr>: a
+       <form> start tag encountered while the HTML parser is "in table" gets inserted and then
+       IMMEDIATELY popped off the stack of open elements per the HTML5 tree-construction algorithm —
+       its own descendants (the row's inputs/selects) only ever associated with it through the
+       legacy "form owner" fallback, never real DOM nesting. Plain browser forms tolerated that
+       silently; Blazor's SSR form-postback tracking does not, and it corrupted every named-form
+       postback on this page (not just update-node's own) until this was split out. *@
+    @foreach (var n in NodeRows)
+    {
+        @* FormName must be unique per rendered form — Blazor throws "more than one named submit event
+           with the name X" when a loop renders the same name twice. Because a unique name can't be
+           referenced by [SupplyParameterFromForm(FormName = ...)] (that needs a compile-time
+           constant), these handlers read their values off HttpContext.Request.Form instead; only the
+           submitted row's own fields are in that collection, so no per-row prefixing is needed. *@
+        <EditForm Model="this" FormName="@($"update-node-{n.Id}")" OnValidSubmit="HandleUpdateAsync" id="@($"update-form-{n.Id}")">
+            @* Stale-save guard — see the Snapshot dictionary's own doc comment. Round-tripped
+               verbatim; HandleUpdateAsync rejects the save outright if this node's config no longer
+               matches what this hash was computed from. *@
+            <input type="hidden" name="Id" value="@n.Id" />
+            <input type="hidden" name="Snapshot" value="@Snapshot.GetValueOrDefault(n.Id)" />
+        </EditForm>
+    }
+
+    <div class="table-responsive">
+        <table class="table align-middle" id="nodesTable" data-sortable data-paginate>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Status</th>
+                    <th>IP</th>
+                    <th>Version</th>
+                    <th>Platform</th>
+                    <th data-no-sort>Encoders</th>
+                    <th data-no-sort>AI accelerator</th>
+                    <th data-no-sort>Detection model</th>
+                    <th>Last seen</th>
+                    <th data-sort-numeric>Cameras</th>
+                    <th>Storage root</th>
+                    <th data-sort-numeric>Storage usage</th>
+                    <th data-sort-numeric>Retention (days)</th>
+                    <th data-no-sort>Streaming &amp; failover</th>
+                    <th data-no-sort></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var n in NodeRows)
+                {
+                    <tr>
+                            <td style="min-width: 12rem;" data-sort-value="@n.Name">
+                                <input name="Name" form="@($"update-form-{n.Id}")" class="form-control form-control-sm" value="@n.Name" required />
+                            </td>
+                            <td>
+                                @{
+                                    var stale = n.LastSeenAt is null || n.LastSeenAt < DateTime.UtcNow.AddMinutes(-2);
+                                }
+                                <span class="badge @(stale ? "text-bg-secondary" : "text-bg-success")">@n.Status</span>
+                                @if (StaleCameraCountByNode.GetValueOrDefault(n.Id) is > 0 and var staleCount)
+                                {
+                                    var staleTooltip = string.Join("\n", StaleCamerasByNode[n.Id]
+                                        .OrderBy(r => r.ClearsAtUtc)
+                                        .Select(r => $"{r.CameraName} — falls off {r.ClearsAtUtc.ToLocalTime():g}"));
+                                    <span class="ms-1" title="@staleTooltip">⚠️ @staleCount</span>
+                                }
+                                @if (n.StoragePressureActive)
+                                {
+                                    var since = n.StoragePressureSince?.ToLocalTime().ToString("g");
+                                    <span class="ms-1 text-warning" title="This node's primary volume is over the storage watermark@(since is null ? "" : $" (since {since})") — its oldest footage is being archived early (or deleted, if archiving is unavailable) to keep the disk under the limit.">⚠️ storage full</span>
+                                }
+                                @if (string.IsNullOrWhiteSpace(n.StorageRootPath))
+                                {
+                                    <span class="ms-1 text-danger" title="This node has no storage path — it is recording nothing. Set a storage path below and save.">⚠️ no storage path — not recording</span>
+                                }
+                            </td>
+                            <td class="font-monospace">@(n.LastIpAddress ?? "—")</td>
+                            <td>@n.Version</td>
+                            <td>@n.Platform</td>
+                            <td>
+                                @{
+                                    var encoders = string.IsNullOrEmpty(n.DetectedEncodersJson)
+                                        ? []
+                                        : System.Text.Json.JsonSerializer.Deserialize<List<string>>(n.DetectedEncodersJson) ?? [];
+                                }
+                                @if (encoders.Count == 0)
+                                {
+                                    <span class="text-muted small" title="No successful ffmpeg -encoders probe reported yet — needs a heartbeat from a node running M17 or later.">none reported</span>
+                                }
+                                else
+                                {
+                                    foreach (var enc in encoders)
+                                    {
+                                        <span class="badge text-bg-secondary font-monospace">@enc</span>
+                                    }
+                                }
+                            </td>
+                            <td style="min-width: 9rem;">
+                                <select name="AiAccelerator" form="@($"update-form-{n.Id}")" class="form-select form-select-sm" data-accel-select="@n.Id">
+                                    <option value="" selected="@(n.AiAccelerator is null)">Auto</option>
+                                    <option value="Nvidia" selected="@(n.AiAccelerator == AiAccelerator.Nvidia)">CUDA</option>
+                                    <option value="TensorRt" selected="@(n.AiAccelerator == AiAccelerator.TensorRt)">TensorRT</option>
+                                    <option value="Amd" selected="@(n.AiAccelerator == AiAccelerator.Amd)">DirectML</option>
+                                    <option value="OpenVino" selected="@(n.AiAccelerator == AiAccelerator.OpenVino)">OpenVINO</option>
+                                    <option value="Cpu" selected="@(n.AiAccelerator == AiAccelerator.Cpu)">CPU</option>
+                                    <option value="MIGraphX" selected="@(n.AiAccelerator == AiAccelerator.MIGraphX)">MIGraphX (AMD) — future feature</option>
+                                </select>
+                                <div class="form-text text-warning" data-migraphx-notice="@n.Id" hidden="@(n.AiAccelerator != AiAccelerator.MIGraphX)">
+                                    MIGraphX is not implemented yet — this node runs no AI-detection backend until a different choice is selected.
+                                </div>
+                                @{
+                                    var detectedAccelerators = string.IsNullOrEmpty(n.DetectedAcceleratorsJson)
+                                        ? []
+                                        : System.Text.Json.JsonSerializer.Deserialize<List<string>>(n.DetectedAcceleratorsJson) ?? [];
+                                }
+                                <div class="mt-1">
+                                    @if (detectedAccelerators.Count == 0)
+                                    {
+                                        <span class="text-muted small" title="No successful accelerator probe reported yet — needs a heartbeat from a node running this build or later.">none reported</span>
+                                    }
+                                    else
+                                    {
+                                        foreach (var accel in detectedAccelerators)
+                                        {
+                                            <span class="badge text-bg-secondary font-monospace">@accel</span>
+                                        }
+                                    }
+                                </div>
+                            </td>
+                            <td style="min-width: 9rem;">
+                                <select name="ModelFamilyOverride" form="@($"update-form-{n.Id}")" class="form-select form-select-sm">
+                                    <option value="" selected="@(string.IsNullOrEmpty(ModelFamilyOverride.GetValueOrDefault(n.Id)))">
+                                        (inherit — currently @EffectiveModelFamily.GetValueOrDefault(n.Id, "Auto"))
+                                    </option>
+                                    <option value="Auto" selected="@(ModelFamilyOverride.GetValueOrDefault(n.Id) == "Auto")">Auto (YOLOX)</option>
+                                    <option value="YoloX" selected="@(ModelFamilyOverride.GetValueOrDefault(n.Id) == "YoloX")">YOLOX</option>
+                                    <option value="DFine" selected="@(ModelFamilyOverride.GetValueOrDefault(n.Id) == "DFine")">D-FINE (experimental)</option>
+                                    <option value="Custom" selected="@(ModelFamilyOverride.GetValueOrDefault(n.Id) == "Custom")">Custom (a model dropped into C:\ProgramData\LarisVMS\models)</option>
+                                    <option value="RfDetr" disabled>RF-DETR (not yet available)</option>
+                                </select>
+                                @{ var savedLocalModel = LocalModelNameOverride.GetValueOrDefault(n.Id); }
+                                <div class="input-group input-group-sm mt-1">
+                                    <select name="LocalModelNameOverride" form="@($"update-form-{n.Id}")" class="form-select form-select-sm" data-local-model-select="@n.Id"
+                                            title="Detection.LocalModelName override — only used when the model family above resolves to Custom">
+                                        <option value="" selected="@string.IsNullOrEmpty(savedLocalModel)">(inherit local model name)</option>
+                                        @if (!string.IsNullOrEmpty(savedLocalModel))
+                                        {
+                                            <option value="@savedLocalModel" selected data-saved="true">@savedLocalModel (saved)</option>
+                                        }
+                                    </select>
+                                    <button type="button" class="btn btn-outline-secondary btn-sm" data-refresh-local-models="@n.Id">Refresh models</button>
+                                </div>
+                                <div class="form-text" data-local-models-status="@n.Id"></div>
+                                @{ var yls = YoloXSizeOverride.GetValueOrDefault(n.Id); }
+                                <select name="YoloXSizeOverride" form="@($"update-form-{n.Id}")" class="form-select form-select-sm mt-1" title="YOLOX model size (only used when the family resolves to YOLOX)">
+                                    <option value="" selected="@(string.IsNullOrEmpty(yls))">(inherit YOLOX size)</option>
+                                    @foreach (var s in new[] { "Nano", "Tiny", "S", "M", "L", "X" })
+                                    {
+                                        <option value="@s" selected="@(yls == s)">YOLOX-@s</option>
+                                    }
+                                </select>
+                                <input type="number" name="MaxFpsOverride" form="@($"update-form-{n.Id}")" class="form-control form-control-sm mt-1" min="0" max="60"
+                                       placeholder="max fps (inherit)" title="Max detection frames/sec for this node — blank inherits the global setting"
+                                       value="@(MaxFpsOverride.GetValueOrDefault(n.Id)?.ToString())" />
+                                <select name="DFineWeightsOverride" form="@($"update-form-{n.Id}")" class="form-select form-select-sm mt-1">
+                                    <option value="" selected="@(string.IsNullOrEmpty(DFineWeightsOverride.GetValueOrDefault(n.Id)))">(inherit D-FINE weights)</option>
+                                    <option value="Obj2Coco" selected="@(DFineWeightsOverride.GetValueOrDefault(n.Id) == "Obj2Coco")">Obj2Coco (small)</option>
+                                    <option value="Obj2CocoMedium" selected="@(DFineWeightsOverride.GetValueOrDefault(n.Id) == "Obj2CocoMedium")">Obj2Coco (medium)</option>
+                                    <option value="Obj365" selected="@(DFineWeightsOverride.GetValueOrDefault(n.Id) == "Obj365")">Obj365 (small)</option>
+                                </select>
+                                <select name="AspectModeOverride" form="@($"update-form-{n.Id}")" class="form-select form-select-sm mt-1">
+                                    <option value="" selected="@(string.IsNullOrEmpty(AspectModeOverride.GetValueOrDefault(n.Id)))">
+                                        (inherit — currently @EffectiveAspectMode.GetValueOrDefault(n.Id, "Letterbox"))
+                                    </option>
+                                    <option value="Letterbox" selected="@(AspectModeOverride.GetValueOrDefault(n.Id) == "Letterbox")">Letterbox</option>
+                                    <option value="Stretch" selected="@(AspectModeOverride.GetValueOrDefault(n.Id) == "Stretch")">Stretch</option>
+                                    <option value="Slice" selected="@(AspectModeOverride.GetValueOrDefault(n.Id) == "Slice")">Slice (requires GPU preprocessing)</option>
+                                </select>
+                                <select name="DFineTensorRtModeOverride" form="@($"update-form-{n.Id}")" class="form-select form-select-sm mt-1"
+                                        title="How D-FINE uses TensorRT on this node — blank inherits the global setting">
+                                    <option value="" selected="@(string.IsNullOrEmpty(DFineTensorRtModeOverride.GetValueOrDefault(n.Id)))">
+                                        (inherit D-FINE TensorRT — currently @EffectiveDFineTensorRtMode.GetValueOrDefault(n.Id, "Off"))
+                                    </option>
+                                    <option value="Off" selected="@(DFineTensorRtModeOverride.GetValueOrDefault(n.Id) == "Off")">Off (plain CUDA)</option>
+                                    <option value="FP32" selected="@(DFineTensorRtModeOverride.GetValueOrDefault(n.Id) == "FP32")">FP32</option>
+                                    <option value="FP16" selected="@(DFineTensorRtModeOverride.GetValueOrDefault(n.Id) == "FP16")">FP16 (auto-falls back to FP32 on overflow)</option>
+                                </select>
+                                @{ var backendOv = DetectionBackendOverride.GetValueOrDefault(n.Id); }
+                                <select name="BackendOverride" form="@($"update-form-{n.Id}")" class="form-select form-select-sm mt-1"
+                                        title="Which detection backend this node runs — blank inherits the global setting">
+                                    <option value="" selected="@(string.IsNullOrEmpty(backendOv))">
+                                        (inherit backend — currently @EffectiveDetectionBackend.GetValueOrDefault(n.Id, "BuiltIn"))
+                                    </option>
+                                    <option value="BuiltIn" selected="@(backendOv == "BuiltIn")">Built-in</option>
+                                    <option value="ExternalHttp" selected="@(backendOv == "ExternalHttp")">External HTTP service</option>
+                                </select>
+                                <input name="ExternalUrlOverride" form="@($"update-form-{n.Id}")" class="form-control form-control-sm mt-1"
+                                       value="@ExternalInferenceUrlOverride.GetValueOrDefault(n.Id)"
+                                       placeholder="service URL override (inherit)"
+                                       title="Only used when the backend above resolves to External HTTP. Blank inherits the global URL from Admin/Settings/Detection." />
+                                <input name="ExternalModelOverride" form="@($"update-form-{n.Id}")" class="form-control form-control-sm mt-1"
+                                       value="@ExternalInferenceModelOverride.GetValueOrDefault(n.Id)"
+                                       placeholder="model override (inherit)"
+                                       title="Only used when the backend above resolves to External HTTP. Blank inherits the global model." />
+                                <input type="number" name="ExternalInputSizeOverride" form="@($"update-form-{n.Id}")" class="form-control form-control-sm mt-1" min="32" step="32"
+                                       value="@(ExternalInferenceInputSizeOverride.GetValueOrDefault(n.Id)?.ToString())"
+                                       placeholder="input size override (inherit)"
+                                       title="The overridden model's square input size in pixels — must be a positive multiple of 32. Blank inherits the global value." />
+                                <input name="ExternalApiKeyOverride" form="@($"update-form-{n.Id}")" type="password" autocomplete="new-password"
+                                       class="form-control form-control-sm mt-1"
+                                       placeholder="@(HasExternalInferenceApiKeyOverride.GetValueOrDefault(n.Id) ? "API key override (unchanged)" : "API key override (inherit)")"
+                                       title="Only used when the backend above resolves to External HTTP. Blank leaves this alone — inherits the global key unless one was set here before. Write-only: never re-shown once saved." />
+                            </td>
+                            <td data-sort-value="@(n.LastSeenAt?.Ticks ?? 0)">
+                                @if (n.LastSeenAt is { } seen)
+                                {
+                                    <span title="@seen.ToString("u")">@seen.ToLocalTime().ToString("g")</span>
+                                }
+                                else
+                                {
+                                    <span class="text-muted">never</span>
+                                }
+                                @if (n.ClockSkewSeconds is { } skew && Math.Abs(skew) > 60)
+                                {
+                                    <span class="ms-1" title="This node's own clock disagrees with the server's by about @Math.Round(skew) second(s) (measured @n.ClockSkewMeasuredAt?.ToLocalTime().ToString("g")) — check NTP/time sync on that machine.">⚠️ clock</span>
+                                }
+                            </td>
+                            <td>@CameraCountByNode.GetValueOrDefault(n.Id, 0)</td>
+                            <td style="min-width: 16rem;" data-sort-value="@n.StorageRootPath">
+                                <input name="StorageRootPath" form="@($"update-form-{n.Id}")" class="form-control form-control-sm font-monospace"
+                                       value="@n.StorageRootPath" placeholder="e.g. E:\LarisVMS\recordings" required
+                                       title="Where this node records to. Required — a node with no storage path records nothing." />
+                                <input name="ArchiveRootPath" form="@($"update-form-{n.Id}")" class="form-control form-control-sm font-monospace mt-1"
+                                       value="@n.ArchiveRootPath" placeholder="archive volume (optional)"
+                                       title="Optional secondary (SMB / USB) volume for aged-out footage. Must be a separate location from the recording path above." />
+                            </td>
+                            <td style="min-width: 12rem;" data-sort-value="@((n.StorageTotalBytes is { } t && n.StorageFreeBytes is { } f) ? t - f : -1)">
+                                @if (n.StorageTotalBytes is { } total && n.StorageFreeBytes is { } free)
+                                {
+                                    var usedPercent = total > 0 ? 100.0 * (total - free) / total : 0;
+                                    <div class="progress" style="height: 0.5rem;" title="@ByteFormat.Format(total - free) used of @ByteFormat.Format(total)">
+                                        <div class="progress-bar @(usedPercent > 90 ? "bg-danger" : usedPercent > 75 ? "bg-warning" : "")"
+                                             style="width: @usedPercent.ToString("0.#")%"></div>
+                                    </div>
+                                    <span class="small text-muted">
+                                        @ByteFormat.Format(free) free
+                                        @if (DaysRemaining.GetValueOrDefault(n.Id) is { } days)
+                                        {
+                                            <text>&middot; ~@days.ToString("0") day(s) left</text>
+                                        }
+                                        else
+                                        {
+                                            <text>&middot; <span title="Needs about a day of recording history to estimate">runway not yet estimated</span></text>
+                                        }
+                                    </span>
+                                }
+                                else
+                                {
+                                    <span class="text-muted">no report yet</span>
+                                }
+                                @if (n.ArchiveTotalBytes is { } aTotal && n.ArchiveFreeBytes is { } aFree)
+                                {
+                                    var aUsedPercent = aTotal > 0 ? 100.0 * (aTotal - aFree) / aTotal : 0;
+                                    <div class="progress mt-1" style="height: 0.5rem;" title="Archive volume: @ByteFormat.Format(aTotal - aFree) used of @ByteFormat.Format(aTotal)">
+                                        <div class="progress-bar bg-secondary" style="width: @aUsedPercent.ToString("0.#")%"></div>
+                                    </div>
+                                    <span class="small text-muted">
+                                        archive: @ByteFormat.Format(aFree) free
+                                        @if (ArchiveDaysRemaining.GetValueOrDefault(n.Id) is { } aDays)
+                                        {
+                                            <text>&middot; ~@aDays.ToString("0") day(s) left</text>
+                                        }
+                                        else
+                                        {
+                                            <text>&middot; <span title="Needs about a day of archiving activity to estimate">runway not yet estimated</span></text>
+                                        }
+                                    </span>
+                                }
+                            </td>
+                            <td style="min-width: 8rem;" data-sort-value="@EffectiveRetentionDays.GetValueOrDefault(n.Id, 30)">
+                                <input name="RetentionDaysOverride" form="@($"update-form-{n.Id}")" type="number" min="0" class="form-control form-control-sm"
+                                       value="@RetentionOverride.GetValueOrDefault(n.Id)"
+                                       placeholder="(global: @EffectiveRetentionDays.GetValueOrDefault(n.Id, 30))" />
+                                @{ var archEn = ArchiveEnabledOverride.GetValueOrDefault(n.Id, ""); }
+                                <select name="ArchiveEnabledOverride" form="@($"update-form-{n.Id}")" class="form-select form-select-sm mt-1"
+                                        title="Whether aged-out footage on this node is archived rather than deleted">
+                                    <option value="" selected="@(archEn == "")">archive: inherit (@(EffectiveArchiveEnabled.GetValueOrDefault(n.Id) ? "on" : "off"))</option>
+                                    <option value="True" selected="@(archEn == "True")">archive: on</option>
+                                    <option value="False" selected="@(archEn == "False")">archive: off</option>
+                                </select>
+                                <input name="ArchiveRetentionDaysOverride" form="@($"update-form-{n.Id}")" type="number" min="0" class="form-control form-control-sm mt-1"
+                                       value="@ArchiveRetentionOverride.GetValueOrDefault(n.Id)"
+                                       placeholder="archive days (global: @EffectiveArchiveRetentionDays.GetValueOrDefault(n.Id, 0))"
+                                       title="How long footage stays on the archive volume, from its original record date. 0 = keep forever." />
+                            </td>
+                            <td style="min-width: 13rem;">
+                                @{
+                                    var dsm = n.DirectStreamingMode ?? "";
+                                    var ins = n.AllowInsecureClientEndpoint;
+                                }
+                                <select name="DirectStreamingMode" form="@($"update-form-{n.Id}")" class="form-select form-select-sm"
+                                        title="Where this node's live/playback bytes flow">
+                                    <option value="" selected="@(dsm == "")">inherit (@GlobalDirectStreaming)</option>
+                                    <option value="Proxy" selected="@(dsm == "Proxy")">Proxy</option>
+                                    <option value="Direct" selected="@(dsm == "Direct")">Direct</option>
+                                </select>
+                                <input name="ClientEndpointHost" form="@($"update-form-{n.Id}")" class="form-control form-control-sm mt-1"
+                                       value="@n.ClientEndpointHost" placeholder="client endpoint FQDN" />
+                                <input name="ClientCertPfxPath" form="@($"update-form-{n.Id}")" class="form-control form-control-sm mt-1"
+                                       value="@n.ClientCertPfxPath" placeholder="cert .pfx path (optional)" />
+                                <input name="ClientCertPfxPassword" form="@($"update-form-{n.Id}")" type="password" autocomplete="new-password"
+                                       class="form-control form-control-sm mt-1" placeholder="pfx password (unchanged)" />
+                                <select name="AllowInsecureClientEndpoint" form="@($"update-form-{n.Id}")" class="form-select form-select-sm mt-1"
+                                        title="Allow a self-signed certificate on this node's client endpoint">
+                                    <option value="" selected="@(ins is null)">insecure: inherit (@(GlobalAllowInsecureClientEndpoint ? "allow" : "block"))</option>
+                                    <option value="true" selected="@(ins == true)">insecure: allow</option>
+                                    <option value="false" selected="@(ins == false)">insecure: block</option>
+                                </select>
+                                @if (AvailableProxies.Count > 0)
+                                {
+                                    <select name="PrimaryProxyId" form="@($"update-form-{n.Id}")" class="form-select form-select-sm mt-1" title="Route this node's cameras through this media proxy">
+                                        <option value="" selected="@(n.PrimaryProxyId is null)">no proxy (direct / central)</option>
+                                        @foreach (var px in AvailableProxies)
+                                        {
+                                            <option value="@px.Id" selected="@(n.PrimaryProxyId == px.Id)">via @px.Name</option>
+                                        }
+                                    </select>
+                                    <select name="BackupProxyId" form="@($"update-form-{n.Id}")" class="form-select form-select-sm mt-1" title="Used when the primary proxy is unhealthy">
+                                        <option value="" selected="@(n.BackupProxyId is null)">no backup proxy</option>
+                                        @foreach (var px in AvailableProxies)
+                                        {
+                                            <option value="@px.Id" selected="@(n.BackupProxyId == px.Id)">backup: @px.Name</option>
+                                        }
+                                    </select>
+                                }
+                                else
+                                {
+                                    <input type="hidden" name="PrimaryProxyId" form="@($"update-form-{n.Id}")" value="@(n.PrimaryProxyId?.ToString() ?? "")" />
+                                    <input type="hidden" name="BackupProxyId" form="@($"update-form-{n.Id}")" value="@(n.BackupProxyId?.ToString() ?? "")" />
+                                }
+
+                                @{
+                                    var otherNodes = NodeRows.Where(x => x.Id != n.Id).ToList();
+                                    var backup = n.BackupNodeId is { } bnid ? NodeRows.FirstOrDefault(x => x.Id == bnid) : null;
+                                    string AccelLabel(Node x) =>
+                                        x.AiAccelerator?.ToString()
+                                        ?? (string.IsNullOrWhiteSpace(x.DetectedAcceleratorsJson) || x.DetectedAcceleratorsJson == "[]" ? "none/CPU" : x.DetectedAcceleratorsJson.Trim('[', ']', '"'));
+                                    var hwMismatch = backup is not null && !string.Equals(AccelLabel(backup), AccelLabel(n), StringComparison.OrdinalIgnoreCase);
+                                }
+                                <select name="BackupNodeId" form="@($"update-form-{n.Id}")" class="form-select form-select-sm mt-1"
+                                        title="Recording failover: this node's cameras move here for recording while it is down">
+                                    <option value="" selected="@(n.BackupNodeId is null)">no backup node (recording stops if down)</option>
+                                    @foreach (var bn in otherNodes)
+                                    {
+                                        <option value="@bn.Id" selected="@(n.BackupNodeId == bn.Id)">fails over to @bn.Name</option>
+                                    }
+                                </select>
+                                <div class="form-check form-check-sm mt-1">
+                                    <input class="form-check-input" type="checkbox" name="DisableAiObjectDetection" value="true" form="@($"update-form-{n.Id}")"
+                                           id="recOnly_@n.Id" checked="@n.DisableAiObjectDetection" />
+                                    <label class="form-check-label small" for="recOnly_@n.Id"
+                                           title="Never run AI object detection on this node — it still records continuously and tags ONVIF events">
+                                        recording only (AI detection off)
+                                    </label>
+                                </div>
+                                @if (hwMismatch && backup is not null)
+                                {
+                                    <div class="small text-warning mt-1" title="During a failover, AI detection and hardware transcoding for this node's cameras may be slower or unavailable on the backup.">
+                                        ⚠️ backup @backup.Name has different acceleration (@AccelLabel(n) vs @AccelLabel(backup))
+                                    </div>
+                                }
+                                @if (backup is { DisableAiObjectDetection: true })
+                                {
+                                    <div class="small text-warning mt-1">⚠️ backup @backup.Name is recording-only — object detection pauses for this node's cameras during a failover</div>
+                                }
+                                @{
+                                    var (fBadge, fText) = n.FailoverState switch
+                                    {
+                                        NodeFailoverState.FailedOverAway when n.FailoverReason == NodeFailoverReason.Maintenance
+                                            => ("text-bg-warning", "in maintenance — cameras on backup"),
+                                        NodeFailoverState.FailedOverAway
+                                            => ("text-bg-danger", "failed over — cameras on backup"),
+                                        NodeFailoverState.HostingFailover
+                                            => ("text-bg-info", "hosting failover cameras"),
+                                        _ => ("", ""),
+                                    };
+                                }
+                                @if (fText.Length > 0)
+                                {
+                                    <div class="mt-1"><span class="badge @fBadge">@fText</span>
+                                        @if (n.FailoverSinceUtc is { } fsince)
+                                        {
+                                            <span class="text-muted small" title="@fsince.ToString("u")"> since @fsince.ToLocalTime().ToString("g")</span>
+                                        }
+                                    </div>
+                                }
+                                <div class="small text-muted mt-1">
+                                    @if (n.ClientEndpointReportedPort is { } cePort)
+                                    {
+                                        <text>endpoint&nbsp;:@cePort</text>
+                                        @if (n.ClientEndpointCertNotAfter is { } na)
+                                        {
+                                            <text> &middot; cert to @na.ToLocalTime().ToString("d")</text>
+                                        }
+                                        @if (n.ClientEndpointCertIsSelfSigned == true)
+                                        {
+                                            <span class="text-warning"> &middot; self-signed</span>
+                                        }
+                                    }
+                                    else
+                                    {
+                                        <text>no client endpoint running</text>
+                                    }
+                                    @if (!string.IsNullOrEmpty(n.ClientEndpointLastError))
+                                    {
+                                        <div class="text-danger" title="@n.ClientEndpointLastError">⚠️ endpoint error</div>
+                                    }
+                                </div>
+                            </td>
+                            <td class="text-end text-nowrap">
+                                <button type="submit" form="@($"update-form-{n.Id}")" class="btn btn-sm btn-outline-primary"><span aria-hidden="true">💾</span> Save</button>
+                            </td>
+                        <td class="text-end text-nowrap">
+                            @* Restarts the node's Windows Service only — never the machine it runs on.
+                               Confirmed because recording on this node's cameras stops for the few
+                               seconds it takes to come back. *@
+                            <EditForm Model="this" FormName="@($"restart-node-{n.Id}")" OnValidSubmit="HandleRestartAsync" class="d-inline">
+                                <input type="hidden" name="RestartId" value="@n.Id" />
+                                @* onclick, not onsubmit on the EditForm — a bare on* attribute on a
+                                   component matches its parameters case-insensitively, and EditForm
+                                   already has its own OnSubmit/OnValidSubmit parameter, so onsubmit
+                                   here would silently rebind that instead of passing through as a
+                                   literal HTML attribute (RZ9986/CS1503 either way). onclick on the
+                                   plain <button> element below has no such collision — same pattern
+                                   already proven on Bookmarks/Groups/Cameras' own delete buttons. *@
+                                <button type="submit" class="btn btn-sm btn-outline-secondary" title="Restart this node's service (not the machine)"
+                                        onclick="@ConfirmRestart(n.Name, CameraCountByNode.GetValueOrDefault(n.Id))"><span aria-hidden="true">🔄</span> Restart</button>
+                            </EditForm>
+                            @* Failover plan phase 5: clears a wedged rolling check-in nonce (a
+                               heartbeat response the node never received). Harmless if the node is
+                               healthy — it just re-syncs the nonce on its next cycle. *@
+                            <EditForm Model="this" FormName="@($"reset-node-auth-{n.Id}")" OnValidSubmit="HandleResetAuthAsync" class="d-inline">
+                                <input type="hidden" name="ResetAuthId" value="@n.Id" />
+                                <button type="submit" class="btn btn-sm btn-outline-warning" title="Clear this node's rolling check-in nonce (recovery for a locked-out node)"
+                                        onclick="@ConfirmResetAuth(n.Name)"><span aria-hidden="true">🔑</span> Reset auth</button>
+                            </EditForm>
+                            @* Failover plan phase 3: maintenance mode — fails this node's cameras over
+                               to its backup and holds them there until turned off. *@
+                            @{
+                                var maintCams = CameraCountByNode.GetValueOrDefault(n.Id);
+                                var maintBackup = n.BackupNodeId is { } mbid ? NodeRows.FirstOrDefault(x => x.Id == mbid)?.Name : null;
+                            }
+                            <EditForm Model="this" FormName="@($"set-node-maintenance-{n.Id}")" OnValidSubmit="HandleSetMaintenanceAsync" class="d-inline">
+                                <input type="hidden" name="MaintenanceId" value="@n.Id" />
+                                <input type="hidden" name="MaintenanceEnabled" value="@((!n.MaintenanceMode).ToString().ToLowerInvariant())" />
+                                <button type="submit" class="btn btn-sm @(n.MaintenanceMode ? "btn-warning" : "btn-outline-warning")"
+                                        title="@(n.MaintenanceMode ? "End maintenance mode" : "Fail this node's cameras over to its backup for maintenance")"
+                                        onclick="@ConfirmMaintenance(n.MaintenanceMode, maintCams, maintBackup)">
+                                    <span aria-hidden="true">🛠️</span> @(n.MaintenanceMode ? "End maintenance" : "Maintenance")
+                                </button>
+                            </EditForm>
+                            <EditForm Model="this" FormName="@($"delete-node-{n.Id}")" OnValidSubmit="HandleDeleteAsync" class="d-inline">
+                                <input type="hidden" name="DeleteId" value="@n.Id" />
+                                <button type="submit" class="btn btn-sm btn-outline-danger" onclick="@ConfirmDelete(n.Name)"><span aria-hidden="true">🗑️</span> Delete</button>
+                            </EditForm>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    <div data-paginate-controls-for="nodesTable" class="mt-2"></div>
+
+    <div class="card mt-3" style="max-width: 640px;">
+        <div class="card-body py-2">
+            <h6 class="card-title mb-1">Streaming relay (since @RelayMetrics.SinceUtc.ToLocalTime().ToString("g"))</h6>
+            <p class="card-text small text-muted mb-0">
+                Live streams relayed through this server right now: <strong>@RelayMetrics.ActiveLiveRelays</strong>
+                (@RelayMetrics.LiveRelaysStarted total) &middot;
+                playback segments proxied: <strong>@RelayMetrics.PlaybackSegmentsProxied</strong>
+                (@ByteFormat.Format(RelayMetrics.PlaybackBytesProxied)).
+                With <a href="/Admin/Settings/LiveView">direct streaming</a> on, these trend toward zero.
+            </p>
+        </div>
+    </div>
+
+    <p class="text-muted small mt-3">
+        Every node records to its own storage path (there is no global default) — usually set when the
+        node is installed (<code>install-node.ps1 -StorageRoot …</code>), editable here. The archive
+        volume is optional and must be a separate location. A node with no storage path records
+        nothing until one is set.
+        Blank retention inherits the <a href="/Admin/Settings/StorageAndRetention">global default</a>; a value here
+        overrides it for every camera on this node unless that camera has its own override too. "Days
+        left" is a rough estimate from this node's write rate over the last 24h, not disk health. The
+        ⚠️ count next to a node's status is how many cameras have footage still sitting on this node
+        after being reassigned elsewhere or removed — hover it for which cameras and when each one's
+        leftover footage ages out of retention (which is what clears the warning on its own, with
+        nothing to do here) — see <a href="/Cameras">Cameras</a> for which ones.
+    </p>
+}
+
+<SectionContent SectionName="PageScripts">
+    <script>
+        // MIGraphX is a placeholder entry (AMD's next-gen accelerator, not implemented yet) — show/hide
+        // the "future feature" notice live as the operator changes the selection, not just on page load.
+        document.querySelectorAll('[data-accel-select]').forEach(function (select) {
+            select.addEventListener('change', function () {
+                var notice = document.querySelector('[data-migraphx-notice="' + select.getAttribute('data-accel-select') + '"]');
+                if (notice) notice.hidden = select.value !== 'MIGraphX';
+            });
+        });
+
+        // Model-agnostic ("Custom" family) local-model picker: "Refresh models" probes this node's own
+        // /vision/models via the admin vision-models API and repopulates the <select> with what
+        // LarisVMS.Vision.Models.ModelDiscovery found, showing a warning next to any model whose
+        // metadata/sidecar didn't resolve rather than hiding it.
+        document.querySelectorAll('[data-refresh-local-models]').forEach(function (btn) {
+            btn.addEventListener('click', async function () {
+                var id = btn.getAttribute('data-refresh-local-models');
+                var status = document.querySelector('[data-local-models-status="' + id + '"]');
+                var select = document.querySelector('[data-local-model-select="' + id + '"]');
+                btn.disabled = true;
+                status.textContent = 'Refreshing…';
+                try {
+                    var resp = await fetch('/api/admin/nodes/' + encodeURIComponent(id) + '/vision-models', { headers: { 'Accept': 'application/json' } });
+                    if (!resp.ok) { status.textContent = 'Could not reach this node.'; return; }
+                    var models = await resp.json();
+                    var previousValue = select.value;
+
+                    // Rebuild from scratch: keep "(inherit)", drop the old "(saved)" placeholder (the
+                    // refreshed list supersedes it), add one <option> per discovered model.
+                    select.innerHTML = '';
+                    var inheritOpt = document.createElement('option');
+                    inheritOpt.value = '';
+                    inheritOpt.textContent = '(inherit local model name)';
+                    select.appendChild(inheritOpt);
+
+                    models.forEach(function (m) {
+                        var opt = document.createElement('option');
+                        opt.value = m.name;
+                        var label = m.name + ' — ' + (m.decoder || 'unresolved');
+                        if (m.inputSize) label += ' (' + m.inputSize + 'x' + m.inputSize + ')';
+                        if (m.warnings && m.warnings.length > 0) label += ' \u26a0\ufe0f ' + m.warnings.join(' ');
+                        opt.textContent = label;
+                        select.appendChild(opt);
+                    });
+
+                    // Keep whatever was selected before the refresh if it's still there — or, if the
+                    // refresh didn't find it (e.g. it was only ever a "(saved)" placeholder for a node
+                    // that was offline), re-add it rather than silently losing the current selection.
+                    if (previousValue && ![...select.options].some(function (o) { return o.value === previousValue; })) {
+                        var keepOpt = document.createElement('option');
+                        keepOpt.value = previousValue;
+                        keepOpt.textContent = previousValue + ' (saved — not found on this refresh)';
+                        select.appendChild(keepOpt);
+                    }
+                    select.value = previousValue;
+
+                    status.textContent = models.length === 0
+                        ? 'No models found on this node (or it is unreachable) — drop an .onnx file into C:\\ProgramData\\LarisVMS\\models.'
+                        : models.length + ' model(s) found.';
+                } catch (e) {
+                    status.textContent = 'Could not reach this node.';
+                } finally {
+                    btn.disabled = false;
+                }
+            });
+        });
+    </script>
+</SectionContent>
+
+@code {
+    /// <summary>One row of the warning-emoji tooltip's detail list — ClearsAtUtc is when this camera's
+    /// *last* remaining stale segment on this node ages past retention (see StaleSegmentDetail's own
+    /// doc comment for why it's the newest segment, not the oldest, that determines this), which is
+    /// the same moment the camera drops out of the warning on its own.</summary>
+    private sealed record StaleCameraRow(string CameraName, DateTime ClearsAtUtc);
+
+    /// <summary>Everything HandleUpdateAsync's stale-save guard needs about one node, computed once per
+    /// node concurrently in LoadAsync (see that method's own comment) and then folded into the flat
+    /// per-node dictionaries below.</summary>
+    private sealed record NodeSettingsSnapshot(
+        Guid NodeId, int EffectiveRetentionDays, int? RetentionOverride,
+        string ArchiveEnabledOverride, bool EffectiveArchiveEnabled, int? ArchiveRetentionOverride, int EffectiveArchiveRetentionDays,
+        string ModelFamilyOverride, string DFineWeightsOverride, string YoloXSizeOverride, string LocalModelNameOverride,
+        int? MaxFpsOverride, string EffectiveModelFamily, string AspectModeOverride, string EffectiveAspectMode,
+        string DFineTensorRtModeOverride, string EffectiveDFineTensorRtMode,
+        string DetectionBackendOverride, string EffectiveDetectionBackend, string ExternalInferenceUrlOverride,
+        string ExternalInferenceModelOverride, int? ExternalInferenceInputSizeOverride, bool HasExternalInferenceApiKeyOverride,
+        string Snapshot);
+
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    private System.Security.Claims.ClaimsPrincipal User =>
+        HttpContext?.User ?? new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity());
+
+    [SupplyParameterFromQuery(Name = "statusMessage")] private string? QueryStatusMessage { get; set; }
+    [SupplyParameterFromQuery(Name = "statusIsError")] private bool QueryStatusIsError { get; set; }
+
+    // ── Update form fields ──────────────────────────────────────────────────────────────────────
+    // FormName is unique per row (@($"update-node-{n.Id}")) so Blazor doesn't reject the page with
+    // "more than one named submit event with the name X" — but [SupplyParameterFromForm] requires a
+    // compile-time constant FormName, so it can't bind to a per-row name. These are populated
+    // manually from HttpContext.Request.Form inside HandleUpdateAsync instead (see
+    // PopulateUpdateFieldsFromForm) — only the submitted row's own fields are in that collection, so
+    // no per-row prefixing is needed on the read side.
+    private Guid Id { get; set; }
+    private string Name { get; set; } = "";
+    private string? StorageRootPath { get; set; }
+    private int? RetentionDaysOverride { get; set; }
+    // Renamed from the HTML field's own name (AiAccelerator): a property literally named
+    // AiAccelerator would shadow the LarisVMS.Core.Enums.AiAccelerator enum TYPE for every
+    // unqualified reference in this class (Enum.TryParse<AiAccelerator>, AiAccelerator.Nvidia, etc.)
+    // — same class of collision as the Groups/Plugins.razor component-name lesson, just against an
+    // enum type instead of a static class.
+    private string? AiAcceleratorOverride { get; set; }
+    // "Field" suffix: the unsuffixed name is already the read-side dictionary alias property below
+    // (e.g. ModelFamilyOverride), and this property can't share its name.
+    private string? ModelFamilyOverrideField { get; set; }
+    private string? DFineWeightsOverrideField { get; set; }
+    private string? YoloXSizeOverrideField { get; set; }
+    private int? MaxFpsOverrideField { get; set; }
+    private string? AspectModeOverrideField { get; set; }
+    private string? DFineTensorRtModeOverrideField { get; set; }
+    private string? BackendOverride { get; set; }
+    private string? ExternalUrlOverride { get; set; }
+    private string? ExternalModelOverride { get; set; }
+    private int? ExternalInputSizeOverride { get; set; }
+    private string? ExternalApiKeyOverride { get; set; }
+    private string? ArchiveRootPath { get; set; }
+    private string? ArchiveEnabledOverrideField { get; set; }
+    private int? ArchiveRetentionDaysOverride { get; set; }
+    private string? DirectStreamingMode { get; set; }
+    private string? AllowInsecureClientEndpoint { get; set; }
+    private string? ClientEndpointHost { get; set; }
+    private string? ClientCertPfxPath { get; set; }
+    private string? ClientCertPfxPassword { get; set; }
+    private string? PrimaryProxyId { get; set; }
+    private string? BackupProxyId { get; set; }
+    private string? BackupNodeId { get; set; }
+    private bool DisableAiObjectDetection { get; set; }
+    private string? SnapshotField { get; set; }
+    private string? LocalModelNameOverrideField { get; set; }
+
+    // Same reasoning as above — these four forms also have a unique FormName per row now.
+    private Guid RestartId { get; set; }
+    private Guid ResetAuthId { get; set; }
+    private Guid MaintenanceId { get; set; }
+    private bool MaintenanceEnabled { get; set; }
+    private Guid DeleteId { get; set; }
+
+    private static Guid FormGuid(Microsoft.Extensions.Primitives.StringValues v) => Guid.TryParse(v.ToString(), out var g) ? g : Guid.Empty;
+    private static int? FormIntOrNull(Microsoft.Extensions.Primitives.StringValues v) => int.TryParse(v.ToString(), out var n) ? n : null;
+    private static string? FormStringOrNull(Microsoft.Extensions.Primitives.StringValues v) => v.Count == 0 ? null : v.ToString();
+
+    /// <summary>Populates every update-node field from the raw posted form — see the fields' own
+    /// doc comment for why [SupplyParameterFromForm] can't be used here.</summary>
+    private void PopulateUpdateFieldsFromForm()
+    {
+        var form = HttpContext?.Request.Form;
+        if (form is null) return;
+
+        Id = FormGuid(form["Id"]);
+        Name = form["Name"].ToString();
+        StorageRootPath = FormStringOrNull(form["StorageRootPath"]);
+        RetentionDaysOverride = FormIntOrNull(form["RetentionDaysOverride"]);
+        AiAcceleratorOverride = FormStringOrNull(form["AiAccelerator"]);
+        ModelFamilyOverrideField = FormStringOrNull(form["ModelFamilyOverride"]);
+        DFineWeightsOverrideField = FormStringOrNull(form["DFineWeightsOverride"]);
+        YoloXSizeOverrideField = FormStringOrNull(form["YoloXSizeOverride"]);
+        MaxFpsOverrideField = FormIntOrNull(form["MaxFpsOverride"]);
+        AspectModeOverrideField = FormStringOrNull(form["AspectModeOverride"]);
+        DFineTensorRtModeOverrideField = FormStringOrNull(form["DFineTensorRtModeOverride"]);
+        BackendOverride = FormStringOrNull(form["BackendOverride"]);
+        ExternalUrlOverride = FormStringOrNull(form["ExternalUrlOverride"]);
+        ExternalModelOverride = FormStringOrNull(form["ExternalModelOverride"]);
+        ExternalInputSizeOverride = FormIntOrNull(form["ExternalInputSizeOverride"]);
+        ExternalApiKeyOverride = FormStringOrNull(form["ExternalApiKeyOverride"]);
+        ArchiveRootPath = FormStringOrNull(form["ArchiveRootPath"]);
+        ArchiveEnabledOverrideField = FormStringOrNull(form["ArchiveEnabledOverride"]);
+        ArchiveRetentionDaysOverride = FormIntOrNull(form["ArchiveRetentionDaysOverride"]);
+        DirectStreamingMode = FormStringOrNull(form["DirectStreamingMode"]);
+        AllowInsecureClientEndpoint = FormStringOrNull(form["AllowInsecureClientEndpoint"]);
+        ClientEndpointHost = FormStringOrNull(form["ClientEndpointHost"]);
+        ClientCertPfxPath = FormStringOrNull(form["ClientCertPfxPath"]);
+        ClientCertPfxPassword = FormStringOrNull(form["ClientCertPfxPassword"]);
+        PrimaryProxyId = FormStringOrNull(form["PrimaryProxyId"]);
+        BackupProxyId = FormStringOrNull(form["BackupProxyId"]);
+        BackupNodeId = FormStringOrNull(form["BackupNodeId"]);
+        DisableAiObjectDetection = form["DisableAiObjectDetection"].ToString() == "true";
+        SnapshotField = FormStringOrNull(form["Snapshot"]);
+        LocalModelNameOverrideField = FormStringOrNull(form["LocalModelNameOverride"]);
+    }
+
+    private List<Node> NodeRows { get; set; } = [];
+    private Dictionary<Guid, int> CameraCountByNode { get; set; } = [];
+    private Dictionary<Guid, int> EffectiveRetentionDaysMap { get; set; } = [];
+    private Dictionary<Guid, int?> RetentionOverrideMap { get; set; } = [];
+    private Dictionary<Guid, string> ModelFamilyOverrideMap { get; set; } = [];
+    private Dictionary<Guid, string> DFineWeightsOverrideMap { get; set; } = [];
+    private Dictionary<Guid, string> YoloXSizeOverrideMap { get; set; } = [];
+    private Dictionary<Guid, string> LocalModelNameOverrideMap { get; set; } = [];
+    private Dictionary<Guid, int?> MaxFpsOverrideMap { get; set; } = [];
+    private Dictionary<Guid, string> EffectiveModelFamilyMap { get; set; } = [];
+    private Dictionary<Guid, string> AspectModeOverrideMap { get; set; } = [];
+    private Dictionary<Guid, string> EffectiveAspectModeMap { get; set; } = [];
+    private Dictionary<Guid, string> DFineTensorRtModeOverrideMap { get; set; } = [];
+    private Dictionary<Guid, string> EffectiveDFineTensorRtModeMap { get; set; } = [];
+    private Dictionary<Guid, string> DetectionBackendOverrideMap { get; set; } = [];
+    private Dictionary<Guid, string> EffectiveDetectionBackendMap { get; set; } = [];
+    private Dictionary<Guid, string> ExternalInferenceUrlOverrideMap { get; set; } = [];
+    private Dictionary<Guid, string> ExternalInferenceModelOverrideMap { get; set; } = [];
+    private Dictionary<Guid, int?> ExternalInferenceInputSizeOverrideMap { get; set; } = [];
+    private Dictionary<Guid, bool> HasExternalInferenceApiKeyOverrideMap { get; set; } = [];
+    private Dictionary<Guid, double?> DaysRemainingMap { get; set; } = [];
+    private Dictionary<Guid, double?> ArchiveDaysRemainingMap { get; set; } = [];
+    private Dictionary<Guid, string> ArchiveEnabledOverrideMap { get; set; } = [];
+    private Dictionary<Guid, bool> EffectiveArchiveEnabledMap { get; set; } = [];
+    private Dictionary<Guid, int?> ArchiveRetentionOverrideMap { get; set; } = [];
+    private Dictionary<Guid, int> EffectiveArchiveRetentionDaysMap { get; set; } = [];
+    private Dictionary<Guid, int> StaleCameraCountByNode { get; set; } = [];
+    private Dictionary<Guid, List<StaleCameraRow>> StaleCamerasByNode { get; set; } = [];
+    private Dictionary<Guid, string> SnapshotMap { get; set; } = [];
+    private List<MediaProxy> AvailableProxies { get; set; } = [];
+    private string GlobalDirectStreaming { get; set; } = "Proxy";
+    private bool GlobalAllowInsecureClientEndpoint { get; set; }
+    private string? ErrorMessage;
+    private string? StatusMessage;
+    private bool StatusIsError;
+
+    // Short local aliases matching the dictionary names the markup above reads — keeps the ported
+    // markup nearly byte-identical to the original .cshtml rather than renaming every reference.
+    private Dictionary<Guid, int> EffectiveRetentionDays => EffectiveRetentionDaysMap;
+    private Dictionary<Guid, int?> RetentionOverride => RetentionOverrideMap;
+    private Dictionary<Guid, string> ModelFamilyOverride => ModelFamilyOverrideMap;
+    private Dictionary<Guid, string> DFineWeightsOverride => DFineWeightsOverrideMap;
+    private Dictionary<Guid, string> YoloXSizeOverride => YoloXSizeOverrideMap;
+    private Dictionary<Guid, string> LocalModelNameOverride => LocalModelNameOverrideMap;
+    private Dictionary<Guid, int?> MaxFpsOverride => MaxFpsOverrideMap;
+    private Dictionary<Guid, string> EffectiveModelFamily => EffectiveModelFamilyMap;
+    private Dictionary<Guid, string> AspectModeOverride => AspectModeOverrideMap;
+    private Dictionary<Guid, string> EffectiveAspectMode => EffectiveAspectModeMap;
+    private Dictionary<Guid, string> DFineTensorRtModeOverride => DFineTensorRtModeOverrideMap;
+    private Dictionary<Guid, string> EffectiveDFineTensorRtMode => EffectiveDFineTensorRtModeMap;
+    private Dictionary<Guid, string> DetectionBackendOverride => DetectionBackendOverrideMap;
+    private Dictionary<Guid, string> EffectiveDetectionBackend => EffectiveDetectionBackendMap;
+    private Dictionary<Guid, string> ExternalInferenceUrlOverride => ExternalInferenceUrlOverrideMap;
+    private Dictionary<Guid, string> ExternalInferenceModelOverride => ExternalInferenceModelOverrideMap;
+    private Dictionary<Guid, int?> ExternalInferenceInputSizeOverride => ExternalInferenceInputSizeOverrideMap;
+    private Dictionary<Guid, bool> HasExternalInferenceApiKeyOverride => HasExternalInferenceApiKeyOverrideMap;
+    private Dictionary<Guid, double?> DaysRemaining => DaysRemainingMap;
+    private Dictionary<Guid, double?> ArchiveDaysRemaining => ArchiveDaysRemainingMap;
+    private Dictionary<Guid, string> ArchiveEnabledOverride => ArchiveEnabledOverrideMap;
+    private Dictionary<Guid, bool> EffectiveArchiveEnabled => EffectiveArchiveEnabledMap;
+    private Dictionary<Guid, int?> ArchiveRetentionOverride => ArchiveRetentionOverrideMap;
+    private Dictionary<Guid, int> EffectiveArchiveRetentionDays => EffectiveArchiveRetentionDaysMap;
+    private Dictionary<Guid, string> Snapshot => SnapshotMap;
+
+    /// <summary>A node's archive root must be short enough that a segment path built under it stays
+    /// within Segment.FilePath's 450-char unique-indexed column (cam-{guid}/main/YYYY/MM/DD/HH/filename
+    /// adds ~55 chars), and must be a distinct location from that node's own recording root so the
+    /// node's orphan-import sweep never re-imports archived files. Returns null when valid.</summary>
+    private static string? ValidateArchiveRoot(string? archiveRoot, string? storageRoot)
+    {
+        if (string.IsNullOrWhiteSpace(archiveRoot)) return null;
+        if (archiveRoot.Length > 300)
+            return "Archive storage root is too long — keep it under 300 characters.";
+        if (!string.IsNullOrWhiteSpace(storageRoot))
+        {
+            var a = archiveRoot.TrimEnd('/', '\\');
+            var s = storageRoot.TrimEnd('/', '\\');
+            if (a.Equals(s, StringComparison.OrdinalIgnoreCase)
+                || a.StartsWith(s + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                || a.StartsWith(s + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                || s.StartsWith(a + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                || s.StartsWith(a + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                return "Archive storage root must be a separate location from this node's recording storage root.";
+        }
+        return null;
+    }
+
+    /// <summary>Normalizes an int-valued override the same way on both the render side and the verify
+    /// side of the stale-save guard below, so e.g. "010" and "10" (or a null vs. an empty string) never
+    /// register as a spurious mismatch — every int-typed override on this page is only ever written by
+    /// HandleUpdateAsync as a plain int.ToString(), so the two sides always agree once both are pushed
+    /// through the same parse.</summary>
+    private static string NormalizeInt(string? raw) => int.TryParse(raw, out var v) ? v.ToString() : "";
+
+    // Blazor component attributes ("onsubmit" here, forwarded through EditForm's unmatched-attribute
+    // splatting) don't support mixed literal-text-plus-@expression content the way a plain HTML
+    // attribute on a native <form> did (RZ9986) — the whole value must be one expression, so each
+    // confirm() string is built here instead of inline in the markup. Razor HTML-encodes the result
+    // automatically (a literal " becomes &quot;), so no manual entity-escaping is needed.
+    private static string ConfirmRestart(string name, int cameraCount) =>
+        $"return confirm('Restart the LarisVMS node service on \"{name}\"?\\n\\nRecording on its {cameraCount} camera(s) will stop for a few seconds. This restarts the service only, not the machine.');";
+
+    private static string ConfirmResetAuth(string name) =>
+        $"return confirm('Reset the check-in nonce for \"{name}\"?\\n\\nUse this only if the node shows repeated auth failures after a missed heartbeat — it clears the rolling nonce so the node re-syncs on its next check-in. No effect on a healthy node.');";
+
+    private static string ConfirmMaintenance(bool currentlyInMaintenance, int cameraCount, string? backupNodeName)
+    {
+        var message = currentlyInMaintenance
+            ? "Take this node out of maintenance? Its cameras return to it once it is a confirmed-healthy quorum."
+            : backupNodeName is not null
+                ? $"Put this node into maintenance? Its {cameraCount} camera(s) fail over to node {backupNodeName} for recording within about 15 seconds, and will not fail back until you turn maintenance off."
+                : $"Put this node into maintenance? It has NO backup node - its {cameraCount} camera(s) will STOP recording until maintenance is turned off.";
+        return $"return confirm('{message}');";
+    }
+
+    private static string ConfirmDelete(string name) =>
+        $"return confirm('Delete node \"{name}\"? Cameras assigned to it will be unassigned, not deleted. Past recordings are unaffected.');";
+
+    /// <summary>Stale-save guard: hashes every field this page's per-node form can submit into one
+    /// opaque token. Deliberately excludes anything this form can't edit (Status, LastSeenAt,
+    /// StorageFreeBytes, ...) — those change on every heartbeat independently of any admin edit, and
+    /// including them would make ordinary saves spuriously conflict with a node that simply phoned home
+    /// in between. Also excludes the two write-only secret fields (ClientCertPfxPassword,
+    /// Detection.ExternalInferenceApiKey's own value) since those already use "blank means leave alone"
+    /// rather than "blank means clear" — they were never at risk of the silent-clobber bug this guard
+    /// exists for, so they don't need to gate on it either. U+0001 separates fields (rather than e.g.
+    /// ',') since it can't appear in any of these values, and every null is folded to the distinct
+    /// U+0000 sentinel so "null" and "" can never collide.</summary>
+    private static string ComputeSnapshot(params string?[] parts)
+    {
+        var joined = string.Join('\u0001', parts.Select(p => p ?? "\u0000"));
+        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(joined));
+        return Convert.ToHexString(hash);
+    }
+
+    private static string ComputeNodeSnapshot(Node n,
+        string? retentionOverrideRaw, string? modelFamilyOverride, string? dfineWeightsOverride, string? yoloXSizeOverride,
+        string? maxFpsOverrideRaw, string? aspectModeOverride, string? dfineTensorRtModeOverride,
+        string? backendOverride, string? externalUrlOverride, string? externalModelOverride, string? externalInputSizeOverrideRaw,
+        bool hasExternalApiKeyOverride, string? archiveEnabledOverride, string? archiveRetentionOverrideRaw,
+        string? localModelNameOverride = null) =>
+        ComputeSnapshot(
+            n.Name, n.StorageRootPath, n.ArchiveRootPath, n.AiAccelerator?.ToString(), n.DisableAiObjectDetection.ToString(),
+            n.DirectStreamingMode, n.AllowInsecureClientEndpoint?.ToString(), n.ClientEndpointHost, n.ClientCertPfxPath,
+            n.PrimaryProxyId?.ToString(), n.BackupProxyId?.ToString(), n.BackupNodeId?.ToString(),
+            NormalizeInt(retentionOverrideRaw), modelFamilyOverride ?? "", dfineWeightsOverride ?? "", yoloXSizeOverride ?? "",
+            NormalizeInt(maxFpsOverrideRaw), aspectModeOverride ?? "", dfineTensorRtModeOverride ?? "",
+            backendOverride ?? "", externalUrlOverride ?? "", externalModelOverride ?? "", NormalizeInt(externalInputSizeOverrideRaw),
+            hasExternalApiKeyOverride.ToString(), archiveEnabledOverride ?? "", NormalizeInt(archiveRetentionOverrideRaw),
+            localModelNameOverride ?? "");
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+
+        if (!string.IsNullOrEmpty(QueryStatusMessage))
+        {
+            StatusMessage = QueryStatusMessage;
+            StatusIsError = QueryStatusIsError;
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        NodeRows = await NodeService.ListAsync();
+        var cameras = await CameraService.ListAsync();
+        CameraCountByNode = cameras
+            .Where(c => c.NodeId is not null)
+            .GroupBy(c => c.NodeId!.Value)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        var staleDetails = await CameraService.GetStaleSegmentDetailsAsync();
+        StaleCameraCountByNode = staleDetails
+            .GroupBy(d => d.NodeId)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        StaleCamerasByNode = [];
+        foreach (var d in staleDetails)
+        {
+            var retentionDays = await Settings.GetAsync<int?>("Retention.Days", 30, cameraId: d.CameraId, nodeId: d.NodeId);
+            var clearsAtUtc = d.NewestSegmentEndUtc.AddDays(retentionDays ?? 30);
+            if (!StaleCamerasByNode.TryGetValue(d.NodeId, out var rows))
+                StaleCamerasByNode[d.NodeId] = rows = [];
+            rows.Add(new StaleCameraRow(d.CameraName, clearsAtUtc));
+        }
+
+        DaysRemainingMap = await NodeService.GetEstimatedDaysRemainingAsync();
+        ArchiveDaysRemainingMap = await NodeService.GetArchiveEstimatedDaysRemainingAsync();
+        GlobalDirectStreaming = await Settings.GetAsync("LiveView.DirectStreaming", "Proxy");
+        GlobalAllowInsecureClientEndpoint = await Settings.GetAsync("LiveView.AllowInsecureClientEndpoint", false);
+        AvailableProxies = (await ProxyService.ListAsync()).Where(p => p.Enabled).ToList();
+
+        // Per-node settings reads (~15 sequential awaits each in the original) run concurrently, each
+        // off its own DI scope so they don't share a DbContext instance — same pattern as
+        // Snapshots/Index.razor and Cameras/Index.razor, required here even more: this page can have
+        // several nodes, and a slow OnInitializedAsync actively blocks navigating away under Blazor's
+        // enhanced navigation.
+        var nodeScopes = NodeRows.Select(n => (Node: n, Scope: ScopeFactory.CreateScope())).ToList();
+        try
+        {
+            var nodeTasks = nodeScopes.Select(async x => await LoadNodeSettingsAsync(x.Node, x.Scope.ServiceProvider.GetRequiredService<ISettingsResolver>())).ToList();
+            var results = await Task.WhenAll(nodeTasks);
+
+            foreach (var r in results)
+            {
+                EffectiveRetentionDaysMap[r.NodeId] = r.EffectiveRetentionDays;
+                RetentionOverrideMap[r.NodeId] = r.RetentionOverride;
+                ArchiveEnabledOverrideMap[r.NodeId] = r.ArchiveEnabledOverride;
+                EffectiveArchiveEnabledMap[r.NodeId] = r.EffectiveArchiveEnabled;
+                ArchiveRetentionOverrideMap[r.NodeId] = r.ArchiveRetentionOverride;
+                EffectiveArchiveRetentionDaysMap[r.NodeId] = r.EffectiveArchiveRetentionDays;
+                ModelFamilyOverrideMap[r.NodeId] = r.ModelFamilyOverride;
+                DFineWeightsOverrideMap[r.NodeId] = r.DFineWeightsOverride;
+                YoloXSizeOverrideMap[r.NodeId] = r.YoloXSizeOverride;
+                LocalModelNameOverrideMap[r.NodeId] = r.LocalModelNameOverride;
+                MaxFpsOverrideMap[r.NodeId] = r.MaxFpsOverride;
+                EffectiveModelFamilyMap[r.NodeId] = r.EffectiveModelFamily;
+                AspectModeOverrideMap[r.NodeId] = r.AspectModeOverride;
+                EffectiveAspectModeMap[r.NodeId] = r.EffectiveAspectMode;
+                DFineTensorRtModeOverrideMap[r.NodeId] = r.DFineTensorRtModeOverride;
+                EffectiveDFineTensorRtModeMap[r.NodeId] = r.EffectiveDFineTensorRtMode;
+                DetectionBackendOverrideMap[r.NodeId] = r.DetectionBackendOverride;
+                EffectiveDetectionBackendMap[r.NodeId] = r.EffectiveDetectionBackend;
+                ExternalInferenceUrlOverrideMap[r.NodeId] = r.ExternalInferenceUrlOverride;
+                ExternalInferenceModelOverrideMap[r.NodeId] = r.ExternalInferenceModelOverride;
+                ExternalInferenceInputSizeOverrideMap[r.NodeId] = r.ExternalInferenceInputSizeOverride;
+                HasExternalInferenceApiKeyOverrideMap[r.NodeId] = r.HasExternalInferenceApiKeyOverride;
+                SnapshotMap[r.NodeId] = r.Snapshot;
+            }
+        }
+        finally
+        {
+            foreach (var x in nodeScopes) x.Scope.Dispose();
+        }
+    }
+
+    private async Task<NodeSettingsSnapshot> LoadNodeSettingsAsync(Node n, ISettingsResolver settings)
+    {
+        var effectiveRetentionDays = await settings.GetAsync("Retention.Days", 30, nodeId: n.Id);
+        var ownOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Retention.Days");
+        var retentionOverride = int.TryParse(ownOverride, out var days) ? days : (int?)null;
+
+        var archiveEnabledOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Archive.Enabled") ?? "";
+        var effectiveArchiveEnabled = await settings.GetAsync("Archive.Enabled", false, nodeId: n.Id);
+        var archiveRetentionOwn = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Archive.RetentionDays");
+        var archiveRetentionOverride = int.TryParse(archiveRetentionOwn, out var ard) ? ard : (int?)null;
+        var effectiveArchiveRetentionDays = await settings.GetAsync("Archive.RetentionDays", 0, nodeId: n.Id);
+
+        var modelFamilyOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.ModelFamily") ?? "";
+        var dfineWeightsOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.DFineWeights") ?? "";
+        var yoloXSizeOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.YoloXSize") ?? "";
+        var localModelNameOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.LocalModelName") ?? "";
+        var maxFpsOwn = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.MaxFps");
+        var maxFpsOverride = int.TryParse(maxFpsOwn, out var mf) ? mf : (int?)null;
+        var effectiveModelFamily = await settings.GetAsync("Detection.ModelFamily", "Auto", nodeId: n.Id);
+        var aspectModeOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.AspectMode") ?? "";
+        var effectiveAspectMode = await settings.GetAsync("Detection.AspectMode", "Letterbox", nodeId: n.Id);
+        var dfineTensorRtModeOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.DFineTensorRtMode") ?? "";
+        var effectiveDFineTensorRtMode = await settings.GetAsync("Detection.DFineTensorRtMode", "Off", nodeId: n.Id);
+
+        var detectionBackendOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.Backend") ?? "";
+        var effectiveDetectionBackend = await settings.GetAsync("Detection.Backend", "BuiltIn", nodeId: n.Id);
+        var externalInferenceUrlOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.ExternalInferenceUrl") ?? "";
+        var externalInferenceModelOverride = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.ExternalInferenceModel") ?? "";
+        var externalInputSizeOwn = await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.ExternalInferenceInputSize");
+        var externalInferenceInputSizeOverride = int.TryParse(externalInputSizeOwn, out var eis) ? eis : (int?)null;
+        var hasExternalInferenceApiKeyOverride = !string.IsNullOrEmpty(
+            await settings.GetOwnOverrideAsync(SettingScope.Node, n.Id, "Detection.ExternalInferenceApiKey"));
+
+        // Stale-save guard — see Snapshot's own doc comment. Computed from the exact raw values just
+        // read above (not the parsed/defaulted result) so it matches byte-for-byte what
+        // HandleUpdateAsync recomputes from a fresh read at save time.
+        var snapshot = ComputeNodeSnapshot(n, ownOverride, modelFamilyOverride, dfineWeightsOverride,
+            yoloXSizeOverride, maxFpsOwn, aspectModeOverride, dfineTensorRtModeOverride,
+            detectionBackendOverride, externalInferenceUrlOverride, externalInferenceModelOverride,
+            externalInputSizeOwn, hasExternalInferenceApiKeyOverride, archiveEnabledOverride, archiveRetentionOwn,
+            localModelNameOverride);
+
+        return new NodeSettingsSnapshot(n.Id, effectiveRetentionDays, retentionOverride,
+            archiveEnabledOverride, effectiveArchiveEnabled, archiveRetentionOverride, effectiveArchiveRetentionDays,
+            modelFamilyOverride, dfineWeightsOverride, yoloXSizeOverride, localModelNameOverride,
+            maxFpsOverride, effectiveModelFamily, aspectModeOverride, effectiveAspectMode,
+            dfineTensorRtModeOverride, effectiveDFineTensorRtMode,
+            detectionBackendOverride, effectiveDetectionBackend, externalInferenceUrlOverride,
+            externalInferenceModelOverride, externalInferenceInputSizeOverride, hasExternalInferenceApiKeyOverride,
+            snapshot);
+    }
+
+    private void NavigateBare(string? message = null, bool isError = false)
+    {
+        var url = message is null
+            ? "/Admin/Nodes"
+            : $"/Admin/Nodes?statusMessage={Uri.EscapeDataString(message)}&statusIsError={isError}";
+        NavigationManager.NavigateTo(url);
+    }
+
+    private async Task HandleUpdateAsync()
+    {
+        PopulateUpdateFieldsFromForm();
+        try
+        {
+            if (string.IsNullOrWhiteSpace(StorageRootPath))
+            {
+                ErrorMessage = "A storage path is required — this is where the node records to.";
+                await LoadAsync();
+                return;
+            }
+            var archiveError = ValidateArchiveRoot(ArchiveRootPath, StorageRootPath);
+            if (archiveError is not null)
+            {
+                ErrorMessage = archiveError;
+                await LoadAsync();
+                return;
+            }
+
+            var externalUrlOverride = string.IsNullOrWhiteSpace(ExternalUrlOverride) ? null : ExternalUrlOverride.Trim().TrimEnd('/');
+            if (externalUrlOverride is not null
+                && (!Uri.TryCreate(externalUrlOverride, UriKind.Absolute, out var externalUri) || externalUri.Scheme is not ("http" or "https")))
+            {
+                ErrorMessage = "The external inference service override must be a full URL like http://192.168.1.50:8080, or blank to inherit.";
+                await LoadAsync();
+                return;
+            }
+            if (ExternalInputSizeOverride is { } size && (size <= 0 || size % 32 != 0))
+            {
+                ErrorMessage = "The external inference input-size override must be a positive multiple of 32 (e.g. 640), or blank to inherit.";
+                await LoadAsync();
+                return;
+            }
+
+            var effectiveBackend = string.IsNullOrEmpty(BackendOverride)
+                ? await Settings.GetAsync("Detection.Backend", "BuiltIn")
+                : BackendOverride;
+            if (string.Equals(effectiveBackend, "ExternalHttp", StringComparison.OrdinalIgnoreCase))
+            {
+                var effectiveUrl = externalUrlOverride ?? await Settings.GetAsync("Detection.ExternalInferenceUrl", "");
+                var effectiveModel = string.IsNullOrWhiteSpace(ExternalModelOverride)
+                    ? await Settings.GetAsync("Detection.ExternalInferenceModel", "")
+                    : ExternalModelOverride;
+                if (string.IsNullOrEmpty(effectiveUrl) || string.IsNullOrEmpty(effectiveModel))
+                {
+                    ErrorMessage = "This node resolves to the external HTTP backend but has no URL and model to use — " +
+                        "either fill in the URL/model overrides here, or save them on Admin/Settings/Detection first.";
+                    await LoadAsync();
+                    return;
+                }
+            }
+
+            var before = (await NodeService.ListAsync()).FirstOrDefault(n => n.Id == Id);
+            var oldRetentionOverride = await Settings.GetOwnOverrideAsync(SettingScope.Node, Id, "Retention.Days");
+            var oldModelFamilyOverride = await Settings.GetOwnOverrideAsync(SettingScope.Node, Id, "Detection.ModelFamily");
+            var oldDFineWeightsOverride = await Settings.GetOwnOverrideAsync(SettingScope.Node, Id, "Detection.DFineWeights");
+            var oldYoloXSizeOverride = await Settings.GetOwnOverrideAsync(SettingScope.Node, Id, "Detection.YoloXSize");
+            var oldMaxFpsOverride = await Settings.GetOwnOverrideAsync(SettingScope.Node, Id, "Detection.MaxFps");
+            var oldAspectModeOverride = await Settings.GetOwnOverrideAsync(SettingScope.Node, Id, "Detection.AspectMode");
+            var oldDFineTensorRtModeOverride = await Settings.GetOwnOverrideAsync(SettingScope.Node, Id, "Detection.DFineTensorRtMode");
+            var oldBackendOverride = await Settings.GetOwnOverrideAsync(SettingScope.Node, Id, "Detection.Backend");
+            var oldExternalUrlOverride = await Settings.GetOwnOverrideAsync(SettingScope.Node, Id, "Detection.ExternalInferenceUrl");
+            var oldExternalModelOverride = await Settings.GetOwnOverrideAsync(SettingScope.Node, Id, "Detection.ExternalInferenceModel");
+            var oldExternalInputSizeOverride = await Settings.GetOwnOverrideAsync(SettingScope.Node, Id, "Detection.ExternalInferenceInputSize");
+            var oldArchiveEnabledOverride = await Settings.GetOwnOverrideAsync(SettingScope.Node, Id, "Archive.Enabled");
+            var oldArchiveRetentionOverride = await Settings.GetOwnOverrideAsync(SettingScope.Node, Id, "Archive.RetentionDays");
+            var oldLocalModelNameOverride = await Settings.GetOwnOverrideAsync(SettingScope.Node, Id, "Detection.LocalModelName");
+            var oldHasExternalApiKeyOverride = !string.IsNullOrEmpty(
+                await Settings.GetOwnOverrideAsync(SettingScope.Node, Id, "Detection.ExternalInferenceApiKey"));
+
+            if (before is null)
+            {
+                ErrorMessage = "That node no longer exists.";
+                await LoadAsync();
+                return;
+            }
+
+            // Stale-save guard — see the Snapshot dictionary's own doc comment. Recomputed here from a
+            // fresh read of every field this form can submit, *before* any of them get written, and
+            // compared against the hash the form was rendered with. A mismatch means something else
+            // (another tab, another admin, a reopened/back-navigated page) changed this node's config
+            // since this page was loaded — reject the save outright rather than writing this stale
+            // snapshot's blanks over whatever changed in the meantime.
+            var currentSnapshot = ComputeNodeSnapshot(before, oldRetentionOverride, oldModelFamilyOverride,
+                oldDFineWeightsOverride, oldYoloXSizeOverride, oldMaxFpsOverride, oldAspectModeOverride,
+                oldDFineTensorRtModeOverride, oldBackendOverride, oldExternalUrlOverride, oldExternalModelOverride,
+                oldExternalInputSizeOverride, oldHasExternalApiKeyOverride, oldArchiveEnabledOverride, oldArchiveRetentionOverride,
+                oldLocalModelNameOverride);
+            if (!string.Equals(SnapshotField, currentSnapshot, StringComparison.Ordinal))
+            {
+                ErrorMessage = $"{before.Name}'s settings changed (in another tab, or by someone else) since this page " +
+                    "was loaded — nothing was saved, to avoid overwriting that change. Reload the page and re-apply your edit.";
+                await LoadAsync();
+                return;
+            }
+
+            var accelerator = Enum.TryParse<AiAccelerator>(AiAcceleratorOverride, out var acc) ? acc : (AiAccelerator?)null;
+
+            bool? insecureOverride = AllowInsecureClientEndpoint switch
+            {
+                "true" => true,
+                "false" => false,
+                _ => null,
+            };
+            Guid? primaryProxy = Guid.TryParse(PrimaryProxyId, out var pp) ? pp : null;
+            Guid? backupProxy = Guid.TryParse(BackupProxyId, out var bp) ? bp : null;
+            Guid? backupNode = Guid.TryParse(BackupNodeId, out var bn) ? bn : null;
+            var clientEndpoint = new NodeClientEndpointUpdate(
+                string.IsNullOrWhiteSpace(DirectStreamingMode) ? null : DirectStreamingMode,
+                insecureOverride, ClientEndpointHost, ClientCertPfxPath,
+                string.IsNullOrEmpty(ClientCertPfxPassword) ? null : ClientCertPfxPassword,
+                primaryProxy, backupProxy, backupNode, DisableAiObjectDetection);
+
+            var by = User.Identity?.Name;
+
+            await NodeService.UpdateAsync(Id, Name, StorageRootPath, accelerator, ArchiveRootPath, clientEndpoint);
+            await Settings.SetOverrideAsync(SettingScope.Node, Id, "Retention.Days",
+                RetentionDaysOverride?.ToString(), by);
+            await Settings.SetOverrideAsync(SettingScope.Node, Id, "Detection.ModelFamily",
+                string.IsNullOrEmpty(ModelFamilyOverrideField) ? null : ModelFamilyOverrideField, by);
+            await Settings.SetOverrideAsync(SettingScope.Node, Id, "Detection.DFineWeights",
+                string.IsNullOrEmpty(DFineWeightsOverrideField) ? null : DFineWeightsOverrideField, by);
+            await Settings.SetOverrideAsync(SettingScope.Node, Id, "Detection.YoloXSize",
+                string.IsNullOrEmpty(YoloXSizeOverrideField) ? null : YoloXSizeOverrideField, by);
+            await Settings.SetOverrideAsync(SettingScope.Node, Id, "Detection.LocalModelName",
+                string.IsNullOrEmpty(LocalModelNameOverrideField) ? null : LocalModelNameOverrideField, by);
+            await Settings.SetOverrideAsync(SettingScope.Node, Id, "Detection.MaxFps",
+                MaxFpsOverrideField?.ToString(), by);
+            await Settings.SetOverrideAsync(SettingScope.Node, Id, "Detection.AspectMode",
+                string.IsNullOrEmpty(AspectModeOverrideField) ? null : AspectModeOverrideField, by);
+            await Settings.SetOverrideAsync(SettingScope.Node, Id, "Detection.DFineTensorRtMode",
+                string.IsNullOrEmpty(DFineTensorRtModeOverrideField) ? null : DFineTensorRtModeOverrideField, by);
+            await Settings.SetOverrideAsync(SettingScope.Node, Id, "Detection.Backend",
+                string.IsNullOrEmpty(BackendOverride) ? null : BackendOverride, by);
+            await Settings.SetOverrideAsync(SettingScope.Node, Id, "Detection.ExternalInferenceUrl",
+                externalUrlOverride, by);
+            await Settings.SetOverrideAsync(SettingScope.Node, Id, "Detection.ExternalInferenceModel",
+                string.IsNullOrEmpty(ExternalModelOverride) ? null : ExternalModelOverride, by);
+            await Settings.SetOverrideAsync(SettingScope.Node, Id, "Detection.ExternalInferenceInputSize",
+                ExternalInputSizeOverride?.ToString(), by);
+            var externalApiKeyOverrideChanged = !string.IsNullOrWhiteSpace(ExternalApiKeyOverride);
+            if (externalApiKeyOverrideChanged)
+                await Settings.SetOverrideAsync(SettingScope.Node, Id, "Detection.ExternalInferenceApiKey",
+                    ExternalApiKeyOverride!.Trim(), by);
+            await Settings.SetOverrideAsync(SettingScope.Node, Id, "Archive.Enabled",
+                string.IsNullOrEmpty(ArchiveEnabledOverrideField) ? null : ArchiveEnabledOverrideField, by);
+            await Settings.SetOverrideAsync(SettingScope.Node, Id, "Archive.RetentionDays",
+                ArchiveRetentionDaysOverride?.ToString(), by);
+
+            var details = AuditDiff.Build(
+                AuditDiff.Of("Name", before?.Name, Name),
+                AuditDiff.Of("Storage root", before?.StorageRootPath, StorageRootPath),
+                AuditDiff.Of("Retention override", oldRetentionOverride, RetentionDaysOverride?.ToString()),
+                AuditDiff.Of("AI accelerator", before?.AiAccelerator?.ToString(), accelerator?.ToString()),
+                AuditDiff.Of("Detection model override", oldModelFamilyOverride, ModelFamilyOverrideField),
+                AuditDiff.Of("D-FINE weights override", oldDFineWeightsOverride, DFineWeightsOverrideField),
+                AuditDiff.Of("YOLOX size override", oldYoloXSizeOverride, YoloXSizeOverrideField),
+                AuditDiff.Of("Local model name override", oldLocalModelNameOverride, LocalModelNameOverrideField),
+                AuditDiff.Of("Max detection fps override", oldMaxFpsOverride, MaxFpsOverrideField?.ToString()),
+                AuditDiff.Of("Aspect fitting override", oldAspectModeOverride, AspectModeOverrideField),
+                AuditDiff.Of("D-FINE TensorRT override", oldDFineTensorRtModeOverride, DFineTensorRtModeOverrideField),
+                AuditDiff.Of("Detection backend override", oldBackendOverride, BackendOverride),
+                AuditDiff.Of("External inference URL override", oldExternalUrlOverride, externalUrlOverride),
+                AuditDiff.Of("External inference model override", oldExternalModelOverride, ExternalModelOverride),
+                AuditDiff.Of("External inference input-size override", oldExternalInputSizeOverride, ExternalInputSizeOverride?.ToString()),
+                AuditDiff.SecretChanged("External inference API key override", externalApiKeyOverrideChanged),
+                AuditDiff.Of("Archive root", before?.ArchiveRootPath, ArchiveRootPath),
+                AuditDiff.Of("Archive enabled override", oldArchiveEnabledOverride, ArchiveEnabledOverrideField),
+                AuditDiff.Of("Archive retention override", oldArchiveRetentionOverride, ArchiveRetentionDaysOverride?.ToString()),
+                AuditDiff.Of("Direct streaming mode", before?.DirectStreamingMode, clientEndpoint.DirectStreamingMode),
+                AuditDiff.Of("Allow insecure client endpoint", before?.AllowInsecureClientEndpoint?.ToString(), insecureOverride?.ToString()),
+                AuditDiff.Of("Client endpoint host", before?.ClientEndpointHost, ClientEndpointHost),
+                AuditDiff.Of("Client cert pfx path", before?.ClientCertPfxPath, ClientCertPfxPath),
+                AuditDiff.Of("Client cert pfx password", null, clientEndpoint.ClientCertPfxPassword is null ? null : "(changed)"),
+                AuditDiff.Of("Primary proxy", before?.PrimaryProxyId?.ToString(), primaryProxy?.ToString()),
+                AuditDiff.Of("Backup proxy", before?.BackupProxyId?.ToString(), backupProxy?.ToString()),
+                AuditDiff.Of("Backup node", before?.BackupNodeId?.ToString(), backupNode?.ToString()),
+                AuditDiff.Of("Recording only (AI off)", before?.DisableAiObjectDetection.ToString(), DisableAiObjectDetection.ToString()));
+
+            await LogAsync("Node.Update", details is null ? $"{Name} ({Id})" : $"{Name} ({Id}) — {details}");
+
+            // Fire-and-forget, deliberately not awaited — see the equivalent comment on
+            // Admin/Settings/Detection's own global-save reconcile trigger.
+            _ = NodeControlClient.TriggerReconcileAsync(before);
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = ex.Message;
+            await LoadAsync();
+            return;
+        }
+
+        NavigateBare();
+    }
+
+    /// <summary>Restarts a node's own Windows Service — not the machine. Proxied through this tier the
+    /// same way every other Web→Node call is (the browser never talks to a node directly), authorized
+    /// by a short-lived token signed with that node's own MediaSigningKey.
+    ///
+    /// Recording on this node's cameras stops for the few seconds the service is down, which is why
+    /// this is behind Nodes.Edit and audited like any other node change.</summary>
+    private async Task HandleRestartAsync()
+    {
+        RestartId = FormGuid(HttpContext?.Request.Form["RestartId"] ?? default);
+        var node = (await NodeService.ListAsync()).FirstOrDefault(n => n.Id == RestartId);
+        if (node is null) { NavigateBare("That node no longer exists.", isError: true); return; }
+
+        if (node is not { LastIpAddress: { } ip, LivePort: { } port, MediaSigningKey: { } key })
+        {
+            NavigateBare($"{node.Name} hasn't reported its address yet — it needs at least one heartbeat before it can be restarted from here.", isError: true);
+            return;
+        }
+
+        var token = MediaToken.IssueForNodeControl("restart", key, TimeSpan.FromSeconds(30));
+        var client = HttpFactory.CreateClient();
+        client.Timeout = TimeSpan.FromSeconds(15);
+
+        try
+        {
+            var response = await client.SendAsync(MediaTokenRequest.Create(HttpMethod.Post,
+                $"http://{ip}:{port}/restart?token={Uri.EscapeDataString(token)}", token));
+
+            if (response.IsSuccessStatusCode)
+            {
+                await LogAsync("Node.Restart", $"{node.Name} ({RestartId})");
+                NavigateBare($"{node.Name} is restarting. It should reappear as online within a minute.");
+            }
+            else
+            {
+                var body = (await response.Content.ReadAsStringAsync()).Trim();
+                NavigateBare($"{node.Name} refused the restart ({(int)response.StatusCode})" +
+                    (string.IsNullOrEmpty(body) ? "." : $": {body}"), isError: true);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            NavigateBare($"Could not reach {node.Name}: {ex.Message}", isError: true);
+        }
+    }
+
+    /// <summary>Failover plan phase 5a: recovery for a node locked out because its rolling check-in
+    /// nonce got out of sync (a heartbeat response the node never received — it keeps resending the
+    /// stale nonce, which the server now rejects 401). Clears the stored nonce so the node's next
+    /// check-in is accepted as a not-yet-nonced one and re-syncs. A no-op risk on a healthy node.</summary>
+    private async Task HandleResetAuthAsync()
+    {
+        ResetAuthId = FormGuid(HttpContext?.Request.Form["ResetAuthId"] ?? default);
+        var node = (await NodeService.ListAsync()).FirstOrDefault(n => n.Id == ResetAuthId);
+        if (node is null) { NavigateBare("That node no longer exists.", isError: true); return; }
+
+        await NodeService.ResetAuthAsync(ResetAuthId, rotateSecretNow: false);
+        await LogAsync("Node.ResetAuth", $"{node.Name} ({ResetAuthId}) — check-in nonce cleared");
+        NavigateBare($"{node.Name}: check-in nonce cleared. If it was locked out, it should re-sync within a heartbeat cycle.");
+    }
+
+    /// <summary>Failover plan phase 3: toggle a node into/out of maintenance mode. On = its cameras fail
+    /// over to its backup node on RecordingFailoverService's next tick (~15s) and stay there until
+    /// turned off, regardless of the node's own health. Confirm dialog is client-side.</summary>
+    private async Task HandleSetMaintenanceAsync()
+    {
+        var maintForm = HttpContext?.Request.Form;
+        MaintenanceId = FormGuid(maintForm?["MaintenanceId"] ?? default);
+        MaintenanceEnabled = maintForm?["MaintenanceEnabled"].ToString() == "true";
+        var node = (await NodeService.ListAsync()).FirstOrDefault(n => n.Id == MaintenanceId);
+        if (node is null) { NavigateBare("That node no longer exists.", isError: true); return; }
+
+        await NodeService.SetMaintenanceAsync(MaintenanceId, MaintenanceEnabled, User.Identity?.Name);
+        await LogAsync(MaintenanceEnabled ? "Node.MaintenanceEntered" : "Node.MaintenanceExited", $"{node.Name} ({MaintenanceId})");
+        NavigateBare(MaintenanceEnabled
+            ? $"{node.Name} is in maintenance — its cameras move to its backup node within ~15 seconds and stay there until you turn maintenance off."
+            : $"{node.Name} left maintenance — its cameras return to it once it is a confirmed-healthy quorum (or immediately if it stayed healthy).");
+    }
+
+    private async Task HandleDeleteAsync()
+    {
+        DeleteId = FormGuid(HttpContext?.Request.Form["DeleteId"] ?? default);
+        var node = (await NodeService.ListAsync()).FirstOrDefault(n => n.Id == DeleteId);
+        await NodeService.DeleteAsync(DeleteId);
+        await LogAsync("Node.Delete", $"{node?.Name ?? "?"} ({DeleteId})");
+        NavigateBare();
+    }
+
+    private Task LogAsync(string action, string details) =>
+        AuditService.LogAsync(action, User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
+            User.Identity?.Name, HttpContext?.Connection.RemoteIpAddress?.ToString(), details);
+}

@@ -1,0 +1,196 @@
+@inherits LayoutComponentBase
+@using System.Security.Claims
+@using System.Text
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.Extensions.DependencyInjection
+@using LarisVMS.Core
+@using LarisVMS.Core.Interfaces
+@using LarisVMS.Infrastructure.Data
+@inject IServiceScopeFactory ScopeFactory
+@inject NavigationManager Nav
+
+<HeadContent>
+    <title>@_appName</title>
+    @if (_brandingStyle is not null)
+    {
+        @((MarkupString)_brandingStyle)
+    }
+</HeadContent>
+
+<div class="lv-shell">
+    @* Every item below is permission-gated the same way _Layout.cshtml's were — see the `_show*`
+       fields computed in OnInitializedAsync, one per nav item, mirroring the policy on the page it
+       links to. Element IDs (lvSidebar/lvTopbar) must stay exactly as in the old layout: JS-heavy
+       pages migrated in a later phase (kiosk fullscreen mode, etc.) reach into them by id. *@
+    <aside class="lv-side collapse d-lg-block" id="lvSidebar">
+        <div class="lv-brand">
+            @if (_logoDataUri is not null)
+            {
+                <img src="@_logoDataUri" alt="" />
+            }
+            <div>
+                <div class="lv-brand-text">@_appName</div>
+                <div class="lv-brand-sub">Video Management</div>
+            </div>
+        </div>
+        <nav class="lv-nav">
+            @if (_isAuthenticated)
+            {
+                <a class="lv-navitem@(IsActive("/") ? " active" : "")" href="/"><span aria-hidden="true">🏠︎</span> Dashboard</a>
+            }
+            @if (_showLive)
+            {
+                <a class="lv-navitem@(IsActive("/Live") ? " active" : "")" href="/Live"><span aria-hidden="true">📡</span> Live</a>
+            }
+            @if (_showPlayback)
+            {
+                <a class="lv-navitem@(IsActive("/Playback") ? " active" : "")" href="/Playback"><span aria-hidden="true">▶️</span> Playback</a>
+            }
+            @if (_showExports)
+            {
+                <a class="lv-navitem@(IsActive("/Exports") ? " active" : "")" href="/Exports"><span aria-hidden="true">🎬</span> Exports</a>
+            }
+            @if (_showBookmarks)
+            {
+                <a class="lv-navitem@(IsActive("/Bookmarks") ? " active" : "")" href="/Bookmarks"><span aria-hidden="true">🔖</span> Bookmarks</a>
+            }
+            @if (_showSnapshots)
+            {
+                <a class="lv-navitem@(IsActive("/Snapshots") ? " active" : "")" href="/Snapshots"><span aria-hidden="true">📸</span> Snapshots</a>
+            }
+            @if (_showViews)
+            {
+                <a class="lv-navitem@(IsActive("/Views") ? " active" : "")" href="/Views"><span aria-hidden="true">🖼️</span> Views</a>
+            }
+            @if (_showCameras)
+            {
+                <a class="lv-navitem@(IsActive("/Cameras") ? " active" : "")" href="/Cameras"><span aria-hidden="true">📷</span> Cameras</a>
+            }
+            @if (_showSettingsHub)
+            {
+                <a class="lv-navitem@(IsActive("/Admin/Settings") ? " active" : "")" href="/Admin/Settings"><span aria-hidden="true">⚙️</span> Settings</a>
+            }
+        </nav>
+        <div class="lv-side-foot">
+            &copy; @DateTime.UtcNow.Year @_appName @(_version is not null ? $"v{_version}" : "")
+        </div>
+    </aside>
+
+    <div class="lv-main">
+        <div class="lv-topbar" id="lvTopbar">
+            <button class="btn btn-outline-secondary d-lg-none" type="button" data-bs-toggle="collapse"
+                    data-bs-target="#lvSidebar" aria-controls="lvSidebar" aria-expanded="false" aria-label="Toggle navigation">
+                <span aria-hidden="true">☰</span>
+            </button>
+            <div class="lv-topbar-right ms-auto">
+                <button class="lv-darktoggle" id="themeToggle" type="button"
+                        onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme"><span id="themeIcon" aria-hidden="true">🌙</span></button>
+                <LoginPartial />
+            </div>
+        </div>
+
+        <main role="main" class="lv-content">
+            @* Lets a migrated page build "PageName - AppName" as <PageTitle> without its own
+               IBrandingService round trip — see Components/Pages/Index.razor for the consumer side. *@
+            <CascadingValue Value="_appName" Name="AppName">
+                @Body
+            </CascadingValue>
+        </main>
+    </div>
+</div>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+
+    private string _appName = BrandingOptions.DefaultAppName;
+    private string? _logoDataUri;
+    private string? _version;
+    private string? _brandingStyle;
+    private bool _isAuthenticated;
+    private bool _showLive, _showPlayback, _showExports, _showBookmarks, _showSnapshots,
+        _showViews, _showCameras, _showNodes, _showLogs, _showSettings, _showPlugins,
+        _showAlerts, _showApiKeys, _showSettingsHub;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // MainLayout wraps every page, so its OnInitializedAsync always runs alongside the routed
+        // page's own — Blazor's Static SSR renderer initializes them concurrently, not sequentially,
+        // since Body is an independent subtree. ApplicationDbContext is scoped per HTTP request, so
+        // without this the layout's own DB calls (Branding/Permission/AppVersions) and the page's
+        // (e.g. Dashboard's IDashboardService) race on the SAME DbContext instance — EF Core's
+        // single-threaded concurrency detector throws "A second operation was started on this
+        // context instance..." whenever their awaits happen to interleave (timing-dependent: works
+        // most of the time, fails intermittently). A dedicated scope gives the layout its own,
+        // isolated DbContext so it can never race the page it wraps.
+        using var scope = ScopeFactory.CreateScope();
+        var brandingService = scope.ServiceProvider.GetRequiredService<IBrandingService>();
+        var permissionService = scope.ServiceProvider.GetRequiredService<IPermissionService>();
+        var layoutDb = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        var branding = await brandingService.GetAsync();
+        _appName = branding.AppName;
+        _logoDataUri = branding.LogoDataUri;
+        _brandingStyle = BuildBrandingStyle(branding);
+
+        try
+        {
+            var latest = await layoutDb.AppVersions
+                .OrderByDescending(v => v.Major).ThenByDescending(v => v.Minor).ThenByDescending(v => v.Patch)
+                .FirstOrDefaultAsync();
+            _version = latest?.ToVersionString();
+        }
+        catch { /* pre-setup: no schema yet */ }
+
+        var user = AuthenticationStateTask is not null
+            ? (await AuthenticationStateTask).User
+            : new ClaimsPrincipal(new ClaimsIdentity());
+        _isAuthenticated = user.Identity?.IsAuthenticated == true;
+
+        var nav = await permissionService.GetGrantedAsync(user);
+        _showLive = nav.Has("Cameras", "View");
+        _showPlayback = nav.Has("Playback", "View");
+        _showExports = nav.Has("Exports", "View");
+        _showBookmarks = nav.Has("Playback", "View");
+        _showSnapshots = nav.Has("Playback", "View");
+        _showViews = nav.Has("Views", "View");
+        _showCameras = nav.Has("Cameras", "View");
+        _showNodes = nav.Has("Nodes", "Edit");
+        _showLogs = nav.Has("Logs", "View") || nav.Has("SystemLogs", "View");
+        _showSettings = nav.Has("Settings", "Edit") || nav.Has("Backups", "Edit");
+        _showPlugins = nav.Has("Plugins", "View");
+        _showAlerts = nav.Has("Alerts", "Edit");
+        _showApiKeys = nav.Has("ApiKeys", "Edit");
+        _showSettingsHub = _showSettings || _showPlugins || _showAlerts || _showApiKeys || _showNodes || _showLogs;
+    }
+
+    private bool IsActive(string prefix)
+    {
+        var path = new Uri(Nav.Uri).AbsolutePath;
+        return prefix == "/" ? path == "/" : path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? BuildBrandingStyle(BrandingOptions branding)
+    {
+        if (branding.PrimaryColor is null && branding.AccentColor is null && branding.FontStack is null)
+            return null;
+
+        // Every field is already validated by BrandingOptions' own Sanitize path (see its doc
+        // comment), which is what makes interpolating these straight into a <style> block safe.
+        var sb = new StringBuilder("<style>");
+        if (branding.PrimaryColor is { } primary)
+        {
+            sb.Append($":root {{ --lv-accent: {primary}; --bs-primary: {primary}; --bs-link-color: {primary}; }}");
+            sb.Append($".btn-primary {{ --bs-btn-bg: {primary}; --bs-btn-border-color: {primary}; }}");
+        }
+        if (branding.AccentColor is { } accent)
+        {
+            sb.Append($".lv-brand {{ background-color: {accent} !important; }} .lv-brand-text, .lv-brand-sub {{ color: #fff !important; }}");
+        }
+        if (branding.FontStack is { } fontStack)
+        {
+            sb.Append($"body {{ font-family: {fontStack}; }}");
+        }
+        sb.Append("</style>");
+        return sb.ToString();
+    }
+}

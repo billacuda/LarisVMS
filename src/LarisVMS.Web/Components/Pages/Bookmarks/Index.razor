@@ -1,0 +1,107 @@
+@page "/Bookmarks"
+@attribute [Authorize("Playback.View")]
+@using LarisVMS.Core.Interfaces
+@inject IBookmarkService BookmarkService
+@inject IAuthorizationService AuthorizationService
+
+<PageTitle>Bookmarks - @AppName</PageTitle>
+
+<h1>Bookmarks</h1>
+<p class="text-muted">
+    Marked moments from Playback's own toolbar, shared with everyone who can view playback. A
+    bookmark disappears on its own once the footage it points at ages out of retention — it's a
+    marker on real footage, not a note that outlives it.
+</p>
+
+@if (Bookmarks.Count == 0)
+{
+    <p class="text-muted">No bookmarks yet — add one from the Playback page while reviewing footage.</p>
+}
+else
+{
+    <div class="row g-2 align-items-center mb-2">
+        <div class="col-sm-4">
+            <input type="search" class="form-control" data-filter-table="bookmarksTable"
+                   placeholder="Filter by camera, note&hellip;" />
+        </div>
+        <div class="col-sm-auto d-flex align-items-center gap-2">
+            <label class="form-label small mb-0" for="bookmarksPageSize">Rows per page</label>
+            <select id="bookmarksPageSize" class="form-select form-select-sm" style="width: auto;" data-paginate-size-for="bookmarksTable">
+                <option value="10">10</option>
+                <option value="25" selected>25</option>
+                <option value="50">50</option>
+                <option value="all">All</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="table-responsive">
+        <table class="table align-middle" id="bookmarksTable" data-sortable data-paginate>
+            <thead>
+                <tr>
+                    <th>Camera</th>
+                    <th>Time</th>
+                    <th>Note</th>
+                    <th>Created by</th>
+                    <th data-no-sort></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var b in Bookmarks)
+                {
+                    <tr>
+                        <td data-sort-value="@b.CameraName">@b.CameraName</td>
+                        <td data-sort-value="@b.TimestampUtc.Ticks">
+                            <span title="@b.TimestampUtc.ToString("u")">@b.TimestampUtc.ToLocalTime().ToString("g")</span>
+                        </td>
+                        <td>@b.Note</td>
+                        <td class="text-muted small">@(b.CreatedByUserName ?? "—")</td>
+                        <td class="text-end text-nowrap">
+                            <a class="btn btn-sm btn-outline-primary"
+                               href="/Playback?cameraId=@b.CameraId&atUtc=@b.TimestampUtc.ToString("o")">
+                                ▶ Play
+                            </a>
+                            @* FormName is unique per row — Blazor throws "more than one named submit
+                               event with the name X" if a loop renders the same FormName twice. *@
+                            <EditForm Model="this" FormName="@($"delete-bookmark-{b.Id}")" OnValidSubmit="HandleDeleteAsync" class="d-inline">
+                                <input type="hidden" name="Id" value="@b.Id" />
+                                <button type="submit" class="btn btn-sm btn-outline-danger"
+                                        onclick="return confirm('Delete this bookmark?');">🗑️ Delete</button>
+                            </EditForm>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    <div data-paginate-controls-for="bookmarksTable" class="mt-2"></div>
+}
+
+@code {
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    private List<LarisVMS.Core.Dtos.BookmarkDto> Bookmarks { get; set; } = [];
+
+    // Read from the raw form, not [SupplyParameterFromForm] — that attribute needs a compile-time
+    // constant FormName, which a per-row unique name (see above) can't provide.
+    private Guid Id { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        Bookmarks = await BookmarkService.ListAsync();
+    }
+
+    private async Task HandleDeleteAsync()
+    {
+        Id = Guid.TryParse(HttpContext?.Request.Form["Id"].ToString(), out var id) ? id : Guid.Empty;
+        var user = AuthenticationStateTask is not null
+            ? (await AuthenticationStateTask).User
+            : new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity());
+        if (!(await AuthorizationService.AuthorizeAsync(user, "Bookmarks.Edit")).Succeeded) return;
+
+        await BookmarkService.DeleteAsync(Id);
+        Bookmarks = await BookmarkService.ListAsync();
+    }
+}

@@ -55,6 +55,21 @@
         });
     }
 
+    // Classic Razor Pages (Audit Logs, and any hard load) fires DOMContentLoaded once per real
+    // navigation — sufficient there. Blazor enhanced navigation (Snapshots) never fires it again
+    // after the first load, so also hook 'enhancedload' (fires after every enhanced-nav DOM
+    // update, including the very first load — see blazor-chrome-sync.js for the same mechanism).
+    // init() running twice on a Snapshots hard load is harmless: the restore branch calls
+    // location.replace with the same target both times (duplicate no-op navigation), and the save
+    // branch PUTs the same value twice (the preferences endpoint is a plain upsert).
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
     else init();
+
+    // Guarded because window.Blazor doesn't exist yet at the point this IIFE runs today — this
+    // script's <script> tag must load after blazor.web.js (see App.razor) for this branch to ever
+    // fire. No-op (as intended) on _Layout.cshtml's classic Razor Pages, which never loads
+    // blazor.web.js at all.
+    if (window.Blazor && window.Blazor.addEventListener) {
+        window.Blazor.addEventListener('enhancedload', init);
+    }
 })();

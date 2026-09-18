@@ -1,0 +1,101 @@
+@page "/Admin/Settings/Cameras"
+@attribute [Authorize("Settings.Edit")]
+@using System.Security.Claims
+@using LarisVMS.Core
+@using LarisVMS.Core.Interfaces
+@using LarisVMS.Web.Services
+@inject ISettingsResolver Settings
+@inject IAuditService AuditService
+
+<PageTitle>Camera settings - @AppName</PageTitle>
+
+<h1>Settings</h1>
+<SettingsTabs ActiveKey="Cameras" />
+
+@if (!string.IsNullOrEmpty(SavedMessage))
+{
+    <div class="alert alert-success">@SavedMessage</div>
+}
+
+<EditForm Model="this" FormName="camera-settings" OnSubmit="HandleSaveAsync" class="row g-3" style="max-width: 560px;">
+    <div class="col-12">
+        <div class="form-check">
+            <InputCheckbox @bind-Value="DailyReprobeEnabled" class="form-check-input" id="DailyReprobeEnabled" />
+            <label class="form-check-label" for="DailyReprobeEnabled">
+                Re-probe every camera daily
+                <button type="button" class="help-icon" data-help-target="reprobeHelp" tabindex="0" aria-label="Help">ℹ️</button>
+            </label>
+        </div>
+        <div class="help-text-source" id="reprobeHelp">
+            Picks up a camera that has gained, lost, or re-encoded a stream without anyone pressing
+            Re-probe. Cameras are probed one at a time rather than all at once — a fleet-wide burst
+            of ONVIF conversations is exactly what makes cheap cameras drop their other connections,
+            including the RTSP session being recorded. Per-stream enable/disable and custom names are
+            carried across a re-probe, so an unchanged camera comes out unchanged.
+        </div>
+    </div>
+    <div class="col-6">
+        <label class="form-label">
+            Re-probe at (server local time)
+            <button type="button" class="help-icon" data-help-target="reprobeAtHelp" tabindex="0" aria-label="Help">ℹ️</button>
+        </label>
+        <InputText @bind-Value="DailyReprobeAtLocalTime" type="time" class="form-control" />
+        <div class="help-text-source" id="reprobeAtHelp">
+            Local to this server, matching how Schedule recording mode already reads times. A run
+            missed because the application was restarting is skipped rather than queued — the next
+            day's run does the same work.
+        </div>
+    </div>
+
+    <div class="col-12">
+        <button type="submit" class="btn btn-primary"><span aria-hidden="true">💾</span> Save</button>
+    </div>
+</EditForm>
+
+@code {
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    [SupplyParameterFromForm(FormName = "camera-settings")] private bool DailyReprobeEnabled { get; set; } = CameraReprobeService.DefaultEnabled;
+    [SupplyParameterFromForm(FormName = "camera-settings")] private string DailyReprobeAtLocalTime { get; set; } = CameraReprobeService.DefaultAtLocalTime;
+
+    private string? SavedMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        DailyReprobeEnabled = await Settings.GetAsync(CameraReprobeService.EnabledKey, CameraReprobeService.DefaultEnabled);
+        DailyReprobeAtLocalTime = CameraReprobeService
+            .ParseTimeOfDay(await Settings.GetRawAsync(CameraReprobeService.AtLocalTimeKey))
+            .ToString("HH:mm");
+    }
+
+    private async Task HandleSaveAsync()
+    {
+        var user = AuthenticationStateTask is not null
+            ? (await AuthenticationStateTask).User
+            : new ClaimsPrincipal(new ClaimsIdentity());
+        var by = user.Identity?.Name;
+
+        var oldEnabled = await Settings.GetAsync(CameraReprobeService.EnabledKey, CameraReprobeService.DefaultEnabled);
+        var oldAt = CameraReprobeService
+            .ParseTimeOfDay(await Settings.GetRawAsync(CameraReprobeService.AtLocalTimeKey)).ToString("HH:mm");
+
+        // Normalized before storing, not just when reading: a value that never reaches the database
+        // can't be served to a browser by some other code path that forgets to normalize.
+        var reprobeAt = CameraReprobeService.ParseTimeOfDay(DailyReprobeAtLocalTime).ToString("HH:mm");
+        await Settings.SetGlobalAsync(CameraReprobeService.EnabledKey, DailyReprobeEnabled.ToString(), by);
+        await Settings.SetGlobalAsync(CameraReprobeService.AtLocalTimeKey, reprobeAt, by);
+        DailyReprobeAtLocalTime = reprobeAt;
+
+        var details = AuditDiff.Build(
+            AuditDiff.Of(CameraReprobeService.EnabledKey, oldEnabled.ToString(), DailyReprobeEnabled.ToString()),
+            AuditDiff.Of(CameraReprobeService.AtLocalTimeKey, oldAt, reprobeAt));
+
+        await AuditService.LogAsync("Settings.Update",
+            user.FindFirst(ClaimTypes.NameIdentifier)?.Value, by,
+            HttpContext?.Connection.RemoteIpAddress?.ToString(), details);
+
+        SavedMessage = "Saved.";
+    }
+}

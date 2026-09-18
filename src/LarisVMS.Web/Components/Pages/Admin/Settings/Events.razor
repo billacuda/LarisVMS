@@ -1,0 +1,321 @@
+@page "/Admin/Settings/Events"
+@attribute [Authorize("Settings.Edit")]
+@using System.Security.Claims
+@using LarisVMS.Core
+@using LarisVMS.Core.Enums
+@using LarisVMS.Core.Interfaces
+@inject IEventColorService EventColorsService
+@inject ISettingsResolver Settings
+@inject IAuditService AuditService
+
+<PageTitle>Event settings - @AppName</PageTitle>
+
+<h1>Settings</h1>
+<SettingsTabs ActiveKey="Events" />
+
+@if (!string.IsNullOrEmpty(SavedMessage))
+{
+    <div class="alert alert-success">@SavedMessage</div>
+}
+@if (!string.IsNullOrEmpty(ErrorMessage))
+{
+    <div class="alert alert-danger">@ErrorMessage</div>
+}
+
+<EditForm Model="this" FormName="events-settings" OnSubmit="HandleSaveAsync" style="max-width: 640px;">
+    <h2 class="h5">Coverage</h2>
+    <p class="text-muted small">
+        Drawn for every camera, whether or not it can classify what it sees. Motion takes precedence
+        over plain recording for a stretch of time that has both.
+    </p>
+
+    <div class="row g-3 align-items-end mb-2">
+        <div class="col-sm-6">
+            <label class="form-label" for="MotionColor">
+                <span aria-hidden="true">@MotionEmoji</span> Motion
+            </label>
+            <div class="input-group">
+                <input type="color" class="form-control form-control-color js-color-picker"
+                       value="@(MotionColor ?? DefaultMotion)" data-for="MotionColor"
+                       aria-label="Motion color picker" />
+                <InputText @bind-Value="MotionColor" id="MotionColor" class="form-control js-color-text"
+                       placeholder="@DefaultMotion" maxlength="7" />
+                <button type="button" class="btn btn-outline-secondary js-color-reset"
+                        data-for="MotionColor" data-default="@DefaultMotion"
+                        title="Reset to the built-in default">Reset</button>
+            </div>
+            <div class="form-text">Movement with no object class attached.</div>
+        </div>
+
+        <div class="col-sm-6">
+            <label class="form-label" for="RecordingColor">Recorded</label>
+            <div class="input-group">
+                <input type="color" class="form-control form-control-color js-color-picker"
+                       value="@(RecordingColor ?? DefaultRecording)" data-for="RecordingColor"
+                       aria-label="Recorded color picker" />
+                <InputText @bind-Value="RecordingColor" id="RecordingColor" class="form-control js-color-text"
+                       placeholder="@DefaultRecording" maxlength="7" />
+                <button type="button" class="btn btn-outline-secondary js-color-reset"
+                        data-for="RecordingColor" data-default="@DefaultRecording"
+                        title="Reset to the built-in default">Reset</button>
+            </div>
+            <div class="form-text">Footage exists, but nothing was detected.</div>
+        </div>
+    </div>
+
+    <h2 class="h5 mt-4">Detected objects</h2>
+    <p class="text-muted small">
+        Only cameras whose own analytics classify what they see report these — either over ONVIF, or
+        through a vendor integration (<span aria-hidden="true">🧩</span> on the Cameras list). A class
+        your cameras never report simply never appears; it costs nothing to leave configured.
+    </p>
+
+    <div class="row g-3">
+        @foreach (var kind in Kinds)
+        {
+            var name = kind.ToString();
+            var fieldId = "DetectionColors_" + name;
+            var fallback = DefaultFor(kind);
+            var current = DetectionColors.TryGetValue(name, out var v) ? v : null;
+            <div class="col-sm-6">
+                <label class="form-label" for="@fieldId">
+                    <span aria-hidden="true">@Emoji(kind)</span>
+                    @Label(kind)
+                </label>
+                <div class="input-group">
+                    <input type="color" class="form-control form-control-color js-color-picker"
+                           value="@(current ?? fallback)" data-for="@fieldId"
+                           aria-label="@Label(kind) color picker" />
+                    <input type="text" id="@fieldId" name="@fieldId" value="@current"
+                           class="form-control js-color-text" placeholder="@fallback" maxlength="7" />
+                    <button type="button" class="btn btn-outline-secondary js-color-reset"
+                            data-for="@fieldId" data-default="@fallback"
+                            title="Reset to the built-in default">Reset</button>
+                </div>
+            </div>
+        }
+    </div>
+
+    <h2 class="h5 mt-4">Snapshots browser</h2>
+    <p class="text-muted small">
+        The <a href="/Snapshots">Snapshots</a> browser lists detections only — AI object
+        detections, camera-native object classes, and custom event tags. Plain motion is never listed
+        there (it still appears on the timeline and live badges, which these settings don't affect).
+        Untick a class below to hide that specific camera-native class from the browser. A custom
+        event tag (<a href="/Cameras/EventTags">Cameras &rarr; Event tags</a>) always appears,
+        since each tag already has its own enabled/disabled toggle.
+    </p>
+    <div class="row g-2">
+        @foreach (var kind in Kinds)
+        {
+            var name = kind.ToString();
+            var fieldId = "DetectionSnapshotsEnabled_" + name;
+            var enabled = DetectionSnapshotsEnabled.TryGetValue(name, out var e) && e;
+            <div class="col-sm-4">
+                <div class="form-check">
+                    <input type="checkbox" class="form-check-input" id="@fieldId"
+                           name="@fieldId" value="true" checked="@enabled" />
+                    <input type="hidden" name="@fieldId" value="false" />
+                    <label class="form-check-label" for="@fieldId">
+                        <span aria-hidden="true">@Emoji(kind)</span>
+                        @Label(kind)
+                    </label>
+                </div>
+            </div>
+        }
+    </div>
+
+    <h2 class="h5 mt-4">Event tag position</h2>
+    <div class="row g-3">
+        <div class="col-sm-6">
+            <label class="form-label">
+                Corner
+                <button type="button" class="help-icon" data-help-target="cornerHelp" tabindex="0" aria-label="Help">ℹ️</button>
+            </label>
+            <select name="EventBadgeCornerValue" class="form-select">
+                @foreach (var corner in EventBadgeCorner.All)
+                {
+                    <option value="@corner" selected="@(corner == EventBadgeCornerValue)">@EventBadgeCorner.Label(corner)</option>
+                }
+            </select>
+            <div class="help-text-source" id="cornerHelp">
+                Which corner of a live tile the motion badge and object-detection badges appear in.
+                The bottom corners already hold other controls — a tile's hover controls sit bottom
+                right, and a cell switched into playback mode puts its mini timeline bottom left —
+                so badges placed there are lifted clear of them rather than overlapping.
+            </div>
+        </div>
+    </div>
+
+    <div class="mt-4">
+        <button type="submit" class="btn btn-primary"><span aria-hidden="true">💾</span> Save</button>
+    </div>
+</EditForm>
+
+<SectionContent SectionName="PageScripts">
+    <script>
+        (function () {
+            // The swatch and the hex box edit the same value from two directions. The text box stays
+            // authoritative (it's what posts, and it's the only one that can express "blank = use the
+            // default"), so the picker writes into it rather than being a separate field.
+            document.querySelectorAll('.js-color-picker').forEach(function (picker) {
+                var target = document.getElementById(picker.dataset.for);
+                if (!target) return;
+                picker.addEventListener('input', function () { target.value = picker.value; });
+                target.addEventListener('input', function () {
+                    if (/^#[0-9a-fA-F]{6}$/.test(target.value)) picker.value = target.value;
+                });
+            });
+
+            // Clearing the box (rather than writing the default into it) is what keeps this
+            // deployment tracking the built-in value.
+            document.querySelectorAll('.js-color-reset').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    var target = document.getElementById(btn.dataset.for);
+                    if (!target) return;
+                    target.value = '';
+                    var picker = document.querySelector('.js-color-picker[data-for="' + btn.dataset.for + '"]');
+                    if (picker) picker.value = btn.dataset.default;
+                });
+            });
+        })();
+    </script>
+</SectionContent>
+
+@code {
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    [SupplyParameterFromForm(FormName = "events-settings")] private string? MotionColor { get; set; }
+    [SupplyParameterFromForm(FormName = "events-settings")] private string? RecordingColor { get; set; }
+    [SupplyParameterFromForm(FormName = "events-settings")] private string EventBadgeCornerValue { get; set; } = EventBadgeCorner.Default;
+
+    // Dictionary-shaped form data (one flat field per detection kind, e.g. "DetectionColors_PersonDetected")
+    // is read directly off HttpContext.Request.Form in HandleSaveAsync rather than via
+    // [SupplyParameterFromForm] — Blazor's simpler form-value binder doesn't support the
+    // bracket-indexed collection binding ASP.NET Core MVC's model binder does, so these are populated
+    // manually both on load and on submit.
+    private Dictionary<string, string?> DetectionColors { get; set; } = [];
+    private Dictionary<string, bool> DetectionSnapshotsEnabled { get; set; } = [];
+
+    private string? SavedMessage;
+    private string? ErrorMessage;
+
+    private static IReadOnlyList<DetectionKind> Kinds => DetectionDisplay.AllKinds;
+    private static string DefaultFor(DetectionKind kind) => DetectionDisplay.ColorHex(kind);
+    private static string Label(DetectionKind kind) => DetectionDisplay.Label(kind);
+    private static string Emoji(DetectionKind kind) => DetectionDisplay.Emoji(kind);
+    private static string DefaultMotion => EventColors.DefaultMotion;
+    private static string DefaultRecording => EventColors.DefaultRecording;
+    private static string MotionEmoji => EventColors.MotionEmoji;
+
+    private const string EventBadgeCornerKey = EventSettingsKeys.EventBadgeCornerKey;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var current = await EventColorsService.GetAsync();
+        MotionColor = current.Motion;
+        RecordingColor = current.Recording;
+        DetectionColors = DetectionDisplay.AllKinds.ToDictionary(
+            k => k.ToString(),
+            k => current.Detections.TryGetValue(k, out var hex) ? hex : null);
+        EventBadgeCornerValue = EventBadgeCorner.Normalize(await Settings.GetRawAsync(EventBadgeCornerKey));
+
+        DetectionSnapshotsEnabled = new Dictionary<string, bool>();
+        foreach (var kind in DetectionDisplay.AllKinds)
+            DetectionSnapshotsEnabled[kind.ToString()] = await Settings.GetAsync(SnapshotVisibility.DetectionKey(kind), true);
+    }
+
+    private async Task HandleSaveAsync()
+    {
+        // Read the dynamic per-kind fields directly off the raw form — see the fields' own doc
+        // comment for why.
+        var form = HttpContext?.Request.Form;
+        DetectionColors = new Dictionary<string, string?>();
+        DetectionSnapshotsEnabled = new Dictionary<string, bool>();
+        foreach (var kind in DetectionDisplay.AllKinds)
+        {
+            var name = kind.ToString();
+            DetectionColors[name] = form?[$"DetectionColors_{name}"].FirstOrDefault();
+            DetectionSnapshotsEnabled[name] = form?[$"DetectionSnapshotsEnabled_{name}"].FirstOrDefault() == "true";
+        }
+
+        // Validated here as well as in the service so the form can name the field it rejected rather
+        // than silently dropping it back to the default on save.
+        var invalid = new List<string>();
+        if (!string.IsNullOrWhiteSpace(MotionColor) && EventColors.Normalize(MotionColor) is null) invalid.Add("Motion");
+        if (!string.IsNullOrWhiteSpace(RecordingColor) && EventColors.Normalize(RecordingColor) is null) invalid.Add("Recording");
+        foreach (var kind in DetectionDisplay.AllKinds)
+        {
+            DetectionColors.TryGetValue(kind.ToString(), out var hex);
+            if (!string.IsNullOrWhiteSpace(hex) && EventColors.Normalize(hex) is null)
+                invalid.Add(DetectionDisplay.Label(kind));
+        }
+
+        if (invalid.Count > 0)
+        {
+            ErrorMessage = "These must be hex values like #28e070: " + string.Join(", ", invalid) + ".";
+            return;
+        }
+
+        var user = AuthenticationStateTask is not null
+            ? (await AuthenticationStateTask).User
+            : new ClaimsPrincipal(new ClaimsIdentity());
+        var by = user.Identity?.Name;
+        var before = await EventColorsService.GetAsync();
+        var oldBadgeCorner = EventBadgeCorner.Normalize(await Settings.GetRawAsync(EventBadgeCornerKey));
+
+        var detections = new Dictionary<DetectionKind, string>();
+        foreach (var kind in DetectionDisplay.AllKinds)
+        {
+            DetectionColors.TryGetValue(kind.ToString(), out var hex);
+            var normalized = EventColors.Normalize(hex);
+            if (normalized is not null) detections[kind] = normalized;
+        }
+
+        var updated = new EventPalette(
+            EventColors.Normalize(MotionColor), EventColors.Normalize(RecordingColor), detections);
+        await EventColorsService.SaveAsync(updated, by);
+
+        var badgeCorner = EventBadgeCorner.Normalize(EventBadgeCornerValue);
+        await Settings.SetGlobalAsync(EventBadgeCornerKey, badgeCorner, by);
+        EventBadgeCornerValue = badgeCorner;
+
+        var oldDetectionSnapshots = new Dictionary<DetectionKind, bool>();
+        foreach (var kind in DetectionDisplay.AllKinds)
+        {
+            oldDetectionSnapshots[kind] = await Settings.GetAsync(SnapshotVisibility.DetectionKey(kind), true);
+            DetectionSnapshotsEnabled.TryGetValue(kind.ToString(), out var enabled);
+            await Settings.SetGlobalAsync(SnapshotVisibility.DetectionKey(kind), enabled.ToString(), by);
+        }
+
+        var fields = new List<AuditDiff.Field>
+        {
+            AuditDiff.Of("Motion", before.Motion ?? "(default)", updated.Motion ?? "(default)"),
+            AuditDiff.Of("Recording", before.Recording ?? "(default)", updated.Recording ?? "(default)")
+        };
+        foreach (var kind in DetectionDisplay.AllKinds)
+        {
+            before.Detections.TryGetValue(kind, out var oldHex);
+            updated.Detections.TryGetValue(kind, out var newHex);
+            fields.Add(AuditDiff.Of(DetectionDisplay.Label(kind), oldHex ?? "(default)", newHex ?? "(default)"));
+        }
+        fields.Add(AuditDiff.Of(EventBadgeCornerKey, oldBadgeCorner, badgeCorner));
+        foreach (var kind in DetectionDisplay.AllKinds)
+        {
+            DetectionSnapshotsEnabled.TryGetValue(kind.ToString(), out var newEnabled);
+            fields.Add(AuditDiff.Of("Snapshots: " + DetectionDisplay.Label(kind), oldDetectionSnapshots[kind].ToString(), newEnabled.ToString()));
+        }
+
+        await AuditService.LogAsync("EventColors.Update",
+            user.FindFirst(ClaimTypes.NameIdentifier)?.Value,
+            by, HttpContext?.Connection.RemoteIpAddress?.ToString(),
+            AuditDiff.Build([.. fields]));
+
+        SavedMessage = "Event settings saved.";
+        await LoadAsync();
+    }
+}

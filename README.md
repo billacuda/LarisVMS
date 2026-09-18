@@ -15,11 +15,13 @@ work on phone, tablet, and desktop.
 
 ---
 
-## **Current version [0.201.0](CHANGELOG.md)**
+## **Current version [0.206.0](CHANGELOG.md)**
 
 ## Stack
 
-- ASP.NET Core 10, Razor Pages
+- ASP.NET Core 10, Blazor Web App (Static SSR) migrating incrementally off Razor Pages — most
+  pages have moved; a handful of JS-heavy ones (`Views/Play`, `Views/Editor`, `Playback/Index`,
+  `Cameras/Zones`) and the Setup wizard stay on Razor Pages for now
 - EF Core 10 + SQL Server
 - Bootstrap 5 + GridStack, vendored locally (`wwwroot/lib/`), no build step and no CDN dependency
 - Self-hosted Kestrel, running as its own Windows Service ("LarisVMS Web") — no IIS dependency;
@@ -498,7 +500,7 @@ src/
   LarisVMS.Onvif            ONVIF SOAP clients, WS-Discovery
   LarisVMS.Media            FFmpeg process supervision, segment detection
   LarisVMS.Infrastructure   EF Core, auth, setup, settings resolution, node control plane
-  LarisVMS.Web              Razor Pages host (self-hosted Kestrel, Windows Service) + node control plane API
+  LarisVMS.Web              Blazor Web App / Razor Pages host (self-hosted Kestrel, Windows Service) + node control plane API
   LarisVMS.Node              recorder Windows Service — 24/7 recording
   LarisVMS.NodeUpdater       detached helper that swaps the node's binary during an auto-update
   LarisVMS.Vision            AI detection capture/inference/tracking — GPU/ONNX Runtime deps live here,

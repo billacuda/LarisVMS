@@ -1,0 +1,20 @@
+@* Blazor port of Pages/Logs/_LogsTabs.cshtml — plain <a href> links, works across still-Razor-Pages
+   (AuditLogs) and already-migrated (SystemLogs) tabs alike. *@
+<ul class="nav nav-tabs mb-3">
+    @foreach (var (key, href, label) in Tabs)
+    {
+        <li class="nav-item">
+            <a class="nav-link @(key == ActiveKey ? "active" : "")" href="@href">@label</a>
+        </li>
+    }
+</ul>
+
+@code {
+    [Parameter, EditorRequired] public string ActiveKey { get; set; } = "";
+
+    private static readonly (string Key, string Href, string Label)[] Tabs =
+    [
+        ("AuditLogs", "/Logs/AuditLogs", "📋 Audit Logs"),
+        ("SystemLogs", "/Logs/SystemLogs", "🖥️ System Logs")
+    ];
+}

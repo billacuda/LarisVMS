@@ -1,0 +1,332 @@
+@page "/Snapshots"
+@attribute [Authorize("Playback.View")]
+@using System.Security.Claims
+@using LarisVMS.Core.Dtos
+@using LarisVMS.Core.Entities
+@using LarisVMS.Core.Enums
+@using LarisVMS.Core.Interfaces
+@using LarisVMS.Infrastructure.Services
+@using Microsoft.Extensions.DependencyInjection
+@inject ITimelineService TimelineService
+@inject ICameraService CameraService
+@inject ICameraGroupService CameraGroupService
+@inject IViewService ViewService
+@inject IServiceScopeFactory ScopeFactory
+
+<PageTitle>Snapshots - @AppName</PageTitle>
+
+<h1>Snapshots <span id="snapshotLoadStatus" class="badge bg-secondary ms-2 d-none fw-normal"></span></h1>
+<p class="text-muted">
+    Every detection, browsable as a thumbnail — AI object detections, camera-native object classes,
+    and custom event tags. Plain motion isn't listed here (it's still on the Playback timeline). Each
+    thumbnail is pulled live from the recording itself, and a card disappears once its own footage
+    ages out of retention, so what's shown here can always be played back.
+</p>
+
+@* data-remember-filters: these selections survive navigating away and coming back, or a refresh —
+   see remember-filters.js. The Clear link below carries data-clear-filters so clearing actually
+   clears rather than being restored again on the next load. *@
+<form method="get" class="row g-2 mb-3" data-remember-filters="snapshots" id="snapshotFilterForm">
+    <div class="col-md-2">
+        <select name="mode" id="snapshotMode" class="form-select form-select-sm">
+            <option value="single" selected="@(Mode == "single")">Single camera</option>
+            <option value="all" selected="@(Mode == "all")">All cameras</option>
+            <option value="group" selected="@(Mode == "group")">Camera group</option>
+            <option value="view" selected="@(Mode == "view")">View</option>
+        </select>
+    </div>
+    <div class="col-md-3 snapshot-mode-target" data-for-mode="single">
+        <select name="cameraId" class="form-select form-select-sm">
+            @foreach (var c in Cameras)
+            {
+                <option value="@c.Id" selected="@(CameraId == c.Id)">@c.Name</option>
+            }
+        </select>
+    </div>
+    <div class="col-md-3 snapshot-mode-target d-none" data-for-mode="group">
+        <select name="groupId" class="form-select form-select-sm">
+            <option value="">Select a group…</option>
+            @foreach (var g in Groups)
+            {
+                <option value="@g.Id" selected="@(GroupId == g.Id)">@(new string('—', Depth(g))) @g.Name</option>
+            }
+        </select>
+    </div>
+    <div class="col-md-3 snapshot-mode-target d-none" data-for-mode="view">
+        <select name="viewId" class="form-select form-select-sm">
+            <option value="">Select a view…</option>
+            @foreach (var v in Views)
+            {
+                <option value="@v.Id" selected="@(ViewId == v.Id)">@v.Name</option>
+            }
+        </select>
+    </div>
+    <div class="col-md-2">
+        <input type="date" name="from" value="@From" class="form-control form-control-sm" />
+    </div>
+    <div class="col-md-2">
+        <input type="date" name="to" value="@To" class="form-control form-control-sm" />
+    </div>
+    <div class="col-md-1">
+        <button type="submit" class="btn btn-sm btn-primary w-100">Filter</button>
+    </div>
+    <div class="col-md-1">
+        <a href="/Snapshots" class="btn btn-sm btn-outline-secondary w-100" data-clear-filters>Clear</a>
+    </div>
+</form>
+
+<div class="d-flex flex-column flex-lg-row gap-3">
+    @* Collapsible filter tree — everything checked by default (see IsKindChecked/IsLabelChecked),
+       unchecking a whole category excludes everything under it (the existing Kinds behavior),
+       unchecking one specific label under a category excludes just that label. Checkbox states here
+       feed snapshotFilterForm via the name="kinds" attribute (category/kind nodes, submitted
+       natively) and, for specific labels, via the hidden excludedLabels inputs the script below
+       builds right before submit — see that script's own comment for why labels need this instead
+       of a plain checked-box name/value pair. *@
+    <aside class="snapshot-filter-tree" style="min-width: 15rem; max-width: 18rem;">
+        <div class="d-flex flex-column gap-1">
+            <div class="form-check mb-0">
+                <input type="checkbox" class="form-check-input" id="kind-customtag" name="kinds" value="@CustomTagToken" checked="@IsKindChecked(CustomTagToken)" form="snapshotFilterForm" />
+                <label class="form-check-label small" for="kind-customtag">🏷️ Custom tags</label>
+            </div>
+            @foreach (var node in TopLevelNodes)
+            {
+                var children = DetectedObjectLabels.Where(l => l.CategoryName.Equals(node.Name, StringComparison.OrdinalIgnoreCase)).ToList();
+                if (children.Count == 0)
+                {
+                    <div class="form-check mb-0">
+                        <input type="checkbox" class="form-check-input" id="kind-@node.Name" name="kinds" value="@node.Name" checked="@IsKindChecked(node.Name)" form="snapshotFilterForm" />
+                        <label class="form-check-label small" for="kind-@node.Name">
+                            @if (node.Emoji is { } emoji) { @emoji }
+                            else if (node.ColorHex is { } color) { <span class="badge" style="background-color: @color;">&nbsp;</span> }
+                            @node.Name
+                        </label>
+                    </div>
+                }
+                else
+                {
+                    <details open class="snapshot-filter-tree-node">
+                        <summary class="d-flex align-items-center gap-1">
+                            <span class="snapshot-tree-caret" aria-hidden="true">▸</span>
+                            <input type="checkbox" class="form-check-input snapshot-tree-parent" id="kind-@node.Name" name="kinds" value="@node.Name"
+                                   checked="@IsKindChecked(node.Name)" form="snapshotFilterForm" data-children-of="@node.Name" onclick="event.stopPropagation();" />
+                            <label class="form-check-label small" for="kind-@node.Name" onclick="event.stopPropagation();">
+                                @if (node.ColorHex is { } color2) { <span class="badge" style="background-color: @color2;">&nbsp;</span> }
+                                @node.Name
+                            </label>
+                        </summary>
+                        <div class="snapshot-tree-children d-flex flex-column gap-1 mt-1">
+                            @foreach (var child in children)
+                            {
+                                var token = $"{node.Name}:{child.Label}";
+                                <div class="form-check mb-0">
+                                    <input type="checkbox" class="form-check-input snapshot-tree-child" id="label-@token" data-label-token="@token"
+                                           data-parent-name="@node.Name" checked="@IsLabelChecked(node.Name, child.Label)" />
+                                    <label class="form-check-label small" for="label-@token">@Char.ToUpperInvariant(child.Label[0])@child.Label[1..]</label>
+                                </div>
+                            }
+                        </div>
+                    </details>
+                }
+            }
+        </div>
+    </aside>
+
+    <div class="flex-grow-1">
+    @if (Results.Items.Count == 0)
+    {
+        <p class="text-muted">No detections found@(Mode != "all" || From is not null || To is not null ? " for this filter." : " yet.")</p>
+    }
+    else
+    {
+    <PaginationControls Model="@(new PaginationViewModel(Results.CurrentPage, Results.TotalPages, SnapshotPageUrl, CssClass: "mb-3", AriaLabel: "Pagination (top)"))" />
+    <div class="row row-cols-1 row-cols-sm-2 row-cols-md-3 row-cols-lg-4 g-3">
+        @foreach (var s in Results.Items)
+        {
+            var atUtcIso = s.AtUtc.ToString("o");
+            var playFromUtcIso = s.PlayFromUtc.ToString("o");
+            var frameColors = SnapshotBorderStyle.OrderColors(s.Badges.Select(b => b.ColorHex).DefaultIfEmpty(s.ColorHex));
+            var frameGradient = SnapshotBorderStyle.GradientCss(frameColors);
+            var imgSrc = s.IsAiDetection
+                ? $"/snapshot-image/{s.CameraId}/{s.Id}"
+                : $"/playback-thumbnail/{s.CameraId}?atUtc={Uri.EscapeDataString(atUtcIso)}&exact=true";
+            <div class="col">
+                @* Every card gets a 3px border in its badge color. One distinct color → a plain solid
+                   border; two or more → a 3px gradient ring — see SnapshotBorderStyle.cs and the
+                   .snapshot-card--framed block in site.css. *@
+                <div class="card h-100@(frameGradient is null ? "" : " snapshot-card--framed")"
+                     style="@(frameGradient is null
+                                ? $"border-width: 3px; border-color: {(frameColors.Count == 1 ? frameColors[0] : s.ColorHex)};"
+                                : $"--snapshot-frame: {frameGradient};")">
+                    <a href="/Playback?cameraId=@s.CameraId&atUtc=@Uri.EscapeDataString(playFromUtcIso)">
+                        <img src="@imgSrc"
+                             loading="lazy" class="card-img-top" data-snapshot-thumb style="aspect-ratio: 16/9; object-fit: contain; background: var(--bs-secondary-bg);"
+                             alt="Snapshot thumbnail"
+                             onerror="this.style.display='none'; this.nextElementSibling.classList.remove('d-none');" />
+                        <div class="d-none text-muted small text-center d-flex align-items-center justify-content-center"
+                             style="aspect-ratio: 16/9; background: var(--bs-secondary-bg);">
+                            No thumbnail available
+                        </div>
+                    </a>
+                    <div class="card-body py-2 px-2">
+                        @foreach (var badge in s.Badges)
+                        {
+                            <span class="badge" style="background-color: @badge.ColorHex;">
+                                @badge.Emoji @badge.Label@if (badge.MovingCount is { } n && n > 1)
+                                {<span class="snapshot-badge-count" title="@n moving at once">&times;@n</span>}@if (badge.Confidence is { } c)
+                                {<span class="snapshot-badge-confidence" title="Detection confidence">@FormatConfidence(c)</span>}
+                            </span>
+                        }
+                        <span class="badge bg-secondary" title="How long this event lasted">@FormatDuration(s.Duration)</span>
+                        <div class="small text-muted mt-1">@s.CameraName</div>
+                        <div class="small text-muted" title="@s.AtUtc.ToString("u")">@s.AtUtc.ToLocalTime().ToString("G")</div>
+                    </div>
+                    <div class="card-footer py-1 px-2 text-end">
+                        <a class="btn btn-sm btn-outline-primary" href="/Playback?cameraId=@s.CameraId&atUtc=@Uri.EscapeDataString(playFromUtcIso)">▶ Play</a>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+    }
+
+    <PaginationControls Model="@(new PaginationViewModel(Results.CurrentPage, Results.TotalPages, SnapshotPageUrl))" />
+    </div>
+</div>
+
+<SectionContent SectionName="PageScripts">
+    <script src="/js/snapshot-load-status.js"></script>
+    @* Filter-tree parent/child sync, the excludedLabels submit build, and per-user memory of the
+       tree's expand/collapse + checkbox state — see snapshot-filter-tree.js. *@
+    <script src="/js/snapshot-filter-tree.js"></script>
+    <script>
+        (function () {
+            var modeSelect = document.getElementById('snapshotMode');
+            var targets = document.querySelectorAll('.snapshot-mode-target');
+            function applyMode() {
+                targets.forEach(function (el) {
+                    el.classList.toggle('d-none', el.getAttribute('data-for-mode') !== modeSelect.value);
+                });
+            }
+            modeSelect.addEventListener('change', applyMode);
+            applyMode();
+        })();
+    </script>
+</SectionContent>
+
+@code {
+    private const int PageSize = 24;
+
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+
+    [SupplyParameterFromQuery(Name = "cameraId")] private Guid? CameraId { get; set; }
+    [SupplyParameterFromQuery(Name = "mode")] private string? ModeParam { get; set; }
+    [SupplyParameterFromQuery(Name = "groupId")] private Guid? GroupId { get; set; }
+    [SupplyParameterFromQuery(Name = "viewId")] private Guid? ViewId { get; set; }
+    [SupplyParameterFromQuery(Name = "from")] private string? From { get; set; }
+    [SupplyParameterFromQuery(Name = "to")] private string? To { get; set; }
+    [SupplyParameterFromQuery(Name = "pageNumber")] private int PageNumber { get; set; }
+    [SupplyParameterFromQuery(Name = "kinds")] private string[]? Kinds { get; set; }
+    [SupplyParameterFromQuery(Name = "excludedLabels")] private string[]? ExcludedLabels { get; set; }
+
+    private SnapshotPageDto Results { get; set; } = new([], 1, 1);
+    private List<Camera> Cameras { get; set; } = [];
+    private List<CameraGroup> Groups { get; set; } = [];
+    private List<View> Views { get; set; } = [];
+    private string Mode => ModeParam ?? (CameraId is null ? "all" : "single");
+    private List<DetectedObjectCategoryDto> DetectedObjectCategories { get; set; } = [];
+    private List<DetectedObjectLabelDto> DetectedObjectLabels { get; set; } = [];
+    private List<(string Name, string? Emoji, string? ColorHex)> TopLevelNodes { get; set; } = [];
+
+    private const string CustomTagToken = LarisVMS.Infrastructure.Services.TimelineService.CustomTagKindToken;
+
+    private static int Depth(CameraGroup group) => group.MaterializedPath.Count(c => c == '/') - 1;
+
+    private bool IsKindChecked(string token) => Kinds is null || Kinds.Contains(token, StringComparer.OrdinalIgnoreCase);
+
+    private bool IsLabelChecked(string category, string label) =>
+        ExcludedLabels is null || !ExcludedLabels.Contains($"{category}:{label}", StringComparer.OrdinalIgnoreCase);
+
+    private static string FormatDuration(TimeSpan d)
+    {
+        if (d.TotalHours >= 1) return $"{(int)d.TotalHours}h {d.Minutes:D2}m";
+        if (d.TotalMinutes >= 1) return $"{(int)d.TotalMinutes}m {d.Seconds:D2}s";
+        return $"{Math.Max(0, (int)d.TotalSeconds)}s";
+    }
+
+    private static string FormatConfidence(double confidence) =>
+        $"{Math.Clamp(Math.Round(confidence * 100), 0, 100):0}%";
+
+    private string SnapshotPageUrl(int p)
+    {
+        var kindsQuery = Kinds is null ? "" : string.Concat(Kinds.Select(k => "&kinds=" + Uri.EscapeDataString(k)));
+        var excludedLabelsQuery = ExcludedLabels is null ? "" : string.Concat(ExcludedLabels.Select(l => "&excludedLabels=" + Uri.EscapeDataString(l)));
+        // Absolute path, not a bare "?query" — App.razor's <base href="/"> makes the browser resolve a
+        // relative query-only href against "/" (the Dashboard route), not the current page, so a bare
+        // "?mode=..." pagination link silently sent every click to "/" instead of staying on /Snapshots.
+        return $"/Snapshots?mode={Mode}&cameraId={CameraId}&groupId={GroupId}&viewId={ViewId}&from={From}&to={To}&pageNumber={p}{kindsQuery}{excludedLabelsQuery}";
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = AuthenticationStateTask is not null
+            ? (await AuthenticationStateTask).User
+            : new ClaimsPrincipal(new ClaimsIdentity());
+        var currentUserId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
+
+        // Five independent reads, previously sequential (~5 round trips) — confirmed live that
+        // Blazor's enhanced navigation doesn't let a new click interrupt an in-flight slow one (no
+        // URL change, no spinner, just unresponsive until the current navigation resolves), so a
+        // slow-loading page silently blocks navigating away from it entirely. Each gets its own DI
+        // scope (and thus its own DbContext instance) so they can run concurrently without violating
+        // EF Core's single-operation-per-context rule — see MainLayout's own doc comment for why
+        // sharing one DbContext across concurrent calls crashes.
+        using var camerasScope = ScopeFactory.CreateScope();
+        using var groupsScope = ScopeFactory.CreateScope();
+        using var categoriesScope = ScopeFactory.CreateScope();
+        using var labelsScope = ScopeFactory.CreateScope();
+        using var viewsScope = ScopeFactory.CreateScope();
+
+        var camerasTask = camerasScope.ServiceProvider.GetRequiredService<ICameraService>().ListAsync();
+        var groupsTask = groupsScope.ServiceProvider.GetRequiredService<ICameraGroupService>().GetTreeAsync();
+        var categoriesTask = categoriesScope.ServiceProvider.GetRequiredService<ITimelineService>().GetDetectedObjectCategoriesAsync();
+        var labelsTask = labelsScope.ServiceProvider.GetRequiredService<ITimelineService>().GetDetectedObjectLabelsAsync();
+        var viewsTask = viewsScope.ServiceProvider.GetRequiredService<IViewService>().ListVisibleToAsync(currentUserId);
+
+        await Task.WhenAll(camerasTask, groupsTask, categoriesTask, labelsTask, viewsTask);
+
+        Cameras = (await camerasTask).OrderBy(c => c.Name).ToList();
+        Groups = await groupsTask;
+        DetectedObjectCategories = await categoriesTask;
+        DetectedObjectLabels = await labelsTask;
+        Views = await viewsTask;
+
+        var topLevelKinds = DetectionDisplay.AllKinds
+            .Select(k => (Name: k.ToString(), Emoji: (string?)DetectionDisplay.Emoji(k), ColorHex: (string?)null))
+            .ToList();
+        var topLevelCategoriesOnly = DetectedObjectCategories
+            .Where(c => !topLevelKinds.Any(k => k.Name.Equals(c.Name, StringComparison.OrdinalIgnoreCase)))
+            .Select(c => (Name: c.Name, Emoji: (string?)null, ColorHex: (string?)c.ColorHex));
+        TopLevelNodes = topLevelKinds.Concat(topLevelCategoriesOnly).ToList();
+
+        List<Guid>? cameraIds = Mode switch
+        {
+            "all" => null,
+            "group" when GroupId is { } gid => await CameraGroupService.GetCameraIdsInSubtreeAsync(gid),
+            "view" when ViewId is { } vid => await ResolveViewCameraIdsAsync(currentUserId, vid),
+            _ => CameraId is { } cid ? [cid] : null,
+        };
+
+        var fromUtc = LocalDateFilter.StartOfDayUtc(From);
+        var toUtc = LocalDateFilter.EndOfDayUtc(To);
+
+        Results = await TimelineService.GetSnapshotsAsync(cameraIds, fromUtc, toUtc, PageNumber < 1 ? 1 : PageNumber, PageSize, default, Kinds, ExcludedLabels);
+    }
+
+    private async Task<List<Guid>> ResolveViewCameraIdsAsync(string userId, Guid viewId)
+    {
+        var view = await ViewService.GetVisibleToAsync(viewId, userId);
+        return view is null ? [] : ViewLayout.CameraIds(view.LayoutJson);
+    }
+}

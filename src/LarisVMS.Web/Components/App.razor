@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="light">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <base href="/" />
+    <link rel="stylesheet" href="/lib/bootstrap/dist/css/bootstrap.min.css" />
+    <link rel="stylesheet" href="/css/theme.css" />
+    <link rel="stylesheet" href="/css/site.css" />
+    <HeadOutlet />
+    <script>
+        // Anti-flash: applies the stored theme (or the system preference, when unset — 'auto' is
+        // the default) before first paint. Kept identical to _Layout.cshtml's copy so Razor-Pages-
+        // served and Blazor-served pages never disagree on initial theme during the migration.
+        (function () {
+            var t = localStorage.getItem('larisvms.theme');
+            if (t === 'dark' || t === 'light') {
+                document.documentElement.setAttribute('data-bs-theme', t);
+            } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                document.documentElement.setAttribute('data-bs-theme', 'dark');
+            }
+        })();
+    </script>
+</head>
+<body>
+    <Routes />
+
+    <script src="/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/js/user-preferences.js"></script>
+    <script src="/js/theme.js"></script>
+    <script src="/js/sortable-table.js"></script>
+    <script src="/js/list-filter.js"></script>
+    <script src="/js/table-pagination.js"></script>
+    <script src="/js/column-picker.js"></script>
+    <script src="/js/help-popover.js"></script>
+    <script src="/js/secret-reveal.js"></script>
+    @* Equivalent of Razor Pages' @section Scripts: a page's own <SectionContent SectionName="PageScripts">
+       renders here — after every global helper above — regardless of where it's declared in that
+       page's markup. Required for anything (like dashboard.js) that depends on a global helper
+       (larisvmsPreferences, etc.) already having run; a plain <script> tag embedded directly in a
+       page's own markup executes wherever it sits in the render tree, which is before this point. *@
+    <SectionOutlet SectionName="PageScripts" />
+    <script src="_framework/blazor.web.js"></script>
+    @* Must load after blazor.web.js — it registers a listener on Blazor's own 'enhancedload' event.
+       See the file's own comment for why this exists: keeps the sidebar's active-nav highlight and
+       the theme correct across enhanced navigation, which doesn't reliably re-apply either on its
+       own. *@
+    <script src="/js/blazor-chrome-sync.js"></script>
+    @* Must load after blazor.web.js for the same reason as blazor-chrome-sync.js above — it
+       registers an 'enhancedload' listener so filter save/restore (Snapshots, Audit Logs) actually
+       fires on Blazor's in-app navigation, not just the first hard load. See the file's own
+       comment. *@
+    <script src="/js/remember-filters.js"></script>
+</body>
+</html>

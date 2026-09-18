@@ -71,13 +71,16 @@ public class OAuthCallbackModel(ApplicationDbContext db, IDataProtectionProvider
             User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, User.Identity?.Name,
             HttpContext.Connection.RemoteIpAddress?.ToString(), settings.GmailEmailAddress, ct);
 
-        TempData["SavedMessage"] = $"Connected to Gmail as {settings.GmailEmailAddress}.";
-        return RedirectToPage("/Admin/Settings/Email");
+        return SucceedRedirect($"Connected to Gmail as {settings.GmailEmailAddress}.");
     }
 
-    private IActionResult Fail(string message)
-    {
-        TempData["ErrorMessage"] = message;
-        return RedirectToPage("/Admin/Settings/Email");
-    }
+    /// <summary>Admin/Settings/Email is now a Blazor component (Components/Pages/Admin/Settings/
+    /// Email.razor) with no TempData participation, so the result of this round trip travels back via
+    /// the query string instead — read there via [SupplyParameterFromQuery] StatusMessage/
+    /// StatusIsError.</summary>
+    private IActionResult SucceedRedirect(string message) =>
+        Redirect($"/Admin/Settings/Email?statusMessage={Uri.EscapeDataString(message)}&statusIsError=false");
+
+    private IActionResult Fail(string message) =>
+        Redirect($"/Admin/Settings/Email?statusMessage={Uri.EscapeDataString(message)}&statusIsError=true");
 }
