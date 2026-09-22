@@ -57,9 +57,28 @@
         } catch (e) { /* best effort */ }
     }
 
+    // Stutter-investigation beacon (see MediaStreamEventBeacon's own doc comment) — same best-effort,
+    // never-blocks-playback shape as reportTiming above.
+    function reportStreamEvent(cameraId, role, streamMode, eventType, magnitude, detail) {
+        try {
+            fetch('/api/media/stream-event', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    cameraId: cameraId, role: role, streamMode: streamMode, eventType: eventType,
+                    magnitude: (typeof magnitude === 'number' && isFinite(magnitude)) ? magnitude : null,
+                    detail: detail || null
+                }),
+                keepalive: true
+            }).catch(function () { });
+        } catch (e) { /* best effort */ }
+    }
+
     window.larisvmsMediaEndpoint = {
         resolveLive: resolveLive,
         invalidate: invalidate,
-        reportTiming: reportTiming
+        reportTiming: reportTiming,
+        reportStreamEvent: reportStreamEvent
     };
 })();

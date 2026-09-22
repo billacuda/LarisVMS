@@ -367,7 +367,11 @@ public sealed class CameraPipelineManager : IAsyncDisposable
     public VisionLiveDetectionsResponse? GetLiveDetections(Guid cameraId)
     {
         if (!_pipelines.TryGetValue(cameraId, out var pipeline)) return null;
-        return new VisionLiveDetectionsResponse(cameraId, DateTime.UtcNow, [.. pipeline.GetLiveSnapshot()]);
+        var capturedAtUtc = pipeline.GetLiveSnapshotAtUtc();
+        // Both readings are this process's own clock — never compared against Node's or the
+        // browser's — so this duration is accurate regardless of cross-machine clock sync.
+        double? ageMs = capturedAtUtc == default ? null : (DateTime.UtcNow - capturedAtUtc).TotalMilliseconds;
+        return new VisionLiveDetectionsResponse(cameraId, ageMs, [.. pipeline.GetLiveSnapshot()]);
     }
 
     public async ValueTask DisposeAsync()

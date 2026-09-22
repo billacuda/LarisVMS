@@ -442,10 +442,11 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         var reconcileLoop = ReconcileLoopAsync(stoppingToken);
         var segmentReportLoop = SegmentReportLoopAsync(stoppingToken);
         var gatedDecisionLoop = GatedDecisionLoopAsync(stoppingToken);
+        var processHealthLoop = ProcessHealthLoopAsync(stoppingToken);
 
         try
         {
-            await Task.WhenAll(reconcileLoop, segmentReportLoop, gatedDecisionLoop);
+            await Task.WhenAll(reconcileLoop, segmentReportLoop, gatedDecisionLoop, processHealthLoop);
         }
         catch (OperationCanceledException) { }
         finally
@@ -784,6 +785,81 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             foreach (var (kind, detectionSpan) in recorder.Session.CurrentInProgressDetectionSpans(now))
                 _pendingMotionSpans.Enqueue(new MotionSpanReportItem(cameraId, null, detectionSpan.StartUtc,
                     detectionSpan.EndUtc, detectionSpan.PeakScore, EventTagRuleId: null, DetectionKind: kind));
+        }
+    }
+
+    /// <summary>
+    /// Diagnostic heartbeat for a confirmed, chronic fault: this process periodically freezes
+    /// wholesale for 20s to nearly 3 minutes (measured 2026-09-21 as 25 stalls in 70 minutes, the
+    /// longest 176s). Everything hosted here stops together — every live viewer's WebSocket send
+    /// loop, every RecordingSession stdout drain, and the report loops — while the ffmpeg child
+    /// processes keep producing, so their output backs up and then floods on recovery. Downstream
+    /// that surfaces as live view freezing and then blowing past live-view.js's own
+    /// HARD_RESYNC_THRESHOLD_SECONDS, tearing down and reconnecting every tile at once.
+    ///
+    /// Already ruled out by observation: it is not machine-wide (LarisVMS.Vision.Service, a separate
+    /// process on the same box, logs straight through every stall on its own steady cadence), and it
+    /// is not StorageRetry's blocking Thread.Sleep backoff (zero "storage I/O error" warnings on the
+    /// days measured). That leaves in-process causes, which this exists to tell apart:
+    ///
+    /// <list type="bullet">
+    /// <item>GC pause — <see cref="GC.GetTotalPauseDuration"/> delta accounts for most of the
+    /// lateness. Plausible a priori: live fragments are copied per viewer as byte[] up to ~700KB,
+    /// which is over the 85KB Large Object Heap threshold, so the live path is a steady LOH
+    /// allocation source and LOH is only collected on (blocking) gen2.</item>
+    /// <item>Thread-pool starvation — GC pause is small but the queue has backed up and the worker
+    /// pool is pinned at its maximum. Fits the long tail especially: once exhausted, the pool injects
+    /// only ~1-2 threads/sec, so recovery drags out far longer than any single GC.</item>
+    /// </list>
+    ///
+    /// Deliberately logs only when something is actually off (or once a minute as a baseline), since
+    /// a healthy node would otherwise write a line every 5s forever for no reason.
+    /// </summary>
+    private async Task ProcessHealthLoopAsync(CancellationToken ct)
+    {
+        const int IntervalMs = 5_000;
+        // The tick's own lateness IS the stall measurement: this loop only awaits a timer, so if it
+        // comes back far later than it asked for, the process was not running anything of ours.
+        const int LateThresholdMs = 1_000;
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var lastTickMs = sw.ElapsedMilliseconds;
+        var lastPause = GC.GetTotalPauseDuration();
+        var lastGen2 = GC.CollectionCount(2);
+        var sinceBaseline = 0;
+
+        while (!ct.IsCancellationRequested)
+        {
+            try { await Task.Delay(IntervalMs, ct); }
+            catch (OperationCanceledException) { break; }
+
+            var nowMs = sw.ElapsedMilliseconds;
+            var lateMs = nowMs - lastTickMs - IntervalMs;
+            lastTickMs = nowMs;
+
+            var pause = GC.GetTotalPauseDuration();
+            var pauseMs = (pause - lastPause).TotalMilliseconds;
+            lastPause = pause;
+
+            var gen2 = GC.CollectionCount(2);
+            var gen2Delta = gen2 - lastGen2;
+            lastGen2 = gen2;
+
+            ThreadPool.GetMaxThreads(out var maxWorker, out _);
+            ThreadPool.GetAvailableThreads(out var availableWorker, out _);
+            var busyWorker = maxWorker - availableWorker;
+            var pending = ThreadPool.PendingWorkItemCount;
+
+            var interesting = lateMs > LateThresholdMs || pauseMs > 500 || pending > 20;
+            if (!interesting && ++sinceBaseline < 12) continue;
+            sinceBaseline = 0;
+
+            // One line, both candidate mechanisms side by side: if gcPauseMs accounts for lateMs it
+            // is GC; if gcPauseMs is small while pending/busyWorker are high it is starvation.
+            var log = lateMs > LateThresholdMs ? LogLevel.Warning : LogLevel.Information;
+            _logger.Log(log,
+                "Node process health: tick {LateMs}ms late, gcPauseMs={PauseMs:F0} gen2Collections={Gen2} heapMB={HeapMB} busyWorkerThreads={BusyWorker}/{MaxWorker} pendingWorkItems={Pending}",
+                lateMs, pauseMs, gen2Delta, GC.GetTotalMemory(false) / (1024 * 1024), busyWorker, maxWorker, pending);
         }
     }
 

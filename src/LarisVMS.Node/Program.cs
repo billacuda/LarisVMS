@@ -105,6 +105,27 @@ var onvifHttpClient = new HttpClient(new HttpClientHandler
 { Timeout = TimeSpan.FromSeconds(45) };
 var onvifEventsClient = new OnvifEventsClient(new OnvifSoapClient(onvifHttpClient));
 
+// Thread-pool starvation mitigation for a measured, chronic fault: this process was observed
+// freezing wholesale for 20s to nearly 3 minutes (2026-09-21: 25 stalls in 70 minutes, longest
+// 176s), taking every live viewer's WebSocket send loop, every RecordingSession stdout drain and
+// the report loops down together, while the ffmpeg children kept producing — so their output backed
+// up and flooded on recovery, which downstream tore down and reconnected every live tile at once.
+//
+// NodeWorker.ProcessHealthLoopAsync measured what it was and was not: GC accounted for ~9ms of an
+// 18.4s stall (heap small and flat, so not memory pressure), while ~57 work items sat queued behind
+// only ~11 running threads. That is the signature of threads blocked rather than computing — and
+// the reason those stalls run so long is the pool's own injection rate, which adds only ~1-2 threads
+// per second once it is past its minimum. Raising the floor lets the pool create what it needs
+// immediately instead of rationing threads for tens of seconds.
+//
+// This is a mitigation, not the cure: whatever is blocking those threads is still blocking them
+// (ruled out so far — GC, StorageRetry's Thread.Sleep backoff, machine-wide stalls, and disk
+// latency, the volume being a fully-expanded VHDX on NVMe). Naming the actual blocking call needs a
+// stack dump captured during a stall. Costs nothing when unused: this sets the no-throttle ceiling,
+// it does not preallocate threads.
+ThreadPool.GetMinThreads(out var minWorkerThreads, out var minIoThreads);
+ThreadPool.SetMinThreads(Math.Max(minWorkerThreads, 128), Math.Max(minIoThreads, 128));
+
 var builder = WebApplication.CreateBuilder(args);
 // M11: a Windows Service has no console anyone will ever see — file capture is the only way to
 // diagnose a node after the fact. Sibling of node.config's own %ProgramData%\LarisVMS\ (NodeConfigStore),

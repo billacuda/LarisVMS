@@ -11,7 +11,8 @@
     var mediaEndpoint = window.larisvmsMediaEndpoint || {
         resolveLive: function (id) { return Promise.resolve({ mode: 'proxy', videoUrl: '/live/' + encodeURIComponent(id), token: null }); },
         invalidate: function () { },
-        reportTiming: function () { }
+        reportTiming: function () { },
+        reportStreamEvent: function () { }
     };
 
     // H.264 and H.265/HEVC video codec tokens, tried in order within whichever family actually
@@ -188,6 +189,20 @@
     // not oscillating between a speed-up and a stall — the old code chased the edge with a hard
     // playbackRate=1.5 and starved the buffer on every keyframe.
     var TARGET_LATENCY_SECONDS = 2.0;
+    // AI-detection box overlay hold-back (see startDetectionOverlay below): boxes arrive over their
+    // own low-latency path (near-zero detection-side buffering, ~150ms poll cadence) while the video
+    // above is deliberately held TARGET_LATENCY_SECONDS+ behind live — without this, boxes visibly
+    // lead the object they're drawn on. An empirically-tuned constant, not derived from the drift
+    // controller's live state (that state is private to startSession's closure; startDetectionOverlay
+    // is a sibling function sharing only videoEl) — matched to TARGET_LATENCY_SECONDS itself rather
+    // than padded further: an initial +1.0s fudge for upstream fragment/relay latency overshot in
+    // practice (confirmed live: boxes ran 0.5-1.5s *late* at 3.0s total), so the extra padding was
+    // removed rather than re-added elsewhere. Boxes don't need per-video-frame precision (decision 6:
+    // 5-10Hz is fine), so a tuned constant here is idiomatic, same as TARGET_LATENCY_SECONDS itself.
+    var BOX_LATENCY_SECONDS = TARGET_LATENCY_SECONDS;
+    // Safety net for a paused/backgrounded tab: a tick older than this is dropped rather than ever
+    // rendered, mirroring LiveViewerHandler's own bounded-queue-drop philosophy server-side.
+    var BOX_QUEUE_MAX_AGE_SECONDS = 5;
     // Half-width of the no-correction band around the target. Inside +/- this of the target, the
     // rate stays exactly 1.0 — a tile only corrects once it has drifted meaningfully off target, so
     // it isn't perpetually nudging the rate a hair either way.
@@ -205,6 +220,25 @@
     // more can go undetected until the tab regains focus) — falls back to ending the session, same
     // as the stall-recovery path below, so start()'s retry wrapper rebuilds cleanly at the edge.
     var HARD_RESYNC_THRESHOLD_SECONDS = 15;
+    // Drift threshold for the pause/playing recovery handler (see onVideo('playing', ...) below) to
+    // step in with an immediate seek rather than leaving it to the ordinary gentle rate-trim.
+    // Comfortably above ordinary jitter, comfortably below HARD_RESYNC_THRESHOLD_SECONDS — the whole
+    // point is to resync before drift ever gets anywhere near that cliff.
+    var PAUSE_RESYNC_THRESHOLD_SECONDS = 5;
+    // How much buffered-but-already-played data driftTimer leaves behind currentTime before trimming
+    // the rest via SourceBuffer.remove() (see driftTimer below). Nothing else in this file ever
+    // evicts old data, so during an extended stall (backgrounded tab, network hiccup) fragments keep
+    // arriving and appending indefinitely — confirmed live as a session whose backlog grew to ~120s,
+    // at which point the `waiting` handler's only keyframe-safe recovery (jumpToLiveEdge, which must
+    // target buffered.start() — see the comment block above driftTimer for why seeking anywhere else
+    // regressed) landed 120s behind the live edge and immediately tripped HARD_RESYNC_THRESHOLD_
+    // SECONDS, tearing the session down and repeating the same failure on the very next connection.
+    // Trimming bounds how far behind buffered.start() can ever be, independent of playback state
+    // (fragments keep appending even while paused), so that fallout is capped well under the
+    // hard-resync threshold instead of forcing a teardown. Comfortably above the largest *legitimate*
+    // forward drift observed (buffered.end() - currentTime, an unrelated axis — this only ever trims
+    // data *behind* currentTime, never data the catch-up controller still needs ahead of it).
+    var BUFFER_TRIM_KEEP_SECONDS = 8;
     // The badge is for sustained, visible catch-up only — not the ordinary sub-1.05x trims the
     // controller makes constantly — so it needs both a minimum rate and a couple of ticks at it.
     var CATCHUP_BADGE_MIN_RATE = 1.05;
@@ -282,6 +316,28 @@
         var driftTimer = null;
         var initialSeekDone = false;
         var catchupTicks = 0;
+        // Hoisted out of the resolveLive().then() callback below (where it's assigned) so the
+        // stutter-beacon call sites here in startSession's top level — driftTimer, jumpToLiveEdge —
+        // can report which routing mode (proxy/direct) a session was actually using.
+        var streamMode = 'proxy';
+        // Decode-health sampling state (driftTimer below) — previous tick's wall-clock time,
+        // currentTime, and cumulative dropped/total frame counts, so each tick can compute a delta
+        // rather than a cumulative-since-session-start figure. null until the first sample lands.
+        var lastHealthSampleMs = 0;
+        var lastHealthCurrentTime = 0;
+        var lastPlaybackQuality = null;
+        var decodeHealthTickCount = 0;
+        // Every Nth driftTimer tick, a decode_health beacon is sent regardless of state — cheap
+        // enough at 1 tick/sec that "every 10th" is still a fine-grained trend, without spamming the
+        // endpoint for every one of what could be many simultaneous grid tiles.
+        var DECODE_HEALTH_REPORT_EVERY_TICKS = 10;
+        // Effective rate (actual currentTime advance per wall-clock second) below this fraction of
+        // the *requested* playbackRate means the decoder itself can't keep up — asking it to go
+        // faster can't help and only starves the buffer sooner. Below this ratio the catch-up
+        // controller stops pushing the rate up and reports the shortfall immediately (not waiting
+        // for the next scheduled low-duty-cycle tick), since this is exactly the condition Part 2's
+        // GPU transcode work is meant to fix.
+        var DECODE_BOUND_RATE_RATIO = 0.85;
 
         // An appendBuffer failure is never recoverable for this session (a torn-down/replaced
         // MediaSource throws "removed from parent media source" on the very next call, and retrying
@@ -312,6 +368,70 @@
         // than once per session (e.g. after a buffering pause); onFrameVisible is idempotent so that's
         // harmless. Registered through onVideo so it's detached with the rest when the session ends.
         onVideo('playing', onFrameVisible);
+
+        // Recovery from an unexpected pause (confirmed live: video.paused briefly goes true —
+        // whatever the outside cause, a backgrounded/occluded tab, a display sleep, or anything else
+        // that stops decode for a while — with playback frozen the whole time). driftTimer's own 1Hz
+        // polling can't catch this until drift has already grown past HARD_RESYNC_THRESHOLD_SECONDS,
+        // at which point every tile in a grid that was paused together discovers it independently and
+        // hard-resyncs within the same second or two — a synchronized restart storm. Watching the
+        // element's own pause/playing transitions directly means this tile can resync to near the
+        // live edge the instant playback actually resumes, before driftTimer's next tick ever sees
+        // the large drift.
+        var wasPaused = false;
+        onVideo('pause', function () {
+            // Only stop()'s own teardown calls .pause() intentionally, and it sets closed=true first
+            // (see stop() below) — anything else pausing the element is the browser's doing, not ours.
+            if (closed || ended) return;
+            wasPaused = true;
+            // Captured at the exact instant of the pause, because everything about this freeze has so
+            // far had to be inferred after the fact: whether the page genuinely had focus/visibility
+            // (both are reported by the browser itself here rather than recalled later), whether data
+            // was still flowing, and what state the buffer was in. Cheap — an unexpected pause is
+            // rare, and each one is exactly the event worth a detailed line.
+            var buffered = 'none';
+            if (sourceBuffer && sourceBuffer.buffered.length > 0) {
+                var last = sourceBuffer.buffered.length - 1;
+                buffered = sourceBuffer.buffered.start(last).toFixed(2) + '-' + sourceBuffer.buffered.end(last).toFixed(2) +
+                    ' (ranges=' + sourceBuffer.buffered.length + ')';
+            }
+            var detail = 'visibility=' + document.visibilityState +
+                ' hasFocus=' + (typeof document.hasFocus === 'function' ? document.hasFocus() : 'n/a') +
+                ' readyState=' + videoEl.readyState +
+                ' networkState=' + videoEl.networkState +
+                ' currentTime=' + videoEl.currentTime.toFixed(2) +
+                ' buffered=' + buffered +
+                ' updating=' + (sourceBuffer ? sourceBuffer.updating : 'n/a') +
+                ' fragments=' + fragmentCount +
+                ' error=' + (videoEl.error ? videoEl.error.code : 'none');
+            console.warn('[live-view] unexpected pause —', detail);
+            mediaEndpoint.reportStreamEvent(cameraId, role || 'main', streamMode, 'unexpected_pause', null, detail);
+        });
+        onVideo('playing', function () {
+            if (!wasPaused) return;
+            wasPaused = false;
+            if (closed || ended || !sourceBuffer || sourceBuffer.buffered.length === 0) return;
+            var lastRange = sourceBuffer.buffered.length - 1;
+            var rangeEnd = sourceBuffer.buffered.end(lastRange);
+            var drift = rangeEnd - videoEl.currentTime;
+            // Small enough that the ordinary gentle rate-trim in driftTimer will close it on its own
+            // — no need to intervene for every brief, harmless pause/resume blip.
+            if (drift <= PAUSE_RESYNC_THRESHOLD_SECONDS) return;
+            // Same target formula as doInitialSeek below — proven safe in production (rangeStart is
+            // always keyframe-aligned; a point short of buffered.end() leaves headroom rather than
+            // risking the "seek too close to the live edge" MediaError regression documented above
+            // driftTimer), not a new risky pattern.
+            var rangeStart = sourceBuffer.buffered.start(lastRange);
+            var target = Math.max(rangeStart, rangeEnd - TARGET_LATENCY_SECONDS);
+            console.log('[live-view] resynced after playback resumed, currentTime=', videoEl.currentTime,
+                '-> ', target, 'was', drift.toFixed(1), 's behind');
+            videoEl.currentTime = target;
+            videoEl.playbackRate = 1;
+            catchupTicks = 0;
+            hideCatchupBadge();
+            mediaEndpoint.reportStreamEvent(cameraId, role || 'main', streamMode, 'pause_resync', drift, null);
+        });
+
         onVideo('error', function () {
             var err = videoEl.error;
             var msg = 'Video decode error' + (err ? ' (code ' + err.code + ')' : '') + '.';
@@ -353,6 +473,7 @@
                 console.log('[live-view] ' + reason + ', currentTime=', videoEl.currentTime, '-> ', target,
                     'buffered=', target, '-', sourceBuffer.buffered.end(lastRange));
                 videoEl.currentTime = target;
+                mediaEndpoint.reportStreamEvent(cameraId, role || 'main', streamMode, 'gap_jump', null, reason);
             }
 
             // A fresh <video> defaults to currentTime=0, but this live leg has been running (and its
@@ -449,16 +570,78 @@
                 // one-time initial seek has positioned currentTime — until then it's at 0 while
                 // buffered.end() is minutes in, which reads as a huge false "drift".
                 if (!initialSeekDone) return;
+
+                // Runs even while paused — fragments keep arriving and appending regardless of
+                // playback state, so backlog can grow whether or not the controller below is active.
+                // remove() is itself an async SourceBuffer operation gated by `updating`, same as
+                // appendBuffer; skipping this tick when busy is fine, the next tick tries again.
+                //
+                // Exonerated by an isolation test (2026-09-21): the freeze this was briefly suspected
+                // of causing reproduced identically with this disabled, and was then traced to the
+                // node process stalling wholesale (see NodeWorker.ProcessHealthLoopAsync). Kept on
+                // because it still bounds the worst case — an extended upstream stall would otherwise
+                // let backlog grow until the `waiting` handler's only keyframe-safe recovery
+                // (jumpToLiveEdge → buffered.start()) lands far enough back to trip
+                // HARD_RESYNC_THRESHOLD_SECONDS and tear the session down.
+                if (!sourceBuffer.updating && sourceBuffer.buffered.length > 0) {
+                    var trimEnd = videoEl.currentTime - BUFFER_TRIM_KEEP_SECONDS;
+                    if (trimEnd > sourceBuffer.buffered.start(0)) {
+                        try { sourceBuffer.remove(0, trimEnd); } catch (e) { /* best-effort, retried next tick */ }
+                    }
+                }
+
                 if (videoEl.paused || sourceBuffer.buffered.length === 0) return;
                 var lastRange = sourceBuffer.buffered.length - 1;
                 var liveEdge = sourceBuffer.buffered.end(lastRange);
                 var drift = liveEdge - videoEl.currentTime;
+
+                // Decode-health sample: how much currentTime actually advanced this tick vs. wall
+                // time, against the rate we asked for. A decoder that's keeping up tracks
+                // playbackRate closely; one that's saturated (too many simultaneous decode
+                // instances, insufficient hardware accel) can't exceed roughly 1x of real time no
+                // matter what rate is requested — this is the same signature that showed up live as
+                // "requesting 1.25x never closes the gap." See DECODE_BOUND_RATE_RATIO above.
+                var nowMs = Date.now();
+                var effectiveRate = null, rateRatio = null, decodeBound = false;
+                if (lastHealthSampleMs > 0) {
+                    var wallDeltaS = (nowMs - lastHealthSampleMs) / 1000;
+                    if (wallDeltaS > 0) {
+                        effectiveRate = (videoEl.currentTime - lastHealthCurrentTime) / wallDeltaS;
+                        if (videoEl.playbackRate > 0) {
+                            rateRatio = effectiveRate / videoEl.playbackRate;
+                            decodeBound = rateRatio < DECODE_BOUND_RATE_RATIO;
+                        }
+                    }
+                }
+                var droppedDelta = null, totalDelta = null;
+                if (typeof videoEl.getVideoPlaybackQuality === 'function') {
+                    var quality = videoEl.getVideoPlaybackQuality();
+                    if (lastPlaybackQuality) {
+                        droppedDelta = quality.droppedVideoFrames - lastPlaybackQuality.droppedVideoFrames;
+                        totalDelta = quality.totalVideoFrames - lastPlaybackQuality.totalVideoFrames;
+                    }
+                    lastPlaybackQuality = quality;
+                }
+                lastHealthSampleMs = nowMs;
+                lastHealthCurrentTime = videoEl.currentTime;
+
+                // Reported on a low duty cycle to stay cheap across a grid of simultaneous tiles,
+                // except a decode-bound tick is reported immediately — that's the condition worth
+                // seeing right away, not up to 10s later.
+                decodeHealthTickCount++;
+                if (decodeBound || decodeHealthTickCount % DECODE_HEALTH_REPORT_EVERY_TICKS === 0) {
+                    var healthDetail = 'requestedRate=' + videoEl.playbackRate.toFixed(2) +
+                        (effectiveRate !== null ? ' effectiveRate=' + effectiveRate.toFixed(2) : '') +
+                        (totalDelta !== null ? ' droppedFrames=' + droppedDelta + '/' + totalDelta : '');
+                    mediaEndpoint.reportStreamEvent(cameraId, role || 'main', streamMode, 'decode_health', rateRatio, healthDetail);
+                }
 
                 if (drift > HARD_RESYNC_THRESHOLD_SECONDS) {
                     // Deliberately NOT a seek — every seek-based correction tried here regressed (see
                     // the comment block above). Ending the session hands off to start()'s retry
                     // wrapper, which builds a fresh MediaSource that begins cleanly near the edge.
                     console.log('[live-view] ' + drift.toFixed(1) + 's behind live edge — too far to catch up, restarting session');
+                    mediaEndpoint.reportStreamEvent(cameraId, role || 'main', streamMode, 'hard_resync', drift, null);
                     videoEl.playbackRate = 1;
                     hideCatchupBadge();
                     closed = true;
@@ -477,12 +660,19 @@
                 } else if (error < -LATENCY_DEADBAND_SECONDS) {
                     desiredRate = Math.max(CATCHUP_MIN_RATE, 1 + CATCHUP_RATE_GAIN * (error + LATENCY_DEADBAND_SECONDS));
                 }
+                // The decoder already can't sustain the current rate — asking for more can't close
+                // the gap (confirmed live: requesting 1.25x never moved drift) and only starves the
+                // buffer sooner, which is what turns an ordinary catch-up into a hard resync. Let
+                // drift sit wider instead of thrashing toward a restart neither more speed nor more
+                // time will fix.
+                if (decodeBound && desiredRate > 1) desiredRate = 1;
                 if (Math.abs(videoEl.playbackRate - desiredRate) > 0.01) videoEl.playbackRate = desiredRate;
 
                 // Badge only on sustained real catch-up, not the constant sub-1.05x trims.
                 if (desiredRate >= CATCHUP_BADGE_MIN_RATE) {
                     if (++catchupTicks === CATCHUP_BADGE_SUSTAIN_TICKS) {
                         console.log('[live-view] catching up to live edge (' + drift.toFixed(1) + 's behind)');
+                        mediaEndpoint.reportStreamEvent(cameraId, role || 'main', streamMode, 'catchup', drift, desiredRate.toFixed(2) + 'x');
                     }
                     if (catchupTicks >= CATCHUP_BADGE_SUSTAIN_TICKS) showCatchupBadge(desiredRate);
                 } else {
@@ -510,7 +700,8 @@
                 if (closed || ended) return;
                 ticket = ticket || { mode: 'proxy' };
 
-                var url, streamMode = 'proxy';
+                var url;
+                streamMode = 'proxy';
                 if (ticket.mode === 'direct' && ticket.videoUrl && ticket.token) {
                     var sep = ticket.videoUrl.indexOf('?') >= 0 ? '&' : '?';
                     url = ticket.videoUrl + sep + 'token=' + encodeURIComponent(ticket.token) +
@@ -566,7 +757,10 @@
                     // 1008 (policy violation) is the node telling us this viewer fell behind and it
                     // closed rather than splice a gap into the stream — see this function's header
                     // comment. start()'s retry wrapper reconnects with a fresh init segment.
-                    if (evt.code === 1008) console.log('[live-view] server dropped us for falling behind — reconnecting');
+                    if (evt.code === 1008) {
+                        console.log('[live-view] server dropped us for falling behind — reconnecting');
+                        mediaEndpoint.reportStreamEvent(cameraId, role || 'main', streamMode, 'server_disconnect', evt.code, evt.reason || null);
+                    }
                     if (!wasAlreadyClosed && statusEl.textContent === '') {
                         statusEl.textContent = evt.reason || 'Disconnected.';
                     }
@@ -726,6 +920,13 @@
         var showConfidence = false;
         var stopped = false;
         var reconnectTimer = null;
+        // Hold-back queue (see BOX_LATENCY_SECONDS above): each tick waits here, tagged with its own
+        // scheduled render time (BOX_LATENCY_SECONDS minus however old it already was on arrival),
+        // roughly matching when the video itself will show that same moment — instead of drawing the
+        // instant it arrives over the wire.
+        var pendingTicks = [];
+        var lastRenderedAtMs = 0;
+        var holdBackTimer = null;
 
         function draw() {
             canvas.style.transform = (fsHandle && fsHandle.isFullscreen()) ? fsHandle.getTransformCss() : '';
@@ -806,21 +1007,73 @@
             refreshBadgesForCamera(cameraId);
         }
 
+        // Renders the newest pending tick whose hold-back has elapsed, dropping everything up to and
+        // including it (older superseded ticks never draw) — run on the same cadence as the boxes
+        // arrive at (DetectionOverlayHandler.PollInterval) rather than a separate timer granularity.
+        function pumpPendingTicks() {
+            var nowMs = Date.now();
+            var i = pendingTicks.length - 1;
+            // Newest-first scan for the newest tick that's actually due; anything older (whether due
+            // or not) is superseded by it and dropped without ever drawing. atMs is already the
+            // scheduled render time (computed once at push, below) — not the capture time — so no
+            // further arithmetic happens here.
+            for (; i >= 0; i--) {
+                if (pendingTicks[i].atMs <= nowMs) break;
+            }
+            if (i >= 0) {
+                var tick = pendingTicks[i];
+                pendingTicks = pendingTicks.slice(i + 1);
+                // A clock step (NTP correction) must never make boxes visually rewind to an earlier
+                // moment than what's already on screen.
+                if (tick.atMs >= lastRenderedAtMs) {
+                    lastRenderedAtMs = tick.atMs;
+                    latestBoxes = tick.boxes;
+                    draw();
+                    updateAiBadgeState();
+                }
+            }
+            // Safety net for a paused/backgrounded tab: never let the queue grow unbounded.
+            var cutoffMs = nowMs - BOX_QUEUE_MAX_AGE_SECONDS * 1000;
+            pendingTicks = pendingTicks.filter(function (t) { return t.atMs >= cutoffMs; });
+        }
+
         function connect() {
             if (stopped) return;
             var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
             socket = new WebSocket(proto + '//' + location.host + '/live/' + cameraId + '/detections');
             socket.onmessage = function (evt) {
+                var parsed;
                 try {
-                    latestBoxes = JSON.parse(evt.data) || [];
+                    parsed = JSON.parse(evt.data);
                 } catch (e) {
                     return; // one malformed tick — next one supersedes it
                 }
-                draw();
-                updateAiBadgeState();
+                var boxes = (parsed && parsed.boxes) || [];
+                // No usable delay budget (pipeline hasn't processed a frame yet, or this tick fell
+                // back after a skipped/failed poll — see DetectionOverlayHandler.FetchSnapshotAsync)
+                // — draw immediately rather than waiting on a hold-back that can never elapse.
+                if (!parsed || typeof parsed.ageMs !== 'number' || !isFinite(parsed.ageMs)) {
+                    latestBoxes = boxes;
+                    draw();
+                    updateAiBadgeState();
+                    return;
+                }
+                // ageMs (how old this snapshot already was when Vision Service sent it — see
+                // VisionLiveDetectionsResponse's doc comment) is a duration computed entirely on
+                // Vision Service's own clock; scheduling the remaining wait against this machine's
+                // own Date.now() here means the two clocks are never compared against each other.
+                // If a snapshot arrives already older than the whole budget (e.g. slow inference),
+                // clamping to 0 draws it immediately rather than compounding a real delay with an
+                // artificial one.
+                var dueAtMs = Date.now() + Math.max(0, BOX_LATENCY_SECONDS * 1000 - parsed.ageMs);
+                pendingTicks.push({ atMs: dueAtMs, boxes: boxes });
+                if (!holdBackTimer) holdBackTimer = setInterval(pumpPendingTicks, 150);
             };
             socket.onclose = function () {
                 socket = null;
+                if (holdBackTimer) { clearInterval(holdBackTimer); holdBackTimer = null; }
+                pendingTicks = [];
+                lastRenderedAtMs = 0;
                 if (stopped || !(showMoving || showIdle)) return;
                 // Routine reconnect, same fixed-delay spirit as the freeze-overlay/retry story the
                 // video socket already has — this feed is lower-stakes (a missed box or two is not
@@ -837,7 +1090,10 @@
                 connect();
             } else if (!anyOn) {
                 if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+                if (holdBackTimer) { clearInterval(holdBackTimer); holdBackTimer = null; }
                 if (socket) { try { socket.close(); } catch (e) {} socket = null; }
+                pendingTicks = [];
+                lastRenderedAtMs = 0;
                 latestBoxes = [];
                 draw();
                 clearAiBadgeState();
@@ -853,6 +1109,8 @@
             stop: function () {
                 stopped = true;
                 if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+                if (holdBackTimer) { clearInterval(holdBackTimer); holdBackTimer = null; }
+                pendingTicks = [];
                 if (socket) { try { socket.close(); } catch (e) {} }
                 if (canvas.parentElement) canvas.parentElement.removeChild(canvas);
                 clearAiBadgeState();

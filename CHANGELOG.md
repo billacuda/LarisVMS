@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.207.0] - 2026-09-22
+
+### Fixed
+
+- **Live view froze for 20 seconds to nearly 3 minutes at a time, then tore down and reconnected
+  every tile at once.** Root cause was **thread-pool starvation in the node process**, not anything
+  in the browser: the process stalled wholesale — every live viewer's WebSocket send loop, every
+  `RecordingSession` stdout drain and the report loops all stopping together — while the ffmpeg
+  children kept producing, so their output backed up and then flooded on recovery. That flood pushed
+  `buffered.end()` forward 15-25s in one step, which `live-view.js` correctly read as being far past
+  `HARD_RESYNC_THRESHOLD_SECONDS` and responded to by restarting every session simultaneously.
+  Measured on a real node: 25 stalls in 70 minutes, the longest 176s. The stalls ran so long because
+  of the pool's own injection rate — once past its minimum it adds only ~1-2 threads/sec — so
+  `Node/Program.cs` now raises the floor (`ThreadPool.SetMinThreads(128, 128)`), letting the pool
+  create what it needs immediately. After: queued work items 57 → 0, heartbeat lateness 18,424ms →
+  under 15ms, and client-side resyncs → zero. Note this is a mitigation, not a cure: busy thread
+  count is unchanged, so whatever blocks those threads still blocks them — the pool simply has
+  headroom to absorb it now. Naming the blocking call needs a stack dump taken during a stall.
+- **AI detection boxes were drawn ahead of the objects they marked.** Live video is deliberately
+  held `TARGET_LATENCY_SECONDS` behind the live edge for smooth MSE playback, while detection boxes
+  were drawn the instant they arrived over their own socket — so the boxes consistently led the
+  picture. The pipeline already computed the frame's true capture instant for exactly this purpose
+  (`CameraDetectionPipeline.GetLiveSnapshotAtUtc`) but nothing consumed it:
+  `CameraPipelineManager.GetLiveDetections` stamped its response with `DateTime.UtcNow` instead, and
+  Node then discarded the field before it ever reached the browser. `VisionLiveDetectionsResponse`
+  now carries `AgeMs` — a *duration* computed entirely on Vision Service's own clock, so no hop ever
+  compares its clock against another machine's — which Node and Web relay untouched and
+  `live-view.js` uses to hold each tick on a short queue until the video has caught up to it.
+- **Boxes then ran late instead**, because the first hold-back constant overshot: it assumed a full
+  extra second of upstream fragment/relay latency on top of the client-side buffer. Retuned
+  `BOX_LATENCY_SECONDS` to match `TARGET_LATENCY_SECONDS` with no padding.
+- **A stalled tile could rewind roughly two minutes and take the session down with it.** Nothing
+  ever trimmed the SourceBuffer, so during an extended stall the buffered range grew unbounded
+  (observed at ~120s); when `waiting` then fired, the only keyframe-safe recovery available
+  (`jumpToLiveEdge`, which must target `buffered.start()`) landed that far back, instantly tripping
+  the hard-resync threshold. `driftTimer` now trims played-out data behind `currentTime`
+  (`BUFFER_TRIM_KEEP_SECONDS`), bounding the worst case well under that threshold.
+
+### Added
+
+- **Live-view health telemetry** — a best-effort client beacon (`POST /api/media/stream-event`,
+  `MediaStreamEventBeacon`) that lands drift-controller events in the app's own log instead of only
+  a browser console nobody was watching at the time, mirroring the existing `/api/media/timing`
+  beacon. Event types: `catchup`, `hard_resync`, `gap_jump`, `server_disconnect`, `decode_health`
+  (periodic decoder-throughput sample — effective vs. requested playback rate, plus dropped-frame
+  counts, which is what proved the client was keeping up fine and moved the investigation
+  server-side), `unexpected_pause` (captures visibility/focus/buffer state at the instant the
+  element pauses) and `pause_resync`.
+- **Node process-health heartbeat** (`NodeWorker.ProcessHealthLoopAsync`) — measures its own tick
+  lateness, which *is* the stall, alongside GC pause duration, heap size, busy worker threads and
+  queued work items. This is what separated GC from thread-pool starvation in a single log line
+  (9ms of GC across an 18.4s stall, with 57 items queued behind 11 running threads). Logs only when
+  something is off, plus a once-a-minute baseline.
+- **Recovery from an unexpected pause** — `live-view.js` now watches the video element's own
+  `pause`/`playing` transitions and, when playback resumes more than `PAUSE_RESYNC_THRESHOLD_SECONDS`
+  behind, seeks straight to near the live edge rather than waiting for `driftTimer` to discover the
+  drift and hard-resync. Covers a backgrounded/occluded window (see the README troubleshooting note)
+  and anything else that stops decode.
+- **Decode-aware rate control** — when a tile's measured playback rate falls well short of the rate
+  actually requested, the catch-up controller stops pushing the rate higher, since a saturated
+  decoder cannot go faster and the attempt only starves the buffer sooner.
+
 ## [0.206.0] - 2026-09-18
 
 ### Changed

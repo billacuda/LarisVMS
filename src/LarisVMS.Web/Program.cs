@@ -1521,6 +1521,18 @@ app.MapPost("/api/media/timing", (MediaTimingBeacon beacon, ILoggerFactory logge
     return Results.NoContent();
 }).RequireAuthorization("Cameras.View");
 
+// Live-view stutter/catch-up investigation: turns live-view.js's console-only drift-controller
+// events (catchup, hard_resync, gap_jump, server_disconnect) into a queryable log record, so
+// whether these are the expected occasional rate-trim or a real capacity/network problem can be
+// judged from logs instead of needing a browser open with devtools at the right moment.
+app.MapPost("/api/media/stream-event", (MediaStreamEventBeacon beacon, ILoggerFactory loggerFactory) =>
+{
+    loggerFactory.CreateLogger("MediaStreamHealth").LogInformation(
+        "stream event camera={CameraId} role={Role} mode={StreamMode} type={EventType} magnitude={Magnitude} detail={Detail}",
+        beacon.CameraId, beacon.Role, beacon.StreamMode, beacon.EventType, beacon.Magnitude, beacon.Detail);
+    return Results.NoContent();
+}).RequireAuthorization("Cameras.View");
+
 // M11: Pages/Index's own 60s AJAX refresh (dashboard.js) — same IDashboardService.GetHealthAsync
 // Pages/Index.cshtml.cs's OnGetAsync itself calls, so the polled data and the server-rendered
 // initial page can never independently drift out of sync. Plain [Authorize] (no specific resource
@@ -2218,18 +2230,19 @@ static async Task ProxyDetectionOverlayAsync(WebSocket node, WebSocket browser, 
                 messageBuffer.Write(buffer, 0, result.Count);
             } while (!result.EndOfMessage);
 
-            List<VisionLiveDetectionBox> boxes;
+            VisionLiveDetectionsResponse? snapshot;
             try
             {
-                boxes = System.Text.Json.JsonSerializer.Deserialize<List<VisionLiveDetectionBox>>(messageBuffer.ToArray()) ?? [];
+                snapshot = System.Text.Json.JsonSerializer.Deserialize<VisionLiveDetectionsResponse>(messageBuffer.ToArray());
             }
             catch (System.Text.Json.JsonException)
             {
                 continue;
             }
+            if (snapshot is null) continue;
 
-            var enriched = new List<object>(boxes.Count);
-            foreach (var box in boxes)
+            var enriched = new List<object>(snapshot.Boxes.Count);
+            foreach (var box in snapshot.Boxes)
             {
                 var colorHex = await colorCache.GetColorAsync(box.Category, ct);
                 enriched.Add(new
@@ -2239,7 +2252,13 @@ static async Task ProxyDetectionOverlayAsync(WebSocket node, WebSocket browser, 
                 });
             }
 
-            var json = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(enriched, camelCaseJson);
+            // AgeMs is a duration computed entirely on Vision Service's own clock (see
+            // VisionLiveDetectionsResponse's doc comment) — passed through unchanged rather than
+            // recomputed here, so no hop in this chain ever has to compare its own clock against a
+            // different machine's. Null (no frame processed yet, or a skipped poll tick) means
+            // live-view.js's hold-back queue draws immediately instead of waiting forever.
+            var payload = new { ageMs = snapshot.AgeMs, boxes = enriched };
+            var json = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(payload, camelCaseJson);
             await browser.SendAsync(json, WebSocketMessageType.Text, endOfMessage: true, ct);
         }
     }

@@ -15,3 +15,25 @@ public record MediaLiveTicket(string Mode, bool Insecure, string VideoUrl, strin
 /// <summary>Failover plan phase 1: client → Web time-to-first-frame beacon, logged for the
 /// direct-vs-proxy A/B. Not persisted.</summary>
 public record MediaTimingBeacon(Guid CameraId, string Mode, double MsToFirstFrame);
+
+/// <summary>Client → Web live-view health beacon: one shared shape for the stutter/catch-up/decode
+/// events live-view.js's drift controller can hit (see EventType), sent so they land in this app's
+/// own logs instead of only a browser devtools console nobody was watching at the time. Best-effort,
+/// logged only — not persisted.</summary>
+/// <param name="Role">'main' or 'sub' — which of the camera's live-fMP4 sources this tile was on.</param>
+/// <param name="StreamMode">'proxy' or 'direct' — the failover-plan routing this session used.</param>
+/// <param name="EventType">"catchup" (sustained playbackRate speed-up), "hard_resync" (drift too
+/// large, session torn down), "gap_jump" (currentTime fell out of the buffered range and was
+/// resynced), "server_disconnect" (node closed the socket, viewer fell behind), "decode_health"
+/// (periodic sample of decoder throughput — see live-view.js's driftTimer for how effectiveRate vs.
+/// requestedRate distinguishes a decode-bound tile from a network/buffering one), "unexpected_pause"
+/// (the element paused without this app asking it to — Detail carries the visibility/focus/buffer
+/// state captured at that instant, since the cause has so far resisted being inferred after the
+/// fact), or "pause_resync" (playback resumed after such a pause and was resynced straight to near
+/// the live edge, rather than waiting for driftTimer to discover the drift the slow way).</param>
+/// <param name="Magnitude">Drift seconds for catchup/hard_resync/pause_resync, the WebSocket close
+/// code for server_disconnect, effective-rate/requested-rate ratio for decode_health (below ~0.85
+/// means the decoder itself is the bottleneck), null for gap_jump (no natural magnitude).</param>
+/// <param name="Detail">Free-text context — current rate, close reason, jump reason, or (for
+/// decode_health) requested/effective rate and dropped-frame counts.</param>
+public record MediaStreamEventBeacon(Guid CameraId, string Role, string? StreamMode, string EventType, double? Magnitude, string? Detail);

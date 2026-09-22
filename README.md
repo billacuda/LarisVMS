@@ -15,7 +15,7 @@ work on phone, tablet, and desktop.
 
 ---
 
-## **Current version [0.206.0](CHANGELOG.md)**
+## **Current version [0.207.0](CHANGELOG.md)**
 
 ## Stack
 
@@ -443,6 +443,34 @@ chrome.exe --disable-backgrounding-occluded-windows --disable-background-timer-t
 ```
 
 Append them to the **Target** of your Chrome shortcut, after `...\chrome.exe`.
+
+Live view also recovers from this on its own now — when playback resumes after any pause it seeks
+straight to near the live edge instead of slowly discovering the gap — so the flags are an
+optimization, not a requirement. A pause caught this way is logged as a `pause_resync` (or
+`unexpected_pause`, which records the window's visibility and focus state at that instant) in
+**Logs → System Logs**, filtered on `MediaStreamHealth`.
+
+### Live view freezes, then every tile reconnects at once
+
+If *all* tiles freeze together for tens of seconds and then reconnect simultaneously, the problem is
+almost certainly on the recorder node rather than in the browser or the network — the giveaway is
+that video and data delivery stop *together* (drift stays small during the freeze, then jumps in one
+step when the backlog floods through).
+
+The node logs a heartbeat for exactly this, in `%ProgramData%\LarisVMS\logs\node-*.log`:
+
+```
+Node process health: tick 18424ms late, gcPauseMs=9 ... busyWorkerThreads=11 pendingWorkItems=57
+```
+
+`tick N ms late` *is* the stall — that loop only awaits a timer, so if it returns late the process
+wasn't running anything. A healthy node logs this about once a minute at `[INFO]` with
+`pendingWorkItems=0` and lateness in single-digit milliseconds. Read the rest as:
+
+- **`gcPauseMs` close to the lateness** → garbage collection; look at allocation pressure.
+- **`gcPauseMs` small but `pendingWorkItems` in the tens** → thread-pool starvation; threads are
+  blocked rather than computing. Capture a stack dump *while it is stalling*
+  (`dotnet-dump collect -p <LarisVMS.Node pid>`) to find what they're blocked on.
 
 ### Email (`Admin → Settings → Email`)
 

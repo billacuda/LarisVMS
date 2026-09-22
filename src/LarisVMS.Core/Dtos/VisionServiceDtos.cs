@@ -247,8 +247,16 @@ public record VisionDetectionCropItem(Guid CameraId, DateTime AtUtc, byte[] Imag
 /// ReportIdleDetections (which only ever gates the /detections *report*, never this live read).
 /// Deliberately carries no color: Vision Service has no database access at all, the same way Node
 /// itself never touches SQL Server directly — LarisVMS.Web's own live-view proxy is what attaches
-/// each category's color when it relays this feed on to a browser.</summary>
-public record VisionLiveDetectionsResponse(Guid CameraId, DateTime AsOfUtc, List<VisionLiveDetectionBox> Boxes);
+/// each category's color when it relays this feed on to a browser.
+///
+/// <see cref="AgeMs"/> is a duration ("how old is this snapshot right now"), not an absolute
+/// timestamp — computed entirely on Vision Service's own clock (its capture instant vs. its own
+/// current time when this response is built), specifically so the browser never has to compare its
+/// own clock against a different machine's. Null only until this camera's pipeline has processed
+/// its first frame (see CameraDetectionPipeline.GetLiveSnapshotAtUtc's own doc comment) — the
+/// browser's live-view.js falls back to drawing immediately rather than waiting on a delay budget
+/// that can never be computed.</summary>
+public record VisionLiveDetectionsResponse(Guid CameraId, double? AgeMs, List<VisionLiveDetectionBox> Boxes);
 
 public record VisionLiveDetectionBox(
     int TrackId,

@@ -34,8 +34,8 @@ public static class DetectionOverlayHandler
         {
             while (!ct.IsCancellationRequested && socket.State == WebSocketState.Open)
             {
-                var boxes = await FetchBoxesAsync(cameraId, visionHttp, logger, ct);
-                var json = JsonSerializer.SerializeToUtf8Bytes(boxes);
+                var snapshot = await FetchSnapshotAsync(cameraId, visionHttp, logger, ct);
+                var json = JsonSerializer.SerializeToUtf8Bytes(snapshot);
                 await socket.SendAsync(json, WebSocketMessageType.Text, endOfMessage: true, ct);
 
                 try { await Task.Delay(PollInterval, ct); }
@@ -53,11 +53,13 @@ public static class DetectionOverlayHandler
         }
     }
 
-    /// <summary>Empty (never null) whenever Vision Service isn't currently watching this camera, or
-    /// is unreachable — the browser side just shows no boxes for that tick, not an error; a single
-    /// failed poll is routine (Vision Service restarting, a camera mid-reconnect) and must not tear
-    /// down the whole viewer connection over it.</summary>
-    private static async Task<List<VisionLiveDetectionBox>> FetchBoxesAsync(Guid cameraId, HttpClient visionHttp, ILogger logger, CancellationToken ct)
+    /// <summary>Boxes are empty (never null) whenever Vision Service isn't currently watching this
+    /// camera, or is unreachable — the browser side just shows no boxes for that tick, not an error;
+    /// a single failed poll is routine (Vision Service restarting, a camera mid-reconnect) and must
+    /// not tear down the whole viewer connection over it. AgeMs is null on any of those fallback
+    /// paths — the browser's own hold-back queue treats that as "no usable delay budget" and draws
+    /// immediately rather than waiting forever.</summary>
+    private static async Task<VisionLiveDetectionsResponse> FetchSnapshotAsync(Guid cameraId, HttpClient visionHttp, ILogger logger, CancellationToken ct)
     {
         // Bounded well below the shared client's own timeout: this runs at PollInterval per viewer,
         // so a Vision Service that has gone slow should cost this viewer a frame of boxes, not let
@@ -69,22 +71,22 @@ public static class DetectionOverlayHandler
         try
         {
             var response = await visionHttp.GetAsync($"/cameras/{cameraId}/detections", pollTimeout.Token);
-            if (!response.IsSuccessStatusCode) return [];
+            if (!response.IsSuccessStatusCode) return new VisionLiveDetectionsResponse(cameraId, null, []);
 
             var snapshot = await response.Content.ReadFromJsonAsync<VisionLiveDetectionsResponse>(pollTimeout.Token);
-            return snapshot?.Boxes ?? [];
+            return snapshot ?? new VisionLiveDetectionsResponse(cameraId, null, []);
         }
         // A poll that outran its own 2s budget while the viewer is still connected is a skipped tick,
         // not a disconnect — only the caller's own ct ending the loop should propagate.
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             logger.LogDebug("Detection poll for camera {CameraId} timed out — showing no boxes this tick.", cameraId);
-            return [];
+            return new VisionLiveDetectionsResponse(cameraId, null, []);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.LogDebug(ex, "Failed to poll Vision Service for camera {CameraId}'s live detections — will retry.", cameraId);
-            return [];
+            return new VisionLiveDetectionsResponse(cameraId, null, []);
         }
     }
 
