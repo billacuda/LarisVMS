@@ -634,7 +634,21 @@
     private string? SavedMessage;
     private bool StatusIsError;
 
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    protected override async Task OnInitializedAsync()
+    {
+        // Skip on a form POST: [SupplyParameterFromForm] has already bound this request's
+        // submitted values by the time OnInitializedAsync runs (Blazor sets those, along with
+        // cascading parameters like HttpContext below, before any lifecycle method), so reloading
+        // from the database here would overwrite every field with its stale pre-save value before
+        // HandleSaveAsync ever sees the edit. Confirmed as the reason every save on this page
+        // silently no-op'd since the Blazor migration (0.206.0): the value written back was always
+        // whatever was already in the database, never what the operator just submitted, and because
+        // HandleSaveAsync never redirects (no PRG — the POST response is the final render), there was
+        // no later GET where a correct LoadAsync() could have papered over it. Same protection
+        // RefreshLocalModels/TestConnection below already give themselves by re-applying their own
+        // edits after their own deliberate LoadAsync() call.
+        if (HttpContext?.Request.HasFormContentType != true) await LoadAsync();
+    }
 
     private async Task LoadAsync()
     {

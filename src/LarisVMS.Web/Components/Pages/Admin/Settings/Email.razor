@@ -259,7 +259,17 @@
 
     protected override async Task OnInitializedAsync()
     {
-        await LoadAsync();
+        // Skip on a form POST — same fix and same reasoning as Admin/Settings/Detection.razor's
+        // OnInitializedAsync: [SupplyParameterFromForm] has already bound this request's submitted
+        // values by the time this runs, so an unconditional LoadAsync() here overwrote every field
+        // (SmtpHost, credentials, everything) with its stale pre-save value before SaveInternalAsync
+        // ever saw the edit, and because that handler never redirects (no PRG), there was no later
+        // GET where a correct load could have papered over it. The EmailSettings table currently has
+        // no row at all, so this had not yet been observed to silently no-op an edit the way
+        // Detection.MaxFps was (LoadAsync's own settings-is-null guard is a no-op on a first save) —
+        // but it would have on the very next edit after any first save, the moment a row existed to
+        // load stale values back from.
+        if (HttpContext?.Request.HasFormContentType != true) await LoadAsync();
 
         if (!string.IsNullOrEmpty(StatusMessage))
         {

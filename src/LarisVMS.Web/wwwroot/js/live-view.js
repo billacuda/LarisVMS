@@ -189,20 +189,40 @@
     // not oscillating between a speed-up and a stall — the old code chased the edge with a hard
     // playbackRate=1.5 and starved the buffer on every keyframe.
     var TARGET_LATENCY_SECONDS = 2.0;
-    // AI-detection box overlay hold-back (see startDetectionOverlay below): boxes arrive over their
-    // own low-latency path (near-zero detection-side buffering, ~150ms poll cadence) while the video
-    // above is deliberately held TARGET_LATENCY_SECONDS+ behind live — without this, boxes visibly
-    // lead the object they're drawn on. An empirically-tuned constant, not derived from the drift
-    // controller's live state (that state is private to startSession's closure; startDetectionOverlay
-    // is a sibling function sharing only videoEl) — matched to TARGET_LATENCY_SECONDS itself rather
-    // than padded further: an initial +1.0s fudge for upstream fragment/relay latency overshot in
-    // practice (confirmed live: boxes ran 0.5-1.5s *late* at 3.0s total), so the extra padding was
-    // removed rather than re-added elsewhere. Boxes don't need per-video-frame precision (decision 6:
-    // 5-10Hz is fine), so a tuned constant here is idiomatic, same as TARGET_LATENCY_SECONDS itself.
-    var BOX_LATENCY_SECONDS = TARGET_LATENCY_SECONDS;
+    // AI-detection boxes arrive over their own low-latency path (measured ~200ms end to end: ~143ms
+    // inter-frame at the Sub stream's 7fps, 10-40ms inference, ~75ms average on Node's 150ms poll),
+    // while the video they're drawn over is held behind live by the buffering above — so without a
+    // hold-back they visibly lead the object.
+    //
+    // That hold-back used to be a fixed constant, which could not work: the drift controller only
+    // corrects outside a +/-LATENCY_DEADBAND_SECONDS band and trims the rate within it, so the
+    // video's real latency *floats* by design. A constant is wrong by however far drift has wandered
+    // — confirmed live in both directions (boxes 0.5-1.5s late at a 3.0s constant, then still late
+    // at 2.0s once the video path got healthier). startDetectionOverlay now measures the video's
+    // actual latency instead, via the timing handle startSession publishes on the shared videoEl.
+    //
+    // This is the only piece that measurement can't supply: the gap between a fragment arriving and
+    // the wall-clock instant its NEWEST frame — the one buffered.end() actually points at — was
+    // captured. Not half of RecordingSession's LiveFragDurationMicros (500ms): frag_duration/
+    // min_frag_duration force a fragment boundary every 200-500ms regardless of keyframes
+    // specifically so a fragment is flushed close to when it's encoded, not accumulated over that
+    // whole window — so the newest frame inside it is only as stale as encode processing plus LAN
+    // transit, both small. (An earlier version of this comment reasoned from the fragment's average
+    // content age, which answers a different question than "how old is the newest frame" — confirmed
+    // live as a real, visible source of lag once boxes were actually measured against video content
+    // rather than just checked against TARGET_LATENCY_SECONDS.)
+    var BOX_RESIDUAL_LATENCY_MS = 50;
+    // Fallback hold-back for when no timing handle is available at all — an overlay mounted over a
+    // tile that isn't running a live session (view-play.js keeps the overlay mounted across a
+    // playback toggle). Same fixed-constant behaviour as before measurement existed.
+    var BOX_FALLBACK_LATENCY_MS = TARGET_LATENCY_SECONDS * 1000;
     // Safety net for a paused/backgrounded tab: a tick older than this is dropped rather than ever
     // rendered, mirroring LiveViewerHandler's own bounded-queue-drop philosophy server-side.
     var BOX_QUEUE_MAX_AGE_SECONDS = 5;
+    // How often the box overlay reports its own alignment numbers (measured video latency, incoming
+    // ageMs, the interpolation span it's working across). rAF runs ~60x/sec; this is per-tile, so
+    // keep it rare.
+    var BOX_ALIGNMENT_REPORT_EVERY_FRAMES = 600;
     // Half-width of the no-correction band around the target. Inside +/- this of the target, the
     // rate stays exactly 1.0 — a tile only corrects once it has drifted meaningfully off target, so
     // it isn't perpetually nudging the rate a hair either way.
@@ -289,6 +309,11 @@
             }
             elementListeners = [];
             videoEl.playbackRate = 1;
+            // Cleared so the box overlay falls back to its fixed constant rather than scheduling
+            // against a frozen clock from a session that has stopped producing fragments — the
+            // overlay outlives an individual video session (it stays mounted across reconnects and
+            // across a playback toggle).
+            if (videoEl._larisvmsLiveTiming) videoEl._larisvmsLiveTiming = null;
             hideCatchupBadge();
             onEnded();
         }
@@ -338,6 +363,37 @@
         // for the next scheduled low-duty-cycle tick), since this is exactly the condition Part 2's
         // GPU transcode work is meant to fix.
         var DECODE_BOUND_RATE_RATIO = 0.85;
+
+        // Publishes what the box overlay needs to know about this video's real latency, so it can
+        // hold detections back by the right amount instead of guessing with a constant. Hung off the
+        // <video> element because startSession and startDetectionOverlay are sibling functions that
+        // already share exactly one thing — this element — and threading a handle through both call
+        // sites in view-play.js/view-editor.js/zones-editor.js would touch far more surface for no
+        // extra capability. Ownership is the same as everywhere else in this file: whoever currently
+        // owns videoEl.src owns the element, so a superseded session must not keep writing here (a
+        // tile toggled into playback hands this element to playback-player.js entirely).
+        //
+        // Together these give the overlay:
+        //   videoLatencyMs = (now - lastFragmentArrivalMs) + driftMs + BOX_RESIDUAL_LATENCY_MS
+        // i.e. how long ago the newest buffered frame arrived, plus how far behind the buffer's live
+        // edge playback is deliberately sitting, plus the one unmeasurable bit (camera encode +
+        // fragment accumulation).
+        function publishLiveTiming(arrivalMs) {
+            if (closed || ended || videoEl.src !== objectUrl) return;
+            var driftMs = null;
+            if (sourceBuffer && !sourceBuffer.updating && sourceBuffer.buffered.length > 0) {
+                var last = sourceBuffer.buffered.length - 1;
+                driftMs = (sourceBuffer.buffered.end(last) - videoEl.currentTime) * 1000;
+            }
+            var existing = videoEl._larisvmsLiveTiming;
+            videoEl._larisvmsLiveTiming = {
+                // Kept from the previous sample when this call couldn't measure one (mid-append), so
+                // a busy SourceBuffer doesn't blank the overlay's clock for a frame.
+                lastFragmentArrivalMs: arrivalMs !== null ? arrivalMs
+                    : (existing ? existing.lastFragmentArrivalMs : null),
+                driftMs: driftMs !== null ? driftMs : (existing ? existing.driftMs : null)
+            };
+        }
 
         // An appendBuffer failure is never recoverable for this session (a torn-down/replaced
         // MediaSource throws "removed from parent media source" on the very next call, and retrying
@@ -595,6 +651,11 @@
                 var liveEdge = sourceBuffer.buffered.end(lastRange);
                 var drift = liveEdge - videoEl.currentTime;
 
+                // Keeps the overlay's drift figure fresh between fragment arrivals — playback keeps
+                // advancing (and the rate controller keeps trimming it) in the ~500ms gaps, so a
+                // figure only refreshed on arrival would lag by up to that much.
+                publishLiveTiming(null);
+
                 // Decode-health sample: how much currentTime actually advanced this tick vs. wall
                 // time, against the rate we asked for. A decoder that's keeping up tracks
                 // playbackRate closely; one that's saturated (too many simultaneous decode
@@ -728,6 +789,10 @@
                         console.log('[live-view] fragment', fragmentCount, ',', evt.data.byteLength, 'bytes, video.readyState=', videoEl.readyState, 'video.paused=', videoEl.paused);
                     }
                     statusEl.textContent = '';
+                    // Anchors the box overlay's presentation clock — see publishLiveTiming.
+                    // Recorded before appendNext() so it marks when the bytes actually arrived, not
+                    // when the SourceBuffer got around to accepting them.
+                    if (fragmentCount > 1) publishLiveTiming(Date.now());
                     pending.push(new Uint8Array(evt.data));
                     appendNext();
                 };
@@ -920,13 +985,24 @@
         var showConfidence = false;
         var stopped = false;
         var reconnectTimer = null;
-        // Hold-back queue (see BOX_LATENCY_SECONDS above): each tick waits here, tagged with its own
-        // scheduled render time (BOX_LATENCY_SECONDS minus however old it already was on arrival),
-        // roughly matching when the video itself will show that same moment — instead of drawing the
-        // instant it arrives over the wire.
+        // Detection ticks on a client-relative *capture* timeline: each tick's captureAtMs is when
+        // its frame was actually grabbed, derived on arrival as (arrival - ageMs) where ageMs is the
+        // duration Vision Service measured on its own clock. Nothing here compares clocks across
+        // machines — ageMs is a duration, and it's only ever subtracted from a local timestamp.
+        //
+        // Rendering then runs against a presentation clock (now - videoLatencyMs) and interpolates
+        // between the two ticks bracketing it. Detection runs at ~7fps over ~18fps video, so drawing
+        // a tick verbatim holds each box still for ~2.6 video frames, which reads as stepping;
+        // interpolating removes that. Interpolation rather than prediction specifically because the
+        // hold-back means the *next* tick is usually already in hand — extrapolating from one tick
+        // would overshoot every time an object changed direction.
         var pendingTicks = [];
-        var lastRenderedAtMs = 0;
-        var holdBackTimer = null;
+        var rafHandle = null;
+        var frameCounter = 0;
+        var lastBadgeTickMs = 0;
+        // Last values actually rendered, kept so a frame with nothing new to say can redraw
+        // identically (canvas resize, fullscreen transform change) without recomputing.
+        var latestAlignmentMs = null;
 
         function draw() {
             canvas.style.transform = (fsHandle && fsHandle.isFullscreen()) ? fsHandle.getTransformCss() : '';
@@ -939,8 +1015,13 @@
                 return;
             }
 
-            canvas.width = w;
-            canvas.height = h;
+            // Only on a real size change: assigning canvas.width/height resets the whole drawing
+            // surface and reallocates its backing store even when the value is identical. That was
+            // negligible at the old 6.7Hz tick cadence but this now runs per animation frame.
+            if (canvas.width !== w || canvas.height !== h) {
+                canvas.width = w;
+                canvas.height = h;
+            }
             var scale = Math.min(w / nw, h / nh);
             var dw = nw * scale, dh = nh * scale;
             var offsetX = (w - dw) / 2, offsetY = (h - dh) / 2;
@@ -1007,34 +1088,153 @@
             refreshBadgesForCamera(cameraId);
         }
 
-        // Renders the newest pending tick whose hold-back has elapsed, dropping everything up to and
-        // including it (older superseded ticks never draw) — run on the same cadence as the boxes
-        // arrive at (DetectionOverlayHandler.PollInterval) rather than a separate timer granularity.
-        function pumpPendingTicks() {
-            var nowMs = Date.now();
-            var i = pendingTicks.length - 1;
-            // Newest-first scan for the newest tick that's actually due; anything older (whether due
-            // or not) is superseded by it and dropped without ever drawing. atMs is already the
-            // scheduled render time (computed once at push, below) — not the capture time — so no
-            // further arithmetic happens here.
-            for (; i >= 0; i--) {
-                if (pendingTicks[i].atMs <= nowMs) break;
+        // How far behind real time the video currently is, measured rather than assumed — see
+        // BOX_RESIDUAL_LATENCY_MS and startSession's publishLiveTiming. Returns the fixed fallback
+        // when there's no live session publishing for this element (overlay mounted over a tile in
+        // playback mode, or between reconnects).
+        function videoLatencyMs() {
+            var t = videoEl._larisvmsLiveTiming;
+            if (!t || t.lastFragmentArrivalMs === null || t.driftMs === null) return BOX_FALLBACK_LATENCY_MS;
+            var sinceArrival = Date.now() - t.lastFragmentArrivalMs;
+            // A stale handle means fragments stopped arriving (upstream stall). Clamping to the
+            // fallback keeps boxes roughly placed instead of letting the presentation clock run away
+            // backwards as sinceArrival grows without bound.
+            if (sinceArrival > BOX_QUEUE_MAX_AGE_SECONDS * 1000) return BOX_FALLBACK_LATENCY_MS;
+            return sinceArrival + t.driftMs + BOX_RESIDUAL_LATENCY_MS;
+        }
+
+        function lerp(a, b, f) { return a + (b - a) * f; }
+
+        // Boxes for `atMs` on the capture timeline, interpolated between the two ticks bracketing it
+        // and matched across them by trackId (assigned by ByteTracker, relayed end to end). Geometry
+        // is interpolated; everything else (label, category, colour, movement state) comes from the
+        // newer tick, since those are classifications rather than positions and shouldn't be blended.
+        function boxesAt(atMs) {
+            if (pendingTicks.length === 0) return null;
+
+            var olderIndex = -1;
+            for (var i = 0; i < pendingTicks.length; i++) {
+                if (pendingTicks[i].captureAtMs <= atMs) olderIndex = i;
+                else break;
             }
-            if (i >= 0) {
-                var tick = pendingTicks[i];
-                pendingTicks = pendingTicks.slice(i + 1);
-                // A clock step (NTP correction) must never make boxes visually rewind to an earlier
-                // moment than what's already on screen.
-                if (tick.atMs >= lastRenderedAtMs) {
-                    lastRenderedAtMs = tick.atMs;
-                    latestBoxes = tick.boxes;
-                    draw();
+            // Presentation clock hasn't reached the oldest tick yet — nothing to show for this
+            // instant, so hold whatever is already drawn rather than jumping ahead to a future
+            // position. (The clock catches up within a frame or two of a session starting.)
+            if (olderIndex < 0) return null;
+
+            // Ticks before the bracket actually in use are never needed again — the presentation
+            // clock only moves forward, so nothing will ever interpolate against an instant older
+            // than what was just rendered. Trimming them here (rather than relying only on
+            // BOX_QUEUE_MAX_AGE_SECONDS's safety net in renderFrame) keeps the queue at the ~2 ticks
+            // interpolation actually needs instead of dragging several seconds of already-rendered
+            // history behind it on every frame — confirmed live via box_alignment: 38-44 queued
+            // ticks (~5-6s) when interpolation only ever looks at the newest two.
+            if (olderIndex > 0) pendingTicks = pendingTicks.slice(olderIndex);
+
+            var older = pendingTicks[0];
+            var newer = pendingTicks.length > 1 ? pendingTicks[1] : null;
+            // Past the newest tick: detection is momentarily behind the video. Hold the newest known
+            // position rather than extrapolating — see the pendingTicks comment on why.
+            if (!newer) return older.boxes;
+
+            var span = newer.captureAtMs - older.captureAtMs;
+            if (span <= 0) return newer.boxes;
+            var f = Math.min(1, Math.max(0, (atMs - older.captureAtMs) / span));
+
+            var newerById = {};
+            for (var n = 0; n < newer.boxes.length; n++) newerById[newer.boxes[n].trackId] = newer.boxes[n];
+
+            var out = [];
+            for (var o = 0; o < older.boxes.length; o++) {
+                var a = older.boxes[o];
+                var b = newerById[a.trackId];
+                // A track the newer tick doesn't have (object just left, or the model dropped it for
+                // a frame) draws at its last known position rather than vanishing mid-interpolation.
+                if (!b) { out.push(a); continue; }
+                out.push({
+                    trackId: b.trackId, category: b.category, label: b.label,
+                    movementState: b.movementState, confidence: b.confidence, colorHex: b.colorHex,
+                    x: lerp(a.x, b.x, f), y: lerp(a.y, b.y, f),
+                    w: lerp(a.w, b.w, f), h: lerp(a.h, b.h, f)
+                });
+            }
+            // Tracks only in the newer tick (just appeared) draw un-interpolated — there's no earlier
+            // position to blend from, and holding them back until the next tick would make every new
+            // object appear ~150ms late.
+            for (var k = 0; k < newer.boxes.length; k++) {
+                var nb = newer.boxes[k];
+                var seen = false;
+                for (var m = 0; m < older.boxes.length; m++) {
+                    if (older.boxes[m].trackId === nb.trackId) { seen = true; break; }
+                }
+                if (!seen) out.push(nb);
+            }
+            return out;
+        }
+
+        // Replaces the old fixed-cadence pump: rendering at display rate is what turns 7fps
+        // detections into smooth motion, and it also stops the overlay repainting on a timer when
+        // nothing has moved.
+        function renderFrame() {
+            rafHandle = null;
+            // Not just `stopped`: toggling both box types off cancels the pending frame, and without
+            // this the in-flight frame would immediately reschedule and keep the loop alive forever.
+            if (stopped || !(showMoving || showIdle)) return;
+
+            var latency = videoLatencyMs();
+            var presentationNowMs = Date.now() - latency;
+            var boxes = boxesAt(presentationNowMs);
+            if (boxes) {
+                latestBoxes = boxes;
+                latestAlignmentMs = latency;
+                draw();
+                // Deliberately NOT per frame: this writes the module-scope badge state and touches
+                // the DOM through refreshBadgesForCamera. What it derives (which labels are moving)
+                // can only change when a new detection tick arrives, not between interpolated
+                // frames, so it runs on tick changes only — 60Hz DOM writes per tile for data that
+                // changes at ~7Hz would be pure waste.
+                var newestTickMs = pendingTicks.length > 0
+                    ? pendingTicks[pendingTicks.length - 1].captureAtMs : 0;
+                if (newestTickMs !== lastBadgeTickMs) {
+                    lastBadgeTickMs = newestTickMs;
                     updateAiBadgeState();
                 }
             }
-            // Safety net for a paused/backgrounded tab: never let the queue grow unbounded.
-            var cutoffMs = nowMs - BOX_QUEUE_MAX_AGE_SECONDS * 1000;
-            pendingTicks = pendingTicks.filter(function (t) { return t.atMs >= cutoffMs; });
+
+            // Drop ticks well behind the presentation clock (not behind *now*) — they've already been
+            // rendered through, and the clock is deliberately running BOX-latency in the past.
+            var cutoffMs = presentationNowMs - BOX_QUEUE_MAX_AGE_SECONDS * 1000;
+            if (pendingTicks.length > 0 && pendingTicks[0].captureAtMs < cutoffMs) {
+                pendingTicks = pendingTicks.filter(function (t) { return t.captureAtMs >= cutoffMs; });
+            }
+
+            if (++frameCounter % BOX_ALIGNMENT_REPORT_EVERY_FRAMES === 0) reportAlignment();
+            scheduleFrame();
+        }
+
+        function scheduleFrame() {
+            if (stopped || rafHandle !== null) return;
+            rafHandle = window.requestAnimationFrame(renderFrame);
+        }
+
+        // Turns "the boxes look laggy" into milliseconds, the same way decode_health did for the
+        // video path — measured video latency, how old the detections themselves were, and how wide
+        // a gap the interpolation is currently bridging.
+        function reportAlignment() {
+            var t = videoEl._larisvmsLiveTiming;
+            var spanMs = pendingTicks.length >= 2
+                ? pendingTicks[pendingTicks.length - 1].captureAtMs - pendingTicks[pendingTicks.length - 2].captureAtMs
+                : null;
+            var newestAgeMs = pendingTicks.length > 0
+                ? pendingTicks[pendingTicks.length - 1].ageMs : null;
+            var detail = 'videoLatencyMs=' + Math.round(latestAlignmentMs === null ? videoLatencyMs() : latestAlignmentMs) +
+                ' measured=' + (t && t.driftMs !== null ? 'yes' : 'no-fallback') +
+                (t && t.driftMs !== null ? ' driftMs=' + Math.round(t.driftMs) : '') +
+                (newestAgeMs !== null ? ' detectionAgeMs=' + Math.round(newestAgeMs) : '') +
+                (spanMs !== null ? ' tickSpanMs=' + Math.round(spanMs) : '') +
+                ' queuedTicks=' + pendingTicks.length;
+            mediaEndpoint.reportStreamEvent(cameraId, 'main', null, 'box_alignment',
+                latestAlignmentMs === null ? null : Math.round(latestAlignmentMs), detail);
         }
 
         function connect() {
@@ -1060,20 +1260,20 @@
                 }
                 // ageMs (how old this snapshot already was when Vision Service sent it — see
                 // VisionLiveDetectionsResponse's doc comment) is a duration computed entirely on
-                // Vision Service's own clock; scheduling the remaining wait against this machine's
-                // own Date.now() here means the two clocks are never compared against each other.
-                // If a snapshot arrives already older than the whole budget (e.g. slow inference),
-                // clamping to 0 draws it immediately rather than compounding a real delay with an
-                // artificial one.
-                var dueAtMs = Date.now() + Math.max(0, BOX_LATENCY_SECONDS * 1000 - parsed.ageMs);
-                pendingTicks.push({ atMs: dueAtMs, boxes: boxes });
-                if (!holdBackTimer) holdBackTimer = setInterval(pumpPendingTicks, 150);
+                // Vision Service's own clock, so subtracting it from this machine's own arrival
+                // timestamp places the tick on a local capture timeline without ever comparing the
+                // two clocks against each other.
+                var captureAtMs = Date.now() - parsed.ageMs;
+                // Out-of-order arrival would break the bracketing scan in boxesAt, which assumes
+                // ascending capture times. Ticks come off one polled socket so this is unexpected;
+                // dropping the straggler is cheaper and safer than re-sorting every push.
+                if (pendingTicks.length > 0 && captureAtMs <= pendingTicks[pendingTicks.length - 1].captureAtMs) return;
+                pendingTicks.push({ captureAtMs: captureAtMs, ageMs: parsed.ageMs, boxes: boxes });
+                scheduleFrame();
             };
             socket.onclose = function () {
                 socket = null;
-                if (holdBackTimer) { clearInterval(holdBackTimer); holdBackTimer = null; }
                 pendingTicks = [];
-                lastRenderedAtMs = 0;
                 if (stopped || !(showMoving || showIdle)) return;
                 // Routine reconnect, same fixed-delay spirit as the freeze-overlay/retry story the
                 // video socket already has — this feed is lower-stakes (a missed box or two is not
@@ -1090,10 +1290,9 @@
                 connect();
             } else if (!anyOn) {
                 if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-                if (holdBackTimer) { clearInterval(holdBackTimer); holdBackTimer = null; }
+                if (rafHandle !== null) { window.cancelAnimationFrame(rafHandle); rafHandle = null; }
                 if (socket) { try { socket.close(); } catch (e) {} socket = null; }
                 pendingTicks = [];
-                lastRenderedAtMs = 0;
                 latestBoxes = [];
                 draw();
                 clearAiBadgeState();
@@ -1109,7 +1308,7 @@
             stop: function () {
                 stopped = true;
                 if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-                if (holdBackTimer) { clearInterval(holdBackTimer); holdBackTimer = null; }
+                if (rafHandle !== null) { window.cancelAnimationFrame(rafHandle); rafHandle = null; }
                 pendingTicks = [];
                 if (socket) { try { socket.close(); } catch (e) {} }
                 if (canvas.parentElement) canvas.parentElement.removeChild(canvas);

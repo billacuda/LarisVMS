@@ -29,11 +29,16 @@ public record MediaTimingBeacon(Guid CameraId, string Mode, double MsToFirstFram
 /// requestedRate distinguishes a decode-bound tile from a network/buffering one), "unexpected_pause"
 /// (the element paused without this app asking it to — Detail carries the visibility/focus/buffer
 /// state captured at that instant, since the cause has so far resisted being inferred after the
-/// fact), or "pause_resync" (playback resumed after such a pause and was resynced straight to near
-/// the live edge, rather than waiting for driftTimer to discover the drift the slow way).</param>
+/// fact), "pause_resync" (playback resumed after such a pause and was resynced straight to near
+/// the live edge, rather than waiting for driftTimer to discover the drift the slow way), or
+/// "box_alignment" (periodic sample of how the AI-detection overlay is lining up with the video —
+/// the video latency it measured, how old the detections themselves were, and the gap it is
+/// interpolating across).</param>
 /// <param name="Magnitude">Drift seconds for catchup/hard_resync/pause_resync, the WebSocket close
 /// code for server_disconnect, effective-rate/requested-rate ratio for decode_health (below ~0.85
-/// means the decoder itself is the bottleneck), null for gap_jump (no natural magnitude).</param>
-/// <param name="Detail">Free-text context — current rate, close reason, jump reason, or (for
-/// decode_health) requested/effective rate and dropped-frame counts.</param>
+/// means the decoder itself is the bottleneck), measured video latency in ms for box_alignment,
+/// null for gap_jump (no natural magnitude).</param>
+/// <param name="Detail">Free-text context — current rate, close reason, jump reason, (for
+/// decode_health) requested/effective rate and dropped-frame counts, or (for box_alignment) the
+/// latency breakdown and whether it came from measurement or the fixed fallback.</param>
 public record MediaStreamEventBeacon(Guid CameraId, string Role, string? StreamMode, string EventType, double? Magnitude, string? Detail);
