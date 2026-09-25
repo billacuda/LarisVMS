@@ -7,7 +7,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>0.207.0</Version>
+    <Version>0.208.0</Version>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 

@@ -4,7 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>0.207.0</Version>
+    <Version>0.208.0</Version>
     <!-- S5332 ("use https not http"): every http:// URL in this project targets a recorder node on
          the LAN. Nodes present no TLS certificate by design (see the architecture notes / the many
          Web->Node call sites in Program.cs, Nodes.cshtml.cs, ExportJobDispatcher.cs); each call is

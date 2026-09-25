@@ -15,7 +15,7 @@ work on phone, tablet, and desktop.
 
 ---
 
-## **Current version [0.207.0](CHANGELOG.md)**
+## **Current version [0.208.0](CHANGELOG.md)**
 
 ## Stack
 
@@ -471,6 +471,19 @@ wasn't running anything. A healthy node logs this about once a minute at `[INFO]
 - **`gcPauseMs` small but `pendingWorkItems` in the tens** → thread-pool starvation; threads are
   blocked rather than computing. Capture a stack dump *while it is stalling*
   (`dotnet-dump collect -p <LarisVMS.Node pid>`) to find what they're blocked on.
+
+### AI detection stops while recording carries on
+
+Usually the GPU driver was reset under the vision process (a TDR). The Windows **System** event log
+shows `nvlddmkm` event 153 and/or `Display` event 4101 at the moment detection stopped. The vision log
+(`%ProgramData%\LarisVMS\logs\vision-*.log`) shows every camera logging `Inference failed on one frame`
+at the same instant, then a count of failed frames on each camera's 30-second `detection cadence`
+line.
+
+The vision service restarts itself after 60s with no successful inference on any camera while
+frames are still arriving (logged as `Inference has produced no result …`), and the node brings it
+back with every camera re-attached. No action is needed for a one-off. Repeated resets point at
+the GPU, its driver, cooling, or power, not LarisVMS.
 
 ### Email (`Admin → Settings → Email`)
 

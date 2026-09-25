@@ -166,6 +166,14 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     private int _cadenceInferenceFailures;
     private bool _loggedInferenceFailure;
 
+    // When inference last succeeded, and how many frames capture had published by then — read by
+    // InferenceWatchdog on another thread via GetInferenceHealth, hence Interlocked. Seeded when the
+    // engine is assigned so a freshly built engine starts out Healthy. Confirmed need: a GPU driver
+    // reset (TDR) on nvr1 2026-09-24 05:52 left every camera's TensorRT session failing every frame
+    // for ~12 hours with the process still alive, until a manual node restart.
+    private long _lastInferenceOkTicksUtc;
+    private long _publishedAtLastInferenceOk;
+
     // Per-label state — see this class's own doc comment for why the grain is the label, not the
     // track. Only ever touched from the single inference loop below, so plain (not concurrent)
     // collections are safe.
@@ -502,6 +510,38 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     /// latch: both fields it reads are already volatile/thread-safe to read from any thread.</summary>
     public bool IsEngineBuilding => _engine is null && !_engineBuildFailed;
 
+    /// <summary>Frames capture must have delivered since the last successful inference before this
+    /// camera counts as <see cref="InferenceHealth.Stalled"/> rather than just starved of input — a
+    /// camera that has gone offline has no frames to fail on, and restarting would not help it.</summary>
+    internal const long MinFramesForStall = 10;
+
+    /// <summary>Whether this camera's local engine is still producing results, for
+    /// <see cref="InferenceWatchdog"/>. Covers both an engine that throws on every frame and one whose
+    /// native call never returns — either way no success is recorded while capture keeps publishing.</summary>
+    public InferenceHealth GetInferenceHealth(DateTime nowUtc, TimeSpan stallAfter) =>
+        ClassifyInferenceHealth(
+            hasLocalEngine: _engine is not (null or HttpDetectionEngine),
+            sinceLastOk: TimeSpan.FromTicks(nowUtc.Ticks - Interlocked.Read(ref _lastInferenceOkTicksUtc)),
+            framesSinceLastOk: _slot.PublishedCount - Interlocked.Read(ref _publishedAtLastInferenceOk),
+            stallAfter);
+
+    /// <summary>The rule behind <see cref="GetInferenceHealth"/>, kept pure for tests. The external
+    /// HTTP backend is never judged here: its failures are the remote service's, which restarting
+    /// this process cannot fix.</summary>
+    internal static InferenceHealth ClassifyInferenceHealth(bool hasLocalEngine, TimeSpan sinceLastOk,
+        long framesSinceLastOk, TimeSpan stallAfter)
+    {
+        if (!hasLocalEngine) return InferenceHealth.NotApplicable;
+        if (sinceLastOk < stallAfter) return InferenceHealth.Healthy;
+        return framesSinceLastOk >= MinFramesForStall ? InferenceHealth.Stalled : InferenceHealth.NotApplicable;
+    }
+
+    private void MarkInferenceOk()
+    {
+        Interlocked.Exchange(ref _publishedAtLastInferenceOk, _slot.PublishedCount);
+        Interlocked.Exchange(ref _lastInferenceOkTicksUtc, DateTime.UtcNow.Ticks);
+    }
+
     /// <summary>What to call this camera in a log line — see VisionStartCameraRequest.DisplayName.
     /// Exposed so CameraPipelineManager can name a camera it is disposing, where only the id is in
     /// hand (VisionStopCameraRequest carries nothing else).</summary>
@@ -566,6 +606,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         }
 
         _engine = engine;
+        MarkInferenceOk();
 
         // One buffer for the whole loop rather than a fresh array per frame. At the detection frame
         // size this is a Large Object Heap allocation every time (640x640 BGRA is 1.56 MB), and on a
@@ -617,8 +658,13 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
                         "Inference failed on one frame — skipping it. Further failures on this camera are counted " +
                         "on the detection cadence line rather than logged individually.");
                 }
+                // Logged from here too, not only after a successful frame below — otherwise an engine
+                // failing every frame never reaches it, and the count this promises never appears.
+                LogCadenceIfDue();
                 continue;
             }
+
+            MarkInferenceOk();
 
             var tracked = _tracker.Update(detections);
 
@@ -1424,4 +1470,15 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         _slot.Dispose();
         _engine?.Dispose();
     }
+}
+
+/// <summary>See <see cref="CameraDetectionPipeline.GetInferenceHealth"/>.</summary>
+public enum InferenceHealth
+{
+    /// <summary>No local engine yet (still building, build failed, or the external HTTP backend), or
+    /// no frames arriving to judge by.</summary>
+    NotApplicable,
+    Healthy,
+    /// <summary>Frames are arriving but none has made it through inference for the stall window.</summary>
+    Stalled
 }

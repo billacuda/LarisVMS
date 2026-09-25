@@ -361,6 +361,10 @@ public sealed class CameraPipelineManager : IAsyncDisposable
     public IReadOnlyList<Core.Dtos.VisionCameraStatusDto> GetCameraStatuses() =>
         [.. _pipelines.Select(p => new Core.Dtos.VisionCameraStatusDto(p.Key, p.Value.IsEngineBuilding, p.Value.EngineBuildFailed))];
 
+    /// <summary>Every watched camera's <see cref="InferenceHealth"/>, for <see cref="InferenceWatchdog"/>.</summary>
+    public IReadOnlyList<(string Camera, InferenceHealth Health)> GetInferenceHealth(DateTime nowUtc, TimeSpan stallAfter) =>
+        [.. _pipelines.Values.Select(p => (p.DisplayName, p.GetInferenceHealth(nowUtc, stallAfter)))];
+
     /// <summary>Null when this camera isn't currently being watched — the caller (Node's own
     /// /live/{cameraId}/detections WS relay) treats that the same as "no boxes right now" rather
     /// than an error.</summary>

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.208.0] - 2026-09-24
+
+### Fixed
+
+- AI detection stayed dead until a manual node restart after a GPU driver reset. The vision process
+  kept running with every camera's inference failing. It now exits after 60s with no successful
+  inference on any camera while frames keep arriving, and the node restarts it.
+- A camera whose inference failed on every frame stopped logging its detection cadence line, so
+  the failure count that line is meant to carry never appeared. It now logs every 30s regardless.
+
 ## [0.207.0] - 2026-09-22
 
 ### Fixed

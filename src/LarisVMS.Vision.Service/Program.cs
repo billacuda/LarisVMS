@@ -18,6 +18,7 @@ builder.Services.AddHttpClient(nameof(CameraDetectionPipeline));
 builder.Services.AddHttpClient(CameraPipelineManager.ExternalInferenceHttpClientName)
     .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(5) });
 builder.Services.AddSingleton<CameraPipelineManager>();
+builder.Services.AddHostedService<InferenceWatchdog>();
 
 // This process has never had its own log file — its console output is captured by
 // VisionServiceSupervisor.DrainOutputAsync and re-logged into Node's own logger, but always at
