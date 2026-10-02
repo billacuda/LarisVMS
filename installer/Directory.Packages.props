@@ -1,0 +1,14 @@
+<Project>
+  <!-- Installer projects only. Kept separate from the repo-root Directory.Packages.props so the WiX
+       toolchain never leaks into the application projects. WiX v5 is MS-RL licensed. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="WixToolset.UI.wixext" Version="5.0.2" />
+    <PackageVersion Include="WixToolset.Util.wixext" Version="5.0.2" />
+    <PackageVersion Include="WixToolset.Firewall.wixext" Version="5.0.2" />
+    <PackageVersion Include="WixToolset.Dtf.CustomAction" Version="5.0.2" />
+    <PackageVersion Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" />
+  </ItemGroup>
+</Project>

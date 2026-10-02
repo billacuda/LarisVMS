@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- LarisVMS web server MSI (self-contained, no .NET runtime needed). Public properties mirror
+     install-web.ps1's machine settings:
+     msiexec /i LarisVMS-Web.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx CERTPASSWORD=... /qn
+     It also carries the node/proxy packages; the web app registers them as Pending on startup. -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:fw="http://wixtoolset.org/schemas/v4/wxs/firewall"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package Name="LarisVMS Web" Manufacturer="LarisVMS" Version="$(var.ProductVersion)"
+           UpgradeCode="760ED37E-D189-471A-A2FC-6E13E3F09979" Scope="perMachine" Compressed="yes" InstallerVersion="500">
+    <SummaryInformation Description="LarisVMS web server" />
+    <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallInitialize"
+                  DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <Icon Id="LarisIcon" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="LarisIcon" />
+
+    <Property Id="LARIS_PRODUCT" Value="Web" />
+    <Property Id="HTTPSPORT" Secure="yes" />
+    <Property Id="CERTPATH" Secure="yes" />
+    <Property Id="CERTPASSWORD" Secure="yes" Hidden="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="LARISROOT" Name="LarisVMS">
+        <Directory Id="INSTALLFOLDER" Name="Web" />
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="LarisVMS Web" AllowAbsent="no">
+      <ComponentGroupRef Id="WebFiles" />
+      <ComponentRef Id="WebService" />
+      <ComponentRef Id="WebFirewall" />
+      <ComponentRef Id="WebFolderAccess" />
+    </Feature>
+
+    <!-- Operator-owned files (setup-generated.json, appsettings.Production.json) are never in the
+         package, so upgrades and uninstalls leave them alone. -->
+    <ComponentGroup Id="WebFiles" Directory="INSTALLFOLDER">
+      <Files Include="!(bindpath.Web)\**">
+        <Exclude Files="!(bindpath.Web)\LarisVMS.Web.exe" />
+        <Exclude Files="!(bindpath.Web)\**\*.pdb" />
+        <Exclude Files="!(bindpath.Web)\web.config" />
+        <Exclude Files="!(bindpath.Web)\appsettings.Development.json" />
+        <Exclude Files="!(bindpath.Web)\appsettings.Production.json" />
+        <Exclude Files="!(bindpath.Web)\setup-generated.json" />
+      </Files>
+    </ComponentGroup>
+
+    <Component Id="WebService" Directory="INSTALLFOLDER">
+      <File Id="WebExe" Source="!(bindpath.Web)\LarisVMS.Web.exe" KeyPath="yes" />
+      <ServiceInstall Id="WebServiceInstall" Name="LarisVMSWeb" DisplayName="LarisVMS Web"
+                      Description="LarisVMS web server - admin UI, live/playback relay and node control plane."
+                      Type="ownProcess" Start="auto" ErrorControl="normal" Vital="yes"
+                      Account="[SERVICEACCOUNT]" Password="[SERVICEPASSWORD]">
+        <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart" ThirdFailureActionType="restart"
+                            RestartServiceDelayInSeconds="60" ResetPeriodInDays="1" />
+      </ServiceInstall>
+      <ServiceControl Id="WebServiceControl" Name="LarisVMSWeb" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+    </Component>
+
+    <Component Id="WebFirewall" Directory="INSTALLFOLDER" Guid="2F8C6D93-1E4A-4B57-A3D2-7C9E5B1F8D55">
+      <CreateFolder />
+      <fw:FirewallException Id="FwWeb" Name="LarisVMS Web" Port="[HTTPSPORT]" Protocol="tcp" Scope="any" />
+    </Component>
+
+    <!-- A non-LocalSystem service account needs write access here: the setup wizard writes
+         setup-generated.json and the app writes its logs into the install folder. -->
+    <Component Id="WebFolderAccess" Directory="INSTALLFOLDER" Guid="8D3E7A15-4C6B-4F29-B1E8-5A2C9D7F3E66" Condition="SERVICEACCOUNT">
+      <CreateFolder>
+        <util:PermissionEx User="[SERVICEACCOUNT]" GenericAll="yes" />
+      </CreateFolder>
+    </Component>
+
+    <InstallUISequence>
+      <Custom Action="DetectExisting" After="AppSearch" />
+      <Custom Action="LoadSettings" After="DetectExisting" />
+    </InstallUISequence>
+    <InstallExecuteSequence>
+      <Custom Action="DetectExisting" After="AppSearch" />
+      <Custom Action="LoadSettings" After="DetectExisting" />
+      <Custom Action="ValidateInstall" Before="InstallInitialize" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="PrepareDeferred" After="ValidateInstall" />
+      <Custom Action="RemoveLegacyInstall" Before="StopServices" Condition="LEGACYINSTALL AND NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="SeedWebConfig" After="InstallFiles" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="SetFailureFlag" After="InstallServices" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="SaveSettings" Before="InstallFinalize" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="ForgetSettings" Before="InstallFinalize" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+
+    <UIRef Id="LarisWebUI" />
+  </Package>
+</Wix>

@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- LarisVMS recorder node MSI. Accepts the same settings as install-node.ps1 as public properties:
+     msiexec /i LarisVMS-Node.msi SERVERURL=https://vms:8444 REGISTRATIONKEY=... STORAGEROOT=D:\Rec /qn
+     Anything not given is prompted for (interactive) or remembered from the previous install. -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:fw="http://wixtoolset.org/schemas/v4/wxs/firewall"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package Name="LarisVMS Node" Manufacturer="LarisVMS" Version="$(var.ProductVersion)"
+           UpgradeCode="7F6B92FC-8EA7-48CF-B79A-B62B1BE787C8" Scope="perMachine" Compressed="yes" InstallerVersion="500">
+    <SummaryInformation Description="LarisVMS recorder node" />
+    <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallInitialize"
+                  DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <Icon Id="LarisIcon" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="LarisIcon" />
+
+    <Property Id="LARIS_PRODUCT" Value="Node" />
+    <Property Id="SERVERURL" Secure="yes" />
+    <Property Id="REGISTRATIONKEY" Secure="yes" Hidden="yes" />
+    <Property Id="STORAGEROOT" Secure="yes" />
+    <Property Id="ARCHIVEROOT" Secure="yes" />
+    <Property Id="FFMPEGPATH" Secure="yes" />
+    <Property Id="FFMPEGRESOLVED" Secure="yes" />
+    <Property Id="LIVEPORT" Secure="yes" />
+    <Property Id="INSECURETLS" Secure="yes" />
+    <Property Id="CLIENTPORT" Secure="yes" />
+    <Property Id="CLIENTPFXPATH" Secure="yes" />
+    <Property Id="CLIENTPFXPASSWORD" Secure="yes" Hidden="yes" />
+    <Property Id="CLIENTALLOWINSECURE" Secure="yes" />
+    <Property Id="CLIENTENDPOINTHOST" Secure="yes" />
+    <Property Id="DIRECTSTREAMING" Secure="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="LARISROOT" Name="LarisVMS">
+        <Directory Id="INSTALLFOLDER" Name="Node" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="LARISDATA" Name="LarisVMS">
+        <Directory Id="MODELSFOLDER" Name="models" />
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="LarisVMS Node" AllowAbsent="no">
+      <ComponentGroupRef Id="NodeFiles" />
+      <ComponentRef Id="NodeService" />
+      <ComponentRef Id="NodeFirewallLive" />
+      <ComponentRef Id="NodeFirewallClient" />
+      <ComponentRef Id="ModelsFolder" />
+    </Feature>
+
+    <ComponentGroup Id="NodeFiles" Directory="INSTALLFOLDER">
+      <Files Include="!(bindpath.Node)\**">
+        <Exclude Files="!(bindpath.Node)\LarisVMS.Node.exe" />
+        <Exclude Files="!(bindpath.Node)\**\*.pdb" />
+        <Exclude Files="!(bindpath.Node)\**\*.lib" />
+        <Exclude Files="!(bindpath.Node)\web.config" />
+        <Exclude Files="!(bindpath.Node)\*.staticwebassets.endpoints.json" />
+        <Exclude Files="!(bindpath.Node)\install-node.ps1" />
+      </Files>
+    </ComponentGroup>
+
+    <Component Id="NodeService" Directory="INSTALLFOLDER">
+      <File Id="NodeExe" Source="!(bindpath.Node)\LarisVMS.Node.exe" KeyPath="yes" />
+      <!-- The name must stay LarisVMSNode: LarisVMS.NodeUpdater hardcodes it for auto-update. -->
+      <ServiceInstall Id="NodeServiceInstall" Name="LarisVMSNode" DisplayName="LarisVMS Node"
+                      Description="LarisVMS recorder node - supervises FFmpeg-based 24/7 camera recording."
+                      Type="ownProcess" Start="auto" ErrorControl="normal" Vital="yes"
+                      Account="[SERVICEACCOUNT]" Password="[SERVICEPASSWORD]" Arguments="[SERVICEARGS]">
+        <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart" ThirdFailureActionType="restart"
+                            RestartServiceDelayInSeconds="60" ResetPeriodInDays="1" />
+      </ServiceInstall>
+      <ServiceControl Id="NodeServiceControl" Name="LarisVMSNode" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+    </Component>
+
+    <Component Id="NodeFirewallLive" Directory="INSTALLFOLDER" Guid="5E0B1C77-6E7B-4C3A-9B57-0D7D3F0D9A11">
+      <CreateFolder />
+      <fw:FirewallException Id="FwNodeLive" Name="LarisVMS Node Live View" Port="[LIVEPORT]" Protocol="tcp" Scope="any" />
+    </Component>
+    <Component Id="NodeFirewallClient" Directory="INSTALLFOLDER" Guid="9B7C3B14-2D54-4F7E-8B1E-6A1E5C3F7D22" Condition="CLIENTPORT">
+      <CreateFolder />
+      <fw:FirewallException Id="FwNodeClient" Name="LarisVMS Node Client Endpoint" Port="[CLIENTPORT]" Protocol="tcp" Scope="any" />
+    </Component>
+    <Component Id="ModelsFolder" Directory="MODELSFOLDER" Guid="3C1F8E52-7A0D-4B9C-A4E6-2F5D8B9C1E33">
+      <CreateFolder />
+    </Component>
+
+    <InstallUISequence>
+      <Custom Action="DetectExisting" After="AppSearch" />
+      <Custom Action="LoadSettings" After="DetectExisting" />
+      <Custom Action="FindFfmpeg" After="LoadSettings" />
+    </InstallUISequence>
+    <InstallExecuteSequence>
+      <Custom Action="DetectExisting" After="AppSearch" />
+      <Custom Action="LoadSettings" After="DetectExisting" />
+      <Custom Action="FindFfmpeg" After="LoadSettings" />
+      <Custom Action="ValidateInstall" Before="InstallInitialize" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="BuildServiceArgs" After="ValidateInstall" />
+      <Custom Action="PrepareDeferred" After="BuildServiceArgs" />
+      <Custom Action="RemoveLegacyInstall" Before="StopServices" Condition="LEGACYINSTALL AND NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="StopNodeChildren" After="StopServices" />
+      <Custom Action="SetFailureFlag" After="InstallServices" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="RemoveCudaDeps" Before="RemoveFiles" Condition="REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="CopyCudaDeps" After="InstallFiles" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="WriteEndpointConfig" After="CopyCudaDeps" Condition="CLIENTPORT AND NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="SaveSettings" Before="InstallFinalize" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="ForgetSettings" Before="InstallFinalize" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+
+    <SetProperty Id="DIRECTSTREAMING" Action="SetDirectStreaming" Value="1" Sequence="ui" After="FindFfmpeg" Condition="CLIENTPORT" />
+
+    <UIRef Id="LarisNodeUI" />
+  </Package>
+</Wix>

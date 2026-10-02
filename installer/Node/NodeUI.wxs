@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Node dialog flow: Welcome -> Server & storage -> (Direct streaming) -> Service account -> Ready. -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Fragment>
+    <UI Id="LarisNodeUI">
+      <UIRef Id="LarisCommonUI" />
+
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="NodeServerDlg" Condition="NOT Installed" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Condition="Installed AND PATCH" />
+
+      <Dialog Id="NodeServerDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="300" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Server and storage" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="320" Height="15" Transparent="yes" NoPrefix="yes" Text="Where this node registers, and where it records." />
+
+        <Control Id="ServerUrlLabel" Type="Text" X="20" Y="56" Width="110" Height="15" Text="Server URL:" />
+        <Control Id="ServerUrl" Type="Edit" X="135" Y="54" Width="215" Height="17" Property="SERVERURL" DisableCondition="ALREADYREGISTERED=&quot;1&quot;" />
+        <Control Id="KeyLabel" Type="Text" X="20" Y="78" Width="110" Height="15" Text="Registration key:" />
+        <Control Id="Key" Type="Edit" X="135" Y="76" Width="215" Height="17" Property="REGISTRATIONKEY" Password="yes" DisableCondition="ALREADYREGISTERED=&quot;1&quot;" />
+        <Control Id="RegisteredNote" Type="Text" X="135" Y="95" Width="215" Height="10" NoPrefix="yes" Text="Already registered with the server." ShowCondition="ALREADYREGISTERED=&quot;1&quot;" HideCondition="ALREADYREGISTERED&lt;&gt;&quot;1&quot;" />
+        <Control Id="KeyNote" Type="Text" X="135" Y="95" Width="215" Height="10" NoPrefix="yes" Text="From Settings &gt; Node defaults on the server." ShowCondition="ALREADYREGISTERED&lt;&gt;&quot;1&quot;" HideCondition="ALREADYREGISTERED=&quot;1&quot;" />
+        <Control Id="StorageLabel" Type="Text" X="20" Y="110" Width="110" Height="15" Text="Storage path:" />
+        <Control Id="Storage" Type="Edit" X="135" Y="108" Width="215" Height="17" Property="STORAGEROOT" />
+        <Control Id="ArchiveLabel" Type="Text" X="20" Y="132" Width="110" Height="15" Text="Archive path (optional):" />
+        <Control Id="Archive" Type="Edit" X="135" Y="130" Width="215" Height="17" Property="ARCHIVEROOT" />
+        <Control Id="FfmpegLabel" Type="Text" X="20" Y="154" Width="110" Height="15" Text="FFmpeg path (optional):" />
+        <Control Id="Ffmpeg" Type="Edit" X="135" Y="152" Width="215" Height="17" Property="FFMPEGPATH" />
+        <Control Id="LivePortLabel" Type="Text" X="20" Y="176" Width="110" Height="15" Text="Live port:" />
+        <Control Id="LivePort" Type="Edit" X="135" Y="174" Width="60" Height="17" Property="LIVEPORT" />
+        <Control Id="Insecure" Type="CheckBox" X="20" Y="198" Width="330" Height="15" Property="INSECURETLS" CheckBoxValue="1" Text="Accept the server's self-signed certificate" />
+        <Control Id="Direct" Type="CheckBox" X="20" Y="214" Width="330" Height="15" Property="DIRECTSTREAMING" CheckBoxValue="1" Text="Stream directly from this node to browsers (configure next)" />
+
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)">
+          <Publish Event="NewDialog" Value="WelcomeDlg" />
+        </Control>
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)">
+          <Publish Property="LARIS_PAGE" Value="Server" Order="1" />
+          <Publish Event="DoAction" Value="FindFfmpeg" Order="2" />
+          <Publish Event="DoAction" Value="ValidateDialog" Order="3" />
+          <Publish Event="SpawnDialog" Value="SettingsErrorDlg" Order="4" Condition="SETTINGS_VALID&lt;&gt;&quot;1&quot;" />
+          <Publish Property="CLIENTPORT" Value="{}" Order="5" Condition="SETTINGS_VALID=&quot;1&quot; AND NOT DIRECTSTREAMING" />
+          <Publish Property="CLIENTPORT" Value="8555" Order="6" Condition="SETTINGS_VALID=&quot;1&quot; AND DIRECTSTREAMING AND NOT CLIENTPORT" />
+          <Publish Property="LARIS_ACCOUNT_BACK" Value="NodeServerDlg" Order="7" Condition="NOT DIRECTSTREAMING" />
+          <Publish Event="NewDialog" Value="NodeEndpointDlg" Order="8" Condition="SETTINGS_VALID=&quot;1&quot; AND DIRECTSTREAMING" />
+          <Publish Event="NewDialog" Value="ServiceAccountDlg" Order="9" Condition="SETTINGS_VALID=&quot;1&quot; AND NOT DIRECTSTREAMING" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
+
+      <Dialog Id="NodeEndpointDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="300" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Direct streaming" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="320" Height="15" Transparent="yes" NoPrefix="yes" Text="The HTTPS endpoint browsers use to stream straight from this node." />
+
+        <Control Id="PortLabel" Type="Text" X="20" Y="56" Width="110" Height="15" Text="Client port:" />
+        <Control Id="Port" Type="Edit" X="135" Y="54" Width="60" Height="17" Property="CLIENTPORT" />
+        <Control Id="HostLabel" Type="Text" X="20" Y="78" Width="110" Height="15" Text="Host name (FQDN):" />
+        <Control Id="Host" Type="Edit" X="135" Y="76" Width="215" Height="17" Property="CLIENTENDPOINTHOST" />
+        <Control Id="PfxLabel" Type="Text" X="20" Y="100" Width="110" Height="15" Text="Certificate (.pfx) path:" />
+        <Control Id="Pfx" Type="Edit" X="135" Y="98" Width="215" Height="17" Property="CLIENTPFXPATH" />
+        <Control Id="PfxPwdLabel" Type="Text" X="20" Y="122" Width="110" Height="15" Text="Certificate password:" />
+        <Control Id="PfxPwd" Type="Edit" X="135" Y="120" Width="215" Height="17" Property="CLIENTPFXPASSWORD" Password="yes" />
+        <Control Id="PfxPwdHint" Type="Text" X="135" Y="139" Width="215" Height="10" NoPrefix="yes" Text="Leave blank to keep the current password." />
+        <Control Id="AllowInsecure" Type="CheckBox" X="20" Y="160" Width="330" Height="15" Property="CLIENTALLOWINSECURE" CheckBoxValue="1" Text="Allow a self-signed certificate (testing only)" />
+
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)">
+          <Publish Event="NewDialog" Value="NodeServerDlg" />
+        </Control>
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)">
+          <Publish Property="LARIS_PAGE" Value="Endpoint" Order="1" />
+          <Publish Event="DoAction" Value="ValidateDialog" Order="2" />
+          <Publish Event="SpawnDialog" Value="SettingsErrorDlg" Order="3" Condition="SETTINGS_VALID&lt;&gt;&quot;1&quot;" />
+          <Publish Property="LARIS_ACCOUNT_BACK" Value="NodeEndpointDlg" Order="4" />
+          <Publish Event="NewDialog" Value="ServiceAccountDlg" Order="5" Condition="SETTINGS_VALID=&quot;1&quot;" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
+    </UI>
+  </Fragment>
+</Wix>

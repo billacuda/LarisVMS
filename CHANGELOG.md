@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- MSI installers for the web server, recorder node and media proxy (`build-installers.ps1`). They take
+  the same settings as the install scripts on the command line, prompt for anything missing, remember
+  settings for upgrades, and take over script-installed machines in place.
+
+### Changed
+
+- The web server applies database migrations itself on startup; upgrades no longer need the repo.
+- The web server is published self-contained, so no ASP.NET Core runtime is needed.
+- The web server registers the node and proxy builds bundled with it as Pending on startup, replacing
+  install-web.ps1's direct database writes.
+
 ## [0.209.0] - 2026-10-01
 
 ### Added

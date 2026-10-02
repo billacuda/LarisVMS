@@ -34,3 +34,12 @@ public interface INodeBuildService
     /// turned down. Throws if buildId doesn't exist.</summary>
     Task<NodeBuildVersion> RejectAsync(Guid buildId, string approvedBy, CancellationToken ct = default);
 }
+
+/// <summary>Registers the node and media-proxy builds shipped inside the web install (its
+/// <c>packages\</c> folder, filled by the Web MSI or install-web.ps1) as Pending on Admin/NodeBuilds,
+/// and seeds the CUDA provider library NVIDIA nodes download. Run once at startup; idempotent — a
+/// version already registered for its platform is skipped.</summary>
+public interface IBundledBuildRegistrar
+{
+    Task RegisterAsync(string packagesRoot, CancellationToken ct = default);
+}

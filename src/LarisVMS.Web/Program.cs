@@ -279,6 +279,7 @@ builder.Services.AddScoped<ICameraService, CameraService>();
 builder.Services.AddScoped<ICameraGroupService, CameraGroupService>();
 builder.Services.AddScoped<INodeService, NodeService>();
 builder.Services.AddScoped<INodeBuildService, NodeBuildService>();
+builder.Services.AddScoped<IBundledBuildRegistrar, BundledBuildRegistrar>();
 // Failover plan phase 2: standalone relay tier.
 builder.Services.AddScoped<IProxyService, ProxyService>();
 builder.Services.AddScoped<IViewService, ViewService>();
@@ -499,6 +500,29 @@ using (var startupScope = app.Services.CreateScope())
     var setupService = startupScope.ServiceProvider.GetRequiredService<ISetupService>();
     if (await setupService.IsDatabaseConfiguredAsync())
     {
+        // Upgrades (MSI or script) migrate here rather than from a build machine. A failure stops
+        // startup on purpose — running on a half-migrated schema is worse than not running, and SCM
+        // recovery retries the service.
+        var startupLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
+        var migrateDb = startupScope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var pending = (await migrateDb.Database.GetPendingMigrationsAsync()).ToList();
+        if (pending.Count > 0)
+        {
+            startupLogger.LogInformation("Applying {Count} database migration(s): {Migrations}", pending.Count, string.Join(", ", pending));
+            try
+            {
+                await migrateDb.Database.MigrateAsync();
+            }
+            catch (Exception ex)
+            {
+                startupLogger.LogCritical(ex, "Database migration failed - the service will not start");
+                throw;
+            }
+        }
+
+        var bundledBuilds = startupScope.ServiceProvider.GetRequiredService<IBundledBuildRegistrar>();
+        await bundledBuilds.RegisterAsync(Path.Combine(app.Environment.ContentRootPath, "packages"));
+
         var roleSeedService = startupScope.ServiceProvider.GetRequiredService<IRoleSeedService>();
         await roleSeedService.SeedAsync();
 

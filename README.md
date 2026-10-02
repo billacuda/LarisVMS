@@ -66,7 +66,7 @@ Settings are inherited **global → node → camera**, and the most specific val
 ## Requirements
 
 - **Operating system:** any 64-bit Windows version supported by [.NET 10](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md), for both the server and the recorder nodes.
-- **Server:** the [.NET 10 SDK](https://dotnet.microsoft.com/download) (to build), and SQL Server (Express works) using SQL or Integrated authentication.
+- **Server:** SQL Server (Express works) using SQL or Integrated authentication. Building from source also needs the [.NET 10 SDK](https://dotnet.microsoft.com/download); the MSIs don't need any .NET runtime.
 - **Each recorder node:** [FFmpeg](https://ffmpeg.org/) (`winget install ffmpeg --scope machine`).- **Each recorder node:** Windows, with [FFmpeg](https://ffmpeg.org/) installed (`winget install ffmpeg --scope machine`).
 - **AI detection (optional):** a GPU and its driver, or CPU only. NVIDIA additionally needs CUDA Toolkit 12.x and cuDNN 9.x (see [AI object detection](#ai-object-detection)) if you want to use CUDA or TensorRT acceleration, otherwise DirectML works out of the box.
 - **Cameras:** ONVIF Profile S or T.
@@ -74,51 +74,66 @@ Settings are inherited **global → node → camera**, and the most specific val
 
 Performance depends entirely on your hardware: how many cameras and AI detection streams a node can handle comes down to its CPU, GPU, disks and network.
 
-## Quick start
+## Installing
+
+Download the installers from the [Releases](https://github.com/billacuda/LarisVMS/releases) page:
+
+| Installer | Install on |
+|---|---|
+| `LarisVMS-Web-<version>-x64.msi` | The server. Self-contained, so no .NET runtime is needed. It also carries the node and proxy builds for auto-update. |
+| `LarisVMS-Node-<version>-x64.msi` | Each recording machine. |
+| `LarisVMS-Proxy-<version>-x64.msi` | Optional relay machines, for remote sites or low-bandwidth links. |
+
+Double-click an installer to be prompted for its settings, or pass them on the command line. Anything not given on the command line is asked for. In a silent install (`/qn`), a missing required value stops the install with a message naming the property.
 
 ### 1. Install the web server
 
-From an elevated PowerShell prompt in the repository root:
-
 ```powershell
-.\install-web.ps1
-# or, to run the service under a domain/service account (for SQL Integrated Security):
-.\install-web.ps1 -ServiceCredential (Get-Credential)
+msiexec /i LarisVMS-Web-0.209.0-x64.msi
+# silent, with a certificate:
+msiexec /i LarisVMS-Web-0.209.0-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx CERTPASSWORD=secret /qn
 ```
 
-`install-web.ps1` builds the web app and the node package, applies database migrations, and installs and starts the **LarisVMS Web** service on port 8444 (change it with `-HttpsPort`).
+| Property | Default | Purpose |
+|---|---|---|
+| `HTTPSPORT` | 8444 | HTTPS port, plus its firewall rule. |
+| `CERTPATH`, `CERTPASSWORD` | blank | Server certificate (`.pfx`). Blank uses a self-signed certificate; a renewed file at the same path is picked up automatically. |
+| `SERVICEACCOUNT`, `SERVICEPASSWORD` | LocalSystem | Service account, for example one with SQL Integrated Security rights. |
+| `INSTALLFOLDER` | `C:\Program Files\LarisVMS\Web` | Install location. |
 
 ### 2. Run the setup wizard
 
-Browse to `https://<server>:8444/`. Until you configure a certificate, the server uses a self-signed one. The wizard sets up the database connection, the first admin account and the branding, and shows the **node registration key**. You can find the key again later under
-**Settings → Node defaults**.
+Browse to `https://<server>:8444/`. The wizard sets up the database connection, the first admin account and the branding, and shows the **node registration key**. You can find the key again later under **Settings → Node defaults**.
 
-### 3. Add a certificate
+### 3. Install recorder nodes
 
-Edit `C:\Program Files\LarisVMS\Web\appsettings.Production.json` and set`Kestrel:Certificates:Default:Path` and `:Password` to your `.pfx` file, then restart the service:
-
-```powershell
-Restart-Service LarisVMSWeb
-```
-
-After that, a renewed certificate file is picked up automatically within a minute.
-
-### 4. Install recorder nodes
-
-Copy `publish\LarisVMS.Node\win\` (built in step 1) to each recording machine. Then, as Administrator:
+Install [FFmpeg](https://ffmpeg.org/) on each recording machine first (`winget install ffmpeg --scope machine`), then:
 
 ```powershell
-winget install ffmpeg --scope machine
-.\install-node.ps1 -ServerUrl https://<server>:8444 -RegistrationKey <key> -StorageRoot D:\Recordings
+msiexec /i LarisVMS-Node-0.209.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> STORAGEROOT=D:\Recordings /qn
 ```
 
-The node registers itself and appears under **Settings → Nodes**. Optional flags:
+| Property | Default | Purpose |
+|---|---|---|
+| `SERVERURL`, `REGISTRATIONKEY` | (required on first install) | Where the node registers. Not needed again once it's registered. |
+| `STORAGEROOT` | | Where the node records. |
+| `ARCHIVEROOT` | | Second volume that receives aged-out footage. |
+| `FFMPEGPATH` | auto-detected | Path to `ffmpeg.exe`. |
+| `LIVEPORT` | 8554 | Live video port, plus its firewall rule. |
+| `INSECURETLS` | | `1` accepts the server's self-signed certificate. |
+| `CLIENTPORT`, `CLIENTENDPOINTHOST`, `CLIENTPFXPATH`, `CLIENTPFXPASSWORD`, `CLIENTALLOWINSECURE` | | Lets browsers stream directly from this node. |
+| `SERVICEACCOUNT`, `SERVICEPASSWORD` | LocalSystem | Run as an account that can reach SMB storage. |
+| `INSTALLFOLDER` | `C:\Program Files\LarisVMS\Node` | Install location. |
 
-| Flag | Purpose |
-|---|---|
-| `-ArchiveRoot` | Second volume that receives aged-out footage. |
-| `-ClientPort`, `-ClientPfxPath`, `-ClientEndpointHost` | Lets browsers stream directly from this node. |
-| `-ServiceCredential` | Run the service as an account that can reach SMB storage. |
+The node registers itself and appears under **Settings → Nodes**.
+
+### 4. Install media proxies (optional)
+
+```powershell
+msiexec /i LarisVMS-Proxy-0.209.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> CLIENTPORT=4443 /qn
+```
+
+Properties: `SERVERURL`, `REGISTRATIONKEY`, `CLIENTPORT` (default 4443), `CLIENTENDPOINTHOST`, `CLIENTPFXPATH`, `CLIENTPFXPASSWORD`, `CLIENTALLOWINSECURE`, `INSECURETLS`, `SERVICEACCOUNT`, `SERVICEPASSWORD`, `INSTALLFOLDER`, with the same meanings as for the node.
 
 ### 5. Add cameras
 
@@ -126,17 +141,25 @@ Use **Cameras → Discover**, or add a camera by its ONVIF device service URL. T
 
 ## Upgrading
 
-Pull the new release and run `.\install-web.ps1` again. It never deletes recordings, and never overwrites `appsettings.Production.json`, `setup-generated.json` or the data-protection keys.
+Run the new version's MSI. Its settings are remembered from the previous install, so no properties are needed; secrets aren't stored, so a custom service account's password is asked for again. The web app applies database migrations itself when it starts. Upgrades never touch recordings, `appsettings.Production.json`, `setup-generated.json`, node registration or the data-protection keys.
 
-Recorder nodes and media proxies **update themselves**. Each run registers a new build as
-*Pending* under **Settings → Node builds**. Once you approve it, every older node downloads it,
-verifies its SHA-256 and installs it on its next check-in. You can turn this off under **Settings →
-Node defaults**.
+An installation made with the PowerShell scripts is upgraded the same way: the MSI takes over the existing service and keeps its settings and registration.
 
-> A node's first AI detection install needs one manual `install-node.ps1` run. Auto-update only
-> replaces files that are already present.
+Recorder nodes and media proxies also **update themselves**. A new web install registers the node and proxy builds it carries as *Pending* under **Settings → Node builds**. Once you approve one, every older node downloads it, verifies its SHA-256 and installs it on its next check-in. You can turn this off under **Settings → Node defaults**.
 
-`deploy.ps1` (the old IIS-based deploy) is deprecated. Use `install-web.ps1`.
+Uninstalling removes the program, its service and firewall rules. Recordings, configuration and everything under `%ProgramData%\LarisVMS` are kept.
+
+## Installing from source
+
+The PowerShell scripts build from the repository and install on the same machine; they take the same settings as the MSIs (`-HttpsPort`, `-ServiceCredential`, `-ServerUrl`, `-RegistrationKey`, `-StorageRoot`, …).
+
+```powershell
+.\install-web.ps1                       # build, then install or upgrade the web server
+.\build-node.ps1; .\build-proxy.ps1     # node and proxy packages in publish\, each with its install script
+.\build-installers.ps1                  # build all three MSIs into publish\installers\
+```
+
+`deploy.ps1` (the old IIS-based deploy) is deprecated.
 
 ## AI object detection
 
@@ -197,9 +220,11 @@ Add a database migration with:
 dotnet ef migrations add <Name> --project src\LarisVMS.Infrastructure --startup-project src\LarisVMS.Web
 ```
 
+Release installers are built with `.uild-installers.ps1` (WiX v5, restored from NuGet).
+
 A release needs the same version in every project's `<Version>` (Web, Node, NodeUpdater, Proxy,
 Core), a `BumpVersionX_Y_Z` migration that inserts into `AppVersions`, and a matching `CHANGELOG.md`
-heading. `install-web.ps1` refuses to deploy if any of these disagree.
+heading. `install-web.ps1` and `build-installers.ps1` refuse to run if any of these disagree.
 
 ### Project layout
 

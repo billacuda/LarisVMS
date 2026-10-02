@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- LarisVMS media proxy MSI. Accepts the same settings as install-proxy.ps1 as public properties:
+     msiexec /i LarisVMS-Proxy.msi SERVERURL=https://vms:8444 REGISTRATIONKEY=... CLIENTPORT=4443 /qn -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:fw="http://wixtoolset.org/schemas/v4/wxs/firewall"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package Name="LarisVMS Proxy" Manufacturer="LarisVMS" Version="$(var.ProductVersion)"
+           UpgradeCode="18C4C281-5D3B-4CDC-8C76-01AE2E782A89" Scope="perMachine" Compressed="yes" InstallerVersion="500">
+    <SummaryInformation Description="LarisVMS media proxy" />
+    <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallInitialize"
+                  DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <Icon Id="LarisIcon" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="LarisIcon" />
+
+    <Property Id="LARIS_PRODUCT" Value="Proxy" />
+    <Property Id="SERVERURL" Secure="yes" />
+    <Property Id="REGISTRATIONKEY" Secure="yes" Hidden="yes" />
+    <Property Id="INSECURETLS" Secure="yes" />
+    <Property Id="CLIENTPORT" Secure="yes" />
+    <Property Id="CLIENTPFXPATH" Secure="yes" />
+    <Property Id="CLIENTPFXPASSWORD" Secure="yes" Hidden="yes" />
+    <Property Id="CLIENTALLOWINSECURE" Secure="yes" />
+    <Property Id="CLIENTENDPOINTHOST" Secure="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="LARISROOT" Name="LarisVMS">
+        <Directory Id="INSTALLFOLDER" Name="Proxy" />
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="LarisVMS Proxy" AllowAbsent="no">
+      <ComponentGroupRef Id="ProxyFiles" />
+      <ComponentRef Id="ProxyService" />
+      <ComponentRef Id="ProxyFirewall" />
+    </Feature>
+
+    <ComponentGroup Id="ProxyFiles" Directory="INSTALLFOLDER">
+      <Files Include="!(bindpath.Proxy)\**">
+        <Exclude Files="!(bindpath.Proxy)\LarisVMS.Proxy.exe" />
+        <Exclude Files="!(bindpath.Proxy)\**\*.pdb" />
+        <Exclude Files="!(bindpath.Proxy)\web.config" />
+        <Exclude Files="!(bindpath.Proxy)\*.staticwebassets.endpoints.json" />
+        <Exclude Files="!(bindpath.Proxy)\aspnetcorev2_inprocess.dll" />
+        <Exclude Files="!(bindpath.Proxy)\install-proxy.ps1" />
+      </Files>
+    </ComponentGroup>
+
+    <Component Id="ProxyService" Directory="INSTALLFOLDER">
+      <File Id="ProxyExe" Source="!(bindpath.Proxy)\LarisVMS.Proxy.exe" KeyPath="yes" />
+      <!-- The name must stay LarisVMSProxy: the proxy's auto-update hardcodes it. -->
+      <ServiceInstall Id="ProxyServiceInstall" Name="LarisVMSProxy" DisplayName="LarisVMS Proxy"
+                      Description="LarisVMS media proxy - a TLS-terminating relay between browsers and recorder nodes."
+                      Type="ownProcess" Start="auto" ErrorControl="normal" Vital="yes"
+                      Account="[SERVICEACCOUNT]" Password="[SERVICEPASSWORD]" Arguments="[SERVICEARGS]">
+        <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart" ThirdFailureActionType="restart"
+                            RestartServiceDelayInSeconds="60" ResetPeriodInDays="1" />
+      </ServiceInstall>
+      <ServiceControl Id="ProxyServiceControl" Name="LarisVMSProxy" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+    </Component>
+
+    <Component Id="ProxyFirewall" Directory="INSTALLFOLDER" Guid="6A2D4E81-3B9F-4C17-9E25-8D4F1A7B3C44">
+      <CreateFolder />
+      <fw:FirewallException Id="FwProxy" Name="LarisVMS Proxy Endpoint" Port="[CLIENTPORT]" Protocol="tcp" Scope="any" />
+    </Component>
+
+    <InstallUISequence>
+      <Custom Action="DetectExisting" After="AppSearch" />
+      <Custom Action="LoadSettings" After="DetectExisting" />
+    </InstallUISequence>
+    <InstallExecuteSequence>
+      <Custom Action="DetectExisting" After="AppSearch" />
+      <Custom Action="LoadSettings" After="DetectExisting" />
+      <Custom Action="ValidateInstall" Before="InstallInitialize" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="BuildServiceArgs" After="ValidateInstall" />
+      <Custom Action="PrepareDeferred" After="BuildServiceArgs" />
+      <Custom Action="RemoveLegacyInstall" Before="StopServices" Condition="LEGACYINSTALL AND NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="SetFailureFlag" After="InstallServices" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="WriteEndpointConfig" After="InstallFiles" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="SaveSettings" Before="InstallFinalize" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="ForgetSettings" Before="InstallFinalize" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+
+    <UIRef Id="LarisProxyUI" />
+  </Package>
+</Wix>

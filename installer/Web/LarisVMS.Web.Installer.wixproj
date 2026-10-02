@@ -1,0 +1,28 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+  <PropertyGroup>
+    <OutputName>LarisVMS-Web</OutputName>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">0.0.0</ProductVersion>
+    <!-- Self-contained web publish with packages\ (node, proxy, CUDA provider) already copied in —
+         build-installers.ps1 produces this. -->
+    <WebPublishDir Condition="'$(WebPublishDir)' == ''">$(MSBuildThisFileDirectory)..\..\publish\LarisVMS.Web</WebPublishDir>
+    <DefineConstants>ProductVersion=$(ProductVersion);IconPath=$(MSBuildThisFileDirectory)..\Common\larisvms.ico</DefineConstants>
+    <!-- ICE61: same-version upgrades are deliberate (AllowSameVersionUpgrades). -->
+    <SuppressIces>ICE61</SuppressIces>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Common\Common.wxs" />
+    <BindPath Include="$(WebPublishDir)" BindName="Web" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.UI.wixext" />
+    <PackageReference Include="WixToolset.Util.wixext" />
+    <PackageReference Include="WixToolset.Firewall.wixext" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CustomActions\LarisVMS.Installer.CustomActions.csproj" />
+  </ItemGroup>
+</Project>

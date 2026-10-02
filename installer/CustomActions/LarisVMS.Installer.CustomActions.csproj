@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Windows Installer custom actions shared by the Web, Node and Proxy MSIs. DTF custom actions
+       run inside msiexec on .NET Framework, hence net472. The build packs a self-extracting
+       LarisVMS.Installer.CustomActions.CA.dll that the .wxs files reference. -->
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <RootNamespace>LarisVMS.Installer</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.Dtf.CustomAction" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Management" />
+    <Reference Include="System.ServiceProcess" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="CustomAction.config" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

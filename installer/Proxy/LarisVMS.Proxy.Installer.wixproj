@@ -1,0 +1,27 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+  <PropertyGroup>
+    <OutputName>LarisVMS-Proxy</OutputName>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">0.0.0</ProductVersion>
+    <!-- Package folder from build-proxy.ps1 (or build-installers.ps1). -->
+    <ProxyPackageDir Condition="'$(ProxyPackageDir)' == ''">$(MSBuildThisFileDirectory)..\..\publish\LarisVMS.Proxy\win</ProxyPackageDir>
+    <DefineConstants>ProductVersion=$(ProductVersion);IconPath=$(MSBuildThisFileDirectory)..\Common\larisvms.ico</DefineConstants>
+    <!-- ICE61: same-version upgrades are deliberate (AllowSameVersionUpgrades). -->
+    <SuppressIces>ICE61</SuppressIces>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Common\Common.wxs" />
+    <BindPath Include="$(ProxyPackageDir)" BindName="Proxy" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.UI.wixext" />
+    <PackageReference Include="WixToolset.Util.wixext" />
+    <PackageReference Include="WixToolset.Firewall.wixext" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CustomActions\LarisVMS.Installer.CustomActions.csproj" />
+  </ItemGroup>
+</Project>

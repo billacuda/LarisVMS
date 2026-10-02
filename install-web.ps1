@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Install or upgrade LarisVMS.Web as a self-hosted Kestrel Windows Service - no IIS required.
 
@@ -14,17 +14,18 @@
          if that's missing (or use -ConnectionString to override) — pre-setup, on a genuinely fresh
          install, there is none yet
       5. Guards against a misconfigured storage root — see "Storage root guard" below
-      6. Builds and publishes the web project (skippable with -SkipBuild)
+      6. Builds and publishes the web project, self-contained win-x64 (skippable with -SkipBuild)
       7. Builds the recorder node package (build-node.ps1) and, optionally, the media proxy package
          (build-proxy.ps1) — same as deploy.ps1's own step, skippable with -SkipNodeBuild
-      8. Registers that build with LarisVMS.Web's node-build-approval queue (Admin -> Node Builds)
+      8. Bundles the node/proxy packages into the web publish (packages\) — the web app registers
+         them as Pending on Admin -> Node Builds at startup
       9. Copies published files into $InstallDir via robocopy /MIR, explicitly preserving
          setup-generated.json, appsettings.Production.json, appsettings.Development.json,
          data-protection-keys\, and every recording/spool/export directory — never a blanket copy
      10. On a fresh install only (the file doesn't already exist), seeds appsettings.Production.json
          from the tracked appsettings.Production.json.example, so the service always has a starting
          config file to edit rather than none at all
-     11. Applies any pending EF Core migrations
+     11. (Database migrations run in the web app itself on startup)
      12. Registers/updates the 'LarisVMSWeb' Windows Service (New-Service, or Win32_Service.Change on
          an upgrade — passing -ServiceCredential is optional on an upgrade; omitting it leaves the
          existing service logon account untouched)
@@ -47,12 +48,11 @@
 .EXAMPLE
     .\install-web.ps1
     .\install-web.ps1 -ServiceCredential (Get-Credential)
-    .\install-web.ps1 -HttpsPort 8444 -SkipMigrations
+    .\install-web.ps1 -HttpsPort 8444 -BuildProxy
 #>
 
 param(
     [string]$WebProject            = (Join-Path $PSScriptRoot 'src\LarisVMS.Web\LarisVMS.Web.csproj'),
-    [string]$MigrationsProject     = (Join-Path $PSScriptRoot 'src\LarisVMS.Infrastructure\LarisVMS.Infrastructure.csproj'),
     [string]$PublishDir            = (Join-Path $PSScriptRoot 'publish\LarisVMS.Web'),
     [string]$Configuration         = 'Release',
     [string]$InstallDir            = 'C:\Program Files\LarisVMS\Web',
@@ -70,10 +70,8 @@ param(
     [string]$ChangelogPath         = (Join-Path $PSScriptRoot 'CHANGELOG.md'),
     [string]$MigrationsPath        = (Join-Path $PSScriptRoot 'src\LarisVMS.Infrastructure\Migrations'),
     [switch]$SkipNodeVision,
-    [switch]$SkipMigrations,
     [switch]$SkipBuild,
     [switch]$SkipNodeBuild,
-    [switch]$SkipNodeBuildRegistration,
     [switch]$SkipHealthCheck,
     [switch]$SkipVersionSyncCheck,
     [switch]$BuildProxy,
@@ -126,64 +124,16 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 }
 
 # ── version sync guard ────────────────────────────────────────────────────────
-# Identical reasoning/logic to deploy.ps1's own guard — see that script's comment for the full
-# history. Kept here too since install-web.ps1 now owns the node/proxy release step this guards.
-#
-# Also checks LarisVMS.Web's own <Version> and that a matching AppVersions "BumpVersionX_Y_Z"
-# migration exists — the footer version shown in the app (Pages/Shared/_Layout.cshtml) is read from
-# the AppVersions table, not from the assembly's own Version, so a release that bumps the changelog
-# and every csproj but forgets the data migration ships a binary that never reports the new version
-# in the UI even though everything else about the release is correct (this happened for 0.205.0).
+# See tools\VersionGuard.ps1 — shared with build-installers.ps1.
+. (Join-Path $PSScriptRoot 'tools\VersionGuard.ps1')
 if (-not $SkipVersionSyncCheck) {
     Write-Step "Checking web/node/proxy version is in sync with this release"
-
     if (-not (Test-Path $ChangelogPath)) {
         Write-Host "CHANGELOG.md not found at '$ChangelogPath' - skipping version sync guard."
     } else {
-        $changelogMatch = Select-String -Path $ChangelogPath -Pattern '^## \[(\d+\.\d+\.\d+)\]' | Select-Object -First 1
-        if (-not $changelogMatch) {
-            throw "Could not find a '## [X.Y.Z]' release heading at the top of '$ChangelogPath'."
-        }
-        $releaseVersion = $changelogMatch.Matches[0].Groups[1].Value
-
-        function Get-CsprojVersion([string]$Path) {
-            $m = Select-String -Path $Path -Pattern '<Version>([^<]+)</Version>' | Select-Object -First 1
-            if (-not $m) { throw "Could not find <Version> in '$Path'." }
-            return $m.Matches[0].Groups[1].Value.Trim()
-        }
-
-        $toCheck = @(
-            @{ Name = 'LarisVMS.Web';         Path = $WebProject },
-            @{ Name = 'LarisVMS.Node';        Path = $NodeCsprojPath },
-            @{ Name = 'LarisVMS.Proxy';       Path = $ProxyCsprojPath },
-            @{ Name = 'LarisVMS.NodeUpdater'; Path = $NodeUpdaterCsprojPath }
-        )
-        $mismatches = @()
-        foreach ($entry in $toCheck) {
-            $version = Get-CsprojVersion $entry.Path
-            if ($version -ne $releaseVersion) {
-                $mismatches += "  - $($entry.Name): <Version>$version</Version> in '$($entry.Path)' (expected $releaseVersion)"
-            }
-        }
-
-        # The in-app footer version comes from the AppVersions table (seeded by a per-release
-        # BumpVersionX_Y_Z EF Core migration), not from any assembly's Version — so it needs its own
-        # check independent of the csproj comparison above.
-        $migrationName = "BumpVersion$($releaseVersion -replace '\.', '_')"
-        $migrationExists = (Test-Path $MigrationsPath) -and
-            (Get-ChildItem $MigrationsPath -Filter "*_$migrationName.cs" -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -notlike '*.Designer.cs' } | Select-Object -First 1)
-        if (-not $migrationExists) {
-            $mismatches += "  - AppVersions migration: no '$migrationName' migration found under '$MigrationsPath' " +
-                "(the in-app footer version is read from the AppVersions table, not the assembly, so it will " +
-                "stay on the previous release without this)"
-        }
-
-        if ($mismatches.Count -gt 0) {
-            throw "This release is $releaseVersion (CHANGELOG.md) but the following are not in sync:`n" +
-                  "$($mismatches -join "`n")`n" +
-                  "Bump/add them for $releaseVersion before deploying, or pass -SkipVersionSyncCheck if this is " +
-                  "deliberate."
+        $releaseVersion = Assert-ReleaseVersionSync -ChangelogPath $ChangelogPath -MigrationsPath $MigrationsPath -Projects @{
+            'LarisVMS.Web' = $WebProject; 'LarisVMS.Node' = $NodeCsprojPath
+            'LarisVMS.Proxy' = $ProxyCsprojPath; 'LarisVMS.NodeUpdater' = $NodeUpdaterCsprojPath
         }
         Write-Ok "Web/Node/Proxy/NodeUpdater version and the AppVersions migration match this release ($releaseVersion)."
     }
@@ -213,9 +163,8 @@ if ($existingSvc) {
 }
 
 # ── resolve connection string ─────────────────────────────────────────────────
-# Needed by the storage-root guard and node-build registration below, independent of -SkipMigrations.
+# Needed by the storage-root guard and the media-port firewall rule below.
 
-$runMigrations = -not $SkipMigrations.IsPresent
 $installedConfigFile = Join-Path $InstallDir 'setup-generated.json'
 
 if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
@@ -223,10 +172,8 @@ if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
     $configFileRead = $installedConfigFile
     if (-not (Test-Path $installedConfigFile) -and -not [string]::IsNullOrWhiteSpace($LegacyIisConfigPath) -and (Test-Path $LegacyIisConfigPath)) {
         # An in-place IIS -> Kestrel migration: the old deploy.ps1 site never wrote its
-        # setup-generated.json into this script's own -InstallDir, so without this fallback every run
-        # here silently skips migrations *and* node-build/proxy-build registration — the build still
-        # compiles, it just never appears as Pending on Admin -> Node Builds, with only a Write-Host
-        # (easy to miss in installer output) explaining why.
+        # setup-generated.json into this script's own -InstallDir, and the service needs it there to
+        # find its database.
         Write-Host "    Not found at '$installedConfigFile' - falling back to legacy IIS path '$LegacyIisConfigPath'."
         $configFileRead = $LegacyIisConfigPath
     }
@@ -240,8 +187,7 @@ if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
 
     if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
         Write-Warning "No connection string found at '$installedConfigFile' or '$LegacyIisConfigPath'."
-        Write-Warning "Migrations AND node-build/proxy-build registration will be SILENTLY skipped this run. Run the Setup wizard first, pass -ConnectionString explicitly, or copy setup-generated.json from the old deployment into '$InstallDir'."
-        $runMigrations = $false
+        Write-Warning "The storage-root guard is skipped this run. Fine on a fresh install (the Setup wizard creates the database); otherwise pass -ConnectionString or copy setup-generated.json from the old deployment into '$InstallDir'."
     } else {
         Write-Ok "Connection string loaded from '$configFileRead'."
     }
@@ -299,7 +245,8 @@ if (-not $SkipBuild) {
         Remove-Item $PublishDir -Recurse -Force
     }
 
-    Invoke-Cmd 'dotnet' @('publish', $WebProject, '-c', $Configuration, '-o', $PublishDir)
+    # Self-contained, same as the Web MSI: no ASP.NET Core runtime needed on the server.
+    Invoke-Cmd 'dotnet' @('publish', $WebProject, '-c', $Configuration, '-r', 'win-x64', '--self-contained', '-o', $PublishDir)
     Write-Ok "Published to: $PublishDir"
 } else {
     Write-Host "Build/publish skipped (-SkipBuild) - installing whatever is already in $PublishDir."
@@ -333,6 +280,26 @@ if ($BuildProxy) {
     }
     & $buildProxyScript @buildProxyArgs
     Write-Ok "Media proxy package built (publish\LarisVMS.Proxy\win)."
+}
+
+# ── bundle node/proxy packages into the web publish ──────────────────────────
+# The web app registers these as Pending on Admin -> Node Builds at startup (IBundledBuildRegistrar).
+$packagesDir = Join-Path $PublishDir 'packages'
+$bundles = @(
+    @{ Src = 'publish\LarisVMS.Node\win\LarisVMS.Node.exe';             Dest = 'node' },
+    @{ Src = 'publish\LarisVMS.Node\win\LarisVMS.Vision.Service.exe';   Dest = 'node' },
+    @{ Src = 'publish\LarisVMS.Node\node-build-version.txt';            Dest = 'node' },
+    @{ Src = 'publish\LarisVMS.Proxy\win\LarisVMS.Proxy.exe';           Dest = 'proxy' },
+    @{ Src = 'publish\LarisVMS.Proxy\proxy-build-version.txt';          Dest = 'proxy' },
+    @{ Src = 'publish\LarisVMS.Node\cuda-provider\onnxruntime_providers_cuda.dll'; Dest = 'cuda-provider' }
+)
+foreach ($b in $bundles) {
+    $src = Join-Path $PSScriptRoot $b.Src
+    if (Test-Path $src) {
+        $dest = Join-Path $packagesDir $b.Dest
+        New-Item -ItemType Directory -Path $dest -Force | Out-Null
+        Copy-Item $src $dest -Force
+    }
 }
 
 # ── copy files, without clobbering machine-specific config ───────────────────
@@ -376,187 +343,9 @@ if (-not (Test-Path $realProdConfig)) {
     }
 }
 
-# ── EF Core migrations ────────────────────────────────────────────────────────
-
-if ($runMigrations) {
-    Write-Step "Applying EF Core migrations"
-    Invoke-Cmd 'dotnet' @(
-        'ef', 'database', 'update',
-        '--project',         $MigrationsProject,
-        '--startup-project', $WebProject,
-        '--configuration',   $Configuration,
-        '--no-build',
-        '--connection',      $ConnectionString
-    )
-    Write-Ok "Migrations applied."
-} else {
-    Write-Host "`nMigrations skipped."
-}
-
-# ── register node build for approval ──────────────────────────────────────────
-# Identical logic to deploy.ps1's own step — writes straight into NodeBuildService's storage folder
-# and inserts the database row directly, same as the storage-root guard above.
-if ($SkipNodeBuild -or $SkipNodeBuildRegistration) {
-    Write-Host "`nNode-build registration skipped."
-} elseif ([string]::IsNullOrWhiteSpace($ConnectionString)) {
-    Write-Host "`nNo connection string available - skipping node-build registration."
-} else {
-    Write-Step "Registering node build for approval"
-    try {
-        $nodeVersionFile = Join-Path $PSScriptRoot 'publish\LarisVMS.Node\node-build-version.txt'
-        if (Test-Path $nodeVersionFile) {
-            $nodeVersion = (Get-Content $nodeVersionFile -Raw).Trim()
-        } else {
-            $nodeVersionMatch = Select-String -Path $NodeCsprojPath -Pattern '<Version>([^<]+)</Version>' | Select-Object -First 1
-            if (-not $nodeVersionMatch) { throw "Could not find <Version> in '$NodeCsprojPath'." }
-            $nodeVersion = $nodeVersionMatch.Matches[0].Groups[1].Value
-        }
-        $platform = 'win-x64'
-        $nodeExePath = Join-Path $PSScriptRoot 'publish\LarisVMS.Node\win\LarisVMS.Node.exe'
-        if (-not (Test-Path $nodeExePath)) { throw "Built node exe not found: $nodeExePath" }
-
-        $visionExePath = Join-Path $PSScriptRoot 'publish\LarisVMS.Node\win\LarisVMS.Vision.Service.exe'
-        $hasVision = Test-Path $visionExePath
-
-        Add-Type -AssemblyName System.Data
-        $sqlCs = Get-SqlClientConnectionString $ConnectionString
-        $conn = New-Object System.Data.SqlClient.SqlConnection($sqlCs)
-        $conn.Open()
-        try {
-            $checkCmd = $conn.CreateCommand()
-            $checkCmd.CommandText = 'SELECT COUNT(*) FROM NodeBuildVersions WHERE Version = @Version AND Platform = @Platform'
-            $checkCmd.Parameters.AddWithValue('@Version', $nodeVersion) | Out-Null
-            $checkCmd.Parameters.AddWithValue('@Platform', $platform) | Out-Null
-            $existingCount = [int]$checkCmd.ExecuteScalar()
-
-            if ($existingCount -gt 0) {
-                Write-Host "Node build $nodeVersion ($platform) is already registered - skipping."
-            } else {
-                $nodeBuildsRoot = Join-Path $env:ProgramData 'LarisVMS\node-builds'
-                New-Item -ItemType Directory -Path $nodeBuildsRoot -Force | Out-Null
-                $buildId = [guid]::NewGuid()
-                $storedPath = Join-Path $nodeBuildsRoot "$buildId.exe"
-                Copy-Item $nodeExePath $storedPath -Force
-
-                $hash = (Get-FileHash -Path $storedPath -Algorithm SHA256).Hash.ToLowerInvariant()
-                $sizeBytes = (Get-Item $storedPath).Length
-
-                $visionStoredPath = $null
-                $visionHash = $null
-                $visionSizeBytes = $null
-                if ($hasVision) {
-                    $visionStoredPath = Join-Path $nodeBuildsRoot "$buildId.vision.exe"
-                    Copy-Item $visionExePath $visionStoredPath -Force
-                    $visionHash = (Get-FileHash -Path $visionStoredPath -Algorithm SHA256).Hash.ToLowerInvariant()
-                    $visionSizeBytes = (Get-Item $visionStoredPath).Length
-                }
-
-                $insertCmd = $conn.CreateCommand()
-                $insertCmd.CommandText = @'
-INSERT INTO NodeBuildVersions (Id, Version, Platform, FilePath, SizeBytes, Sha256, VisionFilePath, VisionSizeBytes, VisionSha256, UploadedAt, Notes, Status, ApprovedAt, ApprovedBy)
-VALUES (@Id, @Version, @Platform, @FilePath, @SizeBytes, @Sha256, @VisionFilePath, @VisionSizeBytes, @VisionSha256, GETUTCDATE(), @Notes, 0, NULL, NULL)
-'@
-                $insertCmd.Parameters.AddWithValue('@Id', $buildId) | Out-Null
-                $insertCmd.Parameters.AddWithValue('@Version', $nodeVersion) | Out-Null
-                $insertCmd.Parameters.AddWithValue('@Platform', $platform) | Out-Null
-                $insertCmd.Parameters.AddWithValue('@FilePath', $storedPath) | Out-Null
-                $insertCmd.Parameters.AddWithValue('@SizeBytes', $sizeBytes) | Out-Null
-                $insertCmd.Parameters.AddWithValue('@Sha256', $hash) | Out-Null
-                $insertCmd.Parameters.AddWithValue('@VisionFilePath', $(if ($visionStoredPath) { $visionStoredPath } else { [DBNull]::Value })) | Out-Null
-                $insertCmd.Parameters.AddWithValue('@VisionSizeBytes', $(if ($null -ne $visionSizeBytes) { $visionSizeBytes } else { [DBNull]::Value })) | Out-Null
-                $insertCmd.Parameters.AddWithValue('@VisionSha256', $(if ($visionHash) { $visionHash } else { [DBNull]::Value })) | Out-Null
-                $insertCmd.Parameters.AddWithValue('@Notes', "Registered by install-web.ps1 on $(Get-Date -Format 'yyyy-MM-dd HH:mm')") | Out-Null
-                $insertCmd.ExecuteNonQuery() | Out-Null
-
-                Write-Ok "Node build $nodeVersion ($platform) registered as Pending - approve it on Admin -> Node Builds.$(if ($hasVision) { ' (includes Vision Service)' })"
-            }
-        } finally {
-            $conn.Close()
-        }
-    } catch {
-        Write-Host "Could not register node build for approval: $_" -ForegroundColor Yellow
-    }
-}
-
-if ($BuildProxy -and -not [string]::IsNullOrWhiteSpace($ConnectionString)) {
-    Write-Step "Registering media proxy build for approval"
-    try {
-        $proxyVersionFile = Join-Path $PSScriptRoot 'publish\LarisVMS.Proxy\proxy-build-version.txt'
-        if (Test-Path $proxyVersionFile) {
-            $proxyVersion = (Get-Content $proxyVersionFile -Raw).Trim()
-        } else {
-            $proxyVersionMatch = Select-String -Path $ProxyCsprojPath -Pattern '<Version>([^<]+)</Version>' | Select-Object -First 1
-            if (-not $proxyVersionMatch) { throw "Could not find <Version> in '$ProxyCsprojPath'." }
-            $proxyVersion = $proxyVersionMatch.Matches[0].Groups[1].Value
-        }
-        $proxyPlatform = 'proxy-win-x64'
-        $proxyExePath = Join-Path $PSScriptRoot 'publish\LarisVMS.Proxy\win\LarisVMS.Proxy.exe'
-        if (-not (Test-Path $proxyExePath)) { throw "Built proxy exe not found: $proxyExePath" }
-
-        Add-Type -AssemblyName System.Data
-        $sqlCs = Get-SqlClientConnectionString $ConnectionString
-        $conn = New-Object System.Data.SqlClient.SqlConnection($sqlCs)
-        $conn.Open()
-        try {
-            $checkCmd = $conn.CreateCommand()
-            $checkCmd.CommandText = 'SELECT COUNT(*) FROM NodeBuildVersions WHERE Version = @Version AND Platform = @Platform'
-            $checkCmd.Parameters.AddWithValue('@Version', $proxyVersion) | Out-Null
-            $checkCmd.Parameters.AddWithValue('@Platform', $proxyPlatform) | Out-Null
-            if ([int]$checkCmd.ExecuteScalar() -gt 0) {
-                Write-Host "Proxy build $proxyVersion ($proxyPlatform) is already registered - skipping."
-            } else {
-                $nodeBuildsRoot = Join-Path $env:ProgramData 'LarisVMS\node-builds'
-                New-Item -ItemType Directory -Path $nodeBuildsRoot -Force | Out-Null
-                $buildId = [guid]::NewGuid()
-                $storedPath = Join-Path $nodeBuildsRoot "$buildId.exe"
-                Copy-Item $proxyExePath $storedPath -Force
-                $hash = (Get-FileHash -Path $storedPath -Algorithm SHA256).Hash.ToLowerInvariant()
-                $sizeBytes = (Get-Item $storedPath).Length
-
-                $insertCmd = $conn.CreateCommand()
-                $insertCmd.CommandText = @'
-INSERT INTO NodeBuildVersions (Id, Version, Platform, FilePath, SizeBytes, Sha256, VisionFilePath, VisionSizeBytes, VisionSha256, UploadedAt, Notes, Status, ApprovedAt, ApprovedBy)
-VALUES (@Id, @Version, @Platform, @FilePath, @SizeBytes, @Sha256, NULL, NULL, NULL, GETUTCDATE(), @Notes, 0, NULL, NULL)
-'@
-                $insertCmd.Parameters.AddWithValue('@Id', $buildId) | Out-Null
-                $insertCmd.Parameters.AddWithValue('@Version', $proxyVersion) | Out-Null
-                $insertCmd.Parameters.AddWithValue('@Platform', $proxyPlatform) | Out-Null
-                $insertCmd.Parameters.AddWithValue('@FilePath', $storedPath) | Out-Null
-                $insertCmd.Parameters.AddWithValue('@SizeBytes', $sizeBytes) | Out-Null
-                $insertCmd.Parameters.AddWithValue('@Sha256', $hash) | Out-Null
-                $insertCmd.Parameters.AddWithValue('@Notes', "Media proxy build, registered by install-web.ps1 on $(Get-Date -Format 'yyyy-MM-dd HH:mm')") | Out-Null
-                $insertCmd.ExecuteNonQuery() | Out-Null
-
-                Write-Ok "Proxy build $proxyVersion ($proxyPlatform) registered as Pending - approve it on Admin -> Node Builds."
-            }
-        } finally {
-            $conn.Close()
-        }
-    } catch {
-        Write-Host "Could not register media proxy build for approval: $_" -ForegroundColor Yellow
-    }
-}
-
-# ── seed the CUDA provider library ────────────────────────────────────────────
-# Identical to deploy.ps1's own step — %ProgramData% is untouched by the robocopy /MIR above.
-$cudaProviderSrc = Join-Path $PSScriptRoot 'publish\LarisVMS.Node\cuda-provider\onnxruntime_providers_cuda.dll'
-if (Test-Path $cudaProviderSrc) {
-    try {
-        $visionNativeRoot = Join-Path $env:ProgramData 'LarisVMS\vision-native'
-        New-Item -ItemType Directory -Path $visionNativeRoot -Force | Out-Null
-        $cudaProviderDest = Join-Path $visionNativeRoot 'onnxruntime_providers_cuda.dll'
-        $srcHash = (Get-FileHash $cudaProviderSrc -Algorithm SHA256).Hash
-        if ((Test-Path $cudaProviderDest) -and (Get-FileHash $cudaProviderDest -Algorithm SHA256).Hash -eq $srcHash) {
-            Write-Host "CUDA provider library already current on the server - skipping."
-        } else {
-            Write-Step "Seeding the CUDA provider library for node download"
-            Copy-Item $cudaProviderSrc $cudaProviderDest -Force
-            Write-Ok "Seeded to $cudaProviderDest"
-        }
-    } catch {
-        Write-Host "Could not seed the CUDA provider library (NVIDIA nodes will keep running DirectML): $_" -ForegroundColor Yellow
-    }
-}
+# Database migrations, node/proxy build registration and CUDA provider seeding happen in the web
+# app itself at startup (Program.cs: MigrateAsync + IBundledBuildRegistrar), using the
+# packages\ folder bundled into the publish output above.
 
 # ── register / update Windows Service ─────────────────────────────────────────
 # All config (connection string, cert path, ports) comes from setup-generated.json /

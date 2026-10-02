@@ -26,6 +26,11 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <!-- The MSI custom actions target net472, so their pure helpers are compiled in as source. -->
+  <ItemGroup>
+    <Compile Include="..\..\installer\CustomActions\Util.cs" Link="Installer\Util.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\..\src\LarisVMS.Core\LarisVMS.Core.csproj" />
     <ProjectReference Include="..\..\src\LarisVMS.Infrastructure\LarisVMS.Infrastructure.csproj" />
