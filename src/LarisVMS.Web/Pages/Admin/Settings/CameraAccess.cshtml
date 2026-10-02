@@ -7,12 +7,8 @@
 <h1>Settings</h1>
 <partial name="_SettingsTabs" model="@("CameraAccess")" />
 
-<p class="text-muted">
-    Narrows which cameras a role can see, beyond the broad Cameras/Playback/Exports permissions —
-    an NVR needs "which cameras", not just "can view cameras at all". A role with <strong>no grants
-    below is unrestricted</strong> and sees every camera; adding a grant switches that role to seeing
-    only what its grants cover. User-specific grants (rather than role-wide) need a user-management
-    page this app doesn't have yet, so this only offers roles for now.
+<p class="text-muted small">
+    Limit which cameras a role can use. A role with no grants sees every camera. <a href="/Help/users#camera-access">Learn more</a>
 </p>
 
 @if (!string.IsNullOrEmpty(Model.SavedMessage))
@@ -158,13 +154,7 @@
                         <label class="form-check-label" for="action-@action">@action</label>
                     </div>
                 }
-                <div class="form-text">
-                    View = appears in live views. Playback = appears on the Playback page. Export =
-                    can include this camera in a download. Ptz (M18) = can pan/tilt/zoom this camera
-                    from its Live tile. Talk and Configure are schema-ready for later milestones and
-                    not yet checked anywhere else in the app — granting them today has no additional
-                    effect until those features enforce them too.
-                </div>
+                <div class="lv-hint">Talk and Configure aren't enforced yet.</div>
             </div>
 
             <div class="col-12">

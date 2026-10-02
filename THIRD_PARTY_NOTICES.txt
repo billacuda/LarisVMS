@@ -1,10 +1,12 @@
 THIRD PARTY NOTICES
 ===================
 
-This file covers the third-party components that came in with native AI object detection
-(LarisVMS.Vision / LarisVMS.Vision.Service). LarisVMS is MIT licensed; this is not yet a complete
-notice for every dependency the wider application uses (ASP.NET Core, EF Core, Bootstrap, GridStack,
-etc. — each carries its own standard OSS license via NuGet/npm, not separately re-stated here).
+LarisVMS is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This file covers the third-party components used by native AI object detection (LarisVMS.Vision /
+LarisVMS.Vision.Service) and other notable runtime libraries. It is not a complete notice for every
+dependency the wider application uses (ASP.NET Core, EF Core, Bootstrap, GridStack, etc. — each
+carries its own standard OSS license via NuGet/npm, not separately re-stated here).
 
 
 RUNTIME DEPENDENCIES
@@ -41,7 +43,7 @@ Microsoft.ML.OnnxRuntime + Microsoft.ML.OnnxRuntime.Gpu.Windows + Microsoft.ML.O
     LarisVMS.Vision references the managed assembly and the CPU native; LarisVMS.Vision.Service also
     stages the CUDA(+TensorRT) and DirectML native builds into onnxruntime-backends/<name>/ so one
     node package runs on any hardware (VisionBackendResolver picks one at runtime). The ~320 MB
-    onnxruntime_providers_cuda.dll is not shipped in the node package — deploy.ps1 seeds it onto the
+    onnxruntime_providers_cuda.dll is not shipped in the node package — install-web.ps1 seeds it onto the
     LarisVMS server and an NVIDIA node downloads it from there once. Used directly from
     Inference/OrtSessionFactory.cs, DFineEngine.cs, YoloXEngine.cs.
 
@@ -59,6 +61,12 @@ SkiaSharp
     for DFineEngine's own frame preprocessing (resize/pixel pack) since the D-FINE integration, and to
     WebP-encode the eager AI-detection snapshot crops.
 
+Markdig
+    BSD-2-Clause
+    https://github.com/xoofx/markdig
+    Copyright (c) Alexandre Mutel
+    Renders the in-app Help pages (LarisVMS.Web/Help/*.md).
+
 
 VENDORED SOURCE
 ---------------
@@ -72,8 +80,8 @@ ByteTrack — src/LarisVMS.Vision/Tracking/
     deploy/TensorRT/cpp/src/BYTETracker.cpp and kalmanFilter.cpp. Each ported file retains upstream
     attribution in its header. The linear assignment step calls YoloDotNet's public LAPJV.Solve
     rather than porting the reference lapjv.cpp. Ported into this repo from `aitest`
-    (g:\Projects\aitest, this project's own standalone prototyping/validation repo, itself MIT
-    licensed) — same code, same attribution, carried forward unchanged.
+    (this project's own standalone prototyping/validation repo, itself MIT licensed) — same code,
+    same attribution, carried forward unchanged.
 
 
 EXTERNAL TOOLS (invoked as subprocesses, not linked)
@@ -82,7 +90,7 @@ EXTERNAL TOOLS (invoked as subprocesses, not linked)
 FFmpeg
     Invoked as a separate process over a pipe; no FFmpeg code is linked into this project, so its
     license does not propagate here (a GPL build is fine). Not bundled — installed per recorder
-    node; see the README's "FFmpeg (required)" section.
+    node; see the README's "Requirements" section.
     https://ffmpeg.org
 
 huggingface-hub (Python)
@@ -116,6 +124,10 @@ D-FINE (small — obj2coco and obj365 variants; medium — obj2coco variant)
     annotation data is included anywhere in this repository or its release artifacts.
     See https://www.objects365.org/download.html.
 
-    RF-DETR and YOLOX are reserved model-family options (DetectionModelFamily enum, rendered
-    disabled in the admin picker) with no weights fetched or shipped yet — see the model-swap
-    plan's deferred scope for why.
+YOLOX (nano, tiny, s, m, l, x)
+    Apache-2.0 — https://github.com/Megvii-BaseDetection/YOLOX (Megvii)
+    The default detection model. ONNX weights are not bundled: the LarisVMS server downloads them
+    from the upstream YOLOX GitHub releases on first use and passes them on to its recorder nodes.
+
+RF-DETR is a reserved model-family option (rendered disabled in the admin picker) with no weights
+fetched or shipped yet.

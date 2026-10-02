@@ -17,15 +17,8 @@
 <SettingsTabs ActiveKey="Permissions" />
 <PermissionsTabs ActiveKey="Matrix" />
 
-<p class="text-muted">
-    Which Resource×Action pairs each role grants. The Super Admin role (marked
-    <span class="badge text-bg-secondary">built-in</span>) always holds every permission and isn't
-    editable here. Camera-level scoping is separate — see
-    <a href="/Admin/Settings/CameraAccess">Camera Access</a> — and each role's scope tier, expiry,
-    and PTZ priority live on the <a href="/Admin/Settings/Permissions/Roles">Roles</a> tab. Live
-    view, PTZ, two-way audio, playback, export, and camera-edit access are all further narrowed
-    per-camera or per-site on the Camera Access page — a checkbox here only controls whether a role
-    can use the feature at all, not which cameras it reaches.
+<p class="text-muted small">
+    What each role is allowed to do. Super Admin always has everything. <a href="/Help/users#permissions">Learn more</a>
 </p>
 
 @if (!string.IsNullOrEmpty(SavedMessage))

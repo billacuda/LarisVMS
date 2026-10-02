@@ -247,11 +247,11 @@ public record NodeConfigCameraDto(Guid CameraId, string Name, string? Username, 
     /// same 10 fps a busy street camera needs to track fast-moving vehicles, and every frame above
     /// what a camera actually needs is pure wasted decode/preprocess/inference cost on both this node
     /// and, for the external backend, the far side of the network too. 0 = no cap (decode-rate), same
-    /// as the node-scoped setting. Defaults 10 = <see cref="NodeConfigResponse.MaxDetectionFps"/>'s
+    /// as the node-scoped setting. Defaults 7 = <see cref="NodeConfigResponse.MaxDetectionFps"/>'s
     /// own default, so an older, not-yet-updated node build's deserialization lands on the same
     /// ceiling it always had. Appended last so the positional NodeService construction stays
     /// stable.</summary>
-    int MaxFps = 10);
+    int MaxFps = 7);
 /// <summary>A camera this node has leftover Segments for but is no longer assigned to record
 /// (reassigned to a different node, or deleted) — StorageManager's orphaned-folder sweep uses
 /// RetentionDays here so leftover footage still ages out on the same schedule it always would have,
@@ -337,9 +337,9 @@ public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? Stor
     /// <summary>Detection.MaxFps — the ceiling on how many frames per second per camera reach the
     /// detection model. The Vision Service's ffmpeg still decodes the Sub stream in real time, but an
     /// `fps=` filter drops the rest before inference, so the GPU idles between frames instead of
-    /// running flat out. Node-scoped. 0 = no cap (decode-rate). Default 10 — plenty for NVR object
-    /// tracking, and where the live overlay poll already tops out.</summary>
-    int MaxDetectionFps = 10,
+    /// running flat out. Node-scoped. 0 = no cap (decode-rate). Default 7 — 5–7 fps is enough for
+    /// accurate detection and tracking.</summary>
+    int MaxDetectionFps = 7,
     /// <summary>Detection.DFineTensorRtMode — "Off" (default) / "FP32" / "FP16", node-scoped like the
     /// other Detection.* fields (Setting + SettingOverride(Scope.Node)). Only acted on when the family
     /// resolves to "DFine" and the node has the machine-local Vision:EnableTensorRt set with a working

@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.209.0] - 2026-10-01
+
+### Added
+
+- Help section (left nav, below Settings): documentation for every part of the system, split into
+  topics, with "Learn more" links from settings pages.
+- Node edit page (Settings → Nodes → a node). All node settings, grouped into sections, replace the
+  inline table editing.
+
+### Changed
+
+- UI cleanup. Settings, node and camera pages use grouped sections with a one-line hint per field
+  instead of ℹ️ popovers; long explanations moved to Help. Fields that don't apply to the current
+  choice are hidden, Save stays visible at the bottom, and leaving with unsaved changes asks first.
+- Nodes list shows only the key columns; node actions moved to a ⋯ menu that floats over the table.
+- Camera edit page grouped into General, Connection, Recording, Storage, AI detection and Motion;
+  capabilities and streams are under a collapsible Device panel.
+- Snapshots: the play button sits on the camera name/time row instead of its own footer.
+- Max detection frame rate defaults to 7 fps (was 10) on new installs; existing installs keep 10.
+- Settings tiles are alphabetical; added a Camera settings tile and renamed the duplicate-sounding
+  ones (Logging, Node defaults, Recording defaults, Security).
+
+### Fixed
+
+- Dashboard's Nodes online only counted nodes that had cameras the user could see. It now counts
+  every registered node.
+- Settings → Email showed none of the provider fields (SMTP, Graph, Gmail).
+- Blazor pages could keep using stale CSS/JS after an update; asset URLs are now versioned.
+- Capability badges on the camera page ignored dark mode.
+
 ## [0.208.0] - 2026-09-24
 
 ### Fixed

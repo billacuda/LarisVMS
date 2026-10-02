@@ -10,13 +10,9 @@
 <PageTitle>Camera groups - @AppName</PageTitle>
 
 <h1>Camera groups</h1>
-<p class="text-muted">
-    Sites / buildings / floors — used to organize cameras, to scope settings overrides, and as the
-    scope a role's <a href="/Admin/Settings/CameraAccess">Camera Access</a> grant narrows down to.
-    A camera can belong to any number of groups, as long as they're all under the same top-level site.
-    <strong>There's no separate "site" field to set</strong> — a group's site is simply whichever
-    top-level group (no parent) it descends from; add one with "Parent" left as "(top level)" below
-    to create a new site, or a sub-group under an existing one for a building/floor within it.
+<p class="text-muted small">
+    Organize cameras into sites, buildings and floors. A top-level group is a site; a camera's groups must share one site.
+    <a href="/Help/cameras#groups">Learn more</a>
 </p>
 
 @if (!string.IsNullOrEmpty(ErrorMessage))
@@ -87,10 +83,7 @@
             <div class="card-body">
                 @if (isBuiltIn)
                 {
-                    <p class="text-muted small mb-0">
-                        Built in — every camera is automatically a member (@members.Count total).
-                        Nothing to manage here; membership follows camera creation/deletion on its own.
-                    </p>
+                    <p class="text-muted small mb-0">Built in. Every camera is a member (@members.Count).</p>
                 }
                 else
                 {
@@ -147,10 +140,7 @@
                     }
                     else
                     {
-                        <p class="text-muted small">
-                            Checking a camera already in a group under a different site will fail —
-                            see each camera's current group(s) below.
-                        </p>
+                        <p class="text-muted small">A camera can't join groups in two different sites.</p>
                         @foreach (var c in Cameras)
                         {
                             <div class="form-check">

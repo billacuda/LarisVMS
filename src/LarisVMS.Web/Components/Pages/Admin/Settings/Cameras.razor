@@ -17,40 +17,24 @@
     <div class="alert alert-success">@SavedMessage</div>
 }
 
-<EditForm Model="this" FormName="camera-settings" OnSubmit="HandleSaveAsync" class="row g-3" style="max-width: 560px;">
-    <div class="col-12">
-        <div class="form-check">
-            <InputCheckbox @bind-Value="DailyReprobeEnabled" class="form-check-input" id="DailyReprobeEnabled" />
-            <label class="form-check-label" for="DailyReprobeEnabled">
-                Re-probe every camera daily
-                <button type="button" class="help-icon" data-help-target="reprobeHelp" tabindex="0" aria-label="Help">ℹ️</button>
-            </label>
-        </div>
-        <div class="help-text-source" id="reprobeHelp">
-            Picks up a camera that has gained, lost, or re-encoded a stream without anyone pressing
-            Re-probe. Cameras are probed one at a time rather than all at once — a fleet-wide burst
-            of ONVIF conversations is exactly what makes cheap cameras drop their other connections,
-            including the RTSP session being recorded. Per-stream enable/disable and custom names are
-            carried across a re-probe, so an unchanged camera comes out unchanged.
-        </div>
-    </div>
-    <div class="col-6">
-        <label class="form-label">
-            Re-probe at (server local time)
-            <button type="button" class="help-icon" data-help-target="reprobeAtHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <InputText @bind-Value="DailyReprobeAtLocalTime" type="time" class="form-control" />
-        <div class="help-text-source" id="reprobeAtHelp">
-            Local to this server, matching how Schedule recording mode already reads times. A run
-            missed because the application was restarting is skipped rather than queued — the next
-            day's run does the same work.
-        </div>
-    </div>
-
-    <div class="col-12">
-        <button type="submit" class="btn btn-primary"><span aria-hidden="true">💾</span> Save</button>
+<div class="lv-page-narrow">
+<EditForm Model="this" FormName="camera-settings" OnSubmit="HandleSaveAsync" data-dirty-guard>
+    <SettingSection Title="Daily re-probe" Subtitle="Picks up stream changes without pressing Re-probe. Cameras are probed one at a time.">
+        <SettingField Label="Re-probe">
+            <div class="form-check mt-1">
+                <InputCheckbox @bind-Value="DailyReprobeEnabled" class="form-check-input" id="DailyReprobeEnabled" />
+                <label class="form-check-label" for="DailyReprobeEnabled">Re-probe every camera daily</label>
+            </div>
+        </SettingField>
+        <SettingField Label="Time (server local)" ShowWhen="DailyReprobeEnabled=true" Hint="A run missed during a restart is skipped.">
+            <InputText @bind-Value="DailyReprobeAtLocalTime" type="time" class="form-control" />
+        </SettingField>
+    </SettingSection>
+    <div class="lv-savebar">
+        <button type="submit" class="btn btn-primary">Save</button>
     </div>
 </EditForm>
+</div>
 
 @code {
     [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }

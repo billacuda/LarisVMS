@@ -1,12 +1,13 @@
+@inject Microsoft.AspNetCore.Mvc.ViewFeatures.IFileVersionProvider FileVersion
 <!DOCTYPE html>
 <html lang="en" data-bs-theme="light">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <base href="/" />
-    <link rel="stylesheet" href="/lib/bootstrap/dist/css/bootstrap.min.css" />
-    <link rel="stylesheet" href="/css/theme.css" />
-    <link rel="stylesheet" href="/css/site.css" />
+    <link rel="stylesheet" href="@V("/lib/bootstrap/dist/css/bootstrap.min.css")" />
+    <link rel="stylesheet" href="@V("/css/theme.css")" />
+    <link rel="stylesheet" href="@V("/css/site.css")" />
     <HeadOutlet />
     <script>
         // Anti-flash: applies the stored theme (or the system preference, when unset — 'auto' is
@@ -25,15 +26,14 @@
 <body>
     <Routes />
 
-    <script src="/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="/js/user-preferences.js"></script>
-    <script src="/js/theme.js"></script>
-    <script src="/js/sortable-table.js"></script>
-    <script src="/js/list-filter.js"></script>
-    <script src="/js/table-pagination.js"></script>
-    <script src="/js/column-picker.js"></script>
-    <script src="/js/help-popover.js"></script>
-    <script src="/js/secret-reveal.js"></script>
+    <script src="@V("/lib/bootstrap/dist/js/bootstrap.bundle.min.js")"></script>
+    <script src="@V("/js/user-preferences.js")"></script>
+    <script src="@V("/js/theme.js")"></script>
+    <script src="@V("/js/sortable-table.js")"></script>
+    <script src="@V("/js/list-filter.js")"></script>
+    <script src="@V("/js/table-pagination.js")"></script>
+    <script src="@V("/js/column-picker.js")"></script>
+    <script src="@V("/js/secret-reveal.js")"></script>
     @* Equivalent of Razor Pages' @section Scripts: a page's own <SectionContent SectionName="PageScripts">
        renders here — after every global helper above — regardless of where it's declared in that
        page's markup. Required for anything (like dashboard.js) that depends on a global helper
@@ -45,11 +45,22 @@
        See the file's own comment for why this exists: keeps the sidebar's active-nav highlight and
        the theme correct across enhanced navigation, which doesn't reliably re-apply either on its
        own. *@
-    <script src="/js/blazor-chrome-sync.js"></script>
+    <script src="@V("/js/blazor-chrome-sync.js")"></script>
     @* Must load after blazor.web.js for the same reason as blazor-chrome-sync.js above — it
        registers an 'enhancedload' listener so filter save/restore (Snapshots, Audit Logs) actually
        fires on Blazor's in-app navigation, not just the first hard load. See the file's own
        comment. *@
-    <script src="/js/remember-filters.js"></script>
+    <script src="@V("/js/remember-filters.js")"></script>
+    @* Must load after blazor.web.js for the same 'enhancedload' reason. Inert on pages without
+       [data-show-when] / form[data-dirty-guard]. *@
+    <script src="@V("/js/conditional-fields.js")"></script>
 </body>
 </html>
+
+@code {
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    // Same ?v=<hash> cache-buster asp-append-version adds on Razor Pages, so a deploy's CSS/JS
+    // reaches browsers instead of a stale cached copy.
+    private string V(string path) => FileVersion.AddFileVersionToPath(HttpContext?.Request.PathBase ?? default, path);
+}

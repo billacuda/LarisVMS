@@ -7,12 +7,7 @@
 }
 
 <h1>Media proxies</h1>
-<p class="text-muted" style="max-width: 60rem;">
-    A media proxy is a standalone relay (<code>LarisVMS.Proxy</code>) that sits between browsers and
-    recorder nodes for live view and playback — a dumb TLS-terminating pass-through. Assign a primary
-    (and optional backup) proxy to a node on <a href="/Admin/Nodes">Nodes</a>; browsers are then
-    routed through the first healthy one, falling back to direct-to-node or this server.
-</p>
+<p class="text-muted small">Relays that carry live and playback video between browsers and nodes. Assign them on each <a href="/Admin/Nodes">node</a>. <a href="/Help/nodes#proxies">Learn more</a></p>
 
 @if (!string.IsNullOrEmpty(Model.StatusMessage))
 {

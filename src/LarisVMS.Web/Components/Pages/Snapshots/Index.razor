@@ -16,12 +16,7 @@
 <PageTitle>Snapshots - @AppName</PageTitle>
 
 <h1>Snapshots <span id="snapshotLoadStatus" class="badge bg-secondary ms-2 d-none fw-normal"></span></h1>
-<p class="text-muted">
-    Every detection, browsable as a thumbnail — AI object detections, camera-native object classes,
-    and custom event tags. Plain motion isn't listed here (it's still on the Playback timeline). Each
-    thumbnail is pulled live from the recording itself, and a card disappears once its own footage
-    ages out of retention, so what's shown here can always be played back.
-</p>
+<p class="text-muted small">Every detection and event tag, newest first. Plain motion is only on the Playback timeline.</p>
 
 @* data-remember-filters: these selections survive navigating away and coming back, or a refresh —
    see remember-filters.js. The Clear link below carries data-clear-filters so clearing actually
@@ -178,11 +173,13 @@
                             </span>
                         }
                         <span class="badge bg-secondary" title="How long this event lasted">@FormatDuration(s.Duration)</span>
-                        <div class="small text-muted mt-1">@s.CameraName</div>
-                        <div class="small text-muted" title="@s.AtUtc.ToString("u")">@s.AtUtc.ToLocalTime().ToString("G")</div>
-                    </div>
-                    <div class="card-footer py-1 px-2 text-end">
-                        <a class="btn btn-sm btn-outline-primary" href="/Playback?cameraId=@s.CameraId&atUtc=@Uri.EscapeDataString(playFromUtcIso)">▶ Play</a>
+                        <div class="d-flex align-items-center gap-2 mt-1">
+                            <div class="small text-muted text-truncate" title="@s.CameraName · @s.AtUtc.ToString("u")">
+                                @s.CameraName · @s.AtUtc.ToLocalTime().ToString("G")
+                            </div>
+                            <a class="btn btn-sm btn-outline-primary py-0 ms-auto flex-shrink-0" aria-label="Play"
+                               href="/Playback?cameraId=@s.CameraId&atUtc=@Uri.EscapeDataString(playFromUtcIso)">▶</a>
+                        </div>
                     </div>
                 </div>
             </div>

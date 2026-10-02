@@ -1,0 +1,21 @@
+@* One card on a settings/edit page: a titled group of related SettingFields laid out in a
+   responsive two-column grid. Razor Pages use the same .lv-section markup directly. *@
+<section class="lv-section" id="@Id">
+    <div class="lv-section-head">
+        <h2 class="lv-section-title">@Title</h2>
+        @if (!string.IsNullOrEmpty(Subtitle))
+        {
+            <div class="lv-section-sub">@Subtitle</div>
+        }
+    </div>
+    <div class="lv-section-body">
+        @ChildContent
+    </div>
+</section>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public string? Subtitle { get; set; }
+    [Parameter] public string? Id { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

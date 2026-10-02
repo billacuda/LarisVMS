@@ -6,6 +6,8 @@
     <!-- ASP.NET Core / Identity / EF Core -->
     <PackageVersion Include="Azure.Identity" Version="1.21.0" />
     <PackageVersion Include="MailKit" Version="4.17.0" />
+    <!-- Help pages: renders the Markdown under LarisVMS.Web/Help (BSD-2-Clause). -->
+    <PackageVersion Include="Markdig" Version="1.4.0" />
     <PackageVersion Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="10.0.10" />
     <PackageVersion Include="Microsoft.AspNetCore.Identity.UI" Version="10.0.10" />
     <PackageVersion Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.10" />

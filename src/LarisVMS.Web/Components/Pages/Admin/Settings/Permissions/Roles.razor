@@ -20,10 +20,8 @@
 <SettingsTabs ActiveKey="Permissions" />
 <PermissionsTabs ActiveKey="Roles" />
 
-<p class="text-muted">
-    Create, rename, and delete roles, and set each one's scope tier, auto-expiry, and PTZ priority.
-    Grant permissions on the <a href="/Admin/Settings/Permissions/Matrix">Permissions Matrix</a>
-    tab, and camera-level scoping on <a href="/Admin/Settings/CameraAccess">Camera Access</a>.
+<p class="text-muted small">
+    Each role's scope, expiry and PTZ priority. Grant permissions on the <a href="/Admin/Settings/Permissions/Matrix">Permissions matrix</a>. <a href="/Help/users#roles">Learn more</a>
 </p>
 
 @if (!string.IsNullOrEmpty(SavedMessage))
@@ -114,11 +112,10 @@
                         <div class="col-sm-4">
                             <label class="form-label">
                                 Default expiry (minutes)
-                                <button type="button" class="help-icon" data-help-target="expiryHelp-@role.Id" tabindex="0" aria-label="Help">ℹ️</button>
                             </label>
                             <input type="number" min="1" name="SaveDefaultExpiryMinutes" class="form-control"
                                    value="@role.DefaultExpiryMinutes" />
-                            <div class="help-text-source" id="expiryHelp-@role.Id">e.g. 480 = 8h shift, 1440 = 24h, 43200 = 30d.</div>
+                            <div class="lv-hint">e.g. 480 = 8h shift, 1440 = 24h, 43200 = 30d.</div>
                         </div>
                     </div>
 
@@ -140,11 +137,10 @@
                     <div class="col-sm-4">
                         <label class="form-label">
                             Session lifetime (hours)
-                            <button type="button" class="help-icon" data-help-target="sessionHelp-@role.Id" tabindex="0" aria-label="Help">ℹ️</button>
                         </label>
                         <input type="number" min="0" name="SaveSessionLifetimeHours" class="form-control"
                                value="@role.SessionLifetimeHours" />
-                        <div class="help-text-source" id="sessionHelp-@role.Id">0 = never expire.</div>
+                        <div class="lv-hint">0 = never expire.</div>
                     </div>
                 </div>
 

@@ -283,7 +283,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         // acted on for a D-FINE pipeline on a node with the machine-local Vision:EnableTensorRt set.
         var dfineTensorRtMode = await settings.GetAsync("Detection.DFineTensorRtMode", "Off", nodeId: nodeId, ct: ct);
         // Per-camera detection frame-rate ceiling (0 = decode rate). Node-scoped.
-        var maxDetectionFps = await settings.GetAsync("Detection.MaxFps", 10, nodeId: nodeId, ct: ct);
+        var maxDetectionFps = await settings.GetAsync("Detection.MaxFps", 7, nodeId: nodeId, ct: ct);
         // Pass 4a — same Global -> Node resolution as the flags above. Moves per-frame preprocessing
         // off the CPU onto whatever accelerator ONNX Runtime is using. Opt-in, default off.
         var gpuPreprocessing = await settings.GetAsync("Detection.GpuPreprocessing", false, nodeId: nodeId, ct: ct);
@@ -364,7 +364,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             // of detection is pure CPU/GPU profit on both this node and whichever external inference
             // service it talks to; a busy street camera keeps the node default. See
             // NodeConfigCameraDto.MaxFps.
-            var maxFps = await settings.GetAsync("Detection.MaxFps", 10, cameraId: c.Id, nodeId: nodeId, ct: ct);
+            var maxFps = await settings.GetAsync("Detection.MaxFps", 7, cameraId: c.Id, nodeId: nodeId, ct: ct);
             var aiDetectionStreamRole = await settings.GetAsync("AiDetection.StreamRole", "Sub", cameraId: c.Id, nodeId: nodeId, ct: ct);
             // Corrects a camera that misreports its watch stream's orientation (a corridor-mounted
             // device advertising 704x480 while delivering 480x704) before the node builds the

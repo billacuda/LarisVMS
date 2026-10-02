@@ -7,10 +7,9 @@
 <h1>Settings</h1>
 <partial name="_SettingsTabs" model="@("Backups")" />
 
-<p class="text-muted">
-    Scheduled and on-demand SQL Server backups of this app's own database — built for SQL Express
-    installs, which have no SQL Agent to schedule their own. Restoring isn't done from this page;
-    restore a <code>.bak</code> file by other means (SSMS, <code>sqlcmd</code>).
+<p class="text-muted small">
+    Full backups of the LarisVMS database. Restore a <code>.bak</code> with SSMS or <code>sqlcmd</code>.
+    <a href="/Help/backups">Learn more</a>
 </p>
 
 @if (!string.IsNullOrEmpty(Model.Message))
@@ -29,9 +28,7 @@
 @if (Model.IsRemoteSql)
 {
     <div class="alert alert-warning">
-        The SQL Server (<code>@Model.DataSource</code>) is not on this machine. Backup files are
-        written by the <strong>SQL Server service on that host</strong>, so the directory below must
-        be a path that exists there, and retention cleanup is skipped (this app can't see those files).
+        SQL Server (<code>@Model.DataSource</code>) is on another machine. The backup directory must exist on that host, and old backups aren't cleaned up.
     </div>
 }
 
@@ -51,13 +48,9 @@
                 <div class="col-sm-6">
                     <label class="form-label" asp-for="BackupDirectory">
                         Backup directory
-                        <button type="button" class="help-icon" data-help-target="backupDirHelp" tabindex="0" aria-label="Help">ℹ️</button>
                     </label>
                     <input asp-for="BackupDirectory" class="form-control" placeholder="D:\Backups\LarisVMS" />
-                    <div class="help-text-source" id="backupDirHelp">
-                        Absolute path the SQL Server service account can write to. Pick a location
-                        that won't be wiped by app redeployments.
-                    </div>
+                    <div class="lv-hint">A folder the SQL Server service can write to, outside the install folder.</div>
                 </div>
                 <div class="col-sm-2">
                     <label class="form-label" asp-for="RetentionCount">Keep last</label>
@@ -71,11 +64,6 @@
             <button type="submit" class="btn btn-outline-secondary btn-sm">Back up now</button>
             <span class="text-muted small ms-2">Runs immediately; large databases can take a while.</span>
         </form>
-        <p class="text-muted small mt-3 mb-0">
-            Backups are full database backups (<code>BACKUP DATABASE &hellip; WITH INIT</code>). On
-            SQL Express, consider the SIMPLE recovery model — this page does not take transaction log
-            backups.
-        </p>
     </div>
 </div>
 

@@ -24,9 +24,8 @@
 <h1>Settings</h1>
 <SettingsTabs ActiveKey="Email" />
 
-<p class="text-muted">
-    The outbound sender alert notifications (M15) will send through.
-</p>
+<div class="lv-page-narrow">
+<p class="text-muted small">How alert emails are sent. <a href="/Help/alerts#email">Provider setup</a></p>
 
 @if (!string.IsNullOrEmpty(SavedMessage))
 {
@@ -37,175 +36,109 @@
     <div class="alert alert-danger">@ErrorMessage</div>
 }
 
-<EditForm Model="this" FormName="email-settings" OnSubmit="HandleSubmitAsync">
-    <div class="card mb-3">
-        <div class="card-header fw-semibold">Sender</div>
-        <div class="card-body">
-            <div class="form-check form-switch mb-3">
+<EditForm Model="this" FormName="email-settings" OnSubmit="HandleSubmitAsync" data-dirty-guard>
+    <SettingSection Title="Sender">
+        <SettingField Label="Email">
+            <div class="form-check form-switch mt-1">
                 <InputCheckbox @bind-Value="IsEnabled" class="form-check-input" id="isEnabled" />
-                <label class="form-check-label" for="isEnabled">Email enabled</label>
+                <label class="form-check-label" for="isEnabled">Enabled</label>
             </div>
-            <div class="row g-3">
-                <div class="col-sm-4">
-                    <label class="form-label">Provider</label>
-                    <select name="Provider" id="provider" class="form-select">
-                        <option value="@EmailProviderType.Smtp" selected="@(Provider == EmailProviderType.Smtp)">SMTP</option>
-                        <option value="@EmailProviderType.Graph" selected="@(Provider == EmailProviderType.Graph)">Microsoft Graph</option>
-                        <option value="@EmailProviderType.Gmail" selected="@(Provider == EmailProviderType.Gmail)">Gmail</option>
-                    </select>
-                </div>
-                <div class="col-sm-4">
-                    <label class="form-label">From address</label>
-                    <InputText type="email" @bind-Value="FromAddress" class="form-control" placeholder="alerts@example.com" />
-                </div>
-                <div class="col-sm-4">
-                    <label class="form-label">From name</label>
-                    <InputText @bind-Value="FromName" class="form-control" placeholder="LarisVMS" />
-                </div>
-            </div>
-        </div>
-    </div>
+        </SettingField>
+        <SettingField Label="Provider" For="provider">
+            <select name="Provider" id="provider" class="form-select">
+                <option value="@EmailProviderType.Smtp" selected="@(Provider == EmailProviderType.Smtp)">SMTP</option>
+                <option value="@EmailProviderType.Graph" selected="@(Provider == EmailProviderType.Graph)">Microsoft Graph</option>
+                <option value="@EmailProviderType.Gmail" selected="@(Provider == EmailProviderType.Gmail)">Gmail</option>
+            </select>
+        </SettingField>
+        <SettingField Label="From address">
+            <InputText type="email" @bind-Value="FromAddress" class="form-control" placeholder="alerts@example.com" />
+        </SettingField>
+        <SettingField Label="From name">
+            <InputText @bind-Value="FromName" class="form-control" placeholder="LarisVMS" />
+        </SettingField>
+    </SettingSection>
 
-    <div class="card mb-3" id="smtpCard">
-        <div class="card-header fw-semibold">SMTP</div>
-        <div class="card-body">
-            <div class="row g-3">
-                <div class="col-sm-6">
-                    <label class="form-label">Host</label>
-                    <InputText @bind-Value="SmtpHost" class="form-control" placeholder="smtp.example.com" />
-                </div>
-                <div class="col-sm-3">
-                    <label class="form-label">Port</label>
-                    <InputNumber @bind-Value="SmtpPort" class="form-control" min="1" max="65535" />
-                </div>
-                <div class="col-sm-3 d-flex align-items-end">
-                    <div class="form-check">
+    <div data-show-when="@($"Provider={EmailProviderType.Smtp}")">
+        <SettingSection Title="SMTP">
+            <SettingField Label="Host">
+                <InputText @bind-Value="SmtpHost" class="form-control" placeholder="smtp.example.com" />
+            </SettingField>
+            <SettingField Label="Port">
+                <div class="d-flex align-items-center gap-3">
+                    <InputNumber @bind-Value="SmtpPort" class="form-control" style="max-width: 8rem;" min="1" max="65535" />
+                    <div class="form-check mb-0">
                         <InputCheckbox @bind-Value="SmtpUseSsl" class="form-check-input" id="smtpUseSsl" />
-                        <label class="form-check-label" for="smtpUseSsl">Use SSL/TLS</label>
+                        <label class="form-check-label" for="smtpUseSsl">SSL/TLS</label>
                     </div>
                 </div>
-                <div class="col-sm-6">
-                    <label class="form-label">Username</label>
-                    <InputText @bind-Value="SmtpUsername" class="form-control" autocomplete="off" />
-                </div>
-                <div class="col-sm-6">
-                    <label class="form-label">Password</label>
-                    <InputText type="password" @bind-Value="SmtpPassword" class="form-control" autocomplete="new-password"
-                           placeholder="@(HasStoredSmtpPassword ? "•••••••• (leave blank to keep)" : "")" />
-                </div>
-            </div>
-        </div>
+            </SettingField>
+            <SettingField Label="Username">
+                <InputText @bind-Value="SmtpUsername" class="form-control" autocomplete="off" />
+            </SettingField>
+            <SettingField Label="Password" Hint="Leave blank to keep the current password.">
+                <InputText type="password" @bind-Value="SmtpPassword" class="form-control" autocomplete="new-password"
+                       placeholder="@(HasStoredSmtpPassword ? "(unchanged)" : "")" />
+            </SettingField>
+        </SettingSection>
     </div>
 
-    <div class="card mb-3" id="graphCard">
-        <div class="card-header fw-semibold">Microsoft Graph</div>
-        <div class="card-body">
-            <p class="text-muted small">
-                App-only auth (client-credentials flow) against an Entra app registration granted the
-                <code>Mail.Send</code> application permission — no per-user consent or refresh token.
-            </p>
-            <div class="row g-3">
-                <div class="col-sm-6">
-                    <label class="form-label">Tenant ID</label>
-                    <InputText @bind-Value="GraphTenantId" class="form-control" autocomplete="off" />
-                </div>
-                <div class="col-sm-6">
-                    <label class="form-label">Client ID</label>
-                    <InputText @bind-Value="GraphClientId" class="form-control" autocomplete="off" />
-                </div>
-                <div class="col-sm-6">
-                    <label class="form-label">Client secret</label>
-                    <InputText type="password" @bind-Value="GraphClientSecret" class="form-control" autocomplete="new-password"
-                           placeholder="@(HasStoredGraphClientSecret ? "•••••••• (leave blank to keep)" : "")" />
-                </div>
-                <div class="col-sm-6">
-                    <label class="form-label">Shared mailbox (optional)</label>
-                    <InputText type="email" @bind-Value="GraphSharedMailbox" class="form-control" placeholder="Defaults to the from address" />
-                </div>
-            </div>
-        </div>
+    <div data-show-when="@($"Provider={EmailProviderType.Graph}")">
+        <SettingSection Title="Microsoft Graph" Subtitle="An Entra app with the Mail.Send application permission.">
+            <SettingField Label="Tenant ID">
+                <InputText @bind-Value="GraphTenantId" class="form-control" autocomplete="off" />
+            </SettingField>
+            <SettingField Label="Client ID">
+                <InputText @bind-Value="GraphClientId" class="form-control" autocomplete="off" />
+            </SettingField>
+            <SettingField Label="Client secret" Hint="Leave blank to keep the current secret.">
+                <InputText type="password" @bind-Value="GraphClientSecret" class="form-control" autocomplete="new-password"
+                       placeholder="@(HasStoredGraphClientSecret ? "(unchanged)" : "")" />
+            </SettingField>
+            <SettingField Label="Shared mailbox" Hint="Optional. Defaults to the from address.">
+                <InputText type="email" @bind-Value="GraphSharedMailbox" class="form-control" />
+            </SettingField>
+        </SettingSection>
     </div>
 
-    <div class="card mb-3" id="gmailCard">
-        <div class="card-header fw-semibold">Gmail</div>
-        <div class="card-body">
-            <p class="text-muted small">
-                Per-user OAuth2 against a Google Cloud project's OAuth client — needs a one-time
-                consent redirect. Enter the Client ID/Secret and Gmail address below, save, then
-                connect.
-            </p>
+    <div data-show-when="@($"Provider={EmailProviderType.Gmail}")">
+        <SettingSection Title="Gmail" Subtitle="Enter the OAuth client details, then connect once to grant consent.">
             @if (IsGmailConnected)
             {
-                <div class="alert alert-success py-2">Connected.</div>
+                <SettingField Wide>
+                    <div class="alert alert-success py-2 mb-0">Connected.</div>
+                </SettingField>
             }
-            <div class="row g-3">
-                <div class="col-sm-6">
-                    <label class="form-label">Client ID</label>
-                    <InputText @bind-Value="GmailClientId" class="form-control" autocomplete="off" />
-                </div>
-                <div class="col-sm-6">
-                    <label class="form-label">Client secret</label>
-                    <InputText type="password" @bind-Value="GmailClientSecret" class="form-control" autocomplete="new-password"
-                           placeholder="@(HasStoredGmailClientSecret ? "•••••••• (leave blank to keep)" : "")" />
-                </div>
-                <div class="col-sm-6">
-                    <label class="form-label">Gmail address</label>
-                    <InputText type="email" @bind-Value="GmailEmailAddress" class="form-control" placeholder="alerts@gmail.com" />
-                </div>
-                <div class="col-sm-6 d-flex align-items-end">
-                    <button type="submit" name="Action" value="ConnectGmail" class="btn btn-outline-primary">
-                        Save and connect to Google
-                    </button>
-                </div>
-            </div>
-        </div>
+            <SettingField Label="Client ID">
+                <InputText @bind-Value="GmailClientId" class="form-control" autocomplete="off" />
+            </SettingField>
+            <SettingField Label="Client secret" Hint="Leave blank to keep the current secret.">
+                <InputText type="password" @bind-Value="GmailClientSecret" class="form-control" autocomplete="new-password"
+                       placeholder="@(HasStoredGmailClientSecret ? "(unchanged)" : "")" />
+            </SettingField>
+            <SettingField Label="Gmail address">
+                <InputText type="email" @bind-Value="GmailEmailAddress" class="form-control" placeholder="alerts@gmail.com" />
+            </SettingField>
+            <SettingField Label="Connection" Hint="Saves, then redirects to Google.">
+                <button type="submit" name="Action" value="ConnectGmail" class="btn btn-outline-primary">Save and connect to Google</button>
+            </SettingField>
+        </SettingSection>
     </div>
 
-    <div class="card">
-        <div class="card-header fw-semibold">Test</div>
-        <div class="card-body">
-            <div class="row g-3 align-items-end">
-                <div class="col-sm-6">
-                    <label class="form-label">Send a test email to</label>
-                    <InputText type="email" @bind-Value="TestRecipient" class="form-control" placeholder="you@example.com" />
-                </div>
-                <div class="col-auto">
-                    <button type="submit" name="Action" value="TestSend" class="btn btn-outline-primary">
-                        Save and send test
-                    </button>
-                </div>
+    <SettingSection Title="Test">
+        <SettingField Label="Send a test email to" Wide Hint="Saves first, then sends using the saved settings.">
+            <div class="input-group">
+                <InputText type="email" @bind-Value="TestRecipient" class="form-control" placeholder="you@example.com" />
+                <button type="submit" name="Action" value="TestSend" class="btn btn-outline-primary">Save and send test</button>
             </div>
-            <div class="form-text">Saves the form above first, then sends through it — a test always
-                reflects exactly what's stored, not an unsaved edit.</div>
-        </div>
-    </div>
+        </SettingField>
+    </SettingSection>
 
-    <div class="mt-3">
+    <div class="lv-savebar">
         <button type="submit" name="Action" value="Save" class="btn btn-primary">Save</button>
     </div>
 </EditForm>
-
-<SectionContent SectionName="PageScripts">
-    <script>
-        (function () {
-            var provider = document.getElementById('provider');
-            var cards = {
-                '@((int)EmailProviderType.Smtp)': document.getElementById('smtpCard'),
-                '@((int)EmailProviderType.Graph)': document.getElementById('graphCard'),
-                '@((int)EmailProviderType.Gmail)': document.getElementById('gmailCard')
-            };
-            if (!provider) return;
-
-            function update() {
-                Object.keys(cards).forEach(function (key) {
-                    cards[key].style.display = key === provider.value ? '' : 'none';
-                });
-            }
-            provider.addEventListener('change', update);
-            update();
-        })();
-    </script>
-</SectionContent>
+</div>
 
 @code {
     [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }

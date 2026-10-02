@@ -293,6 +293,7 @@ builder.Services.AddSingleton<LarisVMS.Web.Services.MediaRelayMetrics>();
 builder.Services.AddSingleton<LarisVMS.Web.Middleware.ClientEndpointCspCache>();
 builder.Services.AddSingleton<LarisVMS.Web.Services.DetectionModelDistributor>();
 builder.Services.AddSingleton<LarisVMS.Web.Services.NodeControlClient>();
+builder.Services.AddSingleton<LarisVMS.Web.Services.HelpContentService>();
 builder.Services.AddSingleton<LarisVMS.Web.Services.VisionNativeDistributor>();
 builder.Services.AddScoped<IZoneService, ZoneService>();
 builder.Services.AddScoped<IEventTagRuleService, EventTagRuleService>();

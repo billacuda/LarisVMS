@@ -1,0 +1,683 @@
+@page "/Admin/Nodes/{NodeId:guid}"
+@attribute [Authorize("Nodes.Edit")]
+@using LarisVMS.Core
+@using LarisVMS.Core.Entities
+@using LarisVMS.Core.Enums
+@using LarisVMS.Core.Interfaces
+@using LarisVMS.Web.Helpers
+@using LarisVMS.Web.Services
+@inject INodeService NodeService
+@inject ICameraService CameraService
+@inject ISettingsResolver Settings
+@inject IAuditService AuditService
+@inject IProxyService ProxyService
+@inject NodeControlClient NodeControlClient
+@inject NavigationManager NavigationManager
+
+<PageTitle>@(Node?.Name ?? "Node") - @AppName</PageTitle>
+
+<div class="lv-page-narrow">
+<nav aria-label="breadcrumb" class="small mb-1"><a href="/Admin/Nodes">&larr; Recorder nodes</a></nav>
+
+@if (Node is null)
+{
+    <h1>Node not found</h1>
+    <p class="text-muted">It may have been deleted. <a href="/Admin/Nodes">Back to the node list</a>.</p>
+}
+else
+{
+    var n = Node;
+    var online = n.LastSeenAt is { } ls && ls >= DateTime.UtcNow.AddMinutes(-2);
+
+    <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+        <h1 class="mb-0 me-2">@n.Name</h1>
+        <span class="badge @(online ? "text-bg-success" : "text-bg-secondary")">@(online ? "online" : "offline")</span>
+        @if (FailoverBadge is { } fb)
+        {
+            <span class="badge @fb.Css">@fb.Text</span>
+        }
+        <span class="text-muted small">@(n.LastIpAddress ?? "no address yet") &middot; v@(n.Version ?? "?") &middot; @(n.Platform ?? "unknown platform") &middot; @CameraCount camera(s)</span>
+    </div>
+
+    @if (!string.IsNullOrEmpty(ErrorMessage))
+    {
+        <div class="alert alert-danger">@ErrorMessage</div>
+    }
+    @if (Saved && string.IsNullOrEmpty(ErrorMessage))
+    {
+        <div class="alert alert-success" role="status">Saved.</div>
+    }
+    @if (string.IsNullOrWhiteSpace(n.StorageRootPath))
+    {
+        <div class="alert alert-warning">This node has no storage path, so it is not recording. Set one under Storage &amp; retention.</div>
+    }
+
+    <EditForm Model="this" FormName="update-node" OnValidSubmit="HandleUpdateAsync" data-dirty-guard>
+        <input type="hidden" name="Snapshot" value="@S.Snapshot" />
+
+        <SettingSection Title="General">
+            <SettingField Label="Name" For="nodeName">
+                <input id="nodeName" name="Name" class="form-control" value="@n.Name" required />
+            </SettingField>
+            <SettingField Label="Recording only" Hint="Turns AI object detection off for this node. It still records and tags camera events.">
+                <div class="form-check mt-1">
+                    <input class="form-check-input" type="checkbox" name="DisableAiObjectDetection" value="true" id="recOnly" checked="@n.DisableAiObjectDetection" />
+                    <label class="form-check-label" for="recOnly">AI detection off</label>
+                </div>
+            </SettingField>
+        </SettingSection>
+
+        <SettingSection Title="Storage & retention" Subtitle="Blank fields inherit the global defaults from Storage & retention.">
+            <SettingField Label="Storage path" For="storageRoot" Hint="Required. Where this node writes recordings.">
+                <input id="storageRoot" name="StorageRootPath" class="form-control font-monospace" value="@n.StorageRootPath" placeholder="e.g. E:\LarisVMS\recordings" required />
+            </SettingField>
+            <SettingField Label="Archive path" For="archiveRoot" Hint="Optional second volume for aged-out footage. Must be separate from the storage path.">
+                <input id="archiveRoot" name="ArchiveRootPath" class="form-control font-monospace" value="@n.ArchiveRootPath" placeholder="(none)" />
+            </SettingField>
+            <SettingField Label="Disk usage" Wide>
+                <NodeStorageBar Node="n" DaysRemaining="DaysRemaining" ArchiveDaysRemaining="ArchiveDaysRemaining" />
+            </SettingField>
+            <SettingField Label="Retention (days)" For="retention" Hint="@($"Blank inherits the global value ({S.EffectiveRetentionDays}).")">
+                <input id="retention" name="RetentionDaysOverride" type="number" min="0" class="form-control" value="@S.RetentionOverride"
+                       placeholder="@($"inherit — {S.EffectiveRetentionDays}")" />
+            </SettingField>
+            <SettingField Label="Archive aged-out footage" For="archiveEnabled" Hint="Off deletes footage when it ages out.">
+                <select id="archiveEnabled" name="ArchiveEnabledOverride" class="form-select">
+                    <option value="" selected="@(S.ArchiveEnabledOverride == "")">inherit — @(S.EffectiveArchiveEnabled ? "on" : "off")</option>
+                    <option value="True" selected="@(S.ArchiveEnabledOverride == "True")">On</option>
+                    <option value="False" selected="@(S.ArchiveEnabledOverride == "False")">Off</option>
+                </select>
+            </SettingField>
+            <SettingField Label="Archive retention (days)" For="archiveDays" Hint="Counted from the original record date. 0 keeps forever.">
+                <input id="archiveDays" name="ArchiveRetentionDaysOverride" type="number" min="0" class="form-control" value="@S.ArchiveRetentionOverride"
+                       placeholder="@($"inherit — {S.EffectiveArchiveRetentionDays}")" />
+            </SettingField>
+        </SettingSection>
+
+        <SettingSection Title="AI detection" Subtitle="Overrides for this node only. Blank or “inherit” uses AI detection settings.">
+            <SettingField Label="Accelerator" For="accel" Hint="@AcceleratorHint">
+                <select id="accel" name="AiAccelerator" class="form-select">
+                    <option value="" selected="@(n.AiAccelerator is null)">Auto</option>
+                    <option value="Nvidia" selected="@(n.AiAccelerator == AiAccelerator.Nvidia)">CUDA</option>
+                    <option value="TensorRt" selected="@(n.AiAccelerator == AiAccelerator.TensorRt)">TensorRT</option>
+                    <option value="Amd" selected="@(n.AiAccelerator == AiAccelerator.Amd)">DirectML</option>
+                    <option value="OpenVino" selected="@(n.AiAccelerator == AiAccelerator.OpenVino)">OpenVINO</option>
+                    <option value="Cpu" selected="@(n.AiAccelerator == AiAccelerator.Cpu)">CPU</option>
+                    <option value="MIGraphX" selected="@(n.AiAccelerator == AiAccelerator.MIGraphX)">MIGraphX (AMD) — not implemented</option>
+                </select>
+                <div class="lv-hint text-warning" data-show-when="AiAccelerator=MIGraphX">MIGraphX isn't implemented yet. No detection runs with this choice.</div>
+            </SettingField>
+            <SettingField Label="Model family" For="family" HelpLink="/Help/ai-detection#model-families">
+                <select id="family" name="ModelFamilyOverride" class="form-select">
+                    <option value="" selected="@(S.ModelFamilyOverride == "")">inherit — @S.EffectiveModelFamily</option>
+                    <option value="Auto" selected="@(S.ModelFamilyOverride == "Auto")">Auto (YOLOX)</option>
+                    <option value="YoloX" selected="@(S.ModelFamilyOverride == "YoloX")">YOLOX</option>
+                    <option value="DFine" selected="@(S.ModelFamilyOverride == "DFine")">D-FINE (experimental)</option>
+                    <option value="Custom" selected="@(S.ModelFamilyOverride == "Custom")">Custom model</option>
+                    <option value="RfDetr" disabled>RF-DETR (not yet available)</option>
+                </select>
+            </SettingField>
+            <SettingField Label="Custom model" For="localModel" ShowWhen="@FamilyShowWhen("Custom")"
+                          Hint="Models dropped into C:\ProgramData\LarisVMS\models on the node.">
+                <div class="input-group">
+                    <select id="localModel" name="LocalModelNameOverride" class="form-select" data-local-model-select>
+                        <option value="" selected="@string.IsNullOrEmpty(S.LocalModelNameOverride)">inherit</option>
+                        @if (!string.IsNullOrEmpty(S.LocalModelNameOverride))
+                        {
+                            <option value="@S.LocalModelNameOverride" selected>@S.LocalModelNameOverride (saved)</option>
+                        }
+                    </select>
+                    <button type="button" class="btn btn-outline-secondary" data-refresh-local-models="@n.Id">Refresh</button>
+                </div>
+                <div class="lv-hint" data-local-models-status></div>
+            </SettingField>
+            <SettingField Label="YOLOX size" For="yoloSize" ShowWhen="@FamilyShowWhen("Auto", "YoloX")" Hint="Larger is more accurate and slower.">
+                <select id="yoloSize" name="YoloXSizeOverride" class="form-select">
+                    <option value="" selected="@(S.YoloXSizeOverride == "")">inherit</option>
+                    @foreach (var s in new[] { "Nano", "Tiny", "S", "M", "L", "X" })
+                    {
+                        <option value="@s" selected="@(S.YoloXSizeOverride == s)">YOLOX-@s</option>
+                    }
+                </select>
+            </SettingField>
+            <SettingField Label="D-FINE weights" For="dfineWeights" ShowWhen="@FamilyShowWhen("DFine")">
+                <select id="dfineWeights" name="DFineWeightsOverride" class="form-select">
+                    <option value="" selected="@(S.DFineWeightsOverride == "")">inherit</option>
+                    <option value="Obj2Coco" selected="@(S.DFineWeightsOverride == "Obj2Coco")">Obj2Coco (small)</option>
+                    <option value="Obj2CocoMedium" selected="@(S.DFineWeightsOverride == "Obj2CocoMedium")">Obj2Coco (medium)</option>
+                    <option value="Obj365" selected="@(S.DFineWeightsOverride == "Obj365")">Obj365 (small)</option>
+                </select>
+            </SettingField>
+            <SettingField Label="D-FINE TensorRT" For="dfineTrt" ShowWhen="@FamilyShowWhen("DFine")" Hint="FP16 falls back to FP32 on overflow.">
+                <select id="dfineTrt" name="DFineTensorRtModeOverride" class="form-select">
+                    <option value="" selected="@(S.DFineTensorRtModeOverride == "")">inherit — @S.EffectiveDFineTensorRtMode</option>
+                    <option value="Off" selected="@(S.DFineTensorRtModeOverride == "Off")">Off (plain CUDA)</option>
+                    <option value="FP32" selected="@(S.DFineTensorRtModeOverride == "FP32")">FP32</option>
+                    <option value="FP16" selected="@(S.DFineTensorRtModeOverride == "FP16")">FP16</option>
+                </select>
+            </SettingField>
+            <SettingField Label="Aspect fitting" For="aspect" Hint="Slice needs GPU preprocessing." HelpLink="/Help/ai-detection#aspect-fitting">
+                <select id="aspect" name="AspectModeOverride" class="form-select">
+                    <option value="" selected="@(S.AspectModeOverride == "")">inherit — @S.EffectiveAspectMode</option>
+                    <option value="Letterbox" selected="@(S.AspectModeOverride == "Letterbox")">Letterbox</option>
+                    <option value="Stretch" selected="@(S.AspectModeOverride == "Stretch")">Stretch</option>
+                    <option value="Slice" selected="@(S.AspectModeOverride == "Slice")">Slice</option>
+                </select>
+            </SettingField>
+            <SettingField Label="Max detection fps" For="maxFps" Hint="Per camera. Blank inherits.">
+                <input id="maxFps" type="number" name="MaxFpsOverride" class="form-control" min="0" max="60"
+                       placeholder="inherit" value="@(S.MaxFpsOverride?.ToString())" />
+            </SettingField>
+            <SettingField Label="Backend" For="backend" HelpLink="/Help/ai-detection#external-backend">
+                <select id="backend" name="BackendOverride" class="form-select">
+                    <option value="" selected="@(S.DetectionBackendOverride == "")">inherit — @(S.EffectiveDetectionBackend == "ExternalHttp" ? "External HTTP" : "Built-in")</option>
+                    <option value="BuiltIn" selected="@(S.DetectionBackendOverride == "BuiltIn")">Built-in</option>
+                    <option value="ExternalHttp" selected="@(S.DetectionBackendOverride == "ExternalHttp")">External HTTP service</option>
+                </select>
+            </SettingField>
+            <SettingField Label="Service URL" For="extUrl" ShowWhen="@BackendShowWhen" Hint="Blank inherits the global URL.">
+                <input id="extUrl" name="ExternalUrlOverride" class="form-control" value="@S.ExternalInferenceUrlOverride" placeholder="inherit" />
+            </SettingField>
+            <SettingField Label="Service model" For="extModel" ShowWhen="@BackendShowWhen">
+                <input id="extModel" name="ExternalModelOverride" class="form-control" value="@S.ExternalInferenceModelOverride" placeholder="inherit" />
+            </SettingField>
+            <SettingField Label="Input size (px)" For="extSize" ShowWhen="@BackendShowWhen" Hint="Multiple of 32.">
+                <input id="extSize" type="number" name="ExternalInputSizeOverride" class="form-control" min="32" step="32"
+                       value="@(S.ExternalInferenceInputSizeOverride?.ToString())" placeholder="inherit" />
+            </SettingField>
+            <SettingField Label="API key" For="extKey" ShowWhen="@BackendShowWhen" Hint="Write-only. Leave blank to keep the current key.">
+                <input id="extKey" name="ExternalApiKeyOverride" type="password" autocomplete="new-password" class="form-control"
+                       placeholder="@(S.HasExternalInferenceApiKeyOverride ? "(unchanged)" : "inherit")" />
+            </SettingField>
+        </SettingSection>
+
+        <SettingSection Title="Streaming" Subtitle="How live and playback video reach browsers from this node.">
+            <SettingField Label="Streaming mode" For="dsm" Hint="Direct sends video straight from the node to the browser." HelpLink="/Help/nodes#direct-streaming">
+                <select id="dsm" name="DirectStreamingMode" class="form-select">
+                    <option value="" selected="@(string.IsNullOrEmpty(n.DirectStreamingMode))">inherit — @GlobalDirectStreaming</option>
+                    <option value="Proxy" selected="@(n.DirectStreamingMode == "Proxy")">Proxy</option>
+                    <option value="Direct" selected="@(n.DirectStreamingMode == "Direct")">Direct</option>
+                </select>
+            </SettingField>
+            <SettingField Label="Client endpoint host" For="ceHost" ShowWhen="@DirectShowWhen" Hint="FQDN browsers use to reach this node.">
+                <input id="ceHost" name="ClientEndpointHost" class="form-control" value="@n.ClientEndpointHost" placeholder="node1.example.com" />
+            </SettingField>
+            <SettingField Label="Certificate (.pfx) path" For="cePfx" ShowWhen="@DirectShowWhen" Hint="Optional.">
+                <input id="cePfx" name="ClientCertPfxPath" class="form-control font-monospace" value="@n.ClientCertPfxPath" />
+            </SettingField>
+            <SettingField Label="Certificate password" For="cePwd" ShowWhen="@DirectShowWhen" Hint="Leave blank to keep the current password.">
+                <input id="cePwd" name="ClientCertPfxPassword" type="password" autocomplete="new-password" class="form-control" placeholder="(unchanged)" />
+            </SettingField>
+            <SettingField Label="Self-signed certificate" For="ceInsecure" ShowWhen="@DirectShowWhen">
+                <select id="ceInsecure" name="AllowInsecureClientEndpoint" class="form-select">
+                    <option value="" selected="@(n.AllowInsecureClientEndpoint is null)">inherit — @(GlobalAllowInsecureClientEndpoint ? "allow" : "block")</option>
+                    <option value="true" selected="@(n.AllowInsecureClientEndpoint == true)">Allow</option>
+                    <option value="false" selected="@(n.AllowInsecureClientEndpoint == false)">Block</option>
+                </select>
+            </SettingField>
+            <SettingField Label="Endpoint status" Wide>
+                <div class="small">
+                    @if (n.ClientEndpointReportedPort is { } cePort)
+                    {
+                        <text>Listening on :@cePort</text>
+                        @if (n.ClientEndpointCertNotAfter is { } na)
+                        {
+                            <text> &middot; cert valid to @na.ToLocalTime().ToString("d")</text>
+                        }
+                        @if (n.ClientEndpointCertIsSelfSigned == true)
+                        {
+                            <span class="text-warning"> &middot; self-signed</span>
+                        }
+                    }
+                    else
+                    {
+                        <span class="text-muted">No client endpoint running.</span>
+                    }
+                    @if (!string.IsNullOrEmpty(n.ClientEndpointLastError))
+                    {
+                        <div class="text-danger">⚠️ @n.ClientEndpointLastError</div>
+                    }
+                </div>
+            </SettingField>
+        </SettingSection>
+
+        <SettingSection Title="Failover">
+            @if (AvailableProxies.Count > 0)
+            {
+                <SettingField Label="Media proxy" For="pxPrimary" Hint="Route this node's cameras through a proxy.">
+                    <select id="pxPrimary" name="PrimaryProxyId" class="form-select">
+                        <option value="" selected="@(n.PrimaryProxyId is null)">None (direct / central)</option>
+                        @foreach (var px in AvailableProxies)
+                        {
+                            <option value="@px.Id" selected="@(n.PrimaryProxyId == px.Id)">@px.Name</option>
+                        }
+                    </select>
+                </SettingField>
+                <SettingField Label="Backup proxy" For="pxBackup" Hint="Used when the primary proxy is unhealthy.">
+                    <select id="pxBackup" name="BackupProxyId" class="form-select">
+                        <option value="" selected="@(n.BackupProxyId is null)">None</option>
+                        @foreach (var px in AvailableProxies)
+                        {
+                            <option value="@px.Id" selected="@(n.BackupProxyId == px.Id)">@px.Name</option>
+                        }
+                    </select>
+                </SettingField>
+            }
+            else
+            {
+                <input type="hidden" name="PrimaryProxyId" value="@(n.PrimaryProxyId?.ToString() ?? "")" />
+                <input type="hidden" name="BackupProxyId" value="@(n.BackupProxyId?.ToString() ?? "")" />
+            }
+            <SettingField Label="Backup recorder node" For="backupNode" Hint="Records this node's cameras while it is down." HelpLink="/Help/nodes#failover">
+                <select id="backupNode" name="BackupNodeId" class="form-select">
+                    <option value="" selected="@(n.BackupNodeId is null)">None (recording stops if down)</option>
+                    @foreach (var bn in OtherNodes)
+                    {
+                        <option value="@bn.Id" selected="@(n.BackupNodeId == bn.Id)">@bn.Name</option>
+                    }
+                </select>
+                @if (BackupWarnings.Count > 0)
+                {
+                    foreach (var w in BackupWarnings)
+                    {
+                        <div class="lv-hint text-warning">⚠️ @w</div>
+                    }
+                }
+            </SettingField>
+        </SettingSection>
+
+        <SettingSection Title="Hardware" Subtitle="Reported by the node.">
+            <SettingField Label="Encoders">
+                <div>
+                    @if (Encoders.Count == 0)
+                    {
+                        <span class="text-muted small">none reported</span>
+                    }
+                    @foreach (var enc in Encoders)
+                    {
+                        <span class="badge text-bg-secondary font-monospace me-1">@enc</span>
+                    }
+                </div>
+            </SettingField>
+            <SettingField Label="Detected accelerators">
+                <div>
+                    @if (DetectedAccelerators.Count == 0)
+                    {
+                        <span class="text-muted small">none reported</span>
+                    }
+                    @foreach (var a in DetectedAccelerators)
+                    {
+                        <span class="badge text-bg-secondary font-monospace me-1">@a</span>
+                    }
+                </div>
+            </SettingField>
+            <SettingField Label="Last seen">
+                <div class="small">
+                    @if (n.LastSeenAt is { } seen)
+                    {
+                        <span title="@seen.ToString("u")">@seen.ToLocalTime().ToString("g")</span>
+                    }
+                    else
+                    {
+                        <span class="text-muted">never</span>
+                    }
+                    @if (n.ClockSkewSeconds is { } skew && Math.Abs(skew) > 60)
+                    {
+                        <div class="text-warning">⚠️ Clock is off by about @Math.Round(skew) s. Check time sync on this machine.</div>
+                    }
+                </div>
+            </SettingField>
+        </SettingSection>
+
+        <div class="lv-savebar">
+            <button type="submit" class="btn btn-primary">Save</button>
+            <a class="btn btn-link" href="/Admin/Nodes">Cancel</a>
+        </div>
+    </EditForm>
+
+    @* Node actions post to the list page, which owns their handlers and shows the result. *@
+    <div class="lv-danger-zone">
+        <div class="fw-semibold mb-2">Actions</div>
+        <div class="d-flex flex-wrap gap-2">
+            <NodeActionForm Handler="@($"restart-node-{n.Id}")" Field="RestartId" NodeId="n.Id"
+                            Css="btn-outline-secondary" Label="🔄 Restart service"
+                            Confirm="@NodeConfirm.Restart(n.Name, CameraCount)" />
+            <NodeActionForm Handler="@($"reset-node-auth-{n.Id}")" Field="ResetAuthId" NodeId="n.Id"
+                            Css="btn-outline-warning" Label="🔑 Reset auth"
+                            Confirm="@NodeConfirm.ResetAuth(n.Name)" />
+            <NodeActionForm Handler="@($"set-node-maintenance-{n.Id}")" Field="MaintenanceId" NodeId="n.Id"
+                            ExtraName="MaintenanceEnabled" ExtraValue="@((!n.MaintenanceMode).ToString().ToLowerInvariant())"
+                            Css="@(n.MaintenanceMode ? "btn-warning" : "btn-outline-warning")"
+                            Label="@(n.MaintenanceMode ? "🛠️ End maintenance" : "🛠️ Maintenance")"
+                            Confirm="@NodeConfirm.Maintenance(n.MaintenanceMode, CameraCount, BackupNodeName)" />
+            <NodeActionForm Handler="@($"delete-node-{n.Id}")" Field="DeleteId" NodeId="n.Id"
+                            Css="btn-outline-danger" Label="🗑️ Delete node"
+                            Confirm="@NodeConfirm.Delete(n.Name)" />
+        </div>
+        <div class="lv-hint mt-2">Restart restarts the node's service, not the machine. Maintenance moves its cameras to the backup node until turned off.</div>
+    </div>
+}
+</div>
+
+<SectionContent SectionName="PageScripts">
+    <script>
+        // "Custom" model family: "Refresh" asks this node which .onnx models it has and repopulates
+        // the picker, flagging any whose metadata didn't resolve rather than hiding it.
+        document.querySelectorAll('[data-refresh-local-models]').forEach(function (btn) {
+            btn.addEventListener('click', async function () {
+                var id = btn.getAttribute('data-refresh-local-models');
+                var status = document.querySelector('[data-local-models-status]');
+                var select = document.querySelector('[data-local-model-select]');
+                btn.disabled = true;
+                status.textContent = 'Refreshing…';
+                try {
+                    var resp = await fetch('/api/admin/nodes/' + encodeURIComponent(id) + '/vision-models', { headers: { 'Accept': 'application/json' } });
+                    if (!resp.ok) { status.textContent = 'Could not reach this node.'; return; }
+                    var models = await resp.json();
+                    var previousValue = select.value;
+
+                    select.innerHTML = '';
+                    var inheritOpt = document.createElement('option');
+                    inheritOpt.value = '';
+                    inheritOpt.textContent = 'inherit';
+                    select.appendChild(inheritOpt);
+
+                    models.forEach(function (m) {
+                        var opt = document.createElement('option');
+                        opt.value = m.name;
+                        var label = m.name + ' — ' + (m.decoder || 'unresolved');
+                        if (m.inputSize) label += ' (' + m.inputSize + 'x' + m.inputSize + ')';
+                        if (m.warnings && m.warnings.length > 0) label += ' \u26a0\ufe0f ' + m.warnings.join(' ');
+                        opt.textContent = label;
+                        select.appendChild(opt);
+                    });
+
+                    // Keep the previous selection even if this refresh didn't find it.
+                    if (previousValue && ![...select.options].some(function (o) { return o.value === previousValue; })) {
+                        var keepOpt = document.createElement('option');
+                        keepOpt.value = previousValue;
+                        keepOpt.textContent = previousValue + ' (saved — not found on this refresh)';
+                        select.appendChild(keepOpt);
+                    }
+                    select.value = previousValue;
+
+                    status.textContent = models.length === 0
+                        ? 'No models found on this node (or it is unreachable).'
+                        : models.length + ' model(s) found.';
+                } catch (e) {
+                    status.textContent = 'Could not reach this node.';
+                } finally {
+                    btn.disabled = false;
+                }
+            });
+        });
+    </script>
+</SectionContent>
+
+@code {
+    [Parameter] public Guid NodeId { get; set; }
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+    [SupplyParameterFromQuery(Name = "saved")] private bool Saved { get; set; }
+
+    private System.Security.Claims.ClaimsPrincipal User =>
+        HttpContext?.User ?? new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity());
+
+    private Node? Node { get; set; }
+    private NodeSettingsState S { get; set; } = default!;
+    private List<Node> OtherNodes { get; set; } = [];
+    private List<MediaProxy> AvailableProxies { get; set; } = [];
+    private List<string> Encoders { get; set; } = [];
+    private List<string> DetectedAccelerators { get; set; } = [];
+    private List<string> BackupWarnings { get; set; } = [];
+    private string? BackupNodeName { get; set; }
+    private int CameraCount { get; set; }
+    private double? DaysRemaining { get; set; }
+    private double? ArchiveDaysRemaining { get; set; }
+    private string GlobalDirectStreaming { get; set; } = "Proxy";
+    private bool GlobalAllowInsecureClientEndpoint { get; set; }
+    private (string Css, string Text)? FailoverBadge { get; set; }
+    private string? ErrorMessage;
+
+    private string AcceleratorHint => DetectedAccelerators.Count == 0
+        ? "Auto picks the best detected accelerator."
+        : $"Auto picks the best of: {string.Join(", ", DetectedAccelerators)}.";
+
+    /// <summary>data-show-when spec for a field that only applies to some model families. The inherit
+    /// option posts "" — included in the list when the inherited family is one of them.</summary>
+    private string FamilyShowWhen(params string[] families)
+    {
+        var inheritMatches = families.Contains(S.EffectiveModelFamily, StringComparer.OrdinalIgnoreCase);
+        return "ModelFamilyOverride=" + string.Join(",", families) + (inheritMatches ? "," : "");
+    }
+
+    private string BackendShowWhen =>
+        "BackendOverride=ExternalHttp" + (string.Equals(S.EffectiveDetectionBackend, "ExternalHttp", StringComparison.OrdinalIgnoreCase) ? "," : "");
+
+    private string DirectShowWhen =>
+        "DirectStreamingMode=Direct" + (string.Equals(GlobalDirectStreaming, "Direct", StringComparison.OrdinalIgnoreCase) ? "," : "");
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var all = await NodeService.ListAsync();
+        Node = all.FirstOrDefault(x => x.Id == NodeId);
+        if (Node is null) return;
+        var n = Node;
+
+        OtherNodes = all.Where(x => x.Id != n.Id).ToList();
+        CameraCount = (await CameraService.ListAsync()).Count(c => c.NodeId == n.Id);
+        DaysRemaining = (await NodeService.GetEstimatedDaysRemainingAsync()).GetValueOrDefault(n.Id);
+        ArchiveDaysRemaining = (await NodeService.GetArchiveEstimatedDaysRemainingAsync()).GetValueOrDefault(n.Id);
+        GlobalDirectStreaming = await Settings.GetAsync("LiveView.DirectStreaming", "Proxy");
+        GlobalAllowInsecureClientEndpoint = await Settings.GetAsync("LiveView.AllowInsecureClientEndpoint", false);
+        AvailableProxies = (await ProxyService.ListAsync()).Where(p => p.Enabled).ToList();
+        S = await NodeSettingsState.LoadAsync(n, Settings);
+
+        Encoders = ParseList(n.DetectedEncodersJson);
+        DetectedAccelerators = ParseList(n.DetectedAcceleratorsJson);
+
+        var backup = n.BackupNodeId is { } bid ? all.FirstOrDefault(x => x.Id == bid) : null;
+        BackupNodeName = backup?.Name;
+        BackupWarnings = [];
+        if (backup is not null)
+        {
+            string AccelLabel(Node x) =>
+                x.AiAccelerator?.ToString()
+                ?? (string.IsNullOrWhiteSpace(x.DetectedAcceleratorsJson) || x.DetectedAcceleratorsJson == "[]" ? "none/CPU" : x.DetectedAcceleratorsJson.Trim('[', ']', '"'));
+            if (!string.Equals(AccelLabel(backup), AccelLabel(n), StringComparison.OrdinalIgnoreCase))
+                BackupWarnings.Add($"{backup.Name} has different acceleration ({AccelLabel(n)} vs {AccelLabel(backup)}); detection may be slower during failover.");
+            if (backup.DisableAiObjectDetection)
+                BackupWarnings.Add($"{backup.Name} is recording-only; detection pauses for these cameras during failover.");
+        }
+
+        FailoverBadge = n.FailoverState switch
+        {
+            NodeFailoverState.FailedOverAway when n.FailoverReason == NodeFailoverReason.Maintenance => ("text-bg-warning", "in maintenance"),
+            NodeFailoverState.FailedOverAway => ("text-bg-danger", "failed over"),
+            NodeFailoverState.HostingFailover => ("text-bg-info", "hosting failover cameras"),
+            _ => null,
+        };
+    }
+
+    private static List<string> ParseList(string? json) =>
+        string.IsNullOrEmpty(json) ? [] : System.Text.Json.JsonSerializer.Deserialize<List<string>>(json) ?? [];
+
+    private static Guid FormGuid(Microsoft.Extensions.Primitives.StringValues v) => Guid.TryParse(v.ToString(), out var g) ? g : Guid.Empty;
+    private static int? FormIntOrNull(Microsoft.Extensions.Primitives.StringValues v) => int.TryParse(v.ToString(), out var x) ? x : null;
+    private static string? FormStringOrNull(Microsoft.Extensions.Primitives.StringValues v) => v.Count == 0 ? null : v.ToString();
+
+    private async Task HandleUpdateAsync()
+    {
+        var form = HttpContext?.Request.Form;
+        if (form is null) return;
+
+        var name = form["Name"].ToString();
+        var storageRootPath = FormStringOrNull(form["StorageRootPath"]);
+        var retentionDaysOverride = FormIntOrNull(form["RetentionDaysOverride"]);
+        var aiAccelerator = FormStringOrNull(form["AiAccelerator"]);
+        var modelFamily = FormStringOrNull(form["ModelFamilyOverride"]);
+        var dfineWeights = FormStringOrNull(form["DFineWeightsOverride"]);
+        var yoloXSize = FormStringOrNull(form["YoloXSizeOverride"]);
+        var maxFps = FormIntOrNull(form["MaxFpsOverride"]);
+        var aspectMode = FormStringOrNull(form["AspectModeOverride"]);
+        var dfineTrt = FormStringOrNull(form["DFineTensorRtModeOverride"]);
+        var backendOverride = FormStringOrNull(form["BackendOverride"]);
+        var externalUrlRaw = FormStringOrNull(form["ExternalUrlOverride"]);
+        var externalModel = FormStringOrNull(form["ExternalModelOverride"]);
+        var externalInputSize = FormIntOrNull(form["ExternalInputSizeOverride"]);
+        var externalApiKey = FormStringOrNull(form["ExternalApiKeyOverride"]);
+        var archiveRootPath = FormStringOrNull(form["ArchiveRootPath"]);
+        var archiveEnabled = FormStringOrNull(form["ArchiveEnabledOverride"]);
+        var archiveRetentionDays = FormIntOrNull(form["ArchiveRetentionDaysOverride"]);
+        var directStreamingMode = FormStringOrNull(form["DirectStreamingMode"]);
+        var allowInsecure = FormStringOrNull(form["AllowInsecureClientEndpoint"]);
+        var clientEndpointHost = FormStringOrNull(form["ClientEndpointHost"]);
+        var clientCertPfxPath = FormStringOrNull(form["ClientCertPfxPath"]);
+        var clientCertPfxPassword = FormStringOrNull(form["ClientCertPfxPassword"]);
+        var primaryProxyId = FormStringOrNull(form["PrimaryProxyId"]);
+        var backupProxyId = FormStringOrNull(form["BackupProxyId"]);
+        var backupNodeId = FormStringOrNull(form["BackupNodeId"]);
+        var disableAi = form["DisableAiObjectDetection"].ToString() == "true";
+        var snapshotField = FormStringOrNull(form["Snapshot"]);
+        var localModelName = FormStringOrNull(form["LocalModelNameOverride"]);
+        var id = NodeId;
+
+        async Task Fail(string message)
+        {
+            ErrorMessage = message;
+            await LoadAsync();
+        }
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(storageRootPath))
+            {
+                await Fail("A storage path is required — this is where the node records to.");
+                return;
+            }
+            var archiveError = NodeSettingsState.ValidateArchiveRoot(archiveRootPath, storageRootPath);
+            if (archiveError is not null) { await Fail(archiveError); return; }
+
+            var externalUrlOverride = string.IsNullOrWhiteSpace(externalUrlRaw) ? null : externalUrlRaw.Trim().TrimEnd('/');
+            if (externalUrlOverride is not null
+                && (!Uri.TryCreate(externalUrlOverride, UriKind.Absolute, out var externalUri) || externalUri.Scheme is not ("http" or "https")))
+            {
+                await Fail("The external service URL must be a full URL like http://192.168.1.50:8080, or blank to inherit.");
+                return;
+            }
+            if (externalInputSize is { } size && (size <= 0 || size % 32 != 0))
+            {
+                await Fail("The external input size must be a positive multiple of 32 (e.g. 640), or blank to inherit.");
+                return;
+            }
+
+            var effectiveBackend = string.IsNullOrEmpty(backendOverride)
+                ? await Settings.GetAsync("Detection.Backend", "BuiltIn")
+                : backendOverride;
+            if (string.Equals(effectiveBackend, "ExternalHttp", StringComparison.OrdinalIgnoreCase))
+            {
+                var effectiveUrl = externalUrlOverride ?? await Settings.GetAsync("Detection.ExternalInferenceUrl", "");
+                var effectiveModel = string.IsNullOrWhiteSpace(externalModel)
+                    ? await Settings.GetAsync("Detection.ExternalInferenceModel", "")
+                    : externalModel;
+                if (string.IsNullOrEmpty(effectiveUrl) || string.IsNullOrEmpty(effectiveModel))
+                {
+                    await Fail("This node uses the external HTTP backend but has no URL and model — set them here or on AI detection settings first.");
+                    return;
+                }
+            }
+
+            var before = (await NodeService.ListAsync()).FirstOrDefault(x => x.Id == id);
+            if (before is null) { await Fail("That node no longer exists."); return; }
+
+            // Stale-save guard: reject if this node's config changed since the page was rendered, rather
+            // than writing this form's values over someone else's change.
+            var current = await NodeSettingsState.LoadAsync(before, Settings);
+            if (!string.Equals(snapshotField, current.Snapshot, StringComparison.Ordinal))
+            {
+                await Fail($"{before.Name}'s settings changed (in another tab, or by someone else) since this page was loaded — " +
+                    "nothing was saved. Reload the page and re-apply your edit.");
+                return;
+            }
+
+            var accelerator = Enum.TryParse<AiAccelerator>(aiAccelerator, out var acc) ? acc : (AiAccelerator?)null;
+            bool? insecureOverride = allowInsecure switch { "true" => true, "false" => false, _ => null };
+            Guid? primaryProxy = Guid.TryParse(primaryProxyId, out var pp) ? pp : null;
+            Guid? backupProxy = Guid.TryParse(backupProxyId, out var bp) ? bp : null;
+            Guid? backupNode = Guid.TryParse(backupNodeId, out var bn) ? bn : null;
+            var clientEndpoint = new NodeClientEndpointUpdate(
+                string.IsNullOrWhiteSpace(directStreamingMode) ? null : directStreamingMode,
+                insecureOverride, clientEndpointHost, clientCertPfxPath,
+                string.IsNullOrEmpty(clientCertPfxPassword) ? null : clientCertPfxPassword,
+                primaryProxy, backupProxy, backupNode, disableAi);
+
+            var by = User.Identity?.Name;
+            static string? Blank(string? v) => string.IsNullOrEmpty(v) ? null : v;
+
+            await NodeService.UpdateAsync(id, name, storageRootPath, accelerator, archiveRootPath, clientEndpoint);
+            await Settings.SetOverrideAsync(SettingScope.Node, id, "Retention.Days", retentionDaysOverride?.ToString(), by);
+            await Settings.SetOverrideAsync(SettingScope.Node, id, "Detection.ModelFamily", Blank(modelFamily), by);
+            await Settings.SetOverrideAsync(SettingScope.Node, id, "Detection.DFineWeights", Blank(dfineWeights), by);
+            await Settings.SetOverrideAsync(SettingScope.Node, id, "Detection.YoloXSize", Blank(yoloXSize), by);
+            await Settings.SetOverrideAsync(SettingScope.Node, id, "Detection.LocalModelName", Blank(localModelName), by);
+            await Settings.SetOverrideAsync(SettingScope.Node, id, "Detection.MaxFps", maxFps?.ToString(), by);
+            await Settings.SetOverrideAsync(SettingScope.Node, id, "Detection.AspectMode", Blank(aspectMode), by);
+            await Settings.SetOverrideAsync(SettingScope.Node, id, "Detection.DFineTensorRtMode", Blank(dfineTrt), by);
+            await Settings.SetOverrideAsync(SettingScope.Node, id, "Detection.Backend", Blank(backendOverride), by);
+            await Settings.SetOverrideAsync(SettingScope.Node, id, "Detection.ExternalInferenceUrl", externalUrlOverride, by);
+            await Settings.SetOverrideAsync(SettingScope.Node, id, "Detection.ExternalInferenceModel", Blank(externalModel), by);
+            await Settings.SetOverrideAsync(SettingScope.Node, id, "Detection.ExternalInferenceInputSize", externalInputSize?.ToString(), by);
+            var externalApiKeyChanged = !string.IsNullOrWhiteSpace(externalApiKey);
+            if (externalApiKeyChanged)
+                await Settings.SetOverrideAsync(SettingScope.Node, id, "Detection.ExternalInferenceApiKey", externalApiKey!.Trim(), by);
+            await Settings.SetOverrideAsync(SettingScope.Node, id, "Archive.Enabled", Blank(archiveEnabled), by);
+            await Settings.SetOverrideAsync(SettingScope.Node, id, "Archive.RetentionDays", archiveRetentionDays?.ToString(), by);
+
+            var details = AuditDiff.Build(
+                AuditDiff.Of("Name", before.Name, name),
+                AuditDiff.Of("Storage root", before.StorageRootPath, storageRootPath),
+                AuditDiff.Of("Retention override", current.RetentionOverride?.ToString(), retentionDaysOverride?.ToString()),
+                AuditDiff.Of("AI accelerator", before.AiAccelerator?.ToString(), accelerator?.ToString()),
+                AuditDiff.Of("Detection model override", Blank(current.ModelFamilyOverride), modelFamily),
+                AuditDiff.Of("D-FINE weights override", Blank(current.DFineWeightsOverride), dfineWeights),
+                AuditDiff.Of("YOLOX size override", Blank(current.YoloXSizeOverride), yoloXSize),
+                AuditDiff.Of("Local model name override", Blank(current.LocalModelNameOverride), localModelName),
+                AuditDiff.Of("Max detection fps override", current.MaxFpsOverride?.ToString(), maxFps?.ToString()),
+                AuditDiff.Of("Aspect fitting override", Blank(current.AspectModeOverride), aspectMode),
+                AuditDiff.Of("D-FINE TensorRT override", Blank(current.DFineTensorRtModeOverride), dfineTrt),
+                AuditDiff.Of("Detection backend override", Blank(current.DetectionBackendOverride), backendOverride),
+                AuditDiff.Of("External inference URL override", Blank(current.ExternalInferenceUrlOverride), externalUrlOverride),
+                AuditDiff.Of("External inference model override", Blank(current.ExternalInferenceModelOverride), externalModel),
+                AuditDiff.Of("External inference input-size override", current.ExternalInferenceInputSizeOverride?.ToString(), externalInputSize?.ToString()),
+                AuditDiff.SecretChanged("External inference API key override", externalApiKeyChanged),
+                AuditDiff.Of("Archive root", before.ArchiveRootPath, archiveRootPath),
+                AuditDiff.Of("Archive enabled override", Blank(current.ArchiveEnabledOverride), archiveEnabled),
+                AuditDiff.Of("Archive retention override", current.ArchiveRetentionOverride?.ToString(), archiveRetentionDays?.ToString()),
+                AuditDiff.Of("Direct streaming mode", before.DirectStreamingMode, clientEndpoint.DirectStreamingMode),
+                AuditDiff.Of("Allow insecure client endpoint", before.AllowInsecureClientEndpoint?.ToString(), insecureOverride?.ToString()),
+                AuditDiff.Of("Client endpoint host", before.ClientEndpointHost, clientEndpointHost),
+                AuditDiff.Of("Client cert pfx path", before.ClientCertPfxPath, clientCertPfxPath),
+                AuditDiff.Of("Client cert pfx password", null, clientEndpoint.ClientCertPfxPassword is null ? null : "(changed)"),
+                AuditDiff.Of("Primary proxy", before.PrimaryProxyId?.ToString(), primaryProxy?.ToString()),
+                AuditDiff.Of("Backup proxy", before.BackupProxyId?.ToString(), backupProxy?.ToString()),
+                AuditDiff.Of("Backup node", before.BackupNodeId?.ToString(), backupNode?.ToString()),
+                AuditDiff.Of("Recording only (AI off)", before.DisableAiObjectDetection.ToString(), disableAi.ToString()));
+
+            await AuditService.LogAsync("Node.Update", User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
+                User.Identity?.Name, HttpContext?.Connection.RemoteIpAddress?.ToString(),
+                details is null ? $"{name} ({id})" : $"{name} ({id}) — {details}");
+
+            // Fire-and-forget, deliberately not awaited — see Admin/Settings/Detection's own reconcile trigger.
+            _ = NodeControlClient.TriggerReconcileAsync(before);
+        }
+        catch (Exception ex)
+        {
+            await Fail(ex.Message);
+            return;
+        }
+
+        NavigationManager.NavigateTo($"/Admin/Nodes/{id}?saved=true");
+    }
+}

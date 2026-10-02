@@ -20,492 +20,224 @@
     <div class="alert @(StatusIsError ? "alert-danger" : "alert-success")">@SavedMessage</div>
 }
 
-<EditForm Model="this" FormName="detection-settings" OnSubmit="HandleSubmitAsync" class="row g-3" style="max-width: 560px;">
-    <div class="col-6">
-        <label class="form-label">
-            Confidence threshold
-            <button type="button" class="help-icon" data-help-target="confidenceHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <div class="d-flex align-items-center gap-2">
-            <input type="range" name="Confidence" value="@Confidence" min="0" max="1" step="0.05" class="form-range" id="confidenceRange" />
-            <output class="text-muted small" style="min-width: 2.5em;" id="confidenceReadout">@Math.Round(Confidence * 100)</output>
-        </div>
-        <div class="help-text-source" id="confidenceHelp">
-            Minimum score a detection needs to be reported at all. Lower catches more real objects but
-            also more false positives; higher misses fainter/partial detections. A per-camera override
-            is available on that camera's own Edit page.
-        </div>
-    </div>
-    <div class="col-6">
-        <label class="form-label">
-            IoU threshold
-            <button type="button" class="help-icon" data-help-target="iouHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <div class="d-flex align-items-center gap-2">
-            <input type="range" name="Iou" value="@Iou" min="0" max="1" step="0.05" class="form-range" id="iouRange" />
-            <output class="text-muted small" style="min-width: 2.5em;" id="iouReadout">@Math.Round(Iou * 100)</output>
-        </div>
-        <div class="help-text-source" id="iouHelp">
-            Overlap threshold used to merge duplicate boxes for the same object. A per-camera override
-            is available on that camera's own Edit page.
-        </div>
-    </div>
+<p class="text-muted small">Defaults for every node and camera. Nodes and cameras can override most of these on their own pages. <a href="/Help/ai-detection">How AI detection works</a></p>
 
-    <div class="col-12">
-        <label class="form-label">
-            Detection model
-            <button type="button" class="help-icon" data-help-target="modelFamilyHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        @* Plain <select>, not InputSelect: InputSelect renders the current value as a value="..."
-           attribute on the <select> tag itself and relies on an interactive Blazor circuit's JS
-           interop to apply it to the live DOM element after render. This page has no interactive
-           render mode (Static SSR), so that step never runs — the raw HTML never gets a "selected"
-           option, and the browser silently falls back to the first one regardless of the real saved
-           value. A plain <select name="..."> with selected="@(...)" on each <option> is valid HTML
-           that works with zero JS involved, matching every other converted page's select handling
-           (Nodes.razor, Cameras/Index.razor, ...). *@
-        <select name="ModelFamily" class="form-select">
-            <option value="Auto" selected="@(ModelFamily == "Auto")">Auto (YOLOX)</option>
-            <option value="YoloX" selected="@(ModelFamily == "YoloX")">YOLOX</option>
-            <option value="DFine" selected="@(ModelFamily == "DFine")">D-FINE (experimental)</option>
-            <option value="Custom" selected="@(ModelFamily == "Custom")">Custom (a model dropped into C:\ProgramData\LarisVMS\models)</option>
-            <option value="RfDetr" disabled>RF-DETR (not yet available)</option>
-        </select>
-        <div class="help-text-source" id="modelFamilyHelp">
-            Which detection model architecture runs inference. Auto resolves to YOLOX on every
-            accelerator — it needs no letterboxing, runs well on low-power and non-Nvidia GPUs, and
-            uses an Nvidia GPU fully where present. <strong>D-FINE is experimental</strong> — it works,
-            but results can be unpredictable, and objects that straddle two tiles under the Slice
-            aspect-fitting option are currently missed or duplicated. Prefer YOLOX unless you are
-            specifically evaluating D-FINE. This is a per-node setting, not per-camera: one detection
-            process serves every camera on a node from one loaded model — a per-node override is on
-            that node's own page (<a href="/Admin/Nodes">manage nodes</a>). YOLOX models are not
-            bundled — a node fetches the chosen size from this server on first use.
-        </div>
-    </div>
-    <div class="col-12">
-        <label class="form-label">
-            YOLOX model size
-            <button type="button" class="help-icon" data-help-target="yoloXSizeHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <select name="YoloXSize" class="form-select">
-            <option value="Nano" selected="@(YoloXSize == "Nano")">Nano — smallest / fastest (416 input)</option>
-            <option value="Tiny" selected="@(YoloXSize == "Tiny")">Tiny (416 input)</option>
-            <option value="S" selected="@(YoloXSize == "S")">S — balanced (default, 640 input)</option>
-            <option value="M" selected="@(YoloXSize == "M")">M (640 input)</option>
-            <option value="L" selected="@(YoloXSize == "L")">L (640 input)</option>
-            <option value="X" selected="@(YoloXSize == "X")">X — largest / most accurate (640 input)</option>
-        </select>
-        <div class="help-text-source" id="yoloXSizeHelp">
-            Only meaningful when the model above resolves to YOLOX. Match it to the node's hardware —
-            Nano/Tiny for a low-power box, L/X for a strong GPU. Per-node overridable on
-            <a href="/Admin/Nodes">manage nodes</a>. Changing it restarts each camera's detection
-            pipeline and fetches the new model.
-        </div>
-    </div>
-    <div class="col-12">
-        <label class="form-label">
-            D-FINE weights
-            <button type="button" class="help-icon" data-help-target="dfineWeightsHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <select name="DFineWeights" class="form-select">
-            <option value="Obj2Coco" selected="@(DFineWeights == "Obj2Coco")">Obj2Coco (small) — 80 COCO classes (default)</option>
-            <option value="Obj2CocoMedium" selected="@(DFineWeights == "Obj2CocoMedium")">Obj2Coco (medium) — same 80 classes, heavier/more accurate</option>
-            <option value="Obj365" selected="@(DFineWeights == "Obj365")">Obj365 (small) — 365 Objects365 classes (richer vocabulary)</option>
-        </select>
-        <div class="help-text-source" id="dfineWeightsHelp">
-            Only meaningful when the detection model above is set to D-FINE. Obj365 recognizes a
-            much wider range of specific object types at the cost of a larger, more specific
-            vocabulary — see the Snapshots page's own filter tree once it's in use. The medium
-            Obj2Coco model keeps the same 80-class vocabulary but uses a larger backbone: more
-            accurate, noticeably more work per frame — best paired with a capable GPU and a lower
-            detection frame-rate cap. Changing this restarts each camera's detection pipeline.
-        </div>
-    </div>
-    <div class="col-12">
-        <label class="form-label">
-            Local model name
-            <button type="button" class="help-icon" data-help-target="localModelNameHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <div class="input-group">
-            <select name="LocalModelName" class="form-select" id="localModelNameSelect">
-                <option value="" selected="@string.IsNullOrEmpty(LocalModelName)">(none selected)</option>
-                @{
-                    var localOptions = AvailableLocalModels.ToList();
-                    if (localOptions.All(m => m.Name != LocalModelName) && !string.IsNullOrEmpty(LocalModelName))
-                    {
-                        <option value="@LocalModelName" selected>@LocalModelName (saved — Refresh models to check it's still available)</option>
-                    }
-                }
-                @foreach (var m in localOptions)
-                {
-                    <option value="@m.Name" selected="@(m.Name == LocalModelName)">
-                        @m.Name — @(m.Decoder ?? "unresolved")@(m.InputSize is { } s ? $" ({s}x{s})" : "")@(m.Warnings.Count > 0 ? " ⚠️ metadata incomplete" : "") · on: @string.Join(", ", m.AvailableOnNodes)
-                    </option>
-                }
+<div class="lv-page-narrow">
+<EditForm Model="this" FormName="detection-settings" OnSubmit="HandleSubmitAsync" data-dirty-guard>
+    <SettingSection Title="Backend">
+        <SettingField Label="Detection backend" For="backendSelect" Hint="Built-in runs a model on the node. External sends frames to your own server." HelpLink="/Help/ai-detection#external-backend">
+            <select name="Backend" class="form-select" id="backendSelect">
+                <option value="BuiltIn" selected="@(Backend == "BuiltIn")">Built-in</option>
+                <option value="ExternalHttp" selected="@(Backend == "ExternalHttp")">External HTTP service</option>
             </select>
-            <button type="submit" name="Action" value="RefreshLocalModels" class="btn btn-outline-secondary">Refresh models</button>
-        </div>
-        @if (AvailableLocalModels.Any(m => m.Warnings.Count > 0))
-        {
-            <div class="form-text">
-                @foreach (var m in AvailableLocalModels.Where(m => m.Warnings.Count > 0))
-                {
-                    <div class="text-warning">⚠️ <strong>@m.Name</strong>: @string.Join(" ", m.Warnings)</div>
-                }
-            </div>
-        }
-        <div class="help-text-source" id="localModelNameHelp">
-            Only meaningful when the detection model above is set to Custom. Names a model dropped
-            into <code>C:\ProgramData\LarisVMS\models</code> on a node — its decoder and input size
-            are read from the model's own metadata, or from a same-named <code>.json</code> sidecar
-            when that's missing or incomplete. "Refresh models" asks every online node what it found;
-            a model listed with a warning is still usable to select but won't actually run detection
-            until the warning is resolved (usually by adding a sidecar). A global default here isn't
-            necessarily present on every node — check the "on:" list. Per-node override on
-            <a href="/Admin/Nodes">manage nodes</a>.
-        </div>
-    </div>
-    <div class="col-12">
-        <label class="form-label">
-            D-FINE TensorRT
-            <button type="button" class="help-icon" data-help-target="dfineTensorRtHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <select name="DFineTensorRtMode" class="form-select">
-            <option value="Off" selected="@(DFineTensorRtMode == "Off")">Off — plain CUDA (default)</option>
-            <option value="FP32" selected="@(DFineTensorRtMode == "FP32")">FP32 — TensorRT, graph fusion + kernel selection</option>
-            <option value="FP16" selected="@(DFineTensorRtMode == "FP16")">FP16 — TensorRT, half-precision (fastest, auto-falls back to FP32)</option>
-        </select>
-        <div class="help-text-source" id="dfineTensorRtHelp">
-            Only applies when the detection model is D-FINE <em>and</em> the node has TensorRT enabled
-            (the machine-local <code>Vision:EnableTensorRt</code> setting) with the TensorRT 10.x SDK
-            installed — it does nothing on a node without those. <strong>FP32</strong> runs D-FINE
-            through TensorRT for graph fusion and kernel selection with no FP16 math — a safe speedup
-            over plain CUDA. <strong>FP16</strong> runs the same plain model at half precision for the
-            fastest inference, with D-FINE's LayerNorm subgraphs kept in FP32 to protect against the
-            transformer-activation overflow FP16 can otherwise cause. If a camera's engine still
-            overflows anyway, the Vision Service detects it automatically (a frame decoding to zero
-            detections with non-finite raw output) and rebuilds that camera's engine at FP32 in the
-            background — no admin action needed, though that camera reports no detections for the
-            short rebuild window. This is a per-node setting; changing it recompiles the TensorRT
-            engine, which takes several minutes on the first start per camera resolution. A per-node
-            override is on <a href="/Admin/Nodes">manage nodes</a>.
-        </div>
-    </div>
-    <div class="col-12">
-        <label class="form-label">
-            Aspect fitting
-            <button type="button" class="help-icon" data-help-target="aspectModeHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <select name="AspectMode" class="form-select">
-            <option value="Letterbox" selected="@(AspectMode == "Letterbox")">Letterbox — preserve aspect ratio, pad with black bars (default)</option>
-            <option value="Stretch" selected="@(AspectMode == "Stretch")">Stretch — squash to fill the model's square input</option>
-            <option value="Slice" selected="@(AspectMode == "Slice")">Slice — cut into overlapping squares, run each at full resolution</option>
-        </select>
-        <div class="help-text-source" id="aspectModeHelp">
-            How a camera's own real aspect ratio fits into the detection model's square input.
-            Letterbox keeps the model seeing correct proportions for a portrait or panoramic
-            camera, at the cost of some black bar padding; Stretch distorts a non-square camera's
-            geometry to fill the square exactly (this app's behavior before this setting existed).
-            Slice scales the short edge to the model's own input size and cuts the long edge into
-            2 or more overlapping squares, each detected at full resolution and merged back into
-            one result — the best option for catching small or distant objects on a wide or tall
-            camera, at the cost of roughly N&times; the inference work (a 16:9 camera runs 2
-            detections per frame instead of 1). Requires GPU frame preprocessing — there is no CPU
-            fallback for slicing, so it forces that setting on for any camera using it regardless of
-            the toggle below. Lower the max detection frame rate if this pushes drop% up on the
-            cadence log. This is a per-node setting, not per-camera — a per-node override is
-            available on that node's own page (<a href="/Admin/Nodes">manage nodes</a>).
-        </div>
-    </div>
-
-    <div class="col-12">
-        <label class="form-label">
-            Detection stream
-            <button type="button" class="help-icon" data-help-target="streamRoleHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <select name="StreamRole" class="form-select">
-            <option value="Sub" selected="@(StreamRole == "Sub")">Sub</option>
-            <option value="Main" selected="@(StreamRole == "Main")">Main</option>
-        </select>
-        <div class="help-text-source" id="streamRoleHelp">
-            Which of a camera's streams AI detection actually watches — Sub (lower resolution, lighter
-            load) by default. A per-camera override is available on that camera's own Edit page.
-        </div>
-    </div>
-
-    <div class="col-12">
-        <label class="form-label">
-            Camera orientation
-            <button type="button" class="help-icon" data-help-target="orientationHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <select name="Orientation" class="form-select">
-            <option value="Auto" selected="@(Orientation == "Auto")">Auto</option>
-            <option value="Landscape" selected="@(Orientation == "Landscape")">Landscape</option>
-            <option value="Portrait" selected="@(Orientation == "Portrait")">Portrait</option>
-        </select>
-        <div class="help-text-source" id="orientationHelp">
-            Auto trusts the resolution a camera reports for its detection stream. Some corridor-mounted
-            cameras advertise a landscape stream (704x480) while actually sending portrait video
-            (480x704) — detection then runs on a squashed frame and snapshot crops come out
-            horizontally stretched. Setting Portrait corrects the shape before the frame reaches the
-            model. Almost always a per-camera setting rather than a deployment default; the override
-            is on that camera's own Edit page.
-        </div>
-    </div>
-
-    <div class="col-12">
-        <label class="form-label">
-            Idle timeout (seconds)
-            <button type="button" class="help-icon" data-help-target="idleTimeoutHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <InputNumber @bind-Value="IdleTimeoutSeconds" min="0" class="form-control" required />
-        <div class="help-text-source" id="idleTimeoutHelp">
-            How long a detected object can go unseen (or sit idle) before its snapshot is finalized and
-            a later re-detection starts a new one. Too short fragments one continuous sighting into
-            several snapshots; too long delays finalizing a snapshot after the object is actually gone.
-        </div>
-    </div>
-
-    <div class="col-12">
-        <label class="form-label">
-            Max detection frame rate
-            <button type="button" class="help-icon" data-help-target="maxFpsHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <InputNumber @bind-Value="MaxFps" min="0" max="60" class="form-control" required />
-        <div class="help-text-source" id="maxFpsHelp">
-            The ceiling on how many frames per second per camera reach the detection model. The
-            recorder still decodes each camera's Sub stream in real time — this just drops the surplus
-            before inference so the GPU idles between frames instead of running flat out (which is
-            what causes thermal throttling on a busy node). It has no effect on a camera whose Sub
-            stream is already at or below this rate. 0 disables the cap. 10 is plenty for object
-            tracking; raise it only if fast motion is being missed. Per-node overridable on
-            <a href="/Admin/Nodes">manage nodes</a>.
-        </div>
-    </div>
-
-    <div class="col-12 form-check">
-        <InputCheckbox @bind-Value="ReportIdleDetections" class="form-check-input" id="reportIdleDetections" />
-        <label class="form-check-label" for="reportIdleDetections">
-            Report idle (stationary) objects
-            <button type="button" class="help-icon" data-help-target="reportIdleHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <div class="help-text-source" id="reportIdleHelp">
-            Off by default — a track that stops moving no longer keeps its snapshot open, so a parked
-            vehicle or a person standing still doesn't get reported at all once it settles. Turn this on
-            to also report objects that are present but not moving.
-        </div>
-    </div>
-
-    <div class="col-12 form-check">
-        <InputCheckbox @bind-Value="SnapshotMotionAccuracy" class="form-check-input" id="snapshotMotionAccuracy" />
-        <label class="form-check-label" for="snapshotMotionAccuracy">
-            Snapshot motion accuracy
-            <button type="button" class="help-icon" data-help-target="snapshotMotionAccuracyHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <div class="help-text-source" id="snapshotMotionAccuracyHelp">
-            On by default. Once a moving object leaves the scene its snapshot is finalized within a few
-            seconds (see the grace period below) instead of staying open long enough for a later,
-            unrelated object of the same type to be folded into it. Turn it off to compare against the
-            previous behaviour. Global; changing it restarts each camera's detection pipeline.
-        </div>
-    </div>
-
-    <div class="col-12">
-        <label class="form-label">
-            Departure grace (seconds)
-            <button type="button" class="help-icon" data-help-target="departureGraceHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <div class="d-flex align-items-center gap-2">
-            <input type="range" name="DepartureGraceSeconds" value="@DepartureGraceSeconds" min="1" max="10" step="1" class="form-range" id="departureGraceRange" />
-            <output class="text-muted small" style="min-width: 2.5em;" id="departureGraceReadout">@DepartureGraceSeconds</output>
-        </div>
-        <div class="help-text-source" id="departureGraceHelp">
-            How long after an object was last seen moving before its snapshot is finalized as
-            "departed". Only applies while "Snapshot motion accuracy" above is on. Shorter finalizes
-            sooner but risks splitting one object that briefly pauses into two snapshots; longer holds
-            the snapshot open for a later same-type object to merge in. Was a fixed 5 seconds.
-        </div>
-    </div>
-
-    <div class="col-12">
-        <label class="form-label">
-            Snapshot crop margin (%)
-            <button type="button" class="help-icon" data-help-target="snapshotMarginHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <div class="d-flex align-items-center gap-2">
-            <input type="range" name="SnapshotMarginPercent" value="@SnapshotMarginPercent" min="0" max="100" step="1" class="form-range" id="snapshotMarginRange" />
-            <output class="text-muted small" style="min-width: 2.5em;" id="snapshotMarginReadout">@SnapshotMarginPercent</output>
-        </div>
-        <div class="help-text-source" id="snapshotMarginHelp">
-            How much extra room the live snapshot crop keeps around a detected object, as a percentage
-            of the object's own box size — 0 crops exactly to the reported box, higher shows more of
-            the surrounding scene so it's clear where the object is relative to what's around it.
-            Applies the same way regardless of detection backend (built-in or an external service).
-            Was a fixed 12%. Restarts each camera's detection pipeline. Does not affect the separate
-            still-frame crop taken from recorded video for the snapshot gallery, which keeps its own
-            larger margin (it also has to absorb some timing drift between the live and recorded
-            streams, not just leave room to look at).
-        </div>
-    </div>
-
-    <div class="col-12 form-check">
-        <InputCheckbox @bind-Value="RejectMotionJitter" class="form-check-input" id="rejectMotionJitter" />
-        <label class="form-check-label" for="rejectMotionJitter">
-            Reject stationary-object jitter
-            <button type="button" class="help-icon" data-help-target="rejectMotionJitterHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <div class="help-text-source" id="rejectMotionJitterHelp">
-            Off by default, and experimental. Smooths the movement check so a distant parked vehicle
-            whose detection box wobbles frame-to-frame doesn't register as "moving" and stop producing
-            stray snapshots. On a noisier model (e.g. YOLOX-M) it has also been observed to hold
-            genuinely slow-moving objects as idle, so it is opt-in — this is the deployment-wide
-            default; set it per camera on a camera's own Edit page for the ones that actually have a
-            parked vehicle in view. Restarts each camera's detection pipeline.
-        </div>
-    </div>
-
-    <div class="col-12">
-        <label class="form-label">
-            Jitter threshold (pixels)
-            <button type="button" class="help-icon" data-help-target="motionJitterPixelsHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <div class="d-flex align-items-center gap-2">
-            <input type="range" name="MotionJitterPixels" value="@MotionJitterPixels" min="1" max="15" step="1" class="form-range" id="motionJitterPixelsRange" />
-            <output class="text-muted small" style="min-width: 2.5em;" id="motionJitterPixelsReadout">@MotionJitterPixels</output>
-        </div>
-        <div class="help-text-source" id="motionJitterPixelsHelp">
-            Minimum real pixel travel of a detection box's centre before it counts as moving. Only
-            applies where "Reject stationary-object jitter" is on. Higher rejects more box wobble but
-            also ignores slower genuine movement; 3 is the previous built-in value. Per-camera
-            overridable on a camera's own Edit page.
-        </div>
-    </div>
-
-    <div class="col-12 form-check">
-        <InputCheckbox @bind-Value="GpuPreprocessing" class="form-check-input" id="gpuPreprocessing" />
-        <label class="form-check-label" for="gpuPreprocessing">
-            GPU frame preprocessing
-            <button type="button" class="help-icon" data-help-target="gpuPreprocessingHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <div class="help-text-source" id="gpuPreprocessingHelp">
-            Off by default. Moves the per-frame colour conversion and normalization that detection
-            does before every inference off the CPU and onto the accelerator (it becomes part of the
-            model graph, so it runs on NVIDIA, AMD or Intel hardware the same way). Meant to lower CPU
-            load on nodes running several cameras. This is a per-node setting; toggling it restarts
-            each camera's detection pipeline. Forced on automatically for a camera using the Slice
-            aspect fitting option above, regardless of this toggle — there is no CPU fallback for
-            frame slicing.
-        </div>
-    </div>
-
-    <div class="col-12">
-        <label class="form-label">
-            Detection backend
-            <button type="button" class="help-icon" data-help-target="backendHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <select name="Backend" class="form-select" id="backendSelect">
-            <option value="BuiltIn" selected="@(Backend == "BuiltIn")">Built-in — bundled model on the node's own accelerator (default)</option>
-            <option value="ExternalHttp" selected="@(Backend == "ExternalHttp")">External HTTP service — send frames to your own inference server</option>
-        </select>
-        <div class="help-text-source" id="backendHelp">
-            Built-in runs one of the bundled models (YOLOX / D-FINE) on each node's GPU. The external
-            option runs no model on the node at all: every frame is scaled to the model's input size,
-            JPEG-encoded, and POSTed to an inference server you run, which replies with JSON boxes.
-            Use it for models LarisVMS doesn't bundle. Everything downstream — tracking, snapshots,
-            timeline, live overlay — is identical. This is the one detection path that needs no GPU on
-            the node. Per-node setting; changing it restarts each camera's detection pipeline.
-        </div>
-    </div>
-
-    <fieldset class="col-12 border rounded p-3" id="externalBackendFields" style="@(Backend == "ExternalHttp" ? "" : "display:none;")">
-        <legend class="fs-6 text-muted">External inference service</legend>
-
-        <div class="mb-3">
-            <label class="form-label">Service URL</label>
+        </SettingField>
+        <SettingField Label="Service URL" ShowWhen="Backend=ExternalHttp" Hint="Include the port.">
             <div class="input-group">
                 <InputText type="url" @bind-Value="ExternalUrl" class="form-control" placeholder="http://192.168.1.50:8080" />
-                <button type="submit" name="Action" value="TestConnection" class="btn btn-outline-secondary">
-                    Test connection
-                </button>
+                <button type="submit" name="Action" value="TestConnection" class="btn btn-outline-secondary">Test</button>
             </div>
-            <div class="form-text">Include the port. The service must expose <code>POST /v1/detect</code>, <code>GET /v1/models</code> and <code>GET /healthz</code>.</div>
-        </div>
-
-        <div class="mb-3">
-            <label class="form-label">API key</label>
+            @if (ProbeHealth is { } h)
+            {
+                <div class="lv-hint">
+                    Service: <strong>@(h.Status ?? "?")</strong>
+                    @if (!string.IsNullOrEmpty(h.Version)) { <text>· v@(h.Version)</text> }
+                    @if (!string.IsNullOrEmpty(h.Backend)) { <text>· @(h.Backend)</text> }
+                    @if (h.ModelsReady is { } ready) { <text>· @ready model(s) ready</text> }
+                    @if (h.ModelsFailed is { } failed and > 0) { <text>· @failed failed</text> }
+                </div>
+            }
+        </SettingField>
+        <SettingField Label="API key" ShowWhen="Backend=ExternalHttp" Hint="Sent as a Bearer token. Leave blank to keep the current key.">
             <InputText type="password" @bind-Value="ExternalApiKey" autocomplete="new-password" class="form-control"
-                   placeholder="@(HasStoredExternalApiKey ? "•••••••• (unchanged — leave blank to keep it)" : "leave blank if the service needs no auth")" />
-            <div class="form-text">
-                Sent as <code>Authorization: Bearer &lt;key&gt;</code> on every request, including "Test connection".
-                A service bound to loopback only (the common case) needs none; SideGlance and most others require
-                one once reachable over the LAN. Never re-shown once saved — type a new value to replace it.
-            </div>
-        </div>
-
-        @if (ProbeHealth is { } h)
-        {
-            <div class="small text-muted mb-2">
-                Service: <strong>@(h.Status ?? "?")</strong>
-                @if (!string.IsNullOrEmpty(h.Version)) { <text>· v@(h.Version)</text> }
-                @if (!string.IsNullOrEmpty(h.Backend)) { <text>· backend @(h.Backend)</text> }
-                @if (h.ModelsReady is { } ready) { <text>· @ready model(s) ready</text> }
-                @if (h.ModelsFailed is { } failed and > 0) { <text>· @failed failed</text> }
-            </div>
-        }
-
-        <div class="mb-3">
-            <label class="form-label">Model</label>
+                       placeholder="@(HasStoredExternalApiKey ? "(unchanged)" : "none")" />
+        </SettingField>
+        <SettingField Label="Model" ShowWhen="Backend=ExternalHttp"
+                      Hint="@(AvailableModels.Count == 0 ? "Click Test to load the service's models." : "Its input size sets the frame size sent.")">
             <select name="ExternalModel" class="form-select" id="externalModelSelect">
                 @{
                     var options = AvailableModels.ToList();
                     if (options.Count == 0 && !string.IsNullOrEmpty(ExternalModel))
                     {
-                        <option value="@ExternalModel" data-input-size="@ExternalInputSize" selected>@ExternalModel (saved — Test connection to refresh)</option>
+                        <option value="@ExternalModel" data-input-size="@ExternalInputSize" selected>@ExternalModel (saved)</option>
                     }
                 }
                 @foreach (var m in options)
                 {
                     <option value="@m.Name" data-input-size="@m.InputSize"
                         data-input-modes="@string.Join(',', m.InputModes ?? [])" selected="@(m.Name == ExternalModel)">
-                        @m.Name — @(m.InputSize)px input@(m.ClassCount is { } cc ? $", {cc} classes" : "")@(string.IsNullOrEmpty(m.Decoder) ? "" : $" ({m.Decoder})")@(string.Equals(m.Status, "ready", StringComparison.OrdinalIgnoreCase) ? "" : $" [{m.Status}]")
+                        @m.Name — @(m.InputSize)px@(m.ClassCount is { } cc ? $", {cc} classes" : "")@(string.IsNullOrEmpty(m.Decoder) ? "" : $" ({m.Decoder})")@(string.Equals(m.Status, "ready", StringComparison.OrdinalIgnoreCase) ? "" : $" [{m.Status}]")
                     </option>
                 }
             </select>
             <input type="hidden" name="ExternalInputSize" value="@ExternalInputSize" id="externalInputSize" />
-            <div class="form-text">
-                @if (AvailableModels.Count == 0)
-                {
-                    <text>Click <strong>Test connection</strong> to load the model list from the service.</text>
-                }
-                else
-                {
-                    <text>The model's input size sizes the frames LarisVMS sends. Slice aspect-fitting is delegated to the service.</text>
-                }
-            </div>
-        </div>
-
-        <div class="mb-3">
-            <label class="form-label">Transport</label>
+        </SettingField>
+        <SettingField Label="Transport" ShowWhen="Backend=ExternalHttp">
             <select name="ExternalTransport" class="form-select" id="externalTransportSelect">
-                <option value="Auto" selected="@(ExternalTransport == "Auto")">Auto (JPEG for now)</option>
-                <option value="Jpeg" selected="@(ExternalTransport == "Jpeg")">JPEG — works with any service</option>
-                <option value="PixelsYuv420" selected="@(ExternalTransport == "PixelsYuv420")">Raw YUV 4:2:0 — no JPEG codec, ~10x the bandwidth</option>
-                <option value="PixelsBgra" selected="@(ExternalTransport == "PixelsBgra")">Raw BGRA — no JPEG codec, ~4x the bandwidth</option>
+                <option value="Auto" selected="@(ExternalTransport == "Auto")">Auto (JPEG)</option>
+                <option value="Jpeg" selected="@(ExternalTransport == "Jpeg")">JPEG</option>
+                <option value="PixelsYuv420" selected="@(ExternalTransport == "PixelsYuv420")">Raw YUV 4:2:0</option>
+                <option value="PixelsBgra" selected="@(ExternalTransport == "PixelsBgra")">Raw BGRA</option>
             </select>
-            <div class="form-text" id="externalTransportHint">
-                Skips the JPEG encode/decode round trip on a loopback or LAN service that supports it —
-                use <strong>Test connection</strong> to check what the selected model actually
-                advertises before picking a raw mode; an unsupported choice degrades to errors on
-                every frame, not a graceful fallback.
-            </div>
-        </div>
-    </fieldset>
+            <div class="lv-hint" id="externalTransportHint">Raw modes skip JPEG but use much more bandwidth. Test first.</div>
+        </SettingField>
+    </SettingSection>
 
-    <div class="col-12">
-        <button type="submit" name="Action" value="Save" class="btn btn-primary"><span aria-hidden="true">💾</span> Save</button>
+    <div data-show-when="Backend=BuiltIn">
+        <SettingSection Title="Model" Subtitle="Runs once per node and serves all of its cameras.">
+            <SettingField Label="Detection model" Hint="Auto uses YOLOX. D-FINE is experimental." HelpLink="/Help/ai-detection#model-families">
+                @* Plain <select> with selected="" per option, not InputSelect — under Static SSR
+                   InputSelect never marks the saved option as selected. *@
+                <select name="ModelFamily" class="form-select">
+                    <option value="Auto" selected="@(ModelFamily == "Auto")">Auto (YOLOX)</option>
+                    <option value="YoloX" selected="@(ModelFamily == "YoloX")">YOLOX</option>
+                    <option value="DFine" selected="@(ModelFamily == "DFine")">D-FINE (experimental)</option>
+                    <option value="Custom" selected="@(ModelFamily == "Custom")">Custom model</option>
+                    <option value="RfDetr" disabled>RF-DETR (not yet available)</option>
+                </select>
+            </SettingField>
+            <SettingField Label="YOLOX size" ShowWhen="ModelFamily=Auto,YoloX" Hint="Nano/Tiny for low-power boxes, L/X for strong GPUs.">
+                <select name="YoloXSize" class="form-select">
+                    <option value="Nano" selected="@(YoloXSize == "Nano")">Nano (fastest)</option>
+                    <option value="Tiny" selected="@(YoloXSize == "Tiny")">Tiny</option>
+                    <option value="S" selected="@(YoloXSize == "S")">S (balanced, default)</option>
+                    <option value="M" selected="@(YoloXSize == "M")">M</option>
+                    <option value="L" selected="@(YoloXSize == "L")">L</option>
+                    <option value="X" selected="@(YoloXSize == "X")">X (most accurate)</option>
+                </select>
+            </SettingField>
+            <SettingField Label="D-FINE weights" ShowWhen="ModelFamily=DFine" Hint="Obj365 knows 365 object types; Obj2Coco knows 80.">
+                <select name="DFineWeights" class="form-select">
+                    <option value="Obj2Coco" selected="@(DFineWeights == "Obj2Coco")">Obj2Coco (small, default)</option>
+                    <option value="Obj2CocoMedium" selected="@(DFineWeights == "Obj2CocoMedium")">Obj2Coco (medium)</option>
+                    <option value="Obj365" selected="@(DFineWeights == "Obj365")">Obj365 (small)</option>
+                </select>
+            </SettingField>
+            <SettingField Label="D-FINE TensorRT" ShowWhen="ModelFamily=DFine" Hint="Needs TensorRT enabled on the node." HelpLink="/Help/ai-detection#tensorrt">
+                <select name="DFineTensorRtMode" class="form-select">
+                    <option value="Off" selected="@(DFineTensorRtMode == "Off")">Off (plain CUDA, default)</option>
+                    <option value="FP32" selected="@(DFineTensorRtMode == "FP32")">FP32</option>
+                    <option value="FP16" selected="@(DFineTensorRtMode == "FP16")">FP16 (falls back to FP32)</option>
+                </select>
+            </SettingField>
+            <SettingField Label="Custom model" ShowWhen="ModelFamily=Custom" Wide Hint="Models dropped into C:\ProgramData\LarisVMS\models on a node." HelpLink="/Help/ai-detection#custom-models">
+                <div class="input-group">
+                    <select name="LocalModelName" class="form-select" id="localModelNameSelect">
+                        <option value="" selected="@string.IsNullOrEmpty(LocalModelName)">(none selected)</option>
+                        @{
+                            var localOptions = AvailableLocalModels.ToList();
+                            if (localOptions.All(m => m.Name != LocalModelName) && !string.IsNullOrEmpty(LocalModelName))
+                            {
+                                <option value="@LocalModelName" selected>@LocalModelName (saved)</option>
+                            }
+                        }
+                        @foreach (var m in localOptions)
+                        {
+                            <option value="@m.Name" selected="@(m.Name == LocalModelName)">
+                                @m.Name — @(m.Decoder ?? "unresolved")@(m.InputSize is { } s ? $" ({s}x{s})" : "")@(m.Warnings.Count > 0 ? " ⚠️" : "") · on: @string.Join(", ", m.AvailableOnNodes)
+                            </option>
+                        }
+                    </select>
+                    <button type="submit" name="Action" value="RefreshLocalModels" class="btn btn-outline-secondary">Refresh</button>
+                </div>
+                @foreach (var m in AvailableLocalModels.Where(m => m.Warnings.Count > 0))
+                {
+                    <div class="lv-hint text-warning">⚠️ <strong>@m.Name</strong>: @string.Join(" ", m.Warnings)</div>
+                }
+            </SettingField>
+            <SettingField Label="Aspect fitting" Hint="Slice finds small objects on wide cameras but costs ~2x." HelpLink="/Help/ai-detection#aspect-fitting">
+                <select name="AspectMode" class="form-select">
+                    <option value="Letterbox" selected="@(AspectMode == "Letterbox")">Letterbox (default)</option>
+                    <option value="Stretch" selected="@(AspectMode == "Stretch")">Stretch</option>
+                    <option value="Slice" selected="@(AspectMode == "Slice")">Slice</option>
+                </select>
+            </SettingField>
+            <SettingField Label="GPU frame preprocessing" Hint="Moves frame conversion to the GPU to save CPU. Always on with Slice.">
+                <div class="form-check mt-1">
+                    <InputCheckbox @bind-Value="GpuPreprocessing" class="form-check-input" id="gpuPreprocessing" />
+                    <label class="form-check-label" for="gpuPreprocessing">Enabled</label>
+                </div>
+            </SettingField>
+        </SettingSection>
+    </div>
+
+    <SettingSection Title="Detection" Subtitle="Cameras can override these on their own page.">
+        <SettingField Label="Confidence threshold" For="confidenceRange" Hint="Lower catches more, with more false positives.">
+            <div class="d-flex align-items-center gap-2">
+                <input type="range" name="Confidence" value="@Confidence" min="0" max="1" step="0.05" class="form-range" id="confidenceRange" />
+                <output class="text-muted small" style="min-width: 2.5em;" id="confidenceReadout">@Math.Round(Confidence * 100)</output>
+            </div>
+        </SettingField>
+        <SettingField Label="IoU threshold" For="iouRange" Hint="Overlap for merging duplicate boxes.">
+            <div class="d-flex align-items-center gap-2">
+                <input type="range" name="Iou" value="@Iou" min="0" max="1" step="0.05" class="form-range" id="iouRange" />
+                <output class="text-muted small" style="min-width: 2.5em;" id="iouReadout">@Math.Round(Iou * 100)</output>
+            </div>
+        </SettingField>
+        <SettingField Label="Detection stream" Hint="Sub is lighter; Main sees more detail.">
+            <select name="StreamRole" class="form-select">
+                <option value="Sub" selected="@(StreamRole == "Sub")">Sub</option>
+                <option value="Main" selected="@(StreamRole == "Main")">Main</option>
+            </select>
+        </SettingField>
+        <SettingField Label="Camera orientation" Hint="Usually set per camera. Portrait fixes corridor-mode cameras.">
+            <select name="Orientation" class="form-select">
+                <option value="Auto" selected="@(Orientation == "Auto")">Auto</option>
+                <option value="Landscape" selected="@(Orientation == "Landscape")">Landscape</option>
+                <option value="Portrait" selected="@(Orientation == "Portrait")">Portrait</option>
+            </select>
+        </SettingField>
+        <SettingField Label="Max detection frame rate" Hint="Per camera. 5–7 is enough for accurate detection; 0 is no cap.">
+            <InputNumber @bind-Value="MaxFps" min="0" max="60" class="form-control" required />
+        </SettingField>
+    </SettingSection>
+
+    <SettingSection Title="Tracking & snapshots">
+        <SettingField Label="Idle timeout (seconds)" Hint="How long an object can go unseen before its snapshot closes.">
+            <InputNumber @bind-Value="IdleTimeoutSeconds" min="0" class="form-control" required />
+        </SettingField>
+        <SettingField Label="Snapshot crop margin (%)" For="snapshotMarginRange" Hint="Extra room around the object in its snapshot.">
+            <div class="d-flex align-items-center gap-2">
+                <input type="range" name="SnapshotMarginPercent" value="@SnapshotMarginPercent" min="0" max="100" step="1" class="form-range" id="snapshotMarginRange" />
+                <output class="text-muted small" style="min-width: 2.5em;" id="snapshotMarginReadout">@SnapshotMarginPercent</output>
+            </div>
+        </SettingField>
+        <SettingField Label="Idle objects" Hint="Also report objects that are present but not moving.">
+            <div class="form-check mt-1">
+                <InputCheckbox @bind-Value="ReportIdleDetections" class="form-check-input" id="reportIdleDetections" />
+                <label class="form-check-label" for="reportIdleDetections">Report idle objects</label>
+            </div>
+        </SettingField>
+        <SettingField Label="Snapshot motion accuracy" Hint="Closes a snapshot soon after its object leaves." HelpLink="/Help/ai-detection#snapshots">
+            <div class="form-check mt-1">
+                <InputCheckbox @bind-Value="SnapshotMotionAccuracy" class="form-check-input" id="snapshotMotionAccuracy" />
+                <label class="form-check-label" for="snapshotMotionAccuracy">Enabled</label>
+            </div>
+        </SettingField>
+        <SettingField Label="Departure grace (seconds)" For="departureGraceRange" ShowWhen="SnapshotMotionAccuracy=true" Hint="Wait after an object was last seen moving.">
+            <div class="d-flex align-items-center gap-2">
+                <input type="range" name="DepartureGraceSeconds" value="@DepartureGraceSeconds" min="1" max="10" step="1" class="form-range" id="departureGraceRange" />
+                <output class="text-muted small" style="min-width: 2.5em;" id="departureGraceReadout">@DepartureGraceSeconds</output>
+            </div>
+        </SettingField>
+        <SettingField Label="Stationary-object jitter" Hint="Stops parked cars' box wobble counting as motion. Experimental." HelpLink="/Help/ai-detection#jitter">
+            <div class="form-check mt-1">
+                <InputCheckbox @bind-Value="RejectMotionJitter" class="form-check-input" id="rejectMotionJitter" />
+                <label class="form-check-label" for="rejectMotionJitter">Reject jitter</label>
+            </div>
+        </SettingField>
+        <SettingField Label="Jitter threshold (pixels)" For="motionJitterPixelsRange" ShowWhen="RejectMotionJitter=true" Hint="Minimum box movement that counts as moving.">
+            <div class="d-flex align-items-center gap-2">
+                <input type="range" name="MotionJitterPixels" value="@MotionJitterPixels" min="1" max="15" step="1" class="form-range" id="motionJitterPixelsRange" />
+                <output class="text-muted small" style="min-width: 2.5em;" id="motionJitterPixelsReadout">@MotionJitterPixels</output>
+            </div>
+        </SettingField>
+    </SettingSection>
+
+    <div class="lv-savebar">
+        <button type="submit" name="Action" value="Save" class="btn btn-primary">Save</button>
     </div>
 </EditForm>
+</div>
 
 <SectionContent SectionName="PageScripts">
     <script>
@@ -528,19 +260,12 @@
             wireSlider('motionJitterPixelsRange', 'motionJitterPixelsReadout', asInt);
         })();
 
-        // External-backend section: show its fields only when that backend is selected, and keep the
-        // hidden input-size field in sync with the picked model (each <option> carries its own size,
-        // discovered by "Test connection") so Save always stores the size that matches the model.
+        // External backend: keep the hidden input-size field in sync with the picked model (each
+        // <option> carries its own size, discovered by "Test") so Save always stores the matching size.
+        // Showing/hiding the external fields is conditional-fields.js (data-show-when).
         (function () {
-            var backend = document.getElementById('backendSelect');
-            var fields = document.getElementById('externalBackendFields');
             var model = document.getElementById('externalModelSelect');
             var size = document.getElementById('externalInputSize');
-            if (backend && fields) {
-                backend.addEventListener('change', function () {
-                    fields.style.display = backend.value === 'ExternalHttp' ? '' : 'none';
-                });
-            }
             function syncSize() {
                 if (!model || !size) return;
                 var opt = model.options[model.selectedIndex];
@@ -606,7 +331,7 @@
     [SupplyParameterFromForm(FormName = "detection-settings")] private int MotionJitterPixels { get; set; } = 3;
     [SupplyParameterFromForm(FormName = "detection-settings")] private int DepartureGraceSeconds { get; set; } = 5;
     [SupplyParameterFromForm(FormName = "detection-settings")] private int SnapshotMarginPercent { get; set; } = 12;
-    [SupplyParameterFromForm(FormName = "detection-settings")] private int MaxFps { get; set; } = 10;
+    [SupplyParameterFromForm(FormName = "detection-settings")] private int MaxFps { get; set; } = 7;
     [SupplyParameterFromForm(FormName = "detection-settings")] private string ModelFamily { get; set; } = "Auto";
     [SupplyParameterFromForm(FormName = "detection-settings")] private string DFineWeights { get; set; } = "Obj2Coco";
     [SupplyParameterFromForm(FormName = "detection-settings")] private string DFineTensorRtMode { get; set; } = "Off";
@@ -663,7 +388,7 @@
         MotionJitterPixels = await Settings.GetAsync("Detection.MotionJitterPixels", 3);
         DepartureGraceSeconds = await Settings.GetAsync("Detection.DepartureGraceSeconds", 5);
         SnapshotMarginPercent = await Settings.GetAsync("Detection.SnapshotMarginPercent", 12);
-        MaxFps = await Settings.GetAsync("Detection.MaxFps", 10);
+        MaxFps = await Settings.GetAsync("Detection.MaxFps", 7);
         ModelFamily = await Settings.GetAsync("Detection.ModelFamily", "Auto");
         DFineWeights = await Settings.GetAsync("Detection.DFineWeights", "Obj2Coco");
         DFineTensorRtMode = await Settings.GetAsync("Detection.DFineTensorRtMode", "Off");
@@ -704,7 +429,7 @@
         var oldMotionJitterPixels = await Settings.GetAsync("Detection.MotionJitterPixels", 3);
         var oldDepartureGraceSeconds = await Settings.GetAsync("Detection.DepartureGraceSeconds", 5);
         var oldSnapshotMarginPercent = await Settings.GetAsync("Detection.SnapshotMarginPercent", 12);
-        var oldMaxFps = await Settings.GetAsync("Detection.MaxFps", 10);
+        var oldMaxFps = await Settings.GetAsync("Detection.MaxFps", 7);
         var oldModelFamily = await Settings.GetAsync("Detection.ModelFamily", "Auto");
         var oldDFineWeights = await Settings.GetAsync("Detection.DFineWeights", "Obj2Coco");
         var oldDFineTensorRtMode = await Settings.GetAsync("Detection.DFineTensorRtMode", "Off");

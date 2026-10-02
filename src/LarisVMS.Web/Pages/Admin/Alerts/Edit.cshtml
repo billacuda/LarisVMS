@@ -29,10 +29,9 @@
                 <div class="col-sm-3">
                     <label class="form-label">
                         Cooldown (minutes)
-                        <button type="button" class="help-icon" data-help-target="cooldownHelp" tabindex="0" aria-label="Help">ℹ️</button>
                     </label>
                     <input type="number" asp-for="CooldownMinutes" class="form-control" min="1" />
-                    <div class="help-text-source" id="cooldownHelp">Minimum time between repeat firings.</div>
+                    <div class="lv-hint">Minimum time between repeat firings.</div>
                 </div>
                 <div class="col-sm-3">
                     <label class="form-label">Condition type</label>
@@ -67,10 +66,9 @@
                 <div class="col-sm-3" id="thresholdField">
                     <label class="form-label">
                         Free space threshold (%)
-                        <button type="button" class="help-icon" data-help-target="thresholdHelp" tabindex="0" aria-label="Help">ℹ️</button>
                     </label>
                     <input type="number" asp-for="ThresholdPercent" class="form-control" min="1" max="99" />
-                    <div class="help-text-source" id="thresholdHelp">Fires when free space drops below this.</div>
+                    <div class="lv-hint">Fires when free space drops below this.</div>
                 </div>
             </div>
         </div>

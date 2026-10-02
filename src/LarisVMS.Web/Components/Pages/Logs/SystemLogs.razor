@@ -8,12 +8,7 @@
 <h1>Logs</h1>
 <LogsTabs ActiveKey="SystemLogs" />
 
-<p class="text-muted">
-    This app's own application log (not the audit trail — see the Audit Logs tab above for who did
-    what). Recorder node logs live on each node's own machine under
-    <code>%ProgramData%\LarisVMS\logs</code> — not shown here. Path and retention are configurable
-    on <a href="/Admin/Settings/Logs">Admin &rarr; Settings &rarr; Logs</a>.
-</p>
+<p class="text-muted small">This server's application log. Node logs stay on each node under <code>%ProgramData%\LarisVMS\logs</code>. <a href="/Help/troubleshooting">Troubleshooting</a></p>
 
 @if (!string.IsNullOrEmpty(ErrorMessage))
 {

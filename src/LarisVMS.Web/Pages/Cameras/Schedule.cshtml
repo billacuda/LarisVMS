@@ -9,12 +9,8 @@
 </div>
 
 <p class="text-muted small">
-    Only matters when this camera's <strong>Recording mode</strong> is set to <strong>Schedule</strong>
-    (<a asp-page="Edit" asp-route-id="@Model.CameraId">set that on the camera's edit page</a>). A
-    segment is kept if it starts inside any enabled window below, evaluated against this recorder
-    node's own local clock — not a stored timezone. No windows at all means every segment is kept,
-    the same "fail open, don't silently discard" rule Motion mode uses for a camera with no zone
-    configured.
+    Used when the camera's recording mode is <strong>Schedule</strong>. Footage starting inside an enabled window is kept,
+    using the node's local time. With no windows, everything is kept. <a href="/Help/recording#schedule">Learn more</a>
 </p>
 
 <div class="row g-3">

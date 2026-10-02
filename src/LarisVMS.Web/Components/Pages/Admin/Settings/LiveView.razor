@@ -21,95 +21,43 @@
     <div class="alert alert-danger">@ErrorMessage</div>
 }
 
-<EditForm Model="this" FormName="liveview-settings" OnSubmit="HandleSaveAsync" class="row g-3" style="max-width: 560px;">
-    <div class="col-12">
-        <div class="form-check form-switch mb-3">
-            <InputCheckbox @bind-Value="AdaptiveStreamingEnabled" class="form-check-input" id="adaptiveStreamingEnabled" />
-            <label class="form-check-label" for="adaptiveStreamingEnabled">
-                Adaptive streaming enabled
-                <button type="button" class="help-icon" data-help-target="adaptiveHelp" tabindex="0" aria-label="Help">ℹ️</button>
-            </label>
-        </div>
-        <div class="help-text-source" id="adaptiveHelp">
-            When on, a live tile too small to benefit from a camera's full resolution is shown its Sub
-            stream instead of Main, cutting bandwidth and decode cost — the tile switches back to Main
-            automatically once it's large enough (or fullscreen) to matter. Turning this off falls
-            every tile back to Main only, and stops every node from pulling Sub streams for live
-            viewing at all.
-        </div>
-    </div>
-
-    <div class="col-12 mt-4">
-        <h5>Direct-to-node streaming</h5>
-        <p class="text-muted small">
-            By default every live stream and every playback byte is relayed through this server. Set
-            this to <strong>Direct</strong> to have browsers connect straight to each recorder node's
-            own HTTPS endpoint instead, taking this server out of the media path. A camera whose node
-            hasn't reported a healthy client endpoint automatically stays on the proxy. Override
-            per-node on <a href="/Admin/Nodes">Nodes</a>.
-        </p>
-    </div>
-    <div class="col-6">
-        <label class="form-label">Mode</label>
-        <select name="DirectStreaming" class="form-select">
-            <option value="Proxy" selected="@(DirectStreaming == "Proxy")">Proxy (through this server)</option>
-            <option value="Direct" selected="@(DirectStreaming == "Direct")">Direct (browser → node)</option>
-        </select>
-    </div>
-    <div class="col-12">
-        <div class="form-check form-switch mt-2">
-            <InputCheckbox @bind-Value="AllowInsecureClientEndpoint" class="form-check-input" id="allowInsecureClientEndpoint" />
-            <label class="form-check-label text-danger" for="allowInsecureClientEndpoint">
-                Allow insecure client endpoint
-            </label>
-        </div>
-        <div class="form-text">
-            <strong>Setup / testing only.</strong> Lets a node's direct endpoint come up on an
-            auto-generated self-signed certificate — viewers must click through a browser security
-            warning, and every affected stream is flagged insecure in the UI. Do not leave on in
-            production; use a real certificate (<code>-ClientPfxPath</code> /
-            <strong>Cert pfx path</strong> on the node) instead.
-        </div>
-    </div>
-    <div class="col-8">
-        <label class="form-label">Public origin <span class="text-muted">(optional)</span></label>
-        <InputText @bind-Value="PublicOrigin" class="form-control" placeholder="https://vms.example.com" />
-        <div class="form-text">
-            The origin browsers load this app from, pinned as the only allowed CORS origin on nodes'
-            direct routes. Leave blank to let each node reflect the request origin instead.
-        </div>
-    </div>
-
-    <div class="col-12 mt-4">
-        <h5>Live/playback port</h5>
-        <p class="text-muted small">
-            Separates live view and playback traffic (the <code>/live</code> WebSocket relay,
-            <code>/playback-segment</code>, <code>/playback-thumbnail</code>,
-            <code>/export-download</code>, and camera snapshots) onto a port of its own, away from
-            the management interface — useful if you want to firewall the two differently, or expose
-            only one of them beyond the LAN.
-        </p>
-    </div>
-    <div class="col-6">
-        <label class="form-label">
-            Custom port
-            <button type="button" class="help-icon" data-help-target="customPortHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <InputNumber @bind-Value="CustomPort" min="1" max="65535" class="form-control" placeholder="(none — everything on the same port)" />
-        <div class="help-text-source" id="customPortHelp">
-            Setting this opens a second HTTPS listener on this port, using the same certificate as the
-            main site. <strong>Requires restarting the LarisVMS Web service to take effect</strong> —
-            the listener is opened once at service startup, not dynamically. Once restarted,
-            live/playback routes stop responding on the management port, and every other route stops
-            responding on this one. Leave blank to disable — everything goes back to sharing the main
-            port.
-        </div>
-    </div>
-
-    <div class="col-12">
-        <button type="submit" class="btn btn-primary"><span aria-hidden="true">💾</span> Save</button>
+<div class="lv-page-narrow">
+<EditForm Model="this" FormName="liveview-settings" OnSubmit="HandleSaveAsync" data-dirty-guard>
+    <SettingSection Title="Live view">
+        <SettingField Label="Adaptive streaming" Wide Hint="Small tiles use the Sub stream to save bandwidth. Off always uses Main.">
+            <div class="form-check form-switch mt-1">
+                <InputCheckbox @bind-Value="AdaptiveStreamingEnabled" class="form-check-input" id="adaptiveStreamingEnabled" />
+                <label class="form-check-label" for="adaptiveStreamingEnabled">Enabled</label>
+            </div>
+        </SettingField>
+    </SettingSection>
+    <SettingSection Title="Direct-to-node streaming" Subtitle="Nodes can override the mode on their own page.">
+        <SettingField Label="Mode" Hint="Direct sends video from the node straight to the browser." HelpLink="/Help/nodes#direct-streaming">
+            <select name="DirectStreaming" class="form-select">
+                <option value="Proxy" selected="@(DirectStreaming == "Proxy")">Proxy (through this server)</option>
+                <option value="Direct" selected="@(DirectStreaming == "Direct")">Direct (browser → node)</option>
+            </select>
+        </SettingField>
+        <SettingField Label="Public origin" ShowWhen="DirectStreaming=Direct" Hint="Optional. The only origin nodes allow. Blank reflects the request.">
+            <InputText @bind-Value="PublicOrigin" class="form-control" placeholder="https://vms.example.com" />
+        </SettingField>
+        <SettingField Label="Self-signed certificates" ShowWhen="DirectStreaming=Direct" Wide Hint="Testing only. Viewers see a browser warning. Use a real certificate in production.">
+            <div class="form-check form-switch mt-1">
+                <InputCheckbox @bind-Value="AllowInsecureClientEndpoint" class="form-check-input" id="allowInsecureClientEndpoint" />
+                <label class="form-check-label text-danger" for="allowInsecureClientEndpoint">Allow insecure client endpoint</label>
+            </div>
+        </SettingField>
+    </SettingSection>
+    <SettingSection Title="Live/playback port">
+        <SettingField Label="Custom port" Hint="Moves live and playback to their own port. Needs a service restart." HelpLink="/Help/security#separate-port">
+            <InputNumber @bind-Value="CustomPort" min="1" max="65535" class="form-control" placeholder="same as main site" />
+        </SettingField>
+    </SettingSection>
+    <div class="lv-savebar">
+        <button type="submit" class="btn btn-primary">Save</button>
     </div>
 </EditForm>
+</div>
 
 @code {
     [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }

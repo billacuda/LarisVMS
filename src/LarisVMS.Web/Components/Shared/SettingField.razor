@@ -1,0 +1,30 @@
+@* One setting: label, control, and a one-line hint. HelpLink adds a "Learn more" link to the
+   matching Help page for anything that needs more than a line. ShowWhen maps to
+   conditional-fields.js's data-show-when ("FieldName=Value1,Value2"). *@
+<div class="lv-field@(Wide ? " lv-field-wide" : "")" data-show-when="@ShowWhen">
+    @if (!string.IsNullOrEmpty(Label))
+    {
+        <label class="form-label" for="@For">@Label</label>
+    }
+    @ChildContent
+    @if (!string.IsNullOrEmpty(Hint) || !string.IsNullOrEmpty(HelpLink))
+    {
+        <div class="lv-hint">
+            @Hint
+            @if (!string.IsNullOrEmpty(HelpLink))
+            {
+                <a href="@HelpLink">Learn more</a>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string? Label { get; set; }
+    [Parameter] public string? For { get; set; }
+    [Parameter] public string? Hint { get; set; }
+    [Parameter] public string? HelpLink { get; set; }
+    [Parameter] public string? ShowWhen { get; set; }
+    [Parameter] public bool Wide { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

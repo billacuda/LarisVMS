@@ -1,0 +1,56 @@
+@page "/Help/{Slug}"
+@attribute [Authorize]
+@using LarisVMS.Web.Services
+@inject HelpContentService Help
+@inject NavigationManager NavigationManager
+
+<PageTitle>@(Topic?.Title ?? "Help") - @AppName</PageTitle>
+
+<div class="lv-help-layout">
+    <nav class="lv-help-toc small" aria-label="Help topics">
+        <a href="/Help" class="fw-semibold mb-1">Help home</a>
+        @foreach (var t in Help.Topics)
+        {
+            <a href="/Help/@t.Slug" class="@(t == Topic ? "active" : "")" aria-current="@(t == Topic ? "page" : null)">@t.Title</a>
+        }
+    </nav>
+
+    <article class="lv-help-content">
+        @if (Topic is null)
+        {
+            <h1>Page not found</h1>
+            <p>There's no help page called “@Slug”. <a href="/Help">Browse all topics</a>.</p>
+        }
+        else
+        {
+            @((MarkupString)Topic.Html)
+
+            <div class="d-flex justify-content-between border-top pt-3 mt-4 small">
+                <span>@if (Prev is not null) { <a href="/Help/@Prev.Slug">&larr; @Prev.Title</a> }</span>
+                <span>@if (Next is not null) { <a href="/Help/@Next.Slug">@Next.Title &rarr;</a> }</span>
+            </div>
+        }
+    </article>
+</div>
+
+@code {
+    [Parameter] public string Slug { get; set; } = "";
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    private HelpTopic? Topic, Prev, Next;
+
+    protected override void OnParametersSet()
+    {
+        Topic = Help.Find(Slug);
+        if (Topic is null)
+        {
+            if (HttpContext is not null) HttpContext.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+        var topics = Help.Topics;
+        var i = topics.ToList().IndexOf(Topic);
+        Prev = i > 0 ? topics[i - 1] : null;
+        Next = i < topics.Count - 1 ? topics[i + 1] : null;
+    }
+}

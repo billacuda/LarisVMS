@@ -1,0 +1,24 @@
+@* A node action (restart, reset auth, maintenance, delete) posted from the node edit page to
+   /Admin/Nodes, whose same-named EditForms own the handlers — Blazor dispatches a POST by its
+   _handler value, so this plain form reaches the list page's handler without duplicating it. *@
+<form method="post" action="/Admin/Nodes" class="d-inline">
+    <input type="hidden" name="_handler" value="@Handler" />
+    <AntiforgeryToken />
+    <input type="hidden" name="@Field" value="@NodeId" />
+    @if (ExtraName is not null)
+    {
+        <input type="hidden" name="@ExtraName" value="@ExtraValue" />
+    }
+    <button type="submit" class="btn btn-sm @Css" onclick="@Confirm">@Label</button>
+</form>
+
+@code {
+    [Parameter, EditorRequired] public string Handler { get; set; } = "";
+    [Parameter, EditorRequired] public string Field { get; set; } = "";
+    [Parameter, EditorRequired] public Guid NodeId { get; set; }
+    [Parameter] public string? ExtraName { get; set; }
+    [Parameter] public string? ExtraValue { get; set; }
+    [Parameter] public string Css { get; set; } = "btn-outline-secondary";
+    [Parameter] public string Label { get; set; } = "";
+    [Parameter] public string? Confirm { get; set; }
+}

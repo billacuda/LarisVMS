@@ -1,5 +1,5 @@
 // Toggles a masked <input type="password"> between hidden and shown, driven by a sibling button
-// carrying data-secret-toggle="<target input id>". Modeled on help-popover.js: an IIFE that wires up
+// carrying data-secret-toggle="<target input id>". An IIFE that wires up
 // on DOMContentLoaded and is completely inert on any page with no [data-secret-toggle] element, so
 // it costs nothing to load globally from _Layout.cshtml.
 //

@@ -1,0 +1,43 @@
+@using LarisVMS.Core.Entities
+@using LarisVMS.Web.Helpers
+@* Primary (and, if configured, archive) volume usage for one node — shared by the Nodes list and the
+   node edit page. *@
+@if (Node.StorageTotalBytes is { } total && Node.StorageFreeBytes is { } free)
+{
+    var usedPercent = total > 0 ? 100.0 * (total - free) / total : 0;
+    <div class="progress" style="height: 0.5rem;" title="@ByteFormat.Format(total - free) used of @ByteFormat.Format(total)">
+        <div class="progress-bar @(usedPercent > 90 ? "bg-danger" : usedPercent > 75 ? "bg-warning" : "")"
+             style="width: @usedPercent.ToString("0.#")%"></div>
+    </div>
+    <span class="small text-muted">
+        @ByteFormat.Format(free) free
+        @if (DaysRemaining is { } days)
+        {
+            <text>&middot; ~@days.ToString("0") day(s) left</text>
+        }
+    </span>
+}
+else
+{
+    <span class="small text-muted">no report yet</span>
+}
+@if (Node.ArchiveTotalBytes is { } aTotal && Node.ArchiveFreeBytes is { } aFree)
+{
+    var aUsedPercent = aTotal > 0 ? 100.0 * (aTotal - aFree) / aTotal : 0;
+    <div class="progress mt-1" style="height: 0.5rem;" title="Archive volume: @ByteFormat.Format(aTotal - aFree) used of @ByteFormat.Format(aTotal)">
+        <div class="progress-bar bg-secondary" style="width: @aUsedPercent.ToString("0.#")%"></div>
+    </div>
+    <span class="small text-muted">
+        archive: @ByteFormat.Format(aFree) free
+        @if (ArchiveDaysRemaining is { } aDays)
+        {
+            <text>&middot; ~@aDays.ToString("0") day(s) left</text>
+        }
+    </span>
+}
+
+@code {
+    [Parameter, EditorRequired] public Node Node { get; set; } = default!;
+    [Parameter] public double? DaysRemaining { get; set; }
+    [Parameter] public double? ArchiveDaysRemaining { get; set; }
+}

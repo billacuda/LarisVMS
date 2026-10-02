@@ -182,6 +182,10 @@
                 {
                     <a class="lv-navitem@(IsActive("/Admin/Settings") ? " active" : "")" href="/Admin/Settings"><span aria-hidden="true">⚙️</span> Settings</a>
                 }
+                @if (isAuthenticated)
+                {
+                    <a class="lv-navitem@(IsActive("/Help") ? " active" : "")" href="/Help"><span aria-hidden="true">❓</span> Help</a>
+                }
             </nav>
             <div class="lv-side-foot">
                 &copy; @DateTime.UtcNow.Year @pageTitle @(_version is not null ? $"v{_version}" : "")
@@ -219,11 +223,10 @@
     @* Inert on any page without a form[data-remember-filters], so it costs nothing to load globally
        rather than adding a Scripts section to each filter page that wants it. *@
     <script src="~/js/remember-filters.js" asp-append-version="true"></script>
-    @* Same "inert unless a page opts in" reasoning — a page with no .help-icon elements just finds
-       nothing to wire up. *@
-    <script src="~/js/help-popover.js" asp-append-version="true"></script>
     @* Same again — inert with no button[data-secret-toggle] on the page. *@
     <script src="~/js/secret-reveal.js" asp-append-version="true"></script>
+    @* Inert on pages without [data-show-when] / form[data-dirty-guard]. *@
+    <script src="~/js/conditional-fields.js" asp-append-version="true"></script>
     @await RenderSectionAsync("Scripts", required: false)
 </body>
 </html>

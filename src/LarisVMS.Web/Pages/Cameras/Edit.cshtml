@@ -3,14 +3,25 @@
 @using LarisVMS.Core.Entities
 @{
     ViewData["Title"] = Model.IsNew ? "Add camera" : "Edit camera";
+    var hasOnvifEvents = Model.Capabilities?.HasEvents ?? false;
+    // data-show-when for the inherit ("") option: only known when the camera has no override of its
+    // own — EffectiveRecordingMode includes this camera's override.
+    string ModeShowWhen(params string[] modes) =>
+        "RecordingModeOverride=" + string.Join(",", modes)
+        + (string.IsNullOrEmpty(Model.RecordingModeOverride) && modes.Contains(Model.EffectiveRecordingMode) ? "," : "");
 }
-<div class="d-flex justify-content-between align-items-center mb-3">
+<div class="lv-page-narrow">
+<nav aria-label="breadcrumb" class="small mb-1"><a href="/Cameras">&larr; Cameras</a></nav>
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
     <h1 class="mb-0">@(Model.IsNew ? "Add camera" : Model.Name)</h1>
     @if (!Model.IsNew)
     {
         <div class="btn-group">
             <a class="btn btn-outline-secondary" asp-page="Zones" asp-route-id="@Model.Id">Zones</a>
             <a class="btn btn-outline-secondary" href="/Cameras/EventTags/@Model.Id">Event tags</a>
+            <a class="btn btn-outline-secondary" asp-page="Schedule" asp-route-id="@Model.Id">Schedule</a>
+            <button type="submit" form="cameraForm" asp-page-handler="Probe" class="btn btn-outline-secondary"
+                    title="Re-read this camera's capabilities and streams"><span aria-hidden="true">🔍</span> Re-probe</button>
         </div>
     }
 </div>
@@ -24,441 +35,6 @@
     <div class="alert alert-info">@Model.ProbeMessage</div>
 }
 
-<form method="post" class="row g-3" style="max-width: 640px;">
-    <input type="hidden" asp-for="Id" />
-    <div class="col-12">
-        <label class="form-label">Name</label>
-        <input asp-for="Name" class="form-control" required />
-    </div>
-    <div class="col-12">
-        <label class="form-label">
-            Device service URL
-            @if (!Model.IsNew)
-            {
-                <button type="button" class="help-icon" data-help-target="deviceUriHelp" tabindex="0" aria-label="Help">ℹ️</button>
-            }
-        </label>
-        <input asp-for="DeviceServiceUri" class="form-control font-monospace" placeholder="http://192.168.1.50/onvif/device_service" required />
-        @if (!Model.IsNew)
-        {
-            <div class="help-text-source" id="deviceUriHelp">
-                Change the scheme here (<code>http://</code> &harr; <code>https://</code>) if the
-                camera's own web server switches, or update the address if its IP changes. Saving a
-                change re-probes the camera automatically, since its capability report can otherwise
-                go stale against the new address.
-            </div>
-        }
-    </div>
-    @if (!Model.IsNew)
-    {
-        <div class="col-12">
-            <label class="form-label">Groups</label>
-            <div>
-                @if (Model.CurrentGroups.Count == 0)
-                {
-                    <span class="text-muted">Not in any group yet.</span>
-                }
-                else
-                {
-                    @foreach (var g in Model.CurrentGroups)
-                    {
-                        <span class="badge text-bg-secondary me-1">@g.Name</span>
-                    }
-                }
-            </div>
-            <div class="form-text">
-                <a href="/Cameras/Groups">Manage groups &rarr;</a>
-            </div>
-        </div>
-    }
-    <div class="col-12">
-        <label class="form-label">Recorder node</label>
-        <select asp-for="NodeId" class="form-select">
-            <option value="">(unassigned — won't record)</option>
-            @foreach (var n in Model.Nodes)
-            {
-                <option value="@n.Id">@n.Name</option>
-            }
-        </select>
-        @if (Model.Nodes.Count == 0)
-        {
-            <div class="form-text">No nodes have registered yet — see <a href="/Admin/Nodes">Admin &rarr; Nodes</a>.</div>
-        }
-    </div>
-    <div class="col-6">
-        <label class="form-label">Username</label>
-        <input asp-for="Username" class="form-control" autocomplete="off" />
-    </div>
-    <div class="col-6">
-        <label class="form-label">Password @(Model.IsNew ? "" : "(leave blank to keep current)")</label>
-        <input asp-for="Password" type="password" class="form-control" autocomplete="new-password" />
-    </div>
-    @if (!Model.IsNew)
-    {
-        <div class="col-12">
-            <div class="form-check">
-                <input asp-for="IsEnabled" class="form-check-input" type="checkbox" />
-                <label class="form-check-label" asp-for="IsEnabled">Enabled</label>
-            </div>
-        </div>
-        <div class="col-6">
-            <label class="form-label">
-                Storage quota (GB)
-                <button type="button" class="help-icon" data-help-target="quotaHelp" tabindex="0" aria-label="Help">ℹ️</button>
-            </label>
-            <input asp-for="QuotaGb" type="number" step="0.1" min="0" class="form-control" placeholder="(no quota — shares the pool)" />
-            <div class="help-text-source" id="quotaHelp">
-                Using @ByteFormat.Format(Model.StorageUsedBytes) now. Oldest footage is
-                evicted first once this camera goes over quota.
-            </div>
-        </div>
-        <div class="col-6">
-            <label class="form-label">
-                Retention override (days)
-                <button type="button" class="help-icon" data-help-target="retentionHelp" tabindex="0" aria-label="Help">ℹ️</button>
-            </label>
-            <input asp-for="RetentionDaysOverride" type="number" min="0" class="form-control"
-                   placeholder="(inherit — currently @Model.EffectiveRetentionDays days)" />
-            <div class="help-text-source" id="retentionHelp">0 = keep forever on this camera. Blank inherits the node's/global setting.</div>
-        </div>
-        <div class="col-6">
-            <label class="form-label">
-                Archive retention override (days)
-                <button type="button" class="help-icon" data-help-target="archiveRetentionHelp" tabindex="0" aria-label="Help">ℹ️</button>
-            </label>
-            <input asp-for="ArchiveRetentionDaysOverride" type="number" min="0" class="form-control"
-                   placeholder="(inherit — currently @Model.EffectiveArchiveRetentionDays days)" />
-            <div class="help-text-source" id="archiveRetentionHelp">
-                How long this camera's footage stays on the archive volume, counted from its original
-                recording date — set this higher than other cameras to keep this one archived longer.
-                0 = keep forever. Blank inherits the node's/global setting.
-                Archiving is currently @(Model.EffectiveArchiveEnabled ? "on" : "off") for this camera
-                (set on <a href="/Admin/Nodes">the node</a> or <a href="/Admin/Settings/StorageAndRetention">globally</a>).
-            </div>
-        </div>
-        <div class="col-6">
-            <label class="form-label">Recording mode override</label>
-            <select asp-for="RecordingModeOverride" class="form-select">
-                <option value="">(inherit — currently @Model.EffectiveRecordingMode)</option>
-                <option value="Continuous">Continuous</option>
-                <option value="Motion">Motion only</option>
-                <option value="Schedule">Schedule</option>
-                <option value="Event">Event (a specific tagged trigger)</option>
-            </select>
-            @{ var hasOnvifEvents = Model.Capabilities?.HasEvents ?? false; }
-            @if (!Model.HasServerMotionZone && !hasOnvifEvents)
-            {
-                <div class="form-text text-warning">
-                    No enabled Motion zone on this camera yet, and it doesn't advertise ONVIF events
-                    either — Motion mode won't discard anything until one exists
-                    (<a asp-page="Zones" asp-route-id="@Model.Id">set one up</a>). Recording behaves
-                    like Continuous in the meantime, not "record nothing."
-                </div>
-            }
-            else
-            {
-                <div class="mt-1">
-                    <button type="button" class="help-icon" data-help-target="motionModeHelp" tabindex="0" aria-label="Help">ℹ️ About Motion mode</button>
-                    <div class="help-text-source" id="motionModeHelp">
-                        Segments with no activity — from a Motion zone@(hasOnvifEvents ? " or this camera's own ONVIF motion events" : "") —
-                        are deleted shortly after they're written, instead of waiting for a retention sweep
-                        (<a asp-page="Zones" asp-route-id="@Model.Id">manage zones</a>).
-                        <strong>Unverified against a real camera</strong> — see CHANGELOG.
-                    </div>
-                </div>
-            }
-            @if (!Model.HasScheduleWindow)
-            {
-                <div class="form-text text-warning">
-                    No enabled schedule window yet — Schedule mode keeps everything until one exists
-                    (<a asp-page="Schedule" asp-route-id="@Model.Id">set one up</a>).
-                </div>
-            }
-            else
-            {
-                <div class="mt-1">
-                    <button type="button" class="help-icon" data-help-target="scheduleModeHelp" tabindex="0" aria-label="Help">ℹ️ About Schedule mode</button>
-                    <div class="help-text-source" id="scheduleModeHelp">
-                        Schedule mode keeps a segment only if it starts inside an enabled window
-                        (<a asp-page="Schedule" asp-route-id="@Model.Id">manage schedule</a>), evaluated
-                        against the recorder node's own local clock.
-                    </div>
-                </div>
-            }
-            @if (!Model.HasDrivingEventRule)
-            {
-                <div class="form-text text-warning">
-                    No enabled event tag rule has "Drives recording" checked yet — Event mode keeps
-                    everything until one exists
-                    (<a href="/Cameras/EventTags/@Model.Id">set one up</a>). Unlike Motion
-                    mode, Event mode ignores Motion zones and the built-in motion classifier entirely
-                    — only a driving rule's own trigger counts.
-                </div>
-            }
-            else
-            {
-                <div class="mt-1">
-                    <button type="button" class="help-icon" data-help-target="eventModeHelp" tabindex="0" aria-label="Help">ℹ️ About Event mode</button>
-                    <div class="help-text-source" id="eventModeHelp">
-                        Event mode keeps a segment only if a driving
-                        (<a href="/Cameras/EventTags/@Model.Id">event tag rule</a>) fired within
-                        its pre/post-roll window — not any activity, unlike Motion mode.
-                        <strong>Unverified against a real camera</strong> — see CHANGELOG.
-                    </div>
-                </div>
-            }
-        </div>
-        <div class="col-6">
-            <label class="form-label">
-                AI object detection
-                <button type="button" class="help-icon" data-help-target="aiDetectionHelp" tabindex="0" aria-label="Help">ℹ️</button>
-            </label>
-            <div class="form-check">
-                <input asp-for="AiDetectionEnabled" class="form-check-input" type="checkbox" />
-                <label class="form-check-label" asp-for="AiDetectionEnabled">Watch this camera for AI object detection</label>
-            </div>
-            <div class="help-text-source" id="aiDetectionHelp">
-                Which hardware accelerator actually runs detection is a per-node setting, not chosen
-                here (<a href="/Admin/Nodes">manage nodes</a>). If the assigned node has none
-                available, this is logged once and every other detection path already configured for
-                this camera keeps working unaffected.
-            </div>
-        </div>
-        <div class="col-6">
-            <label class="form-label">
-                Detection stream override
-                <button type="button" class="help-icon" data-help-target="aiStreamRoleHelp" tabindex="0" aria-label="Help">ℹ️</button>
-            </label>
-            <select asp-for="AiDetectionStreamRoleOverride" class="form-select">
-                <option value="">(inherit — currently @Model.EffectiveAiDetectionStreamRole)</option>
-                <option value="Sub">Sub</option>
-                <option value="Main">Main</option>
-            </select>
-            <div class="help-text-source" id="aiStreamRoleHelp">
-                Which of this camera's streams AI detection watches. Global default is set on
-                <a href="/Admin/Settings/Detection">AI Detection settings</a>.
-            </div>
-        </div>
-        <div class="col-6">
-            <label class="form-label">
-                Camera orientation override
-                <button type="button" class="help-icon" data-help-target="aiOrientationHelp" tabindex="0" aria-label="Help">ℹ️</button>
-            </label>
-            <select asp-for="AiDetectionOrientationOverride" class="form-select">
-                <option value="">(inherit — currently @Model.EffectiveAiDetectionOrientation)</option>
-                <option value="Auto">Auto</option>
-                <option value="Landscape">Landscape</option>
-                <option value="Portrait">Portrait</option>
-            </select>
-            <div class="help-text-source" id="aiOrientationHelp">
-                Set this to Portrait for a corridor-mounted camera that reports a landscape detection
-                stream (704x480) but actually sends portrait video (480x704). Left on Auto, detection
-                runs on a horizontally squashed frame and snapshot crops come out stretched. The node's
-                detection log names this setting when it sees the mismatch.
-            </div>
-        </div>
-        <div class="col-6">
-            <label class="form-label">
-                Confidence threshold override
-                <button type="button" class="help-icon" data-help-target="aiConfidenceHelp" tabindex="0" aria-label="Help">ℹ️</button>
-            </label>
-            <div class="d-flex align-items-center gap-2">
-                <div class="form-check form-check-inline mb-0">
-                    <input type="checkbox" class="form-check-input" id="confidenceOverrideToggle"
-                           checked="@(Model.ConfidenceOverride.HasValue)" />
-                    <label class="form-check-label small" for="confidenceOverrideToggle">Override</label>
-                </div>
-                <input type="range" name="ConfidenceOverride" id="confidenceOverrideSlider" min="0" max="1" step="0.05" class="form-range"
-                       value="@((Model.ConfidenceOverride ?? Model.EffectiveConfidence).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))"
-                       disabled="@(!Model.ConfidenceOverride.HasValue)" />
-                <output class="text-muted small" style="min-width: 2.5em;" id="confidenceOverrideReadout">@Math.Round((Model.ConfidenceOverride ?? Model.EffectiveConfidence) * 100)</output>
-            </div>
-            <div class="help-text-source" id="aiConfidenceHelp">
-                Minimum detection score for this camera specifically — e.g. a camera prone to
-                misdetecting a stationary object may need a higher threshold. Unchecked "Override"
-                inherits the node's/global setting from <a href="/Admin/Settings/Detection">AI Detection settings</a>.
-            </div>
-        </div>
-        <div class="col-6">
-            <label class="form-label">
-                IoU threshold override
-                <button type="button" class="help-icon" data-help-target="aiIouHelp" tabindex="0" aria-label="Help">ℹ️</button>
-            </label>
-            <div class="d-flex align-items-center gap-2">
-                <div class="form-check form-check-inline mb-0">
-                    <input type="checkbox" class="form-check-input" id="iouOverrideToggle"
-                           checked="@(Model.IouOverride.HasValue)" />
-                    <label class="form-check-label small" for="iouOverrideToggle">Override</label>
-                </div>
-                <input type="range" name="IouOverride" id="iouOverrideSlider" min="0" max="1" step="0.05" class="form-range"
-                       value="@((Model.IouOverride ?? Model.EffectiveIou).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))"
-                       disabled="@(!Model.IouOverride.HasValue)" />
-                <output class="text-muted small" style="min-width: 2.5em;" id="iouOverrideReadout">@Math.Round((Model.IouOverride ?? Model.EffectiveIou) * 100)</output>
-            </div>
-            <div class="help-text-source" id="aiIouHelp">
-                Overlap threshold for merging duplicate boxes, for this camera specifically. Unchecked
-                "Override" inherits the node's/global setting from <a href="/Admin/Settings/Detection">AI Detection settings</a>.
-            </div>
-        </div>
-        <div class="col-6">
-            <label class="form-label">
-                Stationary-object jitter rejection
-                <button type="button" class="help-icon" data-help-target="aiRejectJitterHelp" tabindex="0" aria-label="Help">ℹ️</button>
-            </label>
-            <select asp-for="RejectMotionJitterOverride" class="form-select">
-                <option value="">(inherit — currently @(Model.EffectiveRejectMotionJitter ? "on" : "off"))</option>
-                <option value="True">On</option>
-                <option value="False">Off</option>
-            </select>
-            <div class="help-text-source" id="aiRejectJitterHelp">
-                Turn this On for a camera that has a parked vehicle in view whose box wobble is being
-                reported as motion. It smooths the movement check so frame-to-frame box jitter doesn't
-                count as moving — but can also hold a genuinely slow-moving object as idle, so it is
-                off by default. Global default on <a href="/Admin/Settings/Detection">AI Detection settings</a>.
-            </div>
-        </div>
-        <div class="col-6">
-            <label class="form-label">
-                Jitter threshold override (pixels)
-                <button type="button" class="help-icon" data-help-target="aiJitterPixelsHelp" tabindex="0" aria-label="Help">ℹ️</button>
-            </label>
-            <div class="d-flex align-items-center gap-2">
-                <div class="form-check form-check-inline mb-0">
-                    <input type="checkbox" class="form-check-input" id="jitterPixelsOverrideToggle"
-                           checked="@(Model.MotionJitterPixelsOverride.HasValue)" />
-                    <label class="form-check-label small" for="jitterPixelsOverrideToggle">Override</label>
-                </div>
-                <input type="range" name="MotionJitterPixelsOverride" id="jitterPixelsOverrideSlider" min="1" max="15" step="1" class="form-range"
-                       value="@(Model.MotionJitterPixelsOverride ?? Model.EffectiveMotionJitterPixels)"
-                       disabled="@(!Model.MotionJitterPixelsOverride.HasValue)" />
-                <output class="text-muted small" style="min-width: 2.5em;" id="jitterPixelsOverrideReadout">@(Model.MotionJitterPixelsOverride ?? Model.EffectiveMotionJitterPixels)</output>
-            </div>
-            <div class="help-text-source" id="aiJitterPixelsHelp">
-                Minimum real pixel travel before a box counts as moving — only used when jitter
-                rejection is on for this camera. Higher rejects more wobble but ignores slower genuine
-                movement. Unchecked "Override" inherits the node's/global setting from
-                <a href="/Admin/Settings/Detection">AI Detection settings</a>.
-            </div>
-        </div>
-        <div class="col-6">
-            <label class="form-label">
-                Detection frame rate override (fps)
-                <button type="button" class="help-icon" data-help-target="maxFpsHelp" tabindex="0" aria-label="Help">ℹ️</button>
-            </label>
-            <div class="d-flex align-items-center gap-2">
-                <div class="form-check form-check-inline mb-0">
-                    <input type="checkbox" class="form-check-input" id="maxFpsOverrideToggle"
-                           checked="@(Model.MaxFpsOverride.HasValue)" />
-                    <label class="form-check-label small" for="maxFpsOverrideToggle">Override</label>
-                </div>
-                <input type="range" name="MaxFpsOverride" id="maxFpsOverrideSlider" min="0" max="30" step="1" class="form-range"
-                       value="@(Model.MaxFpsOverride ?? Model.EffectiveMaxFps)"
-                       disabled="@(!Model.MaxFpsOverride.HasValue)" />
-                @{ var maxFpsShown = Model.MaxFpsOverride ?? Model.EffectiveMaxFps; }
-                <output class="text-muted small" style="min-width: 3.5em;" id="maxFpsOverrideReadout">@(maxFpsShown == 0 ? "no cap" : maxFpsShown.ToString())</output>
-            </div>
-            <div class="help-text-source" id="maxFpsHelp">
-                Ceiling on how many frames per second reach the detection model for this camera —
-                whichever backend serves it. A camera that only needs to catch a parked-vehicle alert
-                has no use for the same rate a busy street camera needs to track fast-moving traffic;
-                every frame above what a camera actually needs is wasted decode/preprocess/inference
-                cost, on this node and, over the external HTTP backend, on the far side of the network
-                too. 0 = no cap (decode rate). Unchecked "Override" inherits the node's/global setting
-                from <a href="/Admin/Settings/Detection">AI Detection settings</a>.
-            </div>
-        </div>
-        <div class="col-6">
-            <label class="form-label">
-                Motion detection source
-                <button type="button" class="help-icon" data-help-target="motionSourceHelp" tabindex="0" aria-label="Help">ℹ️</button>
-            </label>
-            <select asp-for="MotionDetectionSourceOverride" class="form-select">
-                <option value="">(auto — richest configured signal)</option>
-                <option value="ServerMotion">Server-side motion (pixel zone)</option>
-                <option value="CameraEvent">Camera events (ONVIF)</option>
-                <option value="Integration">Vendor integration</option>
-                <option value="AiDetection">AI detection</option>
-            </select>
-            <div class="help-text-source" id="motionSourceHelp">
-                Only matters in Motion mode, and only narrows the three generic "something moved"
-                signals (server-side zone, ONVIF camera events, vendor integration) to exactly one at
-                a time, so the timeline doesn't collect redundant overlapping entries for the same
-                event. A named event tag rule and AI detection's own object labels always tag the
-                timeline regardless of this choice. Leave on auto to prefer whichever of the three is
-                actually configured, richest signal first.
-            </div>
-        </div>
-        <div class="col-6">
-            <label class="form-label">
-                Server-side motion detection
-                <button type="button" class="help-icon" data-help-target="serverMotionHelp" tabindex="0" aria-label="Help">ℹ️</button>
-            </label>
-            <div class="form-check">
-                <input asp-for="ServerMotionEnabled" class="form-check-input" type="checkbox" />
-                <label class="form-check-label" asp-for="ServerMotionEnabled">Run server-side pixel motion detection on this camera</label>
-            </div>
-            <div class="help-text-source" id="serverMotionHelp">
-                Independent of the motion detection source above — that setting only chooses which
-                signal <em>gates recording</em> in Motion mode, not whether server-side motion runs at
-                all. Leave this on to keep tagging the timeline with plain motion as a fallback even
-                when AI detection (or another source) is the chosen gate — useful in case something
-                triggers motion without an object being detected. Turn it off to stop the CPU cost of
-                this camera's motion decode entirely, if you don't need the fallback.
-            </div>
-        </div>
-        <div class="col-6">
-            <label class="form-label">
-                Pre-roll override (seconds)
-                <button type="button" class="help-icon" data-help-target="preRollHelp" tabindex="0" aria-label="Help">ℹ️</button>
-            </label>
-            <input asp-for="MotionPreRollSecondsOverride" type="number" min="0" class="form-control"
-                   placeholder="(inherit — currently @Model.EffectiveMotionPreRollSeconds s)" />
-            <div class="help-text-source" id="preRollHelp">
-                Only matters in Motion mode. How far <strong>before</strong> activity starts a
-                segment still counts as worth keeping — this is how much lead-up you get on a
-                motion event, e.g. someone walking into frame before they trip the zone.
-            </div>
-        </div>
-        <div class="col-6">
-            <label class="form-label">
-                Post-roll override (seconds)
-                <button type="button" class="help-icon" data-help-target="postRollHelp" tabindex="0" aria-label="Help">ℹ️</button>
-            </label>
-            <input asp-for="MotionPostRollSecondsOverride" type="number" min="0" class="form-control"
-                   placeholder="(inherit — currently @Model.EffectiveMotionPostRollSeconds s)" />
-            <div class="help-text-source" id="postRollHelp">
-                Only matters in Motion mode. How long <strong>after</strong> activity stops a
-                segment still counts as worth keeping.
-            </div>
-        </div>
-        <div class="col-6">
-            <label class="form-label">
-                Segment length override (seconds)
-                <button type="button" class="help-icon" data-help-target="segmentLengthHelp" tabindex="0" aria-label="Help">ℹ️</button>
-            </label>
-            <input asp-for="SegmentSecondsOverride" type="number" min="5" max="300" class="form-control"
-                   placeholder="(inherit — currently @Model.EffectiveSegmentSeconds s)" />
-            <div class="help-text-source" id="segmentLengthHelp">
-                Applies regardless of recording mode. Smaller for a busy/high-resolution camera keeps
-                worst-case Playback scrub latency down; changing it restarts this camera's recording
-                session (brief interruption) to take effect.
-            </div>
-        </div>
-    }
-    <div class="col-12">
-        @* Explicit handler — a handler-less submit posts to the current URL, which still carries
-           "?handler=Probe" after Re-probe and would re-probe rather than save. *@
-        <button type="submit" class="btn btn-primary" asp-page-handler="Save">@(Model.IsNew ? "Add & probe" : "Save")</button>
-        @if (!Model.IsNew)
-        {
-            <button type="submit" asp-page-handler="Probe" class="btn btn-outline-secondary"><span aria-hidden="true">🔍</span> Re-probe</button>
-            <button type="submit" asp-page-handler="Delete" class="btn btn-outline-danger"
-                    onclick="return confirm('Delete this camera?');">Delete</button>
-        }
-        <a href="/Cameras" class="btn btn-link">Cancel</a>
-    </div>
-</form>
-
 @* Only ever offered right after a probe, which is the one thing that reports the device's channel
    list. A camera already pinned to a channel shows what it covers instead of re-offering the split. *@
 @if (!Model.IsNew && Model.DetectedChannelCount > 1 && Model.VideoSourceToken is null)
@@ -466,10 +42,8 @@
     <div class="alert alert-warning d-flex flex-wrap align-items-center gap-2">
         <div class="flex-grow-1">
             <strong>This device has @Model.DetectedChannelCount channels.</strong>
-            It looks like a multi-sensor camera (several lenses in one housing). Right now this single
-            camera picks its streams from across all of them, which can mean it records the wrong lens.
-            Splitting creates one camera per channel — each records independently and can be placed in
-            a view on its own. Your existing camera becomes channel 1 and keeps its recordings.
+            Split it into one camera per lens so each records the right one. This camera becomes channel 1 and keeps its recordings.
+            <a href="/Help/cameras#multi-channel">Learn more</a>
         </div>
         <form method="post">
             <input type="hidden" asp-for="Id" />
@@ -480,101 +54,406 @@
         </form>
     </div>
 }
-else if (Model.VideoSourceToken is { } channelToken)
-{
-    <p class="text-muted small">
-        <span aria-hidden="true">🔀</span>
-        One channel of a multi-sensor device — this camera records only video source
-        <code>@channelToken</code>. Its sibling channels are separate cameras on the
-        <a href="/Cameras">Cameras</a> list.
-    </p>
-}
 
-@if (Model.Integration is { } integration)
-{
-    <div class="alert alert-info d-flex align-items-start gap-2">
-        <span aria-hidden="true">🧩</span>
-        <div>
-            <strong>@integration.DisplayName</strong> is active for this camera.
-            <div class="small">@integration.Summary</div>
-            <div class="form-text">
-                Detected automatically from the make and model this camera reports
-                (@(Model.Capabilities is null ? "re-probe to refresh" : "re-probe to re-check")). The
-                recorder node connects to the camera's own API alongside ONVIF — no setup needed here.
+<form method="post" id="cameraForm" data-dirty-guard>
+    <input type="hidden" asp-for="Id" />
+
+    <section class="lv-section">
+        <div class="lv-section-head"><h2 class="lv-section-title">General</h2></div>
+        <div class="lv-section-body">
+            <div class="lv-field">
+                <label class="form-label" asp-for="Name">Name</label>
+                <input asp-for="Name" class="form-control" required />
+            </div>
+            @if (!Model.IsNew)
+            {
+                <div class="lv-field">
+                    <label class="form-label">Status</label>
+                    <div class="form-check mt-1">
+                        <input asp-for="IsEnabled" class="form-check-input" type="checkbox" />
+                        <label class="form-check-label" asp-for="IsEnabled">Enabled</label>
+                    </div>
+                    <div class="lv-hint">Disabled cameras don't record or stream.</div>
+                </div>
+                <div class="lv-field lv-field-wide">
+                    <label class="form-label">Groups</label>
+                    <div>
+                        @if (Model.CurrentGroups.Count == 0)
+                        {
+                            <span class="text-muted small">Not in any group.</span>
+                        }
+                        @foreach (var g in Model.CurrentGroups)
+                        {
+                            <span class="badge text-bg-secondary me-1">@g.Name</span>
+                        }
+                        <a class="small ms-1" href="/Cameras/Groups">Manage groups</a>
+                    </div>
+                </div>
+            }
+            @if (Model.VideoSourceToken is { } channelToken)
+            {
+                <div class="lv-field lv-field-wide">
+                    <div class="lv-hint">🔀 One channel of a multi-sensor device (video source <code>@channelToken</code>). Its other channels are separate cameras.</div>
+                </div>
+            }
+        </div>
+    </section>
+
+    <section class="lv-section">
+        <div class="lv-section-head"><h2 class="lv-section-title">Connection</h2></div>
+        <div class="lv-section-body">
+            <div class="lv-field lv-field-wide">
+                <label class="form-label" asp-for="DeviceServiceUri">Device service URL</label>
+                <input asp-for="DeviceServiceUri" class="form-control font-monospace" placeholder="http://192.168.1.50/onvif/device_service" required />
+                @if (!Model.IsNew)
+                {
+                    <div class="lv-hint">Changing the address re-probes the camera on save.</div>
+                }
+            </div>
+            <div class="lv-field">
+                <label class="form-label" asp-for="Username">Username</label>
+                <input asp-for="Username" class="form-control" autocomplete="off" />
+            </div>
+            <div class="lv-field">
+                <label class="form-label" asp-for="Password">Password</label>
+                <input asp-for="Password" type="password" class="form-control" autocomplete="new-password"
+                       placeholder="@(Model.IsNew ? "" : "(unchanged)")" />
+                @if (!Model.IsNew)
+                {
+                    <div class="lv-hint">Leave blank to keep the current password.</div>
+                }
+            </div>
+            <div class="lv-field">
+                <label class="form-label" asp-for="NodeId">Recorder node</label>
+                <select asp-for="NodeId" class="form-select">
+                    <option value="">(unassigned — won't record)</option>
+                    @foreach (var n in Model.Nodes)
+                    {
+                        <option value="@n.Id">@n.Name</option>
+                    }
+                </select>
+                @if (Model.Nodes.Count == 0)
+                {
+                    <div class="lv-hint">No nodes have registered yet. See <a href="/Help/installation">Installation</a>.</div>
+                }
             </div>
         </div>
+    </section>
+
+    @if (!Model.IsNew)
+    {
+        <section class="lv-section">
+            <div class="lv-section-head">
+                <h2 class="lv-section-title">Recording</h2>
+                <div class="lv-section-sub">Blank fields inherit from the node or global settings.</div>
+            </div>
+            <div class="lv-section-body">
+                <div class="lv-field">
+                    <label class="form-label" asp-for="RecordingModeOverride">Recording mode</label>
+                    <select asp-for="RecordingModeOverride" class="form-select">
+                        <option value="">inherit — @Model.EffectiveRecordingMode</option>
+                        <option value="Continuous">Continuous</option>
+                        <option value="Motion">Motion only</option>
+                        <option value="Schedule">Schedule</option>
+                        <option value="Event">Event (tagged trigger)</option>
+                    </select>
+                    <div class="lv-hint">Which footage is kept. <a href="/Help/recording#modes">Learn more</a></div>
+                </div>
+                <div class="lv-field">
+                    <label class="form-label" asp-for="SegmentSecondsOverride">Segment length (seconds)</label>
+                    <input asp-for="SegmentSecondsOverride" type="number" min="5" max="300" class="form-control"
+                           placeholder="inherit — @Model.EffectiveSegmentSeconds" />
+                    <div class="lv-hint">Shorter means faster playback seeking. Changing it briefly restarts recording.</div>
+                </div>
+                @if (!Model.HasServerMotionZone && !hasOnvifEvents)
+                {
+                    <div class="lv-field lv-field-wide" data-show-when="@ModeShowWhen("Motion")">
+                        <div class="alert alert-warning py-2 mb-0 small">
+                            No motion zone or camera motion events yet, so Motion mode keeps everything.
+                            <a asp-page="Zones" asp-route-id="@Model.Id">Add a zone</a>
+                        </div>
+                    </div>
+                }
+                @if (!Model.HasScheduleWindow)
+                {
+                    <div class="lv-field lv-field-wide" data-show-when="@ModeShowWhen("Schedule")">
+                        <div class="alert alert-warning py-2 mb-0 small">
+                            No schedule window yet, so Schedule mode keeps everything.
+                            <a asp-page="Schedule" asp-route-id="@Model.Id">Add a schedule</a>
+                        </div>
+                    </div>
+                }
+                @if (!Model.HasDrivingEventRule)
+                {
+                    <div class="lv-field lv-field-wide" data-show-when="@ModeShowWhen("Event")">
+                        <div class="alert alert-warning py-2 mb-0 small">
+                            No event tag rule drives recording yet, so Event mode keeps everything.
+                            <a href="/Cameras/EventTags/@Model.Id">Add a rule</a>
+                        </div>
+                    </div>
+                }
+                <div class="lv-field" data-show-when="@ModeShowWhen("Motion", "Event")">
+                    <label class="form-label" asp-for="MotionPreRollSecondsOverride">Pre-roll (seconds)</label>
+                    <input asp-for="MotionPreRollSecondsOverride" type="number" min="0" class="form-control"
+                           placeholder="inherit — @Model.EffectiveMotionPreRollSeconds" />
+                    <div class="lv-hint">Footage kept before activity starts.</div>
+                </div>
+                <div class="lv-field" data-show-when="@ModeShowWhen("Motion", "Event")">
+                    <label class="form-label" asp-for="MotionPostRollSecondsOverride">Post-roll (seconds)</label>
+                    <input asp-for="MotionPostRollSecondsOverride" type="number" min="0" class="form-control"
+                           placeholder="inherit — @Model.EffectiveMotionPostRollSeconds" />
+                    <div class="lv-hint">Footage kept after activity stops.</div>
+                </div>
+            </div>
+        </section>
+
+        <section class="lv-section">
+            <div class="lv-section-head"><h2 class="lv-section-title">Storage &amp; retention</h2></div>
+            <div class="lv-section-body">
+                <div class="lv-field">
+                    <label class="form-label" asp-for="QuotaGb">Storage quota (GB)</label>
+                    <input asp-for="QuotaGb" type="number" step="0.1" min="0" class="form-control" placeholder="no quota" />
+                    <div class="lv-hint">Using @ByteFormat.Format(Model.StorageUsedBytes). Oldest footage goes first when over.</div>
+                </div>
+                <div class="lv-field">
+                    <label class="form-label" asp-for="RetentionDaysOverride">Retention (days)</label>
+                    <input asp-for="RetentionDaysOverride" type="number" min="0" class="form-control"
+                           placeholder="inherit — @Model.EffectiveRetentionDays" />
+                    <div class="lv-hint">0 keeps forever.</div>
+                </div>
+                <div class="lv-field">
+                    <label class="form-label" asp-for="ArchiveRetentionDaysOverride">Archive retention (days)</label>
+                    <input asp-for="ArchiveRetentionDaysOverride" type="number" min="0" class="form-control"
+                           placeholder="inherit — @Model.EffectiveArchiveRetentionDays" />
+                    <div class="lv-hint">
+                        Archiving is @(Model.EffectiveArchiveEnabled ? "on" : "off") for this camera. 0 keeps forever.
+                        <a href="/Help/storage#archive">Learn more</a>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="lv-section">
+            <div class="lv-section-head">
+                <h2 class="lv-section-title">AI detection</h2>
+                <div class="lv-section-sub">Unchecked “Override” inherits from AI detection settings.</div>
+            </div>
+            <div class="lv-section-body">
+                <div class="lv-field lv-field-wide">
+                    <div class="form-check">
+                        <input asp-for="AiDetectionEnabled" class="form-check-input" type="checkbox" />
+                        <label class="form-check-label fw-semibold" asp-for="AiDetectionEnabled">Watch this camera for objects</label>
+                    </div>
+                    <div class="lv-hint">The accelerator is chosen per node. <a href="/Help/ai-detection">Learn more</a></div>
+                </div>
+                <div class="lv-field" data-show-when="AiDetectionEnabled=true">
+                    <label class="form-label" asp-for="AiDetectionStreamRoleOverride">Detection stream</label>
+                    <select asp-for="AiDetectionStreamRoleOverride" class="form-select">
+                        <option value="">inherit — @Model.EffectiveAiDetectionStreamRole</option>
+                        <option value="Sub">Sub</option>
+                        <option value="Main">Main</option>
+                    </select>
+                </div>
+                <div class="lv-field" data-show-when="AiDetectionEnabled=true">
+                    <label class="form-label" asp-for="AiDetectionOrientationOverride">Orientation</label>
+                    <select asp-for="AiDetectionOrientationOverride" class="form-select">
+                        <option value="">inherit — @Model.EffectiveAiDetectionOrientation</option>
+                        <option value="Auto">Auto</option>
+                        <option value="Landscape">Landscape</option>
+                        <option value="Portrait">Portrait</option>
+                    </select>
+                    <div class="lv-hint">Use Portrait for corridor-mode cameras.</div>
+                </div>
+                <div class="lv-field" data-show-when="AiDetectionEnabled=true">
+                    <label class="form-label" for="confidenceOverrideSlider">Confidence threshold</label>
+                    <div class="d-flex align-items-center gap-2">
+                        <div class="form-check form-check-inline mb-0">
+                            <input type="checkbox" class="form-check-input" id="confidenceOverrideToggle" checked="@(Model.ConfidenceOverride.HasValue)" />
+                            <label class="form-check-label small" for="confidenceOverrideToggle">Override</label>
+                        </div>
+                        <input type="range" name="ConfidenceOverride" id="confidenceOverrideSlider" min="0" max="1" step="0.05" class="form-range"
+                               value="@((Model.ConfidenceOverride ?? Model.EffectiveConfidence).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))"
+                               disabled="@(!Model.ConfidenceOverride.HasValue)" />
+                        <output class="text-muted small" style="min-width: 2.5em;" id="confidenceOverrideReadout">@Math.Round((Model.ConfidenceOverride ?? Model.EffectiveConfidence) * 100)</output>
+                    </div>
+                    <div class="lv-hint">Raise it for a camera with false detections.</div>
+                </div>
+                <div class="lv-field" data-show-when="AiDetectionEnabled=true">
+                    <label class="form-label" for="iouOverrideSlider">IoU threshold</label>
+                    <div class="d-flex align-items-center gap-2">
+                        <div class="form-check form-check-inline mb-0">
+                            <input type="checkbox" class="form-check-input" id="iouOverrideToggle" checked="@(Model.IouOverride.HasValue)" />
+                            <label class="form-check-label small" for="iouOverrideToggle">Override</label>
+                        </div>
+                        <input type="range" name="IouOverride" id="iouOverrideSlider" min="0" max="1" step="0.05" class="form-range"
+                               value="@((Model.IouOverride ?? Model.EffectiveIou).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))"
+                               disabled="@(!Model.IouOverride.HasValue)" />
+                        <output class="text-muted small" style="min-width: 2.5em;" id="iouOverrideReadout">@Math.Round((Model.IouOverride ?? Model.EffectiveIou) * 100)</output>
+                    </div>
+                    <div class="lv-hint">Overlap for merging duplicate boxes.</div>
+                </div>
+                <div class="lv-field" data-show-when="AiDetectionEnabled=true">
+                    <label class="form-label" for="maxFpsOverrideSlider">Detection frame rate (fps)</label>
+                    <div class="d-flex align-items-center gap-2">
+                        <div class="form-check form-check-inline mb-0">
+                            <input type="checkbox" class="form-check-input" id="maxFpsOverrideToggle" checked="@(Model.MaxFpsOverride.HasValue)" />
+                            <label class="form-check-label small" for="maxFpsOverrideToggle">Override</label>
+                        </div>
+                        <input type="range" name="MaxFpsOverride" id="maxFpsOverrideSlider" min="0" max="30" step="1" class="form-range"
+                               value="@(Model.MaxFpsOverride ?? Model.EffectiveMaxFps)"
+                               disabled="@(!Model.MaxFpsOverride.HasValue)" />
+                        @{ var maxFpsShown = Model.MaxFpsOverride ?? Model.EffectiveMaxFps; }
+                        <output class="text-muted small" style="min-width: 3.5em;" id="maxFpsOverrideReadout">@(maxFpsShown == 0 ? "no cap" : maxFpsShown.ToString())</output>
+                    </div>
+                    <div class="lv-hint">Lower saves GPU/CPU. 0 is no cap.</div>
+                </div>
+                <div class="lv-field" data-show-when="AiDetectionEnabled=true">
+                    <label class="form-label" asp-for="RejectMotionJitterOverride">Stationary-object jitter rejection</label>
+                    <select asp-for="RejectMotionJitterOverride" class="form-select">
+                        <option value="">inherit — @(Model.EffectiveRejectMotionJitter ? "on" : "off")</option>
+                        <option value="True">On</option>
+                        <option value="False">Off</option>
+                    </select>
+                    <div class="lv-hint">Stops parked cars' box wobble counting as motion. <a href="/Help/ai-detection#jitter">Learn more</a></div>
+                </div>
+                <div class="lv-field" data-show-when="AiDetectionEnabled=true">
+                    <label class="form-label" for="jitterPixelsOverrideSlider">Jitter threshold (pixels)</label>
+                    <div class="d-flex align-items-center gap-2">
+                        <div class="form-check form-check-inline mb-0">
+                            <input type="checkbox" class="form-check-input" id="jitterPixelsOverrideToggle" checked="@(Model.MotionJitterPixelsOverride.HasValue)" />
+                            <label class="form-check-label small" for="jitterPixelsOverrideToggle">Override</label>
+                        </div>
+                        <input type="range" name="MotionJitterPixelsOverride" id="jitterPixelsOverrideSlider" min="1" max="15" step="1" class="form-range"
+                               value="@(Model.MotionJitterPixelsOverride ?? Model.EffectiveMotionJitterPixels)"
+                               disabled="@(!Model.MotionJitterPixelsOverride.HasValue)" />
+                        <output class="text-muted small" style="min-width: 2.5em;" id="jitterPixelsOverrideReadout">@(Model.MotionJitterPixelsOverride ?? Model.EffectiveMotionJitterPixels)</output>
+                    </div>
+                    <div class="lv-hint">Used only when jitter rejection is on.</div>
+                </div>
+            </div>
+        </section>
+
+        <section class="lv-section">
+            <div class="lv-section-head"><h2 class="lv-section-title">Motion</h2></div>
+            <div class="lv-section-body">
+                <div class="lv-field">
+                    <label class="form-label" asp-for="MotionDetectionSourceOverride">Motion source</label>
+                    <select asp-for="MotionDetectionSourceOverride" class="form-select">
+                        <option value="">Auto (best available)</option>
+                        <option value="ServerMotion">Server-side motion (pixel zone)</option>
+                        <option value="CameraEvent">Camera events (ONVIF)</option>
+                        <option value="Integration">Vendor integration</option>
+                        <option value="AiDetection">AI detection</option>
+                    </select>
+                    <div class="lv-hint">Which signal gates Motion-mode recording. <a href="/Help/motion#source">Learn more</a></div>
+                </div>
+                <div class="lv-field">
+                    <label class="form-label">Server-side motion</label>
+                    <div class="form-check mt-1">
+                        <input asp-for="ServerMotionEnabled" class="form-check-input" type="checkbox" />
+                        <label class="form-check-label" asp-for="ServerMotionEnabled">Run pixel motion detection</label>
+                    </div>
+                    <div class="lv-hint">Tags plain motion on the timeline. Off saves CPU.</div>
+                </div>
+            </div>
+        </section>
+    }
+
+    <div class="lv-savebar">
+        @* Explicit handler — a handler-less submit posts to the current URL, which still carries
+           "?handler=Probe" after Re-probe and would re-probe rather than save. *@
+        <button type="submit" class="btn btn-primary" asp-page-handler="Save">@(Model.IsNew ? "Add & probe" : "Save")</button>
+        <a href="/Cameras" class="btn btn-link">Cancel</a>
+    </div>
+</form>
+
+@if (!Model.IsNew)
+{
+    <details class="lv-section mt-3">
+        <summary class="lv-section-head" style="cursor: pointer;">
+            <span class="lv-section-title">Device</span>
+            <span class="lv-section-sub ms-2">Integration, capabilities and streams</span>
+        </summary>
+        <div class="p-3">
+            @if (Model.Integration is { } integration)
+            {
+                <p class="small mb-3">
+                    <span aria-hidden="true">🧩</span> <strong>@integration.DisplayName</strong> integration is active.
+                    <span class="text-muted">@integration.Summary</span>
+                </p>
+            }
+
+            @if (Model.Capabilities is { } cap)
+            {
+                <h3 class="h6">Capabilities <span class="text-muted small fw-normal">probed @cap.ProbedAt.ToLocalTime().ToString("g")</span></h3>
+                <div class="d-flex flex-wrap gap-1 mb-3">
+                    @foreach (var (label, has) in new[] {
+                        ("Profile S", cap.ProfileS), ("Profile T", cap.ProfileT), ("Profile G", cap.ProfileG), ("Profile M", cap.ProfileM),
+                        ("PTZ", cap.HasPtz), ("Imaging", cap.HasImaging), ("Events", cap.HasEvents), ("Analytics", cap.HasAnalyticsMetadata),
+                        ("Two-way audio", cap.HasAudioOut), ("Relay outputs", cap.HasRelayOutputs), ("Digital inputs", cap.HasDigitalInputs) })
+                    {
+                        <span class="badge @(has ? "text-bg-success" : "bg-transparent text-body-secondary border")">@(has ? "✓" : "✗") @label</span>
+                    }
+                </div>
+
+                <h3 class="h6">Streams</h3>
+                @if (Model.Streams.Count == 0)
+                {
+                    <p class="text-muted small">No streams recorded.</p>
+                }
+                else
+                {
+                    <div class="table-responsive">
+                        <table class="table table-sm align-middle">
+                            <thead><tr><th>On</th><th>Name</th><th>Role</th><th>Resolution</th><th>Codec</th><th>FPS</th><th>Bitrate</th><th>Audio</th><th></th></tr></thead>
+                            <tbody>
+                                @foreach (var s in Model.Streams.OrderBy(s => s.Role))
+                                {
+                                    <tr class="@(s.IsEnabled ? "" : "text-muted")" title="@s.RtspUri">
+                                        <form method="post" asp-page-handler="UpdateStream">
+                                            <input type="hidden" name="Id" value="@Model.Id" />
+                                            <input type="hidden" name="streamId" value="@s.Id" />
+                                            <td>
+                                                <input type="checkbox" class="form-check-input" name="streamIsEnabled" value="true" @(s.IsEnabled ? "checked" : "") />
+                                            </td>
+                                            <td style="min-width: 8rem;">
+                                                <input name="customName" class="form-control form-control-sm" value="@s.CustomName" placeholder="@s.Role" />
+                                            </td>
+                                            <td>@s.Role</td>
+                                            <td>@(s.Width is not null ? $"{s.Width}x{s.Height}" : "—")</td>
+                                            <td>@(s.Codec ?? "—")</td>
+                                            <td>@(s.Fps?.ToString() ?? "—")</td>
+                                            <td>@(s.BitrateKbps is not null ? $"{s.BitrateKbps} kbps" : "—")</td>
+                                            <td>@(s.HasAudio ? s.AudioCodec ?? "yes" : "no")</td>
+                                            <td class="text-end"><button type="submit" class="btn btn-sm btn-outline-primary">Save</button></td>
+                                        </form>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="lv-hint">Hover a stream for its RTSP URL.</div>
+                }
+            }
+            else
+            {
+                <p class="text-muted small mb-0">Not probed yet. Use Re-probe to read the camera's capabilities.</p>
+            }
+        </div>
+    </details>
+
+    <div class="lv-danger-zone d-flex flex-wrap align-items-center gap-2">
+        <div class="flex-grow-1 small">Deleting a camera removes it from LarisVMS.</div>
+        <button type="submit" form="cameraForm" asp-page-handler="Delete" class="btn btn-sm btn-outline-danger"
+                onclick="return confirm('Delete this camera?');">Delete camera</button>
     </div>
 }
-
-@if (Model.Capabilities is { } cap)
-{
-    <h2 class="mt-5 h4">Capabilities</h2>
-    <p class="text-muted small">
-        Best-effort inference from advertised ONVIF services, not certified conformance. Probed
-        @cap.ProbedAt.ToString("u").
-    </p>
-    <table class="table" style="max-width: 480px;">
-        <tbody>
-            <tr><th>Profile S (streaming)</th><td>@(cap.ProfileS ? "Yes" : "No")</td></tr>
-            <tr><th>Profile T (advanced)</th><td>@(cap.ProfileT ? "Yes" : "No")</td></tr>
-            <tr><th>Profile G (recording)</th><td>@(cap.ProfileG ? "Yes" : "No")</td></tr>
-            <tr><th>Profile M (metadata)</th><td>@(cap.ProfileM ? "Yes" : "No")</td></tr>
-            <tr><th>PTZ</th><td>@(cap.HasPtz ? "Yes" : "No")</td></tr>
-            <tr><th>Imaging</th><td>@(cap.HasImaging ? "Yes" : "No")</td></tr>
-            <tr><th>Events</th><td>@(cap.HasEvents ? "Yes" : "No")</td></tr>
-            <tr><th>Analytics metadata</th><td>@(cap.HasAnalyticsMetadata ? "Yes" : "No")</td></tr>
-            <tr><th>Two-way audio</th><td>@(cap.HasAudioOut ? "Yes" : "No")</td></tr>
-            <tr><th>Relay outputs</th><td>@(cap.HasRelayOutputs ? "Yes" : "No")</td></tr>
-            <tr><th>Digital inputs</th><td>@(cap.HasDigitalInputs ? "Yes" : "No")</td></tr>
-        </tbody>
-    </table>
-
-    <h2 class="h4">Streams</h2>
-    @if (Model.Streams.Count == 0)
-    {
-        <p class="text-muted">No streams recorded.</p>
-    }
-    else
-    {
-        <table class="table align-middle">
-            <thead><tr><th>Enabled</th><th>Name</th><th>Role</th><th>Resolution</th><th>Codec</th><th>FPS</th><th>Bitrate</th><th>Audio</th><th>RTSP</th><th></th></tr></thead>
-            <tbody>
-                @foreach (var s in Model.Streams.OrderBy(s => s.Role))
-                {
-                    <tr class="@(s.IsEnabled ? "" : "text-muted")">
-                        <form method="post" asp-page-handler="UpdateStream">
-                            <input type="hidden" name="Id" value="@Model.Id" />
-                            <input type="hidden" name="streamId" value="@s.Id" />
-                            <td>
-                                <input type="checkbox" class="form-check-input" name="streamIsEnabled" value="true" @(s.IsEnabled ? "checked" : "") />
-                            </td>
-                            <td style="min-width: 10rem;">
-                                <input name="customName" class="form-control form-control-sm" value="@s.CustomName" placeholder="@s.Role" />
-                            </td>
-                            <td>@s.Role</td>
-                            <td>@(s.Width is not null ? $"{s.Width}x{s.Height}" : "—")</td>
-                            <td>@(s.Codec ?? "—")</td>
-                            <td>@(s.Fps?.ToString() ?? "—")</td>
-                            <td>@(s.BitrateKbps is not null ? $"{s.BitrateKbps} kbps" : "—")</td>
-                            <td>@(s.HasAudio ? s.AudioCodec ?? "yes" : "no")</td>
-                            <td class="font-monospace small">@s.RtspUri</td>
-                            <td class="text-end"><button type="submit" class="btn btn-sm btn-outline-primary"><span aria-hidden="true">💾</span> Save</button></td>
-                        </form>
-                    </tr>
-                }
-            </tbody>
-        </table>
-    }
-}
+</div>
 
 @section Scripts {
     <script>
-        // Confidence/IoU override slider readouts, wired explicitly by id rather than the previous
-        // oninput="this.nextElementSibling..." adjacency coupling and the checkbox's own inline
-        // onchange — that read as structurally correct on paper but didn't update while dragging in
-        // practice. Explicit ids sidestep whatever the adjacency assumption was actually getting
-        // wrong, and initializing from the slider's own value below (rather than trusting the two to
-        // already agree) rules out the readout and the slider ever silently disagreeing.
+        // Override slider readouts, wired by id. A disabled range fires no 'input' events, so re-sync
+        // when the Override toggle flips.
         (function () {
             function wireOverride(toggleId, rangeId, readoutId, transform, zeroLabel) {
                 var toggle = document.getElementById(toggleId);
@@ -588,13 +467,9 @@ else if (Model.VideoSourceToken is { } channelToken)
                 range.addEventListener('input', sync);
                 toggle.addEventListener('change', function () {
                     range.disabled = !toggle.checked;
-                    // A disabled <input type="range"> fires no 'input' events at all, so re-enabling
-                    // it could otherwise leave the readout showing whatever it last synced to
-                    // (possibly the inherited value shown while disabled) rather than the slider's
-                    // actual current position.
                     sync();
                 });
-                sync(); // in case the slider's own value differs from what was rendered server-side
+                sync();
             }
             var asPercent = function (v) { return Math.round(v * 100); };
             var asInt = function (v) { return Math.round(v); };

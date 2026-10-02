@@ -13,28 +13,16 @@
         <button type="button" id="modeToggleGrid" class="btn btn-outline-primary">Grid</button>
         <button type="button" id="modeTogglePolygon" class="btn btn-outline-primary">Polygon zones</button>
     </div>
-    <span class="text-muted small">
-        Only one method drives motion detection at a time — switching activates it immediately.
-        Neither method's saved configuration is lost when the other is active.
-    </span>
+    <span class="text-muted small">One method is active at a time; switching keeps the other's settings. <a href="/Help/motion#zones">Learn more</a></span>
 </div>
 
 <div id="gridPane">
-    <p class="text-muted small">
-        Click a cell to mask it out of motion detection — watching cells light up amber as things
-        actually move helps you find the ones worth excluding (a swaying branch, a flickering light).
-    </p>
+    <p class="text-muted small">Click a cell to mask it out of motion detection. Amber cells show motion right now.</p>
 </div>
 <div id="polygonPane" style="display: none;">
     <p class="text-muted small">
-        Draw a <strong>Motion</strong> zone to watch for motion, or an <strong>Ignore</strong> zone to
-        exclude part of the frame from it (a tree branch, a public sidewalk at the edge). Pixels inside
-        an Ignore zone never count toward motion in any Motion zone on this camera, even where they
-        overlap. <strong>Camera-side motion</strong> and <strong>Privacy</strong> zones can be drawn and
-        saved here too, but neither one does anything yet — pushing a zone to the camera itself, and
-        burning a privacy mask into the video, are both on hold (Privacy specifically: a real,
-        not-yet-diagnosed bug breaks a masked camera's recording entirely, so it's deliberately switched
-        off rather than left enabled and broken).
+        Draw a <strong>Motion</strong> zone to watch, or an <strong>Ignore</strong> zone to exclude part of the frame.
+        Camera-side and Privacy zones are saved but not active yet.
     </p>
 </div>
 
@@ -62,11 +50,7 @@
                 <button type="button" id="gridSaveBtn" class="btn btn-primary btn-sm" disabled>Save</button>
                 <span id="gridStatus" class="text-muted small"></span>
             </div>
-            <p class="text-muted small mt-1">
-                Changing the grid size clears the current mask. Masked (red) cells never count toward
-                motion; amber means motion is currently over threshold there; no fill means quiet.
-                Click cells (and adjust the controls above) freely, then <strong>Save</strong> when done.
-            </p>
+            <p class="text-muted small mt-1">Red cells are masked. Changing the grid size clears the mask.</p>
         </div>
 
         <div id="polygonControls" class="d-flex gap-2 mt-2" style="display: none;">
@@ -107,15 +91,7 @@
                     Sensitivity: <span id="zoneFormSensitivityValue">3%</span>
                 </label>
                 <input type="range" id="zoneFormSensitivity" class="form-range" min="1" max="90" value="3" />
-                <div class="text-muted small">
-                    Lower = more sensitive (less change needed to count as motion) — this is a
-                    percentage of the zone's own pixels, so a wide zone needs a lower number than a
-                    tight one to catch the same real-world motion. 15% (this control's old default)
-                    turned out to be unreachable in practice on a wide outdoor zone; verified against
-                    real camera frames that even a visible change only ever moved a fraction of a
-                    percent. Start low and raise it only if it's triggering on nothing (wind,
-                    lighting flicker).
-                </div>
+                <div class="lv-hint">Lower is more sensitive. Start low; raise it if wind or lighting triggers it.</div>
             </div>
             <div class="form-check mb-2">
                 <input type="checkbox" id="zoneFormEnabled" class="form-check-input" checked />

@@ -94,7 +94,7 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
     public string EffectiveAiDetectionOrientation { get; set; } = "Auto";
     public bool EffectiveRejectMotionJitter { get; set; }
     public int EffectiveMotionJitterPixels { get; set; } = 3;
-    public int EffectiveMaxFps { get; set; } = 10;
+    public int EffectiveMaxFps { get; set; } = 7;
     /// <summary>Whether this camera has at least one enabled ServerMotion zone — Motion mode does
     /// nothing without one (NodeWorker falls back to recording everything, logging a warning) so
     /// the Edit page can surface that up front instead of the operator discovering it in node logs.</summary>
@@ -214,7 +214,7 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
 
         var ownMaxFps = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "Detection.MaxFps");
         MaxFpsOverride = int.TryParse(ownMaxFps, out var maxFps) ? maxFps : null;
-        EffectiveMaxFps = await settings.GetAsync("Detection.MaxFps", 10, cameraId: cameraId, nodeId: nodeId);
+        EffectiveMaxFps = await settings.GetAsync("Detection.MaxFps", 7, cameraId: cameraId, nodeId: nodeId);
 
         var zones = await zoneService.ListAsync(cameraId);
         HasServerMotionZone = zones.Any(z => z.Kind == ZoneKind.ServerMotion && z.IsEnabled);

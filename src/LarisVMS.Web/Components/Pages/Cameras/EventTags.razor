@@ -12,14 +12,7 @@
 </div>
 
 <p class="text-muted small">
-    A rule matches ONVIF PullPoint notifications from this camera by topic and tags the timeline with
-    a color of your choice — motion, object detection, tamper alarms, anything the camera's own
-    firmware pushes. Give it a <strong>Start topic</strong> alone if the topic's own payload carries a
-    true/false state (most motion/alarm topics do); give it a matching <strong>Stop topic</strong> too
-    if the camera fires two distinct topics for the rising and falling edge instead. Either way the
-    tag starts the instant the rising edge is seen and only ever ends on the falling edge — never on a
-    timeout. Turn on <strong>Drives recording</strong> to also keep/discard segments by this rule the
-    same way built-in motion does, for a Motion-mode camera.
+    Tag the timeline when this camera sends a matching ONVIF event. <a href="/Help/recording#event-tags">Learn more</a>
 </p>
 
 <div class="row g-3">
@@ -40,8 +33,9 @@
                 <input type="text" id="eventTagFormStartTopic" class="form-control form-control-sm" list="observedTopicsList" required />
             </div>
             <div class="mb-2">
-                <label class="form-label small">Stop topic <span class="text-muted">(optional — leave blank to use the start topic's own true/false state)</span></label>
+                <label class="form-label small">Stop topic <span class="text-muted">(optional)</span></label>
                 <input type="text" id="eventTagFormStopTopic" class="form-control form-control-sm" list="observedTopicsList" />
+                <div class="lv-hint">Blank uses the start topic's own true/false state.</div>
             </div>
             <datalist id="observedTopicsList"></datalist>
             <div class="mb-2">
@@ -50,7 +44,8 @@
             </div>
             <div class="form-check mb-2">
                 <input type="checkbox" id="eventTagFormDrivesRecording" class="form-check-input" />
-                <label class="form-check-label small" for="eventTagFormDrivesRecording">Drives recording (keep/discard segments in Motion mode, same as built-in motion)</label>
+                <label class="form-check-label small" for="eventTagFormDrivesRecording">Drives recording</label>
+                <div class="lv-hint">Event and Motion modes keep footage around this rule's events.</div>
             </div>
             <div class="form-check mb-2">
                 <input type="checkbox" id="eventTagFormEnabled" class="form-check-input" checked />
@@ -68,10 +63,7 @@
 
     <div class="col-lg-5">
         <h6>Observed topics</h6>
-        <p class="text-muted small">
-            Every distinct ONVIF topic this camera has actually sent, most recent first — probed from
-            its real event history, not guessed. Click one to use it as the new rule's Start topic.
-        </p>
+        <p class="text-muted small">Topics this camera has sent, newest first. Click one to use it.</p>
         <div id="observedTopicsPanel">
             <p class="text-muted small">Loading…</p>
         </div>

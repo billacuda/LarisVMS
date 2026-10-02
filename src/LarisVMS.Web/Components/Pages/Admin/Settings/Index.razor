@@ -53,6 +53,7 @@ else
             ("/Admin/Nodes", "🔌", "Nodes", "LarisNode NVR instances, capacity, and pairing.", nav.Has("Nodes", "Edit")),
             ("/Admin/NodeBuilds", "🏗️", "Node builds", "Approval queue for recorder-node builds.", nav.Has("Nodes", "Edit")),
             ("/Admin/Proxies", "🔗", "Media proxies", "Relay endpoints for remote and low-bandwidth streams.", nav.Has("Nodes", "Edit")),
+            ("/Admin/Settings/Cameras", "📹", "Camera settings", "Daily re-probe and other camera-wide defaults.", showSettings),
             ("/Logs", "📜", "Logs", "System, audit, and diagnostic log streams.", nav.Has("Logs", "View") || nav.Has("SystemLogs", "View")),
             ("/Admin/Plugins", "🧩", "Plugins", "Installed camera integration providers and their versions.", nav.Has("Plugins", "View")),
             ("/Admin/Settings/Backups", "💾", "Backups", "Configuration snapshots and restore points.", nav.Has("Backups", "Edit")),
@@ -65,14 +66,14 @@ else
             ("/Admin/Settings/Email", "✉️", "Email", "SMTP relay and notification templates.", showSettings),
             ("/Admin/Settings/Events", "🏷️", "Events", "Event-tag colors and rule defaults.", showSettings),
             ("/Admin/Settings/LiveView", "🖥️", "Live view", "Default grid layout, overlays, and stream quality.", showSettings),
-            ("/Admin/Settings/Logs", "📝", "Log settings", "Retention, verbosity, and remote log forwarding.", showSettings),
-            ("/Admin/Settings/Nodes", "🖧", "Node settings", "Per-node defaults for new LarisNode instances.", showSettings),
-            ("/Admin/Settings/Recording", "🎥", "Recording settings", "Codec, bitrate, and continuous vs. motion recording.", showSettings),
-            ("/Admin/Settings/Security", "🔒", "Security settings", "IP allow lists and live/playback port configuration.", showSettings),
+            ("/Admin/Settings/Logs", "📝", "Logging", "Retention, verbosity, and remote log forwarding.", showSettings),
+            ("/Admin/Settings/Nodes", "🖧", "Node defaults", "Per-node defaults for new LarisNode instances.", showSettings),
+            ("/Admin/Settings/Recording", "🎥", "Recording defaults", "Codec, bitrate, and continuous vs. motion recording.", showSettings),
+            ("/Admin/Settings/Security", "🔒", "Security", "IP allow lists and live/playback port configuration.", showSettings),
             ("/Admin/Settings/StorageAndRetention", "🗄️", "Storage & retention", "Disk pools, retention windows, and archiving.", nav.Has("Retention", "Edit")),
             ("/Admin/Alerts", "⚠️", "Alerts", "Alert rules, channels, and thresholds.", nav.Has("Alerts", "Edit")),
             ("/Admin/ApiKeys", "🔑", "API keys", "Issue and revoke integration credentials.", nav.Has("ApiKeys", "Edit")),
         };
-        Cards = [.. all.Where(c => c.Visible).Select(c => new CardInfo(c.Href, c.Icon, c.Title, c.Description))];
+        Cards = [.. all.Where(c => c.Visible).OrderBy(c => c.Title, StringComparer.OrdinalIgnoreCase).Select(c => new CardInfo(c.Href, c.Icon, c.Title, c.Description))];
     }
 }

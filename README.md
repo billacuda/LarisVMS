@@ -1,562 +1,241 @@
 # LarisVMS
 
-Open source security camera recording software (VMS/NVR) for ONVIF cameras. Records video, audio, and
-metadata to local disk or an SMB share; live view, playback, and management are all web-based and
-work on phone, tablet, and desktop.
+Open-source video management software (VMS/NVR) for ONVIF cameras. It records video, audio and
+events to local disks or network shares on one or more Windows recorder nodes. Live view, playback
+and administration all run in the browser, on desktop, tablet and phone.
+
+**Current version: [0.209.0](CHANGELOG.md)**
+
+> **A note on AI-assisted development.** This project is built with the help of AI tooling (Claude
+> Code). Features are planned in detail before implementation, generated code is reviewed as it's
+> written, and changes are tested as they land. If you notice something odd, please open an issue.
 
 ---
 
-> **A note on AI-assisted development**
->
-> This project is being built with the assistance of AI tooling (Claude Code). Features are planned
-> in detail before implementation, any generated code is reviewed as it's written, and changes are
-> tested as they land. AI-generated code can still introduce subtle inconsistencies that aren't
-> always caught immediately — if you notice something odd, please open an issue.
+## Features
 
----
+**Cameras**
+- ONVIF discovery (WS-Discovery) and capability probing (Profiles S/T/G/M), with optional daily re-probing.
+- Main and Sub stream selection, per-stream enable and rename, H.264 and HEVC, with audio.
+- Multi-lens cameras split into one camera per lens.
+- Vendor integrations matched automatically by make and model (for example, Dahua / Amcrest smart events).
+- Groups for sites, buildings and floors.
 
-## **Current version [0.208.0](CHANGELOG.md)**
+**Recording**
+- One Windows-service recorder node per machine, with as many nodes as you need. Recording is `ffmpeg -c copy`, so no re-encoding.
+- Recording modes: Continuous, Motion, Schedule and Event, set globally or per camera, with pre/post-roll.
+- Retention set globally, per node and per camera, plus per-camera quotas and a disk watermark backstop.
+- An optional archive volume (SMB share or USB drive) that receives aged-out footage instead of deleting it.
+- Recording failover to a backup node, and a maintenance mode.
+- Self-updating nodes: each build is approved once, and then every node installs it.
 
-## Stack
+**Detection & events**
+- Server-side motion detection with polygon zones or a mask grid.
+- ONVIF event ingestion, with user-defined event tag rules and timeline colors.
+- Built-in AI object detection (YOLOX, D-FINE, or your own ONNX model) on NVIDIA, AMD, Intel or CPU, or an external HTTP inference service.
+- Live bounding boxes, object badges on live tiles, and a cropped snapshot for every detected object.
 
-- ASP.NET Core 10, Blazor Web App (Static SSR) migrating incrementally off Razor Pages — most
-  pages have moved; a handful of JS-heavy ones (`Views/Play`, `Views/Editor`, `Playback/Index`,
-  `Cameras/Zones`) and the Setup wizard stay on Razor Pages for now
-- EF Core 10 + SQL Server
-- Bootstrap 5 + GridStack, vendored locally (`wwwroot/lib/`), no build step and no CDN dependency
-- Self-hosted Kestrel, running as its own Windows Service ("LarisVMS Web") — no IIS dependency;
-  recording runs in a separate Windows Service ("node") the same way, so it survives independently of
-  the web tier's own restarts
-- FFmpeg (installed per node, not bundled — `winget install ffmpeg`) for RTSP ingest, recording, and transcode fallback
+**Viewing**
+- Saved camera-wall views with drag-and-drop layout, a fullscreen kiosk mode and rotation.
+- Adaptive live streaming that uses Sub streams for small tiles.
+- Synchronized multi-camera playback on a zoomable timeline, with preview thumbnails and 1/32× to 32× speed.
+- Exports, bookmarks and a snapshots browser.
+- Basic PTZ controls.
+- Video relayed through the server, through media proxies, or sent directly from node to browser.
 
-## Status
+**Administration**
+- Roles, a permissions matrix and per-camera/group access control.
+- Optional Microsoft Entra ID sign-in.
+- Alerts by email (SMTP, Microsoft Graph, Gmail), webhook, ntfy, Pushover, Slack and Teams.
+- Audit log, system logs, a health dashboard and scheduled database backups.
+- IP allow lists, an optional separate port for video traffic, and secrets encrypted at rest.
+- Branding: app name, colors, font and logo.
+- Built-in **Help** with documentation for every feature.
 
-Milestones **M1 (skeleton, setup, deploy)**, **M2 (ONVIF discovery & camera management)**,
-**M3 (recorder node & 24/7 recording)**, **M4 (storage & retention)**, **M5 pass 1 (live view)**,
-**M6 pass 1 (views & layout editor)**, **M7 pass 1 (playback & timeline)**, and **M8
-(motion/events)** are in place: solution layout, Identity + RBAC, encryption at rest, the setup
-wizard, `deploy.ps1`, WS-Discovery LAN scan, ONVIF capability probing (Profile S/T/G/M), camera CRUD,
-a Windows Service recorder node that supervises `ffmpeg -c copy` per camera with crash/stall
-auto-recovery, a per-node storage manager that enforces retention (global default → per-node →
-per-camera, `Admin → Settings → Storage and retention`), per-camera quota, and a watermark backstop.
-Each node writes to its own storage path (set at install time or on `Admin → Nodes`); it can also be
-given a second **archive volume** (SMB share / USB drive) that aged-out footage is *moved* to
-instead of deleted, with its own retention — and if the primary volume fills past the watermark, an
-archive-enabled camera's oldest footage is moved to the archive volume while there is headroom,
-falling back to deletion only when the primary volume is critically full or the archive volume is
-unreachable. Playback, thumbnails and export work transparently from either volume. Also: browser live view
-(`Pages/Live`) proxied through this server with no direct browser-to-node connection and no
-certificate needed on the node — all verified end-to-end against real Amcrest cameras, including killing the
-recording process and the node process mid-recording and confirming both recover cleanly. Live view
-connects automatically for every camera on page load, plays both H.264 and HEVC natively with audio,
-auto-reconnects on its own after a dropped session, and can be toggled per-tile into playback mode
-without leaving the page. Every tile with an audio track carries its own mute toggle and volume
-slider, on live and playback alike; tiles always start muted, and unmuting one is deliberate, per
-tile, and never remembered across a page load. `Pages/Views` saves a camera-wall layout (GridStack drag/resize, per-cell
-aspect ratio, live video per tile) and plays it back later (`Views/Play`), with a derived
-single/two-column layout on phones in portrait, the real saved layout scaled to fit the window on any
-short viewport (a phone in landscape), a fullscreen kiosk mode, and optional rotation through a set
-of views on a timer. `Pages/Live` and `Pages/Playback` are both driven by saved Views rather than
-ad-hoc camera pickers — pick a view and watch (or scrub) the same arrangement you'd see live, with
-double-click-to-fullscreen (wheel-zoom/drag-pan while fullscreen) on every tile across all three
-pages. Playback scrubs on two canvas timelines (the selected camera's own coverage, and one merged
-across every camera, both showing motion coloring and per-rule tag colors), streams segments
-incrementally into the decoder, and plays back synchronized across multiple cameras with drift
-correction, each resolving its own recordings/gaps independently.
+## Architecture
 
-**M8** adds per-camera Zones (motion/privacy/camera-motion polygons), server-side motion detection
-with pre/post-roll, ONVIF PullPoint event ingestion, user-configurable event tag rules (with an
-optional "drives recording" gate and a custom timeline color), and a live motion indicator badge —
-plus four recording modes per camera (`Continuous`, `Motion`, `Schedule`, `Event`), completing the
-milestone's original design. Recorder nodes **auto-update themselves**: `install-web.ps1` registers
-each build it produces as Pending on `Admin → Node Builds`, and once approved, every node whose reported
-version is older downloads, verifies (SHA-256), and swaps its own binary on its next heartbeat — no
-manual `install-node.ps1` re-run needed for an ordinary version bump (a service-identity change, like
-the LarisVMS rename, is the one case that still needs a manual reinstall). Multi-camera video export
-(Playback's toolbar, "Export…") queues one async job per selected camera — each camera's own node
-does a `-c copy` remux of its segments for the range — and delivers finished files through the same
-signed-proxy path as playback, tracked on an Exports page (auto-refreshing while a job runs, with
-delete and retry actions). A range that crosses a camera's reassignment between nodes splits into one
-export per node instead of failing. Hovering the Playback timeline shows a small preview thumbnail
-(5-minute buckets, generated on demand with a low-priority backfill for gaps).
-
-**Object detection** reports *what* a camera saw, not just that something moved: cameras whose onboard
-analytics classify objects surface as Person / Vehicle / Face / Object, each with its own timeline
-color and an emoji badge on the live tile (🚶 🚗 🙂 📦). A detection also counts toward Motion-mode
-recording, so footage of a person is retained even when pixel-motion detection wouldn't have fired.
-These are **discrete events, not bounding boxes** — "a person was here around this time", with no
-on-screen box, since per-frame boxes need the ONVIF metadata RTP track and probing this deployment's
-own Amcrest fleet found it carries only a motion-cell grid with no object geometry at all
-(`probe-metadata-track.ps1`).
-
-**Native AI object detection** (`LarisVMS.Vision`/`LarisVMS.Vision.Service`) closes that gap without
-depending on camera hardware at all: each node runs its own real-time YOLO/ByteTrack detection
-pipeline against a second RTSP session on the camera's Sub stream, GPU-accelerated where available
-(per-node accelerator setting, `Admin → Nodes`: Auto/Nvidia/Intel/AMD/CPU, graceful fallback and clear
-logging when nothing's available). Detected objects draw as live, tracked **on-screen bounding boxes**
-— a client-side-only overlay, independently toggleable for Moving vs. Idle objects, never baked into
-recordings — colored by a small auto-assigned category (Human/Vehicle/Animal/Object) with the specific
-class riding alongside ("Vehicle — car"), and a count on the badge ("Human ×2") when several objects
-of the same type were moving at once. A detected object also gets its own cropped, best-frame
-snapshot image, separate from the ordinary hover-thumbnail cache; once a moving object leaves it
-finalizes its own snapshot promptly rather than being merged with a later, unrelated object of the
-same type (`Admin → Settings → Detection → Snapshot motion accuracy`, with an adjustable departure
-grace). An opt-in, per-camera jitter rejection (`Detection → Reject stationary-object jitter`) can
-additionally hold a distant parked vehicle whose box only wobbles as idle. Runs as a sibling process
-(`LarisVMS.Vision.Service`) so a site that never enables it pays nothing for the GPU/ONNX Runtime
-dependency, and a bad GPU/driver interaction can never take down recording itself. **Unverified against
-real GPU hardware or an actual camera end-to-end** — see [CHANGELOG.md](CHANGELOG.md).
-
-**Camera integration plugins** cover what ONVIF can't express. A provider declares which makes/models
-it handles, camera probing matches it automatically from the reported make and model, and the node
-runs that vendor session alongside its ONVIF one. Providers are compiled in and listed in one registry
-rather than loaded from external assemblies — nodes ship as a single self-contained auto-updating
-executable, so a drop-in plugin folder would need its own distribution and version-matching channel.
-The first provider reads **Dahua / Amcrest smart events** over the vendor CGI event API; these cameras
-classify objects onboard but never publish that over ONVIF, so on this fleet the plugin is the *only*
-source of object classes. Verified against real hardware (Amcrest `IP8M-DLB2998EW-AI`): person
-detections arrive as clean start/stop pairs, and the camera honors the narrow code subscription the
-plugin uses (`probe-dahua-events.ps1`).
-
-**Multi-sensor cameras** (quad-lens and similar) split into one camera per lens, grouped by ONVIF
-`VideoSourceToken`, each with its own recorder and retention. Single-lens cameras are unaffected and
-still add automatically with no extra step. This also fixed a real bug on multi-lens hardware, where
-the profile ranker could mix profiles from different lenses into one camera's Main/Sub streams.
-
-**Branding** (`Admin → Settings → Branding`) sets the application name, primary and accent colors, a
-font from a closed list, and a logo shown on the navbar and login page. Values are allowlist-validated
-before storage, since they're interpolated into CSS.
-
-**M11 (operations)** is under way: an audit log viewer (`Logs → Audit Logs`, alongside `Logs → System
-Logs` in the same top-level nav item, each independently retained and independently permissioned)
-recording what each user did, from which IP — including viewing a camera or a view, starting
-playback, and starting or downloading an export — where change entries capture the actual
-`old → new` values, except for secrets and keys, which record only *that* they changed and never the
-value; per-node clock-skew detection (`Admin → Nodes`) flagging when a recorder's own OS clock has
-drifted from the server's; scheduled or on-demand database backups (`Admin → Settings → Backups` —
-restore is deliberately left to other tools, e.g. SSMS); application log capture on both tiers with a
-viewer (`Logs → System Logs`); and a
-health dashboard (the Dashboard page, auto-refreshing, sortable and paginated, with an optional
-thumbnail column) showing each camera's live fps/bitrate/reconnect count, the audio codec and sample
-rate it is actually sending, and every node's online status.
-
-**M14 (identity & access control)**: a Roles admin page (create/rename/delete a role, edit its
-Resource×Action permission matrix against a fixed, closed permission catalog — no free-text grants
-that could typo into matching nothing) and a Users admin page (create an account, assign roles,
-enable/disable via account lockout, reset a password), with self-registration disabled now that
-there's a real way to provision accounts. Per-camera/group access control (`Admin → Settings → Camera
-Access`) narrows a role's View/Playback/Export/PTZ/Talk/Configure access down to specific cameras or
-groups — a role with no grants is unrestricted, so this only ever narrows, never silently locks out an
-existing deployment. Per-role session lifetime, server-backed user preferences (theme, last-watched
-view, table page sizes — follow the user across devices/browsers instead of living in localStorage),
-and running live/playback traffic on a port of its own (see below) round out the milestone.
-
-**M15 (notifications)**: outbound email (`Admin → Settings → Email`) through SMTP, Microsoft Graph
-(app-only, no per-user consent), or Gmail (OAuth2, needs a one-time consent redirect — see below), and
-**Alerting** (`Admin → Alerts`) — a rule watches one camera or node for a condition (not reporting,
-offline, storage below a percentage) and fires through up to six channels: email, webhook, ntfy,
-Pushover, Slack, or Teams, each independently configured and cooled down so a standing condition
-doesn't re-alert every tick.
-
-**M16 (viewing experience)**: pinch-to-zoom in fullscreen (Live and Playback alike, alongside the
-existing wheel-zoom/drag-pan), drag-select-to-zoom on a Playback tile, a playback speed selector from
-1/32× to 32× (native `playbackRate` through 8×, a seek-driven stepped/slideshow mode above that), and
-a per-user toggle for the timeline's event-tag coloring (off by default — a real-phone walkthrough
-found it busy for everyday review).
-
-**M17 (hardware-transcode groundwork)**: each node probes its own `ffmpeg -encoders` output at startup
-and reports which hardware encoders it actually has (QSV/NVENC/AMF, badged on `Admin → Nodes`), behind
-a shared, unit-tested `-hwaccel`/`-vf`/`-c:v` argument builder every transcode-needing feature below
-now shares rather than each inventing its own ffmpeg invocation.
-
-**M18 (recording pipeline)**: **Bookmarks** — mark a moment during Playback with a note, and a
-Bookmarks page lists every one with a "▶ Play" deep link back to the exact instant (entries expire
-along with the footage they point at). **Snapshots** — every motion/detection event gets a
-timeline-matched thumbnail browsable on its own page (paged, filterable, same deep-link-to-Playback
-behavior as Bookmarks) instead of only ever being a color on the timeline. **Basic PTZ** — a
-directional pad + zoom on each PTZ-capable camera's Live tile (not yet run against real PTZ hardware).
-**Adaptive streaming** — a live tile too small to benefit from a camera's full resolution is
-automatically served its Sub stream instead of Main, with a manual per-tile Auto/HD/SD override and
-fullscreen always forcing Main; a global toggle (`Admin → Settings → Live View`) lets an admin disable
-it, and the node itself is the sole gate — turning it off actually stops the extra Sub-stream pulls,
-not just hides the client-side switching. **Configurable segment length** (`Admin → Settings →
-Recording`, also per-camera) and **indexed scrub seeking** — Playback can now jump straight to a
-scrub target inside a segment instead of downloading everything before it first, the fix for a real,
-measured slow/stuck-loading scrub on large (24–44MB) 4K/HEVC segments. Static privacy-mask burn-in
-(per-camera `Privacy` zones, burned in via the M17 encode pipeline) is implemented and tested but
-**currently shipped disabled** — validated live, it gets a masked camera stuck cycling
-Connecting/Backoff on real Intel/NVIDIA hardware, and the root cause wasn't found before it was
-kill-switched back to safe/off pending real diagnostic logs from a stuck attempt.
-
-Real-time on-screen bounding-box overlays now exist (native AI object detection, above) without
-depending on camera hardware at all. The *camera-onboard* path specifically is still blocked on
-hardware, unrelated to that: per-frame boxes from a camera's own analytics need the ONVIF metadata RTP
-track, and every camera probed on this fleet (including a Dahua/Amcrest model whose vendor CGI events
-do carry a `BoundingBox`, not yet consumed) either carries only a motion-cell grid over ONVIF or hasn't
-had that box wired up yet. ONVIF-pushed motion zones, instant replay, evidence lock, smart search, a
-hardware-decode fallback for a browser that can't natively decode a camera's codec, and a dedicated
-mobile-UI polish pass (scoped from a real phone walkthrough, not guessed from the CSS) haven't
-started — see [CHANGELOG.md](CHANGELOG.md) for everything shipped and the architecture plan for the
-full milestone roadmap.
-
-> **`web.config` currently runs `ASPNETCORE_ENVIRONMENT=Development`**, on purpose, for this
-> milestone-by-milestone development phase — it surfaces full exceptions in the browser instead of
-> the generic error page. **Switch it to `Production`** before any milestone that records real
-> footage or is reachable outside a trusted dev network; Development's error pages can leak
-> connection strings and internal file paths.
-
-## Recorder node dependencies
-
-These are installed on each **recorder node** (the machine running `LarisVMS.Node`), not on the web
-server. `install-node.ps1` does not install any of them — it only reports what's missing.
-
-### FFmpeg (required)
-
-Every node needs **FFmpeg** — not bundled. Install it on each recorder node:
-
-```
-winget install ffmpeg --scope machine
-```
-
-The node discovers it automatically at every startup: an explicit `--ffmpeg-path` /
-`LARISVMS_FFMPEG_PATH` wins, then `ffmpeg` on `PATH`, then the newest `ffmpeg.exe` under the WinGet
-package store (`C:\Program Files\WinGet\Packages\…`). An ffmpeg upgrade is picked up with no
-re-install. `install-node.ps1` preflight-checks that it's present and aborts with instructions if
-not. FFmpeg is invoked as a separate process, so its license does not propagate (see
-`THIRD_PARTY_NOTICES.txt`).
-
-### AI object detection (optional)
-
-Only needed on nodes that will actually run AI object detection. A node without any of this still
-records normally and keeps every other detection path (server-side motion zones, ONVIF camera
-events, vendor integrations) working exactly as before — AI detection is additive.
-
-There is **one** node package for every machine. It bundles the DirectML and CPU ONNX Runtime
-backends plus the small CUDA files; the Vision Service picks one at startup for whatever hardware the
-node detected — CUDA for an NVIDIA GPU when the CUDA Toolkit is present, otherwise DirectML (any
-Direct3D 12 GPU: NVIDIA, AMD, Intel), otherwise CPU. The large CUDA provider library
-(`onnxruntime_providers_cuda.dll`, ~320 MB) is **not** in the package — `install-web.ps1` seeds it into
-the server and an NVIDIA node downloads it once, so CPU/DirectML-only installs don't carry it.
-`install-web.ps1` / `build-node.ps1` take no accelerator flag:
-
-```powershell
-.\install-web.ps1
-.\build-node.ps1                            # -SkipVision for a recording-only package
-```
-
-| Detected hardware | Backend used | Must be installed on the node |
+| Component | Runs as | Role |
 |---|---|---|
-| NVIDIA GPU | CUDA (falls back to DirectML) | CUDA Toolkit 12.x + cuDNN 9.x (see below) — without them it runs DirectML; the node also downloads the CUDA provider library from the server once |
-| AMD / Intel GPU | DirectML | Nothing beyond a current GPU driver |
-| No GPU | CPU | Nothing |
+| **LarisVMS Web** | Windows service (Kestrel, HTTPS) | Web UI, REST API and node control plane. Stores configuration in SQL Server. |
+| **LarisVMS Node** | Windows service, one per recording machine | Ingests RTSP, writes segments, enforces retention, runs motion detection, serves live and playback video. |
+| **LarisVMS Vision Service** | Child process of a node (optional) | GPU/CPU object detection. It's isolated, so a driver fault never stops recording. |
+| **LarisVMS Proxy** | Windows service (optional) | Relays video between browsers and nodes, for remote sites or low-bandwidth links. |
 
-`install-node.ps1` reports which backend the node will use and, on an NVIDIA box missing the CUDA
-Toolkit, prints exactly what to install; the node runs DirectML in the meantime and `Admin → Nodes`
-flags it. TensorRT and OpenVINO are not covered by the auto-path (OpenVINO is not bundled; DirectML
-covers Intel GPUs).
+Settings are inherited **global → node → camera**, and the most specific value wins.
 
-**NVIDIA CUDA** needs the CUDA **Toolkit** installed on the node, not just a driver — the NuGet
-packages do not ship the CUDA runtime DLLs, and without them the CUDA backend can't load
-(`Error loading onnxruntime_providers_cuda.dll which depends on "cublasLt64_12.dll" which is
-missing`) and the node falls back to DirectML:
+## Requirements
 
-- **[CUDA Toolkit 12.8](https://developer.nvidia.com/cuda-12-8-0-download-archive)** — provides
-  `cublasLt64_12.dll`, `cublas64_12.dll`, `cudart64_12.dll`, `cufft64_11.dll`. The installer adds its
-  `bin` directory to `PATH`; the runtime libraries alone are enough (Nsight and the Visual Studio
-  integration can be skipped).
-- **[cuDNN 9.x for CUDA 12](https://developer.nvidia.com/cuda/cuda-x-libraries/cudnn)** — needed for
-  `cudnn64_9.dll`, and not included in the CUDA Toolkit installer above. The simplest route on a
-  recorder node is pip (this needs [Python](https://www.python.org/downloads/) on the node itself):
+- **Operating system:** any 64-bit Windows version supported by [.NET 10](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md), for both the server and the recorder nodes.
+- **Server:** the [.NET 10 SDK](https://dotnet.microsoft.com/download) (to build), and SQL Server (Express works) using SQL or Integrated authentication.
+- **Each recorder node:** [FFmpeg](https://ffmpeg.org/) (`winget install ffmpeg --scope machine`).
+- **AI detection (optional):** a GPU and its driver, or CPU only. NVIDIA additionally needs CUDA Toolkit 12.x and cuDNN 9.x (see [AI object detection](#ai-object-detection)).
+- **Cameras:** ONVIF Profile S or T.
+- **Browser:** a current Chrome, Edge, Firefox or Safari. HEVC playback depends on browser support.
 
-  ```powershell
-  pip install --extra-index-url https://pypi.nvidia.com nvidia-cudnn-cu12
-  ```
-
-  That drops the DLLs under the Python environment's site-packages rather than anywhere the OS
-  loader searches, so point `Vision:CudnnPath` at that folder — typically
-  `…\site-packages\nvidia\cudnn\bin`. (`python -c "import nvidia.cudnn, os;
-  print(os.path.join(os.path.dirname(nvidia.cudnn.__file__), 'bin'))"` prints the exact path.)
-  Downloading the archive from NVIDIA instead works the same way: unpack it anywhere, then either
-  point `Vision:CudnnPath` at its `bin` or put that directory on `PATH`.
-- **TensorRT 10.13.3** — optional, performance only. Off unless `Vision:EnableTensorRt` is set, which
-  also requires `Vision:TensorRtEngineCachePath`. YOLOX follows `Vision:EnableTensorRt` /
-  `Vision:TensorRtPrecision` directly. D-FINE has its own web control instead —
-  **Admin > Settings > Detection > "D-FINE TensorRT"** (`Off` / `FP32`, node-scoped, with a per-node
-  override on Admin > Nodes). `FP32` gives graph fusion and kernel selection with no precision risk;
-  it still does nothing unless the node also has `Vision:EnableTensorRt` set and the SDK installed.
-  An `FP16` option exists but is disabled — a straight FP16 cast overflows D-FINE's transformer
-  decoder and the mixed-precision model that would avoid it isn't producible with current tooling.
-
-A detection model is also required, and models are **never bundled** into the node package —
-`install-node.ps1` creates `C:\ProgramData\LarisVMS\models` on the node itself, and a node with
-nothing in that folder can't detect anything until you drop a `.onnx` file in. Two ways to get one:
-
-- **Built-in D-FINE/YOLOX**: export one with [`tools/export-models/`](tools/export-models/) (needs
-  **[Python](https://www.python.org/downloads/)** wherever you run it, then copy the resulting `.onnx`
-  onto the node yourself — the export step no longer places it directly into a build):
-
-  ```powershell
-  cd tools\export-models
-  py -m venv .venv
-  .venv\Scripts\python -m pip install -r requirements.txt
-  .venv\Scripts\python export.py
-  ```
-
-  Only permissively-licensed weights are exported this way — Ultralytics YOLOv8/11/26 are deliberately
-  excluded, since their weights are AGPL-3.0 and this project is Apache-2.0.
-
-- **Any other ONNX model** (`Detection.ModelFamily = Custom`): drop any `.onnx` file into
-  `C:\ProgramData\LarisVMS\models` directly. If its own embedded metadata is enough to tell how it
-  presents objects/boxes (decoder kind, input size, labels), it just works; otherwise add a
-  same-basename JSON sidecar (`yourmodel.onnx` + `yourmodel.json`) supplying whatever's missing — see
-  `LarisVMS.Vision.Models.ModelDescriptor`. `Admin → Settings → Detection` (and the per-node override
-  on `Admin → Nodes`) has a "Refresh models" action that lists everything found, flagging anything
-  still unresolved rather than hiding it. This is how a model under a different (even copyleft)
-  license can be used — LarisVMS never bundles or redistributes it, the operator supplies it directly,
-  same isolation principle sibling project SideGlance uses for its own operator-supplied weights.
-
-  > **A `Custom` model on a camera using `AspectMode.Slice` defaults to one forward pass per tile on
-  > the CPU-cropped path, not one batched GPU pass** — unlike the built-in D-FINE/YOLOX engines, an
-  > arbitrary user-supplied export can't be *assumed* to tolerate a batch dimension greater than 1
-  > internally. A plain Ultralytics ONNX export (`model.export(format="onnx")`) hardcodes batch=1 in
-  > its graph for exactly this reason. If instead you export with a genuinely dynamic batch axis
-  > (Ultralytics: `model.export(format="onnx", dynamic=True)`), LarisVMS notices the model's own
-  > declared input batch dimension isn't fixed at 1 and **automatically attempts** the same one-pass
-  > GPU-native batched path the built-in engines use, falling back to the CPU-per-tile path only if
-  > ONNX Runtime actually rejects the resulting graph (a loud, immediate error at load time — never a
-  > silent wrong answer, which is what makes attempting this safe). Check the node's own log at load
-  > time for `GPU-native batched Slice mode built successfully` vs. `falling back to the CPU-per-tile
-  > path` to see which one a given model actually got.
-
-> **A node's *first* AI detection install needs a manual `install-node.ps1` run.** Recorder
-> auto-update only replaces binaries that are already present, so it will keep an existing
-> `LarisVMS.Vision.Service.exe` current but never place one that was never there.
-
-Whether the accelerator was actually resolved is visible per node at `Admin → Nodes`, and a startup
-failure names its own cause in the node's log at `C:\ProgramData\LarisVMS\logs\node-*.log`.
+Performance depends entirely on your hardware: how many cameras and AI detection streams a node can
+handle comes down to its CPU, GPU, disks and network.
 
 ## Quick start
 
-1. Have a SQL Server reachable from this machine (Integrated Security or SQL Authentication — both
-   supported, see "Installing / upgrading" below)
-2. Publish and install as a Windows Service (must be Administrator):
+### 1. Install the web server
 
-   ```powershell
-   dotnet publish src\LarisVMS.Web\LarisVMS.Web.csproj -c Release -o publish\LarisVMS.Web
-   .\install-web.ps1
-   # Domain/service account (recommended for SQL Integrated Security):
-   .\install-web.ps1 -ServiceCredential (Get-Credential)
-   ```
-
-3. Edit `C:\Program Files\LarisVMS\Web\appsettings.Production.json` (seeded from the tracked
-   `.example` file on first install) with your real certificate path/password, then restart the
-   service — it runs on a self-signed certificate in the meantime, so it's reachable either way:
-
-   ```powershell
-   Restart-Service LarisVMSWeb
-   ```
-
-4. Browse to `https://<host>:8444/` (or whatever `-HttpsPort` you passed) — the setup wizard opens
-   automatically and walks through database, admin account, storage location, recorder node
-   registration, and branding (the wizard sets an initial name and color; everything else, including
-   the logo, is editable later at `Admin → Settings → Branding`)
-
-## Installing / upgrading
+From an elevated PowerShell prompt in the repository root:
 
 ```powershell
-# Fresh install, LocalSystem (works with SQL Authentication, or Integrated Security once the
-# machine's own computer account is granted a SQL login)
 .\install-web.ps1
-
-# Fresh install under a domain/service account (needed for Integrated Security against a domain SQL
-# instance)
+# or, to run the service under a domain/service account (for SQL Integrated Security):
 .\install-web.ps1 -ServiceCredential (Get-Credential)
-
-# Upgrade an existing install — omit -ServiceCredential to leave the existing service account
-# untouched; appsettings.Production.json / setup-generated.json are never overwritten
-.\install-web.ps1
-
-# Skip migrations (e.g. before the setup wizard has run)
-.\install-web.ps1 -SkipMigrations
 ```
 
-`install-web.ps1` never deletes recordings or machine-specific config: it refuses to run if a node's
-configured storage root resolves under the install directory, and excludes `setup-generated.json`,
-`appsettings.Production.json`, `appsettings.Development.json`, `data-protection-keys/`, and every
-recording/spool/export directory from its file copy.
+`install-web.ps1` builds the web app and the node package, applies database migrations, and
+installs and starts the **LarisVMS Web** service on port 8444 (change it with `-HttpsPort`).
 
-`deploy.ps1` (the old IIS-based deploy script) still works for an existing IIS deployment during the
-transition, but is deprecated — use `install-web.ps1` for any new install or upgrade.
+### 2. Run the setup wizard
 
-**Migrating an existing IIS deployment to `install-web.ps1`**: the first run at a new `-InstallDir`
-has no `setup-generated.json` of its own yet, so `install-web.ps1` falls back to
-`-LegacyIisConfigPath` (default `E:\Sites\LarisVMS\setup-generated.json`, `deploy.ps1`'s own default
-`-DestinationPath`) to find the connection string. If your old IIS site lived somewhere else, either
-pass `-LegacyIisConfigPath <path>`, pass `-ConnectionString` directly, or copy `setup-generated.json`
-into the new `-InstallDir` yourself before running. Skipping this silently skips **both** migrations
-and node-build/media-proxy-build registration (a build still compiles, it just never shows up as
-Pending on Admin → Node Builds) — watch installer output for a `WARNING:` about no connection string
-being found.
+Browse to `https://<server>:8444/`. Until you configure a certificate, the server uses a
+self-signed one. The wizard sets up the database connection, the first admin account and the
+branding, and shows the **node registration key**. You can find the key again later under
+**Settings → Node defaults**.
 
-## Certificates
+### 3. Add a certificate
 
-`Kestrel:Certificates:Default:Path`/`:Password` in `appsettings.Production.json` point at a `.pfx`
-file — typically on a file share an external ACME renewal script writes to. The service polls that
-path every 60 seconds and hot-swaps a changed certificate in with no restart needed for a routine
-renewal (the same mechanism the recorder node's own client HTTPS endpoint already uses). A plain
-service restart also picks up a newer certificate immediately, without waiting for the next poll. No
-certificate configured yet? The service still comes up on an auto-generated self-signed certificate
-(browsers show a warning) so the setup wizard is always reachable.
-
-Kestrel's listeners are HTTP/1.1 only, deliberately — a browser that already has an HTTP/2 connection
-open to this site (from the page and its own API calls) will try to multiplex a same-origin WebSocket
-onto it via HTTP/2's "extended CONNECT" instead of opening a fresh HTTP/1.1 connection, which this
-server doesn't support and answers with a 405, silently breaking the live-view bounding-box overlay.
-Restricting to HTTP/1.1 forces every WebSocket through the classic Upgrade handshake instead, which is
-what IIS always effectively presented to the app anyway.
-
-### Live/playback on a separate port
-
-`Admin → Settings → Live View` can move live view and playback traffic (`/live`,
-`/playback-segment`, `/playback-thumbnail`, `/export-download`, camera snapshots) onto a port of its
-own, away from the management interface — useful for firewalling the two differently, or exposing
-only one beyond the LAN. Setting a port there opens a second HTTPS listener on that port, using the
-same certificate as the main site. **This takes effect on the next service restart, not
-immediately:**
+Edit `C:\Program Files\LarisVMS\Web\appsettings.Production.json` and set
+`Kestrel:Certificates:Default:Path` and `:Password` to your `.pfx` file, then restart the service:
 
 ```powershell
 Restart-Service LarisVMSWeb
 ```
 
-Once restarted, live/playback routes stop responding on the management port and every other route
-stops responding on the new one; leave the setting blank to go back to everything sharing the main
-port.
+After that, a renewed certificate file is picked up automatically within a minute.
 
-### Live view pauses in a background Chrome window
+### 4. Install recorder nodes
 
-Chrome throttles timers and can suspend video in a window that isn't focused or visible, so a live
-grid left on a second monitor may freeze and then race to catch up when you switch back to it. Start
-Chrome with these flags to disable that:
-
-```
-chrome.exe --disable-backgrounding-occluded-windows --disable-background-timer-throttling
-```
-
-Append them to the **Target** of your Chrome shortcut, after `...\chrome.exe`.
-
-Live view also recovers from this on its own now — when playback resumes after any pause it seeks
-straight to near the live edge instead of slowly discovering the gap — so the flags are an
-optimization, not a requirement. A pause caught this way is logged as a `pause_resync` (or
-`unexpected_pause`, which records the window's visibility and focus state at that instant) in
-**Logs → System Logs**, filtered on `MediaStreamHealth`.
-
-### Live view freezes, then every tile reconnects at once
-
-If *all* tiles freeze together for tens of seconds and then reconnect simultaneously, the problem is
-almost certainly on the recorder node rather than in the browser or the network — the giveaway is
-that video and data delivery stop *together* (drift stays small during the freeze, then jumps in one
-step when the backlog floods through).
-
-The node logs a heartbeat for exactly this, in `%ProgramData%\LarisVMS\logs\node-*.log`:
-
-```
-Node process health: tick 18424ms late, gcPauseMs=9 ... busyWorkerThreads=11 pendingWorkItems=57
-```
-
-`tick N ms late` *is* the stall — that loop only awaits a timer, so if it returns late the process
-wasn't running anything. A healthy node logs this about once a minute at `[INFO]` with
-`pendingWorkItems=0` and lateness in single-digit milliseconds. Read the rest as:
-
-- **`gcPauseMs` close to the lateness** → garbage collection; look at allocation pressure.
-- **`gcPauseMs` small but `pendingWorkItems` in the tens** → thread-pool starvation; threads are
-  blocked rather than computing. Capture a stack dump *while it is stalling*
-  (`dotnet-dump collect -p <LarisVMS.Node pid>`) to find what they're blocked on.
-
-### AI detection stops while recording carries on
-
-Usually the GPU driver was reset under the vision process (a TDR). The Windows **System** event log
-shows `nvlddmkm` event 153 and/or `Display` event 4101 at the moment detection stopped. The vision log
-(`%ProgramData%\LarisVMS\logs\vision-*.log`) shows every camera logging `Inference failed on one frame`
-at the same instant, then a count of failed frames on each camera's 30-second `detection cadence`
-line.
-
-The vision service restarts itself after 60s with no successful inference on any camera while
-frames are still arriving (logged as `Inference has produced no result …`), and the node brings it
-back with every camera re-attached. No action is needed for a one-off. Repeated resets point at
-the GPU, its driver, cooling, or power, not LarisVMS.
-
-### Email (`Admin → Settings → Email`)
-
-SMTP needs nothing beyond the host/port/credentials themselves. The other two providers need setup on
-the provider's side first:
-
-- **Microsoft Graph** — register an app in Entra ID, grant it the `Mail.Send` **application**
-  permission (not delegated) with admin consent, and use that app's tenant/client id and a client
-  secret. App-only auth — no redirect URI, no per-user consent, no refresh token to manage.
-- **Gmail** — create an OAuth client (type "Web application") in a Google Cloud project, and add
-  `https://<your-host>/Admin/OAuthCallback` as an **authorized redirect URI** before clicking "Save
-  and connect to Google" on the settings page, or Google will reject the redirect. The consent screen
-  needs the `https://mail.google.com/` scope enabled (or the app in testing mode with the connecting
-  account added as a test user). Losing the Data Protection key ring (see below) invalidates the
-  stored refresh token the same way it does every other encrypted credential — reconnect afterward.
-
-## Diagnostic scripts
-
-Read-only research tools. Both open their own connection to a camera and touch nothing the recorders
-are doing — safe to run against a live system.
+Copy `publish\LarisVMS.Node\win\` (built in step 1) to each recording machine. Then, as Administrator:
 
 ```powershell
-# Which smart-event codes does this Dahua/Amcrest camera really emit? Walk through frame while it runs.
-.\probe-dahua-events.ps1 -CameraHost 192.168.1.50 -Seconds 60
-
-# Same, but subscribing with the exact filtered code list the plugin sends rather than [All] —
-# confirms the firmware honors a narrow subscription instead of going silent.
-.\probe-dahua-events.ps1 -CameraHost 192.168.1.50 -Seconds 60 -UsePluginCodes
-
-# Does this camera's ONVIF metadata track carry object geometry (bounding boxes) or only motion cells?
-.\probe-metadata-track.ps1 -RtspUri "rtsp://192.168.1.50:554/cam/realmonitor?channel=1&subtype=0"
+winget install ffmpeg --scope machine
+.\install-node.ps1 -ServerUrl https://<server>:8444 -RegistrationKey <key> -StorageRoot D:\Recordings
 ```
 
-`probe-dahua-events.ps1` is the one to reach for when adding a Dahua/Amcrest camera whose detections
-don't appear: it prints which codes the plugin already understands and which it's ignoring, so an
-unrecognized firmware spelling is a one-line addition to `DahuaCgiEventParser`'s code table rather
-than a guess.
+The node registers itself and appears under **Settings → Nodes**. Optional flags:
 
-## Data at rest
+| Flag | Purpose |
+|---|---|
+| `-ArchiveRoot` | Second volume that receives aged-out footage. |
+| `-ClientPort`, `-ClientPfxPath`, `-ClientEndpointHost` | Lets browsers stream directly from this node. |
+| `-ServiceCredential` | Run the service as an account that can reach SMB storage. |
 
-- Camera credentials, SMB credentials, node media signing keys, and every secret under
-  `Admin → Settings → Email` (SMTP password, Graph client secret, Gmail client secret and refresh
-  token) are encrypted at rest (`LarisVMS.Infrastructure.Security.SecretProtection`), keyed off a Data
-  Protection key ring at `%ProgramData%\LarisVMS\keys`. Losing this key ring makes every encrypted
-  value unrecoverable — include it in whatever backs up the server, and never delete it as part of a
-  deploy.
-- `setup-generated.json` (install directory) holds the plaintext database connection string and
-  branding. It is machine-specific, gitignored, and must never be committed.
+### 5. Add cameras
 
-## Solution layout
+Use **Cameras → Discover**, or add a camera by its ONVIF device service URL. Then assign each
+camera to a recorder node. For everything else, open **Help** in the sidebar.
 
-```
-src/
-  LarisVMS.Core            domain entities, enums, interfaces
-  LarisVMS.Onvif            ONVIF SOAP clients, WS-Discovery
-  LarisVMS.Media            FFmpeg process supervision, segment detection
-  LarisVMS.Infrastructure   EF Core, auth, setup, settings resolution, node control plane
-  LarisVMS.Web              Blazor Web App / Razor Pages host (self-hosted Kestrel, Windows Service) + node control plane API
-  LarisVMS.Node              recorder Windows Service — 24/7 recording
-  LarisVMS.NodeUpdater       detached helper that swaps the node's binary during an auto-update
-  LarisVMS.Vision            AI detection capture/inference/tracking — GPU/ONNX Runtime deps live here,
-                             never referenced by LarisVMS.Node itself
-  LarisVMS.Vision.Service    sibling process LarisVMS.Node supervises as a child — the only project
-                             allowed to reference LarisVMS.Vision
-tests/LarisVMS.Tests        xUnit
-tools/export-models          Python: exports YOLO weights to ONNX for LarisVMS.Vision.Service
-```
+## Upgrading
 
-## Development
+Pull the new release and run `.\install-web.ps1` again. It never deletes recordings, and never
+overwrites `appsettings.Production.json`, `setup-generated.json` or the data-protection keys.
+
+Recorder nodes and media proxies **update themselves**. Each run registers a new build as
+*Pending* under **Settings → Node builds**. Once you approve it, every older node downloads it,
+verifies its SHA-256 and installs it on its next check-in. You can turn this off under **Settings →
+Node defaults**.
+
+> A node's first AI detection install needs one manual `install-node.ps1` run. Auto-update only
+> replaces files that are already present.
+
+`deploy.ps1` (the old IIS-based deploy) is deprecated. Use `install-web.ps1`.
+
+## AI object detection
+
+AI detection is optional and per camera. A node without it still records, and still uses server
+motion, camera events and vendor integrations. The node package includes the CPU, DirectML and CUDA
+backends, and picks one at startup:
+
+| Hardware | Backend | Needed on the node |
+|---|---|---|
+| NVIDIA GPU | CUDA (falls back to DirectML) | [CUDA Toolkit 12.x](https://developer.nvidia.com/cuda-toolkit-archive) and [cuDNN 9.x](https://developer.nvidia.com/cudnn). The large CUDA provider library is downloaded from the server once. |
+| AMD / Intel GPU | DirectML | A current GPU driver |
+| No GPU | CPU | Nothing |
+
+- **cuDNN** can be installed with
+  `pip install --extra-index-url https://pypi.nvidia.com nvidia-cudnn-cu12`. Then point
+  `Vision:CudnnPath` in the node's configuration at the package's `bin` folder.
+- **TensorRT 10.x** is optional, for extra speed. Enable it with `Vision:EnableTensorRt` and
+  `Vision:TensorRtEngineCachePath`.
+- **Models are never bundled.** The built-in YOLOX models are downloaded from the server on first
+  use. For D-FINE, export one with [`tools/export-models`](tools/export-models/). For a custom model,
+  place any `.onnx` file in `C:\ProgramData\LarisVMS\models` on the node, with an optional
+  same-named `.json` file describing its decoder and labels.
+
+**Frame rate:** 5–7 fps per camera is enough for accurate object detection and tracking. Cap
+detection there (**Settings → AI detection → Max detection frame rate**, or per camera) rather than
+sending every frame; higher rates add GPU load without improving results.
+
+`build-node.ps1 -SkipVision` produces a recording-only node package.
+
+## Security
+
+- **Encrypted secrets.** Camera, SMB, node and email credentials are encrypted at rest with the
+  ASP.NET Core data-protection keys in `%ProgramData%\LarisVMS\keys`. **Back this folder up.** Without
+  it, encrypted values can't be recovered.
+- **Connection string.** `setup-generated.json` in the install folder holds the database connection
+  string. It's machine-specific, and must never be committed.
+- **Network controls.** **Settings → Security** has IP allow lists for management and API traffic,
+  and separately for video traffic. **Settings → Live view** can move video traffic to its own port.
+- **Secret handling.** Secrets are write-only in the UI, and the audit log records that a secret
+  changed but never its value.
+
+## Documentation
+
+- **In-app Help:** the **Help** item in the sidebar documents every feature and setting, including
+  troubleshooting.
+- **[CHANGELOG.md](CHANGELOG.md):** release notes. Older releases are in [`changelog-archive/`](changelog-archive/).
+
+## Building from source
 
 ```powershell
 dotnet tool restore
 dotnet build
 dotnet test
+```
+
+Add a database migration with:
+
+```powershell
 dotnet ef migrations add <Name> --project src\LarisVMS.Infrastructure --startup-project src\LarisVMS.Web
 ```
+
+A release needs the same version in every project's `<Version>` (Web, Node, NodeUpdater, Proxy,
+Core), a `BumpVersionX_Y_Z` migration that inserts into `AppVersions`, and a matching `CHANGELOG.md`
+heading. `install-web.ps1` refuses to deploy if any of these disagree.
+
+### Project layout
+
+```
+src/
+  LarisVMS.Core             Domain entities, enums, interfaces
+  LarisVMS.Infrastructure   EF Core, identity, settings resolution, node control plane
+  LarisVMS.Onvif            ONVIF SOAP clients, WS-Discovery
+  LarisVMS.Media            FFmpeg supervision, segment handling
+  LarisVMS.Web              Web UI (Blazor static SSR + Razor Pages) and API
+  LarisVMS.Node             Recorder node service
+  LarisVMS.NodeUpdater      Swaps a node's binaries during auto-update
+  LarisVMS.Vision           Detection capture, inference and tracking (GPU/ONNX Runtime)
+  LarisVMS.Vision.Service   Detection child process supervised by the node
+  LarisVMS.Proxy            Media relay
+tests/LarisVMS.Tests        xUnit tests
+tools/export-models         Python: exports detection models to ONNX
+```
+
+## Known limitations
+
+- Privacy-mask burn-in and camera-side motion zones can be configured, but are **disabled** pending fixes.
+- Bounding boxes from the camera's own analytics aren't shown; only LarisVMS's own detection draws boxes.
+- PTZ has not been tested against real PTZ hardware.
+- Windows only (64-bit), for both the server and the nodes.
+
+## License
+
+LarisVMS is licensed under the [Apache License 2.0](LICENSE). Third-party components and their
+licenses are listed in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt). FFmpeg is not bundled;
+it runs as a separate process.

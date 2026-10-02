@@ -11,11 +11,8 @@
 <h1>Settings</h1>
 <SettingsTabs ActiveKey="Branding" />
 
-<p class="text-muted">
-    Applies across the whole site — every page's navbar, footer, links and buttons, including the
-    sign-in page. Anything left blank falls back to the built-in default, so you can brand only the
-    parts you care about.
-</p>
+<div class="lv-page-narrow">
+<p class="text-muted small">Applies across the site, including sign-in. Blank fields use the built-in default.</p>
 
 @if (!string.IsNullOrEmpty(SavedMessage))
 {
@@ -26,102 +23,67 @@
     <div class="alert alert-danger">@ErrorMessage</div>
 }
 
-<EditForm Model="this" FormName="branding-settings" OnSubmit="HandleSaveAsync" class="row g-3" style="max-width: 560px;">
-    <div class="col-12">
-        <label class="form-label" for="AppNameField">
-            Application name
-            <button type="button" class="help-icon" data-help-target="appNameHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <InputText @bind-Value="FormAppName" id="AppNameField" class="form-control" maxlength="100" />
-        <div class="help-text-source" id="appNameHelp">Shown in the navbar, the browser tab title and the footer.</div>
-    </div>
-
-    <div class="col-sm-6">
-        <label class="form-label" for="PrimaryColor">
-            Primary color
-            <button type="button" class="help-icon" data-help-target="primaryColorHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <div class="input-group">
-            @* The color input is the picker; the text input is what actually posts, so a value can
-               also be pasted in exactly (and so an empty value stays empty — a color input can't
-               represent "unset", it always reports a color). *@
-            <input type="color" class="form-control form-control-color" id="PrimaryColorPicker"
-                   value="@(PrimaryColor ?? "#0d6efd")" title="Pick a primary color"
-                   aria-label="Pick a primary color" />
-            <InputText @bind-Value="PrimaryColor" id="PrimaryColor" class="form-control" placeholder="#0d6efd"
-                   pattern="^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$" />
-        </div>
-        <div class="help-text-source" id="primaryColorHelp">Buttons and links. Blank = Bootstrap default blue.</div>
-    </div>
-
-    <div class="col-sm-6">
-        <label class="form-label" for="AccentColor">
-            Navbar color
-            <button type="button" class="help-icon" data-help-target="accentColorHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <div class="input-group">
-            <input type="color" class="form-control form-control-color" id="AccentColorPicker"
-                   value="@(AccentColor ?? "#212529")" title="Pick a navbar color"
-                   aria-label="Pick a navbar color" />
-            <InputText @bind-Value="AccentColor" id="AccentColor" class="form-control" placeholder="#212529"
-                   pattern="^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$" />
-        </div>
-        <div class="help-text-source" id="accentColorHelp">Blank = the default dark navbar.</div>
-    </div>
-
-    <div class="col-12">
-        <label class="form-label" for="FontKey">
-            Font
-            <button type="button" class="help-icon" data-help-target="fontHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        @* Plain <select>, not InputSelect — see Detection.razor's own copy of this comment: InputSelect
-           needs a live interactive circuit to apply its value, which this Static SSR page doesn't have. *@
-        <select name="FontKey" id="FontKey" class="form-select">
-            <option value="" selected="@string.IsNullOrEmpty(FontKey)">Default (Bootstrap)</option>
-            @foreach (var (key, label) in FontChoices)
-            {
-                <option value="@key" selected="@(key == FontKey)">@label</option>
-            }
-        </select>
-        <div class="help-text-source" id="fontHelp">
-            A fixed list of widely-available font stacks — no web fonts are downloaded, and no
-            custom CSS is accepted.
-        </div>
-    </div>
-
-    <div class="col-12">
-        <label class="form-label" for="LogoFile">
-            Logo
-            <button type="button" class="help-icon" data-help-target="logoHelp" tabindex="0" aria-label="Help">ℹ️</button>
-        </label>
-        <div class="d-flex align-items-center gap-3 mb-2">
-            <img id="logoPreview" src="@(LogoDataUri ?? "")" alt="Current logo preview"
-                 class="border rounded bg-body-tertiary p-1"
-                 style="max-height: 48px; width: auto; @(LogoDataUri is null ? "display:none;" : "")" />
-            <span id="logoEmpty" class="text-muted small @(LogoDataUri is null ? "" : "d-none")">No logo set.</span>
-        </div>
-        <input type="file" id="LogoFile" class="form-control" accept="image/png,image/jpeg,image/gif,image/webp" />
-        <div class="help-text-source" id="logoHelp">
-            PNG, JPEG, GIF or WebP, under @(MaxLogoBytes / 1024)KB. Shown beside the app name in
-            the navbar, scaled to fit. SVG isn't accepted, since an SVG file can carry script.
-        </div>
-        @if (LogoDataUri is not null)
-        {
-            <div class="form-check mt-2">
-                <InputCheckbox @bind-Value="RemoveLogo" class="form-check-input" id="RemoveLogo" />
-                <label class="form-check-label" for="RemoveLogo">Remove the current logo</label>
+<EditForm Model="this" FormName="branding-settings" OnSubmit="HandleSaveAsync" data-dirty-guard>
+    <SettingSection Title="Identity">
+        <SettingField Label="Application name" For="AppNameField" Hint="Navbar, browser tab and footer.">
+            <InputText @bind-Value="FormAppName" id="AppNameField" class="form-control" maxlength="100" />
+        </SettingField>
+        <SettingField Label="Logo" For="LogoFile" Wide Hint="@($"PNG, JPEG, GIF or WebP under {MaxLogoBytes / 1024}KB. SVG isn't accepted.")">
+            <div class="d-flex align-items-center gap-3 mb-2">
+                <img id="logoPreview" src="@(LogoDataUri ?? "")" alt="Current logo preview"
+                     class="border rounded bg-body-tertiary p-1"
+                     style="max-height: 48px; width: auto; @(LogoDataUri is null ? "display:none;" : "")" />
+                <span id="logoEmpty" class="text-muted small @(LogoDataUri is null ? "" : "d-none")">No logo set.</span>
             </div>
-        }
-        @* The image never travels as a file upload — it's read client-side and posted as a data URI
-           in this hidden field, which is also exactly how it's stored. That keeps the whole feature
-           free of filesystem writes and upload plumbing. *@
-        <InputText @bind-Value="LogoDataUri" type="hidden" id="LogoDataUri" />
-    </div>
-
-    <div class="col-12">
-        <button type="submit" class="btn btn-primary"><span aria-hidden="true">💾</span> Save</button>
+            <input type="file" id="LogoFile" class="form-control" accept="image/png,image/jpeg,image/gif,image/webp" />
+            @if (LogoDataUri is not null)
+            {
+                <div class="form-check mt-2">
+                    <InputCheckbox @bind-Value="RemoveLogo" class="form-check-input" id="RemoveLogo" />
+                    <label class="form-check-label" for="RemoveLogo">Remove the current logo</label>
+                </div>
+            }
+            @* Read client-side and posted as a data URI in this hidden field — also exactly how it's
+               stored, so no file upload plumbing. *@
+            <InputText @bind-Value="LogoDataUri" type="hidden" id="LogoDataUri" />
+        </SettingField>
+    </SettingSection>
+    <SettingSection Title="Look">
+        <SettingField Label="Primary color" For="PrimaryColor" Hint="Buttons and links.">
+            <div class="input-group">
+                @* The picker can't represent "unset", so the text box is what posts. *@
+                <input type="color" class="form-control form-control-color" id="PrimaryColorPicker"
+                       value="@(PrimaryColor ?? "#0d6efd")" title="Pick a primary color"
+                       aria-label="Pick a primary color" />
+                <InputText @bind-Value="PrimaryColor" id="PrimaryColor" class="form-control" placeholder="#0d6efd"
+                       pattern="^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$" />
+            </div>
+        </SettingField>
+        <SettingField Label="Navbar color" For="AccentColor">
+            <div class="input-group">
+                <input type="color" class="form-control form-control-color" id="AccentColorPicker"
+                       value="@(AccentColor ?? "#212529")" title="Pick a navbar color"
+                       aria-label="Pick a navbar color" />
+                <InputText @bind-Value="AccentColor" id="AccentColor" class="form-control" placeholder="#212529"
+                       pattern="^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$" />
+            </div>
+        </SettingField>
+        <SettingField Label="Font" For="FontKey" Hint="A fixed list of common font stacks.">
+            @* Plain <select>, not InputSelect — InputSelect can't mark the saved option under Static SSR. *@
+            <select name="FontKey" id="FontKey" class="form-select">
+                <option value="" selected="@string.IsNullOrEmpty(FontKey)">Default</option>
+                @foreach (var (key, label) in FontChoices)
+                {
+                    <option value="@key" selected="@(key == FontKey)">@label</option>
+                }
+            </select>
+        </SettingField>
+    </SettingSection>
+    <div class="lv-savebar">
+        <button type="submit" class="btn btn-primary">Save</button>
     </div>
 </EditForm>
+</div>
 
 <SectionContent SectionName="PageScripts">
     <script>

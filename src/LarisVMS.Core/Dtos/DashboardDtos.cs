@@ -23,9 +23,7 @@ public record DashboardHealthDto(List<CameraHealthRow> Rows,
     int RecordingCount, int NotReportingCount, int DisabledCount,
     int NodesOnlineCount, int NodesTotalCount);
 
-/// <summary>One node's row for the M20 monitoring API — every Node, unlike
-/// DashboardHealthDto's own node tally (which only ever counts nodes that currently have at least one
-/// camera assigned, right for a camera-health summary but wrong for "is this node itself reachable and
-/// does it have disk space").</summary>
+/// <summary>One node's row for the M20 monitoring API — every Node, with its own reachability and
+/// disk space.</summary>
 public record NodeStatusRow(Guid NodeId, string NodeName, bool Online,
     long? StorageFreeBytes, long? StorageTotalBytes, string? Version, string? Platform);

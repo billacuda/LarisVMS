@@ -70,6 +70,10 @@
             {
                 <a class="lv-navitem@(IsActive("/Admin/Settings") ? " active" : "")" href="/Admin/Settings"><span aria-hidden="true">⚙️</span> Settings</a>
             }
+            @if (_isAuthenticated)
+            {
+                <a class="lv-navitem@(IsActive("/Help") ? " active" : "")" href="/Help"><span aria-hidden="true">❓</span> Help</a>
+            }
         </nav>
         <div class="lv-side-foot">
             &copy; @DateTime.UtcNow.Year @_appName @(_version is not null ? $"v{_version}" : "")

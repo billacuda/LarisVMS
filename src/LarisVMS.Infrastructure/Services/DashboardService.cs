@@ -26,10 +26,9 @@ public class DashboardService(ICameraService cameraService, ICameraAccessService
     {
         var cameras = await cameraService.ListAsync(ct);
 
-        // Filtered here, at the source, rather than after building rows — every computation below
-        // (rows, the recording/not-reporting/disabled counts, and the online-node tally) derives
-        // from `cameras`, so a restricted principal's summary numbers and node count also only ever
-        // reflect what they can actually see, not the true system-wide totals.
+        // Filtered here, at the source, rather than after building rows — the rows and the
+        // recording/not-reporting/disabled counts derive from `cameras`, so a restricted principal's
+        // camera numbers only reflect what they can see. The node tally below is system-wide.
         var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(user, CameraAccessActions.View, ct);
         if (accessible is not null) cameras = cameras.Where(c => accessible.Contains(c.Id)).ToList();
 
@@ -52,12 +51,13 @@ public class DashboardService(ICameraService cameraService, ICameraAccessService
         var notReportingCount = rows.Count(r => r.CameraEnabled && !r.HealthFresh);
         var disabledCount = rows.Count(r => !r.CameraEnabled);
 
-        var nodesSeen = cameras.Where(c => c.Node is not null)
-            .Select(c => c.Node!)
-            .DistinctBy(n => n.Id)
+        // Every registered node counts, including ones with no cameras — a node with nothing assigned
+        // is still a box that should be reporting. Pending (unapproved) and Disabled nodes are excluded.
+        var nodes = (await nodeService.ListAsync(ct))
+            .Where(n => n.Status is not (NodeStatus.Pending or NodeStatus.Disabled))
             .ToList();
-        var nodesTotalCount = nodesSeen.Count;
-        var nodesOnlineCount = nodesSeen.Count(n => n.LastSeenAt is { } seen && now - seen < NodeOnlineWindow);
+        var nodesTotalCount = nodes.Count;
+        var nodesOnlineCount = nodes.Count(n => n.LastSeenAt is { } seen && now - seen < NodeOnlineWindow);
 
         return new DashboardHealthDto(rows, recordingCount, notReportingCount, disabledCount,
             nodesOnlineCount, nodesTotalCount);

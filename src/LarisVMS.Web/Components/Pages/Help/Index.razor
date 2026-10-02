@@ -1,0 +1,27 @@
+@page "/Help"
+@attribute [Authorize]
+@using LarisVMS.Web.Services
+@inject HelpContentService Help
+
+<PageTitle>Help - @AppName</PageTitle>
+
+<h1>Help</h1>
+<p class="text-muted">How LarisVMS works, and what each setting does.</p>
+
+<div class="row g-3">
+    @foreach (var t in Help.Topics)
+    {
+        <div class="col-12 col-md-6 col-xl-4">
+            <a href="/Help/@t.Slug" class="card h-100 text-decoration-none text-body">
+                <div class="card-body">
+                    <div class="card-title fw-bold mb-1">@t.Title</div>
+                    <p class="card-text text-muted small mb-0">@t.Summary</p>
+                </div>
+            </a>
+        </div>
+    }
+</div>
+
+@code {
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+}

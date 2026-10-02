@@ -5,10 +5,8 @@
 }
 <h1>Alerts</h1>
 
-<p class="text-muted">
-    Watches a camera or node for a condition and fires through email, webhook, ntfy, Pushover, Slack,
-    or Teams. Checked once a minute; each rule has its own cooldown so a condition that stays true
-    doesn't re-alert every tick.
+<p class="text-muted small">
+    Watch a camera or node and notify by email, webhook, ntfy, Pushover, Slack or Teams. Checked every minute. <a href="/Help/alerts">Learn more</a>
 </p>
 
 @if (!string.IsNullOrEmpty(Model.ErrorMessage))
