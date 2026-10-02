@@ -1,14 +1,10 @@
 # LarisVMS
 
-Open-source video management software (VMS/NVR) for ONVIF cameras. It records video, audio and
-events to local disks or network shares on one or more Windows recorder nodes. Live view, playback
-and administration all run in the browser, on desktop, tablet and phone.
+Open-source video management software (VMS/NVR) for ONVIF cameras. It records video, audio and events to local disks or network shares on one or more Windows recorder nodes. Live view, playback and administration all run in the browser, on desktop, tablet and phone.
 
 **Current version: [0.209.0](CHANGELOG.md)**
 
-> **A note on AI-assisted development.** This project is built with the help of AI tooling (Claude
-> Code). Features are planned in detail before implementation, generated code is reviewed as it's
-> written, and changes are tested as they land. If you notice something odd, please open an issue.
+> **A note on AI-assisted development.** This project is built with the help of AI tooling (Claude Code). Features are planned in detail before implementation, generated code is reviewed as it's written, and changes are tested as they land. If you notice something odd, please open an issue.
 
 ---
 
@@ -68,12 +64,11 @@ Settings are inherited **global → node → camera**, and the most specific val
 - **Operating system:** any 64-bit Windows version supported by [.NET 10](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md), for both the server and the recorder nodes.
 - **Server:** the [.NET 10 SDK](https://dotnet.microsoft.com/download) (to build), and SQL Server (Express works) using SQL or Integrated authentication.
 - **Each recorder node:** [FFmpeg](https://ffmpeg.org/) (`winget install ffmpeg --scope machine`).
-- **AI detection (optional):** a GPU and its driver, or CPU only. NVIDIA additionally needs CUDA Toolkit 12.x and cuDNN 9.x (see [AI object detection](#ai-object-detection)).
+- **AI detection (optional):** a GPU and its driver, or CPU only. NVIDIA additionally needs CUDA Toolkit 12.x and cuDNN 9.x (see [AI object detection](#ai-object-detection)) if you want to use CUDA or TensorRT acceleration, otherwise DirectML works out of the box.
 - **Cameras:** ONVIF Profile S or T.
 - **Browser:** a current Chrome, Edge, Firefox or Safari. HEVC playback depends on browser support.
 
-Performance depends entirely on your hardware: how many cameras and AI detection streams a node can
-handle comes down to its CPU, GPU, disks and network.
+Performance depends entirely on your hardware: how many cameras and AI detection streams a node can handle comes down to its CPU, GPU, disks and network.
 
 ## Quick start
 
@@ -87,20 +82,15 @@ From an elevated PowerShell prompt in the repository root:
 .\install-web.ps1 -ServiceCredential (Get-Credential)
 ```
 
-`install-web.ps1` builds the web app and the node package, applies database migrations, and
-installs and starts the **LarisVMS Web** service on port 8444 (change it with `-HttpsPort`).
+`install-web.ps1` builds the web app and the node package, applies database migrations, and installs and starts the **LarisVMS Web** service on port 8444 (change it with `-HttpsPort`).
 
 ### 2. Run the setup wizard
 
-Browse to `https://<server>:8444/`. Until you configure a certificate, the server uses a
-self-signed one. The wizard sets up the database connection, the first admin account and the
-branding, and shows the **node registration key**. You can find the key again later under
-**Settings → Node defaults**.
+Browse to `https://<server>:8444/`. Until you configure a certificate, the server uses a self-signed one. The wizard sets up the database connection, the first admin account and the branding, and shows the **node registration key**. You can find the key again later under **Settings → Node defaults**.
 
 ### 3. Add a certificate
 
-Edit `C:\Program Files\LarisVMS\Web\appsettings.Production.json` and set
-`Kestrel:Certificates:Default:Path` and `:Password` to your `.pfx` file, then restart the service:
+Edit `C:\Program Files\LarisVMS\Web\appsettings.Production.json` and set `Kestrel:Certificates:Default:Path` and `:Password` to your `.pfx` file, then restart the service:
 
 ```powershell
 Restart-Service LarisVMSWeb
@@ -127,29 +117,21 @@ The node registers itself and appears under **Settings → Nodes**. Optional fla
 
 ### 5. Add cameras
 
-Use **Cameras → Discover**, or add a camera by its ONVIF device service URL. Then assign each
-camera to a recorder node. For everything else, open **Help** in the sidebar.
+Use **Cameras → Discover**, or add a camera by its ONVIF device service URL. Then assign each camera to a recorder node. For everything else, open **Help** in the sidebar.
 
 ## Upgrading
 
-Pull the new release and run `.\install-web.ps1` again. It never deletes recordings, and never
-overwrites `appsettings.Production.json`, `setup-generated.json` or the data-protection keys.
+Pull the new release and run `.\install-web.ps1` again. It never deletes recordings, and never overwrites `appsettings.Production.json`, `setup-generated.json` or the data-protection keys.
 
-Recorder nodes and media proxies **update themselves**. Each run registers a new build as
-*Pending* under **Settings → Node builds**. Once you approve it, every older node downloads it,
-verifies its SHA-256 and installs it on its next check-in. You can turn this off under **Settings →
-Node defaults**.
+Recorder nodes and media proxies **update themselves**. Each run registers a new build as *Pending* under **Settings → Node builds**. Once you approve it, every older node downloads it, verifies its SHA-256 and installs it on its next check-in. You can turn this off under **Settings → Node defaults**.
 
-> A node's first AI detection install needs one manual `install-node.ps1` run. Auto-update only
-> replaces files that are already present.
+> A node's first AI detection install needs one manual `install-node.ps1` run. Auto-update only replaces files that are already present.
 
 `deploy.ps1` (the old IIS-based deploy) is deprecated. Use `install-web.ps1`.
 
 ## AI object detection
 
-AI detection is optional and per camera. A node without it still records, and still uses server
-motion, camera events and vendor integrations. The node package includes the CPU, DirectML and CUDA
-backends, and picks one at startup:
+AI detection is optional and per camera. A node without it still records, and still uses server motion, camera events and vendor integrations. The node package includes the CPU, DirectML and CUDA backends, and picks one at startup:
 
 | Hardware | Backend | Needed on the node |
 |---|---|---|
@@ -157,38 +139,24 @@ backends, and picks one at startup:
 | AMD / Intel GPU | DirectML | A current GPU driver |
 | No GPU | CPU | Nothing |
 
-- **cuDNN** can be installed with
-  `pip install --extra-index-url https://pypi.nvidia.com nvidia-cudnn-cu12`. Then point
-  `Vision:CudnnPath` in the node's configuration at the package's `bin` folder.
-- **TensorRT 10.x** is optional, for extra speed. Enable it with `Vision:EnableTensorRt` and
-  `Vision:TensorRtEngineCachePath`.
-- **Models are never bundled.** The built-in YOLOX models are downloaded from the server on first
-  use. For D-FINE, export one with [`tools/export-models`](tools/export-models/). For a custom model,
-  place any `.onnx` file in `C:\ProgramData\LarisVMS\models` on the node, with an optional
-  same-named `.json` file describing its decoder and labels.
+- **cuDNN** can be installed with `pip install --extra-index-url https://pypi.nvidia.com nvidia-cudnn-cu12`. Then point `Vision:CudnnPath` in the node's configuration at the package's `bin` folder.
+- **TensorRT 10.x** is optional, for extra speed. Enable it with `Vision:EnableTensorRt` and `Vision:TensorRtEngineCachePath`.
+- **Models are never bundled.** The built-in YOLOX models are downloaded from the server on first use. For D-FINE, export one with [`tools/export-models`](tools/export-models/). For a custom model, place any `.onnx` file in `C:\ProgramData\LarisVMS\models` on the node, with an optional same-named `.json` file describing its decoder and labels.
 
-**Frame rate:** 5–7 fps per camera is enough for accurate object detection and tracking. Cap
-detection there (**Settings → AI detection → Max detection frame rate**, or per camera) rather than
-sending every frame; higher rates add GPU load without improving results.
+**Frame rate:** 5–7 fps per camera is enough for accurate object detection and tracking. Cap detection there (**Settings → AI detection → Max detection frame rate**, or per camera) rather than sending every frame; higher rates add GPU load without improving results.
 
 `build-node.ps1 -SkipVision` produces a recording-only node package.
 
 ## Security
 
-- **Encrypted secrets.** Camera, SMB, node and email credentials are encrypted at rest with the
-  ASP.NET Core data-protection keys in `%ProgramData%\LarisVMS\keys`. **Back this folder up.** Without
-  it, encrypted values can't be recovered.
-- **Connection string.** `setup-generated.json` in the install folder holds the database connection
-  string. It's machine-specific, and must never be committed.
-- **Network controls.** **Settings → Security** has IP allow lists for management and API traffic,
-  and separately for video traffic. **Settings → Live view** can move video traffic to its own port.
-- **Secret handling.** Secrets are write-only in the UI, and the audit log records that a secret
-  changed but never its value.
+- **Encrypted secrets.** Camera, SMB, node and email credentials are encrypted at rest with the ASP.NET Core data-protection keys in `%ProgramData%\LarisVMS\keys`. **Back this folder up.** Without it, encrypted values can't be recovered.
+- **Connection string.** `setup-generated.json` in the install folder holds the database connection string. It's machine-specific, and must never be committed.
+- **Network controls.** **Settings → Security** has IP allow lists for management and API traffic, and separately for video traffic. **Settings → Live view** can move video traffic to its own port.
+- **Secret handling.** Secrets are write-only in the UI, and the audit log records that a secret changed but never its value.
 
 ## Documentation
 
-- **In-app Help:** the **Help** item in the sidebar documents every feature and setting, including
-  troubleshooting.
+- **In-app Help:** the **Help** item in the sidebar documents every feature and setting, including troubleshooting.
 - **[CHANGELOG.md](CHANGELOG.md):** release notes. Older releases are in [`changelog-archive/`](changelog-archive/).
 
 ## Building from source
@@ -205,9 +173,7 @@ Add a database migration with:
 dotnet ef migrations add <Name> --project src\LarisVMS.Infrastructure --startup-project src\LarisVMS.Web
 ```
 
-A release needs the same version in every project's `<Version>` (Web, Node, NodeUpdater, Proxy,
-Core), a `BumpVersionX_Y_Z` migration that inserts into `AppVersions`, and a matching `CHANGELOG.md`
-heading. `install-web.ps1` refuses to deploy if any of these disagree.
+A release needs the same version in every project's `<Version>` (Web, Node, NodeUpdater, Proxy, Core), a `BumpVersionX_Y_Z` migration that inserts into `AppVersions`, and a matching `CHANGELOG.md` heading. `install-web.ps1` refuses to deploy if any of these disagree.
 
 ### Project layout
 
@@ -232,10 +198,10 @@ tools/export-models         Python: exports detection models to ONNX
 - Privacy-mask burn-in and camera-side motion zones can be configured, but are **disabled** pending fixes.
 - Bounding boxes from the camera's own analytics aren't shown; only LarisVMS's own detection draws boxes.
 - PTZ has not been tested against real PTZ hardware.
-- Windows only (64-bit), for both the server and the nodes.
+- Windows only (server and nodes).
+- Entra SSO has not been tested (I don't have a tenant to test it against, but in theory it should work)
+- AD integration not implemented yet, but is in the works.
 
 ## License
 
-LarisVMS is licensed under the [Apache License 2.0](LICENSE). Third-party components and their
-licenses are listed in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt). FFmpeg is not bundled;
-it runs as a separate process.
+LarisVMS is licensed under the [Apache License 2.0](LICENSE). Third-party components and their licenses are listed in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt). FFmpeg is not bundled; it runs as a separate process.
