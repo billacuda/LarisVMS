@@ -252,6 +252,7 @@ tools/export-models         Python: exports detection models to ONNX
 - Windows only (server and nodes).
 - Entra SSO has not been tested (I don't have a tenant to test it against, but in theory it should work)
 - AD integration not implented yet, but is in the works.
+- Bounding boxes for moving objects may not be exactly in sync with objects in live view. This is a known bug and should hopefully be fixed soon.
 
 ## License
 
