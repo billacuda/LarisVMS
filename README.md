@@ -253,6 +253,8 @@ tools/export-models         Python: exports detection models to ONNX
 - Entra SSO has not been tested (I don't have a tenant to test it against, but in theory it should work)
 - AD integration not implented yet, but is in the works.
 - Bounding boxes for moving objects may not be exactly in sync with objects in live view. This is a known bug and should hopefully be fixed soon.
+- Some features listed may have placeholders (webhooks, Teams/Slack integration)
+- Basic email functionality should work with SMTP. Graph API email has not been tested yet.s
 
 ## License
 
