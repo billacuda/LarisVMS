@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <OutputType>Exe</OutputType>
-    <Version>0.209.0</Version>
+    <Version>0.210.0</Version>
   </PropertyGroup>
 
   <ItemGroup>

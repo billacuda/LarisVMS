@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.210.0] - 2026-10-02
+
 ### Added
 
 - MSI installers for the web server, recorder node and media proxy (`build-installers.ps1`). They take
