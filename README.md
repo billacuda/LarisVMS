@@ -201,6 +201,12 @@ detection there (**Settings → AI detection → Max detection frame rate**, or 
 sending every frame; higher rates add GPU load without improving results.
 `build-node.ps1 -SkipVision` produces a recording-only node package.
 
+**Tested hardware:** LarisVMS has been run in real environments on:
+- AMD Ryzen 7 5800X3D
+- Intel Core i5-12600K, including object detection on its integrated GPU via DirectML
+- NVIDIA GeForce RTX 2070: the main testing GPU and a dedicated recording node (DirectML, CUDA, and TensorRT FP32)
+- NVIDIA GeForce RTX 4080 Super (DirectML, CUDA, and TensorRT FP16)
+
 ## Security
 
 - **Encrypted secrets.** Camera, SMB, node and email credentials are encrypted at rest with the
