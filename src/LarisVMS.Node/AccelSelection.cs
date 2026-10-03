@@ -46,6 +46,12 @@ public static class AccelSelection
         if (desired == AiAccelerator.TensorRt) return detected.Contains(AiAccelerator.Nvidia) ? AiAccelerator.TensorRt : null;
         if (desired == AiAccelerator.OpenVino) return detected.Contains(AiAccelerator.Intel) ? AiAccelerator.OpenVino : null;
 
+        // Amd is DirectML (labelled "DirectML" in the node settings), which runs on any DX12 GPU,
+        // not just AMD's. Requiring an AMD GPU meant choosing DirectML on an NVIDIA or Intel node
+        // resolved to nothing, so the Vision Service never started and no camera got detections.
+        if (desired == AiAccelerator.Amd)
+            return detected.Any(a => a is AiAccelerator.Nvidia or AiAccelerator.Intel or AiAccelerator.Amd) ? AiAccelerator.Amd : null;
+
         // An explicit non-Cpu choice is only honored if that specific hardware was actually detected.
         return detected.Contains(desired) ? desired : null;
     }

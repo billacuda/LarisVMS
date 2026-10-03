@@ -22,6 +22,14 @@ public class DatabaseModel(ISetupService setupService) : PageModel
             await setupService.SetupDatabaseAsync(ServerName, DatabaseName, Username, Password);
             return RedirectToPage("Admin");
         }
+        catch (Microsoft.Data.SqlClient.SqlException ex) when (ex.Number is 26 or -1 or 2 or 53 && !ServerName.Contains('\\'))
+        {
+            // "Error locating server/instance" or "server not found" for a name with no instance part.
+            // SQL Server Express installs as the named instance SQLEXPRESS, so "." or "localhost" alone
+            // looks for a default instance that isn't there.
+            ErrorMessage = $"{ex.Message} If you installed SQL Server Express, use {ServerName}\\SQLEXPRESS as the server name.";
+            return Page();
+        }
         catch (Exception ex)
         {
             ErrorMessage = ex.Message;

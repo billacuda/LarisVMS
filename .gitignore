@@ -45,7 +45,9 @@ data-protection-keys/
 # own doc comment), a TensorRT engine cache if one is ever pointed at a repo-local path
 # (VisionServiceOptions.TensorRtEngineCachePath), and tools/export-models/'s own Python virtual
 # environment — same patterns aitest already used for all three.
-models/
+# Repo-root only: a bare "models/" also matched src/LarisVMS.Vision/Models/ (source code) because
+# Git on Windows ignores case, which kept that folder out of the repo.
+/models/
 *.onnx
 *.pt
 *.engine

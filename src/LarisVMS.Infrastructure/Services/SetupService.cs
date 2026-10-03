@@ -117,7 +117,19 @@ public class SetupService(
             throw new InvalidOperationException($"Unable to create administrator account. {errors}");
         }
 
-        await userManager.AddToRoleAsync(admin, "Super Admin");
+        // Any user existing counts as "setup complete" (IsSetupCompleteAsync), so a user left behind
+        // without its role would lock the wizard out with an admin that can't administer anything.
+        try
+        {
+            var roleResult = await userManager.AddToRoleAsync(admin, "Super Admin");
+            if (!roleResult.Succeeded)
+                throw new InvalidOperationException(string.Join(" ", roleResult.Errors.Select(e => e.Description)));
+        }
+        catch (InvalidOperationException ex)
+        {
+            await userManager.DeleteAsync(admin);
+            throw new InvalidOperationException($"Unable to make the administrator a Super Admin. {ex.Message}", ex);
+        }
 
         if (!await db.AppVersions.AnyAsync(ct))
         {

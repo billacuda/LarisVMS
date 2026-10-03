@@ -1,0 +1,106 @@
+{
+  "$comment": "Fake cameras for the demo site. Clips are free stock footage from Pexels (https://www.pexels.com/license/): free to use, no attribution required. See README.md.",
+  "dataRoot": "G:\\LarisDemo",
+  "network": {
+    "switchName": "LarisDemo",
+    "hostIp": "10.77.0.1",
+    "prefixLength": 24
+  },
+  "rtspPort": 554,
+  "credentials": {
+    "username": "admin",
+    "password": "demo"
+  },
+  "cameras": [
+    {
+      "id": "cam01",
+      "name": "Plaza Crosswalk",
+      "ip": "10.77.0.11",
+      "model": "LD-B4K21",
+      "codec": "H264",
+      "audio": false,
+      "pexelsId": 29562700,
+      "source": "https://www.pexels.com/video/urban-pedestrian-crosswalk-in-busy-city-29562700/"
+    },
+    {
+      "id": "cam02",
+      "name": "Lobby",
+      "ip": "10.77.0.12",
+      "model": "LD-D2M10",
+      "codec": "H264",
+      "audio": false,
+      "pexelsId": 38469386,
+      "source": "https://www.pexels.com/video/modern-university-campus-lobby-with-people-walking-38469386/"
+    },
+    {
+      "id": "cam03",
+      "name": "North Intersection",
+      "ip": "10.77.0.13",
+      "model": "LD-B4K21",
+      "codec": "H264",
+      "audio": false,
+      "pexelsId": 15411757,
+      "source": "https://www.pexels.com/video/high-angle-view-of-a-busy-intersection-in-novi-sad-serbia-15411757/"
+    },
+    {
+      "id": "cam04",
+      "name": "Pasture",
+      "ip": "10.77.0.14",
+      "model": "LD-B4K21",
+      "codec": "H264",
+      "audio": false,
+      "pexelsId": 8187697,
+      "source": "https://www.pexels.com/video/herd-of-cows-in-a-pastureland-8187697/"
+    },
+    {
+      "id": "cam05",
+      "name": "Warehouse Aisle 3",
+      "ip": "10.77.0.15",
+      "model": "LD-D2M10",
+      "codec": "H264",
+      "audio": false,
+      "pexelsId": 4280748,
+      "source": "https://www.pexels.com/video/men-working-in-a-warehouse-4280748/"
+    },
+    {
+      "id": "cam06",
+      "name": "Main Gate",
+      "ip": "10.77.0.16",
+      "model": "LD-T8M30",
+      "codec": "H264",
+      "audio": false,
+      "pexelsId": 36304379,
+      "source": "https://www.pexels.com/video/busy-urban-intersection-from-above-36304379/"
+    },
+    {
+      "id": "cam07",
+      "name": "Tram Stop",
+      "ip": "10.77.0.17",
+      "model": "LD-T8M30",
+      "codec": "H264",
+      "audio": true,
+      "pexelsId": 11240520,
+      "source": "https://www.pexels.com/video/high-angle-view-of-a-tramway-passing-by-11240520/"
+    },
+    {
+      "id": "cam08",
+      "name": "Avenue",
+      "ip": "10.77.0.18",
+      "model": "LD-B8K40",
+      "codec": "H265",
+      "audio": false,
+      "pexelsId": 35330813,
+      "source": "https://www.pexels.com/video/nighttime-city-intersection-with-cars-passing-35330813/"
+    },
+    {
+      "id": "cam09",
+      "name": "Penguin Beach",
+      "ip": "10.77.0.19",
+      "model": "LD-B4K21",
+      "codec": "H264",
+      "audio": false,
+      "pexelsId": 13458429,
+      "source": "https://www.pexels.com/video/african-penguins-on-a-sandy-beach-13458429/"
+    }
+  ]
+}

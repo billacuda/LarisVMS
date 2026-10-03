@@ -19,6 +19,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The web server is published self-contained, so no ASP.NET Core runtime is needed.
 - The web server registers the node and proxy builds bundled with it as Pending on startup, replacing
   install-web.ps1's direct database writes.
+- Setup wizard: the database step explains that SQL Server Express needs `.\SQLEXPRESS` as the server
+  name, both as a hint and in the error when the server can't be found.
+
+### Fixed
+
+- Fresh installs: the setup wizard failed with "too many redirects", then an error on every page,
+  because settings and Entra sign-in were read from a database that didn't exist yet.
+- Fresh installs: creating the admin account failed with "Role SUPER ADMIN does not exist", and left a
+  half-created account that locked the wizard. Roles are now seeded before the admin is created, and
+  a failed role assignment removes the account.
+- Live view stayed on "Reconnecting" for a node on the same machine as the web server that connects
+  through `localhost` (IPv6 `::1`).
+- Live AI boxes lagged moving objects by ~700 ms: detection frames were decoded frame-threaded
+  (~600 ms) and rate-limited with a look-ahead filter (~80 ms), and each frame was timestamped after
+  both. Decoding is now low-latency and the rate limit keeps frames as they arrive.
+- Live AI boxes moved in steps two or three times a second instead of smoothly; they now follow
+  objects at the display's frame rate.
+- Choosing DirectML as a node's AI accelerator turned AI detection off on NVIDIA and Intel GPUs.
+- In-progress motion in Grid mode was rejected by the server and only appeared on the timeline once it
+  ended.
 
 ## [0.209.0] - 2026-10-01
 

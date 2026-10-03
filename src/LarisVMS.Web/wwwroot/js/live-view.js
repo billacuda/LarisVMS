@@ -337,6 +337,11 @@
         var socket = null;
         var sourceBuffer = null;
         var pending = [];
+        // Arrival time of each queued fragment (parallel to `pending`), and of the one currently
+        // being appended — published to the box overlay only once its append completes, so the
+        // arrival instant and the buffered end it produced always describe the same frame.
+        var pendingArrivals = [];
+        var appendingArrivalMs = null;
         var closed = false;
         var driftTimer = null;
         var initialSeekDone = false;
@@ -386,11 +391,20 @@
                 driftMs = (sourceBuffer.buffered.end(last) - videoEl.currentTime) * 1000;
             }
             var existing = videoEl._larisvmsLiveTiming;
+            // The buffered end produced by the fragment that arrived at arrivalMs. Paired with that
+            // arrival (both set only after its append completes), it lets the overlay measure drift
+            // against the video's *live* currentTime on every frame — see videoLatencyMs.
+            var bufferedEndSec = null;
+            if (arrivalMs !== null && sourceBuffer && sourceBuffer.buffered.length > 0) {
+                bufferedEndSec = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
+            }
             videoEl._larisvmsLiveTiming = {
                 // Kept from the previous sample when this call couldn't measure one (mid-append), so
                 // a busy SourceBuffer doesn't blank the overlay's clock for a frame.
                 lastFragmentArrivalMs: arrivalMs !== null ? arrivalMs
                     : (existing ? existing.lastFragmentArrivalMs : null),
+                bufferedEndSec: bufferedEndSec !== null ? bufferedEndSec
+                    : (existing ? existing.bufferedEndSec : null),
                 driftMs: driftMs !== null ? driftMs : (existing ? existing.driftMs : null)
             };
         }
@@ -403,6 +417,7 @@
         function appendNext() {
             if (closed || !sourceBuffer || sourceBuffer.updating || pending.length === 0) return;
             try {
+                appendingArrivalMs = pendingArrivals.length > 0 ? pendingArrivals.shift() : null;
                 sourceBuffer.appendBuffer(pending.shift());
             } catch (e) {
                 statusEl.textContent = 'Playback error: ' + e.message;
@@ -514,6 +529,12 @@
                 statusEl.textContent = 'This browser cannot decode this stream (' + mimeType + ').';
                 return;
             }
+            // Registered before appendNext's own listener, so it sees the arrival of the fragment
+            // that just finished appending before appendNext starts the next one.
+            sourceBuffer.addEventListener('updateend', function () {
+                if (appendingArrivalMs !== null) publishLiveTiming(appendingArrivalMs);
+                appendingArrivalMs = null;
+            });
             sourceBuffer.addEventListener('updateend', appendNext);
 
             function isTimeBuffered(t) {
@@ -790,9 +811,10 @@
                     }
                     statusEl.textContent = '';
                     // Anchors the box overlay's presentation clock — see publishLiveTiming.
-                    // Recorded before appendNext() so it marks when the bytes actually arrived, not
-                    // when the SourceBuffer got around to accepting them.
-                    if (fragmentCount > 1) publishLiveTiming(Date.now());
+                    // Recorded here so it marks when the bytes actually arrived, not when the
+                    // SourceBuffer got around to accepting them; published once that append
+                    // completes (see the updateend listener), paired with the buffered end it made.
+                    pendingArrivals.push(fragmentCount > 1 ? Date.now() : null);
                     pending.push(new Uint8Array(evt.data));
                     appendNext();
                 };
@@ -1100,6 +1122,16 @@
             // fallback keeps boxes roughly placed instead of letting the presentation clock run away
             // backwards as sinceArrival grows without bound.
             if (sinceArrival > BOX_QUEUE_MAX_AGE_SECONDS * 1000) return BOX_FALLBACK_LATENCY_MS;
+            // Drift measured against the video's live currentTime, not a sampled driftMs. A sample
+            // only refreshes on fragment arrival or driftTimer's tick, so between refreshes
+            // sinceArrival grew with the clock while the sampled drift stood still: the two cancel,
+            // the presentation clock froze, and boxes only moved 2-3 times a second however fast
+            // detections arrived. Measured live, drift shrinks exactly as fast as sinceArrival
+            // grows (playback advances at ~1x), so the presentation clock advances smoothly.
+            if (typeof t.bufferedEndSec === 'number') {
+                var liveDriftMs = (t.bufferedEndSec - videoEl.currentTime) * 1000;
+                return sinceArrival + liveDriftMs + BOX_RESIDUAL_LATENCY_MS;
+            }
             return sinceArrival + t.driftMs + BOX_RESIDUAL_LATENCY_MS;
         }
 

@@ -753,7 +753,12 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         {
             foreach (var (zoneId, span) in recorder.Session.GetInProgressSpans(now, MotionCheckpointRecency))
             {
-                _pendingMotionSpans.Enqueue(new MotionSpanReportItem(cameraId, zoneId, span.StartUtc, span.EndUtc, span.PeakScore));
+                // Grid mode's GridRegionZoneId is an internal sentinel, rewritten to null exactly as
+                // the MotionSpanCompleted handler does. Sent as-is it isn't a Zones row, so the
+                // server's FK_MotionSpans_Zones_ZoneId rejected every Grid-mode checkpoint and an
+                // in-progress span only appeared once it completed.
+                var reportedZoneId = zoneId == GridRegionZoneId ? (Guid?)null : zoneId;
+                _pendingMotionSpans.Enqueue(new MotionSpanReportItem(cameraId, reportedZoneId, span.StartUtc, span.EndUtc, span.PeakScore));
             }
         }
 

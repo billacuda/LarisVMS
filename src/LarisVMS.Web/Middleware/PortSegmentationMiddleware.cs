@@ -23,6 +23,8 @@ public class PortSegmentationMiddleware(RequestDelegate next)
 
     public async Task InvokeAsync(HttpContext context, ISettingsResolver settings)
     {
+        if (SetupMiddleware.IsSetupPending(context)) { await next(context); return; }
+
         var configuredPort = await settings.GetAsync<int?>(SettingKey, null);
         if (configuredPort is not { } port || port <= 0)
         {

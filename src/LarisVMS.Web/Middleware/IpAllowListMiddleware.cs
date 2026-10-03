@@ -18,6 +18,8 @@ public class IpAllowListMiddleware(RequestDelegate next)
 
     public async Task InvokeAsync(HttpContext context, ISettingsResolver settings)
     {
+        if (SetupMiddleware.IsSetupPending(context)) { await next(context); return; }
+
         var key = MediaRoutes.IsMediaPath(context.Request.Path) ? LiveViewSettingKey : ManagementSettingKey;
         var raw = await settings.GetRawAsync(key);
         var parsed = IpAllowListPolicy.Parse(raw);

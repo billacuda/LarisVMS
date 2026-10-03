@@ -82,14 +82,14 @@ public class VisionSessionFfmpegArgsTests
     }
 
     [Fact]
-    public void FpsCapAppendsAnFpsFilterLastInTheChain()
+    public void FpsCapAppendsASelectFilterLastInTheChain()
     {
         var software = VisionSession.BuildFfmpegArgs(Options(fpsCap: 10));
-        Assert.Equal("scale=640:640,fps=10", software[software.ToList().IndexOf("-vf") + 1]);
+        Assert.Equal("scale=640:640,select='isnan(prev_selected_t)+gte(floor(t*10),floor(prev_selected_t*10)+1)'", software[software.ToList().IndexOf("-vf") + 1]);
 
         var letterbox = new LetterboxGeometry(ScaledWidth: 640, ScaledHeight: 360, PadLeft: 0, PadTop: 140);
         var cuda = VisionSession.BuildFfmpegArgs(Options("cuda", letterbox, fpsCap: 12));
-        Assert.Equal("scale_cuda=w=640:h=360:format=nv12,hwdownload,format=nv12,pad=640:640:0:140:color=black,fps=12",
+        Assert.Equal("scale_cuda=w=640:h=360:format=nv12,hwdownload,format=nv12,pad=640:640:0:140:color=black,select='isnan(prev_selected_t)+gte(floor(t*12),floor(prev_selected_t*12)+1)'",
             cuda[cuda.ToList().IndexOf("-vf") + 1]);
     }
 
@@ -110,7 +110,7 @@ public class VisionSessionFfmpegArgsTests
         Assert.Equal("scale=1280:720", software[software.ToList().IndexOf("-vf") + 1]);
 
         var cuda = VisionSession.BuildFfmpegArgs(Options("cuda", width: 1280, height: 720, fpsCap: 10));
-        Assert.Equal("scale_cuda=w=1280:h=720:format=nv12,hwdownload,format=nv12,fps=10",
+        Assert.Equal("scale_cuda=w=1280:h=720:format=nv12,hwdownload,format=nv12,select='isnan(prev_selected_t)+gte(floor(t*10),floor(prev_selected_t*10)+1)'",
             cuda[cuda.ToList().IndexOf("-vf") + 1]);
     }
 
@@ -126,5 +126,22 @@ public class VisionSessionFfmpegArgsTests
 
         Assert.Equal("scale_cuda=w=436:h=640:format=nv12,hwdownload,format=nv12,pad=640:640:102:0:color=black",
             args[args.ToList().IndexOf("-vf") + 1]);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("cuda")]
+    [InlineData("d3d11va")]
+    public void DecodesWithLowLatencyOptionsBeforeTheInput(string? hwaccel)
+    {
+        // Frame-threaded decode delayed every frame (and so every live-view box) by ~600 ms.
+        var args = VisionSession.BuildFfmpegArgs(Options(hwaccel)).ToList();
+        var input = args.IndexOf("-i");
+
+        Assert.Equal("slice", args[args.IndexOf("-thread_type") + 1]);
+        Assert.Equal("low_delay", args[args.IndexOf("-flags") + 1]);
+        Assert.Equal("nobuffer", args[args.IndexOf("-fflags") + 1]);
+        Assert.True(args.IndexOf("-thread_type") < input, "decoder options must come before -i");
+        Assert.True(args.IndexOf("-flags") < input, "decoder options must come before -i");
     }
 }

@@ -94,6 +94,21 @@ public class AccelSelectionTests
         Assert.Equal(AiAccelerator.Amd, AccelSelection.Choose(AiAccelerator.Auto, [AiAccelerator.Amd]));
     }
 
+    [Theory]
+    [InlineData(AiAccelerator.Nvidia)]
+    [InlineData(AiAccelerator.Intel)]
+    [InlineData(AiAccelerator.Amd)]
+    public void DirectMLRunsOnAnyDetectedGpu(AiAccelerator gpu)
+    {
+        Assert.Equal(AiAccelerator.Amd, AccelSelection.Choose(AiAccelerator.Amd, [gpu]));
+    }
+
+    [Fact]
+    public void DirectMLNeedsAGpu()
+    {
+        Assert.Null(AccelSelection.Choose(AiAccelerator.Amd, []));
+    }
+
     [Fact]
     public void AutoNeverFallsBackToCpuWhenNothingIsDetected()
     {

@@ -72,9 +72,16 @@ public static class IpAllowListPolicy
     /// (live/playback/snapshot proxying, node control calls, failover probing) builds a plain
     /// "http://{ip}:{port}/..." URL straight from the stored value — an unmapped "::ffff:x.x.x.x"
     /// there is simply not a valid host in that string, breaking the connection outright.</summary>
+    ///
+    /// The IPv6 loopback ("::1", what a node on the same machine reports when its server URL is
+    /// https://localhost) becomes "127.0.0.1" for the same reason: unbracketed, "::1" isn't a valid
+    /// host in that string either, and live view failed with "Invalid URI: The hostname could not be
+    /// parsed". Other IPv6 addresses are still stored as-is, so IPv6-only node networks aren't supported.</summary>
     public static string? Unmap(IPAddress? remoteIp)
     {
         if (remoteIp is null) return null;
-        return (remoteIp.IsIPv4MappedToIPv6 ? remoteIp.MapToIPv4() : remoteIp).ToString();
+        if (remoteIp.IsIPv4MappedToIPv6) return remoteIp.MapToIPv4().ToString();
+        if (IPAddress.IPv6Loopback.Equals(remoteIp)) return IPAddress.Loopback.ToString();
+        return remoteIp.ToString();
     }
 }

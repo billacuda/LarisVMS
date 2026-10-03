@@ -235,6 +235,16 @@ public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot 
 
         var args = new List<string> { "-nostdin", "-rtsp_transport", "tcp", "-timeout", "5000000" };
 
+        // Low-latency decode. Each frame is stamped "captured" when it comes out of this pipe
+        // (ReadLoop), and the live-view box overlay positions detections on the video timeline by
+        // that stamp. ffmpeg's default H.264 software decode is frame-threaded, which holds back
+        // roughly one frame per thread (up to 16): measured 600 ms at 25 fps on a 16-thread CPU,
+        // so every box was drawn ~600 ms late and visibly trailed its object. Slice threading
+        // keeps multi-core decode without the reorder delay; nobuffer/low_delay stop the
+        // demuxer and decoder holding frames back as well. The live-view recorder leg copies
+        // video without decoding, so it never had this delay.
+        args.AddRange(["-fflags", "nobuffer", "-flags", "low_delay", "-thread_type", "slice"]);
+
         if (!string.IsNullOrWhiteSpace(options.HardwareAcceleration))
         {
             args.Add("-hwaccel"); args.Add(options.HardwareAcceleration);
@@ -259,8 +269,14 @@ public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot 
         // Frame-rate cap last in the chain (on CPU frames — post-hwdownload for the GPU path) so it
         // only ever runs on frames that survived. Node guarantees FpsCap is below the stream's real
         // rate, so this only drops, never duplicates.
+        // select, not fps=: the fps filter looks ahead to pick the frame nearest each output slot, so
+        // it only releases a frame once later ones have arrived. Measured at 7 fps from 25: frames
+        // left the pipe a median 79 ms late, which (frames being stamped on arrival here) drew every
+        // live-view box that much behind its object. This keeps the first frame of each 1/FpsCap s
+        // slot the moment it arrives: 0 ms added, same average rate.
         var fpsFilter = options.FpsCap > 0
-            ? string.Create(CultureInfo.InvariantCulture, $",fps={options.FpsCap}")
+            ? string.Create(CultureInfo.InvariantCulture,
+                $",select='isnan(prev_selected_t)+gte(floor(t*{options.FpsCap}),floor(prev_selected_t*{options.FpsCap})+1)'")
             : "";
 
         if (useGpuScale)

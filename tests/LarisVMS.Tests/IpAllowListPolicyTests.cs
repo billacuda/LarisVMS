@@ -88,4 +88,14 @@ public class IpAllowListPolicyTests
 
         Assert.False(IpAllowListPolicy.IsAllowed(ipv6, networks));
     }
+
+    [Theory]
+    [InlineData("::ffff:10.0.0.42", "10.0.0.42")]
+    [InlineData("::1", "127.0.0.1")]
+    [InlineData("10.0.0.42", "10.0.0.42")]
+    [InlineData("2001:db8::1", "2001:db8::1")]
+    public void UnmapReturnsAHostUsableInAPlainUrl(string remote, string expected)
+    {
+        Assert.Equal(expected, IpAllowListPolicy.Unmap(IPAddress.Parse(remote)));
+    }
 }

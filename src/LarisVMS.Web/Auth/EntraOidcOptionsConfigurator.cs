@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using LarisVMS.Core.Entities;
 using LarisVMS.Infrastructure.Data;
 
 namespace LarisVMS.Web.Auth;
@@ -26,8 +27,7 @@ public class EntraOidcOptionsConfigurator(IServiceScopeFactory scopeFactory) : I
         if (name != SchemeName) return;
 
         using var scope = scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-        var settings = db.EntraSsoSettings.AsNoTracking().FirstOrDefault();
+        var settings = ReadSettings(scope.ServiceProvider);
 
         // OpenIdConnectOptions.Validate() requires a non-empty ClientId unconditionally — and per
         // this class' own doc comment, AuthenticationMiddleware resolves (and thus validates) every
@@ -60,4 +60,21 @@ public class EntraOidcOptionsConfigurator(IServiceScopeFactory scopeFactory) : I
     }
 
     public void Configure(OpenIdConnectOptions options) => Configure(Options.DefaultName, options);
+
+    /// <summary>Null when there's no database to read yet — no connection string before the setup
+    /// wizard has run, or no tables before its first migration. Treated the same as "Entra not
+    /// configured", so pre-setup requests get the placeholder options instead of an exception.</summary>
+    private static EntraSsoSettings? ReadSettings(IServiceProvider services)
+    {
+        var connectionString = services.GetRequiredService<IConfiguration>().GetConnectionString("DefaultConnection");
+        if (string.IsNullOrWhiteSpace(connectionString)) return null;
+        try
+        {
+            return services.GetRequiredService<ApplicationDbContext>().EntraSsoSettings.AsNoTracking().FirstOrDefault();
+        }
+        catch (Microsoft.Data.SqlClient.SqlException)
+        {
+            return null;
+        }
+    }
 }

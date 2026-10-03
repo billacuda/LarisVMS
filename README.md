@@ -4,6 +4,10 @@ Open-source video management software (VMS/NVR) for ONVIF cameras. It records vi
 events to local disks or network shares on one or more Windows recorder nodes. Live view, playback
 and administration all run in the browser, on desktop, tablet and phone.
 
+<p align="center">
+  <a href="https://www.buymeacoffee.com/billacuda"><img src="https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=☕&slug=billacuda&button_colour=5F7FFF&font_colour=ffffff&font_family=Cookie&outline_colour=000000&coffee_colour=FFDD00" /></a>
+</p>
+
 **Current version: [0.209.0](CHANGELOG.md)**
 
 > **A note on AI-assisted development.** This project is built with the help of AI tooling (Claude
@@ -252,7 +256,6 @@ tools/export-models         Python: exports detection models to ONNX
 - Windows only (server and nodes).
 - Entra SSO has not been tested (I don't have a tenant to test it against, but in theory it should work)
 - AD integration not implented yet, but is in the works.
-- Bounding boxes for moving objects may not be exactly in sync with objects in live view. This is a known bug and should hopefully be fixed soon.
 - Some features listed may have placeholders (webhooks, Teams/Slack integration)
 - Basic email functionality should work with SMTP. Graph API email has not been tested yet.s
 
