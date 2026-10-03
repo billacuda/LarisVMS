@@ -39,6 +39,26 @@ body {
     flex-direction: column;
 }
 
+/* The sidebar is a Bootstrap `offcanvas-lg`: in-flow at lg+, an overlay drawer below. Bootstrap
+   forces `background-color: transparent !important` on it at lg+ and paints its own body-bg drawer
+   below — both overridden here (two-class selector wins) so it stays --lv-surface everywhere. */
+.lv-side.offcanvas-lg {
+    background-color: var(--lv-surface) !important;
+    --bs-offcanvas-width: 260px;
+    --bs-offcanvas-bg: var(--lv-surface);
+    --bs-offcanvas-color: var(--lv-text);
+    --bs-offcanvas-border-color: var(--lv-divider);
+}
+
+@media (max-width: 991.98px) {
+    .lv-side.offcanvas-lg {
+        --bs-offcanvas-border-width: 2px;
+        overflow-y: auto;
+        padding-top: env(safe-area-inset-top);
+        padding-bottom: env(safe-area-inset-bottom);
+    }
+}
+
 .lv-brand {
     display: flex;
     align-items: center;
@@ -128,6 +148,12 @@ body {
     gap: 14px;
 }
 
+/* Hidden below sm (see _LoginPartial); truncated above it so a long email can't push the topbar
+   past the screen edge. */
+.lv-username {
+    max-width: 16rem;
+}
+
 .lv-darktoggle {
     display: flex;
     align-items: center;
@@ -147,6 +173,36 @@ body {
 .lv-content {
     padding: 28px 32px 48px;
     flex: 1;
+}
+
+/* Phone widths: desktop shell padding ate ~20% of a 360px screen. Safe-area insets keep content
+   clear of notches/rounded corners when installed as a standalone app (viewport-fit=cover). */
+@media (max-width: 767.98px) {
+    .lv-topbar {
+        min-height: 56px;
+        padding: calc(8px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right)) 8px calc(12px + env(safe-area-inset-left));
+        gap: 10px;
+    }
+
+    .lv-content {
+        padding: 16px calc(12px + env(safe-area-inset-right)) calc(32px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left));
+    }
+
+    .lv-content h1 {
+        font-size: 1.5rem;
+    }
+
+    /* Long tab rows (Settings has 14) scroll sideways instead of wrapping into a wall of rows. */
+    .lv-content .nav-tabs {
+        flex-wrap: nowrap !important;
+        overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-width: thin;
+    }
+
+    .lv-content .nav-tabs .nav-link {
+        white-space: nowrap;
+    }
 }
 
 /* Per-user column picker (column-picker.js) — a native <details> disclosure rather than a Bootstrap

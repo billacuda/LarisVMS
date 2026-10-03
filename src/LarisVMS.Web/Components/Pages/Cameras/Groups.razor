@@ -61,7 +61,7 @@
     var isBuiltIn = g.Id == CameraGroup.AllCamerasId;
     var bodyId = $"group-body-{g.Id}";
 
-    <div class="card mb-3" style="max-width: 640px; margin-left: @(Depth(g) * 1.75)rem;">
+    <div class="card mb-3" style="max-width: 640px; margin-left: min(@(Depth(g) * 1.75)rem, @(Depth(g) * 4)vw);">
         <div class="card-header d-flex justify-content-between align-items-center">
             <button type="button" class="btn btn-link text-decoration-none p-0 fw-semibold group-collapse-toggle"
                     data-bs-toggle="collapse" data-bs-target="#@bodyId" aria-expanded="true">

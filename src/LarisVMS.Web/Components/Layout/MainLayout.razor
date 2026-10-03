@@ -22,7 +22,7 @@
        fields computed in OnInitializedAsync, one per nav item, mirroring the policy on the page it
        links to. Element IDs (lvSidebar/lvTopbar) must stay exactly as in the old layout: JS-heavy
        pages migrated in a later phase (kiosk fullscreen mode, etc.) reach into them by id. *@
-    <aside class="lv-side collapse d-lg-block" id="lvSidebar">
+    <aside class="lv-side offcanvas-lg offcanvas-start" id="lvSidebar" tabindex="-1" aria-label="Navigation">
         <div class="lv-brand">
             @if (_logoDataUri is not null)
             {
@@ -32,6 +32,8 @@
                 <div class="lv-brand-text">@_appName</div>
                 <div class="lv-brand-sub">Video Management</div>
             </div>
+            <button type="button" class="btn-close d-lg-none ms-auto" data-bs-dismiss="offcanvas"
+                    data-bs-target="#lvSidebar" aria-label="Close navigation"></button>
         </div>
         <nav class="lv-nav">
             @if (_isAuthenticated)
@@ -82,8 +84,8 @@
 
     <div class="lv-main">
         <div class="lv-topbar" id="lvTopbar">
-            <button class="btn btn-outline-secondary d-lg-none" type="button" data-bs-toggle="collapse"
-                    data-bs-target="#lvSidebar" aria-controls="lvSidebar" aria-expanded="false" aria-label="Toggle navigation">
+            <button class="btn btn-outline-secondary d-lg-none" type="button" data-bs-toggle="offcanvas"
+                    data-bs-target="#lvSidebar" aria-controls="lvSidebar" aria-label="Open navigation">
                 <span aria-hidden="true">☰</span>
             </button>
             <div class="lv-topbar-right ms-auto">

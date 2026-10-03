@@ -4,7 +4,7 @@
 <div class="d-flex align-items-center gap-2">
 @if (_isSignedIn)
 {
-    <span class="text-muted small">@_userName</span>
+    <span class="text-muted small d-none d-sm-inline text-truncate lv-username" title="@_userName">@_userName</span>
     <form action="/Identity/Account/Logout?returnUrl=%2F" method="post" class="d-inline">
         <AntiforgeryToken />
         <button type="submit" class="btn btn-link btn-sm p-0">Logout</button>

@@ -3,7 +3,7 @@
 @{
     ViewData["Title"] = "Schedule: " + Model.CameraName;
 }
-<div class="d-flex justify-content-between align-items-center mb-3">
+<div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-3">
     <h1 class="mb-0">Schedule: @Model.CameraName</h1>
     <a class="btn btn-outline-secondary" asp-page="Edit" asp-route-id="@Model.CameraId">Back to camera</a>
 </div>

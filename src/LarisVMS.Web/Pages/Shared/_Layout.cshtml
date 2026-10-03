@@ -65,7 +65,13 @@
 <html lang="en" data-bs-theme="light">
 <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    @* PWA: manifest (Program.cs /manifest.webmanifest) + icons make the site installable on phones. *@
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#f3f2f2" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#15171c" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <title>@ViewData["Title"] - @pageTitle</title>
     <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/theme.css" asp-append-version="true" />
@@ -125,11 +131,11 @@
            Every item below is permission-gated — see the `show*` booleans computed above — so an
            anonymous visitor (the Login page uses this same layout) or a Viewer-role user sees only
            what they can actually do something with, not a wall of dead links.
-           `collapse d-lg-block` (not the old navbar's mobile-only collapse) is what makes this a
-           permanent sidebar at desktop widths and an off-canvas panel toggled by the topbar's
-           hamburger button below on narrow ones — Bootstrap's own collapse plugin (already loaded)
-           drives both, no new JS. *@
-        <aside class="lv-side collapse d-lg-block" id="lvSidebar">
+           `offcanvas-lg` (Bootstrap's responsive offcanvas) is what makes this a permanent sidebar
+           at desktop widths and an overlay drawer, toggled by the topbar's hamburger button, below
+           lg — a plain collapse there pushed in beside the page and squeezed it on a phone.
+           Bootstrap's own offcanvas plugin (already loaded) drives both, no new JS. *@
+        <aside class="lv-side offcanvas-lg offcanvas-start" id="lvSidebar" tabindex="-1" aria-label="Navigation">
             <div class="lv-brand">
                 @if (branding.LogoDataUri is { } logo)
                 {
@@ -139,6 +145,8 @@
                     <div class="lv-brand-text">@pageTitle</div>
                     <div class="lv-brand-sub">Video Management</div>
                 </div>
+                <button type="button" class="btn-close d-lg-none ms-auto" data-bs-dismiss="offcanvas"
+                        data-bs-target="#lvSidebar" aria-label="Close navigation"></button>
             </div>
             <nav class="lv-nav">
                 @* Bare [Authorize] — any authenticated user, no specific resource/action. *@
@@ -194,8 +202,8 @@
 
         <div class="lv-main">
             <div class="lv-topbar" id="lvTopbar">
-                <button class="btn btn-outline-secondary d-lg-none" type="button" data-bs-toggle="collapse"
-                        data-bs-target="#lvSidebar" aria-controls="lvSidebar" aria-expanded="false" aria-label="Toggle navigation">
+                <button class="btn btn-outline-secondary d-lg-none" type="button" data-bs-toggle="offcanvas"
+                        data-bs-target="#lvSidebar" aria-controls="lvSidebar" aria-label="Open navigation">
                     <span aria-hidden="true">☰</span>
                 </button>
                 <div class="lv-topbar-right ms-auto">
@@ -216,6 +224,7 @@
        table-pagination.js right below it. *@
     <script src="~/js/user-preferences.js" asp-append-version="true"></script>
     <script src="~/js/theme.js" asp-append-version="true"></script>
+    <script src="~/js/pwa.js" asp-append-version="true"></script>
     <script src="~/js/sortable-table.js" asp-append-version="true"></script>
     <script src="~/js/list-filter.js" asp-append-version="true"></script>
     <script src="~/js/table-pagination.js" asp-append-version="true"></script>

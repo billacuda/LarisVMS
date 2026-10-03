@@ -28,6 +28,14 @@ Most settings exist at three levels. The most specific one wins:
 
 A blank field (or an “inherit — …” option) uses the next level up, and shows the value it currently inherits.
 
+## On a phone
+
+The whole site works in a phone browser. The sidebar opens from the ☰ button at the top left.
+
+To install it as an app, open the site in Chrome on Android and choose **Install app** from the ⋮ menu. On iOS, open it in Safari and choose **Share → Add to Home Screen**. The app opens full screen, without the browser's address bar.
+
+Installing needs a certificate the phone trusts. Browsers won't install a site using the self-signed certificate a fresh install starts with; see [Certificates](/Help/security#certificates).
+
 ## Where to start
 
 - New install: [Installation](/Help/installation)

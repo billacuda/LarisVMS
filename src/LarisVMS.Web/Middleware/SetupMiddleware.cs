@@ -19,7 +19,9 @@ public class SetupMiddleware(RequestDelegate next, IServiceScopeFactory scopeFac
         // /Setup instead of getting a real response.
         // /error is exempt so UseExceptionHandler's re-execution of a failed request shows the error
         // page; redirecting it to /Setup turned any exception on a wizard page into a redirect loop.
-        "/setup", "/identity", "/_framework", "/favicon", "/health", "/api/nodes", "/error"
+        "/setup", "/identity", "/_framework", "/favicon", "/health", "/api/nodes", "/error",
+        // PWA manifest/service worker/icons — the browser fetches these on every page, the wizard's too.
+        "/manifest.webmanifest", "/sw.js", "/icons"
     ];
 
     /// <summary>True while setup hasn't completed, for a request let through to a wizard-exempt

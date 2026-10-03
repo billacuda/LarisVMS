@@ -35,7 +35,17 @@
         if (attemptsLeft > 0) setTimeout(function () { applyActiveNavSettled(attemptsLeft - 1); }, 50);
     }
 
+    // On a phone the sidebar is an offcanvas drawer; enhanced navigation swaps the page underneath
+    // it without a reload, so it (and its backdrop) would otherwise stay open over the new page.
+    function closeDrawer() {
+        var side = document.getElementById('lvSidebar');
+        if (!side || !window.bootstrap || !window.bootstrap.Offcanvas) return;
+        var drawer = window.bootstrap.Offcanvas.getInstance(side);
+        if (drawer) drawer.hide();
+    }
+
     function sync() {
+        closeDrawer();
         // Theme reapply doesn't depend on the URL, so it's safe to run immediately here.
         if (window.larisvmsTheme) window.larisvmsTheme.reapply();
         applyActiveNavSettled(6);

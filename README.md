@@ -8,7 +8,7 @@ and administration all run in the browser, on desktop, tablet and phone.
   <a href="https://www.buymeacoffee.com/billacuda"><img src="https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=☕&slug=billacuda&button_colour=5F7FFF&font_colour=ffffff&font_family=Cookie&outline_colour=000000&coffee_colour=FFDD00" /></a>
 </p>
 
-**Current version: [0.210.0](CHANGELOG.md)**
+**Current version: [0.211.0](CHANGELOG.md)**
 
 > **A note on AI-assisted development.** This project is built with the help of AI tooling (Claude
 > Code). Features are planned in detail before implementation, generated code is reviewed as it's
@@ -46,6 +46,7 @@ and administration all run in the browser, on desktop, tablet and phone.
 - Exports, bookmarks and a snapshots browser.
 - Basic PTZ controls.
 - Video relayed through the server, through media proxies, or sent directly from node to browser.
+- Phone-friendly layout; installable as an app from Chrome on Android or Safari on iOS.
 
 **Administration**
 - Roles, a permissions matrix and per-camera/group access control.
@@ -93,9 +94,9 @@ Double-click an installer to be prompted for its settings, or pass them on the c
 ### 1. Install the web server
 
 ```powershell
-msiexec /i LarisVMS-Web-0.210.0-x64.msi
+msiexec /i LarisVMS-Web-0.211.0-x64.msi
 # silent, with a certificate:
-msiexec /i LarisVMS-Web-0.210.0-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx CERTPASSWORD=secret /qn
+msiexec /i LarisVMS-Web-0.211.0-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx CERTPASSWORD=secret /qn
 ```
 
 | Property | Default | Purpose |
@@ -114,7 +115,7 @@ Browse to `https://<server>:8444/`. The wizard sets up the database connection, 
 Install [FFmpeg](https://ffmpeg.org/) on each recording machine first (`winget install ffmpeg --scope machine`), then:
 
 ```powershell
-msiexec /i LarisVMS-Node-0.210.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> STORAGEROOT=D:\Recordings /qn
+msiexec /i LarisVMS-Node-0.211.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> STORAGEROOT=D:\Recordings /qn
 ```
 
 | Property | Default | Purpose |
@@ -134,7 +135,7 @@ The node registers itself and appears under **Settings → Nodes**.
 ### 4. Install media proxies (optional)
 
 ```powershell
-msiexec /i LarisVMS-Proxy-0.210.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> CLIENTPORT=4443 /qn
+msiexec /i LarisVMS-Proxy-0.211.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> CLIENTPORT=4443 /qn
 ```
 
 Properties: `SERVERURL`, `REGISTRATIONKEY`, `CLIENTPORT` (default 4443), `CLIENTENDPOINTHOST`, `CLIENTPFXPATH`, `CLIENTPFXPASSWORD`, `CLIENTALLOWINSECURE`, `INSECURETLS`, `SERVICEACCOUNT`, `SERVICEPASSWORD`, `INSTALLFOLDER`, with the same meanings as for the node.

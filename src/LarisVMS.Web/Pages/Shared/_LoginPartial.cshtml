@@ -6,7 +6,7 @@
 <div class="d-flex align-items-center gap-2">
 @if (SignInManager.IsSignedIn(User))
 {
-    <span class="text-muted small">@User.Identity?.Name</span>
+    <span class="text-muted small d-none d-sm-inline text-truncate lv-username" title="@User.Identity?.Name">@User.Identity?.Name</span>
     <form asp-area="Identity" asp-page="/Account/Logout" asp-route-returnUrl="@Url.Page("/Index", new { area = "" })" method="post" class="d-inline">
         <button type="submit" class="btn btn-link btn-sm p-0">Logout</button>
     </form>

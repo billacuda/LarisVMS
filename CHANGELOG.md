@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.211.0] - 2026-10-02
+
+### Added
+
+- Installable as an app on phones: web app manifest (named after Branding), app icons, favicon and a
+  minimal service worker (no caching).
+
+### Changed
+
+- Phone layout: the sidebar is an overlay drawer below desktop width instead of squeezing the page,
+  shell padding is tighter, the topbar username is hidden on small screens, page headers and toolbars
+  wrap, and long tab rows scroll sideways.
+
 ## [0.210.0] - 2026-10-02
 
 ### Added

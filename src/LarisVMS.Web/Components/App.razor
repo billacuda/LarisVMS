@@ -3,7 +3,13 @@
 <html lang="en" data-bs-theme="light">
 <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    @* PWA: manifest (Program.cs /manifest.webmanifest) + icons make the site installable on phones. *@
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#f3f2f2" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#15171c" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <base href="/" />
     <link rel="stylesheet" href="@V("/lib/bootstrap/dist/css/bootstrap.min.css")" />
     <link rel="stylesheet" href="@V("/css/theme.css")" />
@@ -29,6 +35,7 @@
     <script src="@V("/lib/bootstrap/dist/js/bootstrap.bundle.min.js")"></script>
     <script src="@V("/js/user-preferences.js")"></script>
     <script src="@V("/js/theme.js")"></script>
+    <script src="@V("/js/pwa.js")"></script>
     <script src="@V("/js/sortable-table.js")"></script>
     <script src="@V("/js/list-filter.js")"></script>
     <script src="@V("/js/table-pagination.js")"></script>
