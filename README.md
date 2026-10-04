@@ -37,7 +37,7 @@ and administration all run in the browser, on desktop, tablet and phone.
 **Detection & events**
 - Server-side motion detection with polygon zones or a mask grid.
 - ONVIF event ingestion, with user-defined event tag rules and timeline colors.
-- Built-in AI object detection (YOLOX, D-FINE, or your own ONNX model) on NVIDIA, AMD, Intel or CPU, or an external HTTP inference service.
+- Built-in LarisVision AI detection (YOLOX, D-FINE, or your own ONNX model) on NVIDIA, AMD, Intel or CPU, or an external HTTP inference service.
 - Live bounding boxes, object badges on live tiles, and a cropped snapshot for every detected object.
 - Object tracking (ByteTrack), confidence scores, optional high-resolution snapshots, and a Slice mode that tiles wide or panoramic cameras so small objects are still detected.
 
@@ -77,11 +77,11 @@ Settings are inherited **global → node → camera**, and the most specific val
 - **Operating system:** any 64-bit Windows version supported by [.NET 10](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md), for both the server and the recorder nodes.
 - **Server:** SQL Server (Express works) using SQL or Integrated authentication. For SQL Server Express, the server name is `.\SQLEXPRESS`. Building from source also needs the [.NET 10 SDK](https://dotnet.microsoft.com/download); the MSIs don't need any .NET runtime.
 - **Each recorder node:** [FFmpeg](https://ffmpeg.org/) (`winget install ffmpeg --scope machine`).
-- **AI detection (optional):** a GPU and its driver, or CPU only. NVIDIA additionally needs CUDA Toolkit 12.x and cuDNN 9.x (see [AI object detection](#ai-object-detection)) if you want to use CUDA or TensorRT acceleration, otherwise DirectML works out of the box.
+- **LarisVision (optional):** a GPU and its driver, or CPU only. NVIDIA additionally needs CUDA Toolkit 12.x and cuDNN 9.x (see [LarisVision](#larisvision-ai-detection)) if you want to use CUDA or TensorRT acceleration, otherwise DirectML works out of the box.
 - **Cameras:** ONVIF Profile S or T.
 - **Browser:** a current Chrome, Edge, Firefox or Safari. HEVC playback depends on browser support. On phones, Chrome (Android) or Safari (iOS).
 
-Performance depends entirely on your hardware: how many cameras and AI detection streams a node can handle comes down to its CPU, GPU, disks and network.
+Performance depends entirely on your hardware: how many cameras and LarisVision streams a node can handle comes down to its CPU, GPU, disks and network.
 
 ## Installing
 
@@ -174,9 +174,9 @@ The PowerShell scripts build from the repository and install on the same machine
 
 `deploy.ps1` (the old IIS-based deploy) is deprecated.
 
-## AI object detection
+## LarisVision AI detection
 
-AI detection is optional and per camera. A node without it still records, and still uses server
+LarisVision is optional and per camera. A node without it still records, and still uses server
 motion, camera events and vendor integrations. The node package includes the CPU, DirectML and CUDA
 backends, and picks one at startup:
 
@@ -205,7 +205,7 @@ sending every frame; higher rates add GPU load without improving results.
 - **Windows:** Windows 11, Windows Server 2022, and a Windows Server 2022 guest VM on Hyper-V 2022 with RTX 2070 GPU passthrough
 - **Recording storage:** NVMe, Hyper-V virtual disks (on NVMe), a Windows Storage Pool passed through to a Hyper-V VM, and SMB file shares
 - AMD Ryzen 7 5800X3D
-- Intel Core i5-12600K, including object detection on its integrated GPU via DirectML
+- Intel Core i5-12600K, including LarisVision on its integrated GPU via DirectML
 - NVIDIA GeForce RTX 2070: the main testing GPU and a dedicated recording node (DirectML, CUDA, and TensorRT FP32)
 - NVIDIA GeForce RTX 4080 Super (DirectML, CUDA, and TensorRT FP16)
 
@@ -268,7 +268,8 @@ tools/export-models         Python: exports detection models to ONNX
 ## Known limitations
 
 - Privacy-mask burn-in and camera-side motion zones can be configured, but are **disabled** pending fixes.
-- Bounding boxes from the camera's own analytics aren't shown; only LarisVMS's own detection draws boxes.
+- Bounding boxes from the camera's own analytics aren't shown; only LarisVision draws boxes.
+- Face detection and object appeared/missing events come from the camera's own analytics. LarisVision doesn't detect these on its own yet.
 - PTZ has not been tested against real PTZ hardware.
 - Windows only (server and nodes).
 - Entra SSO has not been tested (I don't have a tenant to test it against, but in theory it should work)
