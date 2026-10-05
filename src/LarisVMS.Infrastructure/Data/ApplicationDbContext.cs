@@ -310,7 +310,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.CheckInNonce).HasMaxLength(64);
             e.Property(x => x.Version).HasMaxLength(50);
             e.Property(x => x.Platform).HasMaxLength(50);
-            e.Property(x => x.LastIpAddress).HasMaxLength(45);
+            e.Property(x => x.LastIpAddress).HasMaxLength(64);
             e.Property(x => x.MediaSigningKey).HasConversion(new EncryptedNullableStringConverter()).HasMaxLength(500);
             // Plenty for a JSON array of up to 8 short encoder names (FfmpegCapabilityProber.KnownEncoders) — not a secret, no encryption needed.
             e.Property(x => x.DetectedEncodersJson).HasMaxLength(500);
@@ -357,7 +357,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             // Only the pfx password is a secret — encrypted like Node.MediaSigningKey.
             e.Property(x => x.CertPfxPassword).HasConversion(new EncryptedNullableStringConverter()).HasMaxLength(500);
             e.Property(x => x.Version).HasMaxLength(50);
-            e.Property(x => x.LastIpAddress).HasMaxLength(45);
+            e.Property(x => x.LastIpAddress).HasMaxLength(64);
             e.Property(x => x.LastError).HasMaxLength(500);
             // Failover plan phase 3: this proxy's outgoing quorum votes, same JSON shape as
             // Node.PartnerHealthReportsJson.

@@ -898,6 +898,93 @@
     // 4-entry map and the whole point of this path is per-frame speed with no round trip.
     var AI_CATEGORY_EMOJI = { Human: '🚶', Vehicle: '🚗', Animal: '🐾' };
     function aiCategoryEmoji(category) { return AI_CATEGORY_EMOJI[category] || '📦'; }
+
+    // How far behind real time a live <video> currently is, measured rather than assumed — see
+    // BOX_RESIDUAL_LATENCY_MS and startSession's publishLiveTiming. Returns the fixed fallback when
+    // there's no live session publishing for this element (an overlay over a tile in playback mode,
+    // or between reconnects). Shared by the AI box overlay and the Zones editor's motion overlay, so
+    // both hold their data back by exactly the same amount the video is behind.
+    function videoLatencyMsFor(videoEl) {
+        var t = videoEl._larisvmsLiveTiming;
+        if (!t || t.lastFragmentArrivalMs === null || t.driftMs === null) return BOX_FALLBACK_LATENCY_MS;
+        var sinceArrival = Date.now() - t.lastFragmentArrivalMs;
+        // A stale handle means fragments stopped arriving (upstream stall). Clamping to the fallback
+        // keeps overlays roughly placed instead of letting the presentation clock run away backwards
+        // as sinceArrival grows without bound.
+        if (sinceArrival > BOX_QUEUE_MAX_AGE_SECONDS * 1000) return BOX_FALLBACK_LATENCY_MS;
+        // Drift measured against the video's live currentTime, not a sampled driftMs. A sample only
+        // refreshes on fragment arrival or driftTimer's tick, so between refreshes sinceArrival grew
+        // with the clock while the sampled drift stood still: the two cancel, the presentation clock
+        // froze, and boxes only moved 2-3 times a second however fast detections arrived. Measured
+        // live, drift shrinks exactly as fast as sinceArrival grows (playback advances at ~1x), so the
+        // presentation clock advances smoothly.
+        if (typeof t.bufferedEndSec === 'number') {
+            var liveDriftMs = (t.bufferedEndSec - videoEl.currentTime) * 1000;
+            return sinceArrival + liveDriftMs + BOX_RESIDUAL_LATENCY_MS;
+        }
+        return sinceArrival + t.driftMs + BOX_RESIDUAL_LATENCY_MS;
+    }
+
+    var BOX_LABEL_HEIGHT = 16;
+
+    // Where each AI box's label goes: kept inside the visible video (a box at the right edge used to
+    // push its label off-screen) and clear of every other label. labels: [{w, h, box: {x, y, w, h}}],
+    // video: {x, y, w, h} in canvas pixels. Returns [{x, y}] in the same order.
+    //
+    // Larger boxes are placed first and keep the natural spot — just above the box, or just inside
+    // its top edge when there's no room above the video. Each later label tries that spot, then
+    // inside the box's bottom edge, then just below the box; if all three collide it steps down past
+    // whichever label it hits (or up, when it runs out of room below). A crowded frame can still end
+    // up with an overlap once every option is exhausted — that is accepted over hiding a label.
+    function placeBoxLabels(labels, video) {
+        var minX = video.x, maxX = video.x + video.w, minY = video.y, maxY = video.y + video.h;
+        function clampX(x, w) { return Math.max(minX, Math.min(x, maxX - w)); }
+        function clampY(y, h) { return Math.max(minY, Math.min(y, maxY - h)); }
+
+        var placedRects = [];
+        function collision(r) {
+            for (var i = 0; i < placedRects.length; i++) {
+                var p = placedRects[i];
+                if (r.x < p.x + p.w && p.x < r.x + r.w && r.y < p.y + p.h && p.y < r.y + r.h) return p;
+            }
+            return null;
+        }
+
+        var order = labels.map(function (_, i) { return i; }).sort(function (a, b) {
+            return labels[b].box.w * labels[b].box.h - labels[a].box.w * labels[a].box.h;
+        });
+
+        var result = new Array(labels.length);
+        order.forEach(function (i) {
+            var l = labels[i], b = l.box;
+            var x = clampX(b.x, l.w);
+            var preferredY = b.y - l.h >= minY ? b.y - l.h : b.y;
+
+            var chosen = null;
+            [preferredY, b.y + b.h - l.h, b.y + b.h].some(function (cy) {
+                var r = { x: x, y: clampY(cy, l.h), w: l.w, h: l.h };
+                if (collision(r)) return false;
+                chosen = r;
+                return true;
+            });
+
+            if (!chosen) {
+                var r = { x: x, y: clampY(preferredY, l.h), w: l.w, h: l.h };
+                var hit, steps = 0;
+                while ((hit = collision(r)) && steps++ < 12 && hit.y + hit.h + r.h <= maxY) r.y = hit.y + hit.h;
+                if (collision(r)) {
+                    r.y = clampY(preferredY, l.h);
+                    steps = 0;
+                    while ((hit = collision(r)) && steps++ < 12 && hit.y - r.h >= minY) r.y = hit.y - r.h;
+                }
+                chosen = r;
+            }
+
+            placedRects.push(chosen);
+            result[i] = { x: chosen.x, y: chosen.y };
+        });
+        return result;
+    }
     function capitalizeFirst(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
 
     // Two independent sources feed one tile's badge row: camera-native DetectionKind badges
@@ -931,12 +1018,14 @@
         if (container.dataset.signature === signature) return;
         container.dataset.signature = signature;
 
-        container.innerHTML = '';
+        // Only this function's own badges are replaced: the row's first child is the motion badge
+        // (view-play.js), which the motion poller toggles and which must stay first.
+        container.querySelectorAll('.live-object-badge').forEach(function (el) { el.remove(); });
         // One badge per class, never a summary — a camera seeing a person and a vehicle at the same
         // time has to show both. Spacing comes from the container's own flex gap.
         dbDetections.forEach(function (detection) {
             var badge = document.createElement('span');
-            badge.className = 'badge';
+            badge.className = 'badge live-object-badge';
             badge.style.backgroundColor = detection.colorHex;
             badge.style.color = readableTextColor(detection.colorHex);
             badge.title = detection.label + ' detected by the camera';
@@ -950,7 +1039,7 @@
             var color = detection.colorHex || '#22d3ee';
             var label = capitalizeFirst(detection.label);
             var badge = document.createElement('span');
-            badge.className = 'badge';
+            badge.className = 'badge live-object-badge';
             badge.style.backgroundColor = color;
             badge.style.color = readableTextColor(color);
             badge.title = label + ' is currently moving';
@@ -1027,7 +1116,9 @@
         var latestAlignmentMs = null;
 
         function draw() {
-            canvas.style.transform = (fsHandle && fsHandle.isFullscreen()) ? fsHandle.getTransformCss() : '';
+            // Follows the tile's digital zoom in the grid as well as fullscreen (drag-to-zoom works in
+            // both), so boxes stay on their objects while zoomed.
+            canvas.style.transform = fsHandle ? fsHandle.getTransformCss() : '';
 
             var w = videoEl.clientWidth, h = videoEl.clientHeight;
             var nw = videoEl.videoWidth, nh = videoEl.videoHeight;
@@ -1049,7 +1140,11 @@
             var offsetX = (w - dw) / 2, offsetY = (h - dh) / 2;
 
             ctx.clearRect(0, 0, w, h);
+            ctx.font = '12px sans-serif';
 
+            // Boxes first, labels after: a label is placed against every other label (see
+            // placeBoxLabels), so all of them have to be known before any is drawn.
+            var labels = [];
             latestBoxes.forEach(function (box) {
                 if (box.movementState === 'Moving' && !showMoving) return;
                 if (box.movementState === 'Idle' && !showIdle) return;
@@ -1077,13 +1172,19 @@
                 if (showConfidence && typeof box.confidence === 'number' && isFinite(box.confidence)) {
                     label += ' ' + Math.round(box.confidence * 100) + '%';
                 }
-                ctx.font = '12px sans-serif';
-                var textWidth = ctx.measureText(label).width;
-                var labelY = Math.max(0, y - 16);
-                ctx.fillStyle = color;
-                ctx.fillRect(x, labelY, textWidth + 8, 16);
-                ctx.fillStyle = readableTextColor(color);
-                ctx.fillText(label, x + 4, labelY + 12);
+                labels.push({
+                    text: label, color: color, w: ctx.measureText(label).width + 8, h: BOX_LABEL_HEIGHT,
+                    box: { x: x, y: y, w: boxW, h: boxH }
+                });
+            });
+
+            var placed = placeBoxLabels(labels, { x: offsetX, y: offsetY, w: dw, h: dh });
+            labels.forEach(function (l, i) {
+                var p = placed[i];
+                ctx.fillStyle = l.color;
+                ctx.fillRect(p.x, p.y, l.w, l.h);
+                ctx.fillStyle = readableTextColor(l.color);
+                ctx.fillText(l.text, p.x + 4, p.y + 12);
             });
         }
 
@@ -1110,30 +1211,7 @@
             refreshBadgesForCamera(cameraId);
         }
 
-        // How far behind real time the video currently is, measured rather than assumed — see
-        // BOX_RESIDUAL_LATENCY_MS and startSession's publishLiveTiming. Returns the fixed fallback
-        // when there's no live session publishing for this element (overlay mounted over a tile in
-        // playback mode, or between reconnects).
-        function videoLatencyMs() {
-            var t = videoEl._larisvmsLiveTiming;
-            if (!t || t.lastFragmentArrivalMs === null || t.driftMs === null) return BOX_FALLBACK_LATENCY_MS;
-            var sinceArrival = Date.now() - t.lastFragmentArrivalMs;
-            // A stale handle means fragments stopped arriving (upstream stall). Clamping to the
-            // fallback keeps boxes roughly placed instead of letting the presentation clock run away
-            // backwards as sinceArrival grows without bound.
-            if (sinceArrival > BOX_QUEUE_MAX_AGE_SECONDS * 1000) return BOX_FALLBACK_LATENCY_MS;
-            // Drift measured against the video's live currentTime, not a sampled driftMs. A sample
-            // only refreshes on fragment arrival or driftTimer's tick, so between refreshes
-            // sinceArrival grew with the clock while the sampled drift stood still: the two cancel,
-            // the presentation clock froze, and boxes only moved 2-3 times a second however fast
-            // detections arrived. Measured live, drift shrinks exactly as fast as sinceArrival
-            // grows (playback advances at ~1x), so the presentation clock advances smoothly.
-            if (typeof t.bufferedEndSec === 'number') {
-                var liveDriftMs = (t.bufferedEndSec - videoEl.currentTime) * 1000;
-                return sinceArrival + liveDriftMs + BOX_RESIDUAL_LATENCY_MS;
-            }
-            return sinceArrival + t.driftMs + BOX_RESIDUAL_LATENCY_MS;
-        }
+        function videoLatencyMs() { return videoLatencyMsFor(videoEl); }
 
         function lerp(a, b, f) { return a + (b - a) * f; }
 
@@ -1401,6 +1479,7 @@
     window.larisvmsLiveView = {
         start: start,
         startMotionIndicatorPolling: startMotionIndicatorPolling,
-        startDetectionOverlay: startDetectionOverlay
+        startDetectionOverlay: startDetectionOverlay,
+        videoLatencyMs: videoLatencyMsFor
     };
 })();

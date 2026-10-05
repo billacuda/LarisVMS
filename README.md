@@ -8,7 +8,7 @@ and administration all run in the browser, on desktop, tablet and phone.
   <a href="https://www.buymeacoffee.com/billacuda"><img src="https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=☕&slug=billacuda&button_colour=5F7FFF&font_colour=ffffff&font_family=Cookie&outline_colour=000000&coffee_colour=FFDD00" /></a>
 </p>
 
-**Current version: [0.211.0](CHANGELOG.md)**
+**Current version: [0.212.0](CHANGELOG.md)**
 
 > **A note on AI-assisted development.** This project is built with the help of AI tooling (Claude
 > Code). Features are planned in detail before implementation, generated code is reviewed as it's
@@ -28,7 +28,7 @@ and administration all run in the browser, on desktop, tablet and phone.
 **Recording**
 - One Windows-service recorder node per machine, with as many nodes as you need. Recording is `ffmpeg -c copy`, so no re-encoding.
 - Recording modes: Continuous, Motion, Schedule and Event, set globally or per camera, with pre/post-roll.
-- Retention set globally, per node and per camera, plus per-camera quotas and a disk watermark backstop.
+- Retention set globally, per node and per camera, plus per-camera quotas and a disk watermark backstop. Footage left behind when a camera or storage path moves is still aged out and confirmed deleted.
 - An optional archive volume (SMB share or USB drive) that receives aged-out footage instead of deleting it.
 - Recording failover to a backup node, and a maintenance mode.
 - Self-updating nodes: each build is approved once, and then every node installs it.
@@ -37,12 +37,13 @@ and administration all run in the browser, on desktop, tablet and phone.
 - Server-side motion detection with polygon zones or a mask grid.
 - ONVIF event ingestion, with user-defined event tag rules and timeline colors.
 - Built-in AI object detection (YOLOX, D-FINE, or your own ONNX model) on NVIDIA, AMD, Intel or CPU, or an external HTTP inference service.
-- Live bounding boxes, object badges on live tiles, and a cropped snapshot for every detected object.
+- Live bounding boxes synced to the video, object badges on live tiles, and a cropped snapshot for every detected object.
 
 **Viewing**
 - Saved camera-wall views with drag-and-drop layout, a fullscreen kiosk mode and rotation.
 - Adaptive live streaming that uses Sub streams for small tiles.
 - Synchronized multi-camera playback on a zoomable timeline, with preview thumbnails and 1/32× to 32× speed.
+- Digital zoom on any live or playback tile: drag a box to zoom in, right-click to reset.
 - Exports, bookmarks and a snapshots browser.
 - Basic PTZ controls.
 - Video relayed through the server, through media proxies, or sent directly from node to browser.
@@ -52,7 +53,7 @@ and administration all run in the browser, on desktop, tablet and phone.
 - Roles, a permissions matrix and per-camera/group access control.
 - Optional Microsoft Entra ID sign-in.
 - Alerts by email (SMTP, Microsoft Graph, Gmail), webhook, ntfy, Pushover, Slack and Teams.
-- Audit log, system logs, a health dashboard and scheduled database backups.
+- Audit log, system logs, a health dashboard (per-node CPU, memory, network, fps and detection counts) and scheduled database backups.
 - IP allow lists, an optional separate port for video traffic, and secrets encrypted at rest.
 - Branding: app name, colors, font and logo.
 - Built-in **Help** with documentation for every feature.
@@ -72,10 +73,38 @@ Settings are inherited **global → node → camera**, and the most specific val
 
 - **Operating system:** any 64-bit Windows version supported by [.NET 10](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md), for both the server and the recorder nodes.
 - **Server:** SQL Server (Express works) using SQL or Integrated authentication. Building from source also needs the [.NET 10 SDK](https://dotnet.microsoft.com/download); the MSIs don't need any .NET runtime.
-- **Each recorder node:** [FFmpeg](https://ffmpeg.org/) (`winget install ffmpeg --scope machine`).- **Each recorder node:** Windows, with [FFmpeg](https://ffmpeg.org/) installed (`winget install ffmpeg --scope machine`).
+- **Each recorder node:** Windows, with [FFmpeg](https://ffmpeg.org/) installed (`winget install ffmpeg --scope machine`).
 - **AI detection (optional):** a GPU and its driver, or CPU only. NVIDIA additionally needs CUDA Toolkit 12.x and cuDNN 9.x (see [AI object detection](#ai-object-detection)) if you want to use CUDA or TensorRT acceleration, otherwise DirectML works out of the box.
 - **Cameras:** ONVIF Profile S or T.
 - **Browser:** a current Chrome, Edge, Firefox or Safari. HEVC playback depends on browser support.
+
+### Hardware
+
+Windows 10 or later, or Windows Server 2019 or later.
+
+**Minimum** (physical or virtual):
+
+- 2 CPU cores
+- 8 GB RAM for the Web, Node and SQL Express services all on one machine
+- 12 GB RAM and 4 GB VRAM if the LarisVision service (optional) also runs on that machine
+
+**Recommended** (6 cameras at ~4K with hardware-accelerated object detection):
+
+- Windows 11 or Windows Server 2022 or later
+- 4 CPU cores
+- Separate machines for Web/SQL and Node/Vision
+- 8 GB RAM for Web/SQL, and 8 GB RAM for Node/Vision
+- 8 GB VRAM for the LarisVision service (optional)
+- See the GPU chart below for minimum and equivalent hardware for LarisVision acceleration
+
+| Generation / Tier | NVIDIA (CUDA / TensorRT) | AMD (DirectML) | Intel Arc (DirectML) | Intel iGPU (DirectML) | Typical VRAM / shared memory |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Baseline** | **RTX 2070** | *N/A (Turing era)* | *N/A* | *N/A* | **8 GB dedicated** |
+| **Gen 1** | **RTX 3060** | **RX 6600 / 6600 XT** | **Arc A580 / A750** | **Intel UHD 770** (e.g. i5-12600K) | **8–12 GB** (system shared for iGPU) |
+| **Gen 2** | **RTX 4060** | **RX 7600** | **Arc B560** | **Intel Arc Graphics** (Meteor Lake / Core Ultra) | **8 GB dedicated** / dynamic shared |
+| **Gen 3** | **RTX 5050** | **RX 9050 / 9060** | *Future gen* | **Intel Arc Graphics** (Lunar Lake / Battlemage Xe2) | **8 GB dedicated** / unified system memory |
+
+Without object detection, a node can easily handle 20 or more cameras.
 
 Performance depends entirely on your hardware: how many cameras and AI detection streams a node can handle comes down to its CPU, GPU, disks and network.
 
@@ -94,9 +123,9 @@ Double-click an installer to be prompted for its settings, or pass them on the c
 ### 1. Install the web server
 
 ```powershell
-msiexec /i LarisVMS-Web-0.211.0-x64.msi
+msiexec /i LarisVMS-Web-0.212.0-x64.msi
 # silent, with a certificate:
-msiexec /i LarisVMS-Web-0.211.0-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx CERTPASSWORD=secret /qn
+msiexec /i LarisVMS-Web-0.212.0-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx CERTPASSWORD=secret /qn
 ```
 
 | Property | Default | Purpose |
@@ -115,7 +144,7 @@ Browse to `https://<server>:8444/`. The wizard sets up the database connection, 
 Install [FFmpeg](https://ffmpeg.org/) on each recording machine first (`winget install ffmpeg --scope machine`), then:
 
 ```powershell
-msiexec /i LarisVMS-Node-0.211.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> STORAGEROOT=D:\Recordings /qn
+msiexec /i LarisVMS-Node-0.212.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> STORAGEROOT=D:\Recordings /qn
 ```
 
 | Property | Default | Purpose |
@@ -135,7 +164,7 @@ The node registers itself and appears under **Settings → Nodes**.
 ### 4. Install media proxies (optional)
 
 ```powershell
-msiexec /i LarisVMS-Proxy-0.211.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> CLIENTPORT=4443 /qn
+msiexec /i LarisVMS-Proxy-0.212.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> CLIENTPORT=4443 /qn
 ```
 
 Properties: `SERVERURL`, `REGISTRATIONKEY`, `CLIENTPORT` (default 4443), `CLIENTENDPOINTHOST`, `CLIENTPFXPATH`, `CLIENTPFXPASSWORD`, `CLIENTALLOWINSECURE`, `INSECURETLS`, `SERVICEACCOUNT`, `SERVICEPASSWORD`, `INSTALLFOLDER`, with the same meanings as for the node.

@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.212.0] - 2026-10-04
+
+### Added
+
+- Settings → Events: "Reset all object colors to defaults" button.
+- Dashboard: a card per node with CPU, memory and network load, total recording fps, and (with object
+  detection on) events and human/vehicle/animal counts for the last hour, 24 hours, 7 days and 30 days.
+- Live and View tiles: drag a box to zoom into it, the same as Playback. While zoomed, a reset button
+  shows in the tile's lower right, and right-clicking the video goes back to 1×.
+
+### Changed
+
+- Playback "Now" jumps to the end of the newest recorded footage instead of the current time, which
+  usually had nothing playable yet.
+
+- Live view: a moving object keeps its AI box and badge through pauses, until it has been still for
+  the detection idle timeout, instead of blinking off whenever it stops.
+- Vision Service: cameras running the same model variant can share ONNX Runtime sessions, up to
+  `Vision:MaxCamerasPerSession` cameras per session (default 1, no sharing). Raising it trades
+  per-frame inference latency for lower memory use.
+
+### Fixed
+
+- Playback drag-to-zoom: after zooming back out (or leaving fullscreen), dragging panned instead of
+  selecting a new area. Tiles now keep a single zoom state, and panning stays within the frame.
+- Live AI box labels running off the right edge of the video or overlapping each other.
+- Zones editor: the motion wash on grid cells and polygon zones ran ahead of the live video. It is now
+  held back to line up with the video, the same way live AI boxes are.
+- Footage outliving its retention when it was outside a node's current storage folders (a storage
+  path that changed, or a camera that moved to another node). The server now lists overdue footage
+  to the node that owns it, wherever it is, and the record is removed only once the node confirms the
+  file is gone. Nodes also remember unreported deletions across restarts, and storage-pressure cleanup
+  removes leftover footage from moved cameras before an active camera's.
+- Admin → Nodes: leftover-footage warnings show keep-forever and archive retention correctly, flag
+  footage the node hasn't confirmed deleting, ignore a failover backup's own recordings, and can
+  forget records left on a deleted node.
+- Settings → Events: a color's Reset button now counts as an unsaved change.
+- GPU-batched slice mode rejected for generic ONNX models whose outputs are in pixel units or
+  sorted by score, over sub-pixel rounding differences. Its self-check now compares each tile's
+  detections as a set, and falls back to per-tile inference whenever it can't prove each slot carries
+  its own tile. A batched graph that fails is not rebuilt for other cameras on the same slice layout.
+- Live view, playback, snapshots, exports and node control calls failing ("Invalid URI: The hostname
+  could not be parsed") for nodes and media proxies that check in over IPv6: their address is now
+  stored bracketed.
+- Live AI boxes trailing moving objects: vision frames are stamped with their stream arrival time
+  rather than when decoding finished, and the Web relay's own handling time is counted. The vision
+  cadence log line now reports the decode delay this removes.
+- Vision Service GC churn for generic ONNX models on the CPU-per-tile slice path: each tile is now
+  preprocessed straight from the frame instead of through two new large buffers per tile per frame.
+- Fewer vision frame drops: the Vision Service no longer copies model outputs every frame. Frames
+  published while the detection engine is still building no longer count as drops. The cadence log
+  line adds GC pause time and memory load.
+- Live tiles: object badges no longer cover the Motion badge. Motion comes first, the object badges
+  follow it on the same row, and they wrap only when they would run off the tile.
+
 ## [0.211.0] - 2026-10-02
 
 ### Added

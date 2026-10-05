@@ -48,6 +48,64 @@
         nodesOnline.classList.toggle('text-danger', data.nodesOnlineCount < data.nodesTotalCount);
     }
 
+    // ── Node cards ──────────────────────────────────────────────────────────
+    // Must produce the same markup and text as Pages/Index.razor's node cards (its pre-JS first
+    // paint) — see the matching Percent/Gigabytes/Mbits/BarClass helpers there.
+    var nodesContainer = document.getElementById('dashboardNodes');
+
+    function percent(p) { return p === null || p === undefined ? '—' : Math.round(p) + '%'; }
+    function gigabytes(b) { return b === null || b === undefined ? '—' : (b / 1073741824).toFixed(1); }
+    function mbits(b) { return b === null || b === undefined ? '—' : (b * 8 / 1000000).toFixed(1); }
+    function barClass(p) { return p >= 90 ? 'bg-danger' : p >= 75 ? 'bg-warning' : 'bg-success'; }
+    function barWidth(p) { return Math.round(Math.max(0, Math.min(100, p || 0))); }
+    function memoryPercent(n) {
+        return n.memoryUsedBytes !== null && n.memoryUsedBytes !== undefined && n.memoryTotalBytes
+            ? 100 * n.memoryUsedBytes / n.memoryTotalBytes : null;
+    }
+    function bar(p) {
+        return '<div class="progress mb-2" style="height: 6px;"><div class="progress-bar ' + barClass(p) +
+            '" style="width: ' + barWidth(p) + '%"></div></div>';
+    }
+
+    function countRow(label, c) {
+        if (!c) return '';
+        return '<tr><td>' + label + '</td>' +
+            '<td class="text-end">' + c.lastHour.toLocaleString() + '</td>' +
+            '<td class="text-end">' + c.last24Hours.toLocaleString() + '</td>' +
+            '<td class="text-end">' + c.last7Days.toLocaleString() + '</td>' +
+            '<td class="text-end">' + c.last30Days.toLocaleString() + '</td></tr>';
+    }
+
+    function renderNode(n) {
+        var html = '<div class="col-12 col-md-6 col-xl-4"><div class="card h-100"><div class="card-body">' +
+            '<div class="d-flex justify-content-between align-items-center mb-2">' +
+                '<span class="fw-semibold">' + escapeHtml(n.nodeName) + '</span>' +
+                '<span class="badge ' + (n.online ? 'text-bg-success' : 'text-bg-secondary') + '">' + (n.online ? 'online' : 'offline') + '</span>' +
+            '</div>';
+        if (n.hostStatsFresh) {
+            var mem = memoryPercent(n);
+            html += '<div class="small mb-1">CPU <span class="float-end">' + percent(n.cpuPercent) + '</span></div>' + bar(n.cpuPercent) +
+                '<div class="small mb-1">Memory <span class="float-end">' + gigabytes(n.memoryUsedBytes) + ' / ' + gigabytes(n.memoryTotalBytes) + ' GB</span></div>' + bar(mem) +
+                '<div class="small mb-1">Network <span class="float-end">↓ ' + mbits(n.netReceiveBytesPerSec) + ' · ↑ ' + mbits(n.netSendBytesPerSec) + ' Mbit/s</span></div>';
+        } else {
+            html += '<div class="small text-muted mb-1">No load figures from this node yet.</div>';
+        }
+        html += '<div class="small mb-1">Recording <span class="float-end">' + n.totalFps + ' fps from ' + n.camerasReporting + ' camera(s)</span></div>';
+        if (n.objectDetectionEnabled && n.events) {
+            html += '<table class="table table-sm small mb-0 mt-2"><thead><tr><th></th>' +
+                '<th class="text-end">1 h</th><th class="text-end">24 h</th><th class="text-end">7 d</th><th class="text-end">30 d</th></tr></thead><tbody>' +
+                countRow('Events', n.events) + countRow('Humans', n.humans) +
+                countRow('Vehicles', n.vehicles) + countRow('Animals', n.animals) +
+                '</tbody></table>';
+        }
+        return html + '</div></div></div>';
+    }
+
+    function renderNodes(data) {
+        if (!nodesContainer) return;
+        nodesContainer.innerHTML = (data.nodes || []).map(renderNode).join('');
+    }
+
     function statusBadge(r) {
         if (!r.cameraEnabled) return '<span class="badge text-bg-secondary">Disabled</span>';
         if (!r.nodeAssigned) return '<span class="badge text-bg-warning">No node</span>';
@@ -124,6 +182,7 @@
     function render(data) {
         lastData = data;
         renderSummary(data);
+        renderNodes(data);
 
         var showThumbnails = !!(thumbToggle && thumbToggle.checked);
         table.classList.toggle('hide-thumb-col', !showThumbnails);

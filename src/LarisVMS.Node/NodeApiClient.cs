@@ -123,6 +123,13 @@ public class NodeApiClient
         return (await response.Content.ReadFromJsonAsync<List<string>>(ct))!;
     }
 
+    public async Task<List<ExpiredSegmentDto>> GetExpiredSegmentsAsync(int limit, CancellationToken ct)
+    {
+        var response = await _http.GetAsync($"api/nodes/segments/expired?limit={limit}", ct);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<List<ExpiredSegmentDto>>(ct))!;
+    }
+
     public async Task<List<string>> GetPrimaryTieredSegmentFilePathsAsync(CancellationToken ct)
     {
         var response = await _http.GetAsync("api/nodes/segments/primary-paths", ct);

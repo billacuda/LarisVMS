@@ -39,10 +39,10 @@ public class ProxyAuthMiddleware(RequestDelegate next)
             return;
         }
 
-        // Unmapped for the same reason as NodeAuthMiddleware — see IpAllowListPolicy.Unmap.
+        // Normalized for the same reason as NodeAuthMiddleware — see IpAllowListPolicy.ToUrlHost.
         var proxy = await proxyService.AuthenticateAsync(
             token[..separator], token[(separator + 1)..],
-            IpAllowListPolicy.Unmap(context.Connection.RemoteIpAddress), context.RequestAborted);
+            IpAllowListPolicy.ToUrlHost(context.Connection.RemoteIpAddress), context.RequestAborted);
         if (proxy is null)
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;

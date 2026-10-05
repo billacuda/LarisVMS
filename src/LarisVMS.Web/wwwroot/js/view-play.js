@@ -91,23 +91,29 @@ window.larisvmsViewPlay = (function () {
         var cam = cameraById[cell.cameraId];
         var name = cam ? cam.name : '';
         var badgePos = badgePositionClasses();
+        // A right-corner row grows leftwards from its edge, wrapped lines included.
+        var badgeAlign = opts && (opts.badgeCorner === 'TopRight' || opts.badgeCorner === 'BottomRight')
+            ? ' justify-content-end' : '';
         return (
             '<div class="h-100 d-flex flex-column border rounded overflow-hidden" data-camera-tile="' + cell.cameraId + '">' +
                 '<div class="view-cell-frame position-relative flex-grow-1 bg-black" style="min-height: 0;">' +
                     '<video class="view-cell-video" style="width:100%; height:100%; object-fit:contain;" muted playsinline></video>' +
                     '<div class="position-absolute top-50 start-50 translate-middle text-white small text-center px-2 view-cell-status" role="status" aria-live="polite"></div>' +
-                    '<span class="badge bg-danger position-absolute ' + badgePos + ' live-motion-badge d-none"' +
-                        ' title="Motion detected — movement with no object class attached">🌀 Motion</span>' +
-                    // Filled in by live-view.js's poller from the camera's own object analytics.
-                    // Sits under the motion badge's corner rather than beside it, since the two are
-                    // mutually exclusive — a classified badge replaces the generic one.
+                    // One badge row: the motion badge first (toggled by live-view.js's motion poller),
+                    // then the object badges live-view.js's renderDetectionBadges appends after it —
+                    // camera-native classes and currently-moving AI objects. A single flex row rather
+                    // than two elements pinned to the same corner, which drew the object badges
+                    // straight over the motion badge whenever both showed.
                     //
                     // Wraps, and is width-capped to the cell: a camera can legitimately see several
                     // classes at once (a person walking a dog past a car is three), and every one of
-                    // them gets its own badge. Without the cap they'd run off the edge of a small
-                    // cell in a dense grid rather than stacking onto a second line.
-                    '<div class="position-absolute ' + badgePos + ' d-flex flex-wrap gap-1 live-detection-badges"' +
-                        ' style="max-width: calc(100% - .5rem);"></div>' +
+                    // them gets its own badge. They stay on one line until the next one would run
+                    // off the cell's edge, and only then start a second line.
+                    '<div class="position-absolute ' + badgePos + badgeAlign + ' d-flex flex-wrap gap-1 live-detection-badges"' +
+                        ' style="max-width: calc(100% - .5rem);">' +
+                        '<span class="badge bg-danger live-motion-badge d-none"' +
+                            ' title="Motion detected — movement with no object class attached">🌀 Motion</span>' +
+                    '</div>' +
                     // Only shown once this one cell has been toggled into playback mode (see the
                     // view-cell-playback button below) — every other cell keeps showing pure live
                     // video with no timeline at all. The right clearance keeps it clear of the

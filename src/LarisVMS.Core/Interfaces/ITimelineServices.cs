@@ -39,6 +39,15 @@ public interface ITimelineService
     /// resolves "which file covers this instant" against.</summary>
     Task<List<SegmentSummaryDto>> GetSegmentsAsync(Guid cameraId, DateTime fromUtc, DateTime toUtc, CancellationToken ct = default);
 
+    /// <summary>End of the newest recorded segment for this camera, or null if it has none. Segments
+    /// only get a row once they close, so this is the newest moment that can actually be played.</summary>
+    Task<DateTime?> GetLatestSegmentEndAsync(Guid cameraId, CancellationToken ct = default);
+
+    /// <summary>Detection spans (custom tags, AI detections, camera analytics — the Snapshots page's
+    /// definition of an event; plain motion excluded) from the last 30 days, grouped per camera by kind
+    /// and age — see CameraEventCountRow. Null cameraIds means every camera.</summary>
+    Task<List<CameraEventCountRow>> GetEventCountsAsync(IReadOnlyCollection<Guid>? cameraIds, DateTime nowUtc, CancellationToken ct = default);
+
     /// <summary>Null if segmentId doesn't exist or doesn't belong to cameraId — the /playback-segment
     /// proxy treats that as 404 rather than trusting the caller's cameraId/segmentId pairing.</summary>
     Task<PlaybackSegmentInfo?> GetSegmentForPlaybackAsync(Guid cameraId, long segmentId, CancellationToken ct = default);

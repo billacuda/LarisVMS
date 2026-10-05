@@ -48,6 +48,55 @@
     </div>
 </div>
 
+@* One card per node. dashboard.js renderNodes() re-renders this from /api/dashboard with the same
+   markup — keep the two in step (this is only the pre-JS first paint). *@
+<div class="row g-3 mb-4" id="dashboardNodes">
+    @foreach (var n in Nodes)
+    {
+        <div class="col-12 col-md-6 col-xl-4">
+            <div class="card h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span class="fw-semibold">@n.NodeName</span>
+                        <span class="badge @(n.Online ? "text-bg-success" : "text-bg-secondary")">@(n.Online ? "online" : "offline")</span>
+                    </div>
+                    @if (n.HostStatsFresh)
+                    {
+                        <div class="small mb-1">CPU <span class="float-end">@Percent(n.CpuPercent)</span></div>
+                        <div class="progress mb-2" style="height: 6px;"><div class="progress-bar @BarClass(n.CpuPercent)" style="width: @BarWidth(n.CpuPercent)%"></div></div>
+                        <div class="small mb-1">Memory <span class="float-end">@Gigabytes(n.MemoryUsedBytes) / @Gigabytes(n.MemoryTotalBytes) GB</span></div>
+                        <div class="progress mb-2" style="height: 6px;"><div class="progress-bar @BarClass(MemoryPercent(n))" style="width: @BarWidth(MemoryPercent(n))%"></div></div>
+                        <div class="small mb-1">Network <span class="float-end">↓ @Mbits(n.NetReceiveBytesPerSec) · ↑ @Mbits(n.NetSendBytesPerSec) Mbit/s</span></div>
+                    }
+                    else
+                    {
+                        <div class="small text-muted mb-1">No load figures from this node yet.</div>
+                    }
+                    <div class="small mb-1">Recording <span class="float-end">@n.TotalFps fps from @n.CamerasReporting camera(s)</span></div>
+                    @if (n.ObjectDetectionEnabled && n.Events is not null)
+                    {
+                        <table class="table table-sm small mb-0 mt-2">
+                            <thead><tr><th></th><th class="text-end">1 h</th><th class="text-end">24 h</th><th class="text-end">7 d</th><th class="text-end">30 d</th></tr></thead>
+                            <tbody>
+                                @foreach (var (label, counts) in CountRows(n))
+                                {
+                                    <tr>
+                                        <td>@label</td>
+                                        <td class="text-end">@counts.LastHour.ToString("N0")</td>
+                                        <td class="text-end">@counts.Last24Hours.ToString("N0")</td>
+                                        <td class="text-end">@counts.Last7Days.ToString("N0")</td>
+                                        <td class="text-end">@counts.Last30Days.ToString("N0")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
 <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
     @* Persisted server-side (see user-preferences.js) so the choice survives a reload and follows the
        signed-in user across devices — same convention as the theme toggle. Kept as its own switch
@@ -192,6 +241,27 @@
         DisabledCount = health.DisabledCount;
         NodesOnlineCount = health.NodesOnlineCount;
         NodesTotalCount = health.NodesTotalCount;
+        Nodes = health.Nodes ?? [];
+    }
+
+    private List<LarisVMS.Core.Dtos.NodeDashboardRow> Nodes { get; set; } = [];
+
+    // Node card formatting — dashboard.js has matching helpers (percent, gigabytes, mbits, barClass)
+    // and must produce the same text for the same values.
+    private static string Percent(double? p) => p is { } v ? v.ToString("0", CultureInfo.InvariantCulture) + "%" : "—";
+    private static string Gigabytes(long? bytes) => bytes is { } b ? (b / 1073741824.0).ToString("0.0", CultureInfo.InvariantCulture) : "—";
+    private static string Mbits(long? bytesPerSec) => bytesPerSec is { } b ? (b * 8 / 1_000_000.0).ToString("0.0", CultureInfo.InvariantCulture) : "—";
+    private static double? MemoryPercent(LarisVMS.Core.Dtos.NodeDashboardRow n) =>
+        n.MemoryUsedBytes is { } used && n.MemoryTotalBytes is { } total && total > 0 ? 100.0 * used / total : null;
+    private static string BarClass(double? p) => p is >= 90 ? "bg-danger" : p is >= 75 ? "bg-warning" : "bg-success";
+    private static string BarWidth(double? p) => Math.Clamp(p ?? 0, 0, 100).ToString("0", CultureInfo.InvariantCulture);
+
+    private static IEnumerable<(string Label, LarisVMS.Core.Dtos.WindowCounts Counts)> CountRows(LarisVMS.Core.Dtos.NodeDashboardRow n)
+    {
+        if (n.Events is { } e) yield return ("Events", e);
+        if (n.Humans is { } h) yield return ("Humans", h);
+        if (n.Vehicles is { } v) yield return ("Vehicles", v);
+        if (n.Animals is { } a) yield return ("Animals", a);
     }
 
     // dashboard.js has to render the identical string for the same row (this markup is only the

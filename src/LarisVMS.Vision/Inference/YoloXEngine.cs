@@ -51,7 +51,7 @@ public sealed class YoloXEngine : IDetectionEngine, IBatchDetectionEngine, ISlic
     /// <see cref="ValidateInputShape"/>'s own name check.</summary>
     private const string PinnedInputName = "images";
 
-    private readonly InferenceSession _session;
+    private readonly SessionLease _lease;
     private readonly InferenceProfile _profile;
     private readonly SliceLayout? _sliceLayout;
     private readonly IReadOnlyList<string> _labels;
@@ -97,33 +97,34 @@ public sealed class YoloXEngine : IDetectionEngine, IBatchDetectionEngine, ISlic
         };
 
         var stopwatch = Stopwatch.StartNew();
-        if (sliceLayout is not null)
+        // Shared with other cameras on the same variant (SharedSessionPool) — built only if none exists.
+        _lease = SharedSessionPool.Acquire(SharedSessionPool.KeyFor(opts), options.MaxCamerasPerSession, () =>
         {
-            // Composition order matters — see OnnxPreprocessHead.MergeSliced's own doc comment:
-            // OnnxBatchAxis must rewrite the model's internal fixed-batch-1 Reshape targets *before*
-            // the slicing head is merged in. numClasses = labels.Count, same as the plain-batch path.
-            var batchDynamic = OnnxBatchAxis.MakeBatchDynamic(File.ReadAllBytes(opts.ModelPath), sliceLayout.Slices.Count, labels.Count);
-            var sliced = OnnxPreprocessHead.MergeSliced(batchDynamic, sliceLayout, PinnedInputName,
-                rescaleTo01: false, rgbChannelOrder: false);
-            _session = new InferenceSession(sliced, OrtSessionFactory.Create(opts, logger));
-        }
-        else if (_batchSize > 1)
-        {
-            // OnnxBatchAxis.MakeBatchDynamic needs numClasses to recognize the export's own
-            // fixed-batch-1 Reshape targets (numAttrs - 5) — labels.Count is exactly that.
-            var rewritten = OnnxBatchAxis.MakeBatchDynamic(File.ReadAllBytes(opts.ModelPath), _batchSize, labels.Count);
-            var sessionOptions = OrtSessionFactory.Create(
-                opts with { TensorRtBatchProfile = (PinnedInputName, profile.NetworkHeight, profile.NetworkWidth) },
-                logger);
-            _session = new InferenceSession(rewritten, sessionOptions);
-        }
-        else
-        {
-            _session = new InferenceSession(opts.ModelPath, OrtSessionFactory.Create(opts, logger));
-        }
+            if (sliceLayout is not null)
+            {
+                // Composition order matters — see OnnxPreprocessHead.MergeSliced's own doc comment:
+                // OnnxBatchAxis must rewrite the model's internal fixed-batch-1 Reshape targets *before*
+                // the slicing head is merged in. numClasses = labels.Count, same as the plain-batch path.
+                var batchDynamic = OnnxBatchAxis.MakeBatchDynamic(File.ReadAllBytes(opts.ModelPath), sliceLayout.Slices.Count, labels.Count);
+                var sliced = OnnxPreprocessHead.MergeSliced(batchDynamic, sliceLayout, PinnedInputName,
+                    rescaleTo01: false, rgbChannelOrder: false);
+                return new InferenceSession(sliced, OrtSessionFactory.Create(opts, logger));
+            }
+            if (_batchSize > 1)
+            {
+                // OnnxBatchAxis.MakeBatchDynamic needs numClasses to recognize the export's own
+                // fixed-batch-1 Reshape targets (numAttrs - 5) — labels.Count is exactly that.
+                var rewritten = OnnxBatchAxis.MakeBatchDynamic(File.ReadAllBytes(opts.ModelPath), _batchSize, labels.Count);
+                var sessionOptions = OrtSessionFactory.Create(
+                    opts with { TensorRtBatchProfile = (PinnedInputName, profile.NetworkHeight, profile.NetworkWidth) },
+                    logger);
+                return new InferenceSession(rewritten, sessionOptions);
+            }
+            return new InferenceSession(opts.ModelPath, OrtSessionFactory.Create(opts, logger));
+        });
         stopwatch.Stop();
 
-        _inputName = _session.InputMetadata.Keys.First();
+        _inputName = _lease.Session.InputMetadata.Keys.First();
         if (sliceLayout is null && _batchSize > 1 && _inputName != PinnedInputName)
         {
             _logger.LogWarning(
@@ -151,7 +152,7 @@ public sealed class YoloXEngine : IDetectionEngine, IBatchDetectionEngine, ISlic
         var stopwatch = Stopwatch.StartNew();
 
         var input = NamedOnnxValue.CreateFromTensor(_inputName, Preprocess(frame, _inputTensor, imageIndex: 0));
-        using var outputs = _session.Run([input]);
+        using var outputs = _lease.Run([input]);
 
         var outTensor = outputs.First().AsTensor<float>();
         var dims = outTensor.Dimensions;
@@ -192,7 +193,7 @@ public sealed class YoloXEngine : IDetectionEngine, IBatchDetectionEngine, ISlic
     }
 
     /// <summary>Currently unused (the planned frame-slicing overhaul is the first real caller) — one
-    /// genuine batched <see cref="_session"/> forward pass over every image at once via
+    /// genuine batched <see cref="_lease"/> forward pass over every image at once via
     /// <see cref="OnnxBatchAxis"/>'s graph rewrite, not a loop. <paramref name="images"/>.Count must
     /// equal this engine's own fixed <see cref="EngineOptions.BatchSize"/> — see
     /// <see cref="DFineEngine.DetectBatch"/>'s own doc comment for why a real batched Run call can't
@@ -221,7 +222,7 @@ public sealed class YoloXEngine : IDetectionEngine, IBatchDetectionEngine, ISlic
         }
 
         var input = NamedOnnxValue.CreateFromTensor(_inputName, _batchTensor);
-        using var outputs = _session.Run([input]);
+        using var outputs = _lease.Run([input]);
 
         var outTensor = outputs.First().AsTensor<float>();
         var dims = outTensor.Dimensions;
@@ -271,7 +272,7 @@ public sealed class YoloXEngine : IDetectionEngine, IBatchDetectionEngine, ISlic
 
         var stopwatch = Stopwatch.StartNew();
         var nv12Tensor = new DenseTensor<byte>(wholeFrameNv12, [1, layout.CaptureHeight * 3 / 2, layout.CaptureWidth]);
-        using var outputs = _session.Run([NamedOnnxValue.CreateFromTensor(_inputName, nv12Tensor)]);
+        using var outputs = _lease.Run([NamedOnnxValue.CreateFromTensor(_inputName, nv12Tensor)]);
 
         var outTensor = outputs.First().AsTensor<float>();
         var dims = outTensor.Dimensions;
@@ -360,7 +361,7 @@ public sealed class YoloXEngine : IDetectionEngine, IBatchDetectionEngine, ISlic
 
     private void ValidateInputShape()
     {
-        var dims = _session.InputMetadata[_inputName].Dimensions; // expected [1, 3, H, W]
+        var dims = _lease.Session.InputMetadata[_inputName].Dimensions; // expected [1, 3, H, W]
         if (dims.Length != 4)
         {
             _logger.LogWarning("YOLOX input '{Input}' has rank {Rank}, expected 4 ([1,3,H,W]) — proceeding anyway.", _inputName, dims.Length);
@@ -377,5 +378,5 @@ public sealed class YoloXEngine : IDetectionEngine, IBatchDetectionEngine, ISlic
                 "(DetectionModelCatalog.GetYoloXNetworkSize) must match the pinned export.");
     }
 
-    public void Dispose() => _session.Dispose();
+    public void Dispose() => _lease.Dispose();
 }

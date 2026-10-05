@@ -279,6 +279,11 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
             select new StaleSegmentDetail(g.Key.CameraId, g.Key.Name, g.Key.NodeId, g.Max(x => x.EndUtc)))
             .ToListAsync(ct);
 
+    public async Task<int> ForgetSegmentsOnMissingNodesAsync(CancellationToken ct = default)
+        => await db.Segments
+            .Where(s => !db.Nodes.Any(n => n.Id == s.NodeId))
+            .ExecuteDeleteAsync(ct);
+
     public async Task DeleteAsync(Guid id, CancellationToken ct = default)
     {
         // ExecuteDeleteAsync issues the DELETE directly rather than loading the entity first — a

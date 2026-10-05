@@ -49,7 +49,15 @@ public record NodeHeartbeatRequest(string? Version, long? FreeBytes = null, long
     /// managed to reach a verdict on this cycle. The server persists these as this node's outgoing
     /// votes; <c>RecordingFailoverService</c> tallies them alongside central's own live probe and any
     /// assigned proxy's. Null/empty from an older node build or one with nothing to probe.</summary>
-    List<NodePartnerHealthReport>? PartnerHealthReports = null);
+    List<NodePartnerHealthReport>? PartnerHealthReports = null,
+    /// <summary>The node machine's own CPU, memory and network load, for the dashboard. Null from an
+    /// older node build, or one that can't measure them (non-Windows).</summary>
+    NodeHostStats? HostStats = null);
+
+/// <summary>A node machine's host load, sampled each heartbeat. CPU is percent busy across all cores
+/// since the previous sample; network is total bytes/s across its active adapters since then.</summary>
+public record NodeHostStats(double? CpuPercent, long? MemoryUsedBytes, long? MemoryTotalBytes,
+    long? NetReceiveBytesPerSec, long? NetSendBytesPerSec);
 
 /// <summary>Failover plan phase 3: one recorder node a voter (a partner node, or a media proxy) is
 /// asked to probe for the recording-failover quorum. <see cref="Host"/>/<see cref="Port"/> are the
@@ -499,6 +507,12 @@ public record NodeStatusReportItem(Guid CameraId, string State, DateTime? LastSe
 /// per-camera quota, or watermark eviction) — the web deletes the matching Segment rows so the DB
 /// index never claims a file that no longer exists.</summary>
 public record SegmentDeleteRequest(List<string> FilePaths);
+
+/// <summary>A segment this node owns that is past its retention (GET /api/nodes/segments/expired) —
+/// wherever the file is: under the node's current storage or archive root, an old root, or a folder
+/// for a camera that has since moved to another node. The node deletes the file (or confirms it is
+/// already gone) and reports it through /segments/delete; the row is only removed on that report.</summary>
+public record ExpiredSegmentDto(Guid CameraId, string FilePath);
 
 /// <summary>Reported by the node's StorageManager after it MOVES a segment file from the primary
 /// volume to the archive volume (primary retention would have deleted it, and archiving is enabled).

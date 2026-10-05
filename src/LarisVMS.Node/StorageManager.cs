@@ -67,6 +67,16 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
     // BackgroundService's own sequential loop, never concurrently with itself.
     private readonly List<string> _pendingDeletionReports = [];
 
+    // _pendingDeletionReports, persisted: a node restarted between deleting files and reporting them
+    // used to leave those rows behind for good (the files were gone, so nothing rediscovered them
+    // until the hourly reconcile, which can't see paths outside the current roots).
+    internal string PendingDeletionsPath { get; init; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "pending-segment-deletions.json");
+
+    // GET /api/nodes/segments/expired page size — the server re-lists anything not yet confirmed, so
+    // a large backlog simply drains over successive sweeps.
+    private const int ExpiredSegmentBatchSize = 500;
+
     // Archive storage: a segment file this MOVED to the archive volume but hasn't yet successfully
     // told the web tier about (POST /api/nodes/segments/relocate). Same re-queue-on-failure reason as
     // _pendingDeletionReports above, but the stakes are higher: the source file is deliberately kept
@@ -94,6 +104,9 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
+        // Reports a previous run deleted the files for but never got through to the server.
+        _pendingDeletionReports.AddRange(LoadPendingDeletions(PendingDeletionsPath, logger));
+
         while (!ct.IsCancellationRequested)
         {
             try
@@ -200,6 +213,18 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
 
         ApplyWatermark(config, storageRoot, archiveRoot, archiveUsable, now, deletedPaths, relocations);
 
+        try
+        {
+            var relocatingNow = relocations.Select(r => r.Item.OldFilePath)
+                .Concat(_pendingRelocationReports.Select(r => r.Item.OldFilePath))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            await DeleteServerExpiredSegmentsAsync(relocatingNow, deletedPaths, ct);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            logger.LogWarning(ex, "Server-directed retention pass failed — will retry next sweep.");
+        }
+
         // Export output files (and any stray concat list file ExportRunner didn't get to clean up
         // after a crash) — a sibling of the cam-{id}/ folders above, deliberately never walked by
         // the per-camera loop, so it needs its own pass. Age-only, no quota/watermark interaction:
@@ -276,6 +301,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
                 }
             }
         }
+        SavePendingDeletions(PendingDeletionsPath, _pendingDeletionReports, logger);
 
         // Relocations (archive moves): the source is still on the primary volume — only removed once
         // the web has updated the row to the archive path. A failed report keeps both copies and
@@ -562,17 +588,25 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
         var alreadyHandled = new HashSet<string>(deletedPaths, StringComparer.OrdinalIgnoreCase);
         foreach (var r in relocations) alreadyHandled.Add(r.Item.OldFilePath);
 
-        // Global oldest-first across every camera on this node — retention/quota already ran, so
-        // whatever's left here is "in policy" but the volume is full anyway; age is the only fair
-        // tiebreaker across cameras with different quotas/retention. Carries CameraId/MainDir
-        // alongside each FileInfo (not just the file) so a deletion here can also clean up that
-        // segment's cached thumbnails, same as the retention/quota loops above.
-        var candidates = config.Cameras
+        // Leftover footage from cameras no longer assigned here goes first, oldest-first: nobody is
+        // recording it anymore, so it should never cost an active camera its footage. Then global
+        // oldest-first across every assigned camera — retention/quota already ran, so whatever's left
+        // here is "in policy" but the volume is full anyway; age is the only fair tiebreaker across
+        // cameras with different quotas/retention. Carries CameraId/MainDir alongside each FileInfo
+        // (not just the file) so a deletion here can also clean up that segment's cached thumbnails,
+        // same as the retention/quota loops above. Orphans are never archived here (their
+        // ArchiveEnabled lookup below is false), only deleted.
+        var orphanCandidates = FindOrphanedCameraMainDirs(storageRoot, config.Cameras.Select(c => c.CameraId))
+            .SelectMany(x => EnumerateEvictable(x.MainDir, now).Select(f => (x.CameraId, x.MainDir, File: f)))
+            .Where(x => !alreadyHandled.Contains(x.File.FullName))
+            .OrderBy(x => x.File.LastWriteTimeUtc);
+        var assignedCandidates = config.Cameras
             .Select(c => (c.CameraId, MainDir: Path.Combine(storageRoot, $"cam-{c.CameraId}", "main")))
             .Where(x => Directory.Exists(x.MainDir))
             .SelectMany(x => EnumerateEvictable(x.MainDir, now).Select(f => (x.CameraId, x.MainDir, File: f)))
             .Where(x => !alreadyHandled.Contains(x.File.FullName))
             .OrderBy(x => x.File.LastWriteTimeUtc);
+        var candidates = orphanCandidates.Concat(assignedCandidates);
 
         // Projection assumes each selected segment frees its own length — exact for a deletion,
         // optimistic for an archive move (whose primary copy isn't freed until the relocation report
@@ -1285,6 +1319,126 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
 
                 if (now - info.LastWriteTimeUtc > LogRetention) TryDelete(path);
             }
+        }
+    }
+
+    /// <summary>Server-directed retention: deletes this node's segments the server lists as overdue
+    /// (NodeService.ListExpiredSegmentsAsync), wherever they are — the cases every other pass here
+    /// misses because it only walks the current storage/archive roots: a storage root that has since
+    /// moved, or leftovers outside them for a camera that moved to another node. A file that is
+    /// already gone counts as confirmed too, but only when the folder it lived in is reachable, so an
+    /// offline share is never mistaken for footage that was deleted. Every confirmed path joins this
+    /// sweep's deletion report; the server only removes the row once that report lands, and keeps
+    /// re-listing anything unconfirmed.</summary>
+    private async Task DeleteServerExpiredSegmentsAsync(HashSet<string> excluded, List<string> deletedPaths, CancellationToken ct)
+    {
+        var expired = await api.GetExpiredSegmentsAsync(ExpiredSegmentBatchSize, ct);
+        if (expired.Count == 0) return;
+
+        var already = new HashSet<string>(deletedPaths, StringComparer.OrdinalIgnoreCase);
+        var dirsToPrune = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int deleted = 0, alreadyGone = 0, rejected = 0, unreachable = 0;
+        foreach (var e in expired)
+        {
+            if (excluded.Contains(e.FilePath) || already.Contains(e.FilePath)) continue;
+            if (TryGetSegmentLayout(e.FilePath, e.CameraId) is not { } layout)
+            {
+                rejected++;
+                continue;
+            }
+
+            if (File.Exists(e.FilePath))
+            {
+                if (!TryDelete(e.FilePath)) continue;
+                deleted++;
+            }
+            else if (Directory.Exists(layout.RootDir))
+            {
+                alreadyGone++;
+            }
+            else
+            {
+                unreachable++;
+                continue;
+            }
+
+            deletedPaths.Add(e.FilePath);
+            already.Add(e.FilePath);
+            dirsToPrune.Add(layout.StreamDir);
+        }
+
+        foreach (var dir in dirsToPrune)
+            if (Directory.Exists(dir)) PruneEmptyDirectories(dir);
+
+        if (deleted + alreadyGone > 0)
+            logger.LogInformation(
+                "Retention: removed {Deleted} overdue segment(s) the regular sweep can't reach (an old storage root or a camera that moved away), and confirmed {Gone} already gone.",
+                deleted, alreadyGone);
+        if (rejected > 0)
+            logger.LogWarning(
+                "Retention: skipped {Count} overdue segment path(s) that don't look like this node's recordings (expected …\\cam-<camera id>\\main|sub\\…\\*.mp4) — left in place.",
+                rejected);
+        if (unreachable > 0)
+            logger.LogWarning(
+                "Retention: {Count} overdue segment(s) are on storage this node can't reach right now — will retry next sweep.",
+                unreachable);
+    }
+
+    /// <summary>The folder layout a path the server asks this node to delete must have — the same one
+    /// the recorder writes: {root}\cam-{cameraId}\{main|sub}\...\{file}.mp4, with no relative
+    /// segments. Null for anything else, which is left alone. RootDir is the folder above cam-{id},
+    /// used to tell "file deleted" apart from "storage unreachable".</summary>
+    internal static (string RootDir, string StreamDir)? TryGetSegmentLayout(string? path, Guid cameraId)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !path.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase)) return null;
+
+        var parts = path.Split(['\\', '/'], StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Any(p => p is "." or "..")) return null;
+
+        var camIndex = Array.FindIndex(parts, p => p.Equals($"cam-{cameraId}", StringComparison.OrdinalIgnoreCase));
+        if (camIndex < 1 || camIndex + 2 >= parts.Length) return null;
+        var stream = parts[camIndex + 1];
+        if (!stream.Equals("main", StringComparison.OrdinalIgnoreCase) && !stream.Equals("sub", StringComparison.OrdinalIgnoreCase)) return null;
+
+        // Rebuild against the original string so a UNC (\\server\share) or drive root is kept intact.
+        var camDir = Path.GetDirectoryName(path);
+        while (camDir is not null && !Path.GetFileName(camDir).Equals($"cam-{cameraId}", StringComparison.OrdinalIgnoreCase))
+            camDir = Path.GetDirectoryName(camDir);
+        if (camDir is null || Path.GetDirectoryName(camDir) is not { } rootDir) return null;
+        return (rootDir, Path.Combine(camDir, stream));
+    }
+
+    internal static List<string> LoadPendingDeletions(string path, ILogger? logger = null)
+    {
+        try
+        {
+            if (!File.Exists(path)) return [];
+            return System.Text.Json.JsonSerializer.Deserialize<List<string>>(File.ReadAllText(path)) ?? [];
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Couldn't read pending segment deletion reports from {Path} — starting without them; the server's expired list will re-surface those rows.", path);
+            return [];
+        }
+    }
+
+    internal static void SavePendingDeletions(string path, IReadOnlyCollection<string> pending, ILogger? logger = null)
+    {
+        try
+        {
+            if (pending.Count == 0)
+            {
+                if (File.Exists(path)) File.Delete(path);
+                return;
+            }
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var tmp = path + ".tmp";
+            File.WriteAllText(tmp, System.Text.Json.JsonSerializer.Serialize(pending));
+            File.Move(tmp, path, overwrite: true);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Couldn't save pending segment deletion reports to {Path}.", path);
         }
     }
 

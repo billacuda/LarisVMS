@@ -46,16 +46,15 @@ namespace LarisVMS.Vision.Inference;
 /// exception, or unsupported normalize convention falls back to the CPU-per-tile path, which is always
 /// correct because it never asks the model's own graph to batch at all.
 ///
-/// Either way, the CPU-per-tile path crops each tile out of the whole captured nv12 frame on the CPU
-/// (<see cref="Nv12Ops.CropTile"/>, already exactly the shape kept in this codebase "for the planned
-/// slicing overhaul") and runs N separate batch-1 forward passes — the exact same single-image path
-/// <see cref="Detect"/> already uses.
+/// Either way, the CPU-per-tile path reads each tile straight out of the whole captured nv12 frame on
+/// the CPU (<see cref="PreprocessNv12Tile"/>, into the same reused input tensor <see cref="Detect"/>
+/// fills) and runs N separate batch-1 forward passes.
 ///
 /// Batching (<see cref="IBatchDetectionEngine"/>) is not implemented.
 /// </summary>
 public sealed class GenericOnnxEngine : IDetectionEngine, ISlicedDetectionEngine
 {
-    private readonly InferenceSession _session;
+    private readonly SessionLease _lease;
     private readonly InferenceProfile _profile;
     private readonly ModelDescriptor _descriptor;
     private readonly IDetectionDecoder _decoder;
@@ -106,27 +105,28 @@ public sealed class GenericOnnxEngine : IDetectionEngine, ISlicedDetectionEngine
         };
 
         var stopwatch = Stopwatch.StartNew();
-        var plainSession = new InferenceSession(options.ModelPath, OrtSessionFactory.Create(plainOpts, logger));
-        _inputName = plainSession.InputMetadata.Keys.First();
+        var plainLease = SharedSessionPool.Acquire(SharedSessionPool.KeyFor(plainOpts), options.MaxCamerasPerSession,
+            () => new InferenceSession(options.ModelPath, OrtSessionFactory.Create(plainOpts, logger)));
+        _inputName = plainLease.Session.InputMetadata.Keys.First();
         // Allocated before the GPU-native attempt below: Preprocess (used by both the CPU-per-tile
         // fallback and the verification step's own single-tile runs) needs it either way.
         _inputTensor = new DenseTensor<float>([1, 3, profile.NetworkHeight, profile.NetworkWidth]);
 
-        InferenceSession? gpuNativeSession = null;
-        if (sliceLayout is not null && DeclaresPossiblyDynamicBatch(plainSession, _inputName))
+        SessionLease? gpuNativeLease = null;
+        if (sliceLayout is not null && DeclaresPossiblyDynamicBatch(plainLease.Session, _inputName))
         {
-            gpuNativeSession = TryBuildGpuNativeSlicedSession(options, sliceLayout, profile, plainSession, logger);
+            gpuNativeLease = TryBuildGpuNativeSlicedSession(options, sliceLayout, profile, plainLease.Session, logger);
         }
 
-        if (gpuNativeSession is not null)
+        if (gpuNativeLease is not null)
         {
-            plainSession.Dispose();
-            _session = gpuNativeSession;
+            plainLease.Dispose();
+            _lease = gpuNativeLease;
             _gpuNativeSlicing = true;
         }
         else
         {
-            _session = plainSession;
+            _lease = plainLease;
             _gpuNativeSlicing = false;
         }
         stopwatch.Stop();
@@ -135,9 +135,10 @@ public sealed class GenericOnnxEngine : IDetectionEngine, ISlicedDetectionEngine
 
         _logger.LogInformation(
             "Loaded descriptor-driven model ({Classes} classes, decoder {Decoder}, input '{Input}') from {Path} in {LoadMs} ms " +
-            "(sliced: {Sliced}, slicing mode: {SliceMode}).",
+            "(sliced: {Sliced}, slicing mode: {SliceMode}, session: {Session}).",
             _labels.Count, descriptor.Decoder, _inputName, options.ModelPath, stopwatch.ElapsedMilliseconds,
-            sliceLayout is not null, sliceLayout is null ? "n/a" : _gpuNativeSlicing ? "GPU-native" : "CPU-per-tile");
+            sliceLayout is not null, sliceLayout is null ? "n/a" : _gpuNativeSlicing ? "GPU-native" : "CPU-per-tile",
+            _lease.IsShared ? $"shared, camera {_lease.LeaseNumber} of up to {options.MaxCamerasPerSession}" : "new");
     }
 
     public double? LastInferenceMilliseconds { get; private set; }
@@ -155,7 +156,7 @@ public sealed class GenericOnnxEngine : IDetectionEngine, ISlicedDetectionEngine
         var stopwatch = Stopwatch.StartNew();
 
         var input = NamedOnnxValue.CreateFromTensor(_inputName, Preprocess(frame));
-        using var outputs = _session.Run([input]);
+        using var outputs = _lease.Run([input]);
 
         var thresholds = new DecodeThresholds((float)confidence, (float)iou, _descriptor.MaxDetections, _descriptor.ClassAgnosticNms);
         var results = _decoder.Decode(outputs, _labels, thresholds, _profile);
@@ -224,7 +225,7 @@ public sealed class GenericOnnxEngine : IDetectionEngine, ISlicedDetectionEngine
         var nv12Tensor = new DenseTensor<byte>(wholeFrameNv12, [1, layout.CaptureHeight * 3 / 2, layout.CaptureWidth]);
         List<NamedOnnxValue> inputs = [NamedOnnxValue.CreateFromTensor("nv12", nv12Tensor)];
 
-        using var outputs = _session.Run(inputs);
+        using var outputs = _lease.Run(inputs);
 
         // Read the real batch dimension rather than trusting layout.Slices.Count — mirrors
         // DFineEngine.DetectSliced's own convention. Defense in depth: load-time verification
@@ -251,11 +252,9 @@ public sealed class GenericOnnxEngine : IDetectionEngine, ISlicedDetectionEngine
         var results = new List<List<ObjectDetection>>(layout.Slices.Count);
         foreach (var tile in layout.Slices)
         {
-            var tileNv12 = Nv12Ops.CropTile(wholeFrameNv12, layout.CaptureWidth, layout.CaptureHeight, tile.X, tile.Y, tile.Width, tile.Height);
-            var bgra = Nv12ToBgra(tileNv12, tile.Width, tile.Height);
-
-            var input = NamedOnnxValue.CreateFromTensor(_inputName, Preprocess(bgra));
-            using var outputs = _session.Run([input]);
+            var input = NamedOnnxValue.CreateFromTensor(_inputName,
+                PreprocessNv12Tile(wholeFrameNv12, layout.CaptureWidth, layout.CaptureHeight, tile.X, tile.Y, tile.Width, tile.Height));
+            using var outputs = _lease.Run([input]);
             // batchSlot defaults to 0 — each Run here is its own single-image (batch-1) forward pass.
             results.Add(_decoder.Decode(outputs, _labels, thresholds, _profile));
         }
@@ -282,7 +281,20 @@ public sealed class GenericOnnxEngine : IDetectionEngine, ISlicedDetectionEngine
     /// actually agree with N independent single-tile runs. See this class's own doc comment for why
     /// "ONNX Runtime didn't throw" alone is not sufficient proof and was the cause of a real production
     /// regression.</summary>
-    private InferenceSession? TryBuildGpuNativeSlicedSession(EngineOptions options, SliceLayout sliceLayout,
+    // Batched-graph variants that failed their check in this process, with why. Without this, every
+    // camera on the same slice layout rebuilt and re-tested a graph already known to be unusable, and
+    // each throw-away TensorRT session load left native memory the process didn't hand back. Keyed by
+    // the session-pool key plus the model file's timestamp, so a replaced model file is tried afresh.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> FailedBatchedVariants = new();
+
+    private static string? BatchedFailureKey(EngineOptions opts)
+    {
+        if (SharedSessionPool.KeyFor(opts) is not { } key) return null;
+        try { return key + "|" + File.GetLastWriteTimeUtc(opts.ModelPath).Ticks; }
+        catch (IOException) { return key; }
+    }
+
+    private SessionLease? TryBuildGpuNativeSlicedSession(EngineOptions options, SliceLayout sliceLayout,
         InferenceProfile profile, InferenceSession plainSession, ILogger<GenericOnnxEngine> logger)
     {
         if (!TryResolveMergedSliceNormalizeConvention(_descriptor.Normalize, out var rescaleTo01))
@@ -297,20 +309,37 @@ public sealed class GenericOnnxEngine : IDetectionEngine, ISlicedDetectionEngine
             return null;
         }
 
-        InferenceSession? candidate = null;
+        var opts = options with
+        {
+            TensorRtCacheKey = OrtSessionFactory.TensorRtCacheKeyFor(options.ModelPath, profile, sliceLayout,
+                options.BatchSize, gpuPreprocessing: true),
+        };
+        var failureKey = BatchedFailureKey(opts);
+        if (failureKey is not null && FailedBatchedVariants.TryGetValue(failureKey, out var earlierFailure))
+        {
+            _logger.LogInformation(
+                "Model {Path}: GPU-native batched Slice graph for this slice layout already failed its check in this " +
+                "process ({Reason}) — using the CPU-per-tile path without rebuilding it.",
+                options.ModelPath, earlierFailure);
+            return null;
+        }
+
+        SessionLease? candidate = null;
         try
         {
-            var opts = options with
+            candidate = SharedSessionPool.Acquire(SharedSessionPool.KeyFor(opts), options.MaxCamerasPerSession, () =>
             {
-                TensorRtCacheKey = OrtSessionFactory.TensorRtCacheKeyFor(options.ModelPath, profile, sliceLayout,
-                    options.BatchSize, gpuPreprocessing: true),
-            };
-            var sessionOptions = OrtSessionFactory.Create(opts, logger);
-            var merged = OnnxPreprocessHead.MergeSliced(File.ReadAllBytes(opts.ModelPath), sliceLayout, _inputName,
-                rescaleTo01, _channelOrderRgb);
-            candidate = new InferenceSession(merged, sessionOptions);
+                var sessionOptions = OrtSessionFactory.Create(opts, logger);
+                var merged = OnnxPreprocessHead.MergeSliced(File.ReadAllBytes(opts.ModelPath), sliceLayout, _inputName,
+                    rescaleTo01, _channelOrderRgb);
+                return new InferenceSession(merged, sessionOptions);
+            });
 
-            if (!VerifyBatchedOutputsMatchSingleImage(candidate, plainSession, sliceLayout, out var mismatchReason))
+            // A session already in the pool passed this same check when the camera that created it was
+            // built (a failed one is disposed straight away, below, before any other build can run).
+            if (candidate.IsShared) return candidate;
+
+            if (!VerifyBatchedOutputsMatchSingleImage(candidate.Session, plainSession, sliceLayout, out var mismatchReason))
             {
                 _logger.LogWarning(
                     "Model {Path}: GPU-native batched Slice graph loaded, but its output didn't " +
@@ -321,6 +350,7 @@ public sealed class GenericOnnxEngine : IDetectionEngine, ISlicedDetectionEngine
                     "detections come out carrying one tile's own content).",
                     options.ModelPath, sliceLayout.Slices.Count, mismatchReason);
                 candidate.Dispose();
+                if (failureKey is not null) FailedBatchedVariants[failureKey] = mismatchReason ?? "verification failed";
                 return null;
             }
 
@@ -333,6 +363,7 @@ public sealed class GenericOnnxEngine : IDetectionEngine, ISlicedDetectionEngine
         catch (Exception ex)
         {
             candidate?.Dispose();
+            if (failureKey is not null) FailedBatchedVariants[failureKey] = ex.GetType().Name + ": " + ex.Message;
             _logger.LogWarning(ex,
                 "Model {Path}: declared a possibly-dynamic batch input, but building or verifying the " +
                 "GPU-native batched Slice graph failed — falling back to the CPU-per-tile path, which " +
@@ -348,104 +379,92 @@ public sealed class GenericOnnxEngine : IDetectionEngine, ISlicedDetectionEngine
     /// builds one deterministic, non-uniform synthetic nv12 frame (never sent to the model for real
     /// decoding), runs it once through <paramref name="batchedSession"/>'s merged graph, then crops
     /// and runs each of the same frame's tiles individually through <paramref name="plainSession"/> —
-    /// the exact CPU-per-tile preprocessing path (<see cref="Nv12Ops.CropTile"/>, <see cref="Nv12ToBgra"/>,
-    /// <see cref="Preprocess"/>) this whole check exists to fall back to if verification fails. Compares
-    /// every named output tensor's per-slot values generically (no decoder-specific knowledge, so this
-    /// works for any decoder kind) — this is what actually proves the claim the class doc comment
-    /// makes, which "ONNX Runtime didn't throw" alone does not. Content must vary across the synthetic
-    /// frame (not a flat color): if the batched graph's per-slot output is actually frozen to one
-    /// slot's content, a uniform frame would make every tile's comparison coincidentally match.</summary>
+    /// the exact CPU-per-tile preprocessing path (<see cref="PreprocessNv12Tile"/>) this whole check
+    /// exists to fall back to if verification fails. Every named output is compared per slot by
+    /// <see cref="SlicedOutputComparison"/> (no decoder-specific knowledge, so this works for any
+    /// decoder kind) — this is what actually proves the claim the class doc comment makes, which "ONNX
+    /// Runtime didn't throw" alone does not. Content must vary across the synthetic frame (not a flat
+    /// color): if the batched graph's per-slot output is actually frozen to one slot's content, a
+    /// uniform frame would make every tile's comparison coincidentally match.</summary>
     private bool VerifyBatchedOutputsMatchSingleImage(InferenceSession batchedSession, InferenceSession plainSession,
         SliceLayout layout, out string? mismatchReason)
     {
         mismatchReason = null;
         var wholeFrame = BuildSyntheticNv12Frame(layout.CaptureWidth, layout.CaptureHeight);
+        var n = layout.Slices.Count;
 
         var nv12Tensor = new DenseTensor<byte>(wholeFrame, [1, layout.CaptureHeight * 3 / 2, layout.CaptureWidth]);
         using var batchedOutputs = batchedSession.Run([NamedOnnxValue.CreateFromTensor("nv12", nv12Tensor)]);
 
-        for (var i = 0; i < layout.Slices.Count; i++)
+        // Per output name: each tile's single-run values (copied — the run's own buffers are freed when
+        // its outputs are disposed) and the output's per-image shape.
+        var singles = new Dictionary<string, (float[][] Slots, int[] Dims)>();
+        for (var i = 0; i < n; i++)
         {
             var tile = layout.Slices[i];
-            var tileNv12 = Nv12Ops.CropTile(wholeFrame, layout.CaptureWidth, layout.CaptureHeight, tile.X, tile.Y, tile.Width, tile.Height);
-            var bgra = Nv12ToBgra(tileNv12, tile.Width, tile.Height);
-            var singleInput = NamedOnnxValue.CreateFromTensor(_inputName, Preprocess(bgra));
+            var singleInput = NamedOnnxValue.CreateFromTensor(_inputName,
+                PreprocessNv12Tile(wholeFrame, layout.CaptureWidth, layout.CaptureHeight, tile.X, tile.Y, tile.Width, tile.Height));
 
             using var singleOutputs = plainSession.Run([singleInput]);
             foreach (var singleOutput in singleOutputs)
             {
-                var batchedOutput = batchedOutputs.FirstOrDefault(o => o.Name == singleOutput.Name);
-                if (batchedOutput is null)
+                var tensor = singleOutput.AsTensor<float>();
+                if (!singles.TryGetValue(singleOutput.Name, out var entry))
+                    singles[singleOutput.Name] = entry = (new float[n][], tensor.Dimensions.ToArray());
+                entry.Slots[i] = tensor.ToArray();
+            }
+        }
+
+        foreach (var (name, (singleSlots, singleDims)) in singles)
+        {
+            var batchedOutput = batchedOutputs.FirstOrDefault(o => o.Name == name);
+            if (batchedOutput is null)
+            {
+                mismatchReason = $"batched graph has no output named '{name}'";
+                return false;
+            }
+
+            var batchedTensor = batchedOutput.AsTensor<float>();
+            var batchedDims = batchedTensor.Dimensions;
+            if (batchedDims.Length != singleDims.Length || batchedDims[0] != n)
+            {
+                mismatchReason = $"output '{name}' batch shape mismatch " +
+                    $"(batched [{string.Join(",", batchedDims.ToArray())}], expected {n} " +
+                    $"in dim 0 to match single [{string.Join(",", singleDims)}])";
+                return false;
+            }
+
+            var perImage = 1;
+            for (var d = 1; d < singleDims.Length; d++)
+            {
+                if (batchedDims[d] != singleDims[d])
                 {
-                    mismatchReason = $"batched graph has no output named '{singleOutput.Name}'";
+                    mismatchReason = $"output '{name}' per-image shape mismatch at dim {d} " +
+                        $"(batched {batchedDims[d]} vs single {singleDims[d]})";
                     return false;
                 }
+                perImage *= singleDims[d];
+            }
 
-                var singleTensor = singleOutput.AsTensor<float>();
-                var batchedTensor = batchedOutput.AsTensor<float>();
-                var singleDims = singleTensor.Dimensions;
-                var batchedDims = batchedTensor.Dimensions;
+            var batchedAll = batchedTensor.ToArray();
+            var batchedSlots = new float[n][];
+            for (var i = 0; i < n; i++) batchedSlots[i] = batchedAll.AsSpan(i * perImage, perImage).ToArray();
 
-                if (batchedDims.Length != singleDims.Length || batchedDims[0] != layout.Slices.Count)
-                {
-                    mismatchReason = $"output '{singleOutput.Name}' batch shape mismatch " +
-                        $"(batched [{string.Join(",", batchedDims.ToArray())}], expected {layout.Slices.Count} " +
-                        $"in dim 0 to match single [{string.Join(",", singleDims.ToArray())}])";
-                    return false;
-                }
-
-                var perImage = 1;
-                for (var d = 1; d < singleDims.Length; d++)
-                {
-                    if (batchedDims[d] != singleDims[d])
-                    {
-                        mismatchReason = $"output '{singleOutput.Name}' per-image shape mismatch at dim {d} " +
-                            $"(batched {batchedDims[d]} vs single {singleDims[d]})";
-                        return false;
-                    }
-                    perImage *= singleDims[d];
-                }
-
-                ReadOnlySpan<float> batchedSpan = batchedTensor is DenseTensor<float> bd
-                    ? bd.Buffer.Span.Slice(i * perImage, perImage)
-                    : batchedTensor.ToArray().AsSpan(i * perImage, perImage);
-                ReadOnlySpan<float> singleSpan = singleTensor is DenseTensor<float> sd
-                    ? sd.Buffer.Span
-                    : singleTensor.ToArray();
-
-                for (var e = 0; e < perImage; e++)
-                {
-                    if (!NearlyEqual(batchedSpan[e], singleSpan[e], _descriptor.Normalize.Scale))
-                    {
-                        mismatchReason = $"output '{singleOutput.Name}' slot {i} element {e} differs " +
-                            $"(batched {batchedSpan[e]}, single-tile {singleSpan[e]})";
-                        return false;
-                    }
-                }
+            var rowWidth = singleDims.Length > 1 ? singleDims[^1] : perImage;
+            mismatchReason = SlicedOutputComparison.Compare(name, batchedSlots, singleSlots, rowWidth, out var identitySkipped);
+            if (mismatchReason is not null) return false;
+            // Unproven is a failure, not a pass. Closeness alone let through a graph that returned
+            // detections for slot 0 only (every other slot empty) on real frames, because the synthetic
+            // frame's single-tile outputs were too alike to tell the slots apart.
+            if (identitySkipped)
+            {
+                mismatchReason = $"output '{name}' came out nearly the same for every tile of the synthetic frame, so it " +
+                    "can't show whether each slot carries its own tile";
+                return false;
             }
         }
 
         return true;
-    }
-
-    /// <summary>Absolute+relative float tolerance for <see cref="VerifyBatchedOutputsMatchSingleImage"/> —
-    /// loose enough to absorb the legitimate small numeric difference between the batched graph's
-    /// GPU-side float preprocessing (no intermediate rounding) and the CPU path's byte-quantized
-    /// preprocessing (<see cref="Nv12ToBgra"/> rounds every pixel to a byte before <see cref="Preprocess"/>
-    /// ever sees it), tight enough that "this slot's output is actually a different tile's content" (a
-    /// large, structural difference — the confirmed real failure mode) fails clearly. The absolute term
-    /// is scaled by <paramref name="pixelScale"/> (the descriptor's own <see cref="NormalizeSpec.Scale"/>)
-    /// because the compared values are *post-normalize*: a fixed absolute tolerance would be far too
-    /// loose for the rescaled-0-1 convention and, as observed directly against a synthetic raw-pixel
-    /// passthrough model, too tight for the raw-0-255 one — a single Y/U/V byte-rounding difference can
-    /// shift a channel by close to <see cref="Bt601Limited.Kb"/> (~2.02, the largest BT.601 coefficient)
-    /// raw units, and <c>TryResolveMergedSliceNormalizeConvention</c> already guarantees zero mean/unit
-    /// std, so scaling that raw-unit bound by <paramref name="pixelScale"/> alone is enough.</summary>
-    private static bool NearlyEqual(float a, float b, double pixelScale)
-    {
-        var absoluteTolerance = (float)(2.5 * pixelScale);
-        const float relativeTolerance = 0.02f;
-        return MathF.Abs(a - b) <= absoluteTolerance + relativeTolerance * MathF.Max(MathF.Abs(a), MathF.Abs(b));
     }
 
     /// <summary>Deterministic but non-uniform synthetic nv12 frame for verification only — a plain
@@ -487,26 +506,52 @@ public sealed class GenericOnnxEngine : IDetectionEngine, ISlicedDetectionEngine
         return false;
     }
 
-    /// <summary>Plain nv12 → BGRA8888 conversion (BT.601 limited range, matching every other nv12
-    /// consumer in this codebase) — same helper YoloXEngine's own batched path uses, duplicated here
-    /// per this project's own "small duplication over a shared path for an unrelated caller" convention
-    /// (see OnnxPreprocessHead's own doc comment for the same reasoning).</summary>
-    private static byte[] Nv12ToBgra(byte[] nv12, int w, int h)
+    /// <summary>CPU-per-tile preprocessing: one tile of a whole nv12 frame, converted (BT.601 limited
+    /// range, matching every other nv12 consumer in this codebase) and normalized straight into the
+    /// reused <see cref="_inputTensor"/>. Same values as cropping the tile to its own nv12 buffer,
+    /// converting that to BGRA, then <see cref="Preprocess"/> — which is what this replaced: those two
+    /// intermediate buffers were fresh Large Object Heap arrays (~0.6 MB + ~1.6 MB) per tile per frame,
+    /// ~150 MB/s on a 7-camera recorder, and the cause of its ~4 background gen2 GCs a second. Tile
+    /// origins are even (see <see cref="SliceLayout"/>), so each pixel reads the same chroma pair the
+    /// crop would have.</summary>
+    private DenseTensor<float> PreprocessNv12Tile(byte[] frame, int frameW, int frameH, int tileX, int tileY, int tileW, int tileH)
     {
-        var bgra = new byte[w * h * 4];
-        var srcUv = w * h;
-        for (var y = 0; y < h; y++)
+        if (tileW != _profile.NetworkWidth || tileH != _profile.NetworkHeight)
+            throw new InvalidOperationException(
+                $"Slice tile is {tileW}x{tileH}, expected the network size {_profile.NetworkWidth}x{_profile.NetworkHeight}.");
+
+        var n = _descriptor.Normalize;
+        var scale = n.Scale;
+        var (mean0, mean1, mean2) = (n.Mean[0], n.Mean[1], n.Mean[2]);
+        var (std0, std1, std2) = (n.Std[0], n.Std[1], n.Std[2]);
+
+        var t = _inputTensor.Buffer.Span;
+        var pixelCount = tileW * tileH;
+        var plane1 = pixelCount;
+        var plane2 = pixelCount * 2;
+        var srcUv = frameW * frameH;
+
+        for (var y = 0; y < tileH; y++)
         {
-            var cyRow = srcUv + (y / 2) * w;
-            for (var x = 0; x < w; x++)
+            var sy = tileY + y;
+            var yRow = sy * frameW;
+            var cyRow = srcUv + (sy / 2) * frameW;
+            for (var x = 0; x < tileW; x++)
             {
-                var cxByte = (x / 2) * 2;
-                var (r, g, b) = Bt601Limited.ToRgb(nv12[y * w + x], nv12[cyRow + cxByte], nv12[cyRow + cxByte + 1]);
-                var o = (y * w + x) * 4;
-                bgra[o] = b; bgra[o + 1] = g; bgra[o + 2] = r; bgra[o + 3] = 255;
+                var sx = tileX + x;
+                var cxByte = (sx / 2) * 2;
+                var (r, g, b) = Bt601Limited.ToRgb(frame[yRow + sx], frame[cyRow + cxByte], frame[cyRow + cxByte + 1]);
+
+                // Same plane/normalize rules as Preprocess.
+                var (val0, val2) = _channelOrderRgb ? (r, b) : (b, r);
+                var i = y * tileW + x;
+                t[i] = (float)((val0 * scale - mean0) / std0);
+                t[plane1 + i] = (float)((g * scale - mean1) / std1);
+                t[plane2 + i] = (float)((val2 * scale - mean2) / std2);
             }
         }
-        return bgra;
+
+        return _inputTensor;
     }
 
     /// <summary>Packs one BGRA8888 frame into a <c>[1,3,H,W]</c> float32 NCHW tensor per the
@@ -555,7 +600,7 @@ public sealed class GenericOnnxEngine : IDetectionEngine, ISlicedDetectionEngine
 
     private void ValidateInputShape()
     {
-        var dims = _session.InputMetadata[_inputName].Dimensions;
+        var dims = _lease.Session.InputMetadata[_inputName].Dimensions;
         if (dims.Length != 4)
         {
             _logger.LogWarning("Model input '{Input}' has rank {Rank}, expected 4 ([1,3,H,W]) — proceeding anyway.", _inputName, dims.Length);
@@ -570,5 +615,5 @@ public sealed class GenericOnnxEngine : IDetectionEngine, ISlicedDetectionEngine
                 $"{_profile.NetworkWidth}x{_profile.NetworkHeight} — check the descriptor's 'inputSize'.");
     }
 
-    public void Dispose() => _session.Dispose();
+    public void Dispose() => _lease.Dispose();
 }

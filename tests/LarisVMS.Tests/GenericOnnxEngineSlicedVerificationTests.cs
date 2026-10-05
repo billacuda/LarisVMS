@@ -63,6 +63,29 @@ public class GenericOnnxEngineSlicedVerificationTests
     }
 
     [Fact]
+    public void AFailedBatchedGraphIsNotRebuiltForTheNextCameraOnTheSameLayout()
+    {
+        var layout = SliceLayout.Create(CaptureWidth, CaptureHeight, NetSize);
+        var modelPath = WriteTempModel(BuildFrozenSlotZeroModel(NetSize, NetSize, layout.Slices.Count));
+        try
+        {
+            var first = new CapturingLogger<GenericOnnxEngine>();
+            using var a = BuildEngine(modelPath, out _, first);
+            var second = new CapturingLogger<GenericOnnxEngine>();
+            using var b = BuildEngine(modelPath, out _, second);
+
+            Assert.False(b.IsGpuNativeSlicing);
+            Assert.Contains(first.Messages, m => m.Contains("didn't numerically match"));
+            Assert.DoesNotContain(second.Messages, m => m.Contains("didn't numerically match"));
+            Assert.Contains(second.Messages, m => m.Contains("already failed its check"));
+        }
+        finally
+        {
+            File.Delete(modelPath);
+        }
+    }
+
+    [Fact]
     public void StaticBatchOneModel_NeverAttemptsGpuNative()
     {
         // A plain, non-dynamic export (batch hardcoded to 1) — DeclaresPossiblyDynamicBatch should
@@ -106,7 +129,7 @@ public class GenericOnnxEngineSlicedVerificationTests
             => Messages.Add($"[{logLevel}] {formatter(state, exception)}{(exception is null ? "" : " -- " + exception)}");
     }
 
-    private static string WriteTempModel(byte[] bytes)
+    internal static string WriteTempModel(byte[] bytes)
     {
         var path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.onnx");
         File.WriteAllBytes(path, bytes);
@@ -188,7 +211,7 @@ public class GenericOnnxEngineSlicedVerificationTests
     /// <see cref="BuildDynamicBatchIdentityModel"/>. Represents a normal Ultralytics export without
     /// <c>dynamic=True</c>: <c>DeclaresPossiblyDynamicBatch</c> must gate the GPU-native attempt out
     /// before it ever reaches <c>MergeSliced</c>.</summary>
-    private static byte[] BuildStaticBatchOneIdentityModel(int w, int h)
+    internal static byte[] BuildStaticBatchOneIdentityModel(int w, int h)
     {
         static ValueInfoProto StaticBatchOneInput(string name, int c, int hh, int ww) => new()
         {

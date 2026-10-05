@@ -78,6 +78,11 @@ public sealed class VisionServiceOptions
     /// OpenVINO backend is selected.</summary>
     public string OpenVinoDeviceType { get; set; } = "GPU";
 
+    /// <summary>How many cameras may share one model session — see
+    /// Inference.EngineOptions.MaxCamerasPerSession. Higher saves memory, lower keeps more cameras'
+    /// inferences running in parallel.</summary>
+    public int MaxCamerasPerSession { get; set; } = 1;
+
     /// <summary>The <c>AiAccelerator</c> the node resolved for this machine's hardware ("Nvidia",
     /// "Intel", "Amd", "Cpu"), passed through by VisionServiceSupervisor as <c>Vision__PreferredAccelerator</c>.
     /// <see cref="VisionBackendResolver"/> maps it to one of the bundled native ONNX Runtime backends

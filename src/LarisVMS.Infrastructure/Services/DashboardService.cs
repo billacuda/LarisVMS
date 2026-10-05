@@ -10,7 +10,8 @@ namespace LarisVMS.Infrastructure.Services;
 /// online status. Split out of Pages/Index.cshtml.cs's own OnGetAsync so the exact same computation
 /// backs both the server-rendered initial page load and GET /api/dashboard's 60s AJAX refresh — the
 /// two must never independently drift out of sync with each other.</summary>
-public class DashboardService(ICameraService cameraService, ICameraAccessService cameraAccess, INodeService nodeService) : IDashboardService
+public class DashboardService(ICameraService cameraService, ICameraAccessService cameraAccess, INodeService nodeService,
+    ITimelineService? timeline = null) : IDashboardService
 {
     // Same 2-minute staleness window Admin/Nodes already uses for a node's own online/offline badge
     // — kept in sync rather than each page inventing its own threshold. Public: AlertEvaluationPolicy
@@ -24,7 +25,8 @@ public class DashboardService(ICameraService cameraService, ICameraAccessService
 
     public async Task<DashboardHealthDto> GetHealthAsync(ClaimsPrincipal user, CancellationToken ct = default)
     {
-        var cameras = await cameraService.ListAsync(ct);
+        var allCameras = await cameraService.ListAsync(ct);
+        var cameras = allCameras;
 
         // Filtered here, at the source, rather than after building rows — the rows and the
         // recording/not-reporting/disabled counts derive from `cameras`, so a restricted principal's
@@ -59,8 +61,81 @@ public class DashboardService(ICameraService cameraService, ICameraAccessService
         var nodesTotalCount = nodes.Count;
         var nodesOnlineCount = nodes.Count(n => n.LastSeenAt is { } seen && now - seen < NodeOnlineWindow);
 
+        var nodeRows = await BuildNodeRowsAsync(nodes, allCameras, cameras, accessible, now, ct);
+
         return new DashboardHealthDto(rows, recordingCount, notReportingCount, disabledCount,
-            nodesOnlineCount, nodesTotalCount);
+            nodesOnlineCount, nodesTotalCount, nodeRows);
+    }
+
+    /// <summary>One card per node. Host load is system-wide (like the nodes-online tile); fps and the
+    /// detection counts only cover the cameras the viewer can see.
+    ///
+    /// Counting rules, so one object isn't counted twice by two sources: a camera running AI detection
+    /// contributes its AI detections, a camera without it contributes its own analytics events, and
+    /// custom tags always count. Humans/vehicles/animals add up each detection's peak simultaneous
+    /// count (two people walking by together count as two). Events are attributed to the camera's
+    /// home node.</summary>
+    private async Task<List<NodeDashboardRow>> BuildNodeRowsAsync(List<Core.Entities.Node> nodes,
+        List<Core.Entities.Camera> allCameras, List<Core.Entities.Camera> visibleCameras,
+        IReadOnlySet<Guid>? accessible, DateTime now, CancellationToken ct)
+    {
+        var failoverStateOf = nodes.ToDictionary(n => n.Id, n => n.FailoverState);
+        var defaultBackupOf = nodes.ToDictionary(n => n.Id, n => n.BackupNodeId);
+        var disabledAiByNode = nodes.ToDictionary(n => n.Id, n => n.DisableAiObjectDetection);
+        bool AiOn(Core.Entities.Camera c) =>
+            c.AiDetectionEnabled && c.NodeId is { } home && !disabledAiByNode.GetValueOrDefault(home);
+
+        var counts = timeline is null ? [] : await timeline.GetEventCountsAsync(accessible, now, ct);
+        var visibleById = visibleCameras.ToDictionary(c => c.Id);
+
+        var result = new List<NodeDashboardRow>();
+        foreach (var node in nodes)
+        {
+            var online = node.LastSeenAt is { } seen && now - seen < NodeOnlineWindow;
+            var hostFresh = node.HostStatsUpdatedAt is { } at && now - at < NodeOnlineWindow;
+
+            var recording = visibleCameras.Where(c => c.IsEnabled && RecordingNodeResolver.Resolve(
+                c.NodeId, c.BackupNodeIdOverride, failoverStateOf, defaultBackupOf) == node.Id).ToList();
+            var fresh = recording
+                .Select(c => c.Streams.FirstOrDefault(s => s.Role == CameraStreamRole.Main))
+                .Where(s => s?.HealthReportedAt is { } r && now - r < HealthFreshWindow)
+                .ToList();
+
+            var detectionOn = !node.DisableAiObjectDetection && allCameras.Any(c => c.NodeId == node.Id && c.AiDetectionEnabled);
+
+            WindowCounts? events = null, humans = null, vehicles = null, animals = null;
+            if (detectionOn)
+            {
+                var nodeCounts = counts.Where(r => visibleById.TryGetValue(r.CameraId, out var cam) && cam.NodeId == node.Id
+                    && (r.Kind == "Tag" || (r.Kind == "Ai") == AiOn(cam))).ToList();
+                events = Windows(nodeCounts, _ => true, objects: false);
+                humans = Windows(nodeCounts, r => r.Name is "Human" or nameof(DetectionKind.Human) or nameof(DetectionKind.Face), objects: true);
+                vehicles = Windows(nodeCounts, r => r.Name is "Vehicle" or nameof(DetectionKind.Vehicle), objects: true);
+                animals = Windows(nodeCounts, r => r.Name is "Animal" or nameof(DetectionKind.Animal), objects: true);
+            }
+
+            result.Add(new NodeDashboardRow(node.Id, node.Name, online,
+                hostFresh ? node.CpuPercent : null, hostFresh ? node.MemoryUsedBytes : null, hostFresh ? node.MemoryTotalBytes : null,
+                hostFresh ? node.NetReceiveBytesPerSec : null, hostFresh ? node.NetSendBytesPerSec : null, hostFresh,
+                fresh.Sum(s => s!.Fps ?? 0), fresh.Count,
+                detectionOn, events, humans, vehicles, animals));
+        }
+        return result;
+    }
+
+    /// <summary>Cumulative counts per window from CameraEventCountRow's exclusive age buckets: spans for
+    /// events, peak-object totals for object classes (custom tags never count as an object).</summary>
+    internal static WindowCounts Windows(IEnumerable<CameraEventCountRow> rows, Func<CameraEventCountRow, bool> include, bool objects)
+    {
+        var perBucket = new int[4];
+        foreach (var r in rows)
+        {
+            if (!include(r) || r.Bucket is < 0 or > 3) continue;
+            if (objects && r.Kind == "Tag") continue;
+            perBucket[r.Bucket] += objects ? r.Objects : r.Spans;
+        }
+        return new WindowCounts(perBucket[0], perBucket[0] + perBucket[1],
+            perBucket[0] + perBucket[1] + perBucket[2], perBucket.Sum());
     }
 
     public async Task<List<NodeStatusRow>> GetAllNodeStatusAsync(CancellationToken ct = default)

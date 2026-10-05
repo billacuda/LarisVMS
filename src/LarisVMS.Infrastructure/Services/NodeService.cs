@@ -533,6 +533,59 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
     public async Task<List<string>> ListSegmentFilePathsAsync(Guid nodeId, CancellationToken ct = default)
         => await db.Segments.AsNoTracking().Where(s => s.NodeId == nodeId).Select(s => s.FilePath).ToListAsync(ct);
 
+    // ListExpiredSegmentsAsync only hands out rows overdue by more than this: the node's own
+    // retention pass deletes footage under its current roots on time, and this list exists for what
+    // that pass can't reach, not to race it.
+    internal static readonly TimeSpan ExpiredSegmentGrace = TimeSpan.FromDays(1);
+
+    /// <summary>The server-side half of retention for footage the node's own sweep can't see — a camera
+    /// that moved to another node, or a node whose storage root moved, leaves rows (and files) outside
+    /// every folder that sweep walks, and only the owning node may delete its rows. Resolved per camera
+    /// with the same settings chain (camera, then this node, then global) the node's config uses:
+    /// primary-tier footage expires after Retention.Days unless that camera archives on this node (then
+    /// it's the node's job to move it, not delete it); archive-tier footage after Archive.RetentionDays.
+    /// 0 or less means keep forever. Locked segments are never included.</summary>
+    public async Task<List<ExpiredSegmentDto>> ListExpiredSegmentsAsync(Guid nodeId, int limit, CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+        var cameraIds = await db.Segments.AsNoTracking()
+            .Where(s => s.NodeId == nodeId)
+            .Select(s => s.CameraId).Distinct().ToListAsync(ct);
+
+        var result = new List<ExpiredSegmentDto>();
+        foreach (var cameraId in cameraIds)
+        {
+            if (result.Count >= limit) break;
+
+            var retentionDays = await settings.GetAsync<int?>("Retention.Days", 30, cameraId: cameraId, nodeId: nodeId, ct: ct);
+            var archiveEnabled = await settings.GetAsync("Archive.Enabled", false, cameraId: cameraId, nodeId: nodeId, ct: ct);
+            var archiveRetentionDays = await settings.GetAsync<int?>("Archive.RetentionDays", 0, cameraId: cameraId, nodeId: nodeId, ct: ct);
+
+            if (!archiveEnabled && retentionDays is > 0)
+            {
+                var cutoff = now - TimeSpan.FromDays(retentionDays.Value) - ExpiredSegmentGrace;
+                result.AddRange(await db.Segments.AsNoTracking()
+                    .Where(s => s.NodeId == nodeId && s.CameraId == cameraId && !s.IsLocked
+                        && s.StorageTier == StorageTier.Primary && s.EndUtc < cutoff)
+                    .OrderBy(s => s.EndUtc).Take(limit - result.Count)
+                    .Select(s => new ExpiredSegmentDto(s.CameraId, s.FilePath))
+                    .ToListAsync(ct));
+            }
+
+            if (archiveRetentionDays is > 0 && result.Count < limit)
+            {
+                var cutoff = now - TimeSpan.FromDays(archiveRetentionDays.Value) - ExpiredSegmentGrace;
+                result.AddRange(await db.Segments.AsNoTracking()
+                    .Where(s => s.NodeId == nodeId && s.CameraId == cameraId && !s.IsLocked
+                        && s.StorageTier == StorageTier.Archive && s.EndUtc < cutoff)
+                    .OrderBy(s => s.EndUtc).Take(limit - result.Count)
+                    .Select(s => new ExpiredSegmentDto(s.CameraId, s.FilePath))
+                    .ToListAsync(ct));
+            }
+        }
+        return result;
+    }
+
     public async Task<List<string>> ListPrimaryTieredSegmentFilePathsAsync(Guid nodeId, CancellationToken ct = default)
         => await db.Segments.AsNoTracking()
             .Where(s => s.NodeId == nodeId && s.StorageTier == StorageTier.Primary)
@@ -553,7 +606,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         bool storagePressureActive = false, int? clientEndpointReportedPort = null,
         DateTime? clientEndpointCertNotAfter = null, bool? clientEndpointCertIsSelfSigned = null,
         string? clientEndpointLastError = null, List<NodePartnerHealthReport>? partnerHealthReports = null,
-        CancellationToken ct = default)
+        NodeHostStats? hostStats = null, CancellationToken ct = default)
     {
         var skew = ComputeClockSkewSeconds(nodeSentAtUtc, serverReceivedUtc);
         var encodersJson = detectedEncoders is not null ? System.Text.Json.JsonSerializer.Serialize(detectedEncoders) : null;
@@ -565,6 +618,12 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         var partnerHealthJson = partnerHealthReports is not null
             ? System.Text.Json.JsonSerializer.Serialize(partnerHealthReports) : null;
         var now = DateTime.UtcNow;
+        var cpuPercent = hostStats?.CpuPercent;
+        var memoryUsedBytes = hostStats?.MemoryUsedBytes;
+        var memoryTotalBytes = hostStats?.MemoryTotalBytes;
+        var netReceiveBytesPerSec = hostStats?.NetReceiveBytesPerSec;
+        var netSendBytesPerSec = hostStats?.NetSendBytesPerSec;
+        DateTime? hostStatsUpdatedAt = hostStats is not null ? now : null;
 
         await db.Nodes.Where(n => n.Id == nodeId).ExecuteUpdateAsync(s => s
             .SetProperty(n => n.StorageFreeBytes, freeBytes)
@@ -593,7 +652,16 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             .SetProperty(n => n.ClientEndpointCertNotAfter, clientEndpointCertNotAfter)
             .SetProperty(n => n.ClientEndpointCertIsSelfSigned, clientEndpointCertIsSelfSigned)
             .SetProperty(n => n.ClientEndpointLastError, clientEndpointLastError)
-            .SetProperty(n => n.PartnerHealthReportsJson, n => partnerHealthJson ?? n.PartnerHealthReportsJson), ct);
+            .SetProperty(n => n.PartnerHealthReportsJson, n => partnerHealthJson ?? n.PartnerHealthReportsJson)
+            // Dashboard host load: the full current reading every heartbeat (all null from a node that
+            // can't measure it), so a blind overwrite; HostStatsUpdatedAt lets the dashboard grey out
+            // a stale reading from a node that has stopped checking in.
+            .SetProperty(n => n.CpuPercent, cpuPercent)
+            .SetProperty(n => n.MemoryUsedBytes, memoryUsedBytes)
+            .SetProperty(n => n.MemoryTotalBytes, memoryTotalBytes)
+            .SetProperty(n => n.NetReceiveBytesPerSec, netReceiveBytesPerSec)
+            .SetProperty(n => n.NetSendBytesPerSec, netSendBytesPerSec)
+            .SetProperty(n => n.HostStatsUpdatedAt, hostStatsUpdatedAt), ct);
     }
 
     /// <summary>Every field is coalesce-preserve (`item.X ?? s.X`), not a blind overwrite — M11 added

@@ -87,6 +87,23 @@ public sealed class MotionSession(MotionSessionOptions options, IReadOnlyList<Mo
     private volatile IReadOnlyList<double>? _lastCellScores;
     public IReadOnlyList<double>? GetCurrentCellScores() => _lastCellScores;
 
+    // UTC ticks of the frame the current scores were computed from (when it was read off ffmpeg), 0
+    // before the first score. Lets the Zones editor's overlay hold scores back to line up with the
+    // live video, which plays a couple of seconds behind real time, instead of washing zones while the
+    // object that caused it hasn't reached them on screen yet.
+    private long _lastScoresCapturedTicks;
+
+    /// <summary>When the frame behind <see cref="GetCurrentZoneScores"/>/<see cref="GetCurrentCellScores"/>
+    /// was captured, or null before anything has been scored.</summary>
+    public DateTime? ScoresCapturedUtc
+    {
+        get
+        {
+            var ticks = Interlocked.Read(ref _lastScoresCapturedTicks);
+            return ticks == 0 ? null : new DateTime(ticks, DateTimeKind.Utc);
+        }
+    }
+
     // The Y (luma) plane is always Width*Height bytes and is grayscale by construction — both the
     // plain software path (format=gray, one byte/pixel already) and the CUDA path (nv12's Y plane,
     // read as-is) hand MotionDetector.Score exactly the same shape of data, so no format-specific
@@ -261,7 +278,8 @@ public sealed class MotionSession(MotionSessionOptions options, IReadOnlyList<Mo
         {
             if (!await ReadExactAsync(stdout, current, ct)) return; // pipe closed — process exiting
 
-            LastFrameAt = DateTime.UtcNow;
+            var readAt = DateTime.UtcNow;
+            LastFrameAt = readAt;
             if (State != StreamRecordingState.Recording) State = StreamRecordingState.Recording;
 
             if (havePrevious)
@@ -290,6 +308,7 @@ public sealed class MotionSession(MotionSessionOptions options, IReadOnlyList<Mo
                 {
                     _lastCellScores = MotionGrid.ScoreCells(previousY, currentY, gs, options.Width, options.Height, options.PixelDeltaThreshold);
                 }
+                Interlocked.Exchange(ref _lastScoresCapturedTicks, readAt.Ticks);
             }
 
             (previous, current) = (current, previous);

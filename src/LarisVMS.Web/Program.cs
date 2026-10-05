@@ -668,7 +668,8 @@ nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest requ
         request.SentAtUtc, DateTime.UtcNow, request.DetectedEncoders, request.DetectedAccelerators,
         request.ArchiveFreeBytes, request.ArchiveTotalBytes, request.StoragePressureActive,
         request.ClientEndpointReportedPort, request.ClientEndpointCertNotAfterUtc,
-        request.ClientEndpointCertIsSelfSigned, request.ClientEndpointLastError, request.PartnerHealthReports, ct);
+        request.ClientEndpointCertIsSelfSigned, request.ClientEndpointLastError, request.PartnerHealthReports,
+        request.HostStats, ct);
 
     // ── Auto-update check ────────────────────────────────────────────────
     // Global-only gate (Admin/Settings/Nodes' NodeAutoUpdate.Enabled) — no per-node override for this
@@ -788,6 +789,15 @@ nodesApi.MapGet("/segments/paths", async (HttpContext ctx, INodeService nodeServ
 
 // Archive storage: feeds the node's archive-tier reconciliation — rows still marked primary storage
 // whose file is actually on the archive volume (an admin repointed the storage root) get flipped.
+// Server-directed retention: this node's segments overdue for deletion wherever the file lives (an
+// old storage root, a camera that moved away). Paged by limit; the node keeps asking each sweep until
+// the list comes back empty.
+nodesApi.MapGet("/segments/expired", async (HttpContext ctx, INodeService nodeService, int? limit, CancellationToken ct) =>
+{
+    var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
+    return Results.Json(await nodeService.ListExpiredSegmentsAsync(node.Id, Math.Clamp(limit ?? 500, 1, 2000), ct));
+});
+
 nodesApi.MapGet("/segments/primary-paths", async (HttpContext ctx, INodeService nodeService, CancellationToken ct) =>
 {
     var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
@@ -1424,6 +1434,17 @@ playbackApi.MapGet("/segments", async (HttpContext ctx, Guid cameraId, DateTime 
     if (accessible is not null && !accessible.Contains(cameraId))
         return Results.Problem("You don't have playback access to this camera.", statusCode: StatusCodes.Status403Forbidden);
     return Results.Json(await timeline.GetSegmentsAsync(cameraId, from, to, ct));
+});
+
+// Playback's "Now": the newest moment that can actually be played (the still-recording segment has no
+// row yet, so wall-clock now is almost never playable).
+playbackApi.MapGet("/latest-segment-end", async (HttpContext ctx, Guid cameraId,
+    ITimelineService timeline, ICameraAccessService cameraAccess, CancellationToken ct) =>
+{
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Playback, ct);
+    if (accessible is not null && !accessible.Contains(cameraId))
+        return Results.Problem("You don't have playback access to this camera.", statusCode: StatusCodes.Status403Forbidden);
+    return Results.Json(new { endUtc = await timeline.GetLatestSegmentEndAsync(cameraId, ct) });
 });
 
 // M18: the per-camera timeline's own bookmark markers — same Playback.View gate as the rest of this
@@ -2283,6 +2304,7 @@ static async Task ProxyDetectionOverlayAsync(WebSocket node, WebSocket browser, 
                 if (result.MessageType == WebSocketMessageType.Close) return;
                 messageBuffer.Write(buffer, 0, result.Count);
             } while (!result.EndOfMessage);
+            var receivedAt = System.Diagnostics.Stopwatch.GetTimestamp();
 
             VisionLiveDetectionsResponse? snapshot;
             try
@@ -2307,11 +2329,14 @@ static async Task ProxyDetectionOverlayAsync(WebSocket node, WebSocket browser, 
             }
 
             // AgeMs is a duration computed entirely on Vision Service's own clock (see
-            // VisionLiveDetectionsResponse's doc comment) — passed through unchanged rather than
-            // recomputed here, so no hop in this chain ever has to compare its own clock against a
-            // different machine's. Null (no frame processed yet, or a skipped poll tick) means
-            // live-view.js's hold-back queue draws immediately instead of waiting forever.
-            var payload = new { ageMs = snapshot.AgeMs, boxes = enriched };
+            // VisionLiveDetectionsResponse's doc comment), so no hop in this chain ever has to compare
+            // its own clock against a different machine's. This hop only adds the time it held the
+            // tick itself (deserialize + per-box color lookups), measured on its own clock; otherwise
+            // the browser would place these boxes that much later on the video timeline. Null (no
+            // frame processed yet, or a skipped poll tick) stays null: live-view.js's hold-back queue
+            // draws immediately instead of waiting forever.
+            var ageMs = snapshot.AgeMs + System.Diagnostics.Stopwatch.GetElapsedTime(receivedAt).TotalMilliseconds;
+            var payload = new { ageMs, boxes = enriched };
             var json = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(payload, camelCaseJson);
             await browser.SendAsync(json, WebSocketMessageType.Text, endOfMessage: true, ct);
         }

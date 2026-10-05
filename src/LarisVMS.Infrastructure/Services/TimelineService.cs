@@ -207,6 +207,51 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
             .ToListAsync(ct);
     }
 
+    public async Task<DateTime?> GetLatestSegmentEndAsync(Guid cameraId, CancellationToken ct = default)
+    {
+        var end = await db.Segments
+            .Where(s => s.CameraId == cameraId)
+            .OrderByDescending(s => s.EndUtc)
+            .Select(s => (DateTime?)s.EndUtc)
+            .FirstOrDefaultAsync(ct);
+        return end is { } e ? NormalizeToUtc(e) : null;
+    }
+
+    public async Task<List<CameraEventCountRow>> GetEventCountsAsync(IReadOnlyCollection<Guid>? cameraIds, DateTime nowUtc, CancellationToken ct = default)
+    {
+        nowUtc = NormalizeToUtc(nowUtc);
+        var hour = nowUtc.AddHours(-1);
+        var day = nowUtc.AddDays(-1);
+        var week = nowUtc.AddDays(-7);
+        var month = nowUtc.AddDays(-30);
+
+        var query = db.MotionSpans.AsNoTracking()
+            .Where(m => m.StartUtc >= month
+                && (m.EventTagRuleId != null || m.DetectionKind != null || m.DetectedObjectCategoryId != null));
+        if (cameraIds is not null) query = query.Where(m => cameraIds.Contains(m.CameraId));
+
+        // Aggregated in SQL: a busy node produces thousands of spans a day, and this runs on every
+        // dashboard refresh, so only the grouped counts ever leave the database.
+        var grouped = await query
+            .Select(m => new
+            {
+                m.CameraId,
+                Kind = m.EventTagRuleId != null ? 0 : m.DetectedObjectCategoryId != null ? 1 : 2,
+                Category = m.DetectedObjectCategory != null ? m.DetectedObjectCategory.Name : null,
+                m.DetectionKind,
+                Bucket = m.StartUtc >= hour ? 0 : m.StartUtc >= day ? 1 : m.StartUtc >= week ? 2 : 3,
+                Objects = m.MovingCount ?? 1,
+            })
+            .GroupBy(x => new { x.CameraId, x.Kind, x.Category, x.DetectionKind, x.Bucket })
+            .Select(g => new { g.Key.CameraId, g.Key.Kind, g.Key.Category, g.Key.DetectionKind, g.Key.Bucket, Spans = g.Count(), Objects = g.Sum(x => x.Objects) })
+            .ToListAsync(ct);
+
+        return grouped.Select(g => new CameraEventCountRow(g.CameraId,
+            g.Kind switch { 0 => "Tag", 1 => "Ai", _ => "Camera" },
+            g.Kind switch { 1 => g.Category, 2 => g.DetectionKind?.ToString(), _ => null },
+            g.Bucket, g.Spans, g.Objects)).ToList();
+    }
+
     public async Task<PlaybackSegmentInfo?> GetSegmentForPlaybackAsync(Guid cameraId, long segmentId, CancellationToken ct = default)
     {
         var segment = await db.Segments

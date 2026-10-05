@@ -40,7 +40,7 @@ public sealed class DFineEngine : IDetectionEngine, IBatchDetectionEngine, ISlic
     // through this same session — D-FINE's own export was already batch-dynamic before this project
     // ever touched it, so DetectBatch's single-Run batch (pass 3) needed no graph change here, unlike
     // YoloXEngine's OnnxBatchAxis rewrite.
-    private readonly InferenceSession _session;
+    private readonly SessionLease _lease;
 
     private readonly bool _gpuPreprocessing;
     private readonly InferenceProfile _profile;
@@ -114,30 +114,31 @@ public sealed class DFineEngine : IDetectionEngine, IBatchDetectionEngine, ISlic
                 options.ModelPath, profile, sliceLayout, options.BatchSize, _gpuPreprocessing),
         };
 
-        var sessionOptions = _batchSize > 1 && sliceLayout is null
-            ? OrtSessionFactory.Create(opts with
-              {
-                  TensorRtBatchProfile = (_gpuPreprocessing ? "nv12" : "pixel_values", profile.NetworkHeight, profile.NetworkWidth),
-              }, logger)
-            : OrtSessionFactory.Create(opts, logger);
-
         var stopwatch = Stopwatch.StartNew();
-        if (sliceLayout is not null)
+        // Shared with other cameras on the same variant (SharedSessionPool) — built only if none exists.
+        _lease = SharedSessionPool.Acquire(SharedSessionPool.KeyFor(opts), options.MaxCamerasPerSession, () =>
         {
-            var merged = OnnxPreprocessHead.MergeSliced(File.ReadAllBytes(opts.ModelPath), sliceLayout,
-                "pixel_values", rescaleTo01: true, rgbChannelOrder: true);
-            _session = new InferenceSession(merged, sessionOptions);
-        }
-        else if (_gpuPreprocessing)
-        {
-            var merged = OnnxPreprocessHead.Merge(File.ReadAllBytes(opts.ModelPath),
-                profile.NetworkWidth, profile.NetworkHeight);
-            _session = new InferenceSession(merged, sessionOptions);
-        }
-        else
-        {
-            _session = new InferenceSession(opts.ModelPath, sessionOptions);
-        }
+            var sessionOptions = _batchSize > 1 && sliceLayout is null
+                ? OrtSessionFactory.Create(opts with
+                  {
+                      TensorRtBatchProfile = (_gpuPreprocessing ? "nv12" : "pixel_values", profile.NetworkHeight, profile.NetworkWidth),
+                  }, logger)
+                : OrtSessionFactory.Create(opts, logger);
+
+            if (sliceLayout is not null)
+            {
+                var merged = OnnxPreprocessHead.MergeSliced(File.ReadAllBytes(opts.ModelPath), sliceLayout,
+                    "pixel_values", rescaleTo01: true, rgbChannelOrder: true);
+                return new InferenceSession(merged, sessionOptions);
+            }
+            if (_gpuPreprocessing)
+            {
+                var merged = OnnxPreprocessHead.Merge(File.ReadAllBytes(opts.ModelPath),
+                    profile.NetworkWidth, profile.NetworkHeight);
+                return new InferenceSession(merged, sessionOptions);
+            }
+            return new InferenceSession(opts.ModelPath, sessionOptions);
+        });
         stopwatch.Stop();
 
         _logger.LogInformation(
@@ -176,15 +177,15 @@ public sealed class DFineEngine : IDetectionEngine, IBatchDetectionEngine, ISlic
             inputs = [NamedOnnxValue.CreateFromTensor("pixel_values", Preprocess(frame))];
         }
 
-        using var outputs = _session.Run(inputs);
+        using var outputs = _lease.Run(inputs);
         var logitsTensor = outputs.First(o => o.Name == "logits").AsTensor<float>();
         var boxesTensor = outputs.First(o => o.Name == "pred_boxes").AsTensor<float>();
 
         var numQueries = logitsTensor.Dimensions[1];
         var numClasses = logitsTensor.Dimensions[2];
 
-        var logits = logitsTensor.ToArray();
-        var boxes = boxesTensor.ToArray();
+        var logits = OutputSpan(logitsTensor);
+        var boxes = OutputSpan(boxesTensor);
         var results = DFineDecoder.Decode(logits, boxes, numQueries, numClasses, _labels, confidence, _profile);
         if (results.Count == 0) WarnIfNonFinite(logits, boxes);
 
@@ -208,7 +209,7 @@ public sealed class DFineEngine : IDetectionEngine, IBatchDetectionEngine, ISlic
     }
 
     /// <summary>Currently unused (the planned frame-slicing overhaul is the first real caller) — one
-    /// genuine batched <see cref="_session"/> forward pass over every image at once, not a loop:
+    /// genuine batched <see cref="_lease"/> forward pass over every image at once, not a loop:
     /// D-FINE's own export already has a dynamic batch axis (verified directly against the real
     /// model — see <see cref="OnnxBatchAxis"/>'s own doc comment for the equivalent YOLOX finding,
     /// which needed graph surgery where D-FINE didn't), so batching it needed only a batch-shaped
@@ -259,13 +260,13 @@ public sealed class DFineEngine : IDetectionEngine, IBatchDetectionEngine, ISlic
             inputs = [NamedOnnxValue.CreateFromTensor("pixel_values", _batchTensor!)];
         }
 
-        using var outputs = _session.Run(inputs);
+        using var outputs = _lease.Run(inputs);
         var logitsTensor = outputs.First(o => o.Name == "logits").AsTensor<float>();
         var boxesTensor = outputs.First(o => o.Name == "pred_boxes").AsTensor<float>();
         var numQueries = logitsTensor.Dimensions[1];
         var numClasses = logitsTensor.Dimensions[2];
-        var logits = logitsTensor.ToArray(); // [n, numQueries, numClasses], row-major
-        var boxes = boxesTensor.ToArray(); // [n, numQueries, 4], row-major
+        var logits = OutputSpan(logitsTensor); // [n, numQueries, numClasses], row-major
+        var boxes = OutputSpan(boxesTensor); // [n, numQueries, 4], row-major
 
         var logitsPerImage = numQueries * numClasses;
         var boxesPerImage = numQueries * 4;
@@ -273,9 +274,9 @@ public sealed class DFineEngine : IDetectionEngine, IBatchDetectionEngine, ISlic
         for (var i = 0; i < n; i++)
         {
             // A plain span slice, not a copy — Decode only ever reads forward through it, and the
-            // backing arrays (from ToArray() above) are alive for this whole loop regardless.
-            var imageLogits = logits.AsSpan(i * logitsPerImage, logitsPerImage);
-            var imageBoxes = boxes.AsSpan(i * boxesPerImage, boxesPerImage);
+            // output tensors behind it stay alive until `outputs` is disposed after this loop.
+            var imageLogits = logits.Slice(i * logitsPerImage, logitsPerImage);
+            var imageBoxes = boxes.Slice(i * boxesPerImage, boxesPerImage);
             var imageResults = DFineDecoder.Decode(imageLogits, imageBoxes, numQueries, numClasses, _labels, confidence, images[i].Profile);
             if (imageResults.Count == 0) WarnIfNonFinite(imageLogits, imageBoxes);
             results.Add(imageResults);
@@ -307,22 +308,22 @@ public sealed class DFineEngine : IDetectionEngine, IBatchDetectionEngine, ISlic
         var nv12Tensor = new DenseTensor<byte>(wholeFrameNv12, [1, layout.CaptureHeight * 3 / 2, layout.CaptureWidth]);
         List<NamedOnnxValue> inputs = [NamedOnnxValue.CreateFromTensor("nv12", nv12Tensor)];
 
-        using var outputs = _session.Run(inputs);
+        using var outputs = _lease.Run(inputs);
         var logitsTensor = outputs.First(o => o.Name == "logits").AsTensor<float>();
         var boxesTensor = outputs.First(o => o.Name == "pred_boxes").AsTensor<float>();
         var n = logitsTensor.Dimensions[0];
         var numQueries = logitsTensor.Dimensions[1];
         var numClasses = logitsTensor.Dimensions[2];
-        var logits = logitsTensor.ToArray();
-        var boxes = boxesTensor.ToArray();
+        var logits = OutputSpan(logitsTensor);
+        var boxes = OutputSpan(boxesTensor);
 
         var logitsPerImage = numQueries * numClasses;
         var boxesPerImage = numQueries * 4;
         var results = new List<List<ObjectDetection>>(n);
         for (var i = 0; i < n; i++)
         {
-            var imageLogits = logits.AsSpan(i * logitsPerImage, logitsPerImage);
-            var imageBoxes = boxes.AsSpan(i * boxesPerImage, boxesPerImage);
+            var imageLogits = logits.Slice(i * logitsPerImage, logitsPerImage);
+            var imageBoxes = boxes.Slice(i * boxesPerImage, boxesPerImage);
             // _profile here is the shared per-slice identity profile (see this class's own
             // constructor doc comment) — every slice decodes through the identical transform.
             var imageResults = DFineDecoder.Decode(imageLogits, imageBoxes, numQueries, numClasses, _labels, confidence, _profile);
@@ -353,6 +354,12 @@ public sealed class DFineEngine : IDetectionEngine, IBatchDetectionEngine, ISlic
     /// per frame — the actual fix (an automatic FP32 rebuild) happens in CameraDetectionPipeline, not
     /// here, so this only ever reports what was observed, never what it did about it.
     /// </summary>
+    // Reads an ORT output in place. ToArray() copied it every frame — the logits alone are a Large
+    // Object Heap allocation (~96 KB per image, ~290 KB per frame in Slice mode), and LOH churn is
+    // what drives gen2 collections. Valid only while the Run's outputs are undisposed.
+    private static ReadOnlySpan<float> OutputSpan(Tensor<float> tensor) =>
+        tensor is DenseTensor<float> dense ? dense.Buffer.Span : tensor.ToArray();
+
     private void WarnIfNonFinite(ReadOnlySpan<float> logits, ReadOnlySpan<float> boxes)
     {
         if (!HasNonFinite(logits) && !HasNonFinite(boxes)) return;
@@ -442,6 +449,6 @@ public sealed class DFineEngine : IDetectionEngine, IBatchDetectionEngine, ISlic
 
     public void Dispose()
     {
-        _session.Dispose();
+        _lease.Dispose();
     }
 }

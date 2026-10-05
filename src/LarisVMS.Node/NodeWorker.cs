@@ -181,6 +181,9 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     // previously-stored value alone rather than clearing it — see NodeService.RecordHeartbeatAsync).
     private IReadOnlyList<string>? _detectedEncoders;
 
+    // Sampled once per heartbeat; CPU and network are deltas since the previous heartbeat.
+    private readonly HostStatsSampler _hostStats = new();
+
     // Probed once at startup alongside the encoders (same "the installed ffmpeg build doesn't
     // change while this process runs" reasoning) — gates whether this node writes hover thumbnails
     // and segment-seek snapshot crops as WebP or falls back to JPEG. The Vision Service's eager
@@ -557,7 +560,9 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                     certHolder is not null ? certHolder.IsSelfSigned : null,
                     certHolder?.LastError,
                     // Failover plan phase 3: this node's /health verdicts on the partners it backs up.
-                    partnerHealthTracker.CurrentReports()), ct);
+                    partnerHealthTracker.CurrentReports(),
+                    // Dashboard: this machine's CPU, memory and network load.
+                    HostStats: _hostStats.Sample()), ct);
 
                 // Failover plan phase 5a/5b: fold in the next nonce, and a rotated secret if central
                 // sent one, persisting node.config before switching so a mid-rotation restart can't

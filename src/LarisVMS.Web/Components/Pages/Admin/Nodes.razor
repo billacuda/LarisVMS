@@ -28,6 +28,22 @@
     <div class="alert @(StatusIsError ? "alert-danger" : "alert-success")" role="status">@StatusMessage</div>
 }
 
+@if (MissingNodeStaleCameras.Count > 0)
+{
+    <div class="alert alert-warning d-flex flex-wrap align-items-center gap-2" role="status">
+        <span>
+            Footage records for @string.Join(", ", MissingNodeStaleCameras) belong to a node that no longer exists,
+            so nothing can confirm their deletion.
+        </span>
+        <EditForm Model="this" FormName="forget-missing-node-segments" OnValidSubmit="HandleForgetMissingNodeSegmentsAsync">
+            <button type="submit" class="btn btn-sm btn-outline-danger"
+                    onclick="return confirm('Remove these footage records? Any files left on that node\'s storage are not touched.');">
+                Forget these records
+            </button>
+        </EditForm>
+    </div>
+}
+
 @if (NodeRows.Count == 0)
 {
     <p class="text-muted">No nodes have registered yet. See <a href="/Help/installation">Installation</a>.</p>
@@ -87,10 +103,11 @@ else
                             }
                             @if (StaleCameraCountByNode.GetValueOrDefault(n.Id) is > 0 and var staleCount)
                             {
-                                var staleTooltip = "Leftover footage from cameras moved off this node; clears on its own as it ages out:\n" + string.Join("\n", StaleCamerasByNode[n.Id]
-                                    .OrderBy(r => r.ClearsAtUtc)
-                                    .Select(r => $"{r.CameraName} — falls off {r.ClearsAtUtc.ToLocalTime():g}"));
-                                <span class="ms-1" title="@staleTooltip">⚠️ @staleCount</span>
+                                var staleRows = StaleCamerasByNode[n.Id];
+                                var staleTooltip = "Leftover footage from cameras moved off this node; clears on its own as it ages out:\n" + string.Join("\n", staleRows
+                                    .OrderByDescending(r => r.Overdue).ThenBy(r => r.CameraName)
+                                    .Select(r => $"{r.CameraName} — {r.Status}"));
+                                <span class="ms-1 @(staleRows.Any(r => r.Overdue) ? "text-danger" : "")" title="@staleTooltip">⚠️ @staleCount</span>
                             }
                             @if (string.IsNullOrWhiteSpace(n.StorageRootPath))
                             {
@@ -168,9 +185,15 @@ else
 }
 
 @code {
-    /// <summary>One row of the stale-camera warning's tooltip — ClearsAtUtc is when this camera's last
-    /// remaining segment on this node ages past retention, which clears the warning on its own.</summary>
-    private sealed record StaleCameraRow(string CameraName, DateTime ClearsAtUtc);
+    /// <summary>One row of the stale-camera warning's tooltip. Status says when this camera's last
+    /// remaining segment on this node ages past retention, that it's kept indefinitely, or — once well
+    /// past that — that the node hasn't confirmed deleting it yet.</summary>
+    private sealed record StaleCameraRow(string CameraName, string Status, bool Overdue);
+
+    // Leftover footage is only called overdue this long after it should have gone: the server's
+    // expired-segment list waits a day past retention (NodeService.ExpiredSegmentGrace) before
+    // handing it to the node, plus slack for the node's 5-minute sweep and report.
+    private static readonly TimeSpan StaleOverdueGrace = TimeSpan.FromDays(1) + TimeSpan.FromHours(1);
 
     [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
     [CascadingParameter] private HttpContext? HttpContext { get; set; }
@@ -197,6 +220,7 @@ else
     private Dictionary<Guid, double?> ArchiveDaysRemainingMap { get; set; } = [];
     private Dictionary<Guid, int> StaleCameraCountByNode { get; set; } = [];
     private Dictionary<Guid, List<StaleCameraRow>> StaleCamerasByNode { get; set; } = [];
+    private List<string> MissingNodeStaleCameras { get; set; } = [];
     private string? StatusMessage;
     private bool StatusIsError;
 
@@ -220,19 +244,66 @@ else
             .GroupBy(c => c.NodeId!.Value)
             .ToDictionary(g => g.Key, g => g.Count());
 
-        var staleDetails = await CameraService.GetStaleSegmentDetailsAsync();
+        // Footage on the node that is recording the camera right now isn't stale, even when that's not
+        // the camera's home node — a failover backup's own recordings were flagged before.
+        var failoverStateOf = NodeRows.ToDictionary(n => n.Id, n => n.FailoverState);
+        var defaultBackupOf = NodeRows.ToDictionary(n => n.Id, n => n.BackupNodeId);
+        var cameraById = cameras.ToDictionary(c => c.Id);
+        var nodeById = NodeRows.ToDictionary(n => n.Id);
+        var staleDetails = (await CameraService.GetStaleSegmentDetailsAsync())
+            .Where(d => !(cameraById.TryGetValue(d.CameraId, out var cam)
+                && LarisVMS.Infrastructure.Services.RecordingNodeResolver.Resolve(
+                    cam.NodeId, cam.BackupNodeIdOverride, failoverStateOf, defaultBackupOf) == d.NodeId))
+            .ToList();
+
+        MissingNodeStaleCameras = staleDetails.Where(d => !nodeById.ContainsKey(d.NodeId))
+            .Select(d => d.CameraName).Distinct().OrderBy(n => n).ToList();
+        staleDetails = staleDetails.Where(d => nodeById.ContainsKey(d.NodeId)).ToList();
+
         StaleCameraCountByNode = staleDetails
             .GroupBy(d => d.NodeId)
             .ToDictionary(g => g.Key, g => g.Count());
 
         StaleCamerasByNode = [];
+        var nowUtc = DateTime.UtcNow;
         foreach (var d in staleDetails)
         {
+            // The same retention the server's expired-segment list applies: archive-enabled footage
+            // goes when it ages past the archive retention, everything else past Retention.Days. 0 or
+            // less is keep forever, not "already expired".
             var retentionDays = await Settings.GetAsync<int?>("Retention.Days", 30, cameraId: d.CameraId, nodeId: d.NodeId);
-            var clearsAtUtc = d.NewestSegmentEndUtc.AddDays(retentionDays ?? 30);
+            var archiveEnabled = await Settings.GetAsync("Archive.Enabled", false, cameraId: d.CameraId, nodeId: d.NodeId);
+            var archiveRetentionDays = await Settings.GetAsync<int?>("Archive.RetentionDays", 0, cameraId: d.CameraId, nodeId: d.NodeId);
+            var keepDays = archiveEnabled ? archiveRetentionDays : retentionDays;
+
+            StaleCameraRow row;
+            if (keepDays is not > 0)
+            {
+                row = new StaleCameraRow(d.CameraName,
+                    archiveEnabled ? "kept indefinitely (archive retention is keep forever)" : "kept indefinitely (retention is keep forever)",
+                    Overdue: false);
+            }
+            else
+            {
+                var clearsAtUtc = d.NewestSegmentEndUtc.AddDays(keepDays.Value);
+                if (nowUtc < clearsAtUtc + StaleOverdueGrace)
+                {
+                    row = new StaleCameraRow(d.CameraName, $"falls off {clearsAtUtc.ToLocalTime():g}", Overdue: false);
+                }
+                else
+                {
+                    var node = nodeById[d.NodeId];
+                    var online = node.LastSeenAt is { } seen && seen >= nowUtc.AddMinutes(-2);
+                    row = new StaleCameraRow(d.CameraName,
+                        $"overdue since {clearsAtUtc.ToLocalTime():g}, waiting for this node to confirm deletion" +
+                        (online ? "" : " (node is offline)"),
+                        Overdue: true);
+                }
+            }
+
             if (!StaleCamerasByNode.TryGetValue(d.NodeId, out var rows))
                 StaleCamerasByNode[d.NodeId] = rows = [];
-            rows.Add(new StaleCameraRow(d.CameraName, clearsAtUtc));
+            rows.Add(row);
         }
 
         DaysRemainingMap = await NodeService.GetEstimatedDaysRemainingAsync();
@@ -290,6 +361,15 @@ else
         {
             NavigateBare($"Could not reach {node.Name}: {ex.Message}", isError: true);
         }
+    }
+
+    /// <summary>Removes footage records left on a node that has since been deleted — nothing can ever
+    /// confirm their deletion otherwise. Records only; files are untouched. Audited.</summary>
+    private async Task HandleForgetMissingNodeSegmentsAsync()
+    {
+        var removed = await CameraService.ForgetSegmentsOnMissingNodesAsync();
+        await LogAsync("Segments.ForgetMissingNode", $"{removed} footage record(s) on deleted node(s) removed");
+        NavigateBare($"Removed {removed} footage record(s) that belonged to a deleted node.");
     }
 
     /// <summary>Failover plan phase 5a: recovery for a node locked out because its rolling check-in

@@ -1,10 +1,18 @@
-// Shared "focused/fullscreen view" behavior for a single camera tile, used by both Live and
-// Playback. Double-click enters real browser Fullscreen API on the tile's own container element
-// (not the bare <video>) so sibling overlay controls stay in the fullscreened render subtree and
-// can still be interacted with — fullscreening only the <video> would drop every sibling button
-// out of the render tree entirely, with no way back in except Esc. Because this uses the real
-// Fullscreen API rather than an in-page "big tile" CSS toggle, every other tile on the page simply
-// keeps decoding/playing off-screen the whole time — nothing needs to be torn down or hidden.
+// Shared tile behavior for a single camera video, used by both Live/Views and Playback:
+//   * double-click toggles real browser Fullscreen on the tile's own container element (not the
+//     bare <video>), so sibling overlay controls stay in the fullscreened render subtree;
+//   * digital zoom — the ONE zoom state for the tile. Drag a box to zoom into it; once zoomed, drag
+//     pans; back at 1x (Out/Reset, wheel or pinch), drag selects again. Wheel and pinch zoom while
+//     fullscreen. The page's own zoom buttons (Playback's In/Out/Reset) drive it through the returned
+//     handle rather than keeping a second state.
+//
+// Playback used to run its own drag-select zoom (wireZoom) beside this file's fullscreen zoom, both
+// writing the same <video> transform from separate state. Leaving fullscreen cleared the transform
+// while wireZoom still believed it was zoomed, so the next drag panned an unzoomed frame instead of
+// selecting — and the two handlers stole pointer capture from each other. One state fixes both.
+//
+// Because this uses the real Fullscreen API rather than an in-page "big tile" CSS toggle, every other
+// tile on the page keeps decoding/playing off-screen the whole time — nothing is torn down or hidden.
 window.larisvmsFullscreenTile = (function () {
     'use strict';
 
@@ -19,35 +27,79 @@ window.larisvmsFullscreenTile = (function () {
     // it's issued, closing that race instead of racing it.
     var transitioning = false;
 
-    // Deliberately a separate implementation/state from Playback's own button-driven digital zoom
-    // (wireZoom/.pb-zoom-in/out/reset in playback-player.js), not a shared one — that zoom stays
-    // exactly as-is for the normal (non-fullscreen) grid view; this one only ever runs while this
-    // specific tile is the fullscreen element.
+    // A drag smaller than this reads as a plain click (Playback's select-primary click still fires
+    // afterward — preventDefault on pointerdown doesn't suppress 'click'), not "zoom to this region".
+    var MIN_SELECT_PX = 24;
+
+    // Pointer gestures starting on one of the tile's own controls are left to that control.
+    var INTERACTIVE = 'button, a, input, select, textarea, label, [role="button"], .dropdown-menu, .pb-fullscreen-controls';
+
     function wire(containerEl, videoEl, opts) {
         opts = opts || {};
-        var minScale = opts.minScale || 1;
+        var minScale = 1;
         var maxScale = opts.maxScale || 4;
         var scale = 1, panX = 0, panY = 0;
         var transformCss = '';
 
+        function isFs() { return document.fullscreenElement === containerEl; }
+
+        // Keeps the zoomed frame covering the whole tile: the transform is scale(s) translate(p)
+        // around the element's centre, so a point d from centre lands at s*(d+p); the frame's edges
+        // stay outside the viewport while |p| <= (size/2)(1 - 1/s).
+        function clampPan() {
+            var limitX = (videoEl.clientWidth / 2) * (1 - 1 / scale);
+            var limitY = (videoEl.clientHeight / 2) * (1 - 1 / scale);
+            panX = Math.max(-limitX, Math.min(limitX, panX));
+            panY = Math.max(-limitY, Math.min(limitY, panY));
+        }
+
+        // Shown only while zoomed: a drag-to-zoom on a tile with no zoom buttons of its own (every
+        // live/View tile, and any tile in fullscreen) otherwise left no visible way back out. Lifted
+        // clear of the hover controls that share the bottom-right corner (same mb-5 clearance the
+        // corner badges use). Right-click while zoomed does the same.
+        var resetBtn = document.createElement('button');
+        resetBtn.type = 'button';
+        resetBtn.className = 'btn btn-sm btn-dark position-absolute bottom-0 end-0 me-1 mb-5 tile-zoom-reset';
+        resetBtn.style.cssText = 'z-index:6; display:none; opacity:.85; padding:.1rem .45rem;';
+        resetBtn.title = 'Reset zoom (or right-click the video)';
+        resetBtn.textContent = '⤺ 1×';
+        resetBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            resetZoom();
+        });
+        containerEl.appendChild(resetBtn);
+
         function apply() {
-            transformCss = 'scale(' + scale + ') translate(' + panX + 'px, ' + panY + 'px)';
+            if (scale <= minScale) { scale = minScale; panX = 0; panY = 0; }
+            clampPan();
+            transformCss = scale === minScale ? '' : 'scale(' + scale + ') translate(' + panX + 'px, ' + panY + 'px)';
             videoEl.style.transform = transformCss;
+            videoEl.style.cursor = scale > minScale ? 'grab' : '';
+            resetBtn.style.display = scale > minScale ? '' : 'none';
+            if (opts.onZoomChange) opts.onZoomChange(scale);
+        }
+
+        function setScale(next) {
+            scale = Math.min(maxScale, Math.max(minScale, next));
+            apply();
         }
 
         function resetZoom() {
-            scale = 1; panX = 0; panY = 0;
-            transformCss = '';
-            videoEl.style.transform = '';
-            videoEl.style.cursor = '';
-            endDrag();
-            endPinch();
+            endGesture(false);
             activePointers = {};
+            scale = minScale;
+            apply();
         }
 
-        function isFs() { return document.fullscreenElement === containerEl; }
+        // Right-click while zoomed goes straight back to 1x; at 1x the browser's own menu is left alone.
+        containerEl.addEventListener('contextmenu', function (e) {
+            if (scale <= minScale || (e.target.closest && e.target.closest(INTERACTIVE))) return;
+            e.preventDefault();
+            resetZoom();
+        });
 
         containerEl.addEventListener('dblclick', function (e) {
+            if (e.target.closest && e.target.closest(INTERACTIVE)) return;
             e.stopPropagation();
             transitioning = true;
             if (isFs()) {
@@ -64,40 +116,32 @@ window.larisvmsFullscreenTile = (function () {
             transitioning = false;
             var active = isFs();
             containerEl.classList.toggle('tile-fullscreen', active);
+            // Leaving fullscreen returns to the grid at 1x — the same single state, so the next drag
+            // in the grid selects rather than panning a zoom the user can no longer see.
             if (!active) resetZoom();
             if (opts.onFullscreenChange) opts.onFullscreenChange(active);
         });
 
-        // Wheel up = zoom in, down = zoom out, floored at minScale (normal fill size) — only live
-        // while this tile is actually the fullscreen element, so wheel scrolling the page itself is
-        // never hijacked outside of fullscreen.
+        // Wheel up = zoom in, down = zoom out — only while this tile is fullscreen, so scrolling the
+        // page itself is never hijacked in the grid.
         containerEl.addEventListener('wheel', function (e) {
             if (!isFs()) return;
             e.preventDefault();
-            var factor = e.deltaY < 0 ? 1.25 : 0.8;
-            var next = Math.min(maxScale, Math.max(minScale, scale * factor));
-            if (next === scale) return;
-            scale = next;
-            if (scale === minScale) { panX = 0; panY = 0; }
-            apply();
-            videoEl.style.cursor = scale > minScale ? 'grab' : '';
+            setScale(scale * (e.deltaY < 0 ? 1.25 : 0.8));
         }, { passive: false });
 
-        // Pointer events + setPointerCapture rather than plain mouse events on window, for exactly
-        // the reason timeline.js's own drag handler documents: a mouseup that never reaches the page
-        // (released outside the window, or swallowed by the fullscreen transition when Esc is hit
-        // mid-drag) used to leave `dragging` stuck true forever, after which every later mousemove
-        // anywhere on the page kept panning this video and stole gestures meant for other controls —
-        // an intermittent "some other control just stops responding" bug that only ever showed up
-        // after a zoom/fullscreen pan. Capture guarantees the matching pointerup/pointercancel comes
-        // back to this element, and endDrag is idempotent so resetZoom can also call it directly.
-        var dragging = false, startX = 0, startY = 0, startPanX = 0, startPanY = 0, dragPointerId = null;
+        // Pointer events + setPointerCapture (on the container only — one capture owner per gesture)
+        // rather than mouse events on window: a lost mouseup (released outside the window, or
+        // swallowed by the fullscreen transition when Esc is hit mid-drag) used to leave a drag stuck
+        // on forever, after which every mousemove anywhere kept panning this video. Capture guarantees
+        // the matching up/cancel comes back here, and lostpointercapture ends the gesture regardless.
+        var gesture = null; // null | { kind: 'pan'|'select', pointerId, startX, startY, startPanX, startPanY }
+        var selRectEl = null;
 
         // ── Pinch-to-zoom (M16) ──────────────────────────────────────────────
         // Every currently-down pointer's last known position, keyed by pointerId — two entries means
-        // a pinch is in progress. A touchscreen delivers each finger as its own Pointer Events stream
-        // (same pointerdown/move/up/cancel this file already used for mouse drag-to-pan), so pinch is
-        // "the same events, tracked for up to two pointers at once" rather than a separate touch API.
+        // a pinch is in progress. A touchscreen delivers each finger as its own Pointer Events stream,
+        // so pinch is "the same events, tracked for up to two pointers at once".
         var activePointers = {};
         var pinchStartDist = null, pinchStartScale = 1, pinchStartMidX = 0, pinchStartMidY = 0;
         var pinchStartPanX = 0, pinchStartPanY = 0;
@@ -105,54 +149,101 @@ window.larisvmsFullscreenTile = (function () {
         function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
         function midpoint(a, b) { return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
 
-        function endDrag() {
-            if (!dragging) return;
-            dragging = false;
-            if (dragPointerId !== null && containerEl.hasPointerCapture(dragPointerId)) {
-                containerEl.releasePointerCapture(dragPointerId);
-            }
-            dragPointerId = null;
-            videoEl.style.cursor = isFs() && scale > minScale ? 'grab' : '';
+        function ensureSelRectEl() {
+            if (selRectEl) return selRectEl;
+            selRectEl = document.createElement('div');
+            selRectEl.style.cssText = 'position:absolute; border:1px dashed #fff; ' +
+                'background:rgba(255,255,255,.15); pointer-events:none; display:none; z-index:5;';
+            videoEl.parentElement.appendChild(selRectEl);
+            return selRectEl;
         }
 
-        function endPinch() {
-            pinchStartDist = null;
+        // The selection box is positioned in the video's parent's coordinates (it's appended there),
+        // and the zoom math below works in the video element's own box — both from client coords.
+        function localTo(el, e) {
+            var r = el.getBoundingClientRect();
+            return { x: e.clientX - r.left, y: e.clientY - r.top };
+        }
+
+        // commit=false (pointercancel, lost capture, Esc) discards a selection instead of zooming to
+        // wherever it happened to be when interrupted.
+        function endGesture(commit) {
+            if (!gesture) return;
+            var g = gesture;
+            gesture = null;
+            if (containerEl.hasPointerCapture && containerEl.hasPointerCapture(g.pointerId)) {
+                try { containerEl.releasePointerCapture(g.pointerId); } catch (_) { /* already released */ }
+            }
+            if (g.kind === 'select') {
+                var el = ensureSelRectEl();
+                el.style.display = 'none';
+                var w = Math.abs(g.curX - g.startX), h = Math.abs(g.curY - g.startY);
+                if (commit && w >= MIN_SELECT_PX && h >= MIN_SELECT_PX) {
+                    // Zoom so the selection fills the frame, centred on it: the transform maps a
+                    // point d from the frame's centre to scale*(d+pan), so pan = -(selection centre's
+                    // offset from the frame centre) lands it in the middle at any zoom.
+                    var vw = videoEl.clientWidth, vh = videoEl.clientHeight;
+                    var cx = (g.startX + g.curX) / 2, cy = (g.startY + g.curY) / 2;
+                    scale = Math.min(maxScale, Math.max(minScale, Math.min(vw / w, vh / h)));
+                    panX = vw / 2 - cx;
+                    panY = vh / 2 - cy;
+                    apply();
+                }
+            }
+            videoEl.style.cursor = scale > minScale ? 'grab' : '';
         }
 
         containerEl.addEventListener('pointerdown', function (e) {
-            if (!isFs()) return;
-            activePointers[e.pointerId] = { x: e.clientX, y: e.clientY };
-            var ids = Object.keys(activePointers);
+            if (e.target.closest && e.target.closest(INTERACTIVE)) return;
+            var fs = isFs();
 
-            if (ids.length === 2) {
-                // A second finger landed — hand off from single-pointer pan (if one was active) to
-                // a pinch anchored on both fingers' current midpoint/spacing.
-                endDrag();
-                e.preventDefault();
-                containerEl.setPointerCapture(e.pointerId);
-                var p1 = activePointers[ids[0]], p2 = activePointers[ids[1]];
-                pinchStartDist = dist(p1, p2);
-                pinchStartScale = scale;
-                var mid = midpoint(p1, p2);
-                pinchStartMidX = mid.x; pinchStartMidY = mid.y;
-                pinchStartPanX = panX; pinchStartPanY = panY;
-                return;
+            if (fs) {
+                activePointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+                var ids = Object.keys(activePointers);
+                if (ids.length === 2) {
+                    // A second finger landed — hand off from any single-pointer gesture to a pinch
+                    // anchored on both fingers' current midpoint/spacing.
+                    endGesture(false);
+                    e.preventDefault();
+                    containerEl.setPointerCapture(e.pointerId);
+                    var p1 = activePointers[ids[0]], p2 = activePointers[ids[1]];
+                    pinchStartDist = dist(p1, p2);
+                    pinchStartScale = scale;
+                    var mid = midpoint(p1, p2);
+                    pinchStartMidX = mid.x; pinchStartMidY = mid.y;
+                    pinchStartPanX = panX; pinchStartPanY = panY;
+                    return;
+                }
+                if (ids.length > 2) return; // a third finger: ignored, the first two keep driving the pinch
             }
-            if (ids.length > 2) return; // a third finger: ignored, the first two keep driving the pinch
 
-            if (e.button !== 0 || scale <= minScale) return;
-            // See playback-player.js's wireZoom for why this matters: without it, dragging the
-            // <video> can also kick off the browser's own native drag-out-the-frame gesture, which
-            // then owns the mouse for the rest of that gesture and shows the no-drop cursor instead
-            // of actually panning.
+            if (!e.isPrimary || e.button !== 0 || gesture) return;
+            // Outside fullscreen a touch drag must keep scrolling the page, so touch only zooms/pans
+            // while fullscreen (where .tile-fullscreen sets touch-action:none).
+            if (!fs && e.pointerType === 'touch') return;
+
+            // <video> is a native drag source in Chrome/Edge (you can drag a frame out like an image);
+            // without this a drag here can start that native drag instead, which then owns the mouse
+            // and shows the no-drop cursor rather than selecting/panning.
             e.preventDefault();
-            dragging = true;
-            startX = e.clientX; startY = e.clientY;
-            startPanX = panX; startPanY = panY;
-            dragPointerId = e.pointerId;
             containerEl.setPointerCapture(e.pointerId);
-            videoEl.style.cursor = 'grabbing';
+
+            if (scale > minScale) {
+                gesture = { kind: 'pan', pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, startPanX: panX, startPanY: panY };
+                videoEl.style.cursor = 'grabbing';
+            } else {
+                var p = localTo(videoEl, e);
+                gesture = { kind: 'select', pointerId: e.pointerId, startX: p.x, startY: p.y, curX: p.x, curY: p.y };
+                var parentP = localTo(videoEl.parentElement, e);
+                gesture.parentStartX = parentP.x; gesture.parentStartY = parentP.y;
+                var el = ensureSelRectEl();
+                el.style.left = parentP.x + 'px'; el.style.top = parentP.y + 'px';
+                el.style.width = '0px'; el.style.height = '0px';
+                el.style.display = '';
+                videoEl.style.cursor = 'crosshair';
+            }
         });
+
         containerEl.addEventListener('pointermove', function (e) {
             if (activePointers[e.pointerId]) activePointers[e.pointerId] = { x: e.clientX, y: e.clientY };
 
@@ -170,31 +261,48 @@ window.larisvmsFullscreenTile = (function () {
                 panX = pinchStartPanX + (mid.x - pinchStartMidX) / scale;
                 panY = pinchStartPanY + (mid.y - pinchStartMidY) / scale;
                 apply();
-                videoEl.style.cursor = scale > minScale ? 'grab' : '';
                 return;
             }
 
-            if (!dragging) return;
-            panX = startPanX + (e.clientX - startX) / scale;
-            panY = startPanY + (e.clientY - startY) / scale;
-            apply();
+            if (!gesture || e.pointerId !== gesture.pointerId) return;
+            if (gesture.kind === 'pan') {
+                panX = gesture.startPanX + (e.clientX - gesture.startX) / scale;
+                panY = gesture.startPanY + (e.clientY - gesture.startY) / scale;
+                apply();
+                videoEl.style.cursor = 'grabbing';
+            } else {
+                var p = localTo(videoEl, e);
+                gesture.curX = Math.max(0, Math.min(videoEl.clientWidth, p.x));
+                gesture.curY = Math.max(0, Math.min(videoEl.clientHeight, p.y));
+                var parentP = localTo(videoEl.parentElement, e);
+                var el = ensureSelRectEl();
+                el.style.left = Math.min(gesture.parentStartX, parentP.x) + 'px';
+                el.style.top = Math.min(gesture.parentStartY, parentP.y) + 'px';
+                el.style.width = Math.abs(parentP.x - gesture.parentStartX) + 'px';
+                el.style.height = Math.abs(parentP.y - gesture.parentStartY) + 'px';
+            }
         });
-        function onPointerEnd(e) {
+
+        function onPointerEnd(e, commit) {
             delete activePointers[e.pointerId];
-            if (Object.keys(activePointers).length < 2) endPinch();
-            endDrag();
+            if (Object.keys(activePointers).length < 2) pinchStartDist = null;
+            if (gesture && e.pointerId === gesture.pointerId) endGesture(commit);
         }
-        containerEl.addEventListener('pointerup', onPointerEnd);
-        containerEl.addEventListener('pointercancel', onPointerEnd);
+        containerEl.addEventListener('pointerup', function (e) { onPointerEnd(e, true); });
+        containerEl.addEventListener('pointercancel', function (e) { onPointerEnd(e, false); });
+        containerEl.addEventListener('lostpointercapture', function (e) { onPointerEnd(e, false); });
 
         return {
             isFullscreen: isFs,
             exitFullscreen: function () { if (isFs()) document.exitFullscreen().catch(function () { /* ignore */ }); },
-            // The exact CSS transform string currently applied to videoEl (empty when not zoomed/
-            // panned) — a caller drawing an overlay meant to track the video's own content (the
-            // AI-detection bounding-box canvas in live-view.js) applies this same string to its own
-            // element rather than reimplementing the scale/translate math, so the two can never
-            // drift out of sync with each other.
+            zoomIn: function () { setScale(scale + 0.5); },
+            zoomOut: function () { setScale(scale - 0.5); },
+            resetZoom: resetZoom,
+            getScale: function () { return scale; },
+            // The exact CSS transform string currently applied to videoEl (empty at 1x) — a caller
+            // drawing an overlay meant to track the video's own content (the AI-detection bounding-box
+            // canvas in live-view.js) applies this same string to its own element rather than
+            // reimplementing the scale/translate math, so the two can never drift out of sync.
             getTransformCss: function () { return transformCss; }
         };
     }

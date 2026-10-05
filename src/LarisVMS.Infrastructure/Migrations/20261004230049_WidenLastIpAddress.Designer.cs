@@ -4,6 +4,7 @@ using LarisVMS.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace LarisVMS.Infrastructure.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261004230049_WidenLastIpAddress")]
+    partial class WidenLastIpAddress
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1213,9 +1216,6 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.Property<double?>("ClockSkewSeconds")
                         .HasColumnType("float");
 
-                    b.Property<double?>("CpuPercent")
-                        .HasColumnType("float");
-
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
 
@@ -1243,9 +1243,6 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.Property<int>("FailoverState")
                         .HasColumnType("int");
 
-                    b.Property<DateTime?>("HostStatsUpdatedAt")
-                        .HasColumnType("datetime2");
-
                     b.Property<string>("LastIpAddress")
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
@@ -1270,22 +1267,10 @@ namespace LarisVMS.Infrastructure.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
-                    b.Property<long?>("MemoryTotalBytes")
-                        .HasColumnType("bigint");
-
-                    b.Property<long?>("MemoryUsedBytes")
-                        .HasColumnType("bigint");
-
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
-
-                    b.Property<long?>("NetReceiveBytesPerSec")
-                        .HasColumnType("bigint");
-
-                    b.Property<long?>("NetSendBytesPerSec")
-                        .HasColumnType("bigint");
 
                     b.Property<string>("PartnerHealthReportsJson")
                         .HasMaxLength(4000)

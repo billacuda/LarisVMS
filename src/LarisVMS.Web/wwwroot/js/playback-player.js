@@ -1232,141 +1232,17 @@
         );
     }
 
-    // Digital zoom: CSS transform scale/translate on the <video> element itself, no server
-    // involvement. Drag-to-pan engages once zoomed in past 1x; at 1x the same drag instead draws a
-    // selection rectangle and zooms to fill it on release (M16's "drag-select-to-zoom on a video
-    // cell") — one gesture, two meanings depending on current zoom, rather than a second control.
-    function wireZoom(tileEl, videoEl) {
-        var MAX_ZOOM = 4;
-        var zoom = 1, panX = 0, panY = 0;
-        function apply() { videoEl.style.transform = 'scale(' + zoom + ') translate(' + panX + 'px, ' + panY + 'px)'; }
-
+    // The tile's In/Out/Reset buttons drive the one zoom state fullscreen-tile.js keeps for this
+    // tile (drag-to-zoom, pan, wheel and pinch all live there) — Playback used to keep a second,
+    // separate zoom here, and the two drifted apart: after leaving fullscreen a drag panned an
+    // invisible zoom instead of selecting a new area.
+    function wireZoomButtons(tileEl, fsHandle) {
         var inBtn = tileEl.querySelector('.pb-zoom-in');
         var outBtn = tileEl.querySelector('.pb-zoom-out');
         var resetBtn = tileEl.querySelector('.pb-zoom-reset');
-        if (inBtn) inBtn.addEventListener('click', function () { zoom = Math.min(MAX_ZOOM, zoom + 0.5); apply(); });
-        if (outBtn) outBtn.addEventListener('click', function () {
-            zoom = Math.max(1, zoom - 0.5);
-            if (zoom === 1) { panX = 0; panY = 0; }
-            apply();
-        });
-        if (resetBtn) resetBtn.addEventListener('click', function () { zoom = 1; panX = 0; panY = 0; endGesture(false); apply(); });
-
-        // <video> is a native drag source in Chrome/Edge (you can drag a frame out like an image) —
-        // with no preventDefault on pointerdown, a mousedown-then-move over the video could kick off
-        // *that* native drag concurrently with this handler. Once it does, the browser owns the mouse
-        // gesture for the rest of that drag (showing the no-drop/circle-slash cursor over anything
-        // that isn't a valid drop target, which is everywhere on this page, including this same video
-        // and the timeline canvases below it) and our own pointermove/pointerup below stop getting
-        // sane deltas — confirmed live as exactly this: dragging felt "random", working on one
-        // timeline/tile but not another, because it depended on whether that particular pointerdown
-        // happened to also trigger a native dragstart. preventDefault on pointerdown is the documented
-        // way to suppress it, and now fires unconditionally (a version of this before drag-select-to-
-        // zoom existed left it out at zoom<=1, since there was nothing to drag yet there either) —
-        // needed now since a drag at zoom<=1 is a deliberate selection gesture too, not "nothing to
-        // do here."
-        // Pointer events + setPointerCapture, not mouse events on window — see fullscreen-tile.js's
-        // matching handler (and timeline.js's original write-up) for why: a lost mouseup left
-        // `dragging` stuck true forever, and from then on every mousemove anywhere on the page kept
-        // panning this video, intermittently stealing gestures aimed at other controls.
-        var dragging = false, startX = 0, startY = 0, startPanX = 0, startPanY = 0, dragPointerId = null;
-        var selecting = false, selStartX = 0, selStartY = 0, selRectEl = null;
-        // Below this, a drag reads as a plain click (selectPrimary on the tile still fires from the
-        // ordinary 'click' event afterward — preventDefault on pointerdown doesn't suppress it) rather
-        // than a deliberate "zoom to this region" gesture.
-        var MIN_SELECT_PX = 24;
-
-        function ensureSelRectEl() {
-            if (selRectEl) return selRectEl;
-            selRectEl = document.createElement('div');
-            selRectEl.style.cssText = 'position:absolute; border:1px dashed #fff; ' +
-                'background:rgba(255,255,255,.15); pointer-events:none; display:none; z-index:5;';
-            videoEl.parentElement.appendChild(selRectEl);
-            return selRectEl;
-        }
-
-        function releaseCapture() {
-            if (dragPointerId !== null && videoEl.hasPointerCapture(dragPointerId)) {
-                videoEl.releasePointerCapture(dragPointerId);
-            }
-            dragPointerId = null;
-        }
-
-        function endDrag() {
-            if (!dragging) return;
-            dragging = false;
-            releaseCapture();
-            videoEl.style.cursor = zoom > 1 ? 'grab' : 'default';
-        }
-
-        // commit=false on pointercancel (Esc, losing capture mid-gesture, etc.) — the selection is
-        // simply discarded rather than zooming to wherever it happened to be when interrupted.
-        function endSelect(commit) {
-            if (!selecting) return;
-            selecting = false;
-            releaseCapture();
-            var el = ensureSelRectEl();
-            var w = parseFloat(el.style.width) || 0, h = parseFloat(el.style.height) || 0;
-            var left = parseFloat(el.style.left) || 0, top = parseFloat(el.style.top) || 0;
-            el.style.display = 'none';
-            if (commit && w >= MIN_SELECT_PX && h >= MIN_SELECT_PX) {
-                var vRect = videoEl.getBoundingClientRect();
-                // The pan math that centers the selection: transform is `scale(zoom)
-                // translate(panX,panY)` around the element's own center, and CSS applies the
-                // rightmost function (translate) to the point first, then scale — so a point at
-                // offset d from center ends up at zoom*(d+pan) from center post-transform. Setting
-                // that to 0 (selection center lands exactly on the frame's center) gives
-                // pan = -d = (frameCenter - selectionCenter), independent of zoom itself.
-                var cx = left + w / 2, cy = top + h / 2;
-                zoom = Math.min(MAX_ZOOM, Math.max(1, Math.min(vRect.width / w, vRect.height / h)));
-                panX = vRect.width / 2 - cx;
-                panY = vRect.height / 2 - cy;
-                apply();
-            }
-            videoEl.style.cursor = zoom > 1 ? 'grab' : 'default';
-        }
-
-        function endGesture(commit) { endDrag(); endSelect(commit); }
-
-        videoEl.addEventListener('pointerdown', function (e) {
-            if (e.button !== 0) return;
-            e.preventDefault();
-            dragPointerId = e.pointerId;
-            videoEl.setPointerCapture(e.pointerId);
-            if (zoom > 1) {
-                dragging = true;
-                startX = e.clientX; startY = e.clientY;
-                startPanX = panX; startPanY = panY;
-                videoEl.style.cursor = 'grabbing';
-            } else {
-                selecting = true;
-                var vRect = videoEl.getBoundingClientRect();
-                selStartX = e.clientX - vRect.left;
-                selStartY = e.clientY - vRect.top;
-                var el = ensureSelRectEl();
-                el.style.left = selStartX + 'px'; el.style.top = selStartY + 'px';
-                el.style.width = '0px'; el.style.height = '0px';
-                el.style.display = '';
-                videoEl.style.cursor = 'crosshair';
-            }
-        });
-        videoEl.addEventListener('pointermove', function (e) {
-            if (dragging) {
-                panX = startPanX + (e.clientX - startX) / zoom;
-                panY = startPanY + (e.clientY - startY) / zoom;
-                apply();
-            } else if (selecting) {
-                var vRect = videoEl.getBoundingClientRect();
-                var x = e.clientX - vRect.left, y = e.clientY - vRect.top;
-                var el = ensureSelRectEl();
-                el.style.left = Math.min(selStartX, x) + 'px';
-                el.style.top = Math.min(selStartY, y) + 'px';
-                el.style.width = Math.abs(x - selStartX) + 'px';
-                el.style.height = Math.abs(y - selStartY) + 'px';
-            }
-        });
-        videoEl.addEventListener('pointerup', function () { endGesture(true); });
-        videoEl.addEventListener('pointercancel', function () { endGesture(false); });
+        if (inBtn) inBtn.addEventListener('click', function () { fsHandle.zoomIn(); });
+        if (outBtn) outBtn.addEventListener('click', function () { fsHandle.zoomOut(); });
+        if (resetBtn) resetBtn.addEventListener('click', function () { fsHandle.resetZoom(); });
     }
 
     // Double-click-to-fullscreen + wheel-zoom/drag-pan (fullscreen-tile.js), plus the audio/exit
@@ -1452,6 +1328,7 @@
                 else frameEl.requestFullscreen().catch(function () { /* ignore */ });
             });
         }
+        return fsHandle;
     }
 
     async function getBucketsForPrimary(fromIso, toIso, bucketCount) {
@@ -1595,10 +1472,31 @@
             var list = await resp.json();
             if (!list.length) return Date.now(); // genuinely nothing in the last week — "now" is as good a default as any
             var mostRecent = list[list.length - 1]; // GetSegmentsAsync orders by StartUtc ascending
-            return new Date(mostRecent.startUtc).getTime();
+            // Near the end of the newest segment rather than its start — "most recent footage" — but
+            // never before the segment's own start.
+            var startMs = new Date(mostRecent.startUtc).getTime();
+            return Math.max(startMs, new Date(mostRecent.endUtc).getTime() - LATEST_FOOTAGE_BUFFER_MS);
         } catch (e) {
             return Date.now();
         }
+    }
+
+    // How far before the end of the newest closed segment "latest footage" seeks land, so the seek
+    // falls inside that segment rather than on its very last frame.
+    var LATEST_FOOTAGE_BUFFER_MS = 2000;
+
+    // The newest playable moment across cameraIds (the end of each one's newest closed segment, less
+    // the buffer), or null when none of them has any footage.
+    async function latestPlayableMs(cameraIds) {
+        var ends = await Promise.all(cameraIds.map(function (id) {
+            return fetch('/api/cameras/' + id + '/latest-segment-end')
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (j) { return j && j.endUtc ? new Date(j.endUtc).getTime() : null; })
+                .catch(function () { return null; });
+        }));
+        var latest = null;
+        ends.forEach(function (e) { if (e !== null && (latest === null || e > latest)) latest = e; });
+        return latest === null ? null : latest - LATEST_FOOTAGE_BUFFER_MS;
     }
     // Exported so Live's per-tile playback toggle (Pages/Live/Index.cshtml) can default a
     // newly-toggled tile to its most recent recording too, instead of duplicating this lookup.
@@ -1706,8 +1604,7 @@
             var videoEl = el.querySelector('.pb-video');
             var statusEl = el.querySelector('.pb-status');
             var frameEl = el.querySelector('.pb-tile-frame');
-            wireZoom(el, videoEl);
-            wireFullscreen(frameEl, videoEl);
+            wireZoomButtons(el, wireFullscreen(frameEl, videoEl));
             // Whole cell is clickable to select it as primary, not just the name label — the name
             // element (which bubbles up to this same listener) keeps its pointer cursor as a hint,
             // but clicking anywhere else on the tile (the video, its background) works too. Zoom
@@ -2124,13 +2021,16 @@
         var playBtn = document.getElementById(o.playPauseBtnId);
         if (playBtn) playBtn.addEventListener('click', togglePlay);
 
-        // Jump every tile back to the current wall-clock time. timeline.js already clamps the
-        // playhead to Date.now() and draws the "now" marker, so this just seeks there and reloads
-        // both strips for the recentered range.
+        // Jump every tile to the newest footage that can actually be played: the end of the newest
+        // closed segment across the visible cameras, less a small buffer so the seek lands inside it.
+        // Wall-clock now used to be the target, but the segment still recording has no row yet, so
+        // every tile went blank ("No recording available") and the clock froze. Falls back to
+        // wall-clock now only when none of the cameras has any footage at all.
         var jumpNowBtn = o.jumpNowBtnId && document.getElementById(o.jumpNowBtnId);
         if (jumpNowBtn) {
-            jumpNowBtn.addEventListener('click', function () {
-                seekAll(Date.now(), playing);
+            jumpNowBtn.addEventListener('click', async function () {
+                var latest = await latestPlayableMs(Object.keys(tiles));
+                seekAll(latest !== null ? latest : Date.now(), playing);
                 if (timeline) timeline.reload();
                 if (globalTimeline) globalTimeline.reload();
             });

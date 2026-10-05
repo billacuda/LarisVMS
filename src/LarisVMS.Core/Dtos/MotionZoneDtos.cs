@@ -14,4 +14,9 @@ public record MotionZoneScoreDto(Guid ZoneId, double Score);
 /// row*gridSize+col, matching MotionGrid's own bit layout) and null whenever the camera isn't
 /// currently in Grid mode — Zones is always present (empty when there's nothing to report) so a
 /// Polygon-mode camera's payload looks exactly like 3c-1 shipped, just wrapped in an object now.</summary>
-public record MotionZoneOverlayPayload(List<MotionZoneScoreDto> Zones, List<double>? CellScores = null);
+public record MotionZoneOverlayPayload(List<MotionZoneScoreDto> Zones, List<double>? CellScores = null,
+    /// <summary>How old the frame behind these scores was when this tick was sent, on the node's own
+    /// clock (same idea as VisionLiveDetectionsResponse.AgeMs) — the Zones editor holds the scores
+    /// back to line up with the live video. Null before anything has been scored, or from an older
+    /// node build; the editor then shows the scores straight away, as before.</summary>
+    double? AgeMs = null);

@@ -64,24 +64,24 @@ public static class IpAllowListPolicy
         return networks.Any(n => n.BaseAddress.AddressFamily == candidate.AddressFamily && n.Contains(candidate));
     }
 
-    /// <summary>Unmaps an IPv4-mapped-IPv6 address ("::ffff:10.0.0.5") back to plain IPv4 before it's
-    /// stored or used to build a URL — same reasoning as <see cref="IsAllowed"/> above, but for every
-    /// other place a Node/MediaProxy's remote IP gets captured (NodeAuthMiddleware, ProxyAuthMiddleware).
-    /// A dual-stack Kestrel <c>ListenAnyIP</c> socket reports every IPv4 client this way; IIS never did,
-    /// so this normalization was never needed before self-hosted Kestrel. Every downstream consumer
-    /// (live/playback/snapshot proxying, node control calls, failover probing) builds a plain
-    /// "http://{ip}:{port}/..." URL straight from the stored value — an unmapped "::ffff:x.x.x.x"
-    /// there is simply not a valid host in that string, breaking the connection outright.</summary>
+    /// <summary>Normalizes a Node/MediaProxy's remote IP into a string usable directly as the host in a
+    /// "http://{host}:{port}/..." URL, before it's stored as LastIpAddress (NodeAuthMiddleware,
+    /// ProxyAuthMiddleware). Every downstream consumer (live/playback/snapshot proxying, node control
+    /// calls, failover probing, the proxy config/partner-probe DTOs) builds its URL straight from the
+    /// stored value, so it's normalized once here rather than at each call site.
     ///
-    /// The IPv6 loopback ("::1", what a node on the same machine reports when its server URL is
-    /// https://localhost) becomes "127.0.0.1" for the same reason: unbracketed, "::1" isn't a valid
-    /// host in that string either, and live view failed with "Invalid URI: The hostname could not be
-    /// parsed". Other IPv6 addresses are still stored as-is, so IPv6-only node networks aren't supported.</summary>
-    public static string? Unmap(IPAddress? remoteIp)
+    /// An IPv4-mapped-IPv6 address ("::ffff:10.0.0.5") is unmapped to plain IPv4 — a dual-stack Kestrel
+    /// <c>ListenAnyIP</c> socket reports every IPv4 client this way (same reasoning as
+    /// <see cref="IsAllowed"/>). The IPv6 loopback ("::1", what a node on the same machine reports when
+    /// its server URL is https://localhost) becomes "127.0.0.1", since a node may only listen on IPv4.
+    /// Any other IPv6 address is bracketed ("[2001:db8::1]") — unbracketed it isn't a valid URI host and
+    /// fails with "Invalid URI: The hostname could not be parsed".</summary>
+    public static string? ToUrlHost(IPAddress? remoteIp)
     {
         if (remoteIp is null) return null;
         if (remoteIp.IsIPv4MappedToIPv6) return remoteIp.MapToIPv4().ToString();
         if (IPAddress.IPv6Loopback.Equals(remoteIp)) return IPAddress.Loopback.ToString();
+        if (remoteIp.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6) return $"[{remoteIp}]";
         return remoteIp.ToString();
     }
 }

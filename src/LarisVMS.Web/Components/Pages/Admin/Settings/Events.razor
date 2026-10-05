@@ -71,6 +71,12 @@
                 </div>
             </SettingField>
         }
+        <div class="mb-3">
+            <button type="button" class="btn btn-outline-secondary btn-sm js-color-reset-all"
+                    title="Clear every object color above back to its built-in default. Takes effect on Save.">
+                Reset all object colors to defaults
+            </button>
+        </div>
         <SettingField Label="Show in Snapshots" Wide Hint="Untick a class to hide it from the Snapshots page. Custom event tags always show.">
             <div class="d-flex flex-wrap gap-3">
                 @foreach (var kind in Kinds)
@@ -122,14 +128,25 @@
             });
 
             // Clearing the box (rather than writing the default into it) is what keeps this
-            // deployment tracking the built-in value.
+            // deployment tracking the built-in value. The input event marks the form as having unsaved
+            // changes (data-dirty-guard), which a plain value assignment wouldn't.
+            function resetColor(btn) {
+                var target = document.getElementById(btn.dataset.for);
+                if (!target) return;
+                target.value = '';
+                target.dispatchEvent(new Event('input', { bubbles: true }));
+                var picker = document.querySelector('.js-color-picker[data-for="' + btn.dataset.for + '"]');
+                if (picker) picker.value = btn.dataset.default;
+            }
             document.querySelectorAll('.js-color-reset').forEach(function (btn) {
-                btn.addEventListener('click', function () {
-                    var target = document.getElementById(btn.dataset.for);
-                    if (!target) return;
-                    target.value = '';
-                    var picker = document.querySelector('.js-color-picker[data-for="' + btn.dataset.for + '"]');
-                    if (picker) picker.value = btn.dataset.default;
+                btn.addEventListener('click', function () { resetColor(btn); });
+            });
+
+            // Every object class in this section at once — the timeline's Motion/Recording colors
+            // above are left alone.
+            document.querySelectorAll('.js-color-reset-all').forEach(function (all) {
+                all.addEventListener('click', function () {
+                    document.querySelectorAll('.js-color-reset[data-for^="DetectionColors_"]').forEach(resetColor);
                 });
             });
         })();

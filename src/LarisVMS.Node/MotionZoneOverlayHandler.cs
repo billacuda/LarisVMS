@@ -39,7 +39,9 @@ public static class MotionZoneOverlayHandler
                 List<MotionZoneScoreDto> zonePayload = scores is null
                     ? []
                     : scores.Select(kv => new MotionZoneScoreDto(kv.Key, kv.Value)).ToList();
-                var payload = new MotionZoneOverlayPayload(zonePayload, session?.GetCurrentCellScores()?.ToList());
+                var capturedAt = session?.ScoresCapturedUtc;
+                var payload = new MotionZoneOverlayPayload(zonePayload, session?.GetCurrentCellScores()?.ToList(),
+                    capturedAt is { } at ? (DateTime.UtcNow - at).TotalMilliseconds : null);
 
                 var json = JsonSerializer.SerializeToUtf8Bytes(payload, CamelCaseJson);
                 await socket.SendAsync(json, WebSocketMessageType.Text, endOfMessage: true, ct);

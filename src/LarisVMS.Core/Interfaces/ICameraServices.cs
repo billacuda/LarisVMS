@@ -98,6 +98,11 @@ public interface ICameraService
     /// camera name and newest-still-there timestamp attached — see StaleSegmentDetail's own doc
     /// comment for why the newest, not oldest, is what determines when the warning clears.</summary>
     Task<List<StaleSegmentDetail>> GetStaleSegmentDetailsAsync(CancellationToken ct = default);
+
+    /// <summary>Deletes Segment rows whose node no longer exists. Only the owning node can confirm a
+    /// deletion, and a deleted node never will, so these rows would otherwise stay forever. Removes
+    /// the records only — the files, if any survive, are unreachable to LarisVMS. Returns the count.</summary>
+    Task<int> ForgetSegmentsOnMissingNodesAsync(CancellationToken ct = default);
 }
 
 public interface ICameraGroupService

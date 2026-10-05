@@ -93,9 +93,12 @@ public class IpAllowListPolicyTests
     [InlineData("::ffff:10.0.0.42", "10.0.0.42")]
     [InlineData("::1", "127.0.0.1")]
     [InlineData("10.0.0.42", "10.0.0.42")]
-    [InlineData("2001:db8::1", "2001:db8::1")]
-    public void UnmapReturnsAHostUsableInAPlainUrl(string remote, string expected)
+    [InlineData("2001:db8::1", "[2001:db8::1]")]
+    public void ToUrlHostReturnsAHostUsableInAPlainUrl(string remote, string expected)
     {
-        Assert.Equal(expected, IpAllowListPolicy.Unmap(IPAddress.Parse(remote)));
+        var host = IpAllowListPolicy.ToUrlHost(IPAddress.Parse(remote));
+
+        Assert.Equal(expected, host);
+        Assert.True(Uri.TryCreate($"ws://{host}:8554/live/1", UriKind.Absolute, out _));
     }
 }

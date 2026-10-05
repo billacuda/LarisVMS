@@ -303,8 +303,43 @@ window.larisvmsZonesEditor = (function () {
         // One socket, one message shape ({zones, cellScores}) carrying whichever the camera's actual
         // MotionSession is currently producing — both are tracked regardless of activeMode so
         // switching panes never has to wait for a fresh tick to have live data ready.
+        //
+        // Held back to line up with the video, the same way live view's AI boxes are: the live video
+        // plays a couple of seconds behind real time, so showing each tick the moment it arrived
+        // washed zones before the moving object had reached them on screen. Each tick carries how old
+        // its frame was (ageMs, node clock); it is queued and applied once the video has caught up to
+        // that moment (live-view.js's measured video latency). Shown immediately when there's no live
+        // video to line up with (still on the snapshot) or the node didn't send an age.
         (function connectMotionScores() {
             var socket = null;
+            var pending = []; // [{ captureAtMs, payload }] oldest first
+            var MAX_PENDING = 100;
+
+            function applyPayload(payload) {
+                var scores = (payload && payload.zones) || [];
+                zoneScores = {};
+                scores.forEach(function (s) { zoneScores[s.zoneId] = s.score; });
+                cellScores = (payload && payload.cellScores) || null;
+                redraw();
+            }
+
+            function canSync() {
+                return videoHasFrame && videoEl && window.larisvmsLiveView && window.larisvmsLiveView.videoLatencyMs;
+            }
+
+            function release() {
+                if (pending.length > 0) {
+                    var presentationNowMs = canSync()
+                        ? Date.now() - window.larisvmsLiveView.videoLatencyMs(videoEl)
+                        : Infinity;
+                    // The newest tick the video has reached wins; everything older is superseded.
+                    var due = null;
+                    while (pending.length > 0 && pending[0].captureAtMs <= presentationNowMs) due = pending.shift();
+                    if (due) applyPayload(due.payload);
+                }
+                requestAnimationFrame(release);
+            }
+            requestAnimationFrame(release);
 
             function connect() {
                 var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -312,11 +347,14 @@ window.larisvmsZonesEditor = (function () {
                 socket.onmessage = function (evt) {
                     var payload;
                     try { payload = JSON.parse(evt.data); } catch (e) { return; } // one bad tick — next supersedes it
-                    var scores = (payload && payload.zones) || [];
-                    zoneScores = {};
-                    scores.forEach(function (s) { zoneScores[s.zoneId] = s.score; });
-                    cellScores = (payload && payload.cellScores) || null;
-                    redraw();
+                    var ageMs = payload && typeof payload.ageMs === 'number' && isFinite(payload.ageMs) ? payload.ageMs : null;
+                    if (ageMs === null || !canSync()) {
+                        pending = [];
+                        applyPayload(payload);
+                        return;
+                    }
+                    pending.push({ captureAtMs: Date.now() - ageMs, payload: payload });
+                    if (pending.length > MAX_PENDING) pending.splice(0, pending.length - MAX_PENDING);
                 };
                 socket.onclose = function () {
                     socket = null;

@@ -71,6 +71,10 @@ public interface INodeService
     /// only runs on an hours-long cadence, not every reconcile.</summary>
     Task<List<string>> ListSegmentFilePathsAsync(Guid nodeId, CancellationToken ct = default);
 
+    /// <summary>This node's segments that are overdue for deletion, regardless of where the file lives
+    /// (see ExpiredSegmentDto). Locked segments and "keep forever" retention are never included.</summary>
+    Task<List<ExpiredSegmentDto>> ListExpiredSegmentsAsync(Guid nodeId, int limit, CancellationToken ct = default);
+
     /// <summary>Every FilePath this node owns a Segment row for that is still StorageTier=Primary —
     /// used by the node's archive-tier reconciliation to spot rows whose file is actually on the
     /// archive volume (a repointed storage root) and flip them.</summary>
@@ -102,7 +106,7 @@ public interface INodeService
         bool storagePressureActive = false, int? clientEndpointReportedPort = null,
         DateTime? clientEndpointCertNotAfter = null, bool? clientEndpointCertIsSelfSigned = null,
         string? clientEndpointLastError = null, List<NodePartnerHealthReport>? partnerHealthReports = null,
-        CancellationToken ct = default);
+        NodeHostStats? hostStats = null, CancellationToken ct = default);
 
     /// <summary>Rough "days of retention remaining" per node: free bytes divided by that node's
     /// measured write rate over the last 24h. Null for a node with no free-space report yet or no

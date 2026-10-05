@@ -133,6 +133,11 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     // process, so these two counters are what tell the two apart rather than guessing.
     private int _lastCadenceGen2;
     private long _lastCadenceAllocatedBytes;
+    // Gen2 count alone can't say whether those collections hurt: a recorder logging ~130 a window
+    // with almost nothing allocated pointed at memory load (the machine's, not this heap's) rather
+    // than allocation. Total pause time is the cost, memory load against the GC's high threshold is
+    // the likely trigger.
+    private TimeSpan _lastCadenceGcPause;
 
     // What the model found versus what survived tracking, over the cadence window. This is the pair
     // of numbers that localises "an object is visible on screen but never produces a box or a span":
@@ -237,6 +242,13 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     // one per track. _frameIsNv12 picks the crop helper (BGRA is the default; nv12 only when
     // GpuPreprocessing is on — never for YOLOX).
     private readonly HashSet<int> _snapshottedTrackIds = new();
+
+    // Live overlay only: the last instant each track was classified Moving. A track keeps being
+    // reported Moving to the viewer until it has been still for the whole IdleTimeoutSeconds, so an
+    // object that moves, pauses, moves (a car at a junction, a person stopping to look around) keeps
+    // its box and badge instead of blinking them off at every pause. Spans don't use this; they
+    // already ride out pauses through MotionHysteresis's own endAfter of the same timeout.
+    private readonly Dictionary<int, DateTime> _lastMovingAtByTrack = new();
     private readonly bool _frameIsNv12;
     private DateTime _lastSubSnapshotUtc = DateTime.MinValue;
     private static readonly TimeSpan SubSnapshotMinGap = TimeSpan.FromSeconds(1);
@@ -459,6 +471,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             TensorRtBuilderOptimizationLevel = serviceOptions.TensorRtBuilderOptimizationLevel,
             OpenVinoDeviceType = serviceOptions.OpenVinoDeviceType,
             GpuPreprocessing = gpuPreprocessing,
+            MaxCamerasPerSession = serviceOptions.MaxCamerasPerSession,
         };
 
         // Set here as well as inside the engine (which recomputes the identical string from the
@@ -608,6 +621,17 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         _engine = engine;
         MarkInferenceOk();
 
+        // The first cadence window starts now, not at construction: every frame published while the
+        // engine was building (or queued behind another camera's build) was otherwise counted as
+        // dropped, inflating that window's drop % into the tens.
+        _lastCadenceLogUtc = DateTime.UtcNow;
+        _lastCadencePublished = _slot.PublishedCount;
+        _lastCadenceConsumed = _slot.ConsumedCount;
+        _lastCadenceGen2 = GC.CollectionCount(2);
+        _lastCadenceAllocatedBytes = GC.GetTotalAllocatedBytes();
+        _lastCadenceGcPause = GC.GetTotalPauseDuration();
+        _session.TakeDecodeDelayStats();
+
         // One buffer for the whole loop rather than a fresh array per frame. At the detection frame
         // size this is a Large Object Heap allocation every time (640x640 BGRA is 1.56 MB), and on a
         // six-camera node that was the single largest source of allocation in the process. Safe to
@@ -692,6 +716,11 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             _movement.Prune(liveTrackIds);
             _labelArbiter.Prune(liveTrackIds);
             _snapshottedTrackIds.RemoveWhere(id => !liveTrackIds.Contains(id));
+            foreach (var id in _lastMovingAtByTrack.Keys)
+            {
+                if (!liveTrackIds.Contains(id)) _lastMovingAtByTrack.Remove(id);
+            }
+            var liveMovingHold = TimeSpan.FromSeconds(Math.Max(0, _request.IdleTimeoutSeconds));
 
             var seenLabels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var liveBoxes = new List<VisionLiveDetectionBox>(tracked.Count);
@@ -754,8 +783,16 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
                     EnqueueReport(closed, label, category);
                 }
 
+                // See _lastMovingAtByTrack: a paused track stays Moving for the viewer until it has
+                // been still for the idle timeout.
+                if (observation.State == MovementState.Moving) _lastMovingAtByTrack[trackId] = now;
+                var liveState = observation.State == MovementState.Moving
+                    || (_lastMovingAtByTrack.TryGetValue(trackId, out var lastMovingAt) && now - lastMovingAt < liveMovingHold)
+                    ? MovementState.Moving
+                    : MovementState.Idle;
+
                 liveBoxes.Add(new VisionLiveDetectionBox(
-                    trackId, rawCategory, rawLabel, observation.State.ToString(),
+                    trackId, rawCategory, rawLabel, liveState.ToString(),
                     detection.BoundingBox.Left / (double)_sourceWidth,
                     detection.BoundingBox.Top / (double)_sourceHeight,
                     detection.BoundingBox.Width / (double)_sourceWidth,
@@ -1018,17 +1055,24 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         var consumed = _slot.ConsumedCount;
         var gen2 = GC.CollectionCount(2);
         var allocated = GC.GetTotalAllocatedBytes();
+        var gcPause = GC.GetTotalPauseDuration();
 
         var deltaPublished = published - _lastCadencePublished;
         var deltaConsumed = consumed - _lastCadenceConsumed;
         var deltaGen2 = gen2 - _lastCadenceGen2;
         var deltaAllocated = allocated - _lastCadenceAllocatedBytes;
+        var deltaGcPause = gcPause - _lastCadenceGcPause;
 
         _lastCadenceLogUtc = now;
         _lastCadencePublished = published;
         _lastCadenceConsumed = consumed;
         _lastCadenceGen2 = gen2;
         _lastCadenceAllocatedBytes = allocated;
+        _lastCadenceGcPause = gcPause;
+
+        var gcInfo = GC.GetGCMemoryInfo();
+        var memoryLoadPercent = gcInfo.TotalAvailableMemoryBytes == 0 ? 0 : gcInfo.MemoryLoadBytes * 100.0 / gcInfo.TotalAvailableMemoryBytes;
+        var highLoadPercent = gcInfo.TotalAvailableMemoryBytes == 0 ? 0 : gcInfo.HighMemoryLoadThresholdBytes * 100.0 / gcInfo.TotalAvailableMemoryBytes;
 
         var seconds = elapsed.TotalSeconds;
         if (seconds <= 0) return;
@@ -1078,19 +1122,30 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             ? $" Encode {http.LastEncodeMilliseconds ?? 0:F1} ms, transport {http.LastTransportMilliseconds ?? 0:F1} ms."
             : string.Empty;
 
+        // Arrival-to-pipe time of the vision decode path — what frames would have been stamped late
+        // by (and live-view boxes trailed by) without arrival stamps. See FrameArrivalStamps.
+        var (decodeAvgMs, decodeMaxMs, decodeStamped) = _session.TakeDecodeDelayStats();
+        var decodeSummary = decodeStamped == 0
+            ? "decode delay n/a (no arrival stamps)"
+            : $"decode delay avg {decodeAvgMs:F0} ms, max {decodeMaxMs:F0} ms";
+
         _logger.LogInformation(
             "Camera {Camera} detection cadence over {Seconds:F0}s: capture {CaptureFps:F1} fps, " +
             "inference {InferenceFps:F1} fps, {Dropped} frame(s) dropped ({DropPercent:F0}%), " +
-            "last inference {InferenceMs:F1} ms. Peak {PeakDetections} detection(s)/frame -> " +
+            "{DecodeSummary}, last inference {InferenceMs:F1} ms. Peak {PeakDetections} detection(s)/frame -> " +
             "{PeakTracked} tracked, best raw score {BestScore:F2} (tracker needs {NewTrackThreshold:F2} " +
             "to start a track). Live boxes now: {LiveBoxes}. Process-wide over the same window: " +
-            "{Gen2} gen2 collection(s), {AllocatedMbPerSec:F0} MB/s allocated.{SliceSummary}{FailureSummary}{TransportSummary}",
+            "{Gen2} gen2 collection(s), {AllocatedMbPerSec:F0} MB/s allocated, {GcPauseMs:F0} ms paused in GC, " +
+            "memory load {MemoryLoad:F0}% (GC goes aggressive at {HighLoad:F0}%), heap {HeapMb:F0} MB." +
+            "{SliceSummary}{FailureSummary}{TransportSummary}",
             _request.DisplayName, seconds, deltaPublished / seconds, deltaConsumed / seconds,
             deltaPublished - deltaConsumed,
             deltaPublished == 0 ? 0 : (deltaPublished - deltaConsumed) * 100.0 / deltaPublished,
-            _engine?.LastInferenceMilliseconds ?? 0,
+            decodeSummary, _engine?.LastInferenceMilliseconds ?? 0,
             peakDetections, peakTracked, bestScore, _trackerNewTrackThreshold, liveSummary,
-            deltaGen2, deltaAllocated / seconds / (1024.0 * 1024.0), sliceSummary, failureSummary, transportSummary);
+            deltaGen2, deltaAllocated / seconds / (1024.0 * 1024.0), deltaGcPause.TotalMilliseconds,
+            memoryLoadPercent, highLoadPercent, gcInfo.HeapSizeBytes / (1024.0 * 1024.0),
+            sliceSummary, failureSummary, transportSummary);
     }
 
     /// <summary>Pass G: crops one JPEG from the frame the model just ran on, covering the union of

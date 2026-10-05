@@ -21,7 +21,27 @@ public record CameraHealthRow(Guid CameraId, string CameraName, bool CameraEnabl
 
 public record DashboardHealthDto(List<CameraHealthRow> Rows,
     int RecordingCount, int NotReportingCount, int DisabledCount,
-    int NodesOnlineCount, int NodesTotalCount);
+    int NodesOnlineCount, int NodesTotalCount,
+    List<NodeDashboardRow>? Nodes = null);
+
+/// <summary>A count over the dashboard's four look-back windows, each including the shorter ones.</summary>
+public record WindowCounts(int LastHour, int Last24Hours, int Last7Days, int Last30Days);
+
+/// <summary>One node's card on the dashboard. Host figures are the node machine's own load from its
+/// latest heartbeat (HostStatsFresh false when that reading is older than the online window). TotalFps
+/// sums the main-stream fps of the cameras it is recording right now. The detection counts are only
+/// filled in when object detection is enabled on the node, and cover only cameras the viewer can see.</summary>
+public record NodeDashboardRow(Guid NodeId, string NodeName, bool Online,
+    double? CpuPercent, long? MemoryUsedBytes, long? MemoryTotalBytes,
+    long? NetReceiveBytesPerSec, long? NetSendBytesPerSec, bool HostStatsFresh,
+    int TotalFps, int CamerasReporting,
+    bool ObjectDetectionEnabled, WindowCounts? Events, WindowCounts? Humans, WindowCounts? Vehicles, WindowCounts? Animals);
+
+/// <summary>Detection spans for one camera grouped by kind and age (TimelineService.GetEventCountsAsync).
+/// Kind: "Tag" (custom tag rule), "Ai" (AI detection, Name = category), "Camera" (the camera's own
+/// analytics, Name = DetectionKind). Bucket 0 = last hour, 1 = last 24 h, 2 = last 7 days, 3 = last 30
+/// days, each excluding the shorter ones. Objects sums each span's peak simultaneous count.</summary>
+public record CameraEventCountRow(Guid CameraId, string Kind, string? Name, int Bucket, int Spans, int Objects);
 
 /// <summary>One node's row for the M20 monitoring API — every Node, with its own reachability and
 /// disk space.</summary>

@@ -137,4 +137,11 @@ public sealed record EngineOptions
     /// on this option being honored — readable cache filenames and an honest warm/cold probe do.
     /// </summary>
     public string? TensorRtCacheKey { get; init; }
+
+    /// <summary>How many cameras' engines may share one ONNX Runtime session of the same model variant
+    /// (see <see cref="SharedSessionPool"/>). Default 1, one session per camera: on a six-camera
+    /// recorder, pairing cameras saved little memory (most of the footprint is per-process GPU runtime
+    /// state, not per-session) while cameras on a shared session took turns and inference ran slower.
+    /// Raise it only where memory matters more than per-frame latency.</summary>
+    public int MaxCamerasPerSession { get; init; } = 1;
 }

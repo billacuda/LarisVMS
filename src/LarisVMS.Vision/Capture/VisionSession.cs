@@ -81,10 +81,11 @@ public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot 
             try
             {
                 process = StartFfmpeg();
-                var stderrTask = DrainStderrAsync(process, ct);
+                var stamps = new FrameArrivalStamps();
+                var stderrTask = DrainStderrAsync(process, stamps, ct);
 
                 LastFrameAt = DateTime.UtcNow; // grace period before the first frame lands
-                var readTask = ReadFramesAsync(process, ct);
+                var readTask = ReadFramesAsync(process, stamps, ct);
                 var watchdogTask = WatchdogAsync(process, ct);
 
                 await Task.WhenAny(readTask, watchdogTask);
@@ -139,10 +140,41 @@ public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot 
         }
     }
 
-    private async Task ReadFramesAsync(Process process, CancellationToken ct)
+    // How long a frame read off stdout waits for its showinfo line (see FrameArrivalStamps). The line
+    // is printed before the frame is written, so this only covers the two pipes' readers racing.
+    private static readonly TimeSpan ArrivalStampWait = TimeSpan.FromMilliseconds(50);
+
+    // An arrival stamp older than this is treated as bogus (an ffmpeg that ignored
+    // -use_wallclock_as_timestamps) and the read time is used instead.
+    private static readonly TimeSpan MaxPlausibleDecodeDelay = TimeSpan.FromSeconds(10);
+
+    private readonly Lock _decodeDelayLock = new();
+    private double _decodeDelaySumMs;
+    private double _decodeDelayMaxMs;
+    private int _decodeDelayCount;
+
+    /// <summary>Average/max time between a frame arriving over RTSP and being read off ffmpeg's
+    /// stdout (decode, scale, download, pipe), over the frames read since the last call. Count 0
+    /// when no frame carried an arrival stamp. Resets on read.</summary>
+    public (double AvgMs, double MaxMs, int Count) TakeDecodeDelayStats()
+    {
+        lock (_decodeDelayLock)
+        {
+            var result = _decodeDelayCount == 0
+                ? (0d, 0d, 0)
+                : (_decodeDelaySumMs / _decodeDelayCount, _decodeDelayMaxMs, _decodeDelayCount);
+            _decodeDelaySumMs = 0;
+            _decodeDelayMaxMs = 0;
+            _decodeDelayCount = 0;
+            return result;
+        }
+    }
+
+    private async Task ReadFramesAsync(Process process, FrameArrivalStamps stamps, CancellationToken ct)
     {
         var stdout = process.StandardOutput.BaseStream;
         var buffer = ArrayPool<byte>.Shared.Rent(_frameSize);
+        long frameIndex = 0;
 
         try
         {
@@ -150,9 +182,21 @@ public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot 
             {
                 if (!await ReadExactAsync(stdout, buffer, _frameSize, ct)) return; // pipe closed — process exiting
 
-                var capturedAt = DateTime.UtcNow;
-                LastFrameAt = capturedAt;
+                var readAt = DateTime.UtcNow;
+                LastFrameAt = readAt; // the watchdog's notion of "frames are flowing" stays read time
                 if (State != StreamRecordingState.Recording) State = StreamRecordingState.Recording;
+
+                var capturedAt = readAt;
+                if (await stamps.TakeAsync(frameIndex++, ArrivalStampWait, ct) is { } arrivedAt)
+                {
+                    var delay = readAt - arrivedAt;
+                    if (delay < TimeSpan.Zero) delay = TimeSpan.Zero;
+                    if (delay <= MaxPlausibleDecodeDelay)
+                    {
+                        capturedAt = readAt - delay;
+                        RecordDecodeDelay(delay.TotalMilliseconds);
+                    }
+                }
 
                 PublishFrame(buffer, capturedAt);
             }
@@ -160,6 +204,16 @@ public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot 
         finally
         {
             ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private void RecordDecodeDelay(double ms)
+    {
+        lock (_decodeDelayLock)
+        {
+            _decodeDelaySumMs += ms;
+            _decodeDelayCount++;
+            if (ms > _decodeDelayMaxMs) _decodeDelayMaxMs = ms;
         }
     }
 
@@ -245,6 +299,12 @@ public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot 
         // video without decoding, so it never had this delay.
         args.AddRange(["-fflags", "nobuffer", "-flags", "low_delay", "-thread_type", "slice"]);
 
+        // Packet pts = the wall-clock time it came off the network, printed per output frame by the
+        // trailing showinfo below. Frames are stamped with that rather than when they reach the pipe,
+        // so whatever the decode path above still costs (full-res HEVC decode, scale, download)
+        // stays out of the stamp as well. See FrameArrivalStamps.
+        args.AddRange(["-use_wallclock_as_timestamps", "1"]);
+
         if (!string.IsNullOrWhiteSpace(options.HardwareAcceleration))
         {
             args.Add("-hwaccel"); args.Add(options.HardwareAcceleration);
@@ -279,15 +339,20 @@ public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot 
                 $",select='isnan(prev_selected_t)+gte(floor(t*{options.FpsCap}),floor(prev_selected_t*{options.FpsCap})+1)'")
             : "";
 
+        // showinfo last, so it prints exactly one line per frame written to stdout (see
+        // FrameArrivalStamps). Plain showinfo, not checksum=0: that option is missing from older
+        // ffmpeg builds, and an unknown option would stop vision starting at all.
+        const string stampFilter = ",showinfo";
+
         if (useGpuScale)
         {
             args.Add("-vf"); args.Add(string.Create(CultureInfo.InvariantCulture,
-                $"scale_cuda=w={scaleWidth}:h={scaleHeight}:format=nv12,hwdownload,format=nv12{padFilter}{fpsFilter}"));
+                $"scale_cuda=w={scaleWidth}:h={scaleHeight}:format=nv12,hwdownload,format=nv12{padFilter}{fpsFilter}{stampFilter}"));
         }
         else
         {
             args.Add("-vf"); args.Add(string.Create(CultureInfo.InvariantCulture,
-                $"scale={scaleWidth}:{scaleHeight}{padFilter}{fpsFilter}"));
+                $"scale={scaleWidth}:{scaleHeight}{padFilter}{fpsFilter}{stampFilter}"));
         }
 
         // Emit each decoded frame exactly once. Without this, ffmpeg converts the output to a
@@ -296,6 +361,11 @@ public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot 
         // camera reporting r_frame_rate=100 against an actual 20fps: every frame was duplicated
         // five times without this flag.
         args.Add("-fps_mode"); args.Add("passthrough");
+
+        // Keep the wall-clock pts from -use_wallclock_as_timestamps as-is. Without this ffmpeg
+        // rebases input timestamps to start at 0, and showinfo printed seconds-since-connect instead
+        // of arrival times (confirmed on the recorder: every frame fell back to its read time).
+        args.Add("-copyts");
 
         // Pass 4a: nv12 straight through when the engine has the GPU preprocessing head — no
         // swscale colour conversion on the CPU at all. Otherwise BGRA, as before.
@@ -306,7 +376,7 @@ public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot 
         return args;
     }
 
-    private async Task DrainStderrAsync(Process process, CancellationToken ct)
+    private async Task DrainStderrAsync(Process process, FrameArrivalStamps stamps, CancellationToken ct)
     {
         // Per-connection accumulators for input-resolution parsing (see DetectedInputResolution).
         // rawW/rawH from the first Video stream line; rotationQuarterTurn from a later display-matrix
@@ -321,6 +391,9 @@ public sealed class VisionSession(VisionSessionOptions options, LatestFrameSlot 
         {
             while (await process.StandardError.ReadLineAsync(ct) is { } line)
             {
+                // Several lines per frame — consumed for the arrival stamp, never logged.
+                if (stamps.TryParseLine(line)) continue;
+
                 var safeLine = CredentialScrubber.Scrub(line);
                 logger.LogDebug("ffmpeg (vision): {Line}", safeLine);
 

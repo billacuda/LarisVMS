@@ -119,6 +119,17 @@ public class Node
     public double? ClockSkewSeconds { get; set; }
     public DateTime? ClockSkewMeasuredAt { get; set; }
 
+    /// <summary>Host load from the latest heartbeat (NodeHostStats), for the dashboard: CPU percent busy,
+    /// physical memory used/total, and network receive/send bytes per second across active adapters.
+    /// All null from a node that predates this or can't measure it; HostStatsUpdatedAt is when the
+    /// reading arrived.</summary>
+    public double? CpuPercent { get; set; }
+    public long? MemoryUsedBytes { get; set; }
+    public long? MemoryTotalBytes { get; set; }
+    public long? NetReceiveBytesPerSec { get; set; }
+    public long? NetSendBytesPerSec { get; set; }
+    public DateTime? HostStatsUpdatedAt { get; set; }
+
     /// <summary>Port the node's own Kestrel host listens on for media (M5) — plain HTTP, LAN-only,
     /// reachable from LarisVMS.Web, which proxies browser live/playback traffic through it. Combined
     /// with LastIpAddress, this is the address LarisVMS.Web dials. Since the failover plan's phase 1 a
