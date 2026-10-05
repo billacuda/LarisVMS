@@ -20,10 +20,34 @@ public class MotionSessionFfmpegArgsTests
 
         Assert.Equal([
             "-nostdin", "-rtsp_transport", "tcp", "-timeout", "5000000",
+            "-fflags", "nobuffer", "-flags", "low_delay", "-thread_type", "slice",
+            "-use_wallclock_as_timestamps", "1",
             "-i", "rtsp://camera/sub",
-            "-vf", "fps=5,scale=320:240,format=gray",
+            "-vf", "scale=320:240,format=gray," + SelectAndStamp,
+            "-fps_mode", "passthrough",
+            "-copyts",
             "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1"
         ], args);
+    }
+
+    private const string SelectAndStamp =
+        "select='isnan(prev_selected_t)+gte(floor(t*5),floor(prev_selected_t*5)+1)',showinfo";
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("cuda")]
+    public void StampsFramesWithArrivalTimeLikeTheVisionPipeline(string? hwaccel)
+    {
+        // The Zones editor lines the motion wash up with the live video by each frame's RTSP arrival
+        // time (FrameArrivalStamps): wallclock pts as an input option, kept by -copyts, printed by a
+        // trailing showinfo that sees exactly the frames written to stdout.
+        var args = MotionSession.BuildFfmpegArgs(Options(hwaccel)).ToList();
+        var input = args.IndexOf("-i");
+
+        Assert.True(args.IndexOf("-use_wallclock_as_timestamps") < input, "must be an input option");
+        Assert.Contains("-copyts", args);
+        Assert.EndsWith(",showinfo", args[args.IndexOf("-vf") + 1]);
+        Assert.DoesNotContain("fps=", args[args.IndexOf("-vf") + 1]);
     }
 
     [Theory]
@@ -46,10 +70,13 @@ public class MotionSessionFfmpegArgsTests
 
         Assert.Equal([
             "-nostdin", "-rtsp_transport", "tcp", "-timeout", "5000000",
+            "-fflags", "nobuffer", "-flags", "low_delay", "-thread_type", "slice",
+            "-use_wallclock_as_timestamps", "1",
             "-hwaccel", "cuda", "-hwaccel_output_format", "cuda",
             "-i", "rtsp://camera/sub",
-            "-vf", "fps=5,scale_cuda=w=320:h=240:format=nv12,hwdownload,format=nv12",
+            "-vf", "scale_cuda=w=320:h=240:format=nv12,hwdownload,format=nv12," + SelectAndStamp,
             "-fps_mode", "passthrough",
+            "-copyts",
             "-f", "rawvideo", "-pix_fmt", "nv12", "pipe:1"
         ], args);
     }

@@ -1,3 +1,4 @@
+using LarisVMS.Media;
 using LarisVMS.Vision.Capture;
 
 namespace LarisVMS.Tests;

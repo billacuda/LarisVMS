@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.213.0] - 2026-10-04
+
+### Fixed
+
+- Zones editor: the motion wash trailed moving objects slightly. Motion frames are now stamped with
+  their stream arrival time (as live AI frames are), and motion decoding uses low-latency settings.
+
 ## [0.212.0] - 2026-10-04
 
 ### Added

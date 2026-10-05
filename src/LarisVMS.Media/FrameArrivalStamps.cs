@@ -2,25 +2,27 @@ using System.Globalization;
 using System.Text.RegularExpressions;
 using System.Threading.Channels;
 
-namespace LarisVMS.Vision.Capture;
+namespace LarisVMS.Media;
 
 /// <summary>
-/// When each frame on the vision ffmpeg's stdout arrived over RTSP, for one ffmpeg connection.
+/// When each frame on an analysis ffmpeg's stdout arrived over RTSP, for one ffmpeg connection —
+/// shared by VisionSession (AI detection) and MotionSession (motion scoring).
 ///
-/// The vision ffmpeg runs with <c>-use_wallclock_as_timestamps 1</c>, so every packet's pts is the
+/// Those ffmpegs run with <c>-use_wallclock_as_timestamps 1 -copyts</c>, so every packet's pts is the
 /// wall-clock time it was read off the network, and a trailing <c>showinfo</c> filter prints that
 /// pts on stderr for each frame that reaches stdout ("n:" counts exactly those frames). Stamping a
 /// frame with this instead of the moment it is read off the pipe keeps the decode/scale/download/
 /// pipe delay (and any read stall in this process) out of the stamp. The live video copies the
 /// same stream without decoding, so its timeline effectively starts at arrival too; a read-time
-/// stamp made every live-view box trail its object by that whole decode path.
+/// stamp made live-view boxes and the Zones editor's motion wash trail their object by that whole
+/// decode path.
 ///
 /// stderr and stdout are separate pipes read by separate tasks, so a frame can be read before its
 /// showinfo line has been parsed. <see cref="TakeAsync"/> waits briefly for it. Until the first
 /// showinfo line has been seen (an ffmpeg that does not print one), it returns null immediately so
 /// a missing stamp never delays frames.
 /// </summary>
-internal sealed class FrameArrivalStamps
+public sealed class FrameArrivalStamps
 {
     // "[Parsed_showinfo_5 @ 0000...] config in time_base: 1/90000, frame_rate: 25/1"
     private static readonly Regex TimeBaseLine = new(

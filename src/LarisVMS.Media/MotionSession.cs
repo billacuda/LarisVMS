@@ -193,10 +193,11 @@ public sealed class MotionSession(MotionSessionOptions options, IReadOnlyList<Mo
             try
             {
                 process = StartFfmpeg();
-                var stderrTask = DrainStderrAsync(process, ct);
+                var stamps = new FrameArrivalStamps();
+                var stderrTask = DrainStderrAsync(process, stamps, ct);
 
                 LastFrameAt = DateTime.UtcNow; // grace period before the first frame lands
-                var readTask = ReadFramesAsync(process, hysteresis, ct);
+                var readTask = ReadFramesAsync(process, hysteresis, stamps, ct);
                 var watchdogTask = WatchdogAsync(process, ct);
 
                 await Task.WhenAny(readTask, watchdogTask);
@@ -267,19 +268,35 @@ public sealed class MotionSession(MotionSessionOptions options, IReadOnlyList<Mo
         }
     }
 
-    private async Task ReadFramesAsync(Process process, Dictionary<Guid, MotionHysteresis> hysteresis, CancellationToken ct)
+    // How long a frame read off stdout waits for its showinfo line, and the oldest arrival stamp
+    // believed — same reasoning as VisionSession's ArrivalStampWait / MaxPlausibleDecodeDelay.
+    private static readonly TimeSpan ArrivalStampWait = TimeSpan.FromMilliseconds(50);
+    private static readonly TimeSpan MaxPlausibleDecodeDelay = TimeSpan.FromSeconds(10);
+
+    private async Task ReadFramesAsync(Process process, Dictionary<Guid, MotionHysteresis> hysteresis,
+        FrameArrivalStamps stamps, CancellationToken ct)
     {
         var stdout = process.StandardOutput.BaseStream;
         var previous = new byte[_frameSize];
         var current = new byte[_frameSize];
         var havePrevious = false;
+        long frameIndex = 0;
 
         while (!ct.IsCancellationRequested)
         {
             if (!await ReadExactAsync(stdout, current, ct)) return; // pipe closed — process exiting
 
             var readAt = DateTime.UtcNow;
-            LastFrameAt = readAt;
+            LastFrameAt = readAt; // the watchdog's notion of "frames are flowing" stays read time
+
+            // When this frame arrived over RTSP (see FrameArrivalStamps) — what the Zones editor lines
+            // the motion wash up against the video with. Read time when no plausible stamp is available.
+            var capturedAt = readAt;
+            if (await stamps.TakeAsync(frameIndex++, ArrivalStampWait, ct) is { } arrivedAt
+                && arrivedAt <= readAt && readAt - arrivedAt <= MaxPlausibleDecodeDelay)
+            {
+                capturedAt = arrivedAt;
+            }
             if (State != StreamRecordingState.Recording) State = StreamRecordingState.Recording;
 
             if (havePrevious)
@@ -308,7 +325,7 @@ public sealed class MotionSession(MotionSessionOptions options, IReadOnlyList<Mo
                 {
                     _lastCellScores = MotionGrid.ScoreCells(previousY, currentY, gs, options.Width, options.Height, options.PixelDeltaThreshold);
                 }
-                Interlocked.Exchange(ref _lastScoresCapturedTicks, readAt.Ticks);
+                Interlocked.Exchange(ref _lastScoresCapturedTicks, capturedAt.Ticks);
             }
 
             (previous, current) = (current, previous);
@@ -376,33 +393,54 @@ public sealed class MotionSession(MotionSessionOptions options, IReadOnlyList<Mo
             "-nostdin",
             "-rtsp_transport", "tcp",
             "-timeout", "5000000",
+            // Low-latency decode, and every packet's pts set to its network arrival time — the Zones
+            // editor's live motion wash is placed on the video's timeline by when each scored frame
+            // arrived (see FrameArrivalStamps), the same as live-view AI boxes. Frame-threaded
+            // decode alone held frames back by several hundred ms.
+            "-fflags", "nobuffer", "-flags", "low_delay", "-thread_type", "slice",
+            "-use_wallclock_as_timestamps", "1",
         ];
+
+        // select, not fps=: fps= only releases a frame once later ones have arrived (measured ~80 ms
+        // on the vision path), while this keeps the first frame of each 1/Fps-second slot the moment
+        // it arrives — same average rate. Then showinfo, last, prints each output frame's pts (its
+        // arrival time) for FrameArrivalStamps; -copyts keeps that pts from being rebased to zero.
+        var rate = options.Fps.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var selectAndStamp = $"select='isnan(prev_selected_t)+gte(floor(t*{rate}),floor(prev_selected_t*{rate})+1)',showinfo";
 
         if (UsesNv12(options.HardwareAcceleration))
         {
             args.AddRange(["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]);
             args.AddRange(["-i", options.RtspUri]);
             args.AddRange(["-vf",
-                $"fps={options.Fps},scale_cuda=w={options.Width}:h={options.Height}:format=nv12,hwdownload,format=nv12"]);
+                $"scale_cuda=w={options.Width}:h={options.Height}:format=nv12,hwdownload,format=nv12,{selectAndStamp}"]);
             args.AddRange(["-fps_mode", "passthrough"]); // see VisionSession.StartFfmpeg's own comment on r_frame_rate duplication
+            args.AddRange(["-copyts"]);
             args.AddRange(["-f", "rawvideo", "-pix_fmt", "nv12", "pipe:1"]);
         }
         else
         {
             args.AddRange(["-i", options.RtspUri]);
-            args.AddRange(["-vf", $"fps={options.Fps},scale={options.Width}:{options.Height},format=gray"]);
+            args.AddRange(["-vf", $"scale={options.Width}:{options.Height},format=gray,{selectAndStamp}"]);
+            // select leaves a variable frame rate; without passthrough ffmpeg would re-time it to the
+            // stream's r_frame_rate and duplicate frames.
+            args.AddRange(["-fps_mode", "passthrough"]);
+            args.AddRange(["-copyts"]);
             args.AddRange(["-f", "rawvideo", "-pix_fmt", "gray", "pipe:1"]);
         }
 
         return args;
     }
 
-    private async Task DrainStderrAsync(Process process, CancellationToken ct)
+    private async Task DrainStderrAsync(Process process, FrameArrivalStamps stamps, CancellationToken ct)
     {
         try
         {
             while (await process.StandardError.ReadLineAsync(ct) is { } line)
             {
+                // Several lines per frame — consumed for the arrival stamp, never logged.
+                if (stamps.TryParseLine(line)) continue;
+
                 var safeLine = CredentialScrubber.Scrub(line);
                 logger.LogDebug("ffmpeg (motion): {Line}", safeLine);
 
