@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.213.1] - 2026-10-04
+
+### Changed
+
+- Zones editor: a note that changes can take up to 30 seconds to take effect on the recorder node.
+
 ## [0.213.0] - 2026-10-04
 
 ### Fixed
