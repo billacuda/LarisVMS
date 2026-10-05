@@ -5,7 +5,7 @@ events to local disks or network shares on one or more Windows recorder nodes. L
 and administration all run in the browser, on desktop, tablet and phone.
 
 <p align="center">
-  <a href="https://www.buymeacoffee.com/billacuda"><img src="https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=☕&slug=billacuda&button_colour=5F7FFF&font_colour=ffffff&font_family=Cookie&outline_colour=000000&coffee_colour=FFDD00" /></a>
+  <a href="https://www.buymeacoffee.com/billacuda"><img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=%E2%98%95&slug=billacuda&button_colour=5F7FFF&font_colour=ffffff&font_family=Cookie&outline_colour=000000&coffee_colour=FFDD00" alt="Buy me a coffee" height="50" /></a>
 </p>
 
 **Current version: [0.212.0](CHANGELOG.md)**
@@ -32,28 +32,32 @@ and administration all run in the browser, on desktop, tablet and phone.
 - An optional archive volume (SMB share or USB drive) that receives aged-out footage instead of deleting it.
 - Recording failover to a backup node, and a maintenance mode.
 - Self-updating nodes: each build is approved once, and then every node installs it.
+- Nodes keep recording through a server or database outage, even across a reboot.
 
 **Detection & events**
 - Server-side motion detection with polygon zones or a mask grid.
 - ONVIF event ingestion, with user-defined event tag rules and timeline colors.
-- Built-in AI object detection (YOLOX, D-FINE, or your own ONNX model) on NVIDIA, AMD, Intel or CPU, or an external HTTP inference service.
+- Built-in LarisVision AI detection (YOLOX, D-FINE, or your own ONNX model) on NVIDIA, AMD, Intel or CPU, or an external HTTP inference service.
 - Live bounding boxes synced to the video, object badges on live tiles, and a cropped snapshot for every detected object.
+- Object tracking (ByteTrack), confidence scores, optional high-resolution snapshots, and a Slice mode that tiles wide or panoramic cameras so small objects are still detected.
 
 **Viewing**
 - Saved camera-wall views with drag-and-drop layout, a fullscreen kiosk mode and rotation.
 - Adaptive live streaming that uses Sub streams for small tiles.
-- Synchronized multi-camera playback on a zoomable timeline, with preview thumbnails and 1/32× to 32× speed.
+- Synchronized multi-camera playback on a zoomable timeline, with preview thumbnails and 1/32× to 32× speed. Switch any live tile to playback in place.
 - Digital zoom on any live or playback tile: drag a box to zoom in, right-click to reset.
-- Exports, bookmarks and a snapshots browser.
+- Multi-camera exports, bookmarks and a snapshots browser.
 - Basic PTZ controls.
 - Video relayed through the server, through media proxies, or sent directly from node to browser.
-- Phone-friendly layout; installable as an app from Chrome on Android or Safari on iOS.
+- Phone-friendly layout, installable as an app from Chrome on Android or Safari on iOS, with pinch-to-zoom on timelines and in fullscreen. See [Using it on a phone](#6-use-it-on-your-phone-optional).
+- Dark mode.
 
 **Administration**
-- Roles, a permissions matrix and per-camera/group access control.
+- Roles, a permissions matrix and per-camera/group access control, with auto-expiring role assignments and PTZ priority between roles.
 - Optional Microsoft Entra ID sign-in.
-- Alerts by email (SMTP, Microsoft Graph, Gmail), webhook, ntfy, Pushover, Slack and Teams.
-- Audit log, system logs, a health dashboard (per-node CPU, memory, network, fps and detection counts) and scheduled database backups.
+- Alert rules that watch a camera or node, sent by email (SMTP, Microsoft Graph, Gmail), webhook, ntfy, Pushover, Slack and Teams.
+- Audit log, system logs, scheduled database backups, and a health dashboard with per-camera fps, bitrate and reconnects, plus per-node CPU, memory, network, fps and detection counts.
+- API keys for automation, and a monitoring status endpoint.
 - IP allow lists, an optional separate port for video traffic, and secrets encrypted at rest.
 - Branding: app name, colors, font and logo.
 - Built-in **Help** with documentation for every feature.
@@ -72,11 +76,11 @@ Settings are inherited **global → node → camera**, and the most specific val
 ## Requirements
 
 - **Operating system:** any 64-bit Windows version supported by [.NET 10](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md), for both the server and the recorder nodes.
-- **Server:** SQL Server (Express works) using SQL or Integrated authentication. Building from source also needs the [.NET 10 SDK](https://dotnet.microsoft.com/download); the MSIs don't need any .NET runtime.
-- **Each recorder node:** Windows, with [FFmpeg](https://ffmpeg.org/) installed (`winget install ffmpeg --scope machine`).
-- **AI detection (optional):** a GPU and its driver, or CPU only. NVIDIA additionally needs CUDA Toolkit 12.x and cuDNN 9.x (see [AI object detection](#ai-object-detection)) if you want to use CUDA or TensorRT acceleration, otherwise DirectML works out of the box.
+- **Server:** SQL Server (Express works) using SQL or Integrated authentication. For SQL Server Express, the server name is `.\SQLEXPRESS`. Building from source also needs the [.NET 10 SDK](https://dotnet.microsoft.com/download); the MSIs don't need any .NET runtime.
+- **Each recorder node:** [FFmpeg](https://ffmpeg.org/) (`winget install ffmpeg --scope machine`).
+- **LarisVision (optional):** a GPU and its driver, or CPU only. NVIDIA additionally needs CUDA Toolkit 12.x and cuDNN 9.x (see [LarisVision](#larisvision-ai-detection)) if you want to use CUDA or TensorRT acceleration, otherwise DirectML works out of the box.
 - **Cameras:** ONVIF Profile S or T.
-- **Browser:** a current Chrome, Edge, Firefox or Safari. HEVC playback depends on browser support.
+- **Browser:** a current Chrome, Edge, Firefox or Safari. HEVC playback depends on browser support. On phones, Chrome (Android) or Safari (iOS).
 
 ### Hardware
 
@@ -106,7 +110,7 @@ Windows 10 or later, or Windows Server 2019 or later.
 
 Without object detection, a node can easily handle 20 or more cameras.
 
-Performance depends entirely on your hardware: how many cameras and AI detection streams a node can handle comes down to its CPU, GPU, disks and network.
+Performance depends entirely on your hardware: how many cameras and LarisVision streams a node can handle comes down to its CPU, GPU, disks and network.
 
 ## Installing
 
@@ -131,7 +135,7 @@ msiexec /i LarisVMS-Web-0.212.0-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx
 | Property | Default | Purpose |
 |---|---|---|
 | `HTTPSPORT` | 8444 | HTTPS port, plus its firewall rule. |
-| `CERTPATH`, `CERTPASSWORD` | blank | Server certificate (`.pfx`). Blank uses a self-signed certificate; a renewed file at the same path is picked up automatically. |
+| `CERTPATH`, `CERTPASSWORD` | blank | Server certificate (`.pfx`). Blank uses a self-signed certificate; a renewed file at the same path is picked up automatically. A certificate your devices trust is also needed to install LarisVMS as a phone app. |
 | `SERVICEACCOUNT`, `SERVICEPASSWORD` | LocalSystem | Service account, for example one with SQL Integrated Security rights. |
 | `INSTALLFOLDER` | `C:\Program Files\LarisVMS\Web` | Install location. |
 
@@ -173,6 +177,10 @@ Properties: `SERVERURL`, `REGISTRATIONKEY`, `CLIENTPORT` (default 4443), `CLIENT
 
 Use **Cameras → Discover**, or add a camera by its ONVIF device service URL. Then assign each camera to a recorder node. For everything else, open **Help** in the sidebar.
 
+### 6. Use it on your phone (optional)
+
+Open the same address in your phone's browser. To install it as an app, choose **Install app** from the ⋮ menu in Chrome on Android, or **Share → Add to Home Screen** in Safari on iOS. Phones won't install a site that uses the self-signed certificate a fresh install starts with, so set `CERTPATH` to a certificate your devices trust first.
+
 ## Upgrading
 
 Run the new version's MSI. Its settings are remembered from the previous install, so no properties are needed; secrets aren't stored, so a custom service account's password is asked for again. The web app applies database migrations itself when it starts. Upgrades never touch recordings, `appsettings.Production.json`, `setup-generated.json`, node registration or the data-protection keys.
@@ -195,9 +203,9 @@ The PowerShell scripts build from the repository and install on the same machine
 
 `deploy.ps1` (the old IIS-based deploy) is deprecated.
 
-## AI object detection
+## LarisVision AI detection
 
-AI detection is optional and per camera. A node without it still records, and still uses server
+LarisVision is optional and per camera. A node without it still records, and still uses server
 motion, camera events and vendor integrations. The node package includes the CPU, DirectML and CUDA
 backends, and picks one at startup:
 
@@ -221,6 +229,14 @@ backends, and picks one at startup:
 detection there (**Settings → AI detection → Max detection frame rate**, or per camera) rather than
 sending every frame; higher rates add GPU load without improving results.
 `build-node.ps1 -SkipVision` produces a recording-only node package.
+
+**Tested hardware:** LarisVMS has been run in real environments on:
+- **Windows:** Windows 11, Windows Server 2022, and a Windows Server 2022 guest VM on Hyper-V 2022 with RTX 2070 GPU passthrough
+- **Recording storage:** NVMe, Hyper-V virtual disks (on NVMe), a Windows Storage Pool passed through to a Hyper-V VM, and SMB file shares
+- AMD Ryzen 7 5800X3D
+- Intel Core i5-12600K, including LarisVision on its integrated GPU via DirectML
+- NVIDIA GeForce RTX 2070: the main testing GPU and a dedicated recording node (DirectML, CUDA, and TensorRT FP32)
+- NVIDIA GeForce RTX 4080 Super (DirectML, CUDA, and TensorRT FP16)
 
 ## Security
 
@@ -281,13 +297,14 @@ tools/export-models         Python: exports detection models to ONNX
 ## Known limitations
 
 - Privacy-mask burn-in and camera-side motion zones can be configured, but are **disabled** pending fixes.
-- Bounding boxes from the camera's own analytics aren't shown; only LarisVMS's own detection draws boxes.
+- Bounding boxes from the camera's own analytics aren't shown; only LarisVision draws boxes.
+- Face detection and object appeared/missing events come from the camera's own analytics. LarisVision doesn't detect these on its own yet.
 - PTZ has not been tested against real PTZ hardware.
 - Windows only (server and nodes).
 - Entra SSO has not been tested (I don't have a tenant to test it against, but in theory it should work)
-- AD integration not implented yet, but is in the works.
+- AD integration not implemented yet, but is in the works.
 - Some features listed may have placeholders (webhooks, Teams/Slack integration)
-- Basic email functionality should work with SMTP. Graph API email has not been tested yet.s
+- Basic email functionality should work with SMTP. Graph API email has not been tested yet.
 
 ## License
 
