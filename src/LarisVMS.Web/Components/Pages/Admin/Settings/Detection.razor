@@ -320,33 +320,33 @@
         HttpContext?.User ?? new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity());
     private string? CurrentUserId => User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
 
-    [SupplyParameterFromForm(FormName = "detection-settings")] private double Confidence { get; set; } = 0.35;
-    [SupplyParameterFromForm(FormName = "detection-settings")] private double Iou { get; set; } = 0.5;
-    [SupplyParameterFromForm(FormName = "detection-settings")] private string StreamRole { get; set; } = "Sub";
-    [SupplyParameterFromForm(FormName = "detection-settings")] private string Orientation { get; set; } = "Auto";
+    [SupplyParameterFromForm(FormName = "detection-settings")] private double Confidence { get; set; }
+    [SupplyParameterFromForm(FormName = "detection-settings")] private double Iou { get; set; }
+    [SupplyParameterFromForm(FormName = "detection-settings")] private string? StreamRole { get; set; }
+    [SupplyParameterFromForm(FormName = "detection-settings")] private string? Orientation { get; set; }
     [SupplyParameterFromForm(FormName = "detection-settings")] private bool ReportIdleDetections { get; set; }
-    [SupplyParameterFromForm(FormName = "detection-settings")] private int IdleTimeoutSeconds { get; set; } = 10;
-    [SupplyParameterFromForm(FormName = "detection-settings")] private bool SnapshotMotionAccuracy { get; set; } = true;
+    [SupplyParameterFromForm(FormName = "detection-settings")] private int IdleTimeoutSeconds { get; set; }
+    [SupplyParameterFromForm(FormName = "detection-settings")] private bool SnapshotMotionAccuracy { get; set; }
     [SupplyParameterFromForm(FormName = "detection-settings")] private bool RejectMotionJitter { get; set; }
-    [SupplyParameterFromForm(FormName = "detection-settings")] private int MotionJitterPixels { get; set; } = 3;
-    [SupplyParameterFromForm(FormName = "detection-settings")] private int DepartureGraceSeconds { get; set; } = 5;
-    [SupplyParameterFromForm(FormName = "detection-settings")] private int SnapshotMarginPercent { get; set; } = 12;
-    [SupplyParameterFromForm(FormName = "detection-settings")] private int MaxFps { get; set; } = 7;
-    [SupplyParameterFromForm(FormName = "detection-settings")] private string ModelFamily { get; set; } = "Auto";
-    [SupplyParameterFromForm(FormName = "detection-settings")] private string DFineWeights { get; set; } = "Obj2Coco";
-    [SupplyParameterFromForm(FormName = "detection-settings")] private string DFineTensorRtMode { get; set; } = "Off";
-    [SupplyParameterFromForm(FormName = "detection-settings")] private string YoloXSize { get; set; } = "S";
-    [SupplyParameterFromForm(FormName = "detection-settings")] private string LocalModelName { get; set; } = "";
-    [SupplyParameterFromForm(FormName = "detection-settings")] private string AspectMode { get; set; } = "Letterbox";
+    [SupplyParameterFromForm(FormName = "detection-settings")] private int MotionJitterPixels { get; set; }
+    [SupplyParameterFromForm(FormName = "detection-settings")] private int DepartureGraceSeconds { get; set; }
+    [SupplyParameterFromForm(FormName = "detection-settings")] private int SnapshotMarginPercent { get; set; }
+    [SupplyParameterFromForm(FormName = "detection-settings")] private int MaxFps { get; set; }
+    [SupplyParameterFromForm(FormName = "detection-settings")] private string? ModelFamily { get; set; }
+    [SupplyParameterFromForm(FormName = "detection-settings")] private string? DFineWeights { get; set; }
+    [SupplyParameterFromForm(FormName = "detection-settings")] private string? DFineTensorRtMode { get; set; }
+    [SupplyParameterFromForm(FormName = "detection-settings")] private string? YoloXSize { get; set; }
+    [SupplyParameterFromForm(FormName = "detection-settings")] private string? LocalModelName { get; set; }
+    [SupplyParameterFromForm(FormName = "detection-settings")] private string? AspectMode { get; set; }
     [SupplyParameterFromForm(FormName = "detection-settings")] private bool GpuPreprocessing { get; set; }
 
-    [SupplyParameterFromForm(FormName = "detection-settings")] private string Backend { get; set; } = "BuiltIn";
+    [SupplyParameterFromForm(FormName = "detection-settings")] private string? Backend { get; set; }
     [SupplyParameterFromForm(FormName = "detection-settings")] private string? ExternalUrl { get; set; }
     [SupplyParameterFromForm(FormName = "detection-settings")] private string? ExternalModel { get; set; }
-    [SupplyParameterFromForm(FormName = "detection-settings")] private int ExternalInputSize { get; set; } = 640;
+    [SupplyParameterFromForm(FormName = "detection-settings")] private int ExternalInputSize { get; set; }
     [SupplyParameterFromForm(FormName = "detection-settings")] private string? ExternalApiKey { get; set; }
     private bool HasStoredExternalApiKey { get; set; }
-    [SupplyParameterFromForm(FormName = "detection-settings")] private string ExternalTransport { get; set; } = "Auto";
+    [SupplyParameterFromForm(FormName = "detection-settings")] private string? ExternalTransport { get; set; }
 
     // Native HTML substitute for Razor Pages' asp-page-handler multi-handler buttons — see Email.razor's
     // own copy of this comment for why a plain @onclick on type="button" doesn't work under Static SSR.
@@ -454,6 +454,14 @@
         DepartureGraceSeconds = Math.Clamp(DepartureGraceSeconds, 1, 10);
         SnapshotMarginPercent = Math.Clamp(SnapshotMarginPercent, 0, 100);
         MaxFps = Math.Clamp(MaxFps, 0, 60);
+        // A select that didn't post binds null; fall back to the same defaults LoadAsync uses.
+        StreamRole ??= "Sub";
+        Orientation ??= "Auto";
+        ModelFamily ??= "Auto";
+        DFineWeights ??= "Obj2Coco";
+        YoloXSize ??= "S";
+        LocalModelName ??= "";
+        AspectMode ??= "Letterbox";
         // Only three values are meaningful downstream (CameraDetectionPipeline's switch); anything
         // else lands on "Off" there anyway, so normalize a stray form value rather than store it.
         DFineTensorRtMode = DFineTensorRtMode?.Trim().ToUpperInvariant() switch
@@ -468,8 +476,8 @@
         // A positive multiple of 32 (InferenceProfile's own requirement); anything else falls back to
         // the D-FINE/YOLOX default rather than being stored.
         ExternalInputSize = ExternalInputSize > 0 && ExternalInputSize % 32 == 0 ? ExternalInputSize : 640;
-        // Only four values are meaningful downstream (ExternalInferenceTransportExtensions.Parse);
-        // normalize a stray form value to "Auto" rather than store garbage.
+        // Only four values mean anything downstream, in ExternalInferenceTransportExtensions.Parse.
+        // Normalize a stray form value to "Auto" rather than store garbage.
         ExternalTransport = ExternalTransport?.Trim() switch
         {
             "Jpeg" => "Jpeg",

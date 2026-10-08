@@ -160,7 +160,7 @@
 
     [SupplyParameterFromForm(FormName = "events-settings")] private string? MotionColor { get; set; }
     [SupplyParameterFromForm(FormName = "events-settings")] private string? RecordingColor { get; set; }
-    [SupplyParameterFromForm(FormName = "events-settings")] private string EventBadgeCornerValue { get; set; } = EventBadgeCorner.Default;
+    [SupplyParameterFromForm(FormName = "events-settings")] private string? EventBadgeCornerValue { get; set; }
 
     // Dictionary-shaped form data (one flat field per detection kind, e.g. "DetectionColors_PersonDetected")
     // is read directly off HttpContext.Request.Form in HandleSaveAsync rather than via
@@ -183,7 +183,12 @@
 
     private const string EventBadgeCornerKey = EventSettingsKeys.EventBadgeCornerKey;
 
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    // Skip on a form POST: the submitted values are already bound, and reloading here would save the
+    // old ones back (see Detection.razor's OnInitializedAsync).
+    protected override async Task OnInitializedAsync()
+    {
+        if (HttpContext?.Request.HasFormContentType != true) await LoadAsync();
+    }
 
     private async Task LoadAsync()
     {

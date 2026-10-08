@@ -140,7 +140,7 @@
     [CascadingParameter] private HttpContext? HttpContext { get; set; }
 
     // Named differently from the cascading AppName above — this one is the form field being edited.
-    [SupplyParameterFromForm(FormName = "branding-settings")] private string FormAppName { get; set; } = BrandingOptions.DefaultAppName;
+    [SupplyParameterFromForm(FormName = "branding-settings")] private string? FormAppName { get; set; }
     [SupplyParameterFromForm(FormName = "branding-settings")] private string? PrimaryColor { get; set; }
     [SupplyParameterFromForm(FormName = "branding-settings")] private string? AccentColor { get; set; }
     [SupplyParameterFromForm(FormName = "branding-settings")] private string? FontKey { get; set; }
@@ -155,7 +155,12 @@
     private static IReadOnlyList<(string Key, string Label)> FontChoices => LarisVMS.Core.Branding.FontChoices;
     private static int MaxLogoBytes => LarisVMS.Core.Branding.MaxLogoDataUriLength;
 
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    // Skip on a form POST: the submitted values are already bound, and reloading here would save the
+    // old ones back (see Detection.razor's OnInitializedAsync).
+    protected override async Task OnInitializedAsync()
+    {
+        if (HttpContext?.Request.HasFormContentType != true) await LoadAsync();
+    }
 
     private async Task LoadAsync()
     {
@@ -187,7 +192,7 @@
             ? (await AuthenticationStateTask).User
             : new ClaimsPrincipal(new ClaimsIdentity());
 
-        var updated = new BrandingOptions(FormAppName, PrimaryColor, AccentColor,
+        var updated = new BrandingOptions(FormAppName ?? BrandingOptions.DefaultAppName, PrimaryColor, AccentColor,
             RemoveLogo ? null : LogoDataUri, FontKey);
         await BrandingService.SaveAsync(updated, user.Identity?.Name);
 

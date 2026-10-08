@@ -253,7 +253,7 @@
     private static string Mbits(long? bytesPerSec) => bytesPerSec is { } b ? (b * 8 / 1_000_000.0).ToString("0.0", CultureInfo.InvariantCulture) : "—";
     private static double? MemoryPercent(LarisVMS.Core.Dtos.NodeDashboardRow n) =>
         n.MemoryUsedBytes is { } used && n.MemoryTotalBytes is { } total && total > 0 ? 100.0 * used / total : null;
-    private static string BarClass(double? p) => p is >= 90 ? "bg-danger" : p is >= 75 ? "bg-warning" : "bg-success";
+    private static string BarClass(double? p) => p switch { >= 90 => "bg-danger", >= 75 => "bg-warning", _ => "bg-success" };
     private static string BarWidth(double? p) => Math.Clamp(p ?? 0, 0, 100).ToString("0", CultureInfo.InvariantCulture);
 
     private static IEnumerable<(string Label, LarisVMS.Core.Dtos.WindowCounts Counts)> CountRows(LarisVMS.Core.Dtos.NodeDashboardRow n)

@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using LarisVMS.Core.Dtos;
+using LarisVMS.Core.Update;
 
 namespace LarisVMS.Node.Update;
 
@@ -211,6 +212,31 @@ public class UpdateService(NodeConfig config, bool insecureTls, ILogger log, IHo
 
         var currentBinary = Process.GetCurrentProcess().MainModule?.FileName
             ?? Path.Combine(AppContext.BaseDirectory, "LarisVMS.Node.exe");
+        var currentVisionBinary = Path.Combine(AppContext.BaseDirectory, VisionServiceSupervisor.ExeFileName);
+
+        // Swap while still running (see InPlaceBinarySwap), so the updater only has to restart the
+        // service. Falls back to the updater doing the swap after the stop if the rename fails.
+        if (InPlaceBinarySwap.TrySwap(StagedPath, currentBinary, out var swapError))
+        {
+            log.LogInformation("Swapped in the new node binary; restarting the service to run it.");
+            if (visionStaged)
+            {
+                // Same rule as the updater: only keep an already-installed Vision Service current.
+                if (!File.Exists(currentVisionBinary))
+                {
+                    log.LogInformation("Vision Service update skipped: it isn't installed on this node (run install-node.ps1 once to add AI detection).");
+                    TryCleanStagedVision();
+                }
+                else if (!InPlaceBinarySwap.TrySwap(StagedVisionPath, currentVisionBinary, out var visionError))
+                {
+                    log.LogWarning("Could not swap in the new Vision Service binary ({Error}); AI detection stays on the previous one until the next update.", visionError);
+                    TryCleanStagedVision();
+                }
+            }
+            LaunchUpdater($"--restart-only --service {UpdaterLogic_DefaultServiceName}");
+            return;
+        }
+        log.LogWarning("Could not swap the node binary in place ({Error}); handing the swap to the updater after the service stops.", swapError);
 
         var arguments = $"--new \"{StagedPath}\" --current \"{currentBinary}\" --service LarisVMSNode";
         if (visionStaged)
@@ -223,10 +249,14 @@ public class UpdateService(NodeConfig config, bool insecureTls, ILogger log, IHo
             // installed still needs install-node.ps1 run once for that, same as this feature's own
             // initial release (see CHANGELOG) — this only closes the gap for keeping it current
             // *after* that.
-            var currentVisionBinary = Path.Combine(AppContext.BaseDirectory, VisionServiceSupervisor.ExeFileName);
             arguments += $" --new-vision \"{StagedVisionPath}\" --current-vision \"{currentVisionBinary}\"";
         }
 
+        LaunchUpdater(arguments);
+    }
+
+    private void LaunchUpdater(string arguments)
+    {
         using var updater = new Process
         {
             StartInfo = new ProcessStartInfo
@@ -239,8 +269,25 @@ public class UpdateService(NodeConfig config, bool insecureTls, ILogger log, IHo
         };
         updater.Start();
 
-        log.LogInformation("Updater launched. Stopping service for binary swap...");
+        log.LogInformation("Updater launched. Stopping service so it can be started again on the new build...");
         lifetime.StopApplication();
+    }
+
+    /// <summary>Run once at startup. Removes the "*.old" binaries an in-place swap left behind, and
+    /// reports an update that was downloaded but never applied — its staged binary is still sitting in
+    /// the update folder — in this node's own log, since the updater's reason is only in its separate
+    /// updater-*.log file, which nobody looks at when the service just didn't come back.</summary>
+    public void CheckLastUpdate()
+    {
+        InPlaceBinarySwap.CleanUp(AppContext.BaseDirectory);
+        if (!File.Exists(StagedPath)) return;
+
+        log.LogWarning("A node update downloaded {When:u} was never applied (the staged binary is still at {Path}). " +
+            "See updater-*.log in {LogDir} for why. It will be downloaded again on the next update offer.",
+            File.GetLastWriteTimeUtc(StagedPath), StagedPath,
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "logs"));
+        TryCleanStaged();
+        TryCleanStagedVision();
     }
 
     private HttpClientHandler CreateDefaultHandler()

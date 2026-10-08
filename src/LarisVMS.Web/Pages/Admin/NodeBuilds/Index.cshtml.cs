@@ -20,6 +20,9 @@ public class IndexModel(INodeBuildService nodeBuildService, IAuditService auditS
 
     public async Task OnGetAsync(CancellationToken ct)
     {
+        // deploy.ps1 inserts Pending rows straight into the table, so tidy the queue on every visit
+        // rather than only when the app registers a build itself.
+        await nodeBuildService.SupersedeOutdatedPendingAsync(ct);
         Builds = await nodeBuildService.ListAsync(ct);
     }
 
@@ -27,7 +30,17 @@ public class IndexModel(INodeBuildService nodeBuildService, IAuditService auditS
     {
         var by = User.FindFirst(ClaimTypes.Name)?.Value ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "unknown";
         var build = (await nodeBuildService.ListAsync(ct)).FirstOrDefault(b => b.Id == id);
-        await nodeBuildService.ApproveAsync(id, by, ct);
+        try
+        {
+            await nodeBuildService.ApproveAsync(id, by, ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Superseded or rejected since the page was loaded (e.g. a newer build landed).
+            ErrorMessage = ex.Message;
+            await OnGetAsync(ct);
+            return Page();
+        }
         await LogAsync("NodeBuild.Approve", build, id, ct);
         return RedirectToPage();
     }

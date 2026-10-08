@@ -68,7 +68,6 @@ public sealed class RecordingFailoverService(
         var now = DateTime.UtcNow;
 
         var nodes = await db.Nodes.ToListAsync(ct);
-        var nodeById = nodes.ToDictionary(n => n.Id);
 
         // Which nodes are the target of a backup relationship at all — Node.BackupNodeId or a
         // per-camera Camera.BackupNodeIdOverride. Only these are worth evaluating / can host.
@@ -84,10 +83,10 @@ public sealed class RecordingFailoverService(
         foreach (var cb in camBackups) if (cb.Backup != cb.Primary) hasBackup.Add(cb.Primary);
 
         // Gather this cycle's votes for every subject up-front (central probes in parallel).
-        var partnerReports = CollectReports(nodes.Select(n => (n.Id, n.PartnerHealthReportsJson)), now);
+        var partnerReports = CollectReports(nodes.Select(n => (n.Id, n.PartnerHealthReportsJson)));
         var proxyNodes = await db.MediaProxies.AsNoTracking()
             .Select(p => new { p.Id, p.NodeHealthReportsJson }).ToListAsync(ct);
-        var proxyReports = CollectReports(proxyNodes.Select(p => (p.Id, p.NodeHealthReportsJson)), now);
+        var proxyReports = CollectReports(proxyNodes.Select(p => (p.Id, p.NodeHealthReportsJson)));
 
         var dirty = false;
 
@@ -107,7 +106,7 @@ public sealed class RecordingFailoverService(
                     dirty = true;
                     await audit.LogAsync("Node.MaintenanceFailover", null, subject.Name, null,
                         $"{subject.Name} entered maintenance — its cameras move to its backup node.", ct);
-                    await FireAlertAsync(db, subject.Id, ct);
+                    LogFailoverActivated(subject.Id);
                 }
                 continue;
             }
@@ -166,7 +165,7 @@ public sealed class RecordingFailoverService(
                     subject.Name, subject.Id, breakdown);
                 await audit.LogAsync("Node.FailoverStarted", null, subject.Name, null,
                     $"Quorum agreed {subject.Name}'s service is down ({breakdown}) — its cameras move to its backup node.", ct);
-                await FireAlertAsync(db, subject.Id, ct);
+                LogFailoverActivated(subject.Id);
             }
             else // FailBack
             {
@@ -189,9 +188,8 @@ public sealed class RecordingFailoverService(
             // default backup
             if (down.BackupNodeId is { } b && !failedOverIds.Contains(b)) hostingIds.Add(b);
         }
-        foreach (var cb in camBackups)
-            if (failedOverIds.Contains(cb.Primary) && !failedOverIds.Contains(cb.Backup))
-                hostingIds.Add(cb.Backup);
+        foreach (var cb in camBackups.Where(cb => failedOverIds.Contains(cb.Primary) && !failedOverIds.Contains(cb.Backup)))
+            hostingIds.Add(cb.Backup);
 
         foreach (var n in nodes)
         {
@@ -236,7 +234,7 @@ public sealed class RecordingFailoverService(
 
         // 1. Central's own probe (always a live vote when the node has a known address).
         if (!string.IsNullOrWhiteSpace(subject.LastIpAddress) && subject.LivePort is > 0)
-            votes.Add(await ProbeCentralAsync(subject.LastIpAddress!, subject.LivePort!.Value, ct));
+            votes.Add(await ProbeCentralAsync(subject.LastIpAddress, subject.LivePort.Value, ct));
 
         // 2. The freshest partner-node verdict about this subject.
         if (Freshest(partnerReports, subject.Id, now) is { } partner)
@@ -249,7 +247,7 @@ public sealed class RecordingFailoverService(
         return votes;
     }
 
-    private bool? Freshest(IReadOnlyDictionary<Guid, List<(bool running, DateTime at)>> reports, Guid subjectId, DateTime now)
+    private static bool? Freshest(IReadOnlyDictionary<Guid, List<(bool running, DateTime at)>> reports, Guid subjectId, DateTime now)
     {
         if (!reports.TryGetValue(subjectId, out var list) || list.Count == 0) return null;
         var newest = list.MaxBy(r => r.at);
@@ -275,7 +273,7 @@ public sealed class RecordingFailoverService(
     /// <summary>Flattens a set of voters' stored <see cref="NodePartnerHealthReport"/> JSON blobs into
     /// <c>subjectNodeId -&gt; [(running, checkedAt)]</c>.</summary>
     private static Dictionary<Guid, List<(bool running, DateTime at)>> CollectReports(
-        IEnumerable<(Guid voterId, string? json)> voters, DateTime now)
+        IEnumerable<(Guid voterId, string? json)> voters)
     {
         var map = new Dictionary<Guid, List<(bool, DateTime)>>();
         foreach (var (_, json) in voters)
@@ -298,9 +296,8 @@ public sealed class RecordingFailoverService(
     /// <summary>Nudges the alert pipeline: any <c>NodeFailoverActivated</c> rule for this node is
     /// picked up by <see cref="AlertEvaluatorService"/>'s own next sweep — this just logs the
     /// activation so the sweep and the audit trail line up in time.</summary>
-    private Task FireAlertAsync(ApplicationDbContext db, Guid nodeId, CancellationToken ct)
+    private void LogFailoverActivated(Guid nodeId)
     {
         logger.LogInformation("Node {NodeId} is now FailedOverAway — any NodeFailoverActivated alert rule will fire on the next evaluation sweep.", nodeId);
-        return Task.CompletedTask;
     }
 }

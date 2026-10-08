@@ -355,12 +355,20 @@ if (-not (Test-Path $realProdConfig)) {
 $exePath = Join-Path $InstallDir 'LarisVMS.Web.exe'
 $binPath = if ($exePath -match '[\s"]') { '"' + ($exePath -replace '"', '\"') + '"' } else { $exePath }
 
-if ($ServiceCredential) {
-    Write-Host "    Running as $($ServiceCredential.UserName) — this account needs a SQL Server login with db_owner on the LarisVMS database (Integrated Security)."
+# Report the account the service will actually run as. Without -ServiceCredential an upgrade keeps
+# the existing service's account (Win32_Service.Change below leaves StartName alone), so read it
+# rather than assuming LocalSystem.
+$runAs = if ($ServiceCredential) { $ServiceCredential.UserName }
+         elseif ($isUpgrade) { (Get-CimInstance -ClassName Win32_Service -Filter "Name='$ServiceName'").StartName }
+         else { 'LocalSystem' }
+$runAsSource = if ($ServiceCredential) { '' } elseif ($isUpgrade) { ' (kept from the existing service)' } else { '' }
+if ($runAs -and $runAs -notin 'LocalSystem', '.\LocalSystem', 'NT AUTHORITY\SYSTEM') {
+    Write-Host "    Running as $runAs$runAsSource — with Integrated Security this account needs a SQL Server login with db_owner on the LarisVMS database."
 } else {
-    Write-Host "    Running as LocalSystem." -ForegroundColor Yellow
+    $computerAccount = if ((Get-CimInstance -ClassName Win32_ComputerSystem).PartOfDomain) { "$env:USERDOMAIN\$env:COMPUTERNAME`$" } else { "$env:COMPUTERNAME`$" }
+    Write-Host "    Running as LocalSystem$runAsSource." -ForegroundColor Yellow
     Write-Host "    If using SQL Server Integrated Security, LocalSystem authenticates to SQL as this" -ForegroundColor Yellow
-    Write-Host "    machine's own computer account (DOMAIN\$env:COMPUTERNAME`$) - grant that account a" -ForegroundColor Yellow
+    Write-Host "    machine's own computer account ($computerAccount) - grant that account a" -ForegroundColor Yellow
     Write-Host "    SQL login, or use SQL Authentication instead during Setup, or re-run with" -ForegroundColor Yellow
     Write-Host "    -ServiceCredential (Get-Credential) for a domain/service account." -ForegroundColor Yellow
 }

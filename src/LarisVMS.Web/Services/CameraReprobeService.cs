@@ -1,3 +1,4 @@
+using System.Globalization;
 using LarisVMS.Core.Interfaces;
 
 namespace LarisVMS.Web.Services;
@@ -29,20 +30,20 @@ public class CameraReprobeService(IServiceScopeFactory scopeFactory, ILogger<Cam
     /// run does the same work.</summary>
     private DateOnly? _lastRunLocalDate;
 
-    protected override async Task ExecuteAsync(CancellationToken ct)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        while (!ct.IsCancellationRequested)
+        while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                await TickAsync(ct);
+                await TickAsync(stoppingToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 logger.LogError(ex, "Daily camera re-probe tick failed — will retry on the next tick.");
             }
 
-            try { await Task.Delay(TickInterval, ct); }
+            try { await Task.Delay(TickInterval, stoppingToken); }
             catch (OperationCanceledException) { break; }
         }
     }
@@ -97,13 +98,15 @@ public class CameraReprobeService(IServiceScopeFactory scopeFactory, ILogger<Cam
 
         // Actor is null — nobody triggered this. The audit trail should still carry it, since a
         // re-probe can change what a camera records.
-        await auditService.LogAsync("Camera.DailyReprobe", null, "System", null, details);
+        await auditService.LogAsync("Camera.DailyReprobe", null, "System", null, details, ct);
     }
 
     /// <summary>"HH:mm" (24-hour) if it parses, otherwise the default. Never throws — a value typed
     /// into an admin field or edited in the database must not be able to stop the service.</summary>
     internal static TimeOnly ParseTimeOfDay(string? value)
-        => TimeOnly.TryParse(value, out var parsed) ? parsed : TimeOnly.Parse(DefaultAtLocalTime);
+        => TimeOnly.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed)
+            ? parsed
+            : TimeOnly.Parse(DefaultAtLocalTime, CultureInfo.InvariantCulture);
 
     /// <summary>Run when the local clock has reached the scheduled time and today's run hasn't
     /// happened yet. Catch-up is deliberate: a tick at 03:07 still runs a 03:00 schedule, so a

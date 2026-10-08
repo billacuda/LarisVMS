@@ -35,7 +35,7 @@ else
     [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
     [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
 
-    private record CardInfo(string Href, string Icon, string Title, string Description);
+    private sealed record CardInfo(string Href, string Icon, string Title, string Description);
 
     private List<CardInfo> Cards { get; set; } = [];
 

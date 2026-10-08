@@ -25,7 +25,7 @@ public class PortSegmentationMiddleware(RequestDelegate next)
     {
         if (SetupMiddleware.IsSetupPending(context)) { await next(context); return; }
 
-        var configuredPort = await settings.GetAsync<int?>(SettingKey, null);
+        var configuredPort = await settings.GetAsync<int?>(SettingKey, null, ct: context.RequestAborted);
         if (configuredPort is not { } port || port <= 0)
         {
             await next(context);

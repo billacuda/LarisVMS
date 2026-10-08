@@ -16,7 +16,11 @@ public enum NodeBuildStatus
 {
     Pending = 0,
     Approved = 1,
-    Rejected = 2
+    Rejected = 2,
+    /// <summary>Was Pending, but a newer build of the same platform is pending or already approved,
+    /// so approving this one would only roll nodes back. Set automatically
+    /// (NodeBuildService.SupersedeOutdatedPendingAsync); never offered to a node.</summary>
+    Superseded = 3
 }
 
 /// <summary>Recording-failover state for a node (LarisVMS failover plan, phase 3). Written only by

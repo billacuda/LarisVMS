@@ -29,7 +29,7 @@ public class LoginModel(SignInManager<ApplicationUser> signInManager, Applicatio
     [TempData] public string? ErrorMessage { get; set; }
 
     public bool ShowEntraButton { get; set; }
-    public string EntraSchemeName => EntraOidcOptionsConfigurator.SchemeName;
+    public static string EntraSchemeName => EntraOidcOptionsConfigurator.SchemeName;
 
     public class InputModel
     {

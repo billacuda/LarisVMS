@@ -21,7 +21,7 @@ public class IpAllowListMiddleware(RequestDelegate next)
         if (SetupMiddleware.IsSetupPending(context)) { await next(context); return; }
 
         var key = MediaRoutes.IsMediaPath(context.Request.Path) ? LiveViewSettingKey : ManagementSettingKey;
-        var raw = await settings.GetRawAsync(key);
+        var raw = await settings.GetRawAsync(key, ct: context.RequestAborted);
         var parsed = IpAllowListPolicy.Parse(raw);
 
         if (!IpAllowListPolicy.IsAllowed(context.Connection.RemoteIpAddress, parsed.Networks))

@@ -157,7 +157,7 @@ public class EditModel(ApplicationDbContext db, ICameraService cameraService, IN
     {
         Set(AlertChannel.Email, EmailEnabled, EmailEnabled ? JsonSerializer.Serialize(new EmailDeliveryConfig(EmailTo?.Trim() ?? string.Empty)) : null);
         Set(AlertChannel.Webhook, WebhookEnabled, WebhookEnabled ? JsonSerializer.Serialize(new WebhookDeliveryConfig(WebhookUrl?.Trim() ?? string.Empty)) : null);
-        Set(AlertChannel.Ntfy, NtfyEnabled, NtfyEnabled ? JsonSerializer.Serialize(new NtfyDeliveryConfig(NtfyTopic?.Trim() ?? string.Empty, string.IsNullOrWhiteSpace(NtfyServerUrl) ? null : NtfyServerUrl.Trim())) : null);
+        Set(AlertChannel.Ntfy, NtfyEnabled, NtfyEnabled ? JsonSerializer.Serialize(new NtfyDeliveryConfig(NtfyTopic?.Trim() ?? string.Empty, NullIfBlank(NtfyServerUrl))) : null);
         Set(AlertChannel.Pushover, PushoverEnabled, PushoverEnabled ? JsonSerializer.Serialize(new PushoverDeliveryConfig(PushoverAppToken?.Trim() ?? string.Empty, PushoverUserKey?.Trim() ?? string.Empty)) : null);
         Set(AlertChannel.Slack, SlackEnabled, SlackEnabled ? JsonSerializer.Serialize(new SlackDeliveryConfig(SlackWebhookUrl?.Trim() ?? string.Empty)) : null);
         Set(AlertChannel.Teams, TeamsEnabled, TeamsEnabled ? JsonSerializer.Serialize(new TeamsDeliveryConfig(TeamsWebhookUrl?.Trim() ?? string.Empty)) : null);
@@ -210,6 +210,8 @@ public class EditModel(ApplicationDbContext db, ICameraService cameraService, IN
                 break;
         }
     }
+
+    private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static T? Deserialize<T>(string? json) where T : class =>
         string.IsNullOrWhiteSpace(json) ? null : JsonSerializer.Deserialize<T>(json);

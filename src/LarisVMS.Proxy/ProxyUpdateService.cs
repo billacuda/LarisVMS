@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using LarisVMS.Core.Dtos;
+using LarisVMS.Core.Update;
 
 namespace LarisVMS.Proxy;
 
@@ -111,20 +112,49 @@ public class ProxyUpdateService(ProxyConfig config, bool insecureTls, ILogger lo
         var currentBinary = Process.GetCurrentProcess().MainModule?.FileName
             ?? Path.Combine(AppContext.BaseDirectory, "LarisVMS.Proxy.exe");
 
+        // Swap while still running (see InPlaceBinarySwap), so the updater only has to restart the
+        // service. Falls back to the updater doing the swap after the stop if the rename fails.
+        string arguments;
+        if (InPlaceBinarySwap.TrySwap(StagedPath, currentBinary, out var swapError))
+        {
+            log.LogInformation("Swapped in the new proxy binary; restarting the service to run it.");
+            arguments = $"--restart-only --service {ServiceName}";
+        }
+        else
+        {
+            log.LogWarning("Could not swap the proxy binary in place ({Error}); handing the swap to the updater after the service stops.", swapError);
+            arguments = $"--new \"{StagedPath}\" --current \"{currentBinary}\" --service {ServiceName}";
+        }
+
         using var updater = new Process
         {
             StartInfo = new ProcessStartInfo
             {
                 FileName = UpdaterPath,
-                Arguments = $"--new \"{StagedPath}\" --current \"{currentBinary}\" --service {ServiceName}",
+                Arguments = arguments,
                 UseShellExecute = false,
                 CreateNoWindow = true,
             }
         };
         updater.Start();
 
-        log.LogInformation("Updater launched. Stopping service for binary swap...");
+        log.LogInformation("Updater launched. Stopping service so it can be started again on the new build...");
         lifetime.StopApplication();
+    }
+
+    /// <summary>Run once at startup: removes the "*.old" binary an in-place swap left behind, and
+    /// reports in this proxy's own log an update that was downloaded but never applied.</summary>
+    public void CheckLastUpdate()
+    {
+        InPlaceBinarySwap.CleanUp(AppContext.BaseDirectory);
+        if (!File.Exists(StagedPath)) return;
+
+        log.LogWarning("A proxy update downloaded {When:u} was never applied (the staged binary is still at {Path}). " +
+            "See updater-*.log in {LogDir} for why. It will be downloaded again on the next update offer.",
+            File.GetLastWriteTimeUtc(StagedPath), StagedPath,
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "logs"));
+        try { File.Delete(StagedPath); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* replaced by the next download */ }
     }
 
     private HttpClientHandler CreateDefaultHandler()

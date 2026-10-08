@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
@@ -60,7 +61,7 @@ public class BackupsModel(ApplicationDbContext db, IBackupService backupService,
 
     public async Task<IActionResult> OnPostSaveAsync()
     {
-        if (!TimeOnly.TryParse(BackupTime, out _))
+        if (!TimeOnly.TryParse(BackupTime, CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
         {
             ErrorMessage = "Enter the backup time as HH:mm (e.g. 03:00).";
             return RedirectToPage();

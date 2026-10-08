@@ -34,9 +34,9 @@ public sealed class VisionNativeDistributor(ILogger<VisionNativeDistributor> log
     private readonly Lock _hashLock = new();
     private (string Path, DateTime WriteUtc, VisionNativeInfo Info)? _cachedInfo;
 
-    public bool IsKnown(string name) => Files.ContainsKey(name);
+    public static bool IsKnown(string name) => Files.ContainsKey(name);
 
-    private string? ResolvePath(string name)
+    private static string? ResolvePath(string name)
     {
         if (!Files.TryGetValue(name, out var fileName)) return null;
         var path = Path.Combine(CacheDirectory, fileName);
@@ -63,6 +63,6 @@ public sealed class VisionNativeDistributor(ILogger<VisionNativeDistributor> log
     }
 
     /// <summary>An open read stream for the seeded file, or null if the server has no copy.</summary>
-    public Stream? Open(string name)
+    public static Stream? Open(string name)
         => ResolvePath(name) is { } path ? File.OpenRead(path) : null;
 }

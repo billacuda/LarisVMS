@@ -37,7 +37,7 @@
         {
             <hr class="my-4" />
             <form method="post" asp-page="./ExternalLogin">
-                <input type="hidden" name="provider" value="@Model.EntraSchemeName" />
+                <input type="hidden" name="provider" value="@LoginModel.EntraSchemeName" />
                 <input type="hidden" name="returnUrl" value="@Model.ReturnUrl" />
                 <button type="submit" class="btn btn-outline-secondary w-100">
                     <span aria-hidden="true">🪟</span> Sign in with Microsoft

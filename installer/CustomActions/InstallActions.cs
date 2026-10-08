@@ -67,9 +67,10 @@ namespace LarisVMS.Installer
         {
             KillNodeChildren(session);
             var installDir = session.CustomActionData["InstallDir"];
+            // *.exe.old: what the service's own in-place update swap moves the previous binary to.
             if (Directory.Exists(installDir))
-                foreach (var bak in Directory.EnumerateFiles(installDir, "*.bak"))
-                    try { File.Delete(bak); } catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { }
+                foreach (var leftover in Directory.EnumerateFiles(installDir, "*.bak").Concat(Directory.EnumerateFiles(installDir, "*.exe.old")))
+                    try { File.Delete(leftover); } catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { }
             return ActionResult.Success;
         }
 
@@ -183,6 +184,7 @@ namespace LarisVMS.Installer
             if (File.Exists(config))
             {
                 json = File.ReadAllText(config);
+                File.Copy(config, config + RollbackSuffix, overwrite: true); // for SeedWebConfigRollback
             }
             else
             {
@@ -190,15 +192,64 @@ namespace LarisVMS.Installer
                 json = File.ReadAllText(example);
                 // No certificate given: blank the example's placeholders so the server goes straight to
                 // its self-signed fallback instead of trying a share path that doesn't exist.
-                if (string.IsNullOrEmpty(certPath)) json = ReplaceJsonString(json, "Path", "");
-                if (string.IsNullOrEmpty(certPassword)) json = ReplaceJsonString(json, "Password", "");
+                if (string.IsNullOrEmpty(certPath)) json = ReplaceCertValue(json, "Path", "");
+                if (string.IsNullOrEmpty(certPassword)) json = ReplaceCertValue(json, "Password", "");
+                // Same for the example's "Server=." connection string: the setup wizard collects the real
+                // one. Left in, a machine with no local SQL Server spent ~16 s timing out on every
+                // request's setup check (and on startup) instead of showing the wizard.
+                json = ReplaceJsonString(json, "DefaultConnection", "");
             }
 
             json = Regex.Replace(json, "(\"HttpsPort\"\\s*:\\s*)\\d+", m => m.Groups[1].Value + int.Parse(data["HttpsPort"]));
-            if (!string.IsNullOrEmpty(certPath)) json = ReplaceJsonString(json, "Path", certPath);
-            if (!string.IsNullOrEmpty(certPassword)) json = ReplaceJsonString(json, "Password", certPassword);
+            if (!string.IsNullOrEmpty(certPath)) json = ReplaceCertValue(json, "Path", certPath);
+            if (!string.IsNullOrEmpty(certPassword)) json = ReplaceCertValue(json, "Password", certPassword);
 
             File.WriteAllText(config, json, new UTF8Encoding(false));
+            return ActionResult.Success;
+        }
+
+        private const string RollbackSuffix = ".rollback";
+
+        /// <summary>Rollback for SeedWebConfig: the config is written outside the component table, so a
+        /// failed install would otherwise leave it (and the certificate password in it) behind. Deletes
+        /// a file SeedWebConfig created; restores one it edited.</summary>
+        [CustomAction]
+        public static ActionResult SeedWebConfigRollback(Session session)
+        {
+            var data = session.CustomActionData;
+            var config = Path.Combine(data["InstallDir"], "appsettings.Production.json");
+            try
+            {
+                if (data["ConfigExisted"] == "1")
+                {
+                    if (File.Exists(config + RollbackSuffix))
+                    {
+                        File.Copy(config + RollbackSuffix, config, overwrite: true);
+                        File.Delete(config + RollbackSuffix);
+                    }
+                }
+                else if (File.Exists(config))
+                {
+                    File.Delete(config);
+                }
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                session.Log("Could not undo appsettings.Production.json: " + ex.Message);
+            }
+            return ActionResult.Success;
+        }
+
+        /// <summary>Commit for SeedWebConfig: drops the backup so no extra copy of the password stays.</summary>
+        [CustomAction]
+        public static ActionResult SeedWebConfigCommit(Session session)
+        {
+            var config = Path.Combine(session.CustomActionData["InstallDir"], "appsettings.Production.json");
+            try { File.Delete(config + RollbackSuffix); }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                session.Log("Could not delete " + config + RollbackSuffix + ": " + ex.Message);
+            }
             return ActionResult.Success;
         }
 
@@ -239,6 +290,15 @@ namespace LarisVMS.Installer
             using (var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
                 hklm.DeleteSubKeyTree(product.RegistryKey, throwOnMissingSubKey: false);
             return ActionResult.Success;
+        }
+
+        /// <summary>Replaces Path/Password inside the Kestrel certificate block only, so another key of the
+        /// same name elsewhere in an operator's appsettings file is never touched.</summary>
+        private static string ReplaceCertValue(string json, string name, string value)
+        {
+            var block = Util.CertBlock(json);
+            if (block is null) return json;
+            return json.Substring(0, block.Index) + ReplaceJsonString(block.Value, name, value) + json.Substring(block.Index + block.Length);
         }
 
         private static string ReplaceJsonString(string json, string name, string value)

@@ -4,12 +4,14 @@ namespace LarisVMS.Web.Middleware;
 
 /// <summary>
 /// Redirects every request to /Setup until the wizard completes. Caches the "complete" result in a
-/// static volatile bool (frcastr's pattern) so the check stops hitting the database once setup is
+/// volatile bool (frcastr's pattern) so the check stops hitting the database once setup is
 /// done, rather than querying on every request forever (rsolva's version).
 /// </summary>
 public class SetupMiddleware(RequestDelegate next, IServiceScopeFactory scopeFactory)
 {
-    private static volatile bool _setupComplete;
+    // Instance fields are enough: conventional middleware is constructed once per app.
+    private volatile bool _setupComplete;
+    private volatile bool _setupFinalized;
     private const string SetupPendingItem = "LarisVMS.SetupPending";
 
     private static readonly string[] ExemptPrefixes =
@@ -31,6 +33,17 @@ public class SetupMiddleware(RequestDelegate next, IServiceScopeFactory scopeFac
 
     public async Task InvokeAsync(HttpContext context)
     {
+        var path = context.Request.Path.Value ?? string.Empty;
+
+        // Once the wizard has finished against a reachable database, its pages are closed for good:
+        // re-running Database or Branding on a live site would repoint or overwrite it. Cached like
+        // _setupComplete; only /setup requests pay for the check until then.
+        if (path.StartsWith("/setup", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!_setupFinalized && await IsSetupFinalizedAsync()) _setupFinalized = true;
+            if (_setupFinalized) { context.Response.Redirect("/"); return; }
+        }
+
         if (_setupComplete) { await next(context); return; }
 
         if (await IsSetupCompleteAsync())
@@ -40,7 +53,6 @@ public class SetupMiddleware(RequestDelegate next, IServiceScopeFactory scopeFac
             return;
         }
 
-        var path = context.Request.Path.Value ?? string.Empty;
         if (ExemptPrefixes.Any(p => path.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
         {
             context.Items[SetupPendingItem] = true;
@@ -49,6 +61,12 @@ public class SetupMiddleware(RequestDelegate next, IServiceScopeFactory scopeFac
         }
 
         context.Response.Redirect("/Setup");
+    }
+
+    private async Task<bool> IsSetupFinalizedAsync()
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<ISetupService>().IsSetupFinalizedAsync();
     }
 
     private async Task<bool> IsSetupCompleteAsync()

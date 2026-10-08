@@ -72,7 +72,7 @@ else
 @code {
     [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
 
-    private record PluginRow(string Key, string DisplayName, string Version, string Summary, List<string> CameraNames);
+    private sealed record PluginRow(string Key, string DisplayName, string Version, string Summary, List<string> CameraNames);
 
     private List<PluginRow> PluginRows { get; set; } = [];
 

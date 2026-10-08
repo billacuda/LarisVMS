@@ -4,10 +4,12 @@
 @using LarisVMS.Core
 @using LarisVMS.Core.Enums
 @using LarisVMS.Core.Interfaces
+@using LarisVMS.Web.Services
 @inject ISettingsResolver Settings
 @inject ISetupService SetupService
 @inject INodeBuildService NodeBuildService
 @inject IAuditService AuditService
+@inject LarisVMS.Web.Services.ReleaseCheckState ReleaseCheckState
 
 <PageTitle>Node settings - @AppName</PageTitle>
 
@@ -26,6 +28,12 @@
             <div class="form-check mt-1">
                 <InputCheckbox @bind-Value="NodeAutoUpdateEnabled" class="form-check-input" id="NodeAutoUpdateEnabled" />
                 <label class="form-check-label" for="NodeAutoUpdateEnabled">Auto-update nodes and media proxies</label>
+            </div>
+        </SettingField>
+        <SettingField Label="New versions" Hint="Once a day the server checks LarisVMS's GitHub releases and, when a newer version is out, shows a notice in the top bar for people who can change settings. It's the only routine call LarisVMS makes outside your network, and it sends nothing about your install." HelpLink="/Help/installation#updates">
+            <div class="form-check mt-1">
+                <InputCheckbox @bind-Value="ReleaseCheckEnabled" class="form-check-input" id="ReleaseCheckEnabled" />
+                <label class="form-check-label" for="ReleaseCheckEnabled">Check for new LarisVMS versions</label>
             </div>
         </SettingField>
         <SettingField Label="Node builds">
@@ -85,7 +93,8 @@
     [CascadingParameter] private HttpContext? HttpContext { get; set; }
 
     [SupplyParameterFromForm(FormName = "node-settings")] private string? RegistrationKey { get; set; }
-    [SupplyParameterFromForm(FormName = "node-settings")] private bool NodeAutoUpdateEnabled { get; set; } = true;
+    [SupplyParameterFromForm(FormName = "node-settings")] private bool NodeAutoUpdateEnabled { get; set; }
+    [SupplyParameterFromForm(FormName = "node-settings")] private bool ReleaseCheckEnabled { get; set; }
 
     private int PendingBuildCount { get; set; }
     private string? SavedMessage;
@@ -94,9 +103,15 @@
     {
         // Get-or-create rather than a bare read: a deployment whose setup predates the wizard's
         // Node step (or whose Settings row was deleted) would otherwise render an empty field.
+        await NodeBuildService.SupersedeOutdatedPendingAsync();
+        PendingBuildCount = (await NodeBuildService.ListAsync()).Count(b => b.Status == NodeBuildStatus.Pending);
+
+        // Skip the form fields on a POST: the submitted values are already bound, and reloading here
+        // would save the old ones back (see Detection.razor's OnInitializedAsync).
+        if (HttpContext?.Request.HasFormContentType == true) return;
         RegistrationKey = await SetupService.GetOrCreateNodeRegistrationKeyAsync();
         NodeAutoUpdateEnabled = await Settings.GetAsync("NodeAutoUpdate.Enabled", true);
-        PendingBuildCount = (await NodeBuildService.ListAsync()).Count(b => b.Status == NodeBuildStatus.Pending);
+        ReleaseCheckEnabled = await Settings.GetAsync(ReleaseCheckService.EnabledKey, ReleaseCheckService.DefaultEnabled);
     }
 
     private async Task HandleSaveAsync()
@@ -110,17 +125,23 @@
         // itself, since the audit log is readable by anyone with Logs.View.
         var oldRegistrationKey = await Settings.GetRawAsync("Node.RegistrationKey");
         var oldAutoUpdate = await Settings.GetAsync("NodeAutoUpdate.Enabled", true);
+        var oldReleaseCheck = await Settings.GetAsync(ReleaseCheckService.EnabledKey, ReleaseCheckService.DefaultEnabled);
 
         // Blank means "leave unchanged" — the form always submits the current key, so blank only
         // happens if a caller deliberately omits it.
         if (!string.IsNullOrWhiteSpace(RegistrationKey))
             await Settings.SetGlobalAsync("Node.RegistrationKey", RegistrationKey, by);
         await Settings.SetGlobalAsync("NodeAutoUpdate.Enabled", NodeAutoUpdateEnabled.ToString(), by);
+        await Settings.SetGlobalAsync(ReleaseCheckService.EnabledKey, ReleaseCheckEnabled.ToString(), by);
+        // Off: the notice goes at once. Back on: check now rather than at the next daily run.
+        if (!ReleaseCheckEnabled) ReleaseCheckState.Set(null);
+        else if (!oldReleaseCheck) ReleaseCheckState.RequestCheck();
 
         var details = AuditDiff.Build(
             AuditDiff.Secret("Node.RegistrationKey", oldRegistrationKey,
                 string.IsNullOrWhiteSpace(RegistrationKey) ? oldRegistrationKey : RegistrationKey),
-            AuditDiff.Of("NodeAutoUpdate.Enabled", oldAutoUpdate.ToString(), NodeAutoUpdateEnabled.ToString()));
+            AuditDiff.Of("NodeAutoUpdate.Enabled", oldAutoUpdate.ToString(), NodeAutoUpdateEnabled.ToString()),
+            AuditDiff.Of(ReleaseCheckService.EnabledKey, oldReleaseCheck.ToString(), ReleaseCheckEnabled.ToString()));
 
         await AuditService.LogAsync("Settings.Update",
             user.FindFirst(ClaimTypes.NameIdentifier)?.Value, by,

@@ -178,8 +178,8 @@
     private string? CurrentUserName => User.Identity?.Name;
     private string? RemoteIp => HttpContext?.Connection.RemoteIpAddress?.ToString();
 
-    [SupplyParameterFromForm(FormName = "create-user")] private string NewEmail { get; set; } = string.Empty;
-    [SupplyParameterFromForm(FormName = "create-user")] private string NewPassword { get; set; } = string.Empty;
+    [SupplyParameterFromForm(FormName = "create-user")] private string? NewEmail { get; set; }
+    [SupplyParameterFromForm(FormName = "create-user")] private string? NewPassword { get; set; }
     [SupplyParameterFromForm(FormName = "create-user")] private string? NewDisplayName { get; set; }
     [SupplyParameterFromForm(FormName = "create-user")] private List<string>? NewRoleIds { get; set; }
 
@@ -215,7 +215,7 @@
             u.Id,
             u.Email ?? u.UserName ?? u.Id,
             u.DisplayName,
-            IsEnabled(u),
+            IsUserEnabled(u),
             userRoles.Where(ur => ur.UserId == u.Id).Select(ur => roleNamesById.GetValueOrDefault(ur.RoleId, "?")).OrderBy(n => n).ToList(),
             expiries.Where(e => e.UserId == u.Id)
                 .Select(e => new ExpiryRow(e.Id, roleNamesById.GetValueOrDefault(e.RoleId, "?"), e.ExpiresAtUtc))
@@ -225,7 +225,7 @@
 
     private async Task HandleCreateAsync()
     {
-        var email = NewEmail.Trim();
+        var email = (NewEmail ?? "").Trim();
         if (string.IsNullOrEmpty(email))
         {
             ErrorMessage = "Enter an email address.";
@@ -241,7 +241,7 @@
             DisplayName = string.IsNullOrWhiteSpace(NewDisplayName) ? null : NewDisplayName.Trim()
         };
 
-        var result = await UserManagerService.CreateAsync(user, NewPassword);
+        var result = await UserManagerService.CreateAsync(user, NewPassword ?? "");
         if (!result.Succeeded)
         {
             ErrorMessage = string.Join(" ", result.Errors.Select(e => e.Description));
@@ -432,7 +432,7 @@
             return;
         }
 
-        var isEnabled = IsEnabled(user);
+        var isEnabled = IsUserEnabled(user);
         if (isEnabled)
         {
             var roles = await UserManagerService.GetRolesAsync(user);
@@ -486,7 +486,7 @@
         await LoadAsync();
     }
 
-    private static bool IsEnabled(ApplicationUser user) =>
+    private static bool IsUserEnabled(ApplicationUser user) =>
         user.LockoutEnd is null || user.LockoutEnd < DateTimeOffset.UtcNow;
 
     private async Task<bool> IncludesSuperAdminAsync(IEnumerable<string> roleNames)

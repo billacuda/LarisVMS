@@ -5,8 +5,12 @@
     <UI Id="LarisNodeUI">
       <UIRef Id="LarisCommonUI" />
 
-      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="NodeServerDlg" Condition="NOT Installed" />
-      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Condition="Installed AND PATCH" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="NodeServerDlg" Order="1" Condition="NOT Installed AND NOT LARIS_UPGRADE" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Order="2" Condition="Installed AND PATCH" />
+      <!-- Upgrade: settings are already in place, so skip to the first page that needs input (usually none). -->
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="DoAction" Value="ResolveUpgradeRoute" Order="3" Condition="NOT Installed AND LARIS_UPGRADE" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Property="LARIS_ACCOUNT_BACK" Value="WelcomeDlg" Order="4" Condition="NOT Installed AND LARIS_UPGRADE" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="[LARIS_UPGRADE_DLG]" Order="5" Condition="NOT Installed AND LARIS_UPGRADE" />
 
       <Dialog Id="NodeServerDlg" Width="370" Height="270" Title="[ProductName] Setup">
         <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />

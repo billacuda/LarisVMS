@@ -18,6 +18,10 @@ How LarisVMS fits together: the web server, recorder nodes, media proxies and ca
 2. Footage is written as short segment files (see [Recording](/Help/recording)) under the node's storage path.
 3. Live view and playback are served by the node and relayed through this server, a media proxy, or straight to the browser (see [Nodes](/Help/nodes#direct-streaming)).
 
+## Privacy
+
+LarisVMS is self-hosted: your video and settings stay on your own machines, and nothing about your install is collected or shared. There's no telemetry or calling home. The only routine outbound request is a daily check of LarisVMS's GitHub releases for a new version (see [Updates](/Help/installation#updates)); it can be turned off. The other built-in download is a YOLOX AI model from that project's GitHub releases, the first time detection uses one, unless you place the files on the server yourself. Everything else only goes to your cameras, your own servers, and services you set up, such as email and alert channels.
+
 ## Settings inheritance
 
 Most settings exist at three levels. The most specific one wins:

@@ -55,9 +55,9 @@
     [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
     [CascadingParameter] private HttpContext? HttpContext { get; set; }
 
-    [SupplyParameterFromForm(FormName = "log-settings")] private int LogRetentionDays { get; set; } = LogsRetentionService.DefaultRetentionDays;
-    [SupplyParameterFromForm(FormName = "log-settings")] private int AuditLogRetentionDays { get; set; } = AuditLogRetentionService.DefaultRetentionDays;
-    [SupplyParameterFromForm(FormName = "log-settings")] private string LogLevel { get; set; } = "Information";
+    [SupplyParameterFromForm(FormName = "log-settings")] private int LogRetentionDays { get; set; }
+    [SupplyParameterFromForm(FormName = "log-settings")] private int AuditLogRetentionDays { get; set; }
+    [SupplyParameterFromForm(FormName = "log-settings")] private string? LogLevel { get; set; }
 
     private static string[] LogLevelOptions => LogLevels.Selectable;
 
@@ -68,11 +68,15 @@
 
     protected override async Task OnInitializedAsync()
     {
+        LogPath = LogPaths.AppLogsDirectory(Configuration);
+        ConfiguredLogPathOverride = Configuration[LogPaths.ConfigKey];
+
+        // Skip the form fields on a POST: the submitted values are already bound, and reloading here
+        // would save the old ones back (see Detection.razor's OnInitializedAsync).
+        if (HttpContext?.Request.HasFormContentType == true) return;
         LogRetentionDays = await Settings.GetAsync(LogsRetentionService.RetentionDaysKey, LogsRetentionService.DefaultRetentionDays);
         AuditLogRetentionDays = await Settings.GetAsync(AuditLogRetentionService.RetentionDaysKey, AuditLogRetentionService.DefaultRetentionDays);
         LogLevel = await Settings.GetAsync("Logging.Level", "Information");
-        LogPath = LogPaths.AppLogsDirectory(Configuration);
-        ConfiguredLogPathOverride = Configuration[LogPaths.ConfigKey];
     }
 
     private async Task HandleSaveAsync()
@@ -88,7 +92,7 @@
 
         var newLogRetention = Math.Max(0, LogRetentionDays);
         var newAuditRetention = Math.Max(0, AuditLogRetentionDays);
-        var newLogLevel = LogLevels.Selectable.Contains(LogLevel, StringComparer.OrdinalIgnoreCase) ? LogLevel : "Information";
+        var newLogLevel = LogLevel is not null && LogLevels.Selectable.Contains(LogLevel, StringComparer.OrdinalIgnoreCase) ? LogLevel : "Information";
         await Settings.SetGlobalAsync(LogsRetentionService.RetentionDaysKey, newLogRetention.ToString(), by);
         await Settings.SetGlobalAsync(AuditLogRetentionService.RetentionDaysKey, newAuditRetention.ToString(), by);
         await Settings.SetGlobalAsync("Logging.Level", newLogLevel, by);

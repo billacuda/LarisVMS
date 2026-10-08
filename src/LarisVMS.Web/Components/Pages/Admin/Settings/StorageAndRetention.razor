@@ -53,8 +53,8 @@
     [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
     [CascadingParameter] private HttpContext? HttpContext { get; set; }
 
-    [SupplyParameterFromForm(FormName = "storage-retention-settings")] private int RetentionDays { get; set; } = 30;
-    [SupplyParameterFromForm(FormName = "storage-retention-settings")] private int WatermarkPercent { get; set; } = 90;
+    [SupplyParameterFromForm(FormName = "storage-retention-settings")] private int RetentionDays { get; set; }
+    [SupplyParameterFromForm(FormName = "storage-retention-settings")] private int WatermarkPercent { get; set; }
     [SupplyParameterFromForm(FormName = "storage-retention-settings")] private bool ArchiveEnabled { get; set; }
     [SupplyParameterFromForm(FormName = "storage-retention-settings")] private int ArchiveRetentionDays { get; set; }
 
@@ -62,6 +62,9 @@
 
     protected override async Task OnInitializedAsync()
     {
+        // Skip on a form POST: the submitted values are already bound, and reloading here would save
+        // the old ones back (see Detection.razor's OnInitializedAsync).
+        if (HttpContext?.Request.HasFormContentType == true) return;
         RetentionDays = await Settings.GetAsync("Retention.Days", 30);
         WatermarkPercent = await Settings.GetAsync("Storage.WatermarkPercent", 90);
         ArchiveEnabled = await Settings.GetAsync("Archive.Enabled", false);

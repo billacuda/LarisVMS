@@ -22,20 +22,20 @@ public class RoleAssignmentExpirySweepService(IServiceScopeFactory scopeFactory,
 {
     private static readonly TimeSpan TickInterval = TimeSpan.FromMinutes(1);
 
-    protected override async Task ExecuteAsync(CancellationToken ct)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        while (!ct.IsCancellationRequested)
+        while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                await TickAsync(ct);
+                await TickAsync(stoppingToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 logger.LogError(ex, "Role assignment expiry sweep tick failed — will retry on the next tick.");
             }
 
-            try { await Task.Delay(TickInterval, ct); }
+            try { await Task.Delay(TickInterval, stoppingToken); }
             catch (OperationCanceledException) { break; }
         }
     }

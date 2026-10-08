@@ -18,6 +18,8 @@ namespace LarisVMS.Installer
         public static ActionResult DetectExisting(Session session)
         {
             var product = Product.Get(session["LARIS_PRODUCT"]);
+            // Upgrading an existing install: the dialogs are skipped (see ResolveUpgradeRoute).
+            if (!string.IsNullOrEmpty(session["WIX_UPGRADE_DETECTED"])) session["LARIS_UPGRADE"] = "1";
             using (var services = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\" + product.ServiceName))
             {
                 var imagePath = services?.GetValue("ImagePath") as string;
@@ -27,6 +29,7 @@ namespace LarisVMS.Installer
                 if (string.IsNullOrEmpty(session["WIX_UPGRADE_DETECTED"]) && string.IsNullOrEmpty(session["Installed"]))
                 {
                     session["LEGACYINSTALL"] = "1";
+                    session["LARIS_UPGRADE"] = "1";
                     session.Log("Found a script-installed " + product.ServiceName + " service; the MSI will take it over.");
                 }
 
@@ -68,23 +71,88 @@ namespace LarisVMS.Installer
                         FillIfEmpty(session, prop, remembered);
             }
 
-            // The web port lives in appsettings.Production.json; read it so the firewall rule and the
-            // dialog match what the server actually listens on.
-            if (product.Key == "Web" && string.IsNullOrEmpty(session["HTTPSPORT"]) && !string.IsNullOrEmpty(session["INSTALLFOLDER"]))
+            // The web port and certificate live in appsettings.Production.json; read them so the firewall
+            // rule and the dialog match what the server actually uses. INSTALLFOLDER is only known this
+            // early when a service already exists, so a config left from an earlier install (or put
+            // back by hand) is looked for in the default folder too. The certificate password is never
+            // read into a property — the dialog says one is stored, and blank keeps it.
+            if (product.Key == "Web")
             {
-                var config = Path.Combine(session["INSTALLFOLDER"], "appsettings.Production.json");
-                if (File.Exists(config))
+                var folder = !string.IsNullOrEmpty(session["INSTALLFOLDER"])
+                    ? session["INSTALLFOLDER"]
+                    : Path.Combine(session["ProgramFiles64Folder"], "LarisVMS", "Web");
+                var config = Path.Combine(folder, "appsettings.Production.json");
+                string? json = null;
+                try { if (File.Exists(config)) json = File.ReadAllText(config); }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { session.Log("Could not read " + config + ": " + ex.Message); }
+                if (json is not null)
                 {
-                    var m = Regex.Match(File.ReadAllText(config), "\"HttpsPort\"\\s*:\\s*(\\d+)");
-                    if (m.Success) session["HTTPSPORT"] = m.Groups[1].Value;
+                    var port = Regex.Match(json, "\"HttpsPort\"\\s*:\\s*(\\d+)");
+                    if (port.Success) FillIfEmpty(session, "HTTPSPORT", port.Groups[1].Value);
+                    if (Util.CertBlock(json) is { } cert)
+                    {
+                        var certPath = Util.JsonReadString(cert.Value, "Path");
+                        if (!string.IsNullOrEmpty(certPath)) FillIfEmpty(session, "CERTPATH", certPath!);
+                        if (!string.IsNullOrEmpty(Util.JsonReadString(cert.Value, "Password"))) session["CERTPASSWORDSTORED"] = "1";
+                    }
                 }
             }
+
+            // A node's or proxy's direct-streaming endpoint lives in its endpoint JSON, which neither the
+            // service command line nor (for a script install) the registry remembers. Without reading it
+            // here, taking over an existing install deleted the script's "Client Endpoint" firewall rule
+            // (RemoveLegacyInstall) and never recreated it, so browsers couldn't reach the endpoint, and
+            // a proxy fell back to the default port. Read before the defaults below so the real port wins.
+            if (product.Key == "Node" || product.Key == "Proxy")
+                LoadEndpointConfig(session, Path.Combine(Util.ProgramDataLaris,
+                    product.Key == "Node" ? "client-endpoint.json" : "proxy-endpoint.json"), requireEnabled: product.Key == "Node");
 
             foreach (var d in product.Defaults) FillIfEmpty(session, d.Key, d.Value);
 
             if (product.RegistrationFile is not null && File.Exists(Path.Combine(Util.ProgramDataLaris, product.RegistrationFile)))
                 session["ALREADYREGISTERED"] = "1";
+            NormalizePaths(session);
             return ActionResult.Success;
+        }
+
+        /// <summary>Upgrade "Next" handler on the welcome page: the settings are already known, so go
+        /// straight to the first page that still fails validation — normally none, so UpgradeReadyDlg.
+        /// A service running as a password account still lands on ServiceAccountDlg, since the
+        /// upgrade re-creates the service and the password is never stored.</summary>
+        [CustomAction]
+        public static ActionResult ResolveUpgradeRoute(Session session)
+        {
+            NormalizePaths(session);
+            var product = Product.Get(session["LARIS_PRODUCT"]);
+            var pages = product.Key switch
+            {
+                "Web" => new[] { ("Web", "WebSettingsDlg") },
+                "Node" => new[] { ("Server", "NodeServerDlg"), ("Endpoint", "NodeEndpointDlg") },
+                _ => new[] { ("Server", "ProxySettingsDlg"), ("Endpoint", "ProxySettingsDlg") },
+            };
+            var target = "UpgradeReadyDlg";
+            foreach (var (page, dialog) in pages.Concat(new[] { ("Account", "ServiceAccountDlg") }))
+            {
+                var error = Validate(session, page);
+                if (error is null) continue;
+                session.Log("Upgrade: " + page + " page needs input — " + error);
+                target = dialog;
+                break;
+            }
+            session["LARIS_UPGRADE_DLG"] = target;
+            return ActionResult.Success;
+        }
+
+        /// <summary>Strips whitespace and surrounding quotes from path properties, whether typed in a
+        /// dialog or passed on the command line.</summary>
+        private static void NormalizePaths(Session session)
+        {
+            foreach (var prop in new[] { "CERTPATH", "CLIENTPFXPATH", "FFMPEGPATH", "STORAGEROOT", "ARCHIVEROOT" })
+            {
+                var value = session[prop];
+                var clean = Util.CleanPath(value);
+                if (clean != value) session[prop] = clean;
+            }
         }
 
         /// <summary>Mirrors install-node.ps1's Find-Ffmpeg and LarisVMS.Media.FfmpegPathResolver: an
@@ -143,6 +211,7 @@ namespace LarisVMS.Installer
         [CustomAction]
         public static ActionResult ValidateDialog(Session session)
         {
+            NormalizePaths(session);
             var page = session["LARIS_PAGE"];
             var error = Validate(session, page);
             session["SETTINGS_VALID"] = error is null ? "1" : "0";
@@ -155,6 +224,7 @@ namespace LarisVMS.Installer
         [CustomAction]
         public static ActionResult ValidateInstall(Session session)
         {
+            NormalizePaths(session);
             var error = Validate(session, page: null);
             if (error is null) return ActionResult.Success;
 
@@ -190,12 +260,23 @@ namespace LarisVMS.Installer
                         ? "FFmpeg was not found. Install it with 'winget install ffmpeg --scope machine', or set its path (property FFMPEGPATH)."
                         : "FFmpeg was not found at " + session["FFMPEGPATH"] + " (property FFMPEGPATH).";
             }
-            if (All("Web") && product.Key == "Web" && !Util.IsPort(session["HTTPSPORT"]))
-                return "HTTPS port must be a number from 1 to 65535 (property HTTPSPORT).";
+            if (All("Web") && product.Key == "Web")
+            {
+                if (!Util.IsPort(session["HTTPSPORT"])) return "HTTPS port must be a number from 1 to 65535 (property HTTPSPORT).";
+                var existing = string.IsNullOrEmpty(session["INSTALLFOLDER"]) ? null : Path.Combine(session["INSTALLFOLDER"], "appsettings.Production.json");
+                var certError = CheckCertificate(session, "CERTPATH", "CERTPASSWORD", existing, "Path", "Password");
+                if (certError is not null) return certError;
+            }
             if (All("Endpoint") && product.Key == "Proxy" && !Util.IsPort(session["CLIENTPORT"]))
                 return "Client port must be a number from 1 to 65535 (property CLIENTPORT).";
             if (All("Endpoint") && product.Key == "Node" && !string.IsNullOrEmpty(session["CLIENTPORT"]) && !Util.IsPort(session["CLIENTPORT"]))
                 return "Client port must be a number from 1 to 65535 (property CLIENTPORT).";
+            if (All("Endpoint") && (product.Key == "Proxy" || (product.Key == "Node" && !string.IsNullOrEmpty(session["CLIENTPORT"]))))
+            {
+                var existing = Path.Combine(Util.ProgramDataLaris, product.Key == "Node" ? "client-endpoint.json" : "proxy-endpoint.json");
+                var certError = CheckCertificate(session, "CLIENTPFXPATH", "CLIENTPFXPASSWORD", existing, "pfxPath", "pfxPassword");
+                if (certError is not null) return certError;
+            }
             if (All("Account") && Util.NeedsPassword(session["SERVICEACCOUNT"]) && string.IsNullOrEmpty(session["SERVICEPASSWORD"]))
                 return "Enter the password for " + session["SERVICEACCOUNT"] + " (property SERVICEPASSWORD), or leave the account blank to run as LocalSystem.";
             return null;
@@ -270,9 +351,67 @@ namespace LarisVMS.Installer
                 ["HttpsPort"] = session["HTTPSPORT"],
                 ["CertPath"] = session["CERTPATH"],
                 ["CertPassword"] = session["CERTPASSWORD"],
+                // Lets the rollback action tell a file it created (delete it) from one it edited (restore it).
+                ["ConfigExisted"] = !string.IsNullOrEmpty(installDir) && File.Exists(Path.Combine(installDir, "appsettings.Production.json")) ? "1" : "0",
             };
             session["SeedWebConfig"] = web.ToString();
+            var webUndo = new CustomActionData { ["InstallDir"] = installDir, ["ConfigExisted"] = web["ConfigExisted"] };
+            session["SeedWebConfigRollback"] = webUndo.ToString();
+            session["SeedWebConfigCommit"] = webUndo.ToString();
             return ActionResult.Success;
+        }
+
+        /// <summary>Opens the .pfx with the given password. A blank password means "keep the current
+        /// one" (as SeedWebConfig / WriteEndpointConfig do), so the existing config's password is tried;
+        /// and an unchanged path with no new password is left alone — nothing about it is changing, and
+        /// the installing user may not be able to read a share the service account can.</summary>
+        private static string? CheckCertificate(Session session, string pathProp, string passwordProp,
+            string? existingConfig, string existingPathKey, string existingPasswordKey)
+        {
+            var path = session[pathProp];
+            if (string.IsNullOrEmpty(path)) return null;
+            var password = session[passwordProp];
+            if (string.IsNullOrEmpty(password) && existingConfig is not null)
+            {
+                string? json = null;
+                try { if (File.Exists(existingConfig)) json = File.ReadAllText(existingConfig); }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { }
+                if (json is not null)
+                {
+                    // appsettings: only the Kestrel certificate block; the endpoint JSON files are flat.
+                    var scope = existingPathKey == "Path" ? Util.CertBlock(json)?.Value ?? "" : json;
+                    if (string.Equals(Util.CleanPath(Util.JsonReadString(scope, existingPathKey)), path, StringComparison.OrdinalIgnoreCase))
+                        return null;
+                    password = Util.JsonReadString(scope, existingPasswordKey) ?? "";
+                }
+            }
+            return Util.CheckPfx(path, password, pathProp, passwordProp);
+        }
+
+        /// <summary>Fills the CLIENT* properties from an existing endpoint JSON (see LoadSettings). The
+        /// password is never read into a property: WriteEndpointConfig keeps the stored one when the
+        /// field is left blank.</summary>
+        private static void LoadEndpointConfig(Session session, string path, bool requireEnabled)
+        {
+            string json;
+            try
+            {
+                if (!File.Exists(path)) return;
+                json = File.ReadAllText(path);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                session.Log("Could not read " + path + ": " + ex.Message);
+                return;
+            }
+
+            var endpoint = Util.ReadEndpointConfig(json, requireEnabled);
+            if (endpoint is null) return;
+            FillIfEmpty(session, "CLIENTPORT", endpoint.Port);
+            if (endpoint.Host is not null) FillIfEmpty(session, "CLIENTENDPOINTHOST", endpoint.Host);
+            if (endpoint.PfxPath is not null) FillIfEmpty(session, "CLIENTPFXPATH", endpoint.PfxPath);
+            if (endpoint.AllowInsecure) FillIfEmpty(session, "CLIENTALLOWINSECURE", "1");
+            session.Log("Existing endpoint config found at " + path + ": port " + endpoint.Port + ".");
         }
 
         private static void FillIfEmpty(Session session, string property, string value)

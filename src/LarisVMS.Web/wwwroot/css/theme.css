@@ -10,7 +10,8 @@
       pagination, active nav/dropdown/list items, progress bars). Branding's own inline <style>
       block loads after this file, so an admin's chosen color still wins. */
 
-@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&display=swap');
+/* No web-font import: LarisVMS makes no third-party requests (see the README's Privacy section).
+   Archivo is used if it's installed locally; otherwise the system font stack below. */
 
 :root {
     --bs-font-sans-serif: "Archivo", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;

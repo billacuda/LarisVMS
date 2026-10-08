@@ -21,9 +21,9 @@ public class LogsRetentionService(IServiceScopeFactory scopeFactory, IConfigurat
     public const string RetentionDaysKey = "Logs.RetentionDays";
     public const int DefaultRetentionDays = 14;
 
-    protected override async Task ExecuteAsync(CancellationToken ct)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        while (!ct.IsCancellationRequested)
+        while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
@@ -31,7 +31,7 @@ public class LogsRetentionService(IServiceScopeFactory scopeFactory, IConfigurat
                 // is a singleton and can't hold a scoped ISettingsResolver/DbContext across cycles.
                 using var scope = scopeFactory.CreateScope();
                 var settings = scope.ServiceProvider.GetRequiredService<ISettingsResolver>();
-                var days = await settings.GetAsync(RetentionDaysKey, DefaultRetentionDays, ct: ct);
+                var days = await settings.GetAsync(RetentionDaysKey, DefaultRetentionDays, ct: stoppingToken);
                 Sweep(days);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -39,7 +39,7 @@ public class LogsRetentionService(IServiceScopeFactory scopeFactory, IConfigurat
                 logger.LogError(ex, "LogsRetentionService sweep failed — will retry next cycle.");
             }
 
-            try { await Task.Delay(SweepInterval, ct); }
+            try { await Task.Delay(SweepInterval, stoppingToken); }
             catch (OperationCanceledException) { break; }
         }
     }

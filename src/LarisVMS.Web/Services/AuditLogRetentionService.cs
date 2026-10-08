@@ -23,24 +23,24 @@ public class AuditLogRetentionService(IServiceScopeFactory scopeFactory, ILogger
     public const string RetentionDaysKey = "AuditLog.RetentionDays";
     public const int DefaultRetentionDays = 0;
 
-    protected override async Task ExecuteAsync(CancellationToken ct)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        while (!ct.IsCancellationRequested)
+        while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
                 using var scope = scopeFactory.CreateScope();
                 var settings = scope.ServiceProvider.GetRequiredService<ISettingsResolver>();
                 var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-                var days = await settings.GetAsync(RetentionDaysKey, DefaultRetentionDays, ct: ct);
-                await SweepAsync(db, days, ct);
+                var days = await settings.GetAsync(RetentionDaysKey, DefaultRetentionDays, ct: stoppingToken);
+                await SweepAsync(db, days, stoppingToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 logger.LogError(ex, "AuditLogRetentionService sweep failed — will retry next cycle.");
             }
 
-            try { await Task.Delay(SweepInterval, ct); }
+            try { await Task.Delay(SweepInterval, stoppingToken); }
             catch (OperationCanceledException) { break; }
         }
     }

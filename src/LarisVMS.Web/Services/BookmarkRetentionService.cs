@@ -16,22 +16,22 @@ public class BookmarkRetentionService(IServiceScopeFactory scopeFactory, ILogger
 {
     private static readonly TimeSpan SweepInterval = TimeSpan.FromHours(6);
 
-    protected override async Task ExecuteAsync(CancellationToken ct)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        while (!ct.IsCancellationRequested)
+        while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
                 using var scope = scopeFactory.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-                await SweepAsync(db, ct);
+                await SweepAsync(db, stoppingToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 logger.LogError(ex, "BookmarkRetentionService sweep failed — will retry next cycle.");
             }
 
-            try { await Task.Delay(SweepInterval, ct); }
+            try { await Task.Delay(SweepInterval, stoppingToken); }
             catch (OperationCanceledException) { break; }
         }
     }

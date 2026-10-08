@@ -7,7 +7,7 @@ namespace LarisVMS.Web.Health;
 
 public class DbHealthCheck(ApplicationDbContext db, IConfiguration configuration) : IHealthCheck
 {
-    public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken ct = default)
+    public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
     {
         // Pre-setup, there is no connection string yet — that's an expected state, not a failed
         // health check (deploy.ps1's post-deploy probe would otherwise fail on a fresh install
@@ -18,7 +18,7 @@ public class DbHealthCheck(ApplicationDbContext db, IConfiguration configuration
         try
         {
             var conn = db.Database.GetDbConnection();
-            await conn.OpenAsync(ct);
+            await conn.OpenAsync(cancellationToken);
             await conn.CloseAsync();
             return HealthCheckResult.Healthy();
         }

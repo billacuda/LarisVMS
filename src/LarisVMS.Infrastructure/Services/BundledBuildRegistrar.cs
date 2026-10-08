@@ -36,6 +36,18 @@ public class BundledBuildRegistrar(ApplicationDbContext db, ILogger<BundledBuild
         await TryRegisterAsync(Path.Combine(packagesRoot, "proxy"), "LarisVMS.Proxy.exe", "proxy-build-version.txt",
             ProxyPlatform, visionExeName: null, ct);
         TrySeedCudaProvider(Path.Combine(packagesRoot, "cuda-provider", "onnxruntime_providers_cuda.dll"));
+
+        // Each upgrade bundles a newer build; without this, every older one still waiting would stay
+        // in the approval queue next to it.
+        try
+        {
+            var superseded = await NodeBuildService.SupersedeOutdatedPendingAsync(db, ct);
+            if (superseded > 0) logger.LogInformation("Marked {Count} older pending build(s) superseded", superseded);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Could not supersede older pending builds");
+        }
     }
 
     private async Task TryRegisterAsync(string dir, string exeName, string versionFileName, string platform,

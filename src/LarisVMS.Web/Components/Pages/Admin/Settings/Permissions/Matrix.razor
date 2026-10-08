@@ -42,13 +42,13 @@ else
        single shared table can hold every role's own independent submit without nesting <form>
        elements inside table cells. All columns share one FormName ("matrix-save", Bookmarks-style) —
        only the one actually submitted contributes its RoleId/Permissions to any given request. *@
-    @foreach (var col in RoleColumns.Where(c => !c.IsProtected))
+    @foreach (var roleId in RoleColumns.Where(c => !c.IsProtected).Select(c => c.Id))
     {
         @* FormName unique per column — Blazor throws "more than one named submit event with the name
            X" when a loop reuses a shared FormName. Handler reads the raw form directly since
            [SupplyParameterFromForm] needs a compile-time constant FormName. *@
-        <EditForm Model="this" FormName="@($"matrix-save-{col.Id}")" OnValidSubmit="HandleSaveAsync" id="@($"form-{col.Id}")">
-            <input type="hidden" name="RoleId" value="@col.Id" />
+        <EditForm Model="this" FormName="@($"matrix-save-{roleId}")" OnValidSubmit="HandleSaveAsync" id="@($"form-{roleId}")">
+            <input type="hidden" name="RoleId" value="@roleId" />
         </EditForm>
     }
 
@@ -129,7 +129,7 @@ else
     private string? RoleId { get; set; }
     private List<string>? Permissions { get; set; }
 
-    private IReadOnlyList<PermissionCatalog.Entry> Catalog => PermissionCatalog.All;
+    private static IReadOnlyList<PermissionCatalog.Entry> Catalog => PermissionCatalog.All;
     private List<RoleColumn> RoleColumns { get; set; } = [];
     private Dictionary<string, HashSet<(string Resource, string Action)>> GrantedByRoleId { get; set; } = [];
 

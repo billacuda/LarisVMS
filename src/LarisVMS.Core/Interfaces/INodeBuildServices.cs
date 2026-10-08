@@ -24,15 +24,22 @@ public interface INodeBuildService
     /// buildId doesn't exist.</summary>
     Task<NodeBuildVersion?> GetDownloadInfoAsync(Guid buildId, CancellationToken ct = default);
 
-    /// <summary>Moves a Pending build to Approved, making it eligible for GetLatestForPlatformAsync.
-    /// Throws if buildId doesn't exist. A no-op re-stamp (ApprovedAt/ApprovedBy overwritten) if it's
-    /// already Approved — there's no workflow reason to forbid re-approving.</summary>
+    /// <summary>Moves a Pending build to Approved, making it eligible for GetLatestForPlatformAsync,
+    /// then supersedes any older Pending builds of the same platform. Throws if buildId doesn't exist,
+    /// or if the build is Superseded or Rejected. A no-op re-stamp (ApprovedAt/ApprovedBy overwritten)
+    /// if it's already Approved — there's no workflow reason to forbid re-approving.</summary>
     Task<NodeBuildVersion> ApproveAsync(Guid buildId, string approvedBy, CancellationToken ct = default);
 
     /// <summary>Moves a build to Rejected, permanently excluding it from GetLatestForPlatformAsync —
     /// the row (and its file) is kept, not deleted, purely as an audit trail of what was built and
     /// turned down. Throws if buildId doesn't exist.</summary>
     Task<NodeBuildVersion> RejectAsync(Guid buildId, string approvedBy, CancellationToken ct = default);
+
+    /// <summary>Keeps only the newest Pending build per platform awaiting approval, and only while
+    /// it's newer than the newest Approved one; every other Pending build becomes Superseded.
+    /// Returns how many were superseded. Also run automatically after an approval and after the
+    /// bundled builds are registered.</summary>
+    Task<int> SupersedeOutdatedPendingAsync(CancellationToken ct = default);
 }
 
 /// <summary>Registers the node and media-proxy builds shipped inside the web install (its

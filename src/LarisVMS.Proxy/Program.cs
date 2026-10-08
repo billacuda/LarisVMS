@@ -84,6 +84,8 @@ builder.Services.AddSingleton<IHostedService>(sp => new CertWatcherService(
     certHolder, sp.GetRequiredService<ILoggerFactory>().CreateLogger<CertWatcherService>()));
 
 var app = builder.Build();
+// Tidy up after the last auto-update, and say so in this log if it never got applied.
+app.Services.GetRequiredService<ProxyUpdateService>().CheckLastUpdate();
 app.UseWebSockets();
 
 var relayLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Relay");

@@ -6,7 +6,8 @@
 }
 <h1>Recorder node &amp; media proxy builds</h1>
 <p class="text-muted small">
-    New node and proxy builds wait here. Approving one updates every older node on its next check-in.
+    New node and proxy builds wait here. Only the newest build of each kind is offered for approval; older
+    ones move to History as superseded. Approving one updates every older node on its next check-in.
     A node's first AI detection install still needs <code>install-node.ps1</code>. <a href="/Help/nodes#updates">Learn more</a>
 </p>
 
@@ -71,7 +72,7 @@ else
 <h2 class="h5">History</h2>
 @if (decided.Count == 0)
 {
-    <p class="text-muted">No approved or rejected builds yet.</p>
+    <p class="text-muted">No approved, rejected or superseded builds yet.</p>
 }
 else
 {
@@ -84,6 +85,7 @@ else
                     <th>Registered</th>
                     <th data-sort-numeric>Size</th>
                     <th>SHA-256</th>
+                    <th>Vision</th>
                     <th>Status</th>
                     <th>By</th>
                     <th>Notes</th>
@@ -100,13 +102,17 @@ else
                         <td class="font-monospace small">@b.Sha256[..12]&hellip;</td>
                         <td>@(b.VisionFilePath is not null ? "✅" : "—")</td>
                         <td>
-                            @if (b.Status == NodeBuildStatus.Approved)
+                            @switch (b.Status)
                             {
-                                <span class="badge bg-success">Approved</span>
-                            }
-                            else
-                            {
-                                <span class="badge bg-secondary">Rejected</span>
+                                case NodeBuildStatus.Approved:
+                                    <span class="badge bg-success">Approved</span>
+                                    break;
+                                case NodeBuildStatus.Superseded:
+                                    <span class="badge bg-light text-dark border" title="A newer build was registered or approved before this one was">Superseded</span>
+                                    break;
+                                default:
+                                    <span class="badge bg-secondary">Rejected</span>
+                                    break;
                             }
                         </td>
                         <td>@b.ApprovedBy</td>

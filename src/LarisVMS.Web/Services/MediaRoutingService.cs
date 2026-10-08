@@ -48,6 +48,9 @@ public class MediaRoutingService(ISettingsResolver settings, ApplicationDbContex
         return await ResolveDirectAsync(MediaRouteInputs.From(node), ct);
     }
 
+    // Kept for the phase-1 unit tests, which exercise the direct-to-node decision in isolation.
+    public Task<MediaRoute> ResolveAsync(MediaRouteInputs? n, CancellationToken ct = default) => ResolveDirectAsync(n, ct);
+
     public async Task<MediaRoute> ResolveByNodeIdAsync(Guid? nodeId, CancellationToken ct = default)
     {
         if (nodeId is not { } id) return MediaRoute.Proxy;
@@ -109,7 +112,7 @@ public class MediaRoutingService(ISettingsResolver settings, ApplicationDbContex
         if (n is null) return MediaRoute.Proxy;
 
         var mode = !string.IsNullOrWhiteSpace(n.DirectStreamingMode)
-            ? n.DirectStreamingMode!
+            ? n.DirectStreamingMode
             : await settings.GetAsync("LiveView.DirectStreaming", "Proxy", ct: ct);
         if (!string.Equals(mode, "Direct", StringComparison.OrdinalIgnoreCase))
             return MediaRoute.Proxy;
@@ -129,7 +132,4 @@ public class MediaRoutingService(ISettingsResolver settings, ApplicationDbContex
 
         return new MediaRoute(MediaStreamMode.Direct, n.ClientEndpointHost, n.ClientEndpointReportedPort.Value, selfSigned);
     }
-
-    // Kept for the phase-1 unit tests, which exercise the direct-to-node decision in isolation.
-    public Task<MediaRoute> ResolveAsync(MediaRouteInputs? n, CancellationToken ct = default) => ResolveDirectAsync(n, ct);
 }

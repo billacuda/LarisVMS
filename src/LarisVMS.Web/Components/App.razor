@@ -32,6 +32,10 @@
 <body>
     <Routes />
 
+    @* Straight after the content, before the other scripts, so the page's title moves into the top
+       bar before first paint. It also re-runs after each enhanced navigation (see the file). *@
+    <script src="@V("/js/page-title.js")"></script>
+
     <script src="@V("/lib/bootstrap/dist/js/bootstrap.bundle.min.js")"></script>
     <script src="@V("/js/user-preferences.js")"></script>
     <script src="@V("/js/theme.js")"></script>

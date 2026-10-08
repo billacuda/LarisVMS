@@ -8,6 +8,7 @@
 @using LarisVMS.Infrastructure.Data
 @inject IServiceScopeFactory ScopeFactory
 @inject NavigationManager Nav
+@inject LarisVMS.Web.Services.ReleaseCheckState ReleaseCheckState
 
 <HeadContent>
     <title>@_appName</title>
@@ -88,7 +89,14 @@
                     data-bs-target="#lvSidebar" aria-controls="lvSidebar" aria-label="Open navigation">
                 <span aria-hidden="true">☰</span>
             </button>
+            @* Filled from the page's own <h1> by page-title.js (also after each enhanced navigation). *@
+            <div class="lv-topbar-title" id="lvPageTitle"></div>
             <div class="lv-topbar-right ms-auto">
+                @if (_availableRelease is not null)
+                {
+                    <a class="lv-update-notice" href="@_availableRelease.Url" target="_blank" rel="noopener noreferrer"
+                       title="See what's new in @_availableRelease.Version">✨ <span class="d-none d-sm-inline">Version </span>@_availableRelease.Version<span class="d-none d-sm-inline"> is available</span></a>
+                }
                 <button class="lv-darktoggle" id="themeToggle" type="button"
                         onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme"><span id="themeIcon" aria-hidden="true">🌙</span></button>
                 <LoginPartial />
@@ -116,6 +124,7 @@
     private bool _showLive, _showPlayback, _showExports, _showBookmarks, _showSnapshots,
         _showViews, _showCameras, _showNodes, _showLogs, _showSettings, _showPlugins,
         _showAlerts, _showApiKeys, _showSettingsHub;
+    private LarisVMS.Web.Services.AvailableRelease? _availableRelease;
 
     protected override async Task OnInitializedAsync()
     {
@@ -167,6 +176,8 @@
         _showAlerts = nav.Has("Alerts", "Edit");
         _showApiKeys = nav.Has("ApiKeys", "Edit");
         _showSettingsHub = _showSettings || _showPlugins || _showAlerts || _showApiKeys || _showNodes || _showLogs;
+        // New-version notice: only for people who can change settings — nobody else can act on it.
+        _availableRelease = nav.Has("Settings", "Edit") ? ReleaseCheckState.Available : null;
     }
 
     private bool IsActive(string prefix)

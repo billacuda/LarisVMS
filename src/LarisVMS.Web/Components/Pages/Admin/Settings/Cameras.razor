@@ -41,13 +41,16 @@
     [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
     [CascadingParameter] private HttpContext? HttpContext { get; set; }
 
-    [SupplyParameterFromForm(FormName = "camera-settings")] private bool DailyReprobeEnabled { get; set; } = CameraReprobeService.DefaultEnabled;
-    [SupplyParameterFromForm(FormName = "camera-settings")] private string DailyReprobeAtLocalTime { get; set; } = CameraReprobeService.DefaultAtLocalTime;
+    [SupplyParameterFromForm(FormName = "camera-settings")] private bool DailyReprobeEnabled { get; set; }
+    [SupplyParameterFromForm(FormName = "camera-settings")] private string? DailyReprobeAtLocalTime { get; set; }
 
     private string? SavedMessage;
 
     protected override async Task OnInitializedAsync()
     {
+        // Skip on a form POST: the submitted values are already bound, and reloading here would save
+        // the old ones back (see Detection.razor's OnInitializedAsync).
+        if (HttpContext?.Request.HasFormContentType == true) return;
         DailyReprobeEnabled = await Settings.GetAsync(CameraReprobeService.EnabledKey, CameraReprobeService.DefaultEnabled);
         DailyReprobeAtLocalTime = CameraReprobeService
             .ParseTimeOfDay(await Settings.GetRawAsync(CameraReprobeService.AtLocalTimeKey))

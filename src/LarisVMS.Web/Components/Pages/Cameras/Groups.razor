@@ -207,7 +207,7 @@
 @code {
     [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
 
-    [SupplyParameterFromForm(FormName = "create-group")] private string NewName { get; set; } = string.Empty;
+    [SupplyParameterFromForm(FormName = "create-group")] private string? NewName { get; set; }
     [SupplyParameterFromForm(FormName = "create-group")] private Guid? NewParentId { get; set; }
 
     // Read from the raw form, not [SupplyParameterFromForm] — delete-group/remove-camera each have a
@@ -267,7 +267,7 @@
 
     private async Task HandleCreateAsync()
     {
-        await GroupService.CreateAsync(NewName, NewParentId);
+        await GroupService.CreateAsync(NewName ?? "", NewParentId);
         await LoadAsync();
     }
 

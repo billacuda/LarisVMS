@@ -22,10 +22,10 @@ public sealed class DetectionModelDistributor(
 {
     private readonly record struct ModelSource(string FileName, string DefaultUrl);
 
-    // Megvii's own 0.1.1rc0 release ONNX (standard export — single [1,N,85] output, raw box columns;
-    // YoloXDecoder does the grid decode + NMS). yolox_s confirmed working (34 MB, CUDA loads it). The
-    // other five are the same tag — verify each by switching the node's size and watching its log;
-    // override any that 404 via DetectionModels:yolox:<size> config or by seeding the cache dir.
+    // Megvii's own 0.1.1rc0 release ONNX: the standard export, a single 1 x N x 85 output with raw box
+    // columns, and YoloXDecoder does the grid decode and NMS. yolox_s is confirmed working (34 MB, CUDA
+    // loads it). The other five are the same tag; verify each by switching the node's size and watching
+    // its log. Override any that 404 with the DetectionModels:yolox:<size> setting, or seed the cache folder.
     private static readonly Dictionary<string, Dictionary<string, ModelSource>> Sources = new(StringComparer.OrdinalIgnoreCase)
     {
         ["yolox"] = new(StringComparer.OrdinalIgnoreCase)
@@ -43,7 +43,7 @@ public sealed class DetectionModelDistributor(
 
     private string CacheDirectory => Path.Combine(env.ContentRootPath, "detection-models");
 
-    public bool IsKnown(string family, string variant)
+    public static bool IsKnown(string family, string variant)
         => Sources.TryGetValue(family, out var v) && v.ContainsKey(variant);
 
     /// <summary>An open read stream for the model file, or null if the family/variant isn't known.

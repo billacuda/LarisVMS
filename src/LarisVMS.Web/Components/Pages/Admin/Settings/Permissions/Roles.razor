@@ -184,7 +184,7 @@
     private string? CurrentUserName => User.Identity?.Name;
     private string? RemoteIp => HttpContext?.Connection.RemoteIpAddress?.ToString();
 
-    [SupplyParameterFromForm(FormName = "create-role")] private string NewRoleName { get; set; } = string.Empty;
+    [SupplyParameterFromForm(FormName = "create-role")] private string? NewRoleName { get; set; }
 
     // Read from the raw form, not [SupplyParameterFromForm] — save-role/delete-role each have a
     // unique per-row FormName now, which the attribute can't express (it needs a compile-time
@@ -238,7 +238,7 @@
 
     private async Task HandleCreateAsync()
     {
-        var name = NewRoleName.Trim();
+        var name = (NewRoleName ?? "").Trim();
         if (string.IsNullOrEmpty(name))
         {
             ErrorMessage = "Enter a role name.";

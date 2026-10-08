@@ -140,12 +140,62 @@ body {
     padding: 12px 28px;
     gap: 16px;
     border-bottom: 2px solid var(--lv-divider);
+    /* Stays at the top of the window while the page scrolls under it. */
+    position: sticky;
+    top: 0;
+    z-index: 1020;
+    background: var(--lv-bg);
 }
 
 .lv-topbar-right {
     display: flex;
     align-items: center;
     gap: 14px;
+}
+
+/* At lg+ the sidebar stays put too (below lg it's a pop-out drawer). Window scrolling is kept, not a
+   scrolling content pane, so sticky elements inside pages (.lv-savebar), scroll restoration and
+   Live's full-screen keep working. */
+@media (min-width: 992px) {
+    .lv-side {
+        position: sticky;
+        top: 0;
+        height: 100vh;
+        overflow-y: auto;
+        align-self: flex-start;
+    }
+}
+
+/* The page's title, moved here from its <h1> by page-title.js. */
+.lv-topbar-title {
+    flex: 1;
+    min-width: 0;
+    font-size: 1.35rem;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.lv-topbar-title h1 {
+    display: inline;
+    font-size: inherit;
+    font-weight: inherit;
+    margin: 0;
+}
+
+/* "✨ Version X is available" — only rendered for users who can change settings. */
+.lv-update-notice {
+    white-space: nowrap;
+    text-decoration: none;
+    font-weight: 600;
+    padding: 4px 10px;
+    border: 1px solid var(--lv-divider);
+    background: var(--lv-accent-100);
+}
+
+.lv-update-notice:hover {
+    text-decoration: underline;
 }
 
 /* Hidden below sm (see _LoginPartial); truncated above it so a long email can't push the topbar
@@ -188,8 +238,8 @@ body {
         padding: 16px calc(12px + env(safe-area-inset-right)) calc(32px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left));
     }
 
-    .lv-content h1 {
-        font-size: 1.5rem;
+    .lv-topbar-title {
+        font-size: 1.1rem;
     }
 
     /* Long tab rows (Settings has 14) scroll sideways instead of wrapping into a wall of rows. */

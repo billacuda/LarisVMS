@@ -7,7 +7,7 @@ namespace LarisVMS.Web.Pages.Setup;
 // or on Admin -> Nodes), there is no global storage path to collect here anymore.
 public class StorageModel : PageModel
 {
-    public void OnGet() { }
+    public void OnGet() { /* An informational step; nothing to load. */ }
 
     public IActionResult OnPost() => RedirectToPage("Node");
 }

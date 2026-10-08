@@ -49,15 +49,18 @@
     [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
     [CascadingParameter] private HttpContext? HttpContext { get; set; }
 
-    [SupplyParameterFromForm(FormName = "recording-settings")] private string RecordingMode { get; set; } = "Continuous";
-    [SupplyParameterFromForm(FormName = "recording-settings")] private int MotionPreRollSeconds { get; set; } = 10;
-    [SupplyParameterFromForm(FormName = "recording-settings")] private int MotionPostRollSeconds { get; set; } = 30;
-    [SupplyParameterFromForm(FormName = "recording-settings")] private int SegmentSeconds { get; set; } = 60;
+    [SupplyParameterFromForm(FormName = "recording-settings")] private string? RecordingMode { get; set; }
+    [SupplyParameterFromForm(FormName = "recording-settings")] private int MotionPreRollSeconds { get; set; }
+    [SupplyParameterFromForm(FormName = "recording-settings")] private int MotionPostRollSeconds { get; set; }
+    [SupplyParameterFromForm(FormName = "recording-settings")] private int SegmentSeconds { get; set; }
 
     private string? SavedMessage;
 
     protected override async Task OnInitializedAsync()
     {
+        // Skip on a form POST: the submitted values are already bound, and reloading here would save
+        // the old ones back (see Detection.razor's OnInitializedAsync).
+        if (HttpContext?.Request.HasFormContentType == true) return;
         RecordingMode = await Settings.GetAsync("Recording.Mode", "Continuous");
         MotionPreRollSeconds = await Settings.GetAsync("Recording.MotionPreRollSeconds", 10);
         MotionPostRollSeconds = await Settings.GetAsync("Recording.MotionPostRollSeconds", 30);
@@ -81,7 +84,7 @@
         // ends up running.
         SegmentSeconds = Math.Clamp(SegmentSeconds, 5, 300);
 
-        await Settings.SetGlobalAsync("Recording.Mode", RecordingMode, by);
+        await Settings.SetGlobalAsync("Recording.Mode", RecordingMode ?? "Continuous", by);
         await Settings.SetGlobalAsync("Recording.MotionPreRollSeconds", MotionPreRollSeconds.ToString(), by);
         await Settings.SetGlobalAsync("Recording.MotionPostRollSeconds", MotionPostRollSeconds.ToString(), by);
         await Settings.SetGlobalAsync("Recording.SegmentSeconds", SegmentSeconds.ToString(), by);

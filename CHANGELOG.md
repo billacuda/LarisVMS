@@ -7,22 +7,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.215.1] - 2026-10-08
+
+### 🛠️ Fixed
+
+- **Live view and playback stayed on "connecting" after installing a node with the MSI.** Taking over
+  or upgrading an install removed the firewall rule for its direct-streaming endpoint and only made a
+  new one when the port was given again, so browsers couldn't reach the node. The Node and Proxy
+  installers now read the existing endpoint's port and settings and keep the rule; a proxy also no
+  longer falls back to the default port.
+
+## [0.215.0] - 2026-10-07
+
+### ➕ Added
+
+- **New-version notice.** Once a day, and when the service starts, the server checks LarisVMS's
+  GitHub releases; when a newer version is out, people who can change settings see "✨ Version X is
+  available" in the top bar, linking to the release. On by default; turn it off under Settings →
+  Node defaults → New versions.
+
+### ⚙️ Changed
+
+- **The sidebar and top bar stay in place.** Only the page content scrolls, so the logo, menu, theme
+  button and account stay on screen.
+- **Page titles are in the top bar.** Each page's title now shows in the top bar instead of at the top
+  of the page.
+- **ONNX Runtime telemetry is turned off.** The AI detection engine no longer sends usage events
+  through Windows' diagnostic data channel.
+
+### 🛠️ Fixed
+
+- **A web font was requested from Google.** Every page tried to load a font from Google Fonts (blocked
+  by the site's own security policy). The request is gone; the system font is used as before.
+
+## [0.214.0] - 2026-10-07
+
+### ⚙️ Changed
+
+- **Only the newest node and proxy builds await approval.** Older pending builds, and any not newer
+  than what's already approved, move to History as Superseded, including after an approval and for
+  builds registered by deploy.ps1.
+- **Installer upgrades skip the settings pages.** Upgrading an existing install (MSI or script) offers
+  the upgrade directly; a page is shown only if something is missing, such as the service account
+  password.
+- **Certificates are checked in the installer.** The path and password are checked when you click
+  Next, so a wrong password or an unreadable file is reported there instead of when the service starts.
+- **The Web installer reads an existing configuration.** An existing appsettings.Production.json fills
+  in the port and certificate path. A saved certificate password is kept (the field stays blank, with
+  a note) unless a new one is entered.
+- **The setup wizard asks for the database.** A new install no longer writes the example's
+  local-server connection string.
+- **The setup wizard reuses an existing database.** Pointing it at an existing, set-up LarisVMS
+  database uses it as it is (upgraded if needed, nothing seeded or overwritten) and skips the
+  remaining steps. An existing database that isn't a LarisVMS one is refused.
+
+### 🛠️ Fixed
+
+- **Settings pages didn't save.** Saving Branding, Cameras, Events, Live view, Logs, Nodes, Recording,
+  Security, or Storage & retention silently kept the old values.
+- **Auto-update could leave a node or proxy stopped.** Windows reports the service stopped before its
+  process has let go of the exe, so the updater's swap failed and it gave up. The node and proxy now
+  swap in their own binary before stopping and the updater only restarts the service; the updater also
+  waits for the process to exit, retries, and restarts on the previous binary if the swap still fails.
+  An update that never got applied is reported in the node's or proxy's own log on its next start.
+- **A bad certificate crashed the Web service.** A wrong password or path now logs the error and falls
+  back to the self-signed certificate.
+- **The Web service could time out on start**, leaving the installer stuck on "Starting services",
+  when the database was slow or unreachable. Database startup work now runs after the service has
+  started, and connection problems are logged.
+- **The setup wizard stayed reachable on a set-up site**, e.g. after deploying over an existing
+  install, where it could repoint the database or overwrite branding. It now redirects home once setup
+  is complete, and existing sites with users are marked complete at startup.
+- **A failed install left its config behind.** A failed or cancelled Web install no longer leaves
+  appsettings.Production.json (and the certificate password in it); an upgrade's existing file is
+  restored.
+- **Quoted paths are accepted.** Certificate and storage paths with surrounding quotes (as "Copy as
+  path" gives) work.
+- **The install scripts reported the wrong service account.** An upgrade without -ServiceCredential
+  said "Running as LocalSystem" even when the service runs as a service account (which it keeps); the
+  web and node scripts now report the account actually in use.
+
 ## [0.213.1] - 2026-10-04
 
-### Changed
+### ⚙️ Changed
 
 - Zones editor: a note that changes can take up to 30 seconds to take effect on the recorder node.
 
 ## [0.213.0] - 2026-10-04
 
-### Fixed
+### 🛠️ Fixed
 
 - Zones editor: the motion wash trailed moving objects slightly. Motion frames are now stamped with
   their stream arrival time (as live AI frames are), and motion decoding uses low-latency settings.
 
 ## [0.212.0] - 2026-10-04
 
-### Added
+### ➕ Added
 
 - Settings → Events: "Reset all object colors to defaults" button.
 - Dashboard: a card per node with CPU, memory and network load, total recording fps, and (with object
@@ -30,7 +110,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Live and View tiles: drag a box to zoom into it, the same as Playback. While zoomed, a reset button
   shows in the tile's lower right, and right-clicking the video goes back to 1×.
 
-### Changed
+### ⚙️ Changed
 
 - Playback "Now" jumps to the end of the newest recorded footage instead of the current time, which
   usually had nothing playable yet.
@@ -41,7 +121,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Vision:MaxCamerasPerSession` cameras per session (default 1, no sharing). Raising it trades
   per-frame inference latency for lower memory use.
 
-### Fixed
+### 🛠️ Fixed
 
 - Playback drag-to-zoom: after zooming back out (or leaving fullscreen), dragging panned instead of
   selecting a new area. Tiles now keep a single zoom state, and panning stays within the frame.
@@ -77,12 +157,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.211.0] - 2026-10-02
 
-### Added
+### ➕ Added
 
 - Installable as an app on phones: web app manifest (named after Branding), app icons, favicon and a
   minimal service worker (no caching).
 
-### Changed
+### ⚙️ Changed
 
 - Phone layout: the sidebar is an overlay drawer below desktop width instead of squeezing the page,
   shell padding is tighter, the topbar username is hidden on small screens, page headers and toolbars
@@ -90,13 +170,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.210.0] - 2026-10-02
 
-### Added
+### ➕ Added
 
 - MSI installers for the web server, recorder node and media proxy (`build-installers.ps1`). They take
   the same settings as the install scripts on the command line, prompt for anything missing, remember
   settings for upgrades, and take over script-installed machines in place.
 
-### Changed
+### ⚙️ Changed
 
 - The web server applies database migrations itself on startup; upgrades no longer need the repo.
 - The web server is published self-contained, so no ASP.NET Core runtime is needed.
@@ -105,7 +185,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Setup wizard: the database step explains that SQL Server Express needs `.\SQLEXPRESS` as the server
   name, both as a hint and in the error when the server can't be found.
 
-### Fixed
+### 🛠️ Fixed
 
 - Fresh installs: the setup wizard failed with "too many redirects", then an error on every page,
   because settings and Entra sign-in were read from a database that didn't exist yet.
@@ -125,14 +205,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.209.0] - 2026-10-01
 
-### Added
+### ➕ Added
 
 - Help section (left nav, below Settings): documentation for every part of the system, split into
   topics, with "Learn more" links from settings pages.
 - Node edit page (Settings → Nodes → a node). All node settings, grouped into sections, replace the
   inline table editing.
 
-### Changed
+### ⚙️ Changed
 
 - UI cleanup. Settings, node and camera pages use grouped sections with a one-line hint per field
   instead of ℹ️ popovers; long explanations moved to Help. Fields that don't apply to the current
@@ -145,7 +225,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Settings tiles are alphabetical; added a Camera settings tile and renamed the duplicate-sounding
   ones (Logging, Node defaults, Recording defaults, Security).
 
-### Fixed
+### 🛠️ Fixed
 
 - Dashboard's Nodes online only counted nodes that had cameras the user could see. It now counts
   every registered node.
@@ -155,7 +235,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.208.0] - 2026-09-24
 
-### Fixed
+### 🛠️ Fixed
 
 - AI detection stayed dead until a manual node restart after a GPU driver reset. The vision process
   kept running with every camera's inference failing. It now exits after 60s with no successful
@@ -165,7 +245,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.207.0] - 2026-09-22
 
-### Fixed
+### 🛠️ Fixed
 
 - Live view could freeze for tens of seconds and reconnect every tile at once. Caused by node-side
   thread-pool starvation; mitigated by raising the pool's minimum thread count.
@@ -178,7 +258,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the Blazor rewrite of those pages — the page reloaded stored values over the submitted ones
   before the save ran. Fixed; audited the rest of that migration and found no other pages affected.
 
-### Added
+### ➕ Added
 
 - Live-view health telemetry (stream stalls, catch-ups, decode throughput, resyncs, box alignment)
   logged server-side instead of only to the browser console.
@@ -189,13 +269,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.206.0] - 2026-09-18
 
-### Changed
+### ⚙️ Changed
 
 - Migrated the remaining multi-handler-form pages (Cameras/Index, Cameras/Groups, Logs/AuditLogs,
   Admin/Settings/Email, Admin/Settings/Detection, Admin/Nodes, Permissions) from Razor Pages to
   Blazor.
 
-### Fixed
+### 🛠️ Fixed
 
 - Snapshots' and Audit Logs' pagination links could land on the Dashboard instead of the current
   page.
@@ -206,15 +286,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.205.0] - 2026-09-15
 
-### Added
+### ➕ Added
 
 - New Settings hub (`Admin → Settings`) replacing the old Admin nav dropdown and top-level buttons.
 
-### Changed
+### ⚙️ Changed
 
 - Reworked the web UI to a sidebar + topbar shell with new colors/typography over Bootstrap.
 
-### Fixed
+### 🛠️ Fixed
 
 - Several dark-mode/theme bugs: sidebar accent color override, primary-button hover direction,
   missing RGB theme variables, capability badges, Setup wizard dark mode, and fullscreen kiosk mode
@@ -222,12 +302,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.204.0] - 2026-09-15
 
-### Changed
+### ⚙️ Changed
 
 - Web no longer requires IIS — self-hosts Kestrel directly as its own Windows Service, the same way
   the recorder node does. New `install-web.ps1` install/upgrade path.
 
-### Fixed
+### 🛠️ Fixed
 
 - Several issues surfaced by the IIS → Kestrel migration: IPv4-mapped-IPv6 addresses breaking media
   proxying, HTTP/2 WebSocket multiplexing breaking the live detection overlay, a missing example
@@ -235,7 +315,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.203.0] - 2026-09-14
 
-### Fixed
+### 🛠️ Fixed
 
 - Slice-mode detection regressions from the previous release: objects at the true image edge could
   vanish, and a fast detection path could mislabel position. Also fixed a pre-existing bug where a
@@ -243,24 +323,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.202.0] - 2026-09-14
 
-### Fixed
+### 🛠️ Fixed
 
 - Better ONNX model metadata detection. Custom models now work in Slice mode. Fixed duplicate/split
   detections when two tiles disagreed on an object's class.
 
-### Added
+### ➕ Added
 
 - Custom ONNX models can use a faster single-pass detection mode when the model supports it, with
   automatic fallback to the safe per-tile path.
 
 ## [0.201.0] - 2026-09-13
 
-### Changed
+### ⚙️ Changed
 
 - Relicensed from MIT to Apache-2.0, matching sibling project SideGlance's own relicensing, so code
   and patterns can be shared between the two freely.
 
-### Added
+### ➕ Added
 
 - Dashboard shows a spinner while a camera's AI detection engine is still cold-building.
 - Settings changes now reach a running camera pipeline within seconds instead of up to 30.
@@ -272,13 +352,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The external HTTP inference backend can send raw pixels instead of JPEG for lower overhead, and
   reports a per-stage timing breakdown.
 
-### Changed
+### ⚙️ Changed
 
 - External inference traffic now uses its own connection pool, separate from node report traffic.
 - The external backend sends raw JPEG bytes instead of base64-encoded JSON.
 - Detection frame-rate cap (`Detection.MaxFps`) is now per-camera, not just per-node.
 
-### Fixed
+### 🛠️ Fixed
 
 - The external inference model picklist ignored the real input size due to a JSON casing mismatch,
   and its health probe always failed.
@@ -286,7 +366,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.200.0] - 2026-09-11
 
-### Fixed
+### 🛠️ Fixed
 
 - A per-node settings override could be silently lost when saving from a stale page — saving now
   checks the node hasn't changed underneath since the page loaded, and rejects the save instead of
@@ -296,17 +376,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.199.0] - 2026-09-09
 
-### Changed
+### ⚙️ Changed
 
 - Snapshots now shows detections only, not plain motion.
 
-### Fixed
+### 🛠️ Fixed
 
 - An AI detection could be missing from Snapshots if the retired Motion toggle had been unchecked.
 
 ## [0.198.0] - 2026-09-09
 
-### Fixed
+### 🛠️ Fixed
 
 - Live view stuttered and repeatedly caught up compared to smooth recorded playback. The live
   stream flushed a fragment only per keyframe (bursty); it now flushes every ~500ms. The client also
@@ -317,7 +397,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.197.0] - 2026-09-09
 
-### Fixed
+### 🛠️ Fixed
 
 - A fast-moving object could show no live detection box unless "Idle" was also enabled — a
   movement-tracking gap on a briefly missed frame (motion blur, occlusion) wiped its history and
@@ -325,7 +405,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.196.0] - 2026-09-08
 
-### Fixed
+### 🛠️ Fixed
 
 - The storage watermark backstop deleted archive-enabled footage even when the archive volume was
   healthy, and gave up too easily on transient SMB/USB blips. Retries added; the watermark pass now
@@ -333,14 +413,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.195.0] - 2026-09-08
 
-### Changed
+### ⚙️ Changed
 
 - Detection-box jitter rejection is now its own opt-in, per-camera, tunable setting
   (`Detection.RejectMotionJitter`), off by default — it helped some cameras but made a noisier
   model misclassify parked vehicles as moving all night. Snapshot finalization grace period is now
   its own setting too (`Detection.DepartureGraceSeconds`).
 
-### Fixed
+### 🛠️ Fixed
 
 - Motion-span reporting could log duplicate-key errors when a batch reported the same span twice.
 - A recorder node's primary drive could fill to 100% when its archive volume was unreachable — the
@@ -349,7 +429,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.194.0] - 2026-09-08
 
-### Added
+### ➕ Added
 
 - Recording failover — assign a recorder node a backup node; if it goes down, its cameras move to
   the backup for recording and live view until it recovers. The failover decision uses a
@@ -358,18 +438,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.193.0] - 2026-09-07
 
-### Added
+### ➕ Added
 
 - Media proxies now auto-update, the same way recorder nodes do.
 
-### Fixed
+### 🛠️ Fixed
 
 - Enabling archive storage on a node with a large existing footage backlog could stall; reports now
   go out in batches.
 
 ## [0.192.0] - 2026-09-07
 
-### Added
+### ➕ Added
 
 - Media proxy tier — a standalone TLS-terminating relay between browsers and recorder nodes for
   live view and playback, useful when a proxy machine can hold a real certificate but the nodes
@@ -378,19 +458,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.191.0] - 2026-09-06
 
-### Added
+### ➕ Added
 
 - Direct-to-node streaming — live view and playback can connect a browser straight to the recorder
   node instead of relaying through this server. Off by default; falls back safely to the proxy path
   when a node isn't ready.
 
-### Fixed
+### 🛠️ Fixed
 
 - Zooming the timeline in fullscreen also zoomed the video underneath it.
 
 ## [0.190.0] - 2026-09-06
 
-### Added
+### ➕ Added
 
 - Recorder-node check-ins are now replay-hardened (rolling nonce). Bearer-secret rotation support
   (dormant by default). One-shot media tokens (playback, thumbnails, snapshot crops) are now
@@ -398,31 +478,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.189.0] - 2026-09-06
 
-### Fixed
+### 🛠️ Fixed
 
 - Moving people/animals could be misclassified as idle by an overly strict directedness check added
   in 0.188.0; reverted to a simpler centroid-displacement check.
 - The node registration key field on Admin → Settings → Nodes rendered blank instead of masked.
 
-### Changed
+### ⚙️ Changed
 
 - Hover thumbnails and AI snapshot images are now stored as WebP instead of JPEG.
 
 ## [0.188.0] - 2026-09-06
 
-### Changed
+### ⚙️ Changed
 
 - Storage configuration (recording/archive paths) is now per recorder node instead of one global
   setting.
 
-### Added
+### ➕ Added
 
 - Archive storage tier — a node can move aging footage to a secondary volume instead of deleting
   it, with its own retention window; playback and thumbnails work transparently from either volume.
 - Node build numbers, so a rebuild without a version bump still registers as newer for auto-update.
 - Snapshot badges now show object counts (e.g. "Human ×2").
 
-### Fixed
+### 🛠️ Fixed
 
 - A redundant "Person" entry appeared under "Human" in the Snapshots filter tree.
 - A parked vehicle could intermittently register as moving.
@@ -431,90 +511,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.187.2] - 2026-09-05
 
-### Fixed
+### 🛠️ Fixed
 
 - Dragging the recording timeline flashed the video black between positions.
 
-### Changed
+### ⚙️ Changed
 
 - Camera queries that load groups/streams together now run as split queries for performance.
 
 ## [0.187.1] - 2026-09-05
 
-### Fixed
+### 🛠️ Fixed
 
 - A snapshot with several tagged objects now crops around all of them instead of just the
   highest-confidence one.
 
-### Changed
+### ⚙️ Changed
 
 - AI detections of people are now labeled "Human" instead of "Human — person".
 
 ## [0.187.0] - 2026-09-05
 
-### Added
+### ➕ Added
 
 - D-FINE can now run on TensorRT at FP32 (opt-in). FP16 support is wired but not yet selectable —
   no working mixed-precision model export exists yet.
 
-### Changed
+### ⚙️ Changed
 
 - D-FINE is now labeled "experimental"; YOLOX remains the recommended default.
 
 ## [0.186.3] - 2026-09-05
 
-### Changed
+### ⚙️ Changed
 
 - The vision log now identifies cameras by name instead of GUID.
 
 ## [0.186.2] - 2026-09-05
 
-### Fixed
+### 🛠️ Fixed
 
 - On a node with TensorRT enabled, only the first camera in Slice mode worked — every other camera
   failed on every frame due to a TensorRT engine cache collision that didn't account for per-camera
   shape differences. Also fixed misleading "warm cache" logging and excessive per-frame error spam.
 
-### Added
+### ➕ Added
 
 - The vision log now reports a Slice camera's resolved tile geometry and per-slice
   detection/merge counts.
 
 ## [0.186.1] - 2026-09-05
 
-### Fixed
+### 🛠️ Fixed
 
 - Clicking Play on Playback before a camera's stream finished loading could leave it silently
   paused.
 
 ## [0.186.0] - 2026-09-05
 
-### Added
+### ➕ Added
 
 - New "Slice" aspect-fitting option for AI detection — cuts a wide/tall camera's frame into
   overlapping tiles run at full resolution instead of letterboxing and downscaling, to catch small
   or distant objects. Can run entirely on GPU.
 
-### Changed
+### ⚙️ Changed
 
 - Slice mode forces GPU frame preprocessing on for that camera.
 
 ## [0.185.0] - 2026-09-05
 
-### Changed
+### ⚙️ Changed
 
 - Internal groundwork for batched AI inference — no behavior or performance change yet.
 
 ## [0.184.0] - 2026-09-05
 
-### Changed
+### ⚙️ Changed
 
 - AI-detection snapshots now keep upgrading to the clearest view of a moving object instead of
   freezing on its first sighting.
 
 ## [0.183.0] - 2026-09-05
 
-### Removed
+### ➖ Removed
 
 - High-resolution re-detection and high-resolution snapshots — neither worked reliably, and the
   former was the largest CPU cost measured on a busy node. Also removed the vision debug-image
@@ -522,158 +602,158 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.182.0] - 2026-09-04
 
-### Fixed
+### 🛠️ Fixed
 
 - D-FINE on a TensorRT-enabled node produced no detections at all, with nothing in any log
   (FP16 overflow). D-FINE now runs on plain CUDA by default; TensorRT is opt-in per node. Also
   fixed misleading "cold cache" logging.
 
-### Changed
+### ⚙️ Changed
 
 - Camera row actions (Zones, Event tags, Schedule, Re-probe) are now emoji-only buttons with
   tooltips.
 
 ## [0.181.0] - 2026-09-04
 
-### Added
+### ➕ Added
 
 - Snapshot badges now show each AI detection's confidence score.
 
-### Fixed
+### 🛠️ Fixed
 
 - Snapshot badges and card borders now follow the Events settings colors instead of an internal
   auto-assigned color.
 
 ## [0.180.0] - 2026-09-03
 
-### Added
+### ➕ Added
 
 - Live view can label AI detection boxes with their confidence score.
 
-### Changed
+### ⚙️ Changed
 
 - Live-view Moving/Idle detection controls are now switches, saved per account.
 
 ## [0.179.1] - 2026-09-03
 
-### Fixed
+### 🛠️ Fixed
 
 - Enabling TensorRT could stop recording and live view entirely — engine builds ran on the
   recording pipeline's own thread and starved it. Builds now run off that path, one at a time.
   Also fixed overlapping start requests tearing down in-progress builds, and a too-generous
   timeout starving the live detection overlay.
 
-### Changed
+### ⚙️ Changed
 
 - TensorRT's GPU workspace is now bounded instead of unconstrained.
 
 ## [0.179.0] - 2026-09-03
 
-### Added
+### ➕ Added
 
 - One recorder node package now runs on any hardware — picks CUDA, DirectML, or CPU at startup,
   and the CUDA provider library downloads on demand instead of always being bundled.
 
-### Fixed
+### 🛠️ Fixed
 
 - An Intel-iGPU node built for CUDA failed AI detection outright.
 - TensorRT was calling an API newer ONNX Runtime no longer accepts.
 
 ## [0.178.0] - 2026-09-02
 
-### Changed
+### ⚙️ Changed
 
 - Playback timeline bookmark markers now have an outline for legibility over colored backgrounds.
 
 ## [0.177.0] - 2026-09-02
 
-### Added
+### ➕ Added
 
 - The Snapshots filter tree now remembers its collapsed/unchecked state per user.
 
 ## [0.176.0] - 2026-09-02
 
-### Changed
+### ⚙️ Changed
 
 - Snapshot cards are framed more prominently in their badge color(s), including a gradient border
   for cards spanning multiple detection types.
 
 ## [0.175.0] - 2026-09-02
 
-### Fixed
+### 🛠️ Fixed
 
 - Lowering the AI detection confidence below 0.6 had no effect — a separate, fixed tracking
   threshold silently discarded anything under it regardless of the configured confidence.
 
-### Added
+### ➕ Added
 
 - Detection cadence log line now reports what the model found vs. what survived tracking, to
   distinguish "no detection" from "detected but rejected."
 
 ## [0.174.2] - 2026-09-02
 
-### Changed
+### ⚙️ Changed
 
 - AI detection no longer allocates its model input buffer per frame, cutting a major source of GC
   pressure on a busy node.
 
 ## [0.174.1] - 2026-09-02
 
-### Changed
+### ⚙️ Changed
 
 - AI detection no longer allocates two large buffers per frame, cutting GC pressure further. The
   detection cadence line now also reports GC/allocation stats.
 
 ## [0.174.0] - 2026-09-02
 
-### Added
+### ➕ Added
 
 - Per-camera AI detection orientation override, for cameras that advertise the wrong stream shape
   over ONVIF.
 - Per-camera detection cadence log line (frames captured/processed/dropped, inference time).
 
-### Fixed
+### 🛠️ Fixed
 
 - AI detection could restart a camera's watch in a loop after a routine re-probe overwrote a
   resolution correction.
 
 ## [0.173.1] - 2026-09-01
 
-### Security
+### 🔒 Security
 
 - Camera RTSP credentials were being written into node log files via ffmpeg's own output; now
   scrubbed. Rotate existing logs.
 
 ## [0.173.0] - 2026-09-01
 
-### Added
+### ➕ Added
 
 - A medium D-FINE model option, alongside the existing small variants.
 
 ## [0.172.2] - 2026-09-01
 
-### Changed
+### ⚙️ Changed
 
 - Detection span reports are now processed one batch at a time per node, merging conflicts instead
   of dropping them on a race. Hardening only.
 
 ## [0.172.1] - 2026-09-01
 
-### Fixed
+### 🛠️ Fixed
 
 - AI detection could silently stop producing spans/snapshots for a busy camera due to a
   unique-index violation in span coalescing.
 
 ## [0.172.0] - 2026-09-01
 
-### Fixed
+### 🛠️ Fixed
 
 - Portrait/corridor-mounted cameras produced severely stretched AI-detection snapshot crops when
   their watch stream had never been resolution-probed.
 
 ## [0.171.0] - 2026-09-01
 
-### Added
+### ➕ Added
 
 - Detection frame-rate cap setting.
 - YOLOX is now the default detection engine (was D-FINE), with a per-node model-size picker.
@@ -682,13 +762,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Snapshots pagination above the grid as well as below.
 - Optional high-resolution snapshots.
 
-### Fixed
+### 🛠️ Fixed
 
 - AI-detection snapshots are now cropped from the exact detected frame instead of a later
   timestamp seek, and are no longer taken a fraction of a second late.
 - Overlapping detections on one camera now show as a single card.
 
-### Changed
+### ⚙️ Changed
 
 - Node registration key is now masked.
 - Framework log noise is hidden by default.
@@ -697,61 +777,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.170.0] - 2026-08-31
 
-### Changed
+### ⚙️ Changed
 
 - High-resolution re-detection now runs its pixel work on the GPU instead of the CPU, cutting a
   major CPU cost on multi-camera nodes.
 
-### Added
+### ➕ Added
 
 - Deployment-wide log level setting, applied without a restart.
 
 ## [0.169.1] - 2026-08-31
 
-### Changed
+### ⚙️ Changed
 
 - High-res re-detection's keyframe decode now runs on NVDEC where available, cutting CPU load
   further.
 
 ## [0.169.0] - 2026-08-30
 
-### Added
+### ➕ Added
 
 - GPU frame preprocessing option, moving per-frame color conversion/normalization off the CPU.
   Vendor-neutral, off by default.
 
 ## [0.168.0] - 2026-08-30
 
-### Added
+### ➕ Added
 
 - Vision debug images are now a toggle instead of always-on.
 
-### Changed
+### ⚙️ Changed
 
 - Snapshot images are cropped from the exact detection frame when high-res re-detection is
   enabled, with millisecond-precision fallback seeking.
 
-### Fixed
+### 🛠️ Fixed
 
 - Duplicate Snapshots cards for a single object, caused by tracker-ID churn.
 - Camera-native and LarisVMS AI detections of the same object no longer double up in Snapshots.
 
 ## [0.167.3] - 2026-08-30
 
-### Fixed
+### 🛠️ Fixed
 
 - Grid mode's mask/size/sensitivity/active-mode choice never survived a page refresh — a stale
   field projection silently dropped them on read-back (the save itself always worked).
 
 ## [0.167.2] - 2026-08-30
 
-### Added
+### ➕ Added
 
 - Drag-select for the Grid editor's cells instead of one click per cell.
 
 ## [0.167.1] - 2026-08-30
 
-### Changed
+### ⚙️ Changed
 
 - Merged the Grid and Polygon zone editors onto one Zones page.
 - Grid cell edits now require an explicit Save.
@@ -759,21 +839,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.167.0] - 2026-08-30
 
-### Added
+### ➕ Added
 
 - Grid editor UI — live video with a click-to-mask cell grid, size selector, and sensitivity
   slider.
 
 ## [0.166.0] - 2026-08-30
 
-### Added
+### ➕ Added
 
 - Backend for Grid-mode motion detection, an alternative to hand-drawn polygon zones and the
   primary tuning mechanism on nodes without a GPU. Editor UI ships in a later release.
 
 ## [0.165.1] - 2026-08-30
 
-### Fixed
+### 🛠️ Fixed
 
 - Zone Kind serialized as a bare integer instead of its name over the API, breaking zone colors
   and the edit form's Kind selector.
@@ -782,21 +862,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.165.0] - 2026-08-30
 
-### Added
+### ➕ Added
 
 - The Zones editor now shows real live video with each Motion zone washed by its own live motion
   score, instead of a static snapshot with fixed-opacity polygons.
 
 ## [0.164.0] - 2026-08-30
 
-### Added
+### ➕ Added
 
 - High-resolution re-detection's result now actually feeds the snapshot a viewer sees, instead of
   only being logged.
 
 ## [0.163.4] - 2026-08-30
 
-### Fixed
+### 🛠️ Fixed
 
 - Nothing bounded how many high-res re-detection triggers could run at once across cameras,
   risking CPU pegging and duplicate/fragmented snapshots. Now limited to one at a time
@@ -804,33 +884,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.163.3] - 2026-08-30
 
-### Fixed
+### 🛠️ Fixed
 
 - High-res re-detection's debug image dump silently failed to write anything, with no indication
   why (logged below the file logger's minimum level).
 
 ## [0.163.2] - 2026-08-30
 
-### Fixed
+### 🛠️ Fixed
 
 - The node process could crash entirely after an ordinary HTTPS timeout talking to the web tier —
   a cancellation-exception check incorrectly treated a timeout the same as a real shutdown.
 
-### Added
+### ➕ Added
 
 - Temporary diagnostic dump of high-res re-detection's decoded/cropped frames as JPEGs, to
   visually confirm box alignment.
 
 ## [0.163.1] - 2026-08-30
 
-### Fixed
+### 🛠️ Fixed
 
 - Vision Service never had its own log file — its console output was captured at the wrong log
   level and silently dropped before reaching disk.
 
 ## [0.163.0] - 2026-08-30
 
-### Added
+### ➕ Added
 
 - Motion-guided native-scale re-detection — an opt-in pass that re-runs detection at full
   resolution on a newly-moving object's first frame, for better accuracy than the continuous
@@ -838,7 +918,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.162.0] - 2026-08-30
 
-### Added
+### ➕ Added
 
 - Main-stream fragment ring buffer — eager in-memory capture from the high-res stream at detection
   time, replacing lazy after-the-fact segment seeking. Buffers only in this release; nothing
@@ -846,7 +926,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.161.6] - 2026-08-30
 
-### Fixed
+### 🛠️ Fixed
 
 - A few remaining Snapshots cards still 502'd — a segment-duration estimate could be slightly
   inflated, landing past the file's real content. Now retries at offset 0 on failure, same as the
@@ -854,7 +934,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.161.5] - 2026-08-30
 
-### Fixed
+### 🛠️ Fixed
 
 - "No thumbnail available" on some Snapshots cards was concurrency, not data — the capture gate
   allowed only 2 concurrent ffmpeg captures with a 3s timeout, inherited from an unrelated
@@ -863,14 +943,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.161.4] - 2026-08-30
 
-### Added
+### ➕ Added
 
 - Diagnostic logging for "No thumbnail available" cards that don't self-heal — the failure routes
   previously returned a bare error with no explanation.
 
 ## [0.161.3] - 2026-08-30
 
-### Fixed
+### 🛠️ Fixed
 
 - The Snapshots page still timed out after 0.161.2's index — the real cause was an interval-overlap
   query no index can fully seek. The coverage check now runs after pagination, over only the rows
@@ -878,14 +958,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.161.2] - 2026-08-30
 
-### Fixed
+### 🛠️ Fixed
 
 - Attempted fix for Snapshots page timeouts (added an index) — did not fix it; see 0.161.3 for the
   actual cause. Index kept since it helps the real fix.
 
 ## [0.161.1] - 2026-08-30
 
-### Fixed
+### 🛠️ Fixed
 
 - The Snapshots page threw an unhandled exception on every load due to a query EF Core couldn't
   translate to SQL; rewritten to a simpler shape (still timed out under load — fixed in 0.161.2).
@@ -894,7 +974,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.161.0] - 2026-08-29
 
-### Fixed
+### 🛠️ Fixed
 
 - One moving object could produce several snapshots when the detection model's per-frame class
   guess flickered; detections are now arbitrated to one stable label per tracked object.
@@ -905,7 +985,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.160.0] - 2026-08-29
 
-### Changed
+### ⚙️ Changed
 
 - AI detection now fits each camera's own real aspect ratio into the model's square input instead
   of stretching every camera to one fixed global resolution — new Letterbox (default) and Stretch
@@ -913,14 +993,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.159.0] - 2026-08-29
 
-### Changed
+### ⚙️ Changed
 
 - Server-side motion detection now runs on GPU decode where available, cutting a major CPU cost.
   New per-camera toggle to disable it entirely on cameras that don't need the fallback.
 
 ## [0.158.0] - 2026-08-26
 
-### Fixed
+### 🛠️ Fixed
 
 - Vision Service CPU usage went up, not down, after switching to D-FINE, due to unnecessary
   per-frame math.
@@ -937,14 +1017,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Clicking a snapshot deep link could land on a paused tile needing a manual Pause/Play click to
   actually start.
 
-### Changed
+### ⚙️ Changed
 
 - Replaced YOLOv9 with D-FINE as the default AI detection model (licensing).
 - Detection confidence/IoU thresholds and which stream feeds detection are now real, editable
   settings.
 - Unified the "person detected" vocabulary between camera-native and AI detections.
 
-### Added
+### ➕ Added
 
 - AI detection settings tab with a global-default + per-camera-override pattern.
 - Camera list shows which cameras have AI detection enabled and which stream.
@@ -952,7 +1032,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.157.1] - 2026-08-25
 
-### Fixed
+### 🛠️ Fixed
 
 - PowerShell strict-mode bugs in `build-node.ps1`/`install-node.ps1` when exactly one file/process
   matched a query.
@@ -974,7 +1054,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.157.0] - 2026-08-24
 
-### Added
+### ➕ Added
 
 - Native AI object detection — a real-time YOLO/ByteTrack pipeline running per node, independent of
   onboard camera analytics. Runs as a separate sibling process so a bad GPU/driver interaction can't
@@ -987,33 +1067,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.156.1] - 2026-08-23
 
-### Fixed
+### 🛠️ Fixed
 
 - Every page load threw an exception once Entra SSO shipped, due to a DI registration bug and a
   validation edge case in an unconfigured deployment.
 
 ## [0.156.0] - 2026-08-23
 
-### Fixed
+### 🛠️ Fixed
 
 - Some snapshots stalled forever on Play, looping the same recovery attempt; now gives up
   gracefully after repeated failures instead of looping indefinitely.
 
-### Added
+### ➕ Added
 
 - Snapshots search can now filter by camera group or saved view, not just single camera/all.
 - Playback timeline is taller and auto-hides on mobile.
 
 ## [0.155.0] - 2026-08-23
 
-### Fixed
+### 🛠️ Fixed
 
 - Changing an already-recording camera's ONVIF device URI never took effect — it kept recording
   from the old source until deleted and re-added.
 
 ## [0.154.0] - 2026-08-23
 
-### Added
+### ➕ Added
 
 - "Sign in with Microsoft" (Entra ID) — sign-in only, matched against an existing
   admin-provisioned account; no self-registration. New Security settings section; takes effect
@@ -1021,7 +1101,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.153.0] - 2026-08-23
 
-### Changed
+### ⚙️ Changed
 
 - Field-level help text now collapses behind an info icon instead of always showing, across most
   admin/settings pages.

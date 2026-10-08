@@ -12,6 +12,7 @@
     <CustomAction Id="FindFfmpeg" BinaryRef="LarisCA" DllEntry="FindFfmpeg" Execute="immediate" Return="check" />
     <CustomAction Id="ValidateDialog" BinaryRef="LarisCA" DllEntry="ValidateDialog" Execute="immediate" Return="check" />
     <CustomAction Id="ValidateInstall" BinaryRef="LarisCA" DllEntry="ValidateInstall" Execute="immediate" Return="check" />
+    <CustomAction Id="ResolveUpgradeRoute" BinaryRef="LarisCA" DllEntry="ResolveUpgradeRoute" Execute="immediate" Return="check" />
     <CustomAction Id="BuildServiceArgs" BinaryRef="LarisCA" DllEntry="BuildServiceArgs" Execute="immediate" Return="check" HideTarget="yes" />
     <CustomAction Id="PrepareDeferred" BinaryRef="LarisCA" DllEntry="PrepareDeferred" Execute="immediate" Return="check" HideTarget="yes" />
 
@@ -22,6 +23,8 @@
     <CustomAction Id="RemoveCudaDeps" BinaryRef="LarisCA" DllEntry="RemoveCudaDeps" Execute="deferred" Impersonate="no" Return="ignore" />
     <CustomAction Id="WriteEndpointConfig" BinaryRef="LarisCA" DllEntry="WriteEndpointConfig" Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
     <CustomAction Id="SeedWebConfig" BinaryRef="LarisCA" DllEntry="SeedWebConfig" Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
+    <CustomAction Id="SeedWebConfigRollback" BinaryRef="LarisCA" DllEntry="SeedWebConfigRollback" Execute="rollback" Impersonate="no" Return="ignore" />
+    <CustomAction Id="SeedWebConfigCommit" BinaryRef="LarisCA" DllEntry="SeedWebConfigCommit" Execute="commit" Impersonate="no" Return="ignore" />
     <CustomAction Id="SaveSettings" BinaryRef="LarisCA" DllEntry="SaveSettings" Execute="deferred" Impersonate="no" Return="check" />
     <CustomAction Id="SetFailureFlag" BinaryRef="LarisCA" DllEntry="SetFailureFlag" Execute="deferred" Impersonate="no" Return="ignore" />
     <CustomAction Id="ForgetSettings" BinaryRef="LarisCA" DllEntry="ForgetSettings" Execute="deferred" Impersonate="no" Return="ignore" />
@@ -31,8 +34,7 @@
     <Property Id="SERVICEPASSWORD" Secure="yes" Hidden="yes" />
     <Property Id="SERVICEARGS" Secure="yes" Hidden="yes" />
     <Property Id="LEGACYINSTALL" Secure="yes" />
-    <Property Id="ALREADYREGISTERED" Secure="yes" />
-  </Fragment>
+    <Property Id="ALREADYREGISTERED" Secure="yes" />  </Fragment>
 
   <Fragment>
     <UI Id="LarisCommonUI">
@@ -91,6 +93,34 @@
           <Publish Event="DoAction" Value="ValidateDialog" Order="2" />
           <Publish Event="SpawnDialog" Value="SettingsErrorDlg" Order="3" Condition="SETTINGS_VALID&lt;&gt;&quot;1&quot;" />
           <Publish Event="NewDialog" Value="VerifyReadyDlg" Order="4" Condition="SETTINGS_VALID=&quot;1&quot;" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+      </Dialog>
+
+      <!-- Upgrade of an existing install whose settings all validate (ResolveUpgradeRoute): nothing to
+           ask, so offer the upgrade directly. Stock VerifyReadyDlg's Update mode is for patches — on a
+           major upgrade its Install and Update controls would both show. The Upgrade button mirrors
+           VerifyReadyDlg's Install publishes. -->
+      <Dialog Id="UpgradeReadyDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="300" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Ready to upgrade [ProductName]" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="320" Height="15" Transparent="yes" NoPrefix="yes" Text="An existing installation was found." />
+        <Control Id="Text" Type="Text" X="25" Y="70" Width="320" Height="60" NoPrefix="yes"
+                 Text="Click Upgrade to update [ProductName] to version [ProductVersion]. The current settings, certificate and service account are kept. To change a setting, run setup with it on the command line (msiexec /i &lt;msi&gt; PROPERTY=value)." />
+
+        <Control Id="Back" Type="PushButton" X="156" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)">
+          <Publish Event="NewDialog" Value="WelcomeDlg" />
+        </Control>
+        <Control Id="Upgrade" Type="PushButton" X="212" Y="243" Width="80" Height="17" Default="yes" ElevationShield="yes" Text="&amp;Upgrade">
+          <Publish Event="EndDialog" Value="Return" Condition="OutOfDiskSpace &lt;&gt; 1" Order="1" />
+          <Publish Event="SpawnDialog" Value="OutOfRbDiskDlg" Condition="OutOfDiskSpace = 1 AND OutOfNoRbDiskSpace = 0 AND (PROMPTROLLBACKCOST=&quot;P&quot; OR NOT PROMPTROLLBACKCOST)" Order="2" />
+          <Publish Event="EndDialog" Value="Return" Condition="OutOfDiskSpace = 1 AND OutOfNoRbDiskSpace = 0 AND PROMPTROLLBACKCOST=&quot;D&quot;" Order="3" />
+          <Publish Event="EnableRollback" Value="False" Condition="OutOfDiskSpace = 1 AND OutOfNoRbDiskSpace = 0 AND PROMPTROLLBACKCOST=&quot;D&quot;" Order="4" />
+          <Publish Event="SpawnDialog" Value="OutOfDiskDlg" Condition="(OutOfDiskSpace = 1 AND OutOfNoRbDiskSpace = 1) OR (OutOfDiskSpace = 1 AND PROMPTROLLBACKCOST=&quot;F&quot;)" Order="5" />
         </Control>
         <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
           <Publish Event="SpawnDialog" Value="CancelDlg" />

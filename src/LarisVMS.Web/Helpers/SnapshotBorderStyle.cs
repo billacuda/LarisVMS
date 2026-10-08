@@ -104,9 +104,9 @@ public static class SnapshotBorderStyle
             return 0;
 
         double hue;
-        if (max == r)
+        if (r >= g && r >= b)
             hue = ((g - b) / chroma) % 6;
-        else if (max == g)
+        else if (g >= b)
             hue = (b - r) / chroma + 2;
         else
             hue = (r - g) / chroma + 4;

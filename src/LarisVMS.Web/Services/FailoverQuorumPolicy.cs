@@ -51,8 +51,8 @@ public static class FailoverQuorumPolicy
         // FailedOverAway is the only state from which we're looking to come *back*; from Normal (and
         // defensively from HostingFailover — a hosting node that itself goes down must still fail
         // over) we're looking to go *away*.
-        return currentState == NodeFailoverState.FailedOverAway
-            ? (up * 2 > v ? Verdict.FailBack : Verdict.NoChange)
-            : (down * 2 > v ? Verdict.FailOver : Verdict.NoChange);
+        if (currentState == NodeFailoverState.FailedOverAway)
+            return up * 2 > v ? Verdict.FailBack : Verdict.NoChange;
+        return down * 2 > v ? Verdict.FailOver : Verdict.NoChange;
     }
 }

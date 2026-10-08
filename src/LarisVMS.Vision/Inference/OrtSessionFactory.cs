@@ -18,12 +18,30 @@ namespace LarisVMS.Vision.Inference;
 /// </summary>
 public static class OrtSessionFactory
 {
+    private static int _telemetryDisabled;
+
+    /// <summary>ONNX Runtime's Windows builds can send usage events through Windows' diagnostic data
+    /// channel; LarisVMS makes no such calls (see the README's Privacy section), so turn them off.
+    /// Done here — after <see cref="VisionBackendResolver"/> has pointed the loader at the chosen
+    /// backend — rather than at process start, because touching <see cref="OrtEnv"/> loads the native
+    /// library.</summary>
+    private static void DisableTelemetryOnce(ILogger logger)
+    {
+        if (Interlocked.Exchange(ref _telemetryDisabled, 1) == 1) return;
+        try { OrtEnv.Instance().DisableTelemetryEvents(); }
+        catch (Exception ex) when (ex is OnnxRuntimeException or DllNotFoundException or EntryPointNotFoundException)
+        {
+            logger.LogDebug(ex, "Could not turn off ONNX Runtime telemetry events.");
+        }
+    }
+
     public static SessionOptions Create(EngineOptions options, ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
         var backend = VisionBackendResolver.Backend;
+        DisableTelemetryOnce(logger);
 
         try
         {

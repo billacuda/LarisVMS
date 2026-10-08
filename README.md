@@ -8,7 +8,7 @@ and administration all run in the browser, on desktop, tablet and phone.
   <a href="https://www.buymeacoffee.com/billacuda"><img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=%E2%98%95&slug=billacuda&button_colour=5F7FFF&font_colour=ffffff&font_family=Cookie&outline_colour=000000&coffee_colour=FFDD00" alt="Buy me a coffee" height="50" /></a>
 </p>
 
-**Current version: [0.213.1](CHANGELOG.md)**
+**Current version: [0.215.1](CHANGELOG.md)**
 
 > **A note on AI-assisted development.** This project is built with the help of AI tooling (Claude
 > Code). Features are planned in detail before implementation, generated code is reviewed as it's
@@ -77,6 +77,7 @@ Settings are inherited **global → node → camera**, and the most specific val
 
 - **Operating system:** any 64-bit Windows version supported by [.NET 10](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md), for both the server and the recorder nodes.
 - **Server:** SQL Server (Express works) using SQL or Integrated authentication. For SQL Server Express, the server name is `.\SQLEXPRESS`. Building from source also needs the [.NET 10 SDK](https://dotnet.microsoft.com/download); the MSIs don't need any .NET runtime.
+- **.NET version:** developed with the .NET SDK 10.0.401. The 0.215.1 installers were built with it and include the .NET 10.0.12 runtime (ASP.NET Core 10.0.12).
 - **Each recorder node:** [FFmpeg](https://ffmpeg.org/) (`winget install ffmpeg --scope machine`).
 - **LarisVision (optional):** a GPU and its driver, or CPU only. NVIDIA additionally needs CUDA Toolkit 12.x and cuDNN 9.x (see [LarisVision](#larisvision-ai-detection)) if you want to use CUDA or TensorRT acceleration, otherwise DirectML works out of the box.
 - **Cameras:** ONVIF Profile S or T.
@@ -127,15 +128,15 @@ Double-click an installer to be prompted for its settings, or pass them on the c
 ### 1. Install the web server
 
 ```powershell
-msiexec /i LarisVMS-Web-0.213.1-x64.msi
+msiexec /i LarisVMS-Web-0.215.1-x64.msi
 # silent, with a certificate:
-msiexec /i LarisVMS-Web-0.213.1-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx CERTPASSWORD=secret /qn
+msiexec /i LarisVMS-Web-0.215.1-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx CERTPASSWORD=secret /qn
 ```
 
 | Property | Default | Purpose |
 |---|---|---|
 | `HTTPSPORT` | 8444 | HTTPS port, plus its firewall rule. |
-| `CERTPATH`, `CERTPASSWORD` | blank | Server certificate (`.pfx`). Blank uses a self-signed certificate; a renewed file at the same path is picked up automatically. A certificate your devices trust is also needed to install LarisVMS as a phone app. |
+| `CERTPATH`, `CERTPASSWORD` | blank | Server certificate (`.pfx`). Blank uses a self-signed certificate; a renewed file at the same path is picked up automatically. The installer checks that the file opens with the password before it continues. A file share must be readable by the service account. A certificate your devices trust is also needed to install LarisVMS as a phone app. |
 | `SERVICEACCOUNT`, `SERVICEPASSWORD` | LocalSystem | Service account, for example one with SQL Integrated Security rights. |
 | `INSTALLFOLDER` | `C:\Program Files\LarisVMS\Web` | Install location. |
 
@@ -143,12 +144,14 @@ msiexec /i LarisVMS-Web-0.213.1-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx
 
 Browse to `https://<server>:8444/`. The wizard sets up the database connection, the first admin account and the branding, and shows the **node registration key**. You can find the key again later under **Settings → Node defaults**.
 
+Pointing the wizard at an existing LarisVMS database, for example when reinstalling, uses that database as it is: it's upgraded if needed, nothing is seeded or overwritten, and the wizard's remaining steps are skipped. A database that isn't a LarisVMS one is refused. Once setup is complete, the wizard is closed.
+
 ### 3. Install recorder nodes
 
 Install [FFmpeg](https://ffmpeg.org/) on each recording machine first (`winget install ffmpeg --scope machine`), then:
 
 ```powershell
-msiexec /i LarisVMS-Node-0.213.1-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> STORAGEROOT=D:\Recordings /qn
+msiexec /i LarisVMS-Node-0.215.1-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> STORAGEROOT=D:\Recordings /qn
 ```
 
 | Property | Default | Purpose |
@@ -168,7 +171,7 @@ The node registers itself and appears under **Settings → Nodes**.
 ### 4. Install media proxies (optional)
 
 ```powershell
-msiexec /i LarisVMS-Proxy-0.213.1-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> CLIENTPORT=4443 /qn
+msiexec /i LarisVMS-Proxy-0.215.1-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> CLIENTPORT=4443 /qn
 ```
 
 Properties: `SERVERURL`, `REGISTRATIONKEY`, `CLIENTPORT` (default 4443), `CLIENTENDPOINTHOST`, `CLIENTPFXPATH`, `CLIENTPFXPASSWORD`, `CLIENTALLOWINSECURE`, `INSECURETLS`, `SERVICEACCOUNT`, `SERVICEPASSWORD`, `INSTALLFOLDER`, with the same meanings as for the node.
@@ -183,11 +186,11 @@ Open the same address in your phone's browser. To install it as an app, choose *
 
 ## Upgrading
 
-Run the new version's MSI. Its settings are remembered from the previous install, so no properties are needed; secrets aren't stored, so a custom service account's password is asked for again. The web app applies database migrations itself when it starts. Upgrades never touch recordings, `appsettings.Production.json`, `setup-generated.json`, node registration or the data-protection keys.
+Run the new version's MSI. It finds the existing install and offers the upgrade straight away, without the settings pages: its settings are remembered, so no properties are needed. Secrets aren't stored, so a service running as a domain account asks for that password again. The web app applies database migrations itself when it starts. Upgrades never touch recordings, `appsettings.Production.json`, `setup-generated.json`, node registration or the data-protection keys. If an install fails, it's rolled back, including any change it made to `appsettings.Production.json`.
 
-An installation made with the PowerShell scripts is upgraded the same way: the MSI takes over the existing service and keeps its settings and registration.
+An installation made with the PowerShell scripts is upgraded the same way: the MSI takes over the existing service and keeps its settings and registration, including a node's or proxy's direct-streaming endpoint and its firewall rule.
 
-Recorder nodes and media proxies also **update themselves**. A new web install registers the node and proxy builds it carries as *Pending* under **Settings → Node builds**. Once you approve one, every older node downloads it, verifies its SHA-256 and installs it on its next check-in. You can turn this off under **Settings → Node defaults**.
+Recorder nodes and media proxies also **update themselves**. A new web install registers the node and proxy builds it carries as *Pending* under **Settings → Node builds**. Only the newest node build and the newest proxy build wait for approval; older ones move to History as *Superseded*. Once you approve one, every older node downloads it, verifies its SHA-256 and installs it on its next check-in. You can turn this off under **Settings → Node defaults**.
 
 Uninstalling removes the program, its service and firewall rules. Recordings, configuration and everything under `%ProgramData%\LarisVMS` are kept.
 
@@ -250,6 +253,24 @@ sending every frame; higher rates add GPU load without improving results.
 - **Secret handling.** Secrets are write-only in the UI, and the audit log records that a secret
   changed but never its value.
 
+## Privacy
+
+LarisVMS is self-hosted and private by design. Your video, recordings and settings stay on your own
+machines, and you own them: nobody else can see them.
+
+- **No telemetry, no calling home.** There's no analytics, usage tracking, crash reporting or
+  account, and nothing about your install is collected or shared.
+- **One routine outbound check.** Once a day the server asks GitHub whether a newer LarisVMS release
+  is out, and shows a notice in the top bar when there is one. It's a plain request for the public
+  releases list that sends nothing about your install. Turn it off under **Settings → Node defaults →
+  New versions**.
+- **One other download.** The first time AI detection uses a built-in YOLOX model, the server
+  downloads it from the YOLOX project's GitHub releases. Place the model files on the server yourself
+  to avoid it.
+- **Everything else stays local.** Otherwise LarisVMS only talks to your cameras, your own server,
+  nodes and proxies, and services you set up yourself, such as email, alert channels and Entra ID
+  sign-in.
+
 ## Documentation
 
 - **In-app Help:** the **Help** item in the sidebar documents every feature and setting, including
@@ -257,6 +278,8 @@ sending every frame; higher rates add GPU load without improving results.
 - **[CHANGELOG.md](CHANGELOG.md):** release notes. Older releases are in [`changelog-archive/`](changelog-archive/).
 
 ## Building from source
+
+Developed and built with the .NET SDK 10.0.401 (`dotnet --version`). Any later 10.0 SDK should work; there's no `global.json` pinning one.
 
 ```powershell
 dotnet tool restore
@@ -270,7 +293,7 @@ Add a database migration with:
 dotnet ef migrations add <Name> --project src\LarisVMS.Infrastructure --startup-project src\LarisVMS.Web
 ```
 
-Release installers are built with `.uild-installers.ps1` (WiX v5, restored from NuGet).
+Release installers are built with `.\build-installers.ps1` (WiX v5, restored from NuGet).
 
 A release needs the same version in every project's `<Version>` (Web, Node, NodeUpdater, Proxy,
 Core), a `BumpVersionX_Y_Z` migration that inserts into `AppVersions`, and a matching `CHANGELOG.md`

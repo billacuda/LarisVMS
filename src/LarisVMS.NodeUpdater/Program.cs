@@ -11,7 +11,10 @@
 // Steps:
 //   1. Wait until the service reaches Stopped state (max 60s) — LarisVMS.Node.exe holds its own file
 //      open while running, so the swap below can't happen until the SCM has actually released it.
-//   2. Back up the current binary, move the new one over it (UpdaterLogic.TrySwapBinary).
+//   2. Back up the current binary, move the new one over it (UpdaterLogic.TrySwapBinary), retrying
+//      while the stopped process is still releasing it. Current nodes and proxies swap their own
+//      binary before stopping (LarisVMS.Core.Update.InPlaceBinarySwap) and launch this with
+//      --restart-only, so this step is only the fallback when that rename fails.
 //   3. Start the service again (with a few retries — see StartServiceWithRetries) and re-apply the
 //      same failure-recovery config install-node.ps1 sets at install time — a raw binary swap doesn't
 //      touch service configuration, but re-applying here is cheap insurance against a service that
@@ -35,6 +38,9 @@ const int MaxWaitSeconds = 60;
 // in this process's own control flow ever retried the start step — it was exactly one shot.
 const int MaxStartAttempts = 5;
 const int StartRetryDelaySeconds = 10;
+// After the process has exited, a security product can still hold the exe briefly.
+const int MaxSwapAttempts = 10;
+const int SwapRetryDelaySeconds = 3;
 
 var logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "logs");
 
@@ -85,20 +91,38 @@ Log("INFO", "Service stopped.");
 
 // ── Swap binary ────────────────────────────────────────────────────────────
 
+// The SCM reports Stopped before the service's process has actually exited, so its exe can still be
+// locked for a moment ("Access to the path is denied"). Wait for the process itself, then retry the
+// swap for a while before giving up on it.
+var swapFailed = false;
 if (parsed.RestartOnly)
 {
     Log("INFO", "Restart-only mode — skipping binary swap.");
 }
-else if (!UpdaterLogic.TrySwapBinary(parsed.NewBinary!, parsed.CurrentBinary!, out var swapError))
-{
-    Log("ERROR", $"Failed to swap binary: {swapError}. The service is left stopped on its previous binary " +
-        "(a '.bak' may be sitting next to it — see TrySwapBinary's own comment on why it's not auto-restored) " +
-        "and was never restarted.");
-    return 1;
-}
 else
 {
-    Log("INFO", $"Binary swapped: {parsed.NewBinary} -> {parsed.CurrentBinary}");
+    await WaitForProcessExitAsync(Path.GetFileNameWithoutExtension(parsed.CurrentBinary!));
+
+    string? swapError = null;
+    var swapped = false;
+    for (var attempt = 1; attempt <= MaxSwapAttempts && !swapped; attempt++)
+    {
+        swapped = UpdaterLogic.TrySwapBinary(parsed.NewBinary!, parsed.CurrentBinary!, out swapError);
+        if (!swapped && attempt < MaxSwapAttempts) await Task.Delay(TimeSpan.FromSeconds(SwapRetryDelaySeconds));
+    }
+
+    if (swapped)
+    {
+        Log("INFO", $"Binary swapped: {parsed.NewBinary} -> {parsed.CurrentBinary}");
+    }
+    else
+    {
+        // Start it again on the previous binary rather than leaving a recorder down; the next update
+        // offer tries again.
+        swapFailed = true;
+        Log("ERROR", $"Failed to swap binary after {MaxSwapAttempts} attempts: {swapError}. Starting the service " +
+            "again on its previous binary (a '.bak' may be sitting next to it).");
+    }
 }
 
 // Object detection plan follow-up: optional second swap, only attempted when UpdateService staged
@@ -120,7 +144,7 @@ else
 // there's no separate "wait for it to stop" step needed here — NodeWorker's own shutdown
 // (VisionServiceSupervisor.Stop, with its own bounded wait for the process to actually exit) already
 // ran to completion before the Node service itself could report Stopped above.
-if (!parsed.RestartOnly && parsed.NewVisionBinary is not null && parsed.CurrentVisionBinary is not null)
+if (!parsed.RestartOnly && !swapFailed && parsed.NewVisionBinary is not null && parsed.CurrentVisionBinary is not null)
 {
     if (!File.Exists(parsed.CurrentVisionBinary))
     {
@@ -160,7 +184,27 @@ catch (Exception ex) { Log("WARN", $"Could not re-apply service failure-recovery
 try { RunCommand("sc.exe", $"failureflag {parsed.ServiceName} 1"); }
 catch (Exception ex) { Log("WARN", $"Could not re-apply service failureflag: {ex.Message}"); }
 
-return 0;
+return swapFailed ? 1 : 0;
+
+// ── Wait for the stopped service's process to actually exit ───────────────────────────────────
+
+async Task WaitForProcessExitAsync(string processName)
+{
+    var deadline = DateTime.UtcNow.AddSeconds(MaxWaitSeconds);
+    foreach (var process in Process.GetProcessesByName(processName))
+    {
+        using (process)
+        {
+            var remaining = deadline - DateTime.UtcNow;
+            if (remaining <= TimeSpan.Zero) break;
+            Log("INFO", $"Waiting for {processName} (PID {process.Id}) to exit...");
+            using var cts = new CancellationTokenSource(remaining);
+            try { await process.WaitForExitAsync(cts.Token); }
+            catch (OperationCanceledException) { Log("WARN", $"{processName} (PID {process.Id}) is still running; trying the swap anyway."); }
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { /* exited or inaccessible */ }
+        }
+    }
+}
 
 // ── Start-with-retries (the one step that used to be single-shot) ──────────────────────────────
 

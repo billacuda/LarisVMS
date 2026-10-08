@@ -38,6 +38,17 @@ public class SetupService(
         catch { return false; }
     }
 
+    public async Task<bool> IsSetupFinalizedAsync(CancellationToken ct = default)
+    {
+        if (!await IsDatabaseConfiguredAsync(ct)) return false;
+        try
+        {
+            var flag = await db.Settings.AsNoTracking().FirstOrDefaultAsync(s => s.Key == "Setup.IsComplete", ct);
+            return flag?.Value == "true";
+        }
+        catch { return false; }
+    }
+
     public async Task<bool> IsDatabaseConfiguredAsync(CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(configuration.GetConnectionString("DefaultConnection")))
@@ -58,7 +69,7 @@ public class SetupService(
         catch { return false; }
     }
 
-    public async Task SetupDatabaseAsync(string serverName, string databaseName, string? username, string? password,
+    public async Task<bool> SetupDatabaseAsync(string serverName, string databaseName, string? username, string? password,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(serverName) || string.IsNullOrWhiteSpace(databaseName))
@@ -66,15 +77,16 @@ public class SetupService(
         ValidateSqlIdentifier(databaseName, nameof(databaseName));
 
         var masterCs = BuildConnectionString(serverName, "master", username, password);
+        bool existed;
 
         using (var connection = new SqlConnection(masterCs))
         {
             await connection.OpenAsync(ct);
             using var command = connection.CreateCommand();
             command.CommandText = $"SELECT COUNT(*) FROM sys.databases WHERE name = N'{EscapeSqlLiteral(databaseName)}'";
-            var exists = (int?)await command.ExecuteScalarAsync(ct) ?? 0;
+            existed = ((int?)await command.ExecuteScalarAsync(ct) ?? 0) > 0;
 
-            if (exists == 0)
+            if (!existed)
             {
                 using var createCmd = connection.CreateCommand();
                 createCmd.CommandText = $"CREATE DATABASE [{EscapeSqlIdentifier(databaseName)}] COLLATE Latin1_General_100_CI_AS_SC_UTF8";
@@ -83,14 +95,54 @@ public class SetupService(
         }
 
         var appCs = BuildConnectionString(serverName, databaseName, username, password);
+        var migrateOptions = new DbContextOptionsBuilder<ApplicationDbContext>().UseSqlServer(appCs).Options;
+        using var migrateCtx = new ApplicationDbContext(migrateOptions);
+
+        // An existing database is used as-is when it's a LarisVMS one (an earlier install, or a
+        // reinstall pointed back at its old database) — migrated forward below, never re-seeded — and
+        // refused when it holds anything else, before its connection string is saved anywhere.
+        var adopted = existed && await IsLarisDatabaseAsync(migrateCtx, databaseName, ct);
+
         configuration["ConnectionStrings:DefaultConnection"] = appCs;
         MergeSetupJson(cfg => cfg["ConnectionStrings"] = new JsonObject { ["DefaultConnection"] = appCs });
 
-        var migrateOptions = new DbContextOptionsBuilder<ApplicationDbContext>().UseSqlServer(appCs).Options;
-        using var migrateCtx = new ApplicationDbContext(migrateOptions);
         await migrateCtx.Database.MigrateAsync(ct);
 
         await GrantServiceAccountAsync(serverName, databaseName, username, password, ct);
+        if (!adopted) return false;
+
+        // Same test as IsSetupCompleteAsync, but against the database just connected — this request's
+        // injected context was built before the connection string existed. A LarisVMS database with no
+        // users yet carries on through the wizard; one that's already set up gets the flag (an install
+        // interrupted before the Review step never set it) and skips the remaining steps.
+        var flag = await migrateCtx.Settings.FirstOrDefaultAsync(s => s.Key == "Setup.IsComplete", ct);
+        if (flag?.Value != "true" && !await migrateCtx.Users.AnyAsync(ct)) return false;
+        await UpsertSettingAsync(migrateCtx, "Setup.IsComplete", "true", "Set once the setup wizard completes.", ct);
+        return true;
+    }
+
+    /// <summary>True when the database already holds LarisVMS migrations; false when it's empty;
+    /// throws when it has tables of its own but none of ours — migrating into it would mix schemas.</summary>
+    private static async Task<bool> IsLarisDatabaseAsync(ApplicationDbContext ctx, string databaseName, CancellationToken ct)
+    {
+        var connection = ctx.Database.GetDbConnection();
+        await connection.OpenAsync(ct);
+        try
+        {
+            using var tables = connection.CreateCommand();
+            tables.CommandText = "SELECT COUNT(*) FROM sys.tables WHERE is_ms_shipped = 0";
+            if ((int)(await tables.ExecuteScalarAsync(ct) ?? 0) == 0) return false;
+
+            var applied = (await ctx.Database.GetAppliedMigrationsAsync(ct)).ToHashSet(StringComparer.Ordinal);
+            if (ctx.Database.GetMigrations().Any(applied.Contains)) return true;
+
+            throw new InvalidOperationException(
+                $"The database '{databaseName}' already exists and contains tables that aren't from LarisVMS. Choose a different database name.");
+        }
+        finally
+        {
+            await connection.CloseAsync();
+        }
     }
 
     public async Task CompleteSetupAsync(string adminEmail, string adminPassword, CancellationToken ct = default)
@@ -222,9 +274,12 @@ public class SetupService(
         await db.SaveChangesAsync(ct);
     }
 
-    private async Task UpsertSettingAsync(string key, string value, string description, CancellationToken ct)
+    private Task UpsertSettingAsync(string key, string value, string description, CancellationToken ct) =>
+        UpsertSettingAsync(db, key, value, description, ct);
+
+    private static async Task UpsertSettingAsync(ApplicationDbContext target, string key, string value, string description, CancellationToken ct)
     {
-        var existing = await db.Settings.FirstOrDefaultAsync(s => s.Key == key, ct);
+        var existing = await target.Settings.FirstOrDefaultAsync(s => s.Key == key, ct);
         if (existing is not null)
         {
             existing.Value = value;
@@ -233,7 +288,7 @@ public class SetupService(
         }
         else
         {
-            db.Settings.Add(new Setting
+            target.Settings.Add(new Setting
             {
                 Id = Guid.NewGuid(),
                 Key = key,
@@ -245,7 +300,7 @@ public class SetupService(
                 LastModifiedBy = "system"
             });
         }
-        await db.SaveChangesAsync(ct);
+        await target.SaveChangesAsync(ct);
     }
 
     private async Task GrantServiceAccountAsync(string serverName, string databaseName, string? username, string? password,

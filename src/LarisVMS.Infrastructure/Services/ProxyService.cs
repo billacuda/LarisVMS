@@ -1,6 +1,5 @@
 using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging;
 using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
@@ -16,7 +15,7 @@ namespace LarisVMS.Infrastructure.Services;
 /// plus the phase-5a rolling check-in nonce. A proxy holds no per-node secret and no camera
 /// credentials, so there is no MediaSigningKey to hand out and (this pass) no secret rotation.
 /// </summary>
-public class ProxyService(ApplicationDbContext db, ISettingsResolver settings, ILogger<ProxyService>? logger = null) : IProxyService
+public class ProxyService(ApplicationDbContext db, ISettingsResolver settings) : IProxyService
 {
     public async Task<List<MediaProxy>> ListAsync(CancellationToken ct = default)
         => await db.MediaProxies.AsNoTracking().OrderBy(p => p.Name).ToListAsync(ct);

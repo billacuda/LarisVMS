@@ -23,7 +23,7 @@ public sealed class PlayViewModelBuilder(IViewService viewService, ICameraServic
     {
         var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
 
-        var view = await viewService.GetVisibleToAsync(viewId, userId);
+        var view = await viewService.GetVisibleToAsync(viewId, userId, ct);
         if (view is null) return null;
 
         var all = await cameraService.ListAsync(ct);
@@ -31,10 +31,10 @@ public sealed class PlayViewModelBuilder(IViewService viewService, ICameraServic
         var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(user, CameraAccessActions.View, ct);
         if (accessible is not null) cameras = cameras.Where(c => accessible.Contains(c.Id)).ToList();
 
-        var views = await viewService.ListVisibleToAsync(userId);
+        var views = await viewService.ListVisibleToAsync(userId, ct);
         var badgeCorner = EventBadgeCorner.Normalize(
-            await settings.GetRawAsync(EventSettingsKeys.EventBadgeCornerKey));
-        var adaptiveStreaming = await settings.GetAsync("LiveView.AdaptiveStreamingEnabled", false);
+            await settings.GetRawAsync(EventSettingsKeys.EventBadgeCornerKey, ct: ct));
+        var adaptiveStreaming = await settings.GetAsync("LiveView.AdaptiveStreamingEnabled", false, ct: ct);
 
         // Names resolved from the view's own layout, not from `cameras` above — that list is every
         // enabled camera on the system (it feeds the client-side player), not this view's own set,

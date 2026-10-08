@@ -15,25 +15,29 @@ public class ProxyHealthMonitor(IServiceScopeFactory scopeFactory, ILogger<Proxy
 
     private readonly HttpClient _http = new(new SocketsHttpHandler
     {
+        // A reachability probe, not a data channel: proxies commonly run on their own self-signed
+        // certificate, and nothing is sent over this connection.
+#pragma warning disable S4830
         SslOptions = { RemoteCertificateValidationCallback = (_, _, _, _) => true },
+#pragma warning restore S4830
         ConnectTimeout = TimeSpan.FromSeconds(4),
     })
     { Timeout = TimeSpan.FromSeconds(5) };
 
-    protected override async Task ExecuteAsync(CancellationToken ct)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        while (!ct.IsCancellationRequested)
+        while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                await TickAsync(ct);
+                await TickAsync(stoppingToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 logger.LogError(ex, "Proxy health tick failed — will retry.");
             }
 
-            try { await Task.Delay(Interval, ct); }
+            try { await Task.Delay(Interval, stoppingToken); }
             catch (OperationCanceledException) { break; }
         }
     }

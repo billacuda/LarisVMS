@@ -14,7 +14,7 @@
 </p>
 
 <EditForm Model="this" FormName="discover-scan" OnSubmit="HandleScanAsync" class="mb-4">
-    <button type="submit" class="btn btn-primary" disabled="@Scanning">
+    <button type="submit" class="btn btn-primary">
         Scan LAN (5s)
     </button>
 </EditForm>
@@ -56,7 +56,6 @@
 
     private List<DiscoveredCameraDto> Results { get; set; } = [];
     private bool HasScanned { get; set; }
-    private bool Scanning { get; set; }
 
     private async Task HandleScanAsync()
     {

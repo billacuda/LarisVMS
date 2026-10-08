@@ -7,6 +7,7 @@ Common problems, and where to look.
 - **Server**: **Logs → System logs**. Set the level and retention under **Settings → Logging**. Debug and Trace add detail but make large files.
 - **Nodes**: `%ProgramData%\LarisVMS\logs\node-*.log` on each node.
 - **AI detection**: `%ProgramData%\LarisVMS\logs\vision-*.log` on each node.
+- **Auto-update**: `%ProgramData%\LarisVMS\logs\updater-*.log` on each node or proxy.
 
 ## A camera isn't recording
 
@@ -14,6 +15,10 @@ Common problems, and where to look.
 2. Does the node have a **storage path**? The node list flags nodes without one.
 3. Is the camera **enabled**, and do its streams look right? **Re-probe** after any change on the camera itself.
 4. In Motion, Schedule or Event mode, check whether footage is being discarded (see [Recording](/Help/recording#modes)).
+
+## Live view and playback stay on “connecting”
+
+When a node streams directly to browsers (see [Direct streaming](/Help/nodes#direct-streaming)), the browser connects to the node's client port, 4200 by default. If the browser's console shows a failed `wss://<node>:<port>/live/…` connection, check that the node's firewall allows that port: the installer creates an inbound rule named **LarisVMS Node Client Endpoint**. Installers before 0.215.1 could drop that rule when upgrading or taking over a node; run the current Node installer again, or add the rule by hand.
 
 ## Live view pauses in a background window
 
@@ -33,6 +38,10 @@ The node stalled, not the browser or the network. Look in the node log for `Node
 ## AI detection stops but recording carries on
 
 Usually the GPU driver was reset. The Windows System event log shows `nvlddmkm` event 153 or `Display` event 4101 at that moment. The vision service restarts itself after 60 seconds without a result. Repeated resets point at the GPU, its driver, cooling or power.
+
+## A node or proxy didn't come back after an update
+
+Start its service (`sc start LarisVMSNode`, or `LarisVMSProxy`), then check `updater-*.log` for why the restart failed. A downloaded update that never got applied is also noted in the node's or proxy's own log when it next starts, and is offered again on a later check-in.
 
 ## A node shows “clock”
 

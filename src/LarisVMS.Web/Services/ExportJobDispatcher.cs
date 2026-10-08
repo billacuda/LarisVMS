@@ -30,20 +30,20 @@ public class ExportJobDispatcher(IServiceScopeFactory scopeFactory, IHttpClientF
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(7);
 
-    protected override async Task ExecuteAsync(CancellationToken ct)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        while (!ct.IsCancellationRequested)
+        while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                await DispatchQueuedAsync(ct);
+                await DispatchQueuedAsync(stoppingToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 logger.LogError(ex, "Export dispatch cycle failed — will retry next cycle.");
             }
 
-            try { await Task.Delay(PollInterval, ct); }
+            try { await Task.Delay(PollInterval, stoppingToken); }
             catch (OperationCanceledException) { break; }
         }
     }

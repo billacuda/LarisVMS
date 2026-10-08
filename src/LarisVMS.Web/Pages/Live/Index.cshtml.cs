@@ -24,7 +24,7 @@ public class IndexModel(IViewService viewService, IUserPreferenceService prefere
     public async Task<IActionResult> OnGetAsync(CancellationToken ct)
     {
         var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
-        Views = await viewService.ListVisibleToAsync(userId);
+        Views = await viewService.ListVisibleToAsync(userId, ct);
         if (Views.Count == 0) return Page();
 
         var saved = await preferences.GetAllAsync(userId, ct);

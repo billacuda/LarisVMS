@@ -31,7 +31,7 @@ public sealed class WebLogLevelInitializer(IServiceScopeFactory scopeFactory, IL
             var settings = scope.ServiceProvider.GetRequiredService<ISettingsResolver>();
             var level = await settings.GetAsync("Logging.Level", "Information", ct: cancellationToken);
             WebLogLevel.Apply(level);
-            logger.LogInformation("Web log level set to {Level} from the Logging.Level setting.", LogLevels.Parse(level));
+            logger.LogInformation("Web log level set to {Level} from the Logging.Level setting.", LogLevels.Parse(level).ToString());
         }
         catch (Exception ex)
         {

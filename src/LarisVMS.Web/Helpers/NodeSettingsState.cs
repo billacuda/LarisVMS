@@ -112,11 +112,13 @@ public static class NodeConfirm
 
     public static string Maintenance(bool currentlyInMaintenance, int cameraCount, string? backupNodeName)
     {
-        var message = currentlyInMaintenance
-            ? "Take this node out of maintenance? Its cameras return to it once it is a confirmed-healthy quorum."
-            : backupNodeName is not null
-                ? $"Put this node into maintenance? Its {cameraCount} camera(s) fail over to node {backupNodeName} for recording within about 15 seconds, and will not fail back until you turn maintenance off."
-                : $"Put this node into maintenance? It has NO backup node - its {cameraCount} camera(s) will STOP recording until maintenance is turned off.";
+        string message;
+        if (currentlyInMaintenance)
+            message = "Take this node out of maintenance? Its cameras return to it once it is a confirmed-healthy quorum.";
+        else if (backupNodeName is not null)
+            message = $"Put this node into maintenance? Its {cameraCount} camera(s) fail over to node {backupNodeName} for recording within about 15 seconds, and will not fail back until you turn maintenance off.";
+        else
+            message = $"Put this node into maintenance? It has NO backup node - its {cameraCount} camera(s) will STOP recording until maintenance is turned off.";
         return $"return confirm('{message}');";
     }
 

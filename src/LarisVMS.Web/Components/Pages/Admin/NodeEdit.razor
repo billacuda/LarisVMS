@@ -504,7 +504,6 @@ else
     private static List<string> ParseList(string? json) =>
         string.IsNullOrEmpty(json) ? [] : System.Text.Json.JsonSerializer.Deserialize<List<string>>(json) ?? [];
 
-    private static Guid FormGuid(Microsoft.Extensions.Primitives.StringValues v) => Guid.TryParse(v.ToString(), out var g) ? g : Guid.Empty;
     private static int? FormIntOrNull(Microsoft.Extensions.Primitives.StringValues v) => int.TryParse(v.ToString(), out var x) ? x : null;
     private static string? FormStringOrNull(Microsoft.Extensions.Primitives.StringValues v) => v.Count == 0 ? null : v.ToString();
 

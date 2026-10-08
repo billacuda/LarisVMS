@@ -504,10 +504,17 @@ if ($InsecureTls) { $argParts += '--insecure-tls' }
 
 $binPath = (Format-ServiceArg $exePath) + ' ' + (($argParts | ForEach-Object { Format-ServiceArg $_ }) -join ' ')
 
-if ($ServiceCredential) {
-    Write-Host "    Running as $($ServiceCredential.UserName) (needed for network/SMB storage access)."
+# Report the account the service will actually run as. Without -ServiceCredential an upgrade keeps
+# the existing service's account (Win32_Service.Change below leaves StartName alone), so read it
+# rather than assuming LocalSystem.
+$runAs = if ($ServiceCredential) { $ServiceCredential.UserName }
+         elseif ($isUpgrade) { (Get-CimInstance -ClassName Win32_Service -Filter "Name='$ServiceName'").StartName }
+         else { 'LocalSystem' }
+$runAsSource = if ($ServiceCredential) { '' } elseif ($isUpgrade) { ' (kept from the existing service)' } else { '' }
+if ($runAs -and $runAs -notin 'LocalSystem', '.\LocalSystem', 'NT AUTHORITY\SYSTEM') {
+    Write-Host "    Running as $runAs$runAsSource (needed for network/SMB storage access)."
 } else {
-    Write-Host "    Running as LocalSystem." -ForegroundColor Yellow
+    Write-Host "    Running as LocalSystem$runAsSource." -ForegroundColor Yellow
     Write-Host "    If the storage root is a network share, LocalSystem authenticates to it as this" -ForegroundColor Yellow
     Write-Host "    machine's own computer account ($env:COMPUTERNAME`$) - make sure that account has" -ForegroundColor Yellow
     Write-Host "    share and NTFS permissions on the target, or recording will fail. Re-run with" -ForegroundColor Yellow

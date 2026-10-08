@@ -111,13 +111,13 @@
                             </label>
                         </summary>
                         <div class="snapshot-tree-children d-flex flex-column gap-1 mt-1">
-                            @foreach (var child in children)
+                            @foreach (var label in children.Select(c => c.Label))
                             {
-                                var token = $"{node.Name}:{child.Label}";
+                                var token = $"{node.Name}:{label}";
                                 <div class="form-check mb-0">
                                     <input type="checkbox" class="form-check-input snapshot-tree-child" id="label-@token" data-label-token="@token"
-                                           data-parent-name="@node.Name" checked="@IsLabelChecked(node.Name, child.Label)" />
-                                    <label class="form-check-label small" for="label-@token">@Char.ToUpperInvariant(child.Label[0])@child.Label[1..]</label>
+                                           data-parent-name="@node.Name" checked="@IsLabelChecked(node.Name, label)" />
+                                    <label class="form-check-label small" for="label-@token">@Char.ToUpperInvariant(label[0])@label[1..]</label>
                                 </div>
                             }
                         </div>
@@ -142,6 +142,7 @@
             var playFromUtcIso = s.PlayFromUtc.ToString("o");
             var frameColors = SnapshotBorderStyle.OrderColors(s.Badges.Select(b => b.ColorHex).DefaultIfEmpty(s.ColorHex));
             var frameGradient = SnapshotBorderStyle.GradientCss(frameColors);
+            var borderColor = frameColors.Count == 1 ? frameColors[0] : s.ColorHex;
             var imgSrc = s.IsAiDetection
                 ? $"/snapshot-image/{s.CameraId}/{s.Id}"
                 : $"/playback-thumbnail/{s.CameraId}?atUtc={Uri.EscapeDataString(atUtcIso)}&exact=true";
@@ -151,7 +152,7 @@
                    .snapshot-card--framed block in site.css. *@
                 <div class="card h-100@(frameGradient is null ? "" : " snapshot-card--framed")"
                      style="@(frameGradient is null
-                                ? $"border-width: 3px; border-color: {(frameColors.Count == 1 ? frameColors[0] : s.ColorHex)};"
+                                ? $"border-width: 3px; border-color: {borderColor};"
                                 : $"--snapshot-frame: {frameGradient};")">
                     <a href="/Playback?cameraId=@s.CameraId&atUtc=@Uri.EscapeDataString(playFromUtcIso)">
                         <img src="@imgSrc"

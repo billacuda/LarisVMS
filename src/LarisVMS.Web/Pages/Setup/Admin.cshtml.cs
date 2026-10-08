@@ -11,7 +11,7 @@ public class AdminModel(ISetupService setupService, IRoleSeedService roleSeed, I
 
     public string? ErrorMessage { get; set; }
 
-    public void OnGet() { }
+    public void OnGet() { /* The form starts empty. */ }
 
     public async Task<IActionResult> OnPostAsync()
     {

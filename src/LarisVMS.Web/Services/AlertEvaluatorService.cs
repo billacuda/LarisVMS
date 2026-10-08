@@ -17,20 +17,20 @@ public class AlertEvaluatorService(IServiceScopeFactory scopeFactory, ILogger<Al
 {
     private static readonly TimeSpan TickInterval = TimeSpan.FromMinutes(1);
 
-    protected override async Task ExecuteAsync(CancellationToken ct)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        while (!ct.IsCancellationRequested)
+        while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                await TickAsync(ct);
+                await TickAsync(stoppingToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 logger.LogError(ex, "Alert evaluator tick failed — will retry on the next tick.");
             }
 
-            try { await Task.Delay(TickInterval, ct); }
+            try { await Task.Delay(TickInterval, stoppingToken); }
             catch (OperationCanceledException) { break; }
         }
     }
@@ -95,10 +95,9 @@ public class AlertEvaluatorService(IServiceScopeFactory scopeFactory, ILogger<Al
                     .FirstOrDefaultAsync(ct);
                 if (camera is null) return null;
 
-                return AlertEvaluationPolicy.IsCameraNotReporting(camera.MainHealth, nowUtc)
-                    ? $"Camera \"{camera.Name}\" hasn't reported health since " +
-                      (camera.MainHealth is { } reported ? $"{reported:u}." : "it was added.")
-                    : null;
+                if (!AlertEvaluationPolicy.IsCameraNotReporting(camera.MainHealth, nowUtc)) return null;
+                var reportedSince = camera.MainHealth is { } reported ? $"{reported:u}." : "it was added.";
+                return $"Camera \"{camera.Name}\" hasn't reported health since {reportedSince}";
             }
 
             case AlertConditionType.NodeOffline:
@@ -108,10 +107,9 @@ public class AlertEvaluatorService(IServiceScopeFactory scopeFactory, ILogger<Al
                     .Select(n => new { n.Name, n.LastSeenAt }).FirstOrDefaultAsync(ct);
                 if (node is null) return null;
 
-                return AlertEvaluationPolicy.IsNodeOffline(node.LastSeenAt, nowUtc)
-                    ? $"Node \"{node.Name}\" hasn't been seen since " +
-                      (node.LastSeenAt is { } seen ? $"{seen:u}." : "it registered.")
-                    : null;
+                if (!AlertEvaluationPolicy.IsNodeOffline(node.LastSeenAt, nowUtc)) return null;
+                var seenSince = node.LastSeenAt is { } seen ? $"{seen:u}." : "it registered.";
+                return $"Node \"{node.Name}\" hasn't been seen since {seenSince}";
             }
 
             case AlertConditionType.NodeStorageLow:

@@ -148,24 +148,24 @@
     private IDataProtector Protector => Dp.CreateProtector("EmailOAuthState");
 
     [SupplyParameterFromForm(FormName = "email-settings")] private bool IsEnabled { get; set; }
-    [SupplyParameterFromForm(FormName = "email-settings")] private EmailProviderType Provider { get; set; } = EmailProviderType.Smtp;
-    [SupplyParameterFromForm(FormName = "email-settings")] private string FromAddress { get; set; } = string.Empty;
-    [SupplyParameterFromForm(FormName = "email-settings")] private string FromName { get; set; } = string.Empty;
+    [SupplyParameterFromForm(FormName = "email-settings")] private EmailProviderType Provider { get; set; }
+    [SupplyParameterFromForm(FormName = "email-settings")] private string? FromAddress { get; set; }
+    [SupplyParameterFromForm(FormName = "email-settings")] private string? FromName { get; set; }
 
-    [SupplyParameterFromForm(FormName = "email-settings")] private string SmtpHost { get; set; } = string.Empty;
-    [SupplyParameterFromForm(FormName = "email-settings")] private int SmtpPort { get; set; } = 587;
-    [SupplyParameterFromForm(FormName = "email-settings")] private bool SmtpUseSsl { get; set; } = true;
+    [SupplyParameterFromForm(FormName = "email-settings")] private string? SmtpHost { get; set; }
+    [SupplyParameterFromForm(FormName = "email-settings")] private int SmtpPort { get; set; }
+    [SupplyParameterFromForm(FormName = "email-settings")] private bool SmtpUseSsl { get; set; }
     [SupplyParameterFromForm(FormName = "email-settings")] private string? SmtpUsername { get; set; }
     [SupplyParameterFromForm(FormName = "email-settings")] private string? SmtpPassword { get; set; }
     private bool HasStoredSmtpPassword { get; set; }
 
-    [SupplyParameterFromForm(FormName = "email-settings")] private string GraphTenantId { get; set; } = string.Empty;
-    [SupplyParameterFromForm(FormName = "email-settings")] private string GraphClientId { get; set; } = string.Empty;
+    [SupplyParameterFromForm(FormName = "email-settings")] private string? GraphTenantId { get; set; }
+    [SupplyParameterFromForm(FormName = "email-settings")] private string? GraphClientId { get; set; }
     [SupplyParameterFromForm(FormName = "email-settings")] private string? GraphClientSecret { get; set; }
     [SupplyParameterFromForm(FormName = "email-settings")] private string? GraphSharedMailbox { get; set; }
     private bool HasStoredGraphClientSecret { get; set; }
 
-    [SupplyParameterFromForm(FormName = "email-settings")] private string GmailClientId { get; set; } = string.Empty;
+    [SupplyParameterFromForm(FormName = "email-settings")] private string? GmailClientId { get; set; }
     [SupplyParameterFromForm(FormName = "email-settings")] private string? GmailClientSecret { get; set; }
     [SupplyParameterFromForm(FormName = "email-settings")] private string? GmailEmailAddress { get; set; }
     private bool HasStoredGmailClientSecret { get; set; }
@@ -266,24 +266,24 @@
         {
             AuditDiff.Of("Enabled", settings.IsEnabled.ToString(), IsEnabled.ToString()),
             AuditDiff.Of("Provider", settings.Provider.ToString(), Provider.ToString()),
-            AuditDiff.Of("FromAddress", settings.FromAddress, FromAddress.Trim()),
-            AuditDiff.Of("FromName", settings.FromName, FromName.Trim()),
-            AuditDiff.Of("SmtpHost", settings.SmtpHost, SmtpHost.Trim()),
+            AuditDiff.Of("FromAddress", settings.FromAddress, (FromAddress ?? "").Trim()),
+            AuditDiff.Of("FromName", settings.FromName, (FromName ?? "").Trim()),
+            AuditDiff.Of("SmtpHost", settings.SmtpHost, (SmtpHost ?? "").Trim()),
             AuditDiff.Of("SmtpPort", settings.SmtpPort.ToString(), SmtpPort.ToString()),
             AuditDiff.Of("SmtpUseSsl", settings.SmtpUseSsl.ToString(), SmtpUseSsl.ToString()),
             AuditDiff.Of("SmtpUsername", settings.SmtpUsername, SmtpUsername?.Trim()),
-            AuditDiff.Of("GraphTenantId", settings.GraphTenantId, GraphTenantId.Trim()),
-            AuditDiff.Of("GraphClientId", settings.GraphClientId, GraphClientId.Trim()),
+            AuditDiff.Of("GraphTenantId", settings.GraphTenantId, (GraphTenantId ?? "").Trim()),
+            AuditDiff.Of("GraphClientId", settings.GraphClientId, (GraphClientId ?? "").Trim()),
             AuditDiff.Of("GraphSharedMailbox", settings.GraphSharedMailbox, GraphSharedMailbox?.Trim()),
-            AuditDiff.Of("GmailClientId", settings.GmailClientId, GmailClientId.Trim()),
+            AuditDiff.Of("GmailClientId", settings.GmailClientId, (GmailClientId ?? "").Trim()),
             AuditDiff.Of("GmailEmailAddress", settings.GmailEmailAddress, GmailEmailAddress?.Trim())
         };
 
         settings.IsEnabled = IsEnabled;
         settings.Provider = Provider;
-        settings.FromAddress = FromAddress.Trim();
-        settings.FromName = FromName.Trim();
-        settings.SmtpHost = SmtpHost.Trim();
+        settings.FromAddress = (FromAddress ?? "").Trim();
+        settings.FromName = (FromName ?? "").Trim();
+        settings.SmtpHost = (SmtpHost ?? "").Trim();
         settings.SmtpPort = SmtpPort;
         settings.SmtpUseSsl = SmtpUseSsl;
         settings.SmtpUsername = string.IsNullOrWhiteSpace(SmtpUsername) ? null : SmtpUsername.Trim();
@@ -395,7 +395,13 @@
     private async Task LoadAsync()
     {
         var settings = await Db.EmailSettings.FirstOrDefaultAsync();
-        if (settings is null) return;
+        if (settings is null)
+        {
+            // Nothing saved yet: the usual SMTP submission defaults.
+            SmtpPort = 587;
+            SmtpUseSsl = true;
+            return;
+        }
 
         IsEnabled = settings.IsEnabled;
         Provider = settings.Provider;

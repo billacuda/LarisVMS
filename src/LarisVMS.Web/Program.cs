@@ -334,6 +334,9 @@ builder.Services.AddScoped<IAlertChannelSender, SlackAlertChannelSender>();
 builder.Services.AddScoped<IAlertChannelSender, TeamsAlertChannelSender>();
 builder.Services.AddScoped<AlertChannelSenderFactory>();
 
+// Must stay the first hosted service: migrations and seeds finish before anything else starts
+// (hosted services start in registration order, and before Kestrel) — see StartupDatabaseTasks.
+builder.Services.AddHostedService<StartupDatabaseTasks>();
 // First Web-tier BackgroundService — see ExportJobDispatcher's own doc comment for why exports
 // needed one instead of a synchronous per-camera download.
 builder.Services.AddHostedService<ExportJobDispatcher>();
@@ -350,6 +353,9 @@ builder.Services.AddHostedService<LarisVMS.Web.Services.WebLogLevelInitializer>(
 builder.Services.AddHostedService<LarisVMS.Web.Services.ProxyHealthMonitor>();
 // Failover plan phase 3: the recording-failover quorum engine — the only writer of Node.FailoverState.
 builder.Services.AddHostedService<LarisVMS.Web.Services.RecordingFailoverService>();
+// Daily check for a newer LarisVMS release, for the admins' top-bar notice. Off in Settings → Node defaults.
+builder.Services.AddSingleton<ReleaseCheckState>();
+builder.Services.AddHostedService<ReleaseCheckService>();
 
 // ── ONVIF HTTP client ────────────────────────────────────────────────────────
 // CameraService takes a Func<HttpClient> rather than IHttpClientFactory directly so
@@ -366,7 +372,10 @@ builder.Services.AddHostedService<LarisVMS.Web.Services.RecordingFailoverService
 builder.Services.AddHttpClient("onvif", client => client.Timeout = TimeSpan.FromSeconds(8))
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
     {
+        // Deliberate, see above: camera self-signed certificates can't chain to anything.
+#pragma warning disable S4830
         ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+#pragma warning restore S4830
     });
 builder.Services.AddScoped<Func<HttpClient>>(sp =>
     () => sp.GetRequiredService<IHttpClientFactory>().CreateClient("onvif"));
@@ -377,6 +386,13 @@ builder.Services.AddScoped<Func<HttpClient>>(sp =>
 builder.Services.AddHttpClient(LarisVMS.Web.Services.ExternalInferenceProbe.HttpClientName,
     client => client.Timeout = TimeSpan.FromSeconds(5));
 builder.Services.AddSingleton<LarisVMS.Web.Services.ExternalInferenceProbe>();
+// The new-version check: GitHub's API needs a User-Agent, and that is all this request identifies.
+builder.Services.AddHttpClient(ReleaseCheckService.HttpClientName, client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(15);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd($"LarisVMS/{ReleaseCheckService.RunningVersion?.Split('+')[0] ?? "unknown"}");
+    client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+});
 
 // ── Health checks ─────────────────────────────────────────────────────────────
 builder.Services.AddHealthChecks()
@@ -403,7 +419,7 @@ builder.Services.AddCascadingAuthenticationState();
 // ISettingsResolver exist, and opens the matching listener itself below. Best-effort: pre-setup there
 // is no Settings table yet, and a transient DB hiccup here shouldn't crash startup — worst case the
 // custom port just doesn't come up until the next successful restart. "Change requires a service
-// restart" — same accepted model as ClientEndpointConfig/SegmentSeconds elsewhere in this codebase;
+// restart" — same accepted model as ClientEndpointConfig/SegmentSeconds elsewhere in this codebase —
 // see PortSegmentationMiddleware's and LiveViewModel.CustomPort's doc comments.
 int? webMediaPort = null;
 var earlyConnectionString = builder.Configuration.GetConnectionString("DefaultConnection");
@@ -411,18 +427,21 @@ if (!string.IsNullOrWhiteSpace(earlyConnectionString))
 {
     try
     {
-        using var earlyConn = new SqlConnection(earlyConnectionString);
-        earlyConn.Open();
+        // Short timeout: this runs before the service has connected to the SCM, and an unreachable
+        // server would otherwise spend the default 15 s of its 30-second start budget here.
+        using var earlyConn = new SqlConnection(new SqlConnectionStringBuilder(earlyConnectionString) { ConnectTimeout = 5 }.ConnectionString);
+        await earlyConn.OpenAsync();
         using var earlyCmd = earlyConn.CreateCommand();
         earlyCmd.CommandText = "SELECT Value FROM Settings WHERE [Key] = @Key";
         earlyCmd.Parameters.AddWithValue("@Key", PortSegmentationMiddleware.SettingKey);
-        if (earlyCmd.ExecuteScalar() is string rawMediaPort
+        if (await earlyCmd.ExecuteScalarAsync() is string rawMediaPort
             && int.TryParse(rawMediaPort, out var parsedMediaPort) && parsedMediaPort is > 0 and <= 65535)
             webMediaPort = parsedMediaPort;
     }
     catch (Exception ex) when (ex is not OperationCanceledException)
     {
-        Console.Error.WriteLine($"Could not read {PortSegmentationMiddleware.SettingKey} at startup: {ex.Message}");
+        // The file log, not the console — a service's console output goes nowhere.
+        webFileLogger.CreateLogger("Startup").LogWarning(ex, "Could not read {Key} at startup: {Message}", PortSegmentationMiddleware.SettingKey, ex.Message);
     }
 }
 
@@ -435,6 +454,14 @@ if (!string.IsNullOrWhiteSpace(earlyConnectionString))
 // reloading) cert binding.
 var pfxPath = builder.Configuration["Kestrel:Certificates:Default:Path"];
 var pfxPassword = builder.Configuration["Kestrel:Certificates:Default:Password"];
+// Blank the same keys for Kestrel itself: UseHttps() below makes KestrelConfigurationLoader load
+// Kestrel:Certificates:Default eagerly, and a wrong password or bad path there throws out of Build()
+// before CertHolder's self-signed fallback can help — the service just crash-loops.
+builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+{
+    ["Kestrel:Certificates:Default:Path"] = "",
+    ["Kestrel:Certificates:Default:Password"] = "",
+});
 var certLogger = webFileLogger.CreateLogger("Certificate");
 var selfSignedPfxPath = Path.Combine(
     Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "web.selfsigned.pfx");
@@ -445,10 +472,7 @@ var selfSignedPfxPath = Path.Combine(
 var certHolder = new CertHolder(
     new CertHolderOptions(pfxPath, pfxPassword, AllowInsecure: true, Environment.MachineName, selfSignedPfxPath),
     certLogger);
-if (certHolder.Load())
-    Console.WriteLine($"HTTPS certificate loaded ({(certHolder.IsSelfSigned ? "self-signed" : "supplied certificate")}) — NotAfter {certHolder.Current!.NotAfter:u}.");
-else
-    Console.Error.WriteLine($"No HTTPS certificate available: {certHolder.LastError}");
+certHolder.Load(); // logs the outcome (and LastError) to the file log itself
 
 var httpsPort = builder.Configuration.GetValue<int?>("Kestrel:HttpsPort") ?? 8444;
 builder.WebHost.ConfigureKestrel(o =>
@@ -490,46 +514,8 @@ var app = builder.Build();
 // Wire the Data Protection provider into the DB-column encryption helper before any DB access.
 SecretProtection.Configure(app.Services.GetRequiredService<IDataProtectionProvider>());
 
-// Roles/permissions overhaul: seeds the 8 built-in roles' RoleProfile rows (renaming
-// Administrator/Viewer to Super Admin/Guest-Viewer in place along the way) — see RoleSeedService.
-// Idempotent, so safe to run on every startup; only runs once the database actually exists, since a
-// brand-new deployment reaches this point before the setup wizard has configured a connection
-// string at all, and every RoleSeedService query would otherwise throw.
-using (var startupScope = app.Services.CreateScope())
-{
-    var setupService = startupScope.ServiceProvider.GetRequiredService<ISetupService>();
-    if (await setupService.IsDatabaseConfiguredAsync())
-    {
-        // Upgrades (MSI or script) migrate here rather than from a build machine. A failure stops
-        // startup on purpose — running on a half-migrated schema is worse than not running, and SCM
-        // recovery retries the service.
-        var startupLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
-        var migrateDb = startupScope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-        var pending = (await migrateDb.Database.GetPendingMigrationsAsync()).ToList();
-        if (pending.Count > 0)
-        {
-            startupLogger.LogInformation("Applying {Count} database migration(s): {Migrations}", pending.Count, string.Join(", ", pending));
-            try
-            {
-                await migrateDb.Database.MigrateAsync();
-            }
-            catch (Exception ex)
-            {
-                startupLogger.LogCritical(ex, "Database migration failed - the service will not start");
-                throw;
-            }
-        }
-
-        var bundledBuilds = startupScope.ServiceProvider.GetRequiredService<IBundledBuildRegistrar>();
-        await bundledBuilds.RegisterAsync(Path.Combine(app.Environment.ContentRootPath, "packages"));
-
-        var roleSeedService = startupScope.ServiceProvider.GetRequiredService<IRoleSeedService>();
-        await roleSeedService.SeedAsync();
-
-        var cameraGroupSeedService = startupScope.ServiceProvider.GetRequiredService<ICameraGroupSeedService>();
-        await cameraGroupSeedService.SeedAsync();
-    }
-}
+// Migrations, bundled builds and the role/camera-group seeds run in StartupDatabaseTasks (the first
+// hosted service), not here: work before app.Run() counts against the SCM's 30-second start timeout.
 
 if (app.Environment.IsDevelopment())
 {
@@ -608,7 +594,7 @@ app.MapGet("/manifest.webmanifest", async (IBrandingService brandingService) =>
 }).AllowAnonymous();
 
 // ── Node control plane ──────────────────────────────────────────────────────
-// /register is anonymous (authenticates with the one-time registration key in the body instead);
+// /register is anonymous (it authenticates with the one-time registration key in the body instead) —
 // every other route is authenticated by NodeAuthMiddleware above and reads the Node it attached to
 // ── Admin node vision-models fetch (Phase 2 Blazor migration) ────────────────
 // Ported from NodesModel.OnGetLocalModelsAsync (Pages/Admin/Nodes.cshtml.cs) when that page moved to
@@ -738,7 +724,7 @@ nodesApi.MapGet("/config", async (HttpContext ctx, INodeService nodeService, Can
 nodesApi.MapGet("/detection-model/{family}/{variant}", async (
     string family, string variant, LarisVMS.Web.Services.DetectionModelDistributor distributor, CancellationToken ct) =>
 {
-    if (!distributor.IsKnown(family, variant)) return Results.NotFound();
+    if (!LarisVMS.Web.Services.DetectionModelDistributor.IsKnown(family, variant)) return Results.NotFound();
     try
     {
         var stream = await distributor.OpenAsync(family, variant, ct);
@@ -759,15 +745,15 @@ nodesApi.MapGet("/detection-model/{family}/{variant}", async (
 // of /api/nodes/*.
 nodesApi.MapGet("/vision-native/{name}/info", (string name, LarisVMS.Web.Services.VisionNativeDistributor distributor) =>
 {
-    if (!distributor.IsKnown(name)) return Results.NotFound();
+    if (!LarisVMS.Web.Services.VisionNativeDistributor.IsKnown(name)) return Results.NotFound();
     var info = distributor.GetInfo(name);
     return info is null ? Results.NotFound() : Results.Json(info);
 });
 
-nodesApi.MapGet("/vision-native/{name}", (string name, LarisVMS.Web.Services.VisionNativeDistributor distributor) =>
+nodesApi.MapGet("/vision-native/{name}", (string name) =>
 {
-    if (!distributor.IsKnown(name)) return Results.NotFound();
-    var stream = distributor.Open(name);
+    if (!LarisVMS.Web.Services.VisionNativeDistributor.IsKnown(name)) return Results.NotFound();
+    var stream = LarisVMS.Web.Services.VisionNativeDistributor.Open(name);
     return stream is null ? Results.NotFound() : Results.Stream(stream, "application/octet-stream");
 });
 
@@ -946,7 +932,7 @@ app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICame
         return;
     }
 
-    // Global RBAC (Cameras.View, below) says this principal can view *some* camera's live feed;
+    // Global RBAC (Cameras.View, below) says this principal can view *some* camera's live feed —
     // CameraAccess narrows that to *this* camera. Previously unchecked here — the camera/view list
     // pages already filter by this same call, but this endpoint (the one that actually streams
     // video) took only the global gate, so a CameraAccess-restricted user could still open any other
@@ -1471,16 +1457,17 @@ app.MapGet("/api/timeline", async (HttpContext ctx, DateTime from, DateTime to, 
     ITimelineService timeline, ICameraAccessService cameraAccess, CancellationToken ct) =>
 {
     var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Playback, ct);
-    var scopedCameraIds = accessible is null
-        ? cameraIds
-        : (cameraIds is null || cameraIds.Length == 0 ? accessible.ToArray() : cameraIds.Where(accessible.Contains).ToArray());
+    Guid[]? scopedCameraIds;
+    if (accessible is null) scopedCameraIds = cameraIds;
+    else if (cameraIds is null || cameraIds.Length == 0) scopedCameraIds = accessible.ToArray();
+    else scopedCameraIds = cameraIds.Where(accessible.Contains).ToArray();
     return Results.Json(await timeline.GetGlobalBucketsAsync(from, to, buckets ?? 200, scopedCameraIds, ct));
 }).RequireAuthorization("Playback.View");
 
 // Audit-only: Pages/Playback resolves which view (and therefore which cameras) is being reviewed
 // entirely client-side, so there is no existing server hit that knows "this user just started
 // reviewing these cameras" — /playback-segment fires continuously per segment loaded, far too
-// granular to be a meaningful audit record. playback-player.js posts here once per view selection;
+// granular to be a meaningful audit record. playback-player.js posts here once per view selection —
 // the response is ignored client-side, so a failure here can never block playback from starting.
 app.MapPost("/api/playback/view-opened", async (HttpContext ctx, ViewOpenedRequest request,
     IViewService viewService, ICameraService cameraService, IAuditService auditService, CancellationToken ct) =>
@@ -1702,7 +1689,7 @@ app.MapGet("/playback-segment/{cameraId:guid}/{segmentId:long}", async (
     IHttpClientFactory httpFactory, LarisVMS.Web.Services.MediaRoutingService routing,
     LarisVMS.Web.Services.MediaRelayMetrics relayMetrics, CancellationToken ct) =>
 {
-    // The group's Playback.View gate says this principal can review *some* camera's footage;
+    // The group's Playback.View gate says this principal can review *some* camera's footage —
     // CameraAccess narrows it to *this* camera — this is the endpoint that actually streams the
     // video bytes, previously reachable for any cameraId once the global gate was met. Same fix as
     // /live's own (see that endpoint's own comment).
@@ -1810,7 +1797,7 @@ async Task<IResult> ProxyThumbnailAsync(Guid cameraId, ThumbnailInfo? thumb, IHt
 
     Task<HttpResponseMessage> RequestAsync(int offsetSeconds)
     {
-        var token = MediaToken.IssueForThumbnail(cameraId, thumb.FilePath, offsetSeconds, thumb.NodeMediaSigningKey!, TimeSpan.FromSeconds(30));
+        var token = MediaToken.IssueForThumbnail(cameraId, thumb.FilePath, offsetSeconds, thumb.NodeMediaSigningKey, TimeSpan.FromSeconds(30));
         var nodeUri = $"http://{thumb.NodeIp}:{thumb.NodeLivePort}/playback-thumbnail/{cameraId}" +
             $"?path={Uri.EscapeDataString(thumb.FilePath)}&offset={offsetSeconds}&token={Uri.EscapeDataString(token)}&maxDim={maxDimension}&q={quality}";
         // See MediaTokenRequest's own doc comment: also sent as ?token= above for a node that
@@ -1960,7 +1947,7 @@ async Task<IResult> ProxySnapshotImageAsync(Guid cameraId, SnapshotImageInfo? in
     // use on the thumbnail proxy.
     Task<HttpResponseMessage> RequestAsync(int offsetSeconds, long offsetMs, long bestFrameTicks)
     {
-        var token = MediaToken.IssueForThumbnail(cameraId, info.FilePath, offsetSeconds, info.NodeMediaSigningKey!, TimeSpan.FromSeconds(30));
+        var token = MediaToken.IssueForThumbnail(cameraId, info.FilePath, offsetSeconds, info.NodeMediaSigningKey, TimeSpan.FromSeconds(30));
         var nodeUri = $"http://{info.NodeIp}:{info.NodeLivePort}/snapshot-image/{cameraId}" +
             $"?path={Uri.EscapeDataString(info.FilePath)}&offset={offsetSeconds}&offsetMs={offsetMs}&token={Uri.EscapeDataString(token)}" +
             $"&spanId={info.SpanId}&bestFrameTicks={bestFrameTicks}" +
@@ -2241,7 +2228,7 @@ app.MapPost("/api/bookmarks", async (HttpContext ctx, CreateBookmarkRequest requ
     return Results.Json(new { id = bookmark.Id });
 }).RequireAuthorization("Playback.View", "Bookmarks.Edit");
 
-app.Run();
+await app.RunAsync();
 
 // One-directional relay (node -> browser) frame by frame, not message by message — a fragment
 // larger than the read buffer arrives across multiple ReceiveAsync calls with EndOfMessage=false
@@ -2259,18 +2246,11 @@ static async Task ProxyLiveViewAsync(WebSocket node, WebSocket browser, Cancella
             await browser.SendAsync(buffer.AsMemory(0, result.Count), result.MessageType, result.EndOfMessage, ct);
         }
     }
-    catch (OperationCanceledException) { }
-    catch (WebSocketException) { }
+    catch (OperationCanceledException) { /* the viewer went away: the normal end of a relay */ }
+    catch (WebSocketException) { /* either side dropped the connection mid-relay */ }
     finally
     {
-        if (browser.State == WebSocketState.Open)
-        {
-            try { await browser.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); } catch { }
-        }
-        if (node.State == WebSocketState.Open)
-        {
-            try { await node.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); } catch { }
-        }
+        await CloseRelayAsync(node, browser);
     }
 }
 
@@ -2302,7 +2282,7 @@ static async Task ProxyDetectionOverlayAsync(WebSocket node, WebSocket browser, 
             {
                 result = await node.ReceiveAsync(buffer, ct);
                 if (result.MessageType == WebSocketMessageType.Close) return;
-                messageBuffer.Write(buffer, 0, result.Count);
+                await messageBuffer.WriteAsync(buffer.AsMemory(0, result.Count), ct);
             } while (!result.EndOfMessage);
             var receivedAt = System.Diagnostics.Stopwatch.GetTimestamp();
 
@@ -2341,18 +2321,11 @@ static async Task ProxyDetectionOverlayAsync(WebSocket node, WebSocket browser, 
             await browser.SendAsync(json, WebSocketMessageType.Text, endOfMessage: true, ct);
         }
     }
-    catch (OperationCanceledException) { }
-    catch (WebSocketException) { }
+    catch (OperationCanceledException) { /* the viewer went away: the normal end of a relay */ }
+    catch (WebSocketException) { /* either side dropped the connection mid-relay */ }
     finally
     {
-        if (browser.State == WebSocketState.Open)
-        {
-            try { await browser.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); } catch { }
-        }
-        if (node.State == WebSocketState.Open)
-        {
-            try { await node.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); } catch { }
-        }
+        await CloseRelayAsync(node, browser);
     }
 }
 
@@ -2372,24 +2345,17 @@ static async Task ProxyMotionZoneScoresAsync(WebSocket node, WebSocket browser, 
             {
                 result = await node.ReceiveAsync(buffer, ct);
                 if (result.MessageType == WebSocketMessageType.Close) return;
-                messageBuffer.Write(buffer, 0, result.Count);
+                await messageBuffer.WriteAsync(buffer.AsMemory(0, result.Count), ct);
             } while (!result.EndOfMessage);
 
             await browser.SendAsync(messageBuffer.ToArray(), WebSocketMessageType.Text, endOfMessage: true, ct);
         }
     }
-    catch (OperationCanceledException) { }
-    catch (WebSocketException) { }
+    catch (OperationCanceledException) { /* the viewer went away: the normal end of a relay */ }
+    catch (WebSocketException) { /* either side dropped the connection mid-relay */ }
     finally
     {
-        if (browser.State == WebSocketState.Open)
-        {
-            try { await browser.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); } catch { }
-        }
-        if (node.State == WebSocketState.Open)
-        {
-            try { await node.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); } catch { }
-        }
+        await CloseRelayAsync(node, browser);
     }
 }
 
@@ -2407,5 +2373,17 @@ void EnsureWritableDirectory(string path)
         throw new InvalidOperationException(
             $"Unable to initialize data protection key folder at '{path}'. " +
             "Ensure the application identity has write permission to this directory.", ex);
+    }
+}
+
+// Closes whichever ends of a relay are still open. Best-effort: by the time a relay ends, one side
+// has usually already gone, and its close handshake can fail in any number of ways.
+static async Task CloseRelayAsync(WebSocket node, WebSocket browser)
+{
+    foreach (var socket in new[] { browser, node })
+    {
+        if (socket.State != WebSocketState.Open) continue;
+        try { await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); }
+        catch (Exception) { /* already closed or aborted by the other end; nothing left to do */ }
     }
 }

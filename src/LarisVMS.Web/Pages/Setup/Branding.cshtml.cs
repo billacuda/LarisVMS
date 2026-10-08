@@ -9,7 +9,7 @@ public class BrandingModel(ISetupService setupService) : PageModel
     [BindProperty] public string AppName { get; set; } = "LarisVMS";
     [BindProperty] public string PrimaryColor { get; set; } = "#0d6efd";
 
-    public void OnGet() { }
+    public void OnGet() { /* The form starts with its defaults. */ }
 
     public async Task<IActionResult> OnPostAsync()
     {

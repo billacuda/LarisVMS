@@ -207,6 +207,8 @@ builder.Services.AddSingleton(sp => new ExportRunner(
     apiClient, ffmpegPath, sp.GetRequiredService<ILoggerFactory>().CreateLogger<ExportRunner>()));
 
 var app = builder.Build();
+// Tidy up after the last auto-update, and say so in this log if it never got applied.
+app.Services.GetRequiredService<UpdateService>().CheckLastUpdate();
 app.UseWebSockets();
 
 var liveLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("LiveView");

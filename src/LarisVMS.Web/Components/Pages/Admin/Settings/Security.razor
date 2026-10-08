@@ -71,8 +71,8 @@
     [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
     [CascadingParameter] private HttpContext? HttpContext { get; set; }
 
-    [SupplyParameterFromForm(FormName = "security-settings")] private string ManagementAllowList { get; set; } = string.Empty;
-    [SupplyParameterFromForm(FormName = "security-settings")] private string LiveViewAllowList { get; set; } = string.Empty;
+    [SupplyParameterFromForm(FormName = "security-settings")] private string? ManagementAllowList { get; set; }
+    [SupplyParameterFromForm(FormName = "security-settings")] private string? LiveViewAllowList { get; set; }
     [SupplyParameterFromForm(FormName = "security-settings")] private bool EntraEnabled { get; set; }
     [SupplyParameterFromForm(FormName = "security-settings")] private string? EntraTenantId { get; set; }
     [SupplyParameterFromForm(FormName = "security-settings")] private string? EntraClientId { get; set; }
@@ -86,18 +86,24 @@
 
     protected override async Task OnInitializedAsync()
     {
+        var entra = await Db.EntraSsoSettings.AsNoTracking().FirstOrDefaultAsync();
+        HasStoredEntraClientSecret = !string.IsNullOrEmpty(entra?.ClientSecret);
+
+        // Skip the form fields on a POST: the submitted values are already bound, and reloading here
+        // would save the old ones back (see Detection.razor's OnInitializedAsync).
+        if (HttpContext?.Request.HasFormContentType == true) return;
         ManagementAllowList = await Settings.GetRawAsync(IpAllowListMiddleware.ManagementSettingKey) ?? string.Empty;
         LiveViewAllowList = await Settings.GetRawAsync(IpAllowListMiddleware.LiveViewSettingKey) ?? string.Empty;
-
-        var entra = await Db.EntraSsoSettings.AsNoTracking().FirstOrDefaultAsync();
         EntraEnabled = entra?.IsEnabled ?? false;
         EntraTenantId = entra?.TenantId;
         EntraClientId = entra?.ClientId;
-        HasStoredEntraClientSecret = !string.IsNullOrEmpty(entra?.ClientSecret);
     }
 
     private async Task HandleSaveAsync()
     {
+        // An empty textarea posts nothing, which binds null.
+        ManagementAllowList ??= string.Empty;
+        LiveViewAllowList ??= string.Empty;
         var management = IpAllowListPolicy.Parse(ManagementAllowList);
         var liveView = IpAllowListPolicy.Parse(LiveViewAllowList);
         var invalid = management.InvalidLines.Concat(liveView.InvalidLines).ToList();

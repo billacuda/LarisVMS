@@ -13,13 +13,16 @@ public class DatabaseModel(ISetupService setupService) : PageModel
 
     public string? ErrorMessage { get; set; }
 
-    public void OnGet() { }
+    public void OnGet() { /* The form starts with its defaults. */ }
 
     public async Task<IActionResult> OnPostAsync()
     {
         try
         {
-            await setupService.SetupDatabaseAsync(ServerName, DatabaseName, Username, Password);
+            // An existing, already set-up LarisVMS database: its admin, branding, storage and node
+            // settings are already in place, so the remaining steps would only overwrite them.
+            if (await setupService.SetupDatabaseAsync(ServerName, DatabaseName, Username, Password))
+                return Redirect("~/");
             return RedirectToPage("Admin");
         }
         catch (Microsoft.Data.SqlClient.SqlException ex) when (ex.Number is 26 or -1 or 2 or 53 && !ServerName.Contains('\\'))

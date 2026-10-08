@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -72,6 +74,71 @@ namespace LarisVMS.Installer
             var m = Regex.Match(json, "\"" + Regex.Escape(name) + "\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", RegexOptions.IgnoreCase);
             return m.Success ? Regex.Unescape(m.Groups[1].Value) : null;
         }
+
+        /// <summary>Trims whitespace and one pair of surrounding quotes from a typed path (Explorer's
+        /// "Copy as path" adds them).</summary>
+        public static string CleanPath(string? path)
+        {
+            var p = (path ?? "").Trim();
+            if (p.Length >= 2 && p[0] == '"' && p[p.Length - 1] == '"') p = p.Substring(1, p.Length - 2).Trim();
+            return p;
+        }
+
+        /// <summary>Opens a .pfx the way the services will, so a wrong password or unreadable file is
+        /// caught in the dialog instead of when the service starts.</summary>
+        public static string? CheckPfx(string path, string? password, string pathProperty, string passwordProperty)
+        {
+            if (!File.Exists(path))
+                return "Certificate file not found or not readable from this account: " + path + " (property " + pathProperty + ").";
+            try
+            {
+#pragma warning disable SYSLIB0057 // X509CertificateLoader doesn't exist on net472; also compiled into the net10 tests
+                using (new X509Certificate2(path, password ?? "", X509KeyStorageFlags.EphemeralKeySet)) { }
+#pragma warning restore SYSLIB0057
+                return null;
+            }
+            catch (CryptographicException ex)
+            {
+                return "Could not open " + path + " — " + ex.Message.Trim() + " Check the certificate password (property " + passwordProperty + ").";
+            }
+        }
+
+        /// <summary>The <c>Kestrel:Certificates:Default</c> object of an appsettings file (the only
+        /// "Default" key whose value is an object), so its Path/Password aren't confused with any
+        /// other "Path"/"Password" key in the file. Null when there's no such block.</summary>
+        public static Match? CertBlock(string json)
+        {
+            var m = Regex.Match(json, "\"Default\"\\s*:\\s*\\{[^{}]*\\}");
+            return m.Success ? m : null;
+        }
+
+        public sealed class EndpointConfig
+        {
+            public string Port { get; set; } = "";
+            public string? Host { get; set; }
+            public string? PfxPath { get; set; }
+            public bool AllowInsecure { get; set; }
+        }
+
+        /// <summary>Reads the settings a node's client-endpoint.json or a proxy's proxy-endpoint.json
+        /// holds (as WriteEndpointConfig writes them). Null when there's no valid port, or when
+        /// <paramref name="requireEnabled"/> and the node's endpoint is switched off.</summary>
+        public static EndpointConfig? ReadEndpointConfig(string json, bool requireEnabled)
+        {
+            if (requireEnabled && !Regex.IsMatch(json, "\"enabled\"\\s*:\\s*true", RegexOptions.IgnoreCase)) return null;
+            var port = Regex.Match(json, "\"port\"\\s*:\\s*(\\d+)", RegexOptions.IgnoreCase);
+            if (!port.Success || !IsPort(port.Groups[1].Value)) return null;
+
+            return new EndpointConfig
+            {
+                Port = port.Groups[1].Value,
+                Host = NullIfEmpty(JsonReadString(json, "host")),
+                PfxPath = NullIfEmpty(JsonReadString(json, "pfxPath")),
+                AllowInsecure = Regex.IsMatch(json, "\"allowInsecure\"\\s*:\\s*true", RegexOptions.IgnoreCase),
+            };
+        }
+
+        private static string? NullIfEmpty(string? value) => string.IsNullOrEmpty(value) ? null : value;
 
         public static bool IsLocalSystem(string? account) =>
             string.IsNullOrWhiteSpace(account)

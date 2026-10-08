@@ -5,8 +5,12 @@
     <UI Id="LarisWebUI">
       <UIRef Id="LarisCommonUI" />
 
-      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="WebSettingsDlg" Condition="NOT Installed" />
-      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Condition="Installed AND PATCH" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="WebSettingsDlg" Order="1" Condition="NOT Installed AND NOT LARIS_UPGRADE" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Order="2" Condition="Installed AND PATCH" />
+      <!-- Upgrade: settings are already in place, so skip to the first page that needs input (usually none). -->
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="DoAction" Value="ResolveUpgradeRoute" Order="3" Condition="NOT Installed AND LARIS_UPGRADE" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Property="LARIS_ACCOUNT_BACK" Value="WelcomeDlg" Order="4" Condition="NOT Installed AND LARIS_UPGRADE" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="[LARIS_UPGRADE_DLG]" Order="5" Condition="NOT Installed AND LARIS_UPGRADE" />
 
       <Dialog Id="WebSettingsDlg" Width="370" Height="270" Title="[ProductName] Setup">
         <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
@@ -22,7 +26,13 @@
         <Control Id="CertPwdLabel" Type="Text" X="20" Y="100" Width="110" Height="15" Text="Certificate password:" />
         <Control Id="CertPwd" Type="Edit" X="135" Y="98" Width="215" Height="17" Property="CERTPASSWORD" Password="yes" />
         <Control Id="CertHint" Type="Text" X="135" Y="120" Width="215" Height="40" NoPrefix="yes"
-                 Text="Optional. Blank uses a self-signed certificate on a new install, and keeps the current certificate on an upgrade. A renewed .pfx at the same path is picked up automatically." />
+                 ShowCondition="NOT CERTPASSWORDSTORED" HideCondition="CERTPASSWORDSTORED"
+                 Text="Optional. Blank uses a self-signed certificate on a new install. A renewed .pfx at the same path is picked up automatically. A share path must be readable by the service account." />
+        <!-- CERTPASSWORDSTORED: LoadSettings found a password in the existing appsettings.Production.json.
+             The password itself is never read into a property, so the field stays blank. -->
+        <Control Id="CertStoredHint" Type="Text" X="135" Y="120" Width="215" Height="40" NoPrefix="yes"
+                 ShowCondition="CERTPASSWORDSTORED" HideCondition="NOT CERTPASSWORDSTORED"
+                 Text="A password is already saved for this certificate. Leave the field blank to keep it, or enter a new one. A share path must be readable by the service account." />
         <Control Id="NextSteps" Type="Text" X="20" Y="170" Width="330" Height="40" NoPrefix="yes"
                  Text="After setup, browse to https://localhost:[HTTPSPORT]/ to run the setup wizard (database, first admin account, node registration key)." />
 

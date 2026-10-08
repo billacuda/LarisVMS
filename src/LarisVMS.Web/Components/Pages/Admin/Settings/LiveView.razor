@@ -65,7 +65,7 @@
     [CascadingParameter] private HttpContext? HttpContext { get; set; }
 
     [SupplyParameterFromForm(FormName = "liveview-settings")] private bool AdaptiveStreamingEnabled { get; set; }
-    [SupplyParameterFromForm(FormName = "liveview-settings")] private string DirectStreaming { get; set; } = "Proxy";
+    [SupplyParameterFromForm(FormName = "liveview-settings")] private string? DirectStreaming { get; set; }
     [SupplyParameterFromForm(FormName = "liveview-settings")] private bool AllowInsecureClientEndpoint { get; set; }
     [SupplyParameterFromForm(FormName = "liveview-settings")] private string? PublicOrigin { get; set; }
     [SupplyParameterFromForm(FormName = "liveview-settings")] private int? CustomPort { get; set; }
@@ -75,6 +75,9 @@
 
     protected override async Task OnInitializedAsync()
     {
+        // Skip on a form POST: the submitted values are already bound, and reloading here would save
+        // the old ones back (see Detection.razor's OnInitializedAsync).
+        if (HttpContext?.Request.HasFormContentType == true) return;
         AdaptiveStreamingEnabled = await Settings.GetAsync("LiveView.AdaptiveStreamingEnabled", false);
         CustomPort = await Settings.GetAsync<int?>(PortSegmentationMiddleware.SettingKey, null);
         DirectStreaming = await Settings.GetAsync("LiveView.DirectStreaming", "Proxy");

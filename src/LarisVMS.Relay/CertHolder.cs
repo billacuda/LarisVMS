@@ -25,6 +25,8 @@ public record CertHolderOptions(string? PfxPath, string? PfxPassword, bool Allow
 /// </summary>
 public sealed class CertHolder(CertHolderOptions options, ILogger logger)
 {
+    private readonly CertHolderOptions options = options with { PfxPath = CleanPath(options.PfxPath) };
+
     private volatile X509Certificate2? _current;
     private DateTime _loadedPfxWriteUtc;
 
@@ -175,6 +177,15 @@ public sealed class CertHolder(CertHolderOptions options, ILogger logger)
         // Reload from the exported bytes so the key ends up in a form Kestrel's TLS stack accepts on
         // Windows.
         return X509CertificateLoader.LoadPkcs12(pfxBytes, SelfSignedPassword);
+    }
+
+    /// <summary>Trims whitespace and one pair of surrounding quotes — Explorer's "Copy as path" adds
+    /// them, and a quoted path otherwise fails as an invalid file name.</summary>
+    public static string? CleanPath(string? path)
+    {
+        var p = path?.Trim();
+        if (p is { Length: >= 2 } && p[0] == '"' && p[^1] == '"') p = p[1..^1].Trim();
+        return p;
     }
 
     private static DateTime SafeLastWriteUtc(string path)

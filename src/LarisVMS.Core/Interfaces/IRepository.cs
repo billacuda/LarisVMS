@@ -88,7 +88,16 @@ public interface ISetupService
     Task<bool> IsDatabaseConfiguredAsync(CancellationToken ct = default);
     Task<bool> IsAdminCreatedAsync(CancellationToken ct = default);
 
-    Task SetupDatabaseAsync(string serverName, string databaseName, string? username, string? password,
+    /// <summary>True once the wizard has finished (the Setup.IsComplete flag) against a reachable
+    /// database. Stricter than <see cref="IsSetupCompleteAsync"/>, which is already true mid-wizard
+    /// once the admin exists; this one closes the wizard pages for good.</summary>
+    Task<bool> IsSetupFinalizedAsync(CancellationToken ct = default);
+
+    /// <summary>Creates the database if needed and migrates it. Returns true when it adopted an
+    /// existing, already set-up LarisVMS database (upgraded in place, nothing seeded, setup marked
+    /// complete) so the wizard can skip its remaining steps; throws for an existing database that
+    /// isn't a LarisVMS one.</summary>
+    Task<bool> SetupDatabaseAsync(string serverName, string databaseName, string? username, string? password,
         CancellationToken ct = default);
 
     Task CompleteSetupAsync(string adminEmail, string adminPassword, CancellationToken ct = default);

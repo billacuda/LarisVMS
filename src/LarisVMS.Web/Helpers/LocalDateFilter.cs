@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace LarisVMS.Web.Helpers;
 
 /// <summary>
@@ -24,14 +26,14 @@ public static class LocalDateFilter
     /// <summary>The UTC instant at which the given local date begins, or null when the text isn't a
     /// date (including empty — an untouched filter field), which every caller treats as "no bound".</summary>
     public static DateTime? StartOfDayUtc(string? date) =>
-        DateOnly.TryParse(date, out var d)
+        DateOnly.TryParse(date, CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)
             ? DateTime.SpecifyKind(d.ToDateTime(TimeOnly.MinValue), DateTimeKind.Local).ToUniversalTime()
             : null;
 
     /// <summary>The UTC instant at the very end of the given local date (23:59:59.9999999 local), so
     /// an inclusive upper-bound comparison covers the whole day.</summary>
     public static DateTime? EndOfDayUtc(string? date) =>
-        DateOnly.TryParse(date, out var d)
+        DateOnly.TryParse(date, CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)
             ? DateTime.SpecifyKind(d.ToDateTime(TimeOnly.MaxValue), DateTimeKind.Local).ToUniversalTime()
             : null;
 }

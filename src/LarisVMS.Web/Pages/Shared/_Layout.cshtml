@@ -4,6 +4,7 @@
 @inject ApplicationDbContext LayoutDb
 @inject IBrandingService BrandingService
 @inject IPermissionService PermissionService
+@inject LarisVMS.Web.Services.ReleaseCheckState ReleaseCheckState
 @{
     // Every field is already validated by the service (see Branding.Normalize*), which is what makes
     // interpolating the colors/font into the style block below safe.
@@ -53,6 +54,8 @@
     // Settings/Index.cshtml) instead, so this is now "can reach the hub at all", not "expand a
     // dropdown of buttons" — same OR of every gate the hub could show a card for.
     var showSettingsHub = showSettings || showPlugins || showAlerts || showApiKeys || showNodes || showLogs;
+    // New-version notice: only for people who can change settings — nobody else can act on it.
+    var availableRelease = nav.Has("Settings", "Edit") ? ReleaseCheckState.Available : null;
 
     // Sidebar active-item state — the old top navbar never marked a current page, but a persistent
     // sidebar reads as broken without one telling you where you are.
@@ -206,7 +209,14 @@
                         data-bs-target="#lvSidebar" aria-controls="lvSidebar" aria-label="Open navigation">
                     <span aria-hidden="true">☰</span>
                 </button>
+                @* Filled from the page's own <h1> by page-title.js. *@
+                <div class="lv-topbar-title" id="lvPageTitle"></div>
                 <div class="lv-topbar-right ms-auto">
+                    @if (availableRelease is not null)
+                    {
+                        <a class="lv-update-notice" href="@availableRelease.Url" target="_blank" rel="noopener noreferrer"
+                           title="See what's new in @availableRelease.Version">✨ <span class="d-none d-sm-inline">Version </span>@availableRelease.Version<span class="d-none d-sm-inline"> is available</span></a>
+                    }
                     <button class="lv-darktoggle" id="themeToggle" type="button"
                             onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme"><span id="themeIcon" aria-hidden="true">🌙</span></button>
                     <partial name="_LoginPartial" />
@@ -218,6 +228,9 @@
             </main>
         </div>
     </div>
+
+    @* Straight after the content, before the other scripts, so the title moves before first paint. *@
+    <script src="~/js/page-title.js" asp-append-version="true"></script>
 
     <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js" asp-append-version="true"></script>
     @* Loaded before anything that reads/writes a user preference, including theme.js and
