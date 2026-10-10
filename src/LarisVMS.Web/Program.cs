@@ -18,6 +18,7 @@ using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
 using LarisVMS.Core.Logging;
 using LarisVMS.Core.Security;
+using LarisVMS.Infrastructure.ActiveDirectory;
 using LarisVMS.Infrastructure.Alerts;
 using LarisVMS.Infrastructure.Alerts.Channels;
 using LarisVMS.Infrastructure.Auth;
@@ -138,6 +139,10 @@ builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
         options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
         options.Lockout.MaxFailedAccessAttempts = 5;
         options.Lockout.AllowedForNewUsers = true;
+        // AD accounts use their sAMAccountName as UserName, which may contain spaces and other
+        // characters Identity's default allow-list rejects. Empty disables the check; local accounts
+        // are still email addresses.
+        options.User.AllowedUserNameCharacters = string.Empty;
     })
     .AddRoles<IdentityRole>()
     .AddEntityFrameworkStores<ApplicationDbContext>()
@@ -191,6 +196,26 @@ builder.Services.ConfigureApplicationCookie(options =>
         if (previousValidatePrincipal is not null) await previousValidatePrincipal(ctx);
         if (ctx.Principal is null) return; // already rejected by the security-stamp check above
 
+        var db = ctx.HttpContext.RequestServices.GetRequiredService<ApplicationDbContext>();
+        var userId = ctx.Principal.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+
+        // A disabled or deleted user is signed out on their very next request — the security-stamp
+        // check above only re-validates every 30 minutes. "Disabled" is the indefinite lockout the
+        // Users page and AD sync set, not the 15-minute failed-password lockout: someone mistyping
+        // another user's password five times shouldn't sign that user out.
+        if (userId is not null)
+        {
+            var disabledAfter = DateTimeOffset.UtcNow.AddYears(100);
+            var account = await db.Users.Where(u => u.Id == userId)
+                .Select(u => new { u.LockoutEnd }).FirstOrDefaultAsync();
+            if (account is null || account.LockoutEnd > disabledAfter)
+            {
+                ctx.RejectPrincipal();
+                await ctx.HttpContext.SignOutAsync(IdentityConstants.ApplicationScheme);
+                return;
+            }
+        }
+
         var issuedUtc = ctx.Properties.IssuedUtc;
         if (issuedUtc is null) return; // no issued time to measure age against — fail open, not closed
 
@@ -198,7 +223,6 @@ builder.Services.ConfigureApplicationCookie(options =>
             .Select(c => c.Value).ToList();
         if (roleNames.Count == 0) return;
 
-        var db = ctx.HttpContext.RequestServices.GetRequiredService<ApplicationDbContext>();
         var settings = ctx.HttpContext.RequestServices.GetRequiredService<ISettingsResolver>();
 
         var roleIds = await db.Roles.Where(r => roleNames.Contains(r.Name!)).Select(r => r.Id).ToListAsync();
@@ -220,7 +244,6 @@ builder.Services.ConfigureApplicationCookie(options =>
         // ExpiresAtUtc but hasn't been swept yet. This narrows that window from "up to one sweep
         // interval" to "the very next request": a full sign-out rather than surgically dropping just
         // the one expired role claim, matching this handler's own existing all-or-nothing shape above.
-        var userId = ctx.Principal.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
         if (userId is not null &&
             await db.RoleAssignmentExpiries.AnyAsync(e => e.UserId == userId && roleIds.Contains(e.RoleId) && e.ExpiresAtUtc <= DateTime.UtcNow))
         {
@@ -307,6 +330,12 @@ builder.Services.AddScoped<IEventColorService, EventColorService>();
 builder.Services.AddScoped<IPtzService, PtzService>();
 builder.Services.AddScoped<IBookmarkService, BookmarkService>();
 builder.Services.AddScoped<IApiKeyService, ApiKeyService>();
+builder.Services.AddSingleton<UserConnectionRegistry>();
+builder.Services.AddScoped<UserDisableService>();
+// Active Directory sign-in and group → role sync.
+builder.Services.AddSingleton<IActiveDirectoryService, ActiveDirectoryService>();
+builder.Services.AddScoped<ActiveDirectoryUserSync>();
+builder.Services.AddSingleton<ActiveDirectorySyncTrigger>();
 
 // Roles/permissions overhaul, pass 4: PTZ priority arbitration. PtzArbitrationService is a
 // singleton — one shared in-process hold table per camera, not per-request state (see its own doc
@@ -348,6 +377,7 @@ builder.Services.AddHostedService<AlertEvaluatorService>();
 builder.Services.AddHostedService<BookmarkRetentionService>();
 builder.Services.AddHostedService<MotionSpanRetentionService>();
 builder.Services.AddHostedService<RoleAssignmentExpirySweepService>();
+builder.Services.AddHostedService<ActiveDirectorySyncService>();
 builder.Services.AddHostedService<LarisVMS.Web.Services.WebLogLevelInitializer>();
 // Failover plan phase 2: poll each media proxy's /health and write MediaProxy.Healthy.
 builder.Services.AddHostedService<LarisVMS.Web.Services.ProxyHealthMonitor>();
@@ -924,7 +954,7 @@ proxiesApi.MapGet("/config", async (HttpContext ctx, IProxyService proxyService,
 // knows the URL shape).
 app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICameraService cameraService,
     ICameraAccessService cameraAccess, IAuditService auditService, LarisVMS.Web.Services.MediaRelayMetrics relayMetrics,
-    LarisVMS.Web.Services.MediaRoutingService routing, CancellationToken ct) =>
+    LarisVMS.Web.Services.MediaRoutingService routing, UserConnectionRegistry connections, CancellationToken ct) =>
 {
     if (!ctx.WebSockets.IsWebSocketRequest)
     {
@@ -998,7 +1028,9 @@ app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICame
     relayMetrics.EnterLiveRelay();
     try
     {
-        await ProxyLiveViewAsync(nodeSocket, browserSocket, ct);
+        // Registered so disabling this user closes the relay at once, not when the viewer leaves.
+        using var lease = connections.Register(ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, ct);
+        await ProxyLiveViewAsync(nodeSocket, browserSocket, lease.Token);
     }
     finally
     {
@@ -1013,7 +1045,7 @@ app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICame
 // database access at all, so this proxy is the only tier that can.
 app.MapGet("/live/{cameraId:guid}/detections", async (HttpContext ctx, Guid cameraId, ICameraService cameraService,
     ICameraAccessService cameraAccess, DetectedObjectCategoryColorCache colorCache,
-    LarisVMS.Web.Services.MediaRoutingService routing, CancellationToken ct) =>
+    LarisVMS.Web.Services.MediaRoutingService routing, UserConnectionRegistry connections, CancellationToken ct) =>
 {
     if (!ctx.WebSockets.IsWebSocketRequest)
     {
@@ -1055,7 +1087,8 @@ app.MapGet("/live/{cameraId:guid}/detections", async (HttpContext ctx, Guid came
     }
 
     using var browserSocket = await ctx.WebSockets.AcceptWebSocketAsync();
-    await ProxyDetectionOverlayAsync(nodeSocket, browserSocket, colorCache, ct);
+    using var lease = connections.Register(ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, ct);
+    await ProxyDetectionOverlayAsync(nodeSocket, browserSocket, colorCache, lease.Token);
 }).RequireAuthorization("Cameras.View");
 
 // Object detection plan pass 3c-1: live per-zone motion score wash — same two-hop shape as the
@@ -1065,7 +1098,8 @@ app.MapGet("/live/{cameraId:guid}/detections", async (HttpContext ctx, Guid came
 // the editor already has loaded from /api/cameras/{id}/zones) — no per-tick DB augmentation, so this
 // is a pure relay rather than a parse-and-reattach proxy.
 app.MapGet("/live/{cameraId:guid}/motion-zones", async (HttpContext ctx, Guid cameraId, ICameraService cameraService,
-    ICameraAccessService cameraAccess, LarisVMS.Web.Services.MediaRoutingService routing, CancellationToken ct) =>
+    ICameraAccessService cameraAccess, LarisVMS.Web.Services.MediaRoutingService routing, UserConnectionRegistry connections,
+    CancellationToken ct) =>
 {
     if (!ctx.WebSockets.IsWebSocketRequest)
     {
@@ -1107,7 +1141,8 @@ app.MapGet("/live/{cameraId:guid}/motion-zones", async (HttpContext ctx, Guid ca
     }
 
     using var browserSocket = await ctx.WebSockets.AcceptWebSocketAsync();
-    await ProxyMotionZoneScoresAsync(nodeSocket, browserSocket, ct);
+    using var lease = connections.Register(ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, ct);
+    await ProxyMotionZoneScoresAsync(nodeSocket, browserSocket, lease.Token);
 }).RequireAuthorization("Cameras.Edit");
 
 // M8/M5: one-shot still frame — the zone editor's background image, same proxy shape as /live
@@ -1640,6 +1675,36 @@ app.MapPut("/api/preferences/{key}", async (string key, HttpContext ctx, SetPref
     await preferences.SetAsync(userId, key, request.Value, ct);
     return Results.NoContent();
 }).RequireAuthorization();
+
+// ── Session heartbeat ────────────────────────────────────────────────────────
+// Live view polls this so a disabled user's direct-to-node streams stop: those sockets go straight to
+// the node, so nothing on this tier can close them. Anonymous-allowed so a rejected cookie gets a
+// plain 401 instead of the cookie handler's 302 to the login page.
+app.MapGet("/api/session/ping", (HttpContext ctx) =>
+    ctx.User.Identity?.IsAuthenticated == true ? Results.NoContent() : Results.Unauthorized())
+    .AllowAnonymous();
+
+// ── Active Directory group lookup ────────────────────────────────────────────
+// Backs the group autocomplete on Settings › Active Directory: up to 10 security groups whose name
+// starts with q, alphabetical. Works once a domain is saved, before AD sign-in is switched on, so
+// groups can be linked first.
+app.MapGet("/api/admin/ad/groups", async (string? q, ApplicationDbContext db, IActiveDirectoryService directory,
+    CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(q)) return Results.Json(Array.Empty<object>());
+    var settings = await db.ActiveDirectorySettings.AsNoTracking().FirstOrDefaultAsync(ct);
+    if (settings is null || !AdDomain.IsValid(settings.Domain))
+        return Results.Problem("Save an Active Directory domain first.", statusCode: StatusCodes.Status409Conflict);
+    try
+    {
+        var groups = await directory.SearchGroupsAsync(settings, q, 10, ct);
+        return Results.Json(groups.Select(g => new { name = g.Name, sid = g.Sid }));
+    }
+    catch (ActiveDirectoryException ex)
+    {
+        return Results.Problem(ex.Message, statusCode: StatusCodes.Status502BadGateway);
+    }
+}).RequireAuthorization("Settings.Edit");
 
 // ── Audit log CSV export (Phase 2 Blazor migration) ──────────────────────────
 // Ported from AuditLogsModel.OnGetExportAsync (Pages/Logs/AuditLogs.cshtml.cs) when that page moved

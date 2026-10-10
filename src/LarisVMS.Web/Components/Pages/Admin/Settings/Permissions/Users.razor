@@ -6,7 +6,9 @@
 @using LarisVMS.Core.Entities
 @using LarisVMS.Core.Enums
 @using LarisVMS.Core.Interfaces
+@using LarisVMS.Infrastructure.ActiveDirectory
 @using LarisVMS.Infrastructure.Data
+@using LarisVMS.Infrastructure.Services
 @using LarisVMS.Web.Services
 @using Microsoft.AspNetCore.Identity
 @using Microsoft.EntityFrameworkCore
@@ -14,6 +16,7 @@
 @inject UserManager<ApplicationUser> UserManagerService
 @inject IAuthorizationService AuthorizationService
 @inject IAuditService AuditService
+@inject UserDisableService UserDisabler
 
 <PageTitle>Permissions — Users - @AppName</PageTitle>
 
@@ -40,7 +43,7 @@
         <table class="table table-sm mb-0 align-middle">
             <thead class="table-light">
                 <tr>
-                    <th>Email</th>
+                    <th>User</th>
                     <th>Display name</th>
                     <th>Roles</th>
                     <th>Status</th>
@@ -51,9 +54,26 @@
                 @foreach (var u in UserRows)
                 {
                     <tr>
-                        <td>@u.Email</td>
+                        <td>
+                            @u.Email
+                            @if (u.IsDirectoryManaged)
+                            {
+                                <span class="badge text-bg-info ms-1" title="Signs in with Active Directory">AD</span>
+                                @if (!string.IsNullOrEmpty(u.AdEmail))
+                                {
+                                    <div class="small text-muted">@u.AdEmail</div>
+                                }
+                            }
+                        </td>
                         <td>@u.DisplayName</td>
                         <td>
+                            @if (u.IsDirectoryManaged)
+                            {
+                                <span>@(u.RoleNames.Count > 0 ? string.Join(", ", u.RoleNames) : "(none)")</span>
+                                <div class="small text-muted">Managed by AD group sync. <a href="/Admin/Settings/ActiveDirectory">Group links</a></div>
+                            }
+                            else
+                            {
                             @* FormName unique per row/expiry — Blazor throws "more than one named
                                submit event with the name X" when a loop reuses a shared FormName. *@
                             <EditForm Model="this" FormName="@($"save-user-roles-{u.Id}")" OnValidSubmit="HandleSaveRolesAsync" class="d-flex flex-wrap gap-2 align-items-center">
@@ -68,6 +88,7 @@
                                 }
                                 <button type="submit" class="btn btn-sm btn-outline-primary">Save</button>
                             </EditForm>
+                            }
                             @if (u.ActiveExpiries.Count > 0)
                             {
                                 <div class="mt-1">
@@ -102,25 +123,31 @@
                                     @(u.IsEnabled ? "Disable" : "Enable")
                                 </button>
                             </EditForm>
-                            <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#reset-@u.Id">
-                                Reset password
-                            </button>
+                            @if (!u.IsDirectoryManaged)
+                            {
+                                <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#reset-@u.Id">
+                                    Reset password
+                                </button>
+                            }
                         </td>
                     </tr>
-                    <tr class="collapse" id="reset-@u.Id">
-                        <td colspan="5" class="bg-body-secondary">
-                            <EditForm Model="this" FormName="@($"reset-user-password-{u.Id}")" OnValidSubmit="HandleResetPasswordAsync" class="row g-2 align-items-end py-2">
-                                <input type="hidden" name="ResetPasswordUserId" value="@u.Id" />
-                                <div class="col-sm-4">
-                                    <label class="form-label small mb-1">New password for @u.Email</label>
-                                    <input type="password" name="NewPasswordForReset" class="form-control form-control-sm" required minlength="8" />
-                                </div>
-                                <div class="col-auto">
-                                    <button type="submit" class="btn btn-sm btn-primary">Set password</button>
-                                </div>
-                            </EditForm>
-                        </td>
-                    </tr>
+                    @if (!u.IsDirectoryManaged)
+                    {
+                        <tr class="collapse" id="reset-@u.Id">
+                            <td colspan="5" class="bg-body-secondary">
+                                <EditForm Model="this" FormName="@($"reset-user-password-{u.Id}")" OnValidSubmit="HandleResetPasswordAsync" class="row g-2 align-items-end py-2">
+                                    <input type="hidden" name="ResetPasswordUserId" value="@u.Id" />
+                                    <div class="col-sm-4">
+                                        <label class="form-label small mb-1">New password for @u.Email</label>
+                                        <input type="password" name="NewPasswordForReset" class="form-control form-control-sm" required minlength="8" />
+                                    </div>
+                                    <div class="col-auto">
+                                        <button type="submit" class="btn btn-sm btn-primary">Set password</button>
+                                    </div>
+                                </EditForm>
+                            </td>
+                        </tr>
+                    }
                 }
                 @if (UserRows.Count == 0)
                 {
@@ -165,8 +192,10 @@
 </div>
 
 @code {
+    /// <summary>Email is the sign-in name: the email address for a local account, the AD username
+    /// for an AD account (whose own email, if AD has one, is AdEmail).</summary>
     private sealed record UserRow(string Id, string Email, string? DisplayName, bool IsEnabled, IReadOnlyList<string> RoleNames,
-        IReadOnlyList<ExpiryRow> ActiveExpiries);
+        IReadOnlyList<ExpiryRow> ActiveExpiries, bool IsDirectoryManaged, string? AdEmail);
 
     private sealed record ExpiryRow(Guid Id, string RoleName, DateTime ExpiresAtUtc);
 
@@ -210,23 +239,29 @@
         var userRoles = await Db.UserRoles.ToListAsync();
         var expiries = await Db.RoleAssignmentExpiries.ToListAsync();
         var roleNamesById = RoleRows.ToDictionary(r => r.Id, r => r.Name ?? r.Id);
+        var adUserIds = (await Db.UserLogins.Where(l => l.LoginProvider == ActiveDirectoryUserSync.LoginProvider)
+            .Select(l => l.UserId).ToListAsync()).ToHashSet();
 
         UserRows = users.Select(u => new UserRow(
             u.Id,
-            u.Email ?? u.UserName ?? u.Id,
+            adUserIds.Contains(u.Id) ? u.UserName ?? u.Id : u.Email ?? u.UserName ?? u.Id,
             u.DisplayName,
             IsUserEnabled(u),
             userRoles.Where(ur => ur.UserId == u.Id).Select(ur => roleNamesById.GetValueOrDefault(ur.RoleId, "?")).OrderBy(n => n).ToList(),
             expiries.Where(e => e.UserId == u.Id)
                 .Select(e => new ExpiryRow(e.Id, roleNamesById.GetValueOrDefault(e.RoleId, "?"), e.ExpiresAtUtc))
-                .OrderBy(e => e.ExpiresAtUtc).ToList()
-        )).ToList();
+                .OrderBy(e => e.ExpiresAtUtc).ToList(),
+            adUserIds.Contains(u.Id),
+            adUserIds.Contains(u.Id) ? u.Email : null
+        )).OrderBy(r => r.Email, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     private async Task HandleCreateAsync()
     {
         var email = (NewEmail ?? "").Trim();
-        if (string.IsNullOrEmpty(email))
+        // Local accounts are always email addresses: sign-in sends anything without "@" to Active
+        // Directory, so a local username without one could never sign in.
+        if (string.IsNullOrEmpty(email) || !email.Contains('@'))
         {
             ErrorMessage = "Enter an email address.";
             await LoadAsync();
@@ -278,6 +313,12 @@
         if (user is null)
         {
             ErrorMessage = "That user no longer exists.";
+            await LoadAsync();
+            return;
+        }
+        if (await IsDirectoryManagedAsync(user.Id))
+        {
+            ErrorMessage = "This account's roles come from Active Directory group links.";
             await LoadAsync();
             return;
         }
@@ -444,16 +485,14 @@
                 return;
             }
 
-            await UserManagerService.SetLockoutEnabledAsync(user, true);
-            await UserManagerService.SetLockoutEndDateAsync(user, DateTimeOffset.MaxValue);
-            await AuditService.LogAsync("User.Disable", CurrentUserId, CurrentUserName, RemoteIp, user.Email);
-            SavedMessage = $"\"{user.Email}\" disabled.";
+            // Also ends their sessions and open live-view streams.
+            await UserDisabler.DisableAsync(user, byDirectorySync: false, CurrentUserId, CurrentUserName, RemoteIp, user.Email ?? user.UserName);
+            SavedMessage = $"\"{user.Email ?? user.UserName}\" disabled.";
         }
         else
         {
-            await UserManagerService.SetLockoutEndDateAsync(user, null);
-            await AuditService.LogAsync("User.Enable", CurrentUserId, CurrentUserName, RemoteIp, user.Email);
-            SavedMessage = $"\"{user.Email}\" enabled.";
+            await UserDisabler.EnableAsync(user, CurrentUserId, CurrentUserName, RemoteIp, user.Email ?? user.UserName);
+            SavedMessage = $"\"{user.Email ?? user.UserName}\" enabled.";
         }
 
         await LoadAsync();
@@ -468,6 +507,12 @@
         var user = await UserManagerService.FindByIdAsync(userId);
         if (user is null)
         {
+            await LoadAsync();
+            return;
+        }
+        if (await IsDirectoryManagedAsync(user.Id))
+        {
+            ErrorMessage = "Active Directory accounts sign in with their AD password.";
             await LoadAsync();
             return;
         }
@@ -486,8 +531,10 @@
         await LoadAsync();
     }
 
-    private static bool IsUserEnabled(ApplicationUser user) =>
-        user.LockoutEnd is null || user.LockoutEnd < DateTimeOffset.UtcNow;
+    private static bool IsUserEnabled(ApplicationUser user) => UserDisableService.IsEnabled(user);
+
+    private Task<bool> IsDirectoryManagedAsync(string userId) =>
+        Db.UserLogins.AnyAsync(l => l.UserId == userId && l.LoginProvider == ActiveDirectoryUserSync.LoginProvider);
 
     private async Task<bool> IncludesSuperAdminAsync(IEnumerable<string> roleNames)
     {

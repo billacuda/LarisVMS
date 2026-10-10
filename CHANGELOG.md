@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.216.0] - 2026-10-09
+
+### ➕ Added
+
+- **Active Directory sign-in and group sync.** Domain users sign in with their AD username (no
+  domain or @); local email accounts keep working and can be turned off. AD groups, including nested
+  ones, are linked to roles under Settings → Active Directory, with type-ahead group search. Members
+  are created and synced immediately, then every 30 minutes (5 minutes to 24 hours). Groups and users
+  are matched by SID, so renames carry over. Anyone disabled in AD or removed from every linked group
+  is disabled and signed out. Uses LDAPS by default, with integrated security or a service account.
+
+### 🛠️ Fixed
+
+- **Disabling a user didn't end their sessions.** They stayed signed in, and their live video kept
+  playing, until the session expired. They're now signed out on their next request and their live
+  streams close.
+
 ## [0.215.1] - 2026-10-08
 
 ### 🛠️ Fixed

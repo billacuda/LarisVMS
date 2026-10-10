@@ -75,6 +75,20 @@
         } catch (e) { /* best effort */ }
     }
 
+    // Session heartbeat: a direct stream goes straight to the node, so nothing on the server can close
+    // it when the user is disabled or signed out elsewhere. When the session is gone, leave the page,
+    // which closes every stream on it. Network errors are ignored — only a definite 401 counts.
+    var heartbeatMs = 30000;
+    setInterval(function () {
+        fetch('/api/session/ping', { credentials: 'same-origin', cache: 'no-store' })
+            .then(function (r) {
+                if (r.status !== 401) return;
+                var returnUrl = window.location.pathname + window.location.search;
+                window.location.href = '/Identity/Account/Login?ReturnUrl=' + encodeURIComponent(returnUrl);
+            })
+            .catch(function () { });
+    }, heartbeatMs);
+
     window.larisvmsMediaEndpoint = {
         resolveLive: resolveLive,
         invalidate: invalidate,

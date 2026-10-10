@@ -4,6 +4,7 @@ using LarisVMS.Core.Auth;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Interfaces;
 using LarisVMS.Infrastructure.Data;
+using LarisVMS.Infrastructure.Services;
 
 namespace LarisVMS.Web.Services;
 
@@ -46,6 +47,7 @@ public class RoleAssignmentExpirySweepService(IServiceScopeFactory scopeFactory,
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
         var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
         var auditService = scope.ServiceProvider.GetRequiredService<IAuditService>();
+        var disabler = scope.ServiceProvider.GetRequiredService<UserDisableService>();
 
         var now = DateTime.UtcNow;
         var expired = await db.RoleAssignmentExpiries.Where(e => e.ExpiresAtUtc <= now).ToListAsync(ct);
@@ -57,7 +59,7 @@ public class RoleAssignmentExpirySweepService(IServiceScopeFactory scopeFactory,
 
             try
             {
-                await ProcessOneAsync(db, userManager, auditService, expiry, ct);
+                await ProcessOneAsync(db, userManager, auditService, disabler, expiry, ct);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -68,7 +70,7 @@ public class RoleAssignmentExpirySweepService(IServiceScopeFactory scopeFactory,
     }
 
     private async Task ProcessOneAsync(ApplicationDbContext db, UserManager<ApplicationUser> userManager,
-        IAuditService auditService, RoleAssignmentExpiry expiry, CancellationToken ct)
+        IAuditService auditService, UserDisableService disabler, RoleAssignmentExpiry expiry, CancellationToken ct)
     {
         var user = await userManager.FindByIdAsync(expiry.UserId);
         var role = await db.Roles.FirstOrDefaultAsync(r => r.Id == expiry.RoleId, ct);
@@ -108,9 +110,7 @@ public class RoleAssignmentExpirySweepService(IServiceScopeFactory scopeFactory,
         var remainingRoles = await userManager.GetRolesAsync(user);
         if (remainingRoles.Count == 0)
         {
-            await userManager.SetLockoutEnabledAsync(user, true);
-            await userManager.SetLockoutEndDateAsync(user, DateTimeOffset.MaxValue);
-            await auditService.LogAsync("User.Disable", null, "System", null,
+            await disabler.DisableAsync(user, byDirectorySync: false, null, "System", null,
                 $"{user.Email}: disabled automatically — their last role expired.", ct);
         }
     }

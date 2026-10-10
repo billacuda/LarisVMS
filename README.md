@@ -8,7 +8,7 @@ and administration all run in the browser, on desktop, tablet and phone.
   <a href="https://www.buymeacoffee.com/billacuda"><img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=%E2%98%95&slug=billacuda&button_colour=5F7FFF&font_colour=ffffff&font_family=Cookie&outline_colour=000000&coffee_colour=FFDD00" alt="Buy me a coffee" height="50" /></a>
 </p>
 
-**Current version: [0.215.1](CHANGELOG.md)**
+**Current version: [0.216.0](CHANGELOG.md)**
 
 > **A note on AI-assisted development.** This project is built with the help of AI tooling (Claude
 > Code). Features are planned in detail before implementation, generated code is reviewed as it's
@@ -55,6 +55,7 @@ and administration all run in the browser, on desktop, tablet and phone.
 **Administration**
 - Roles, a permissions matrix and per-camera/group access control, with auto-expiring role assignments and PTZ priority between roles.
 - Optional Microsoft Entra ID sign-in.
+- Active Directory sign-in, with AD groups synced to roles.
 - Alert rules that watch a camera or node, sent by email (SMTP, Microsoft Graph, Gmail), webhook, ntfy, Pushover, Slack and Teams.
 - Audit log, system logs, scheduled database backups, and a health dashboard with per-camera fps, bitrate and reconnects, plus per-node CPU, memory, network, fps and detection counts.
 - API keys for automation, and a monitoring status endpoint.
@@ -77,7 +78,7 @@ Settings are inherited **global → node → camera**, and the most specific val
 
 - **Operating system:** any 64-bit Windows version supported by [.NET 10](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md), for both the server and the recorder nodes.
 - **Server:** SQL Server (Express works) using SQL or Integrated authentication. For SQL Server Express, the server name is `.\SQLEXPRESS`. Building from source also needs the [.NET 10 SDK](https://dotnet.microsoft.com/download); the MSIs don't need any .NET runtime.
-- **.NET version:** developed with the .NET SDK 10.0.401. The 0.215.1 installers were built with it and include the .NET 10.0.12 runtime (ASP.NET Core 10.0.12).
+- **.NET version:** developed with the .NET SDK 10.0.401. The 0.216.0 installers were built with it and include the .NET 10.0.12 runtime (ASP.NET Core 10.0.12).
 - **Each recorder node:** [FFmpeg](https://ffmpeg.org/) (`winget install ffmpeg --scope machine`).
 - **LarisVision (optional):** a GPU and its driver, or CPU only. NVIDIA additionally needs CUDA Toolkit 12.x and cuDNN 9.x (see [LarisVision](#larisvision-ai-detection)) if you want to use CUDA or TensorRT acceleration, otherwise DirectML works out of the box.
 - **Cameras:** ONVIF Profile S or T.
@@ -128,9 +129,9 @@ Double-click an installer to be prompted for its settings, or pass them on the c
 ### 1. Install the web server
 
 ```powershell
-msiexec /i LarisVMS-Web-0.215.1-x64.msi
+msiexec /i LarisVMS-Web-0.216.0-x64.msi
 # silent, with a certificate:
-msiexec /i LarisVMS-Web-0.215.1-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx CERTPASSWORD=secret /qn
+msiexec /i LarisVMS-Web-0.216.0-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx CERTPASSWORD=secret /qn
 ```
 
 | Property | Default | Purpose |
@@ -151,7 +152,7 @@ Pointing the wizard at an existing LarisVMS database, for example when reinstall
 Install [FFmpeg](https://ffmpeg.org/) on each recording machine first (`winget install ffmpeg --scope machine`), then:
 
 ```powershell
-msiexec /i LarisVMS-Node-0.215.1-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> STORAGEROOT=D:\Recordings /qn
+msiexec /i LarisVMS-Node-0.216.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> STORAGEROOT=D:\Recordings /qn
 ```
 
 | Property | Default | Purpose |
@@ -171,7 +172,7 @@ The node registers itself and appears under **Settings → Nodes**.
 ### 4. Install media proxies (optional)
 
 ```powershell
-msiexec /i LarisVMS-Proxy-0.215.1-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> CLIENTPORT=4443 /qn
+msiexec /i LarisVMS-Proxy-0.216.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> CLIENTPORT=4443 /qn
 ```
 
 Properties: `SERVERURL`, `REGISTRATIONKEY`, `CLIENTPORT` (default 4443), `CLIENTENDPOINTHOST`, `CLIENTPFXPATH`, `CLIENTPFXPASSWORD`, `CLIENTALLOWINSECURE`, `INSECURETLS`, `SERVICEACCOUNT`, `SERVICEPASSWORD`, `INSTALLFOLDER`, with the same meanings as for the node.
@@ -325,7 +326,6 @@ tools/export-models         Python: exports detection models to ONNX
 - PTZ has not been tested against real PTZ hardware.
 - Windows only (server and nodes).
 - Entra SSO has not been tested (I don't have a tenant to test it against, but in theory it should work)
-- AD integration not implemented yet, but is in the works.
 - Some features listed may have placeholders (webhooks, Teams/Slack integration)
 - Basic email functionality should work with SMTP. Graph API email has not been tested yet.
 

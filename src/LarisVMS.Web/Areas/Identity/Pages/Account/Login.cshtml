@@ -17,9 +17,20 @@
         <form id="account" method="post">
             <input type="hidden" asp-for="ReturnUrl" />
             <div class="mb-3">
-                <label asp-for="Input.Email" class="form-label"></label>
-                <input asp-for="Input.Email" class="form-control" autocomplete="username" autofocus />
-                <span asp-validation-for="Input.Email" class="text-danger small"></span>
+                @if (Model.AdEnabled)
+                {
+                    <label asp-for="Input.Username" class="form-label"></label>
+                }
+                else
+                {
+                    <label asp-for="Input.Username" class="form-label">Email</label>
+                }
+                <input asp-for="Input.Username" class="form-control" autocomplete="username" autofocus />
+                @if (Model.AdEnabled)
+                {
+                    <div class="form-text">Domain accounts: just your username, without the domain.</div>
+                }
+                <span asp-validation-for="Input.Username" class="text-danger small"></span>
             </div>
             <div class="mb-3">
                 <label asp-for="Input.Password" class="form-label"></label>

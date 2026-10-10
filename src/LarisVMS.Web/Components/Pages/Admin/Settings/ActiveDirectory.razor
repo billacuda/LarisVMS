@@ -1,0 +1,545 @@
+@page "/Admin/Settings/ActiveDirectory"
+@attribute [Authorize("Settings.Edit")]
+@using System.Security.Claims
+@using LarisVMS.Core
+@using LarisVMS.Core.Auth
+@using LarisVMS.Core.Entities
+@using LarisVMS.Core.Enums
+@using LarisVMS.Core.Interfaces
+@using LarisVMS.Infrastructure.ActiveDirectory
+@using LarisVMS.Infrastructure.Data
+@using LarisVMS.Web.Services
+@using Microsoft.EntityFrameworkCore
+@inject ApplicationDbContext Db
+@inject IActiveDirectoryService Directory
+@inject ActiveDirectorySyncTrigger SyncTrigger
+@inject IAuthorizationService AuthorizationService
+@inject IAuditService AuditService
+
+<PageTitle>Active Directory settings - @AppName</PageTitle>
+
+<h1>Settings</h1>
+<SettingsTabs ActiveKey="ActiveDirectory" />
+
+@if (!string.IsNullOrEmpty(SavedMessage))
+{
+    <div class="alert alert-success">@SavedMessage</div>
+}
+@if (!string.IsNullOrEmpty(ErrorMessage))
+{
+    <div class="alert alert-danger">@ErrorMessage</div>
+}
+
+<div class="lv-page-narrow">
+<EditForm Model="this" FormName="ad-settings" OnSubmit="HandleSettingsSubmitAsync" data-dirty-guard>
+    <SettingSection Title="Connection" Subtitle="Sign in with domain accounts, and give them roles from their AD groups.">
+        <SettingField Label="Status" Wide HelpLink="/Help/users#active-directory">
+            <div class="form-check form-switch mt-1">
+                <InputCheckbox @bind-Value="AdEnabled" class="form-check-input" id="adEnabled" />
+                <label class="form-check-label" for="adEnabled">Active Directory sign-in enabled</label>
+            </div>
+        </SettingField>
+        <SettingField Label="Domain" Hint="Just the domain name, e.g. corp.example.com.">
+            <InputText @bind-Value="Domain" class="form-control font-monospace" placeholder="corp.example.com" />
+        </SettingField>
+        <SettingField Label="Encryption">
+            <div class="form-check form-switch mt-1">
+                <InputCheckbox @bind-Value="UseLdaps" class="form-check-input" id="useLdaps" />
+                <label class="form-check-label" for="useLdaps">Use LDAPS (port 636)</label>
+            </div>
+        </SettingField>
+        <div class="lv-field lv-field-wide" data-show-when="UseLdaps=false">
+            <div class="alert alert-warning mb-0">
+                ⚠️ LDAP on port 389 is insecure and not recommended. Use LDAPS with a certificate on your domain controllers.
+            </div>
+        </div>
+        <SettingField Label="Lookup account" Hint="Used to look up users and groups. Sign-in always checks the user's own password.">
+            <InputSelect @bind-Value="LookupAccount" class="form-select">
+                <option value="Integrated">Integrated security (this server's account)</option>
+                <option value="ServiceAccount">Service account</option>
+            </InputSelect>
+        </SettingField>
+        <SettingField Label="Service account username" ShowWhen="LookupAccount=ServiceAccount" Hint="DOMAIN\username">
+            <InputText @bind-Value="ServiceAccountUsername" class="form-control font-monospace" placeholder="CORP\svc-larisvms" autocomplete="off" />
+        </SettingField>
+        <SettingField Label="Service account password" ShowWhen="LookupAccount=ServiceAccount" Hint="Leave blank to keep the current password.">
+            <InputText @bind-Value="ServiceAccountPassword" type="password" class="form-control" autocomplete="new-password"
+                       placeholder="@(HasStoredPassword ? "(unchanged)" : "")" />
+        </SettingField>
+        <SettingField Label="Test" Wide>
+            <button type="submit" name="Action" value="TestConnection" class="btn btn-outline-secondary">Test connection</button>
+            @if (TestResult is not null)
+            {
+                <div class="small mt-2 @(TestSucceeded ? "text-success" : "text-danger")">@TestResult</div>
+            }
+        </SettingField>
+    </SettingSection>
+
+    <SettingSection Title="Group sync" Subtitle="Members of linked groups get the linked role. Anyone disabled in AD, or in no linked group, is disabled here.">
+        <SettingField Label="Sync every (minutes)" Hint="5 to 1440 (24 hours). Default 30.">
+            <InputNumber @bind-Value="SyncIntervalMinutes" class="form-control" min="5" max="1440" />
+        </SettingField>
+        <SettingField Label="Last sync" Wide>
+            @if (Current?.LastSyncStartedAt is null)
+            {
+                <div class="text-muted">Not synced yet.</div>
+            }
+            else
+            {
+                <div>
+                    Started @Current.LastSyncStartedAt.Value.ToLocalTime().ToString("g")
+                    @if (Current.LastSyncError is not null)
+                    {
+                        <div class="text-danger small">Failed: @Current.LastSyncError No accounts were changed.</div>
+                    }
+                    else if (Current.LastSyncSummary is not null)
+                    {
+                        <div class="text-muted small">@Current.LastSyncSummary</div>
+                    }
+                </div>
+            }
+            <button type="submit" name="Action" value="SyncNow" class="btn btn-outline-secondary btn-sm mt-2">Sync now</button>
+        </SettingField>
+    </SettingSection>
+
+    <SettingSection Title="Local sign-in" Subtitle="Email-address accounts created in LarisVMS.">
+        <SettingField Label="Local accounts" Wide Hint="Can only be turned off while Active Directory sign-in is on.">
+            <div class="form-check form-switch mt-1">
+                <InputCheckbox @bind-Value="LocalLoginsEnabled" class="form-check-input" id="localLoginsEnabled" />
+                <label class="form-check-label" for="localLoginsEnabled">Allow local (email) sign-in</label>
+            </div>
+        </SettingField>
+        <div class="lv-field lv-field-wide" data-show-when="LocalLoginsEnabled=false">
+            <div class="alert alert-warning mb-0">
+                ⚠️ Store the setup Super Admin's sign-in@(SetupAdminEmail is null ? "" : $" ({SetupAdminEmail})") and password
+                somewhere safe. If Active Directory becomes unavailable, turn local sign-in back on by running
+                <code>UPDATE ActiveDirectorySettings SET LocalLoginsEnabled = 1</code> against the LarisVMS database,
+                then sign in with that account.
+            </div>
+        </div>
+    </SettingSection>
+
+    <div class="lv-savebar">
+        <button type="submit" name="Action" value="Save" class="btn btn-primary">Save</button>
+    </div>
+</EditForm>
+
+<SettingSection Title="Group → role links" Subtitle="Start typing a group name. Tab picks the first match.">
+    <div class="lv-field lv-field-wide">
+        @if (Links.Count == 0)
+        {
+            <div class="text-muted mb-3">No groups linked yet.</div>
+        }
+        else
+        {
+            <table class="table table-sm align-middle mb-3">
+                <thead class="table-light">
+                    <tr><th>AD group</th><th>Role</th><th></th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var link in Links)
+                    {
+                        <tr>
+                            <td>
+                                @link.GroupName
+                                @if (link.IsMissing)
+                                {
+                                    <span class="badge text-bg-warning ms-1" title="This group no longer exists in Active Directory.">missing in AD</span>
+                                }
+                            </td>
+                            <td>@(RoleNames.GetValueOrDefault(link.RoleId, "?"))</td>
+                            <td class="text-end">
+                                <EditForm Model="this" FormName="@($"ad-remove-link-{link.Id}")" OnSubmit="HandleRemoveLinkAsync" class="d-inline">
+                                    <input type="hidden" name="RemoveLinkId" value="@link.Id" />
+                                    <button type="submit" class="btn btn-sm btn-outline-danger"
+                                            onclick="@($"return confirm('Unlink \"{link.GroupName}\"? Its members lose this role at the next sync.');")">
+                                        Remove
+                                    </button>
+                                </EditForm>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+
+        <EditForm Model="this" FormName="ad-add-link" OnSubmit="HandleAddLinkAsync" class="row g-2 align-items-end">
+            <div class="col-sm-6">
+                <label class="form-label" for="adGroupInput">AD group</label>
+                <div class="position-relative">
+                    <input type="text" id="adGroupInput" name="NewGroupName" class="form-control" autocomplete="off"
+                           role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="adGroupList"
+                           placeholder="Start typing a group name" />
+                    <input type="hidden" id="adGroupSid" name="NewGroupSid" />
+                    <ul class="dropdown-menu w-100" id="adGroupList" role="listbox"></ul>
+                </div>
+                <div class="lv-hint" id="adGroupStatus" aria-live="polite"></div>
+            </div>
+            <div class="col-sm-4">
+                <label class="form-label" for="adRoleSelect">Role</label>
+                <select id="adRoleSelect" name="NewRoleId" class="form-select">
+                    @foreach (var role in RoleNames.OrderBy(r => r.Value))
+                    {
+                        <option value="@role.Key">@role.Value</option>
+                    }
+                </select>
+            </div>
+            <div class="col-sm-2">
+                <button type="submit" class="btn btn-primary w-100">Link</button>
+            </div>
+        </EditForm>
+    </div>
+</SettingSection>
+</div>
+
+<SectionContent SectionName="PageScripts">
+    <script src="/js/ad-group-autocomplete.js"></script>
+</SectionContent>
+
+@code {
+    private const string SettingsFormName = "ad-settings";
+
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    [SupplyParameterFromForm(FormName = SettingsFormName)] private bool AdEnabled { get; set; }
+    [SupplyParameterFromForm(FormName = SettingsFormName)] private string? Domain { get; set; }
+    [SupplyParameterFromForm(FormName = SettingsFormName)] private bool UseLdaps { get; set; }
+    [SupplyParameterFromForm(FormName = SettingsFormName)] private string? LookupAccount { get; set; }
+    [SupplyParameterFromForm(FormName = SettingsFormName)] private string? ServiceAccountUsername { get; set; }
+    // Blank on save means "leave unchanged" — the stored password never round-trips to the browser.
+    [SupplyParameterFromForm(FormName = SettingsFormName)] private string? ServiceAccountPassword { get; set; }
+    [SupplyParameterFromForm(FormName = SettingsFormName)] private int SyncIntervalMinutes { get; set; }
+    [SupplyParameterFromForm(FormName = SettingsFormName)] private bool LocalLoginsEnabled { get; set; }
+    [SupplyParameterFromForm(FormName = SettingsFormName)] private string? Action { get; set; }
+
+    private ClaimsPrincipal User => HttpContext?.User ?? new ClaimsPrincipal(new ClaimsIdentity());
+    private string? CurrentUserId => User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+    private string? CurrentUserName => User.Identity?.Name;
+    private string? RemoteIp => HttpContext?.Connection.RemoteIpAddress?.ToString();
+
+    private ActiveDirectorySettings? Current { get; set; }
+    private bool HasStoredPassword { get; set; }
+    private string? SetupAdminEmail { get; set; }
+    private List<AdGroupRoleLink> Links { get; set; } = [];
+    private Dictionary<string, string> RoleNames { get; set; } = [];
+
+    private string? TestResult;
+    private bool TestSucceeded;
+    private string? SavedMessage;
+    private string? ErrorMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+
+        // Skip the form fields when this page's own settings form posted: the submitted values are
+        // already bound, and reloading here would save the old ones back (see Detection.razor). Other
+        // forms on the page (link add/remove) don't carry these fields, so they reload them.
+        var postedForm = HttpContext?.Request.HasFormContentType == true ? HttpContext.Request.Form["_handler"].ToString() : null;
+        if (postedForm == SettingsFormName) return;
+
+        AdEnabled = Current?.IsEnabled ?? false;
+        Domain = Current?.Domain;
+        UseLdaps = Current?.UseLdaps ?? true;
+        LookupAccount = Current?.UseServiceAccount == true ? "ServiceAccount" : "Integrated";
+        ServiceAccountUsername = Current?.ServiceAccountUsername;
+        SyncIntervalMinutes = Current?.SyncIntervalMinutes ?? ActiveDirectorySettings.DefaultSyncIntervalMinutes;
+        LocalLoginsEnabled = Current?.LocalLoginsEnabled ?? true;
+    }
+
+    private async Task LoadAsync()
+    {
+        Current = await Db.ActiveDirectorySettings.AsNoTracking().FirstOrDefaultAsync();
+        HasStoredPassword = !string.IsNullOrEmpty(Current?.ServiceAccountPassword);
+        RoleNames = await Db.Roles.AsNoTracking().ToDictionaryAsync(r => r.Id, r => r.Name ?? r.Id);
+        Links = (await Db.AdGroupRoleLinks.AsNoTracking().ToListAsync())
+            .OrderBy(l => l.GroupName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(l => RoleNames.GetValueOrDefault(l.RoleId, ""), StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        SetupAdminEmail = await FindSetupAdminEmailAsync();
+    }
+
+    private async Task HandleSettingsSubmitAsync()
+    {
+        switch (Action)
+        {
+            case "TestConnection": await HandleTestConnectionAsync(); break;
+            case "SyncNow": HandleSyncNow(); break;
+            default: await HandleSaveAsync(); break;
+        }
+    }
+
+    /// <summary>Tests the values on screen, not the saved ones — so a new domain or account can be
+    /// checked before saving. A blank password field falls back to the stored one.</summary>
+    private async Task HandleTestConnectionAsync()
+    {
+        if (!AdDomain.IsValid(Domain))
+        {
+            TestResult = "Enter a domain name like corp.example.com.";
+            return;
+        }
+
+        var probe = BuildSettingsFromForm(Current);
+        try
+        {
+            TestResult = await Directory.TestConnectionAsync(probe, HttpContext?.RequestAborted ?? default);
+            TestSucceeded = true;
+        }
+        catch (ActiveDirectoryException ex)
+        {
+            TestResult = ex.Message;
+        }
+    }
+
+    private void HandleSyncNow()
+    {
+        if (Current is not { IsEnabled: true })
+        {
+            ErrorMessage = "Turn on Active Directory sign-in and save before syncing.";
+            return;
+        }
+        SyncTrigger.Request();
+        SavedMessage = "Sync started. Refresh this page in a moment to see the result.";
+    }
+
+    private async Task HandleSaveAsync()
+    {
+        var useServiceAccount = LookupAccount == "ServiceAccount";
+        var entity = await Db.ActiveDirectorySettings.FirstOrDefaultAsync();
+        var hadStoredPassword = !string.IsNullOrEmpty(entity?.ServiceAccountPassword);
+
+        if (!string.IsNullOrWhiteSpace(Domain) && !AdDomain.IsValid(Domain))
+        {
+            ErrorMessage = "Enter the domain as a DNS name, like corp.example.com.";
+            return;
+        }
+        if (AdEnabled && !AdDomain.IsValid(Domain))
+        {
+            ErrorMessage = "Enter a domain before enabling Active Directory sign-in.";
+            return;
+        }
+        if (AdEnabled && useServiceAccount && (string.IsNullOrWhiteSpace(ServiceAccountUsername)
+            || (!hadStoredPassword && string.IsNullOrWhiteSpace(ServiceAccountPassword))))
+        {
+            ErrorMessage = "Enter the service account's username and password, or use integrated security.";
+            return;
+        }
+        if (SyncIntervalMinutes is < ActiveDirectorySettings.MinSyncIntervalMinutes or > ActiveDirectorySettings.MaxSyncIntervalMinutes)
+        {
+            ErrorMessage = "Sync interval must be between 5 and 1440 minutes.";
+            return;
+        }
+        if (!LocalLoginsEnabled)
+        {
+            if (!AdEnabled)
+            {
+                ErrorMessage = "Local sign-in can only be turned off while Active Directory sign-in is on.";
+                return;
+            }
+            // Otherwise saving would lock every admin out of the admin pages until someone edits the
+            // database by hand.
+            if (!await AnyEnabledAdSuperAdminAsync())
+            {
+                ErrorMessage = "Before turning off local sign-in, link an AD group to the Super Admin role and make sure at least one of its members has been synced.";
+                return;
+            }
+        }
+
+        var old = entity is null ? null : new
+        {
+            entity.IsEnabled, entity.Domain, entity.UseLdaps, entity.UseServiceAccount,
+            entity.ServiceAccountUsername, entity.SyncIntervalMinutes, entity.LocalLoginsEnabled
+        };
+
+        var isNew = entity is null;
+        entity ??= new ActiveDirectorySettings { Id = Guid.NewGuid() };
+        entity.IsEnabled = AdEnabled;
+        entity.Domain = string.IsNullOrWhiteSpace(Domain) ? null : Domain.Trim();
+        entity.UseLdaps = UseLdaps;
+        entity.UseServiceAccount = useServiceAccount;
+        entity.ServiceAccountUsername = string.IsNullOrWhiteSpace(ServiceAccountUsername) ? null : ServiceAccountUsername.Trim();
+        if (!string.IsNullOrWhiteSpace(ServiceAccountPassword)) entity.ServiceAccountPassword = ServiceAccountPassword;
+        entity.SyncIntervalMinutes = SyncIntervalMinutes;
+        entity.LocalLoginsEnabled = LocalLoginsEnabled;
+        entity.LastModifiedAt = DateTime.UtcNow;
+        entity.LastModifiedBy = CurrentUserName;
+        if (isNew) Db.ActiveDirectorySettings.Add(entity);
+        await Db.SaveChangesAsync();
+
+        var details = AuditDiff.Build(
+            AuditDiff.Of("AD sign-in enabled", old?.IsEnabled.ToString(), AdEnabled.ToString()),
+            AuditDiff.Of("AD domain", old?.Domain, entity.Domain),
+            AuditDiff.Of("AD uses LDAPS", old?.UseLdaps.ToString(), UseLdaps.ToString()),
+            AuditDiff.Of("AD service account", old?.UseServiceAccount == true ? old.ServiceAccountUsername : "(integrated)",
+                useServiceAccount ? entity.ServiceAccountUsername : "(integrated)"),
+            AuditDiff.SecretChanged("AD service account password", !string.IsNullOrWhiteSpace(ServiceAccountPassword)),
+            AuditDiff.Of("AD sync interval (minutes)", old?.SyncIntervalMinutes.ToString(), SyncIntervalMinutes.ToString()),
+            AuditDiff.Of("Local sign-in enabled", old?.LocalLoginsEnabled.ToString(), LocalLoginsEnabled.ToString()));
+        if (details is not null)
+            await AuditService.LogAsync("Settings.Update", CurrentUserId, CurrentUserName, RemoteIp, details);
+
+        if (AdEnabled && old?.IsEnabled != true) SyncTrigger.Request();
+
+        ServiceAccountPassword = null;
+        await LoadAsync();
+        SavedMessage = "Saved.";
+    }
+
+    private async Task HandleAddLinkAsync()
+    {
+        var form = HttpContext?.Request.Form;
+        var groupName = form?["NewGroupName"].ToString().Trim() ?? "";
+        var groupSid = form?["NewGroupSid"].ToString().Trim() ?? "";
+        var roleId = form?["NewRoleId"].ToString() ?? "";
+
+        if (!await CanChangeLinksForRoleAsync(roleId)) return;
+        if (Current is null || !AdDomain.IsValid(Current.Domain))
+        {
+            ErrorMessage = "Save an Active Directory domain first.";
+            return;
+        }
+        if (groupName.Length == 0 && groupSid.Length == 0)
+        {
+            ErrorMessage = "Choose an AD group.";
+            return;
+        }
+
+        AdGroupEntry? group;
+        try
+        {
+            group = AdSid.LooksValid(groupSid)
+                ? await Directory.GetGroupBySidAsync(Current, groupSid)
+                // Typed a full name without picking from the list: accept an exact match.
+                : (await Directory.SearchGroupsAsync(Current, groupName, 10))
+                    .FirstOrDefault(g => string.Equals(g.Name, groupName, StringComparison.OrdinalIgnoreCase));
+        }
+        catch (ActiveDirectoryException ex)
+        {
+            ErrorMessage = ex.Message;
+            return;
+        }
+        if (group is null)
+        {
+            ErrorMessage = $"No AD security group named \"{groupName}\" was found.";
+            return;
+        }
+
+        if (await Db.AdGroupRoleLinks.AnyAsync(l => l.GroupSid == group.Sid && l.RoleId == roleId))
+        {
+            ErrorMessage = $"\"{group.Name}\" is already linked to that role.";
+            return;
+        }
+
+        Db.AdGroupRoleLinks.Add(new AdGroupRoleLink
+        {
+            Id = Guid.NewGuid(),
+            GroupSid = group.Sid,
+            GroupName = group.Name,
+            RoleId = roleId,
+            CreatedAt = DateTime.UtcNow,
+            CreatedBy = CurrentUserName
+        });
+        await Db.SaveChangesAsync();
+        var roleName = RoleNames.GetValueOrDefault(roleId, roleId);
+        await AuditService.LogAsync("AD.GroupLinked", CurrentUserId, CurrentUserName, RemoteIp, $"{group.Name} → {roleName}");
+
+        await LoadAsync();
+        if (Current?.IsEnabled == true)
+        {
+            SyncTrigger.Request();
+            SavedMessage = $"Linked \"{group.Name}\" to {roleName}. Syncing its members now.";
+        }
+        else
+        {
+            SavedMessage = $"Linked \"{group.Name}\" to {roleName}. Members sync once Active Directory sign-in is enabled.";
+        }
+    }
+
+    private async Task HandleRemoveLinkAsync()
+    {
+        var id = Guid.TryParse(HttpContext?.Request.Form["RemoveLinkId"].ToString(), out var parsed) ? parsed : Guid.Empty;
+        var link = await Db.AdGroupRoleLinks.FirstOrDefaultAsync(l => l.Id == id);
+        if (link is null)
+        {
+            await LoadAsync();
+            return;
+        }
+        if (!await CanChangeLinksForRoleAsync(link.RoleId)) return;
+
+        Db.AdGroupRoleLinks.Remove(link);
+        await Db.SaveChangesAsync();
+        var roleName = RoleNames.GetValueOrDefault(link.RoleId, link.RoleId);
+        await AuditService.LogAsync("AD.GroupUnlinked", CurrentUserId, CurrentUserName, RemoteIp, $"{link.GroupName} → {roleName}");
+
+        await LoadAsync();
+        if (Current?.IsEnabled == true) SyncTrigger.Request();
+        SavedMessage = $"Unlinked \"{link.GroupName}\" from {roleName}.";
+    }
+
+    /// <summary>A link hands its role to every member, so it needs the same right as assigning that
+    /// role by hand on the Users page: Roles.Assign, plus Org tier for an Org-tier role.</summary>
+    private async Task<bool> CanChangeLinksForRoleAsync(string roleId)
+    {
+        if (!RoleNames.ContainsKey(roleId))
+        {
+            ErrorMessage = "Choose a role.";
+            return false;
+        }
+        if (!(await AuthorizationService.AuthorizeAsync(User, "Roles.Assign")).Succeeded)
+        {
+            ErrorMessage = "You don't have permission to assign roles.";
+            return false;
+        }
+
+        var roleTier = await Db.RoleProfiles.Where(p => p.RoleId == roleId).Select(p => (RoleScopeTier?)p.MaxScopeTier).FirstOrDefaultAsync()
+            ?? RoleScopeTier.Group;
+        if (!RoleScopePolicy.CanAssignRole(await HighestScopeTierAsync(CurrentUserId), roleTier))
+        {
+            ErrorMessage = "You can't assign that role.";
+            return false;
+        }
+        return true;
+    }
+
+    private async Task<RoleScopeTier> HighestScopeTierAsync(string? userId)
+    {
+        if (userId is null) return RoleScopeTier.Group;
+        var roleIds = await Db.UserRoles.Where(ur => ur.UserId == userId).Select(ur => ur.RoleId).ToListAsync();
+        var tiers = await Db.RoleProfiles.Where(p => roleIds.Contains(p.RoleId)).Select(p => p.MaxScopeTier).ToListAsync();
+        return tiers.Count == 0 ? RoleScopeTier.Group : tiers.Min();
+    }
+
+    private async Task<bool> AnyEnabledAdSuperAdminAsync()
+    {
+        var superAdminRoleId = await Db.RoleProfiles.Where(p => p.Tag == RoleTags.SuperAdmin).Select(p => p.RoleId).FirstOrDefaultAsync();
+        if (superAdminRoleId is null) return false;
+        var adUserIds = Db.UserLogins.Where(l => l.LoginProvider == ActiveDirectoryUserSync.LoginProvider).Select(l => l.UserId);
+        var adAdminIds = await Db.UserRoles.Where(ur => ur.RoleId == superAdminRoleId && adUserIds.Contains(ur.UserId))
+            .Select(ur => ur.UserId).ToListAsync();
+        var now = DateTimeOffset.UtcNow;
+        return await Db.Users.AnyAsync(u => adAdminIds.Contains(u.Id) && (u.LockoutEnd == null || u.LockoutEnd < now));
+    }
+
+    /// <summary>The earliest-created local Super Admin — the account made in the setup wizard, unless
+    /// it has since been removed.</summary>
+    private async Task<string?> FindSetupAdminEmailAsync()
+    {
+        var superAdminRoleId = await Db.RoleProfiles.Where(p => p.Tag == RoleTags.SuperAdmin).Select(p => p.RoleId).FirstOrDefaultAsync();
+        if (superAdminRoleId is null) return null;
+        var adUserIds = Db.UserLogins.Where(l => l.LoginProvider == ActiveDirectoryUserSync.LoginProvider).Select(l => l.UserId);
+        var adminIds = Db.UserRoles.Where(ur => ur.RoleId == superAdminRoleId).Select(ur => ur.UserId);
+        return await Db.Users.Where(u => adminIds.Contains(u.Id) && !adUserIds.Contains(u.Id))
+            .OrderBy(u => u.CreatedAt).Select(u => u.Email).FirstOrDefaultAsync();
+    }
+
+    private ActiveDirectorySettings BuildSettingsFromForm(ActiveDirectorySettings? stored) => new()
+    {
+        IsEnabled = AdEnabled,
+        Domain = Domain?.Trim(),
+        UseLdaps = UseLdaps,
+        UseServiceAccount = LookupAccount == "ServiceAccount",
+        ServiceAccountUsername = ServiceAccountUsername?.Trim(),
+        ServiceAccountPassword = string.IsNullOrWhiteSpace(ServiceAccountPassword) ? stored?.ServiceAccountPassword : ServiceAccountPassword
+    };
+}

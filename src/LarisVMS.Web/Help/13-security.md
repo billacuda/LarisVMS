@@ -19,4 +19,4 @@ The server's certificate is a `.pfx` file set in `appsettings.Production.json`. 
 
 ## Encrypted secrets
 
-Camera credentials, SMB credentials, node keys and email secrets are encrypted in the database, using the data-protection keys in `%ProgramData%\LarisVMS\keys`. Back up that folder, and never delete it during a deploy.
+Camera credentials, SMB credentials, node keys, email secrets, the Entra client secret and the Active Directory service-account password are encrypted in the database, using the data-protection keys in `%ProgramData%\LarisVMS\keys`. Back up that folder, and never delete it during a deploy.

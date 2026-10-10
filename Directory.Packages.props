@@ -29,6 +29,8 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageVersion>
     <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
+    <!-- Active Directory sign-in and group sync (LDAPS/LDAP, paged and sorted searches). -->
+    <PackageVersion Include="System.DirectoryServices.Protocols" Version="10.0.0" />
     <!-- LarisVMS.Vision / LarisVMS.Vision.Service — object detection (see the detection plan).
          Versions match what aitest (g:\Projects\aitest) already proved out. -->
     <PackageVersion Include="YoloDotNet" Version="4.2.0" />

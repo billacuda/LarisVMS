@@ -42,6 +42,8 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<BackupHistoryEntry> BackupHistoryEntries => Set<BackupHistoryEntry>();
     public DbSet<EmailSettings> EmailSettings => Set<EmailSettings>();
     public DbSet<EntraSsoSettings> EntraSsoSettings => Set<EntraSsoSettings>();
+    public DbSet<ActiveDirectorySettings> ActiveDirectorySettings => Set<ActiveDirectorySettings>();
+    public DbSet<AdGroupRoleLink> AdGroupRoleLinks => Set<AdGroupRoleLink>();
     public DbSet<AlertRule> AlertRules => Set<AlertRule>();
     public DbSet<AlertDelivery> AlertDeliveries => Set<AlertDelivery>();
     public DbSet<ApiKey> ApiKeys => Set<ApiKey>();
@@ -202,6 +204,28 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.ClientId).HasMaxLength(100);
             e.Property(x => x.ClientSecret).HasConversion(new EncryptedNullableStringConverter()).HasMaxLength(500);
             e.Property(x => x.LastModifiedBy).HasMaxLength(256);
+        });
+
+        // ── Active Directory ─────────────────────────────────────────────────
+        builder.Entity<ActiveDirectorySettings>(e =>
+        {
+            e.Property(x => x.Domain).HasMaxLength(255);
+            e.Property(x => x.ServiceAccountUsername).HasMaxLength(256);
+            e.Property(x => x.ServiceAccountPassword).HasConversion(new EncryptedNullableStringConverter()).HasMaxLength(500);
+            e.Property(x => x.LastSyncError).HasMaxLength(2000);
+            e.Property(x => x.LastSyncSummary).HasMaxLength(500);
+            e.Property(x => x.LastModifiedBy).HasMaxLength(256);
+            e.Ignore(x => x.Port);
+        });
+        builder.Entity<AdGroupRoleLink>(e =>
+        {
+            e.Property(x => x.GroupSid).HasMaxLength(184).IsRequired();
+            e.Property(x => x.GroupName).HasMaxLength(256).IsRequired();
+            e.Property(x => x.RoleId).HasMaxLength(450).IsRequired();
+            e.Property(x => x.CreatedBy).HasMaxLength(256);
+            e.HasIndex(x => new { x.GroupSid, x.RoleId }).IsUnique();
+            e.HasOne<Microsoft.AspNetCore.Identity.IdentityRole>().WithMany()
+                .HasForeignKey(x => x.RoleId).OnDelete(DeleteBehavior.Cascade);
         });
 
         // ── AlertRule / AlertDelivery ────────────────────────────────────────
