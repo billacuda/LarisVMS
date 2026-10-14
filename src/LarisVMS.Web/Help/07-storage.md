@@ -1,6 +1,6 @@
 # Storage & retention
 
-Where recordings live, how long they're kept, the watermark and the archive volume.
+Where recordings live, how long they're kept, the watermark, and the archive volume.
 
 ## Storage paths
 
@@ -20,7 +20,7 @@ The **watermark** is a hard limit on how full a node's disk may get (90% by defa
 
 A node can have an optional second **archive path**, such as an SMB share or a USB drive. It must be a separate location from the storage path. With archiving on, footage that ages out of retention is **moved** to the archive instead of being deleted, and kept until the **archive retention** is reached. Archive retention is counted from the original recording date, and 0 keeps forever.
 
-Playback, thumbnails and exports work the same from either volume. The node list shows free space and an estimate of days left for both volumes. The estimate is based on the last 24 hours of writing.
+Playback, thumbnails, and exports work the same from either volume. The node list shows free space and an estimate of days left for both volumes. The estimate is based on the last 24 hours of writing.
 
 ## Leftover footage
 

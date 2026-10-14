@@ -1,8 +1,8 @@
 # Nodes
 
-Recorder nodes: status, streaming paths, media proxies, failover, maintenance and updates.
+Recorder nodes: status, streaming paths, media proxies, failover, maintenance, and updates.
 
-**Settings → Nodes** lists every node with its status, address, version, camera count and disk usage. Click a node to edit its settings. The **⋯** menu has these actions:
+**Settings → Nodes** lists every node with its status, address, version, camera count, and disk usage. Click a node to edit its settings. The **⋯** menu has these actions:
 
 - **Restart service**: restarts the node's Windows service, not the machine. Recording pauses for a few seconds.
 - **Reset auth**: clears the node's check-in token, for a node stuck failing authentication after a missed heartbeat. It has no effect on a healthy node.
@@ -23,7 +23,7 @@ A **media proxy** is a separate relay (`LarisVMS.Proxy`) between browsers and no
 
 ## Failover
 
-Give a node a **backup recorder node**, and when it goes down its cameras are recorded by the backup until it comes back. “Down” is decided by a vote between the node's partner, the server and its proxy. **Maintenance** moves its cameras over on purpose and holds them there.
+Give a node a **backup recorder node**, and when it goes down its cameras are recorded by the backup until it comes back. “Down” is decided by a vote between the node's partner, the server, and its proxy. **Maintenance** moves its cameras over on purpose and holds them there.
 
 The node page warns when the backup has different AI hardware, or is recording-only. In those cases detection may be slower, or paused, during a failover.
 

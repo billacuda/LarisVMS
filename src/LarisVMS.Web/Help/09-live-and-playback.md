@@ -1,6 +1,6 @@
 # Live view & playback
 
-Views, live tiles, the playback timeline, exports, bookmarks and snapshots.
+Views, live tiles, the playback timeline, exports, bookmarks, and snapshots.
 
 ## Views
 
@@ -16,7 +16,7 @@ A **view** is a saved camera layout. Build views under **Views** by dragging and
 
 ## Timeline
 
-Playback has two timelines: one for the selected camera and one combined across all cameras. Both are colored by motion, detections and event tags.
+Playback has two timelines: one for the selected camera and one combined across all cameras. Both are colored by motion, detections, and event tags.
 
 - Scroll to zoom (from weeks down to seconds), drag to pan, and click to jump every tile to that moment.
 - Click the time above the timeline to type an exact time.
@@ -28,7 +28,7 @@ Your position and zoom are remembered between visits.
 
 ## Exports
 
-**Export…** in Playback creates a video file for each selected camera over a time range. Exports run in the background and appear on the **Exports** page, where they can be downloaded, retried or deleted.
+**Export…** in Playback creates a video file for each selected camera over a time range. Exports run in the background and appear on the **Exports** page, where they can be downloaded, retried, or deleted.
 
 ## Bookmarks
 
@@ -36,4 +36,4 @@ Mark a moment during Playback with a note. **Bookmarks** lists them all, with a 
 
 ## Snapshots
 
-**Snapshots** lists every detection and event tag as a thumbnail, with filters for camera, group, view, object type and time. Plain motion only appears on the timeline. ▶ opens the moment in Playback.
+**Snapshots** lists every detection and event tag as a thumbnail, with filters for camera, group, view, object type, and time. Plain motion only appears on the timeline. ▶ opens the moment in Playback.

@@ -1,6 +1,6 @@
 # Recording
 
-Recording modes, schedules, event tags, pre/post-roll and segment length.
+Recording modes, schedules, event tags, pre/post-roll, and segment length.
 
 ## Modes
 
@@ -9,13 +9,13 @@ Every camera records continuously to its node. The **recording mode** decides wh
 | Mode | Keeps |
 |---|---|
 | **Continuous** | Everything. |
-| **Motion** | Footage around motion: from a motion zone, the camera's own motion events, an integration or AI detection (see [Motion](/Help/motion#source)). |
+| **Motion** | Footage around motion: from a motion zone, the camera's own motion events, an integration, or AI detection (see [Motion](/Help/motion#source)). |
 | **Schedule** | Footage that starts inside an enabled schedule window. |
 | **Event** | Footage around an event tag rule that has *Drives recording* turned on. |
 
 Footage that isn't kept is deleted shortly after it's written, rather than waiting for retention.
 
-All three non-continuous modes **fail open**. Until a camera has a motion zone, schedule window or driving rule, it keeps everything instead of discarding it. The camera's page warns when this is happening.
+All three non-continuous modes **fail open**. Until a camera has a motion zone, schedule window, or driving rule, it keeps everything instead of discarding it. The camera's page warns when this is happening.
 
 Set the global mode under **Settings → Recording defaults**, and override it on a camera's page.
 
@@ -29,7 +29,7 @@ Footage is written as files of a fixed length (60 seconds by default). Playback 
 
 ## Schedule
 
-A camera's **Schedule** page holds its windows: days, a start time and an end time. An end time before the start time crosses midnight. Times use the **recorder node's local clock**. Windows only matter in Schedule mode.
+A camera's **Schedule** page holds its windows: days, a start time, and an end time. An end time before the start time crosses midnight. Times use the **recorder node's local clock**. Windows only matter in Schedule mode.
 
 ## Event tags
 

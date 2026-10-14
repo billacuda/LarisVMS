@@ -1,10 +1,10 @@
 # Users & access
 
-Accounts, roles, permissions, camera access, Active Directory and Microsoft sign-in.
+Accounts, roles, permissions, camera access, Active Directory, and Microsoft sign-in.
 
 ## Users
 
-Self-registration is off. Accounts are created under **Settings → Users**, where you can also assign roles, disable an account and reset a password. Local accounts sign in with their email address. Disabling an account signs it out everywhere straight away and closes its live video.
+Self-registration is off. Accounts are created under **Settings → Users**, where you can also assign roles, disable an account, and reset a password. Local accounts sign in with their email address. Disabling an account signs it out everywhere straight away and closes its live video.
 
 ## Roles
 
@@ -17,15 +17,15 @@ A role is a named set of permissions, managed under **Settings → Roles**. Each
 
 ## Permissions
 
-**Settings → Permissions matrix** sets which actions each role is allowed (view cameras, playback, export, edit settings and so on). The built-in **Super Admin** role always has every permission.
+**Settings → Permissions matrix** sets which actions each role is allowed (view cameras, playback, export, edit settings, and so on). The built-in **Super Admin** role always has every permission.
 
 ## Camera access
 
-By default a role can use every camera its permissions allow. **Settings → Camera access** narrows a role down to specific cameras or groups, separately for View, Playback, Export and PTZ. A role with **no grants is unrestricted**, so adding the first grant is what limits it. Talk and Configure can be granted but aren't enforced yet.
+By default a role can use every camera its permissions allow. **Settings → Camera access** narrows a role down to specific cameras or groups, separately for View, Playback, Export, and PTZ. A role with **no grants is unrestricted**, so adding the first grant is what limits it. Talk and Configure can be granted but aren't enforced yet.
 
 ## Entra
 
-**Settings → Security → Entra ID sign-in** adds a “Sign in with Microsoft” button for existing accounts whose email matches. It never creates accounts. Register an app in Entra with the redirect URI shown on that page, then enter its tenant ID, client ID and secret. Changes take effect immediately.
+**Settings → Security → Entra ID sign-in** adds a “Sign in with Microsoft” button for existing accounts whose email matches. It never creates accounts. Register an app in Entra with the redirect URI shown on that page, then enter its tenant ID, client ID, and secret. Changes take effect immediately.
 
 ## Active Directory
 
@@ -48,4 +48,4 @@ UPDATE ActiveDirectorySettings SET LocalLoginsEnabled = 1
 
 ## Audit log
 
-Everything users do is recorded under **Logs → Audit logs**: changes (with old and new values; secrets are recorded only as “changed”), viewing cameras, starting playback and exporting.
+Everything users do is recorded under **Logs → Audit logs**: changes (with old and new values; secrets are recorded only as “changed”), viewing cameras, starting playback, and exporting.

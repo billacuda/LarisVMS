@@ -1,13 +1,13 @@
 # Security
 
-IP allow lists, a separate live/playback port, certificates and encrypted secrets.
+IP allow lists, a separate live/playback port, certificates, and encrypted secrets.
 
 ## Allow lists
 
 **Settings → Security** has two IP allow lists. Enter one IP or CIDR block per line (for example `10.0.0.5` or `10.0.0.0/24`); lines starting with `#` are comments. A blank list allows everyone.
 
 - **Management / API**: the admin pages and the REST API. A list that would block the address you're saving from is refused, so you can't lock yourself out.
-- **Live view / playback**: live video, playback, thumbnails, export downloads and camera snapshots.
+- **Live view / playback**: live video, playback, thumbnails, export downloads, and camera snapshots.
 
 ## Separate port
 
@@ -19,4 +19,4 @@ The server's certificate is a `.pfx` file set in `appsettings.Production.json`. 
 
 ## Encrypted secrets
 
-Camera credentials, SMB credentials, node keys, email secrets, the Entra client secret and the Active Directory service-account password are encrypted in the database, using the data-protection keys in `%ProgramData%\LarisVMS\keys`. Back up that folder, and never delete it during a deploy.
+Camera credentials, SMB credentials, node keys, email secrets, the Entra client secret, and the Active Directory service-account password are encrypted in the database, using the data-protection keys in `%ProgramData%\LarisVMS\keys`. Back up that folder, and never delete it during a deploy.

@@ -1,12 +1,12 @@
 # Overview
 
-How LarisVMS fits together: the web server, recorder nodes, media proxies and cameras.
+How LarisVMS fits together: the web server, recorder nodes, media proxies, and cameras.
 
 ## The pieces
 
 | Piece | What it does |
 |---|---|
-| **Web server** | This site. Stores configuration in SQL Server, serves the UI and API, and relays live and playback video unless direct streaming is on. Runs as the *LarisVMS Web* Windows service. |
+| **Web server** | The LarisVMS web app. Stores configuration in SQL Server, serves the UI and API, and relays live and playback video unless direct streaming is on. Runs as the *LarisVMS Web* Windows service. |
 | **Recorder node** | A Windows service on each recording machine. Pulls RTSP from its cameras, writes segments to its storage path, enforces retention, runs motion and AI detection, and reports health. One server can have many nodes. |
 | **Vision service** | Optional child process of a node that runs AI object detection on the node's GPU (or CPU). A crash here never stops recording. |
 | **Media proxy** | Optional relay between browsers and nodes, for remote sites or low-bandwidth links. |

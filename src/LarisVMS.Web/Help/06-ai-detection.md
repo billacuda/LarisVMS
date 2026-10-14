@@ -1,8 +1,8 @@
 # AI detection
 
-Object detection on the node: models, hardware, thresholds, snapshots and the external backend.
+Object detection on the node: models, hardware, thresholds, snapshots, and the external backend.
 
-Each node can run real-time object detection on its cameras. Detected objects get live bounding boxes, a colored mark on the timeline, a badge on the live tile and a cropped snapshot. A detection also counts as motion for Motion-mode recording. Detection runs in a separate process, so a GPU or driver problem never stops recording.
+Each node can run real-time object detection on its cameras. Detected objects get live bounding boxes, a colored mark on the timeline, a badge on the live tile, and a cropped snapshot. A detection also counts as motion for Motion-mode recording. Detection runs in a separate process, so a GPU or driver problem never stops recording.
 
 Turn it on per camera with **Watch this camera for objects**. Only **5–7 fps per camera** is needed for accurate detection, so cap the [frame rate](#thresholds) there to keep GPU load down. Global defaults are under **Settings → AI detection**. Nodes and cameras can override most of them.
 
@@ -34,7 +34,7 @@ Changing the model restarts each camera's detection.
 
 ## Custom models
 
-Drop an `.onnx` file into `C:\ProgramData\LarisVMS\models` on the node. If the model's own metadata describes its decoder, input size and labels, it just works. Otherwise add a `.json` file with the same name that supplies what's missing. **Refresh** lists every model the nodes found, and flags any whose metadata is incomplete. A model with a warning can be selected but won't run until the warning is fixed.
+Drop an `.onnx` file into `C:\ProgramData\LarisVMS\models` on the node. If the model's own metadata describes its decoder, input size, and labels, it just works. Otherwise add a `.json` file with the same name that supplies what's missing. **Refresh** lists every model the nodes found, and flags any whose metadata is incomplete. A model with a warning can be selected but won't run until the warning is fixed.
 
 ## Aspect fitting
 
@@ -69,6 +69,6 @@ A distant parked vehicle's box can wobble from frame to frame and look like move
 
 ## External backend
 
-**External HTTP service** runs no model on the node. Each frame is sent to an inference server you run, which returns boxes as JSON. Use it for models LarisVMS doesn't bundle, or for nodes without a GPU. Tracking, snapshots, the timeline and the live overlay work the same way.
+**External HTTP service** runs no model on the node. Each frame is sent to an inference server you run, which returns boxes as JSON. Use it for models LarisVMS doesn't bundle, or for nodes without a GPU. Tracking, snapshots, the timeline, and the live overlay work the same way.
 
-The service must expose `POST /v1/detect`, `GET /v1/models` and `GET /healthz`. **Test** checks the connection and loads the model list. The **API key** is sent as a Bearer token. **Transport**: JPEG works with any service. The raw YUV and BGRA modes skip JPEG encoding but use 4–10× the bandwidth, and only work if the model advertises them.
+The service must expose `POST /v1/detect`, `GET /v1/models`, and `GET /healthz`. **Test** checks the connection and loads the model list. The **API key** is sent as a Bearer token. **Transport**: JPEG works with any service. The raw YUV and BGRA modes skip JPEG encoding but use 4–10× the bandwidth, and only work if the model advertises them.

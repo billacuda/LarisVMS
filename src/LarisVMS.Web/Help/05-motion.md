@@ -1,6 +1,6 @@
 # Motion detection
 
-Motion sources, server-side motion, zones and the motion grid.
+Motion sources, server-side motion, zones, and the motion grid.
 
 ## Source
 

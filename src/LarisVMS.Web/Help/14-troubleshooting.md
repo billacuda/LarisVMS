@@ -14,7 +14,7 @@ Common problems, and where to look.
 1. Is it **assigned to a node**, and is that node **online**?
 2. Does the node have a **storage path**? The node list flags nodes without one.
 3. Is the camera **enabled**, and do its streams look right? **Re-probe** after any change on the camera itself.
-4. In Motion, Schedule or Event mode, check whether footage is being discarded (see [Recording](/Help/recording#modes)).
+4. In Motion, Schedule, or Event mode, check whether footage is being discarded (see [Recording](/Help/recording#modes)).
 
 ## Live view and playback stay on “connecting”
 
@@ -46,7 +46,7 @@ The node stalled, not the browser or the network. Look in the node log for `Node
 
 ## AI detection stops but recording carries on
 
-Usually the GPU driver was reset. The Windows System event log shows `nvlddmkm` event 153 or `Display` event 4101 at that moment. The vision service restarts itself after 60 seconds without a result. Repeated resets point at the GPU, its driver, cooling or power.
+Usually the GPU driver was reset. The Windows System event log shows `nvlddmkm` event 153 or `Display` event 4101 at that moment. The vision service restarts itself after 60 seconds without a result. Repeated resets point at the GPU, its driver, cooling, or power.
 
 ## A node or proxy didn't come back after an update
 

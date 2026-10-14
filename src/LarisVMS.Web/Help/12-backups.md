@@ -11,7 +11,7 @@ Restoring is done outside LarisVMS, with SSMS or `sqlcmd`. Backups are full back
 
 ## Also back up
 
-- **Data-protection keys** at `%ProgramData%\LarisVMS\keys`. Camera passwords, email secrets and node keys are encrypted with them. Without these keys, a restored database can't decrypt any of them.
+- **Data-protection keys** at `%ProgramData%\LarisVMS\keys`. Camera passwords, email secrets, and node keys are encrypted with them. Without these keys, a restored database can't decrypt any of them.
 - **`setup-generated.json`** in the install folder, which holds the database connection string.
 
 Recordings are not part of the database backup. Protect them with the archive volume or your own storage backups.
