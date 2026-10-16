@@ -184,7 +184,14 @@ public record VisionStartCameraRequest(
     /// <see cref="ModelFamily"/> is "Custom". Appended last so NodeWorker's positional construction
     /// stays stable; blank default means an older node never sends this and Vision Service simply
     /// never sees a "Custom" ModelFamily from it.</summary>
-    string LocalModelName = "")
+    string LocalModelName = "",
+    /// <summary>This camera's enabled speed traps. Null or empty = no speed measurement. Part of
+    /// NodeWorker's restart signature (redrawing a trap restarts the pipeline, which only resets
+    /// tracking). Appended last so NodeWorker's positional construction stays stable.</summary>
+    List<VisionSpeedTrapDto>? SpeedTraps = null,
+    /// <summary>Detection.ColorClassification (global, default on) — whether each tracked object's
+    /// colors are classified from its best frame. Appended last; defaults true.</summary>
+    bool ClassifyColors = true)
 {
     /// <summary>What this camera should be called in a log line. The operator's own name when there
     /// is one, otherwise the first block of the camera id — short enough to scan a column of, and
@@ -194,6 +201,34 @@ public record VisionStartCameraRequest(
     public string DisplayName =>
         string.IsNullOrWhiteSpace(CameraName) ? CameraId.ToString()[..8] : CameraName.Trim();
 }
+
+/// <summary>One speed trap as Vision needs it: gate A and gate B as line segments in normalized
+/// 0-1 frame coordinates (the camera's own source frame, same space as every box), plus the
+/// real-world distance between them. Built by NodeService from SpeedTrap.GatesJson.</summary>
+public record VisionSpeedTrapDto(Guid Id,
+    double AX1, double AY1, double AX2, double AY2,
+    double BX1, double BY1, double BX2, double BY2,
+    double DistanceMeters);
+
+/// <summary>One tracked object inside a <see cref="VisionDetectionReportItem"/> span — see
+/// LarisVMS.Core.Entities.DetectedObject, which this maps onto one-to-one. Box is the object's own
+/// best frame, normalized 0-1. Colors are <see cref="LarisVMS.Core.ObjectColors"/> names, null when
+/// unknown (IR/monochrome, too small, or classification off); Upper/Lower only for people.</summary>
+public record VisionDetectedObjectItem(
+    int TrackId,
+    string Label,
+    DateTime FirstSeenUtc,
+    DateTime LastSeenUtc,
+    DateTime? BestFrameAtUtc,
+    double? X, double? Y, double? W, double? H,
+    double? Confidence,
+    string? PrimaryColor = null,
+    string? UpperColor = null,
+    string? LowerColor = null,
+    double? SpeedKph = null,
+    Guid? SpeedTrapId = null,
+    /// <summary>When the object crossed the trap's second gate. Null from an older Vision build.</summary>
+    DateTime? SpeedMeasuredAtUtc = null);
 
 /// <summary>Node -&gt; Vision Service: stop watching a camera (disabled, reassigned, or the node is
 /// shutting down this camera's session).</summary>
@@ -230,7 +265,10 @@ public record VisionDetectionReportItem(
     /// grouped per label (two trucks passing together are one "truck" span), this is where the
     /// multiplicity that grouping collapses is preserved. Defaults to 1 so an older Vision Service
     /// build that doesn't send it still deserializes to a sensible single-object count.</summary>
-    int MovingCount = 1);
+    int MovingCount = 1,
+    /// <summary>Each tracked object behind this span (capped at 20), with colors and speed. Null
+    /// from an older Vision Service build.</summary>
+    List<VisionDetectedObjectItem>? Objects = null);
 
 /// <summary>Vision Service -&gt; Node (POST /detections/crop): pass G's eager snapshot, cropped from
 /// the exact Sub-stream frame the model ran on the instant a track started Moving — lines up with
@@ -268,4 +306,9 @@ public record VisionLiveDetectionBox(
     /// (VisionStartCameraRequest.Width/Height) — the same coordinate space decision 6's live
     /// overlay already expects.</summary>
     double X, double Y, double W, double H,
-    double Confidence);
+    double Confidence,
+    /// <summary>The track's measured speed in km/h once it has crossed both gates of a speed trap;
+    /// null otherwise.</summary>
+    double? SpeedKph = null,
+    /// <summary>The track's primary color name (ObjectColors), null while unknown.</summary>
+    string? Color = null);

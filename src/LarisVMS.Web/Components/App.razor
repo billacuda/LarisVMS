@@ -3,6 +3,14 @@
 <html lang="en" data-bs-theme="light">
 <head>
     <meta charset="utf-8" />
+    <script>
+        // Back/forward must never land on ERR_CACHE_MISS / "Confirm form resubmission". A page
+        // rendered as the response to a form POST (a settings page after Save, a form redisplayed
+        // with an error) is a POST entry in the browser's history; replacing the entry with its own
+        // URL turns it into a plain GET entry, so returning to it just reloads the page. Harmless on
+        // a page that came from a GET. Keeps the current state and #hash.
+        try { history.replaceState(history.state, '', location.href); } catch (e) { /* not fatal */ }
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     @* PWA: manifest (Program.cs /manifest.webmanifest) + icons make the site installable on phones. *@
     <link rel="manifest" href="/manifest.webmanifest" />
@@ -29,7 +37,11 @@
         })();
     </script>
 </head>
-<body>
+@* data-enhance-nav="false": every link is an ordinary page load. Blazor's enhanced navigation swaps
+   the next page into this document instead, and the scripts that page brings (its PageScripts —
+   dashboard grid, Activity, Live/View players, Razor Pages reached from here) are never executed, so a
+   page reached by clicking a link came up half-built until it was refreshed. *@
+<body data-enhance-nav="false">
     <Routes />
 
     @* Straight after the content, before the other scripts, so the page's title moves into the top
@@ -37,6 +49,7 @@
     <script src="@V("/js/page-title.js")"></script>
 
     <script src="@V("/lib/bootstrap/dist/js/bootstrap.bundle.min.js")"></script>
+    <script src="@V("/js/local-time.js")"></script>
     <script src="@V("/js/user-preferences.js")"></script>
     <script src="@V("/js/theme.js")"></script>
     <script src="@V("/js/pwa.js")"></script>

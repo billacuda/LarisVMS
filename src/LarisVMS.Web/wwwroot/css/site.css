@@ -496,6 +496,57 @@ body {
     transform: rotate(90deg);
 }
 
+/* Activity page, Speeds: a cell (or legend swatch) whose speed is over the trap's limit. An outline
+   rather than a fill, so the blue speed ramp underneath still reads. */
+.activity-cell--over {
+    outline: 2px solid #dc3545;
+    outline-offset: -2px;
+}
+
+/* Snapshots filter tree: Color / Shirt / Pants sections. Each color is a toggle chip (a hidden
+   checkbox + label): unticked shows a dot of the color, ticked fills the chip with it. */
+.snapshot-color-filter > summary {
+    list-style: none;
+    cursor: pointer;
+}
+.snapshot-color-filter > summary::-webkit-details-marker {
+    display: none;
+}
+.snapshot-color-filter[open] > summary .snapshot-tree-caret {
+    transform: rotate(90deg);
+}
+.snapshot-color-chip {
+    border: 1px solid var(--bs-border-color);
+    background: transparent;
+    color: var(--bs-body-color);
+    font-size: .75rem;
+}
+.snapshot-color-chip::before {
+    content: '';
+    display: inline-block;
+    width: .7em;
+    height: .7em;
+    margin-right: .3em;
+    border-radius: 50%;
+    background: var(--chip-bg);
+    border: 1px solid rgba(127, 127, 127, .6);
+    vertical-align: -.05em;
+}
+.btn-check:checked + .snapshot-color-chip {
+    background: var(--chip-bg);
+    color: var(--chip-fg);
+    border-color: rgba(127, 127, 127, .6);
+}
+.btn-check:checked + .snapshot-color-chip::before {
+    display: none;
+}
+
+/* A detected object's color on a snapshot card, painted in that color. The thin rule keeps white
+   and black badges visible against the card in both themes. */
+.snapshot-color-badge {
+    border: 1px solid rgba(127, 127, 127, .45);
+}
+
 /* Guide lines from a category down to its labels: a single left rule on the children container,
    plus a short elbow to each child. var(--bs-border-color) is theme-correct in light and dark
    with no second rule. */
@@ -647,3 +698,105 @@ body {
 .lv-help-content th, .lv-help-content td { padding: 0.3rem 0.75rem; border-bottom: 1px solid var(--bs-border-color-translucent); vertical-align: top; }
 .lv-help-content code { font-size: 0.85em; }
 .lv-help-content pre { background: var(--bs-secondary-bg); padding: 0.75rem; }
+
+/* ── Dashboard widgets (dashboard-widgets.js) ─────────────────────────────── */
+.dashboard-grid { margin: 0 -6px; } /* cancel GridStack's outer margin so widgets line up with the page */
+.dashboard-widget { overflow: hidden; }
+.dashboard-widget-header { min-height: 2.25rem; }
+.dashboard-widget-header .form-select { width: auto; }
+.dashboard-widget-body { overflow: auto; min-height: 0; }
+.dashboard-widget-remove { display: none; }
+.dashboard-editing .dashboard-widget-remove { display: inline-block; }
+.dashboard-editing .dashboard-widget-header { cursor: move; }
+.dashboard-editing .grid-stack-item-content { outline: 1px dashed var(--bs-border-color); }
+/* The summary tiles are cards of their own — no outer card, and no header outside Customize. */
+.dashboard-widget--bare { background: transparent; border: 0; }
+.dashboard-widget--bare > .dashboard-widget-header { display: none; }
+.dashboard-editing .dashboard-widget--bare > .dashboard-widget-header { display: flex; }
+.dashboard-widget--bare > .dashboard-widget-body { padding: 0 !important; }
+.dashboard-toplist { table-layout: fixed; }
+.dashboard-toplist .dashboard-rank { width: 2rem; }
+.dashboard-toplist .dashboard-value { width: 38%; }
+.dashboard-toplist .dashboard-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dashboard-snapshots { overflow-x: auto; }
+.dashboard-snapshot { flex: 0 0 180px; width: 180px; transition: transform 450ms ease, opacity 450ms ease; }
+/* A newly arrived snapshot starts here and fades in (dashboard-widgets.js renderSnapshots). */
+.dashboard-snapshot--entering { opacity: 0; }
+@media (prefers-reduced-motion: reduce) { .dashboard-snapshot { transition: none; } }
+.dashboard-snapshot img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; background: var(--bs-secondary-bg); }
+.dashboard-widget-title { cursor: pointer; }
+.dashboard-widget-title:hover, .dashboard-widget-title:focus-visible { text-decoration: underline; }
+.dashboard-editing .dashboard-widget-title { cursor: move; text-decoration: none; }
+
+/* ── Activity heatmap (activity.js) ───────────────────────────────────────── */
+/* One blue ramp, few -> many (the dataviz reference sequential ramp). Dark mode steps the same ramp
+   the other way round, so "few" still recedes toward the surface and "many" stands out. */
+:root, [data-bs-theme="light"] {
+    --activity-0: var(--bs-tertiary-bg);
+    --activity-1: #cde2fb; --activity-2: #9ec5f4; --activity-3: #6da7ec;
+    --activity-4: #3987e5; --activity-5: #256abf; --activity-6: #104281;
+}
+[data-bs-theme="dark"] {
+    --activity-0: var(--bs-tertiary-bg);
+    --activity-1: #104281; --activity-2: #1c5cab; --activity-3: #2a78d6;
+    --activity-4: #5598e7; --activity-5: #86b6ef; --activity-6: #b7d3f6;
+}
+.activity-grid {
+    display: grid;
+    grid-template-columns: minmax(3rem, max-content) repeat(24, minmax(0, 1fr));
+    gap: 2px;
+    align-items: center;
+}
+.activity-col-label { font-size: .7rem; color: var(--bs-secondary-color); text-align: center; white-space: nowrap; }
+.activity-row-label { font-size: .8rem; color: var(--bs-secondary-color); padding-right: .5rem; max-width: 9rem; }
+.activity-cell { aspect-ratio: 1 / 1; min-height: 14px; border-radius: 3px; cursor: default; }
+.activity-cell:hover { outline: 2px solid var(--bs-body-color); outline-offset: -1px; }
+.activity-step-0 { background: var(--activity-0); }
+.activity-step-1 { background: var(--activity-1); }
+.activity-step-2 { background: var(--activity-2); }
+.activity-step-3 { background: var(--activity-3); }
+.activity-step-4 { background: var(--activity-4); }
+.activity-step-5 { background: var(--activity-5); }
+.activity-step-6 { background: var(--activity-6); }
+.activity-legend { display: flex; align-items: center; gap: 3px; flex-wrap: wrap; }
+.activity-legend .small:first-child { margin-right: .35rem; }
+.activity-legend .small:last-child { margin-left: .35rem; }
+.activity-swatch { display: inline-block; width: 18px; height: 12px; border-radius: 3px; }
+.activity-tooltip {
+    position: fixed; z-index: 1080; pointer-events: none; padding: .3rem .5rem; border-radius: .375rem;
+    font-size: .8rem; background: var(--bs-body-bg); color: var(--bs-body-color);
+    border: 1px solid var(--bs-border-color); box-shadow: 0 .25rem .75rem rgba(0, 0, 0, .15);
+}
+@media (max-width: 767.98px) {
+    .activity-col-label--minor { visibility: hidden; }
+    .activity-row-label { max-width: 5rem; }
+}
+/* Dashboard "Camera activity" widget: the same heatmap, sized to the widget rather than square. */
+.activity-grid--compact { gap: 1px; }
+.activity-grid--compact .activity-cell { aspect-ratio: auto; min-height: 12px; border-radius: 2px; }
+.activity-grid--compact .activity-row-label { font-size: .7rem; }
+.activity-grid--compact .activity-col-label { font-size: .65rem; }
+/* Activity "By day" view: hours down, one column per date. Cells stretch to fill the card, so a year is
+   about 2-3px per day — an overview, with exact numbers in the tooltip and table. */
+.activity-calendar { display: grid; gap: 1px; align-items: stretch; }
+.activity-calendar .activity-row-label { font-size: .7rem; line-height: 1; align-self: center; }
+.activity-cell--calendar { aspect-ratio: auto; min-height: 9px; border-radius: 1px; }
+.activity-month-label { font-size: .7rem; color: var(--bs-secondary-color); white-space: nowrap; overflow: visible; }
+.activity-day-total { min-height: 14px; margin-top: 4px; border-radius: 1px; }
+
+/* ── Map page (map.js) ────────────────────────────────────────────────────── */
+.lv-map { height: calc(100vh - 11rem); min-height: 420px; background: var(--bs-tertiary-bg); }
+.lv-map-cam span {
+    display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 50%;
+    border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .45); font-size: 15px; line-height: 1;
+}
+.lv-map-cam--selected span { outline: 3px solid #0d6efd; outline-offset: 1px; }
+.lv-map-aim span {
+    display: block; width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 2px solid #0d6efd;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .5); cursor: grab;
+}
+.lv-map-popup img { width: 220px; aspect-ratio: 16 / 9; object-fit: cover; background: var(--bs-secondary-bg); display: block; }
+.lv-map-palette-item { cursor: grab; }
+/* Leaflet colours every link in the map; keep Bootstrap buttons in the popup their own colours. */
+.leaflet-container .lv-map-popup a.btn-primary { color: #fff; }
+.leaflet-container .lv-map-popup a.btn-outline-secondary { color: #565e64; } /* the popup is white in both themes */

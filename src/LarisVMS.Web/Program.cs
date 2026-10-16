@@ -320,11 +320,30 @@ builder.Services.AddSingleton<LarisVMS.Web.Services.NodeControlClient>();
 builder.Services.AddSingleton<LarisVMS.Web.Services.HelpContentService>();
 builder.Services.AddSingleton<LarisVMS.Web.Services.VisionNativeDistributor>();
 builder.Services.AddScoped<IZoneService, ZoneService>();
+builder.Services.AddScoped<ISpeedTrapService, SpeedTrapService>();
+builder.Services.AddScoped<SpeedRollupService>();
+// Tamper evidence: the signing key, segment hash chains, and signed export manifests.
+builder.Services.AddScoped<ISigningKeyService, SigningKeyService>();
+builder.Services.AddScoped<IFootageKeyService, FootageKeyService>();
+builder.Services.AddScoped<SegmentChainService>();
+builder.Services.AddScoped<ExportManifestBuilder>();
+builder.Services.AddHostedService<LarisVMS.Web.Services.ChainCheckpointService>();
 builder.Services.AddScoped<IEventTagRuleService, EventTagRuleService>();
 builder.Services.AddScoped<IScheduleWindowService, ScheduleWindowService>();
 builder.Services.AddScoped<IExportService, ExportService>();
 builder.Services.AddScoped<IBackupService, BackupService>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
+builder.Services.AddScoped<ITalkRecordingService, TalkRecordingService>();
+builder.Services.AddScoped<IActivityService, ActivityService>();
+builder.Services.AddScoped<IMapService, MapService>();
+builder.Services.AddScoped<ActivityRollupService>();
+builder.Services.AddSingleton<LarisVMS.Web.Services.TalkSessionRegistry>();
+// DashboardWidgetService shares its system-wide inputs across every viewer's poll through this cache.
+builder.Services.AddMemoryCache();
+// Every API timestamp goes out as UTC with a "Z" — see UtcDateTimeJsonConverter for the local-time
+// display bug this prevents.
+builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Add(new UtcDateTimeJsonConverter()));
+builder.Services.AddScoped<IDashboardWidgetService, DashboardWidgetService>();
 builder.Services.AddScoped<IBrandingService, BrandingService>();
 builder.Services.AddScoped<IEventColorService, EventColorService>();
 builder.Services.AddScoped<IPtzService, PtzService>();
@@ -374,8 +393,14 @@ builder.Services.AddHostedService<LogsRetentionService>();
 builder.Services.AddHostedService<AuditLogRetentionService>();
 builder.Services.AddHostedService<CameraReprobeService>();
 builder.Services.AddHostedService<AlertEvaluatorService>();
+// Detection alerts: NodeService publishes each recorded AI detection to IDetectionEventSink, and the
+// same singleton evaluates them on its own task.
+builder.Services.AddSingleton<DetectionAlertService>();
+builder.Services.AddSingleton<IDetectionEventSink>(sp => sp.GetRequiredService<DetectionAlertService>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<DetectionAlertService>());
 builder.Services.AddHostedService<BookmarkRetentionService>();
 builder.Services.AddHostedService<MotionSpanRetentionService>();
+builder.Services.AddHostedService<ActivityRollupBackgroundService>();
 builder.Services.AddHostedService<RoleAssignmentExpirySweepService>();
 builder.Services.AddHostedService<ActiveDirectorySyncService>();
 builder.Services.AddHostedService<LarisVMS.Web.Services.WebLogLevelInitializer>();
@@ -590,6 +615,9 @@ app.UseAuthorization();
 app.UseAntiforgery();
 
 app.MapRazorPages();
+// The node pages were merged into /Admin/Nodes; keep old bookmarks and links working.
+app.MapGet("/Admin/NodeBuilds", () => Results.Redirect("/Admin/Nodes#builds"));
+app.MapGet("/Admin/Settings/Nodes", () => Results.Redirect("/Admin/Nodes#settings"));
 app.MapRazorComponents<LarisVMS.Web.Components.App>()
     .AddInteractiveServerRenderMode();
 app.MapHealthChecks("/health").AllowAnonymous();
@@ -688,7 +716,7 @@ nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest requ
         request.HostStats, ct);
 
     // ── Auto-update check ────────────────────────────────────────────────
-    // Global-only gate (Admin/Settings/Nodes' NodeAutoUpdate.Enabled) — no per-node override for this
+    // Global-only gate (the Nodes page's NodeAutoUpdate.Enabled) — no per-node override for this
     // first pass, unlike Retention/Recording.Mode which do walk Camera -> Node -> Global.
     NodeUpdateInfoDto? updateAvailable = null;
     var autoUpdateEnabled = await settings.GetAsync("NodeAutoUpdate.Enabled", true, ct: ct);
@@ -871,6 +899,28 @@ nodesApi.MapPost("/events", async (HttpContext ctx, List<CameraEventReportItem> 
     return Results.Ok();
 });
 
+// Footage encryption: a node fetches the data key to seal a camera's footage for a UTC day (created
+// on first use), or a key by id to read an encrypted file. Only for cameras the node records, backs
+// up, or holds footage of. 409 while encryption isn't set up (no master key or no backup yet).
+nodesApi.MapPost("/footage-keys", async (HttpContext ctx, FootageKeyRequest request, IFootageKeyService keys, INodeService nodeService, CancellationToken ct) =>
+{
+    var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
+    if (!await nodeService.NodeMayHoldCameraAsync(node.Id, request.CameraId, ct)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    var key = await keys.GetOrCreateDataKeyAsync(request.CameraId, request.Day, ct);
+    return key is { } k
+        ? Results.Json(new FootageKeyResponse(k.KeyId, request.CameraId, Convert.ToBase64String(k.Key)))
+        : Results.Conflict("Footage encryption isn't set up on the server.");
+});
+
+nodesApi.MapGet("/footage-keys/{id:guid}", async (HttpContext ctx, Guid id, IFootageKeyService keys, INodeService nodeService, CancellationToken ct) =>
+{
+    var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
+    var key = await keys.GetDataKeyAsync(id, ct);
+    if (key is not { } k) return Results.NotFound();
+    if (!await nodeService.NodeMayHoldCameraAsync(node.Id, k.CameraId, ct)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    return Results.Json(new FootageKeyResponse(id, k.CameraId, Convert.ToBase64String(k.Key)));
+});
+
 // One export item finishing (success or failure) — ExportRunner reports here once its ffmpeg
 // concat exits. Scoped to the reporting node inside ApplyCompletionReportAsync itself, same as
 // DeleteSegmentsAsync/UpdateStreamInfoAsync above.
@@ -910,7 +960,7 @@ proxiesApi.MapPost("/heartbeat", async (HttpContext ctx, ProxyHeartbeatRequest r
         request.NodeHealthReports, ct);
 
     // ── Auto-update check ────────────────────────────────────────────────
-    // Same global-only gate (Admin/Settings/Nodes' NodeAutoUpdate.Enabled) and same approval queue as
+    // Same global-only gate (the Nodes page's NodeAutoUpdate.Enabled) and same approval queue as
     // recorder nodes — a proxy build is just a NodeBuildVersion with Platform "proxy-win-x64",
     // registered as Pending by every `deploy.ps1 -BuildProxy` run and only offered once approved.
     ProxyUpdateInfoDto? updateAvailable = null;
@@ -1038,13 +1088,100 @@ app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICame
     }
 }).RequireAuthorization("Cameras.View");
 
+// ── Two-way audio ────────────────────────────────────────────────────────────
+// Push-to-talk from a live tile to the camera's speaker (talk.js <-> here <-> node TalkSessionHandler
+// <-> camera's ONVIF audio backchannel). Always relayed through this host, even when video streams
+// directly from the node: it's a few KB/s, and keeping it here puts the permission check, the
+// one-talker-per-camera lock and the audit trail in one place. Gated like PTZ: Cameras.View globally,
+// narrowed per camera by CameraAccessActions.Talk.
+app.MapGet("/talk/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICameraService cameraService,
+    ICameraAccessService cameraAccess, IAuditService auditService, ITalkRecordingService recordings,
+    LarisVMS.Web.Services.MediaRoutingService routing, LarisVMS.Web.Services.TalkSessionRegistry talkers,
+    UserConnectionRegistry connections, ILoggerFactory loggerFactory, CancellationToken ct) =>
+{
+    if (!ctx.WebSockets.IsWebSocketRequest)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Talk, ct);
+    if (accessible is not null && !accessible.Contains(cameraId))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+        await ctx.Response.WriteAsync("You don't have permission to talk through this camera.");
+        return;
+    }
+
+    var camera = await cameraService.GetAsync(cameraId, ct);
+    if (camera is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+    }
+    var effNode = await routing.GetEffectiveRecordingNodeAsync(camera, ct);
+    if (effNode is not { LastIpAddress: { } ip, LivePort: { } port, MediaSigningKey: { } key })
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsync("This camera's node isn't reachable right now.");
+        return;
+    }
+
+    var userId = ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+    var userName = ctx.User.Identity?.Name ?? "someone";
+    using var browserSocket = await ctx.WebSockets.AcceptWebSocketAsync();
+
+    // Accepted first, refused over the socket: a WebSocket handshake can't carry a readable error
+    // body, and talk.js shows the message to the operator.
+    async Task RefuseAsync(string message)
+    {
+        await browserSocket.SendAsync(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new { type = "error", message }),
+            WebSocketMessageType.Text, true, ct);
+        await browserSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, ct);
+    }
+
+    // A fresh string instance per connection: the registry tells holders apart by reference.
+    var who = new string(userName.AsSpan());
+    if (!talkers.TryAcquire(cameraId, who, out var holder))
+    {
+        await RefuseAsync($"{holder} is already talking through this camera.");
+        return;
+    }
+    try
+    {
+        var token = MediaToken.Issue(cameraId, key, TimeSpan.FromSeconds(60));
+        using var nodeSocket = new ClientWebSocket();
+        nodeSocket.Options.SetRequestHeader("Authorization", $"Bearer {token}");
+        try
+        {
+            await nodeSocket.ConnectAsync(new Uri($"ws://{ip}:{port}/talk/{cameraId}?token={Uri.EscapeDataString(token)}"), ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await RefuseAsync("Couldn't reach this camera's recorder node.");
+            return;
+        }
+
+        await auditService.LogAsync("Camera.Talk", userId, userName, ctx.Connection.RemoteIpAddress?.ToString(), camera.Name, ct);
+        using var lease = connections.Register(userId, ct);
+        await LarisVMS.Web.Services.TalkRelay.RunAsync(browserSocket, nodeSocket,
+            new LarisVMS.Web.Services.TalkRelay.Context(cameraId, effNode.Id, userId, userName, recordings,
+                loggerFactory.CreateLogger("Talk")),
+            lease.Token);
+    }
+    finally
+    {
+        talkers.Release(cameraId, who);
+    }
+}).RequireAuthorization("Cameras.View");
+
 // Object detection plan decision 6: live-view box overlay — a separate WS proxy from the video
 // stream above, same token family (viewing a camera's boxes is the same authorization boundary as
 // viewing its video). Unlike ProxyLiveViewAsync's pure byte relay, this one parses each JSON tick
 // and attaches each box's category color before forwarding — Node and Vision Service both have no
 // database access at all, so this proxy is the only tier that can.
 app.MapGet("/live/{cameraId:guid}/detections", async (HttpContext ctx, Guid cameraId, ICameraService cameraService,
-    ICameraAccessService cameraAccess, DetectedObjectCategoryColorCache colorCache,
+    ICameraAccessService cameraAccess, DetectedObjectCategoryColorCache colorCache, ISettingsResolver settings,
     LarisVMS.Web.Services.MediaRoutingService routing, UserConnectionRegistry connections, CancellationToken ct) =>
 {
     if (!ctx.WebSockets.IsWebSocketRequest)
@@ -1086,9 +1223,12 @@ app.MapGet("/live/{cameraId:guid}/detections", async (HttpContext ctx, Guid came
         return;
     }
 
+    // Read once per connection: speeds go to the browser already formatted in the configured unit.
+    var speedUnit = await settings.GetAsync(SpeedUnits.SettingKey, SpeedUnits.Default, ct: ct);
+
     using var browserSocket = await ctx.WebSockets.AcceptWebSocketAsync();
     using var lease = connections.Register(ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, ct);
-    await ProxyDetectionOverlayAsync(nodeSocket, browserSocket, colorCache, lease.Token);
+    await ProxyDetectionOverlayAsync(nodeSocket, browserSocket, colorCache, speedUnit, lease.Token);
 }).RequireAuthorization("Cameras.View");
 
 // Object detection plan pass 3c-1: live per-zone motion score wash — same two-hop shape as the
@@ -1297,6 +1437,24 @@ ptzApi.MapPost("/stop", async (HttpContext ctx, Guid cameraId,
 // snapshot endpoint above that feeds the editor's background image.
 var zonesApi = app.MapGroup("/api/cameras/{cameraId:guid}/zones").RequireAuthorization("Cameras.Edit");
 
+// Per-camera privacy-mask options (zones page, Privacy masks view). BlocksDetections: whether a mask also
+// stops detections inside it — off by default, stored as a camera override of Privacy.BlocksDetections
+// (removed rather than stored as "false", so a node/global default still applies when off).
+app.MapGet("/api/cameras/{cameraId:guid}/privacy-settings", async (Guid cameraId, ISettingsResolver settings, CancellationToken ct) =>
+    Results.Json(new { blocksDetections = await settings.GetAsync("Privacy.BlocksDetections", false, cameraId: cameraId, ct: ct) })
+).RequireAuthorization("Cameras.Edit");
+
+app.MapPut("/api/cameras/{cameraId:guid}/privacy-settings", async (HttpContext ctx, Guid cameraId, PrivacySettingsRequest request,
+    ISettingsResolver settings, IAuditService auditService, CancellationToken ct) =>
+{
+    await settings.SetOverrideAsync(SettingScope.Camera, cameraId, "Privacy.BlocksDetections",
+        request.BlocksDetections ? "true" : null, ctx.User.Identity?.Name, ct);
+    await auditService.LogAsync("Camera.PrivacySettings", ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
+        ctx.User.Identity?.Name, ctx.Connection.RemoteIpAddress?.ToString(),
+        $"Camera {cameraId}: privacy masks {(request.BlocksDetections ? "block" : "don't block")} detections", ct);
+    return Results.NoContent();
+}).RequireAuthorization("Cameras.Edit");
+
 zonesApi.MapGet("", async (Guid cameraId, IZoneService zones, CancellationToken ct) =>
     Results.Json((await zones.ListAsync(cameraId, ct)).Select(ToZoneDto)));
 
@@ -1324,6 +1482,58 @@ zoneApi.MapDelete("", async (Guid id, IZoneService zones, CancellationToken ct) 
     await zones.DeleteAsync(id, ct);
     return Results.Ok();
 });
+
+// Speed traps (Cameras → Speed traps). Cameras.Edit throughout, same as zones. Saving one changes the
+// camera's node config, which restarts its detection pipeline on the next config poll.
+var speedTrapsApi = app.MapGroup("/api/cameras/{cameraId:guid}/speed-traps").RequireAuthorization("Cameras.Edit");
+
+speedTrapsApi.MapGet("", async (Guid cameraId, ISpeedTrapService traps, CancellationToken ct) =>
+    Results.Json((await traps.ListAsync(cameraId, ct)).Select(ToSpeedTrapDto)));
+
+speedTrapsApi.MapPost("", async (HttpContext ctx, Guid cameraId, SaveSpeedTrapRequest request, ISpeedTrapService traps,
+    ICameraService cameraService, IAuditService auditService, CancellationToken ct) =>
+{
+    if (await cameraService.GetAsync(cameraId, ct) is null) return Results.NotFound();
+    if (ValidateSpeedTrap(request) is { } error) return Results.BadRequest(error);
+    var trap = await traps.CreateAsync(cameraId, request.Name.Trim(), request.GatesJson, request.DistanceMeters, request.SpeedLimitKph, ct);
+    await auditService.LogAsync("SpeedTrap.Create", ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
+        ctx.User.Identity?.Name, ctx.Connection.RemoteIpAddress?.ToString(), $"Camera {cameraId}: speed trap \"{trap.Name}\"", ct);
+    return Results.Json(ToSpeedTrapDto(trap));
+});
+
+var speedTrapApi = app.MapGroup("/api/speed-traps/{id:guid}").RequireAuthorization("Cameras.Edit");
+
+speedTrapApi.MapPut("", async (HttpContext ctx, Guid id, SaveSpeedTrapRequest request, ISpeedTrapService traps,
+    IAuditService auditService, CancellationToken ct) =>
+{
+    if (ValidateSpeedTrap(request) is { } error) return Results.BadRequest(error);
+    if (await traps.GetAsync(id, ct) is null) return Results.NotFound();
+    await traps.UpdateAsync(id, request.Name.Trim(), request.GatesJson, request.DistanceMeters, request.IsEnabled, request.SpeedLimitKph, ct);
+    await auditService.LogAsync("SpeedTrap.Update", ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
+        ctx.User.Identity?.Name, ctx.Connection.RemoteIpAddress?.ToString(), $"Speed trap \"{request.Name.Trim()}\"", ct);
+    return Results.Ok();
+});
+
+speedTrapApi.MapDelete("", async (HttpContext ctx, Guid id, ISpeedTrapService traps, IAuditService auditService, CancellationToken ct) =>
+{
+    var trap = await traps.GetAsync(id, ct);
+    if (trap is null) return Results.Ok();
+    await traps.DeleteAsync(id, ct);
+    await auditService.LogAsync("SpeedTrap.Delete", ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
+        ctx.User.Identity?.Name, ctx.Connection.RemoteIpAddress?.ToString(), $"Speed trap \"{trap.Name}\"", ct);
+    return Results.Ok();
+});
+
+static SpeedTrapDto ToSpeedTrapDto(SpeedTrap t) => new(t.Id, t.CameraId, t.Name, t.GatesJson, t.DistanceMeters, t.IsEnabled, t.SpeedLimitKph);
+
+static string? ValidateSpeedTrap(SaveSpeedTrapRequest r)
+{
+    if (string.IsNullOrWhiteSpace(r.Name) || r.Name.Trim().Length > 100) return "Enter a name (up to 100 characters).";
+    if ((r.GatesJson?.Length ?? 0) > 1000) return "The gate lines couldn't be read.";
+    if (r.SpeedLimitKph is { } limit && (!double.IsFinite(limit) || limit <= 0 || limit > 400))
+        return "Enter a speed limit above 0, or leave it blank.";
+    return SpeedTrapGates.Validate(r.GatesJson, r.DistanceMeters);
+}
 
 // See ZoneDto's own doc comment: Kind must be projected to its string name explicitly — the entity
 // itself has no [JsonConverter] and this app has no global JsonStringEnumConverter, so returning a
@@ -1455,6 +1665,212 @@ playbackApi.MapGet("/segments", async (HttpContext ctx, Guid cameraId, DateTime 
     if (accessible is not null && !accessible.Contains(cameraId))
         return Results.Problem("You don't have playback access to this camera.", statusCode: StatusCodes.Status403Forbidden);
     return Results.Json(await timeline.GetSegmentsAsync(cameraId, from, to, ct));
+});
+
+// Activity heatmap: when, by time of day, each type of event happens on this camera. Repeated
+// ?sel= values choose event types ("Animal") or labels ("Animal:cat"); none means the default.
+playbackApi.MapGet("/activity", async (HttpContext ctx, Guid cameraId, string? range, string? view,
+    IActivityService activity, ICameraAccessService cameraAccess, CancellationToken ct) =>
+{
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Playback, ct);
+    if (accessible is not null && !accessible.Contains(cameraId))
+        return Results.Problem("You don't have playback access to this camera.", statusCode: StatusCodes.Status403Forbidden);
+    var selection = ctx.Request.Query["sel"].Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s!).Take(200).ToList();
+    var heatmap = await activity.GetHeatmapAsync(cameraId, accessible, range, view, selection, ct);
+    return heatmap is null ? Results.NotFound() : Results.Json(heatmap);
+});
+
+// ── Map page ─────────────────────────────────────────────────────────────────
+// Maps (street or floorplan) with cameras placed on them. Viewing follows Cameras.View, narrowed per
+// camera by CameraAccess View like every live surface; placing cameras and managing maps is Cameras.Edit.
+var mapsApi = app.MapGroup("/api/maps").RequireAuthorization("Cameras.View");
+
+mapsApi.MapGet("", async (HttpContext ctx, IMapService maps, ICameraAccessService cameraAccess, CancellationToken ct) =>
+{
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.View, ct);
+    return Results.Json(new { maps = await maps.ListAsync(accessible, ct), tiles = await maps.GetTileSettingsAsync(ct) });
+});
+
+mapsApi.MapGet("/{id:guid}", async (HttpContext ctx, Guid id, IMapService maps, ICameraAccessService cameraAccess, CancellationToken ct) =>
+{
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.View, ct);
+    var map = await maps.GetAsync(id, accessible, ct);
+    return map is null ? Results.NotFound() : Results.Json(map);
+});
+
+mapsApi.MapGet("/{id:guid}/image", async (HttpContext ctx, Guid id, IMapService maps, CancellationToken ct) =>
+{
+    var image = await maps.GetImageAsync(id, ct);
+    if (image is not { } img) return Results.NotFound();
+    ctx.Response.Headers["X-Content-Type-Options"] = "nosniff";
+    ctx.Response.Headers.CacheControl = "private, max-age=3600";
+    return Results.File(img.Image, img.ContentType);
+});
+
+mapsApi.MapPost("", async (HttpContext ctx, CreateSiteMapRequest request, IMapService maps, IAuditService auditService, CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Name)) return Results.BadRequest("A map needs a name.");
+    byte[]? image = null;
+    if (string.Equals(request.Kind, "Floorplan", StringComparison.OrdinalIgnoreCase))
+    {
+        if (string.IsNullOrEmpty(request.ImageBase64) || request.ImageWidth is not > 0 || request.ImageHeight is not > 0)
+            return Results.BadRequest("Choose a floorplan image.");
+        try { image = Convert.FromBase64String(request.ImageBase64); }
+        catch (FormatException) { return Results.BadRequest("That image couldn't be read."); }
+        if (image.Length > 10 * 1024 * 1024) return Results.BadRequest("Floorplan images can be up to 10 MB.");
+        // By the file's own signature, not the name or the browser's claim. No SVG: it can carry script.
+        var detected = SiteMapImage.DetectContentType(image);
+        if (detected is null) return Results.BadRequest("Use a PNG, JPEG, WebP or GIF image.");
+        request = request with { ImageContentType = detected };
+    }
+    var map = await maps.CreateAsync(request, image, ct);
+    await auditService.LogAsync("Map.Create", ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
+        ctx.User.Identity?.Name, ctx.Connection.RemoteIpAddress?.ToString(), $"{map.Kind} map '{map.Name}'", ct);
+    return Results.Json(new { id = map.Id });
+}).RequireAuthorization("Cameras.Edit");
+
+mapsApi.MapPut("/{id:guid}", async (Guid id, UpdateSiteMapRequest request, IMapService maps, CancellationToken ct) =>
+    await maps.UpdateAsync(id, request, ct) ? Results.NoContent() : Results.NotFound()
+).RequireAuthorization("Cameras.Edit");
+
+mapsApi.MapDelete("/{id:guid}", async (HttpContext ctx, Guid id, IMapService maps, IAuditService auditService, CancellationToken ct) =>
+{
+    if (!await maps.DeleteAsync(id, ct)) return Results.NotFound();
+    await auditService.LogAsync("Map.Delete", ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
+        ctx.User.Identity?.Name, ctx.Connection.RemoteIpAddress?.ToString(), $"Map {id}", ct);
+    return Results.NoContent();
+}).RequireAuthorization("Cameras.Edit");
+
+mapsApi.MapPut("/{id:guid}/placements/{cameraId:guid}", async (Guid id, Guid cameraId, SavePlacementRequest request, IMapService maps, CancellationToken ct) =>
+{
+    if (!double.IsFinite(request.Y) || !double.IsFinite(request.X) || !double.IsFinite(request.BearingDeg)
+        || !double.IsFinite(request.FovDeg) || !double.IsFinite(request.Range))
+        return Results.BadRequest();
+    return await maps.SavePlacementAsync(id, cameraId, request, ct) ? Results.NoContent() : Results.NotFound();
+}).RequireAuthorization("Cameras.Edit");
+
+mapsApi.MapDelete("/{id:guid}/placements/{cameraId:guid}", async (Guid id, Guid cameraId, IMapService maps, CancellationToken ct) =>
+    await maps.RemovePlacementAsync(id, cameraId, ct) ? Results.NoContent() : Results.NotFound()
+).RequireAuthorization("Cameras.Edit");
+
+mapsApi.MapPut("/tile-settings", async (HttpContext ctx, MapTileSettingsDto request, IMapService maps, CancellationToken ct) =>
+{
+    // A {z}/{x}/{y} https template — anything else would just break every street map. https only: the
+    // page's CSP allows images from https: (and the page itself is https, so http tiles would be blocked
+    // as mixed content anyway).
+    if (!request.TileUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+        || !request.TileUrl.Contains("{z}") || !request.TileUrl.Contains("{x}") || !request.TileUrl.Contains("{y}"))
+        return Results.BadRequest("The tile URL needs to be an https address containing {z}, {x} and {y}.");
+    await maps.SaveTileSettingsAsync(request, ctx.User.Identity?.Name, ct);
+    return Results.NoContent();
+}).RequireAuthorization("Cameras.Edit");
+
+// The same heatmap for every camera this viewer can review, combined.
+app.MapGet("/api/activity", async (HttpContext ctx, string? range, string? view,
+    IActivityService activity, ICameraAccessService cameraAccess, CancellationToken ct) =>
+{
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Playback, ct);
+    var selection = ctx.Request.Query["sel"].Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s!).Take(200).ToList();
+    return Results.Json(await activity.GetHeatmapAsync(null, accessible, range, view, selection, ct));
+}).RequireAuthorization("Playback.View");
+
+// Speed heatmap (Activity page, Speeds): speed-trap measurements by time of day, for one camera or all
+// accessible ones. ?metric= avg|max|over|count; repeated ?trap= ids narrow to those traps.
+playbackApi.MapGet("/speed-activity", async (HttpContext ctx, Guid cameraId, string? range, string? view, string? metric,
+    IActivityService activity, ICameraAccessService cameraAccess, CancellationToken ct) =>
+{
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Playback, ct);
+    if (accessible is not null && !accessible.Contains(cameraId))
+        return Results.Problem("You don't have playback access to this camera.", statusCode: StatusCodes.Status403Forbidden);
+    var traps = ctx.Request.Query["trap"].Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s!).Take(200).ToList();
+    var heatmap = await activity.GetSpeedHeatmapAsync(cameraId, accessible, range, view, metric, traps, ct);
+    return heatmap is null ? Results.NotFound() : Results.Json(heatmap);
+});
+
+app.MapGet("/api/speed-activity", async (HttpContext ctx, string? range, string? view, string? metric,
+    IActivityService activity, ICameraAccessService cameraAccess, CancellationToken ct) =>
+{
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Playback, ct);
+    var traps = ctx.Request.Query["trap"].Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s!).Take(200).ToList();
+    return Results.Json(await activity.GetSpeedHeatmapAsync(null, accessible, range, view, metric, traps, ct));
+}).RequireAuthorization("Playback.View");
+
+// Recorded push-to-talk presses overlapping a range — Playback plays each in sync with the video and
+// marks it on the timeline.
+playbackApi.MapGet("/talk-recordings", async (HttpContext ctx, Guid cameraId, DateTime from, DateTime to,
+    ITalkRecordingService recordings, ICameraAccessService cameraAccess, CancellationToken ct) =>
+{
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Playback, ct);
+    if (accessible is not null && !accessible.Contains(cameraId))
+        return Results.Problem("You don't have playback access to this camera.", statusCode: StatusCodes.Status403Forbidden);
+    return Results.Json(await recordings.ListAsync(cameraId, from, to, ct));
+});
+
+// Footage encryption: master key create / passphrase-protected backup / restore (Settings →
+// Encryption). JSON bodies, not forms, so a backup can come back as a file download.
+var encryptionApi = app.MapGroup("/api/encryption").RequireAuthorization("Settings.Edit");
+
+encryptionApi.MapPost("/master-key", async (HttpContext ctx, IFootageKeyService keys, IAuditService audit, CancellationToken ct) =>
+{
+    var before = await keys.GetStatusAsync(ct);
+    var status = await keys.CreateMasterKeyAsync(ct);
+    if (!before.HasMasterKey)
+        await audit.LogAsync("Encryption.MasterKeyCreated", ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
+            ctx.User.Identity?.Name, ctx.Connection.RemoteIpAddress?.ToString(), $"Footage master key {status.MasterKeyId} created", ct);
+    return Results.Json(status);
+});
+
+encryptionApi.MapPost("/backup", async (HttpContext ctx, EncryptionBackupRequest request, IFootageKeyService keys, IAuditService audit, CancellationToken ct) =>
+{
+    if ((request.Passphrase?.Length ?? 0) < FootageKeyService.MinPassphraseLength)
+        return Results.BadRequest($"Use a passphrase of at least {FootageKeyService.MinPassphraseLength} characters.");
+    var json = await keys.ExportBackupAsync(request.Passphrase!, ct);
+    if (json is null) return Results.BadRequest("There's no master key to back up yet.");
+    await audit.LogAsync("Encryption.BackupDownloaded", ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
+        ctx.User.Identity?.Name, ctx.Connection.RemoteIpAddress?.ToString(), "Footage master key backup downloaded", ct);
+    return Results.File(System.Text.Encoding.UTF8.GetBytes(json), "application/json", "larisvms-master-key-backup.json");
+});
+
+encryptionApi.MapPost("/restore", async (HttpContext ctx, EncryptionRestoreRequest request, IFootageKeyService keys, IAuditService audit, CancellationToken ct) =>
+{
+    var result = await keys.RestoreBackupAsync(request.Backup ?? "", request.Passphrase ?? "", ct);
+    var (ok, message) = result switch
+    {
+        FootageKeyRestoreResult.Restored => (true, "Master key restored. Encrypted footage can be read again."),
+        FootageKeyRestoreResult.AlreadyInstalled => (true, "That's the master key this server already has — nothing to restore."),
+        FootageKeyRestoreResult.WrongPassphrase => (false, "Wrong passphrase for this backup."),
+        FootageKeyRestoreResult.DifferentKeyInstalled => (false, "This server already has a different master key. Restoring would orphan footage encrypted with it, so it was refused."),
+        _ => (false, "That file isn't a LarisVMS master key backup."),
+    };
+    if (result == FootageKeyRestoreResult.Restored)
+        await audit.LogAsync("Encryption.MasterKeyRestored", ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
+            ctx.User.Identity?.Name, ctx.Connection.RemoteIpAddress?.ToString(), "Footage master key restored from a backup", ct);
+    return Results.Json(new { ok, message });
+});
+
+// Tamper evidence: an export item's signed manifest (download), and this server's public signing
+// keys — what the Verify export page checks a manifest's signature against. The keys are public by
+// nature; they're behind Exports.View only because nothing outside the app needs to fetch them here
+// (Help explains how to verify with openssl from the key inside the manifest).
+app.MapGet("/api/exports/items/{id:guid}/manifest", async (Guid id, IExportService exports, CancellationToken ct) =>
+{
+    var json = await exports.GetManifestAsync(id, ct);
+    if (json is null) return Results.NotFound();
+    return Results.File(System.Text.Encoding.UTF8.GetBytes(json), "application/json", $"export-{id:N}.manifest.json");
+}).RequireAuthorization("Exports.View");
+
+app.MapGet("/api/signing-keys", async (ISigningKeyService signing, CancellationToken ct) =>
+    Results.Json(await signing.ListPublicKeysAsync(ct))).RequireAuthorization("Exports.View");
+
+// Speed-trap measurements on this camera in a range — Playback's timeline markers and the speed badge
+// shown over the video while a measured object is in view.
+playbackApi.MapGet("/speeds", async (HttpContext ctx, Guid cameraId, DateTime from, DateTime to,
+    ITimelineService timeline, ICameraAccessService cameraAccess, CancellationToken ct) =>
+{
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Playback, ct);
+    if (accessible is not null && !accessible.Contains(cameraId))
+        return Results.Problem("You don't have playback access to this camera.", statusCode: StatusCodes.Status403Forbidden);
+    return Results.Json(await timeline.GetSpeedMarkersAsync(cameraId, from, to, ct));
 });
 
 // Playback's "Now": the newest moment that can actually be played (the still-recording segment has no
@@ -1638,6 +2054,40 @@ app.MapPost("/api/media/stream-event", (MediaStreamEventBeacon beacon, ILoggerFa
 app.MapGet("/api/dashboard", async (HttpContext ctx, IDashboardService dashboardService, CancellationToken ct) =>
     Results.Json(await dashboardService.GetHealthAsync(ctx.User, ct))
 ).RequireAuthorization();
+
+// Configurable dashboard widgets. Each `w` is "key" or "key|option|option", where an option is a
+// look-back window (1h/24h/7d/30d), "asc" for lowest-first, or "k=a,b" for latest-detections' types
+// — e.g. ?w=cam-fps|asc&w=cam-human|7d&w=latest-detections|k=Human,Motion.
+// One call per 60s poll returns the top 10 of every list widget on the user's dashboard.
+app.MapGet("/api/dashboard/widgets", async (HttpContext ctx, IDashboardWidgetService widgets,
+    IAuthorizationService authz, CancellationToken ct) =>
+{
+    var viewer = await DashboardViewerFor(ctx.User, authz);
+    var requested = ctx.Request.Query["w"]
+        .Where(w => !string.IsNullOrWhiteSpace(w))
+        .Take(64)
+        .Select(w => DashboardWidgetCatalog.ParseSpec(w!))
+        .ToList();
+    return Results.Json(new { results = await widgets.GetTopAsync(viewer, requested, ct) });
+}).RequireAuthorization();
+
+// The full report behind a widget's title: every row, filterable, 100 per page.
+app.MapGet("/api/dashboard/widgets/{key}/report", async (string key, HttpContext ctx, IDashboardWidgetService widgets,
+    IAuthorizationService authz, int? page, int? pageSize, string? q, Guid? nodeId, string? sort, string? dir,
+    string? window, bool? asc, string? kinds, CancellationToken ct) =>
+{
+    var viewer = await DashboardViewerFor(ctx.User, authz);
+    var options = new DashboardWidgetOptions(window, asc ?? false,
+        kinds is null ? null : DashboardWidgetCatalog.ParseKinds(kinds));
+    var report = await widgets.GetReportAsync(viewer, key, options,
+        page ?? 1, pageSize ?? DashboardWidgetService.MaxReportPageSize, q, nodeId, sort, dir == "desc", ct);
+    return report is null ? Results.NotFound() : Results.Json(report);
+}).RequireAuthorization();
+
+static async Task<DashboardViewer> DashboardViewerFor(System.Security.Claims.ClaimsPrincipal user, IAuthorizationService authz) =>
+    new(user,
+        CanViewAlerts: (await authz.AuthorizeAsync(user, "Alerts.Edit")).Succeeded,
+        CanOpenNodes: (await authz.AuthorizeAsync(user, "Nodes.Edit")).Succeeded);
 
 // ── REST API (M20 pass 1) ────────────────────────────────────────────────────
 // Authenticated by ApiKeyAuthMiddleware above via the "X-Api-Key" header (or, since that middleware
@@ -1836,6 +2286,62 @@ app.MapGet("/playback-segment/{cameraId:guid}/{segmentId:long}", async (
     relayMetrics.RecordPlaybackProxied(nodeResponse.Content.Headers.ContentLength ?? 0);
 
     return Results.Stream(await nodeResponse.Content.ReadAsStreamAsync(ct), "video/mp4");
+}).RequireAuthorization("Playback.View");
+
+// One recorded push-to-talk press's WAV, proxied from its node like /playback-segment (always
+// proxied — the files are small). Range requests pass through so the <audio> element can seek.
+app.MapGet("/talk-audio/{cameraId:guid}/{recordingId:long}", async (HttpContext ctx, Guid cameraId, long recordingId,
+    ITalkRecordingService recordings, INodeService nodeService, ICameraAccessService cameraAccess,
+    IHttpClientFactory httpFactory, CancellationToken ct) =>
+{
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Playback, ct);
+    if (accessible is not null && !accessible.Contains(cameraId))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+        return;
+    }
+
+    var recording = await recordings.GetAsync(recordingId, ct);
+    if (recording is null || recording.CameraId != cameraId)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+    }
+    var node = (await nodeService.ListAsync(ct)).FirstOrDefault(n => n.Id == recording.NodeId);
+    if (node is not { LastIpAddress: { } ip, LivePort: { } port, MediaSigningKey: { } key })
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        return;
+    }
+
+    var token = MediaToken.IssueForSegment(cameraId, recording.FilePath, key, TimeSpan.FromSeconds(30));
+    var nodeUri = $"http://{ip}:{port}/talk-audio/{cameraId}?path={Uri.EscapeDataString(recording.FilePath)}&token={Uri.EscapeDataString(token)}";
+    using var request = MediaTokenRequest.Create(HttpMethod.Get, nodeUri, token);
+    if (ctx.Request.Headers.Range.Count > 0) request.Headers.TryAddWithoutValidation("Range", ctx.Request.Headers.Range.ToString());
+
+    var client = httpFactory.CreateClient();
+    client.Timeout = TimeSpan.FromSeconds(25);
+    HttpResponseMessage nodeResponse;
+    try
+    {
+        nodeResponse = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
+        return;
+    }
+    using (nodeResponse)
+    {
+        ctx.Response.StatusCode = (int)nodeResponse.StatusCode;
+        if (!nodeResponse.IsSuccessStatusCode) return;
+        ctx.Response.Headers.AcceptRanges = "bytes";
+        if (nodeResponse.Content.Headers.ContentRange is { } range) ctx.Response.Headers.ContentRange = range.ToString();
+        if (nodeResponse.Content.Headers.ContentLength is { } length) ctx.Response.ContentLength = length;
+        ctx.Response.ContentType = "audio/wav";
+        await using var body = await nodeResponse.Content.ReadAsStreamAsync(ct);
+        await body.CopyToAsync(ctx.Response.Body, ct);
+    }
 }).RequireAuthorization("Playback.View");
 
 // M7 pass 2: same "browser never talks to a node directly" proxy shape as /playback-segment above,
@@ -2124,9 +2630,24 @@ app.MapPost("/api/exports", async (HttpContext ctx, CreateExportRequest request,
 
     var userId = ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
     var userName = ctx.User.Identity?.Name;
-    var job = await exportService.CreateJobAsync(request.CameraIds, request.FromUtc, request.ToUtc, userId, userName, ct);
+    // Redaction areas, re-serialized in the zone polygon format rather than stored as sent: each
+    // polygon needs 3+ points inside the frame, and anything else is dropped.
+    var redactions = new Dictionary<Guid, string>();
+    foreach (var (cameraId, polygons) in request.Redactions ?? [])
+    {
+        var valid = polygons
+            .Where(p => p.Count is >= 3 and <= 200 && p.All(pt => pt.Length == 2 && pt.All(v => double.IsFinite(v))))
+            .Select(p => new { points = p.Select(pt => new[] { Math.Clamp(pt[0], 0, 1), Math.Clamp(pt[1], 0, 1) }) })
+            .Take(50).ToList();
+        if (valid.Count > 0 && request.CameraIds.Contains(cameraId))
+            redactions[cameraId] = System.Text.Json.JsonSerializer.Serialize(valid);
+    }
+
+    var job = await exportService.CreateJobAsync(request.CameraIds, request.FromUtc, request.ToUtc, userId, userName, ct,
+        redactions.Count > 0 ? redactions : null);
     await auditService.LogAsync("Export.Create", userId, userName, ctx.Connection.RemoteIpAddress?.ToString(),
-        $"{request.CameraIds.Count} camera(s), {request.FromUtc:u} - {request.ToUtc:u}", ct);
+        $"{request.CameraIds.Count} camera(s), {request.FromUtc:u} - {request.ToUtc:u}" +
+        (redactions.Count > 0 ? $", with redacted areas on {redactions.Count} camera(s)" : ""), ct);
     return Results.Json(new { jobId = job.Id });
 }).RequireAuthorization("Exports.View");
 
@@ -2217,7 +2738,8 @@ app.MapGet("/api/exports", async (IExportService exportService, ICameraService c
             nodeName = i.NodeId is { } nid ? nodeNames.GetValueOrDefault(nid) : null,
             status = i.Status.ToString(),
             errorMessage = i.ErrorMessage,
-            outputSizeBytes = i.OutputSizeBytes
+            outputSizeBytes = i.OutputSizeBytes,
+            redacted = i.RedactionJson != null
         })
     }));
 }).RequireAuthorization("Exports.View");
@@ -2325,7 +2847,7 @@ static async Task ProxyLiveViewAsync(WebSocket node, WebSocket browser, Cancella
 // A single malformed or unparseable tick is skipped rather than tearing down the whole viewer
 // connection over it — the next poll (at most ~150ms later, per DetectionOverlayHandler's own
 // cadence) supersedes it anyway.
-static async Task ProxyDetectionOverlayAsync(WebSocket node, WebSocket browser, DetectedObjectCategoryColorCache colorCache, CancellationToken ct)
+static async Task ProxyDetectionOverlayAsync(WebSocket node, WebSocket browser, DetectedObjectCategoryColorCache colorCache, string speedUnit, CancellationToken ct)
 {
     var buffer = new byte[64 * 1024];
     // The re-serialize below has to land as the camelCase this app's JS everywhere else expects
@@ -2369,7 +2891,8 @@ static async Task ProxyDetectionOverlayAsync(WebSocket node, WebSocket browser, 
                 enriched.Add(new
                 {
                     box.TrackId, box.Category, box.Label, box.MovementState,
-                    box.X, box.Y, box.W, box.H, box.Confidence, ColorHex = colorHex
+                    box.X, box.Y, box.W, box.H, box.Confidence, ColorHex = colorHex,
+                    box.Color, SpeedText = box.SpeedKph is { } kph ? SpeedUnits.Format(kph, speedUnit) : null
                 });
             }
 

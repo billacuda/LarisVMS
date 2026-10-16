@@ -457,7 +457,7 @@
         await Db.SaveChangesAsync();
 
         await AuditService.LogAsync("Role.ExpiryExtended", CurrentUserId, CurrentUserName, RemoteIp,
-            $"Extended to {expiry.ExpiresAtUtc:u}");
+            $"Extended to {expiry.ExpiresAtUtc.ToLocalTime():g}");
         SavedMessage = "Expiry extended.";
         await LoadAsync();
     }

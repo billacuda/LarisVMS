@@ -5,7 +5,7 @@ LarisVMS is licensed under the Apache License, Version 2.0 (see LICENSE).
 
 This file covers the third-party components used by native AI object detection (LarisVMS.Vision /
 LarisVMS.Vision.Service) and other notable runtime libraries. It is not a complete notice for every
-dependency the wider application uses (ASP.NET Core, EF Core, Bootstrap, GridStack, etc. — each
+dependency the wider application uses (ASP.NET Core, EF Core, Bootstrap, GridStack, Leaflet, etc. — each
 carries its own standard OSS license via NuGet/npm, not separately re-stated here).
 
 

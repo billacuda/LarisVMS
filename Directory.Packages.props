@@ -29,6 +29,9 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageVersion>
     <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
+    <!-- Not used directly: lifts MailKit/MimeKit's transitive 10.0.0 past GHSA-2fmv-rv2c-59x7 and
+         GHSA-846f-f764-76mx. Drop it once MimeKit itself asks for a patched version. -->
+    <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
     <!-- Active Directory sign-in and group sync (LDAPS/LDAP, paged and sorted searches). -->
     <PackageVersion Include="System.DirectoryServices.Protocols" Version="10.0.0" />
     <!-- LarisVMS.Vision / LarisVMS.Vision.Service — object detection (see the detection plan).

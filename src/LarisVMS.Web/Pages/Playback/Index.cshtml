@@ -7,7 +7,10 @@
     var camerasJson = JsonSerializer.Serialize(Model.Cameras.Select(c =>
     {
         var main = c.Streams.FirstOrDefault(s => s.Role == CameraStreamRole.Main);
-        return new { id = c.Id, name = c.Name, codec = main?.Codec, hasAudio = main?.HasAudio ?? false };
+        // hasSpeaker: recorded two-way audio can play on this camera's tiles even when the camera
+        // sends no audio of its own, so its tiles still get a volume control.
+        return new { id = c.Id, name = c.Name, codec = main?.Codec, hasAudio = main?.HasAudio ?? false,
+            hasSpeaker = c.Capabilities != null && c.Capabilities.HasAudioOut };
     }));
     var viewsJson = JsonSerializer.Serialize(Model.Views.Select(v => new { id = v.Id, name = v.Name, layoutJson = v.LayoutJson }));
 }
@@ -146,6 +149,9 @@ else
     <script src="~/js/timeline.js" asp-append-version="true"></script>
     <script src="~/js/fullscreen-tile.js" asp-append-version="true"></script>
     <script src="~/js/catchup-badge.js" asp-append-version="true"></script>
+    <script src="~/js/talk-playback.js" asp-append-version="true"></script>
+    <script src="~/js/speed-playback.js" asp-append-version="true"></script>
+    <script src="~/js/redaction-editor.js" asp-append-version="true"></script>
     <script src="~/js/playback-player.js" asp-append-version="true"></script>
     <script>
         (function () {

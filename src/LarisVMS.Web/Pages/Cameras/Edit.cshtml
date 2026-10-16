@@ -18,6 +18,7 @@
     {
         <div class="btn-group">
             <a class="btn btn-outline-secondary" asp-page="Zones" asp-route-id="@Model.Id">Zones</a>
+            <a class="btn btn-outline-secondary" asp-page="SpeedTraps" asp-route-id="@Model.Id">Speed traps</a>
             <a class="btn btn-outline-secondary" href="/Cameras/EventTags/@Model.Id">Event tags</a>
             <a class="btn btn-outline-secondary" asp-page="Schedule" asp-route-id="@Model.Id">Schedule</a>
             <button type="submit" form="cameraForm" asp-page-handler="Probe" class="btn btn-outline-secondary"
@@ -229,6 +230,35 @@
                         Archiving is @(Model.EffectiveArchiveEnabled ? "on" : "off") for this camera. 0 keeps forever.
                         <a href="/Help/storage#archive">Learn more</a>
                     </div>
+                </div>
+                <div class="lv-field">
+                    <label class="form-label" asp-for="EncryptOverride">Encryption</label>
+                    <select asp-for="EncryptOverride" class="form-select" disabled="@(!Model.EncryptionReady)">
+                        <option value="">inherit — @(Model.EffectiveEncrypt switch { "Video" => "video", "VideoAndImages" => "video, snapshots and thumbnails", _ => "off" })</option>
+                        <option value="Off">Off</option>
+                        <option value="Video">Video (recordings and talk audio)</option>
+                        <option value="VideoAndImages">Video, snapshots and thumbnails</option>
+                    </select>
+                    <div class="lv-hint">
+                        @if (!Model.EncryptionReady)
+                        {
+                            <span>Set up the master key and its backup under Settings → Encryption first.</span>
+                        }
+                        else if (Model.EffectiveEncrypt != "Off")
+                        {
+                            <span>New footage is encrypted. Existing footage stays as it is unless you
+                            <button type="submit" form="cameraForm" asp-page-handler="EncryptExisting" formnovalidate class="btn btn-link btn-sm p-0 align-baseline">encrypt existing footage</button>.</span>
+                        }
+                        else
+                        {
+                            <span>Encrypts recordings on the recorder's disks.</span>
+                        }
+                        <a href="/Help/storage#encryption">Learn more</a>
+                    </div>
+                    @if (Request.Query["encrypting"] == "existing")
+                    {
+                        <div class="alert alert-info py-1 small mt-1 mb-0">The recorder will encrypt this camera's existing footage in the background over the next while.</div>
+                    }
                 </div>
             </div>
         </section>

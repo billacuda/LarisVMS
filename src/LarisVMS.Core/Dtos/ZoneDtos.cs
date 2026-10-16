@@ -14,3 +14,6 @@ public record SaveZoneRequest(string Name, string Kind, string PolygonJson, doub
 /// live (an Ignore zone never actually showed red, and re-opening any non-ServerMotion zone's edit
 /// form never selected the right option).</summary>
 public record ZoneDto(Guid Id, Guid CameraId, string Name, string Kind, string PolygonJson, double Sensitivity, bool IsEnabled);
+
+/// <summary>PUT /api/cameras/{id}/privacy-settings — see Privacy.BlocksDetections.</summary>
+public record PrivacySettingsRequest(bool BlocksDetections);

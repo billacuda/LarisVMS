@@ -27,11 +27,7 @@ window.larisvmsZonesEditor = (function () {
         ServerMotion: 'Motion (server)',
         Ignore: 'Ignore',
         CameraMotion: 'Motion (camera) — inactive',
-        // M18 built the burn-in (NodeWorker/RecordingSession) but a confirmed-live bug on real
-        // Intel/NVIDIA hardware (masked camera stuck cycling Connecting/Backoff forever, see
-        // CHANGELOG 0.111.0-0.112.0) made it a kill-switched no-op again (NodeWorker.PrivacyMaskEnabled
-        // = false) until the root cause is found — still "not yet active" from an admin's perspective.
-        Privacy: 'Privacy — not yet active'
+        Privacy: 'Privacy mask'
     };
 
     // Closing a polygon by clicking back near its first point needs a forgiving radius in *screen*
@@ -85,6 +81,14 @@ window.larisvmsZonesEditor = (function () {
         // placeholder (new cameras default Grid server-side — see Camera.MotionRegionMode's own doc
         // comment — but an existing camera's real mode always wins once loadRegion() returns).
         var activeMode = 'Grid';
+        // What the editor is showing: 'Grid', 'Polygon', or 'Privacy'. Grid/Polygon follow the active
+        // motion method (choosing one switches the method, as before); 'Privacy' is a view of Privacy
+        // zones only and never changes how the camera detects motion — masks apply either way.
+        var view = 'Grid';
+        var hoveredZoneId = null;
+        // The vertices of the zone being edited (form open), dragged to reshape it before Save.
+        var editPoints = null;
+        var dragIndex = -1;
 
         var zones = [];
         var snapshotImg = new Image();
@@ -180,19 +184,29 @@ window.larisvmsZonesEditor = (function () {
             }
         }
 
+        // The Privacy masks view shows only Privacy zones; the Polygon view shows every zone.
+        function visibleZones() {
+            return view === 'Privacy' ? zones.filter(function (z) { return z.kind === 'Privacy'; }) : zones;
+        }
+
+        var HOVER_COLOR = 'rgba(13,110,253,0.85)';
+        var HANDLE_RADIUS_PX = 6;
+
         function drawPolygons() {
-            zones.forEach(function (z) {
-                var points = parsePolygon(z.polygonJson);
-                if (points.length < 3) return;
-                var color = KIND_COLORS[z.kind] || KIND_COLORS.ServerMotion;
+            visibleZones().forEach(function (z) {
                 var isSelected = z.id === selectedZoneId;
+                // The zone being edited draws from its working copy, so a dragged point moves live.
+                var points = isSelected && editPoints ? editPoints : parsePolygon(z.polygonJson);
+                if (points.length < 3) return;
+                var isHovered = z.id === hoveredZoneId;
+                var color = isHovered ? HOVER_COLOR : (KIND_COLORS[z.kind] || KIND_COLORS.ServerMotion);
 
                 drawPolygonPath(points);
                 ctx.closePath();
-                ctx.fillStyle = color.replace('0.85', fillOpacityForZone(z).toFixed(2));
+                ctx.fillStyle = color.replace('0.85', (isHovered ? 0.35 : fillOpacityForZone(z)).toFixed(2));
                 ctx.fill();
                 ctx.strokeStyle = color;
-                ctx.lineWidth = isSelected ? 3 : 1.5;
+                ctx.lineWidth = isSelected || isHovered ? 3 : 1.5;
                 if (!z.isEnabled) ctx.setLineDash([6, 4]); else ctx.setLineDash([]);
                 ctx.stroke();
                 ctx.setLineDash([]);
@@ -204,6 +218,31 @@ window.larisvmsZonesEditor = (function () {
                     ctx.fillText(z.name, labelPos.x + 4, labelPos.y - 4);
                 }
             });
+
+            // A new zone (drawn, form open, not saved yet) isn't in the list yet — draw its working copy.
+            if (editPoints && !selectedZoneId && editPoints.length >= 3) {
+                drawPolygonPath(editPoints);
+                ctx.closePath();
+                ctx.fillStyle = 'rgba(255,193,7,0.25)';
+                ctx.fill();
+                ctx.strokeStyle = '#ffc107';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+
+            // Handles on the zone being edited: drag one to reshape it.
+            if (editPoints && !drawing) {
+                editPoints.forEach(function (p, i) {
+                    var px = fracToPixel(p);
+                    ctx.beginPath();
+                    ctx.arc(px.x, px.y, HANDLE_RADIUS_PX, 0, Math.PI * 2);
+                    ctx.fillStyle = i === dragIndex ? '#0d6efd' : '#fff';
+                    ctx.fill();
+                    ctx.strokeStyle = '#000';
+                    ctx.lineWidth = 1.5;
+                    ctx.stroke();
+                });
+            }
 
             if (drawing && drawPoints.length > 0) {
                 drawPolygonPath(drawPoints);
@@ -261,7 +300,7 @@ window.larisvmsZonesEditor = (function () {
             if (!w || !h) return;
             ctx.clearRect(0, 0, w, h);
             drawBackground();
-            if (activeMode === 'Grid') drawGrid(); else drawPolygons();
+            if (view === 'Grid') drawGrid(); else drawPolygons();
         }
 
         function parsePolygon(polygonJson) {
@@ -376,39 +415,78 @@ window.larisvmsZonesEditor = (function () {
         // activates that method — viewing an editor and making it the active one are the same action
         // here, not two separate steps.
         function setPaneVisibility(mode) {
+            view = mode;
             document.getElementById(opts.gridPaneId).style.display = mode === 'Grid' ? '' : 'none';
             document.getElementById(opts.polygonPaneId).style.display = mode === 'Grid' ? 'none' : '';
             document.getElementById(opts.gridControlsId).style.display = mode === 'Grid' ? '' : 'none';
             document.getElementById(opts.polygonControlsId).style.display = mode === 'Grid' ? 'none' : '';
             document.getElementById(opts.polygonHintId).style.display = mode === 'Grid' ? 'none' : (drawing ? '' : 'none');
             document.getElementById(opts.polygonSidebarId).style.display = mode === 'Grid' ? 'none' : '';
-            document.getElementById(opts.modeToggleGridId).classList.toggle('active', mode === 'Grid');
-            document.getElementById(opts.modeTogglePolygonId).classList.toggle('active', mode !== 'Grid');
+            // The method buttons show which motion method is active, whatever is being viewed.
+            document.getElementById(opts.modeToggleGridId).classList.toggle('active', activeMode === 'Grid');
+            document.getElementById(opts.modeTogglePolygonId).classList.toggle('active', activeMode !== 'Grid');
+            var privacyBtn = opts.modeTogglePrivacyId && document.getElementById(opts.modeTogglePrivacyId);
+            if (privacyBtn) privacyBtn.classList.toggle('active', mode === 'Privacy');
+            var privacyOptions = opts.privacyOptionsId && document.getElementById(opts.privacyOptionsId);
+            if (privacyOptions) privacyOptions.style.display = mode === 'Privacy' ? '' : 'none';
+            if (zones.length) renderList();
+        }
+
+        function showView(mode) {
+            if (drawing) cancelDrawing();
+            if (editPoints) hideForm();
+            setPaneVisibility(mode);
+            redraw();
         }
 
         function switchMode(mode) {
-            if (mode === activeMode) return;
+            // Already the active method: just show its editor (e.g. coming back from Privacy masks).
+            if (mode === activeMode) { showView(mode); return; }
             fetch('/api/cameras/' + opts.cameraId + '/motion-region/mode', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mode: mode })
             }).then(function (r) {
                 if (!r.ok) { alert('Could not switch modes.'); return; }
-                if (mode !== 'Grid' && drawing) cancelDrawing();
                 activeMode = mode;
-                setPaneVisibility(mode);
-                redraw();
+                showView(mode);
             }).catch(function () { alert('Could not switch modes.'); });
         }
 
         document.getElementById(opts.modeToggleGridId).addEventListener('click', function () { switchMode('Grid'); });
         document.getElementById(opts.modeTogglePolygonId).addEventListener('click', function () { switchMode('Polygon'); });
+        if (opts.modeTogglePrivacyId) {
+            document.getElementById(opts.modeTogglePrivacyId).addEventListener('click', function () { showView('Privacy'); });
+        }
+
+        // Whether this camera's masks also stop detections (off by default) — saved as soon as it's flipped.
+        (function wirePrivacyOptions() {
+            var toggle = opts.privacyBlocksDetectionsId && document.getElementById(opts.privacyBlocksDetectionsId);
+            var status = opts.privacyOptionsStatusId && document.getElementById(opts.privacyOptionsStatusId);
+            if (!toggle) return;
+            var url = '/api/cameras/' + opts.cameraId + '/privacy-settings';
+            fetch(url).then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (s) { if (s) toggle.checked = !!s.blocksDetections; })
+                .catch(function () { /* stays at the default (off) */ });
+            toggle.addEventListener('change', function () {
+                if (status) status.textContent = 'Saving…';
+                fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocksDetections: toggle.checked }) })
+                    .then(function (r) {
+                        if (!r.ok) throw new Error();
+                        if (status) status.textContent = 'Saved. Takes effect on the recorder within about 30 seconds.';
+                    })
+                    .catch(function () {
+                        toggle.checked = !toggle.checked;
+                        if (status) status.textContent = 'Couldn\u2019t save. Try again.';
+                    });
+            });
+        })();
 
         function loadRegion() {
             fetch('/api/cameras/' + opts.cameraId + '/motion-region').then(function (r) {
                 return r.ok ? r.json() : null;
             }).then(function (region) {
-                if (!region) { setPaneVisibility(activeMode); return; }
+                if (!region) { setPaneVisibility(view === 'Privacy' ? 'Privacy' : activeMode); return; }
                 gridSize = region.gridSize;
                 gridMask = region.gridMask;
                 gridSensitivity = region.gridSensitivity;
@@ -417,9 +495,9 @@ window.larisvmsZonesEditor = (function () {
                 document.getElementById(opts.gridSensitivityId).value = pct;
                 document.getElementById(opts.gridSensitivityValueId).textContent = pct + '%';
                 activeMode = region.mode === 'Grid' ? 'Grid' : 'Polygon';
-                setPaneVisibility(activeMode);
+                setPaneVisibility(view === 'Privacy' ? 'Privacy' : activeMode);
                 redraw();
-            }).catch(function () { setPaneVisibility(activeMode); /* best-effort — editor still usable against in-memory defaults */ });
+            }).catch(function () { setPaneVisibility(view === 'Privacy' ? 'Privacy' : activeMode); /* best-effort — editor still usable against in-memory defaults */ });
         }
 
         // ── Grid editing (pass 3c-2) ──────────────────────────────────────────
@@ -507,7 +585,7 @@ window.larisvmsZonesEditor = (function () {
         }
 
         canvas.addEventListener('mousedown', function (e) {
-            if (activeMode !== 'Grid') return;
+            if (view !== 'Grid') return;
             e.preventDefault(); // avoid the page's own text-selection drag while painting cells
             var idx = cellIndexFromEvent(e);
             gridDragActive = true;
@@ -535,12 +613,15 @@ window.larisvmsZonesEditor = (function () {
 
         function renderList() {
             var panel = document.getElementById(opts.listPanelId);
-            if (!zones.length) {
-                panel.innerHTML = '<p class="text-muted small">No zones yet — draw one to get started.</p>';
+            var shown = visibleZones();
+            if (!shown.length) {
+                panel.innerHTML = view === 'Privacy'
+                    ? '<p class="text-muted small">No privacy masks yet — draw one to black out an area in recordings, live view, snapshots and exports.</p>'
+                    : '<p class="text-muted small">No zones yet — draw one to get started.</p>';
                 return;
             }
             var html = '<div class="list-group">';
-            zones.forEach(function (z) {
+            shown.forEach(function (z) {
                 var color = KIND_COLORS[z.kind] || KIND_COLORS.ServerMotion;
                 html += '<button type="button" class="list-group-item list-group-item-action py-2' +
                     (z.id === selectedZoneId ? ' active' : '') + '" data-zone-id="' + z.id + '">' +
@@ -555,6 +636,9 @@ window.larisvmsZonesEditor = (function () {
 
             Array.prototype.forEach.call(panel.querySelectorAll('[data-zone-id]'), function (el) {
                 el.addEventListener('click', function () { selectZone(el.getAttribute('data-zone-id')); });
+                // Hovering an entry highlights its shape on the picture, so it's clear which is which.
+                el.addEventListener('mouseenter', function () { hoveredZoneId = el.getAttribute('data-zone-id'); redraw(); });
+                el.addEventListener('mouseleave', function () { hoveredZoneId = null; redraw(); });
             });
         }
 
@@ -572,8 +656,9 @@ window.larisvmsZonesEditor = (function () {
             document.getElementById(opts.formTitleId).textContent = zone ? ('Edit zone: ' + zone.name) : 'New zone';
             document.getElementById(opts.formIdInputId).value = zone ? zone.id : '';
             document.getElementById(opts.formPolygonInputId).value = zone ? zone.polygonJson : polygonJsonForNew;
+            editPoints = parsePolygon(zone ? zone.polygonJson : polygonJsonForNew);
             document.getElementById(opts.formNameId).value = zone ? zone.name : '';
-            document.getElementById(opts.formKindId).value = zone ? zone.kind : 'ServerMotion';
+            document.getElementById(opts.formKindId).value = zone ? zone.kind : (view === 'Privacy' ? 'Privacy' : 'ServerMotion');
             // 0.03 (3%), not the 0.15 this originally shipped with — see Zone.Sensitivity's doc
             // comment for the real-camera-frame measurement behind that change.
             var sensitivityPercent = Math.round((zone ? zone.sensitivity : 0.03) * 100);
@@ -588,6 +673,8 @@ window.larisvmsZonesEditor = (function () {
 
         function hideForm() {
             selectedZoneId = null;
+            editPoints = null;
+            dragIndex = -1;
             document.getElementById(opts.formPanelId).style.display = 'none';
             renderList();
             redraw();
@@ -646,7 +733,7 @@ window.larisvmsZonesEditor = (function () {
             document.getElementById(opts.undoPointBtnId).style.display = on ? '' : 'none';
             document.getElementById(opts.polygonHintId).style.display = on ? '' : 'none';
             document.getElementById(opts.statusId).textContent = on
-                ? 'Click to place points; click the first point again (or double-click) to finish.'
+                ? 'Click to place points; click the first point again (or double-click) to finish. Right-click removes the last point.'
                 : '';
         }
 
@@ -704,11 +791,59 @@ window.larisvmsZonesEditor = (function () {
             // Grid mode's own interaction is entirely mousedown/mousemove/mouseup (see paintGridCell's
             // own doc comment) — dispatching here too would double-toggle the first cell of every
             // drag, since mousedown already painted it before this click event even fires.
-            if (activeMode !== 'Grid') handlePolygonClick(e);
+            if (view !== 'Grid') handlePolygonClick(e);
+        });
+
+        // Right-click while drawing steps back one point at a time, back to the first.
+        canvas.addEventListener('contextmenu', function (e) {
+            if (view === 'Grid' || !drawing) return;
+            e.preventDefault();
+            drawPoints.pop();
+            redraw();
+        });
+
+        // Reshaping: drag a handle of the zone being edited. Saved with the zone's Save button.
+        function handleAt(e) {
+            if (!editPoints || drawing) return -1;
+            var rect = canvas.getBoundingClientRect();
+            var mx = e.clientX - rect.left, my = e.clientY - rect.top;
+            for (var i = 0; i < editPoints.length; i++) {
+                var px = fracToPixel(editPoints[i]);
+                if (Math.hypot(px.x - mx, px.y - my) <= HANDLE_RADIUS_PX + 3) return i;
+            }
+            return -1;
+        }
+
+        canvas.addEventListener('mousedown', function (e) {
+            if (view === 'Grid' || e.button !== 0) return;
+            var i = handleAt(e);
+            if (i < 0) return;
+            e.preventDefault();
+            dragIndex = i;
+            redraw();
+        });
+        canvas.addEventListener('mousemove', function (e) {
+            if (view === 'Grid' || dragIndex >= 0) return;
+            canvas.style.cursor = handleAt(e) >= 0 ? 'move' : 'crosshair';
+        });
+        window.addEventListener('mousemove', function (e) {
+            if (dragIndex < 0 || !editPoints) return;
+            var rect = canvas.getBoundingClientRect();
+            editPoints[dragIndex] = {
+                x: Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)),
+                y: Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height))
+            };
+            document.getElementById(opts.formPolygonInputId).value = polygonJsonFromPoints(editPoints);
+            redraw();
+        });
+        window.addEventListener('mouseup', function () {
+            if (dragIndex < 0) return;
+            dragIndex = -1;
+            redraw();
         });
 
         canvas.addEventListener('dblclick', function (e) {
-            if (activeMode === 'Grid' || !drawing || drawPoints.length < 3) return;
+            if (view === 'Grid' || !drawing || drawPoints.length < 3) return;
             e.preventDefault();
             finishDrawing();
         });

@@ -5,7 +5,137 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.217.0] - 2026-10-15
+
+### ➕ Added
+
+- **Customizable dashboard.** The dashboard is now made of widgets that each user can add, remove, move
+  and resize; the layout is saved per user. New top-10 widgets cover cameras by storage used, frame
+  rate, bandwidth, resolution, oldest footage, time offline, time since last recording (flagging
+  Continuous cameras that have stopped), reconnects, quota use, AI detection problems, and motion,
+  human, vehicle, animal and object events. Node widgets cover camera count, offline cameras, storage
+  used, frame rate, bandwidth, CPU, least storage time left and health issues; nodes with no cameras
+  are left out where their numbers don't mean anything. Recent alerts and latest detections are also
+  available; latest detections has a ⚙ button to choose which detection types it shows, including
+  plain motion, and new snapshots slide in without the strip redrawing. Clicking a widget's title opens
+  a full report with filtering, sorting, 100 rows per page and CSV download.
+
+- **Two-way audio.** Hold the 🎙️ button on a live tile to talk through the camera's speaker, using
+  any microphone the browser can access (chosen per user). Works with cameras that support the ONVIF
+  audio backchannel, or Dahua-family cameras through their own audio API when the ONVIF one isn't
+  available; one person talks through a camera at a time; needs the camera's Talk permission and HTTPS.
+  Both directions are recorded: each press is saved next to the footage, marked on the playback
+  timeline, played back in sync with the video, and mixed into exports. Talk sessions are audited.
+
+- **Activity heatmaps.** A new Activity page shows when things happen on a camera, or on all cameras
+  combined, for ranges from 24 hours to a year. "Typical week" shows each weekday and hour across the
+  range (with per-day averages on hover); "By day" lays out every date with the hours top to bottom.
+  The busiest day and hour are called out. Filter to event types or specific labels (Animal → cat); the
+  choice is remembered across cameras. Activity history is kept for 400 days, well beyond footage
+  retention, and finished hours are stored once so long ranges load quickly. A Camera activity
+  dashboard widget shows the last 7 days.
+
+- **Privacy masks.** Privacy zones black out an area in recordings, live view (both streams),
+  snapshots and exports, following the shape you draw rather than a box around it. Events behind a mask
+  are still recorded (with masked snapshots) unless the camera's "Also ignore detections inside privacy
+  masks" option is turned on. They're drawn under a new 🔒 Privacy masks view on the zones page, which
+  works whichever motion method the camera uses. A masked camera keeps its own codec (H.264 or H.265)
+  and is re-encoded at the camera's own bitrate, so quality and storage use stay the same.
+- **Export redaction.** When exporting from Playback, ✏ Redact next to a camera blacks out rectangles or
+  polygons drawn over a frame of that camera, in its export only. Redacted exports are marked on the
+  Exports page and in the audit log.
+- **Easier zone editing.** Drag a zone's corners to reshape it, right-click to undo the last point while
+  drawing, and hover a zone in the list to highlight it on the picture.
+- **Camera map.** A new Map page shows cameras on a street map (OpenStreetMap, or your own tile server)
+  or on uploaded floorplans, each with a cone for where it points, how wide it sees and how far, coloured
+  by whether it's recording, offline or disabled. Click a camera for its latest picture and links to
+  Live and Playback. People who can edit cameras drag them onto the map, then move and aim them.
+
+- **Object colors.** AI detection names each object's color, and a person's shirt and pants colors.
+  Snapshots show badges painted in the detected color, and the Snapshots filter has Color, Shirt and
+  Pants sections. No colors are recorded while a camera is in black-and-white night mode.
+
+- **Speed traps.** Draw two lines across a road on a camera's new Speed traps page and enter the
+  distance between them; objects are timed between the lines in either direction. Speeds show on live
+  boxes and snapshots, in km/h or mph.
+
+- **Footage encryption.** Recordings (and optionally snapshots and thumbnails) can be encrypted on the
+  recorders' disks, per camera. Settings → Encryption and signing creates the master key and requires a
+  passphrase-protected backup before it can be used; the backup restores it on a rebuilt server.
+  Playback, snapshots and exports work as before, and existing footage can be encrypted on request.
+
+- **Tamper evidence.** Every recorded segment is fingerprinted as it's written and linked into a
+  per-camera chain that the server signs hourly, so altered, removed or reordered footage shows. Each
+  export gets a signed manifest, and the new Verify an export page checks an exported video against
+  it in the browser; the signature can also be checked with openssl.
+
+- **Speed log.** A new dashboard widget lists the latest speed-trap measurements; its full report has
+  time, camera, trap, object, color and speed columns, with sorting, filtering and CSV download.
+
+- **Speeds in Playback.** Each measurement is marked on the timeline (red when over the trap's limit,
+  with the speed on hover), and the speed shows over the video while the object is on screen.
+
+- **Snapshots speed filter.** Show only snapshots with an object at or over a chosen speed, alone or
+  together with a color.
+
+- **Speed heatmap.** The Activity page's new Speeds view shows average speed, top speed, number over
+  the limit or number measured by day and hour, per speed trap. Speed traps can now have a speed limit.
+
+- **Detection alerts.** Alert rules can fire when an object is detected, or when one passes a speed
+  trap over a limit, filtered by camera, category, label, color, zone, and active days and hours. They
+  fire within seconds of the detection.
+
+### 🛠️ Fixed
+
+- **The map forgot its view.** It now reopens where you left it, and Done editing saves where it
+  opens for everyone else, floorplans included.
+- **Speed traps missed some vehicles.** An object that crossed both lines before it was recognised as
+  moving lost its speed. Crossing a speed trap now counts as moving, so the speed and the object are
+  always recorded.
+- **Object colors picked up the background.** The scene behind an object (a lawn, the road) could
+  outweigh the object itself, so a brown dog on grass read as green. Colors around the box are now
+  sampled and set aside.
+- **Leftover footage on nodes without cameras.** A node with no cameras now deletes its expired footage from old storage locations, so its leftover-footage warning clears.
+- **H.265 cameras with a privacy mask kept reconnecting in live view.** Live view and playback now
+  use the codec the video actually arrives in, rather than assuming the camera's.
+
+- **Going back to a page after saving it showed ERR_CACHE_MISS.** After saving a settings page (or any
+  form), leaving it and pressing Back now just reloads the page instead of showing an error.
+
+- **The alert editor hid the camera and node pickers.** Choosing a condition now shows the fields it
+  needs.
+
+- **Privacy masks broke recording, so they'd been switched off.** A camera with a Privacy zone never
+  produced footage and kept reconnecting: the masked video was written without the headers its files
+  need. That's fixed, and privacy masks work again (see Added).
+- **Pages sometimes didn't load properly until refreshed.** After clicking a link, some pages (the
+  dashboard layout, Activity, Live and Views among them) came up half-built because their scripts
+  didn't run. Every link is now a normal page load.
+- **Some times showed in UTC instead of local time.** Times that reached the browser without a time
+  zone were read as local clock readings, so they showed hours off (Latest detections on the dashboard
+  among them). Every time from the server is now marked as UTC and shown in your local time, including
+  the Alerts, API keys and role-expiry times that were printed in UTC.
+- **Leftover footage on a node never cleared.** Footage left on a node by a camera that moved to
+  another node (or under an old storage path) was never deleted when that camera had archiving turned
+  on, so the node's warning stayed overdue indefinitely. It's now removed once it's past the archive
+  retention.
+- **Cameras with a speaker weren't detected as supporting two-way audio.** Re-probing now finds the
+  audio output where ONVIF cameras actually report it. Re-probe the camera to pick it up.
+- **Cameras with G.711 audio wouldn't play.** Browsers can't play G.711 (or other non-AAC) audio in
+  live view or playback, so those cameras' tiles failed to load. Their audio is now converted to AAC
+  as it's recorded; video is still copied untouched. Footage recorded before this keeps its original
+  audio.
+
+### 🔒 Security
+
+- **Updated a vulnerable cryptography package.** System.Security.Cryptography.Pkcs, used for email, is
+  updated to 10.0.13 for two security advisories.
+
+### ⚙️ Changed
+
+- **One Nodes page.** Node builds and node settings are merged into Nodes: the current build and any waiting for approval, a build history pop-up, and auto-update and registration-key settings. Nodes moved from Settings to the sidebar, and the Settings page no longer repeats Cameras. Old links redirect.
+- **Encryption and signing settings.** The Encryption settings page is on the Settings home, and it also shows the signing key with a public key download.
+- **Dashboard thumbnails hidden.** The camera table's thumbnail option is turned off for now.
 
 ## [0.216.0] - 2026-10-09
 

@@ -65,7 +65,9 @@ public record ThumbnailInfo(string FilePath, int OffsetSeconds, string? NodeIp, 
 /// range wide enough to cross a camera's reassignment from one node to another mid-range. NodeId
 /// lets ExportJobDispatcher detect that split before dispatching, rather than sending every path to
 /// the camera's current node and having the node reject whatever doesn't live on its own disk.</summary>
-public record SegmentFileInfo(string FilePath, Guid NodeId);
+public record SegmentFileInfo(string FilePath, Guid NodeId, DateTime StartUtc = default, DateTime EndUtc = default, bool HasAudio = false,
+    /// <summary>The hash recorded when the segment was written (tamper evidence); null if none.</summary>
+    string? ContentSha256 = null);
 
 /// <summary>Object detection plan decision 5: one currently-known AI-detection category
 /// (auto-registered, auto-colored — see DetectedObjectCategory's own doc comment) — what the
@@ -135,6 +137,30 @@ public record SnapshotDto(long Id, Guid CameraId, string CameraName, DateTime At
 {
     public IReadOnlyList<SnapshotBadgeDto> Badges { get; init; } = [];
     public IReadOnlyList<long> SpanIds { get; init; } = [];
+
+    /// <summary>The tracked objects behind the card's spans that have a color or a speed — what
+    /// the color and speed badges are drawn from. Most confident first, at most 8.</summary>
+    public IReadOnlyList<SnapshotObjectDto> Objects { get; init; } = [];
+}
+
+/// <summary>One speed-trap measurement on a camera's timeline: AtUtc is the moment it was measured
+/// (the marker), First/LastSeenUtc the stretch the object was in view (the on-video badge).
+/// SpeedText is already in the configured unit. OverLimit when the trap has a limit and this beat it.</summary>
+public record SpeedMarkerDto(DateTime AtUtc, DateTime FirstSeenUtc, DateTime LastSeenUtc, string Label, string? Color,
+    double SpeedKph, string SpeedText, bool OverLimit, string? TrapName);
+
+/// <summary>One object on a snapshot card. Colors are ObjectColors names; Upper/Lower are a
+/// person's shirt and pants. SpeedKph is set when it crossed a speed trap.</summary>
+public record SnapshotObjectDto(string Label, string? PrimaryColor, string? UpperColor, string? LowerColor, double? SpeedKph);
+
+/// <summary>Snapshots page object filter: each color list is ObjectColors names, OR within a list,
+/// AND across lists and with the speed — all on the same object, so "shirt blue, pants black" means
+/// one person in a blue shirt and black pants, and "red, 50 km/h" one red object at 50 or more.
+/// Empty or null parts don't filter.</summary>
+public record SnapshotObjectFilter(IReadOnlyCollection<string>? Colors, IReadOnlyCollection<string>? Shirts, IReadOnlyCollection<string>? Pants,
+    double? MinSpeedKph = null)
+{
+    public bool IsEmpty => (Colors?.Count ?? 0) == 0 && (Shirts?.Count ?? 0) == 0 && (Pants?.Count ?? 0) == 0 && MinSpeedKph is null;
 }
 
 /// <summary>Object detection plan decision 10: what LarisVMS.Web's /snapshot-image proxy needs to

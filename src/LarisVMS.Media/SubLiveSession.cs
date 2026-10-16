@@ -10,7 +10,17 @@ public record SubLiveSessionOptions(
     string FfmpegPath,
     string RtspUri,
     int StalledThresholdSeconds = 150,
-    int PollIntervalSeconds = 5);
+    int PollIntervalSeconds = 5,
+    /// <summary>Re-encode the Sub stream's audio to AAC — see AudioTranscode.</summary>
+    bool TranscodeAudioToAac = false,
+    /// <summary>Privacy-mask drawbox filters (PrivacyMaskFilterBuilder) — when present, the Sub stream
+    /// is re-encoded with them burnt in, exactly like the Main stream, so live view never shows what
+    /// the recording hides. Null/empty keeps the zero-cost copy.</summary>
+    IReadOnlyList<string>? PrivacyMaskFilters = null,
+    /// <summary>The encoder to mask with (EncoderSelection.ChooseEncoder); libx264 when null.</summary>
+    string? VideoEncoder = null,
+    /// <summary>Target bitrate for the masked re-encode (EncoderSelection.TargetBitrateKbps).</summary>
+    int? VideoBitrateKbps = null);
 
 /// <summary>
 /// M18 (adaptive streaming): supervises one ffmpeg process pulling a camera's Sub stream and
@@ -176,12 +186,26 @@ public sealed class SubLiveSession(SubLiveSessionOptions options, ILogger logger
         "-nostdin", "-rtsp_transport", "tcp", "-timeout", "5000000",
         "-i", options.RtspUri,
         "-map", "0:v", "-map", "0:a?",
-        "-c", "copy",
+        .. BuildCodecArgs(options),
         "-f", "mp4", "-movflags", MseMovFlags,
         "-frag_duration", LiveFragDurationMicros.ToString(),
         "-min_frag_duration", LiveMinFragDurationMicros.ToString(),
         "pipe:1"
     ];
+
+    /// <summary>Copy by default; re-encode video when the camera has privacy masks, and audio when it
+    /// isn't AAC. The masked path is the same encode the Main stream uses.</summary>
+    internal static IReadOnlyList<string> BuildCodecArgs(SubLiveSessionOptions options)
+    {
+        IReadOnlyList<string> audioArgs = options.TranscodeAudioToAac ? AudioTranscode.AacArgs : ["-c:a", "copy"];
+        if (options.PrivacyMaskFilters is not { Count: > 0 } filters)
+            return options.TranscodeAudioToAac ? ["-c:v", "copy", .. audioArgs] : ["-c", "copy"];
+
+        var encoder = options.VideoEncoder ?? "libx264";
+        var encodeArgs = EncodePipeline.BuildArgs(new EncodePipelineOptions(
+            encoder, VideoFilters: filters, Preset: EncodePipeline.RealtimePreset(encoder), BitrateKbps: options.VideoBitrateKbps));
+        return [.. encodeArgs, .. EncodePipeline.TeeSafeArgs, .. audioArgs];
+    }
 
     // "+frag_keyframe+empty_moov+default_base_moof" — same flags, same constant value, as
     // RecordingSession.MseMovFlags. Not shared by reference (that one is private to RecordingSession)

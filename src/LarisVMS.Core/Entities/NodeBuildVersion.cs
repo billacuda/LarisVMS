@@ -9,7 +9,7 @@ namespace LarisVMS.Core.Entities;
 /// nothing for a flag like that to gate here. One row per registered build, normally created by
 /// deploy.ps1 directly against the database (see deploy.ps1's own "Registering node build" step) as
 /// Pending, and only offered to a heartbeating node once an admin flips it to Approved on
-/// Admin/NodeBuilds — NodeBuildService.GetLatestForPlatformAsync only ever considers Approved rows,
+/// the Nodes page — NodeBuildService.GetLatestForPlatformAsync only ever considers Approved rows,
 /// picking the newest by UploadedAt, and LarisVMS.Web's heartbeat handler compares that against the
 /// reporting node's own version (NodeVersionComparer.IsNewer) to decide whether to hand back update
 /// info.

@@ -20,17 +20,32 @@ How LarisVMS fits together: the web server, recorder nodes, media proxies, and c
 
 ## Privacy
 
-LarisVMS is self-hosted: your video and settings stay on your own machines, and nothing about your install is collected or shared. There's no telemetry or calling home. The only routine outbound request is a daily check of LarisVMS's GitHub releases for a new version (see [Updates](/Help/installation#updates)); it can be turned off. The other built-in download is a YOLOX AI model from that project's GitHub releases, the first time detection uses one, unless you place the files on the server yourself. Everything else only goes to your cameras, your own servers, and services you set up, such as email and alert channels.
+LarisVMS is self-hosted: your video and settings stay on your own machines, and nothing about your install is collected or shared. There's no telemetry or calling home. The only routine outbound request is a daily check of LarisVMS's GitHub releases for a new version (see [Updates](/Help/installation#updates)); it can be turned off. The other built-in download is a YOLOX AI model from that project's GitHub releases, the first time detection uses one, unless you place the files on the server yourself. Street maps on the [Map](/Help/live-and-playback#map) page load their map pictures in your browser from OpenStreetMap, or a tile server you choose; floorplans don't. Everything else only goes to your cameras, your own servers, and services you set up, such as email and alert channels.
 
 ## Settings inheritance
 
 Most settings exist at three levels. The most specific one wins:
 
 1. **Camera**: on the camera's own edit page.
-2. **Node**: on the node's edit page under **Settings → Nodes**.
+2. **Node**: on the node's edit page under **Nodes**.
 3. **Global**: on the matching **Settings** page.
 
 A blank field (or an “inherit — …” option) uses the next level up, and shows the value it currently inherits.
+
+## Dashboard
+
+The dashboard is made of widgets. Each user picks their own, and the layout is saved to their account, so it follows them to other browsers.
+
+- **Customize** (top right; hidden when the window is too narrow for the full grid) unlocks the layout. Drag a widget by its title bar, resize it from the corner, or remove it with ×. **Add widget** lists everything you can add, and **Reset layout** goes back to the default. Click **Done** when you're finished.
+- Most widgets are top-10 lists of cameras or nodes, such as storage used, frame rate, bandwidth, oldest footage, offline cameras, time since last recording, and detections. Some have a time window (1h, 24h, 7d, 30d), and some can switch between highest and lowest first.
+- Click a widget's title to open its full report: every camera or node, 100 per page, with a filter box, a node filter, sortable columns and a CSV download.
+- **Camera activity** shows one camera's last 7 days as a heatmap by time of day; pick the camera in its title bar, and click the title for the full [Activity](/Help/live-and-playback#activity) page.
+- **Latest detections** shows the newest snapshots. Its ⚙ button chooses which detection types to include; plain motion (nothing identified) is off unless you tick it.
+- **Time since last recording** flags a camera set to Continuous recording that hasn't recorded for more than 5 minutes.
+- Node widgets based on cameras (camera counts, offline cameras, frame rate, storage time left) leave out nodes that have no cameras.
+- You only see cameras you have access to. **Recent alerts** is only offered to users who can manage alert rules.
+
+Widgets refresh every minute.
 
 ## On a phone
 

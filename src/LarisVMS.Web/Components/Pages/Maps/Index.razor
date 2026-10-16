@@ -1,0 +1,146 @@
+@page "/Map"
+@attribute [Authorize("Cameras.View")]
+@using System.Security.Claims
+@using System.Text.Json
+@using LarisVMS.Core.Enums
+@using LarisVMS.Core.Interfaces
+@inject ICameraService CameraService
+@inject ICameraAccessService CameraAccess
+@inject IAuthorizationService AuthorizationService
+
+<PageTitle>Map - @AppName</PageTitle>
+
+<HeadContent>
+    <link rel="stylesheet" href="/lib/leaflet/dist/leaflet.css" />
+</HeadContent>
+
+<div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+    <h1 class="mb-0">Map</h1>
+    <select class="form-select form-select-sm w-auto" id="mapSelect" aria-label="Map"></select>
+    @if (CanEdit)
+    {
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="mapEditToggle">Edit map</button>
+        <div class="dropdown">
+            <button type="button" class="btn btn-sm btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">New map</button>
+            <ul class="dropdown-menu">
+                <li><button type="button" class="dropdown-item" data-new-map="Street">Street map…</button></li>
+                <li><button type="button" class="dropdown-item" data-new-map="Floorplan">Floorplan…</button></li>
+            </ul>
+        </div>
+        <div class="dropdown">
+            <button type="button" class="btn btn-sm btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false" id="mapManageBtn">Manage</button>
+            <ul class="dropdown-menu">
+                <li><button type="button" class="dropdown-item" id="mapRename">Rename this map…</button></li>
+                <li><button type="button" class="dropdown-item" id="mapSaveView">Open this map here for everyone</button></li>
+                <li><button type="button" class="dropdown-item" id="mapTileSettings">Street map tiles…</button></li>
+                <li><hr class="dropdown-divider"></li>
+                <li><button type="button" class="dropdown-item text-danger" id="mapDelete">Delete this map…</button></li>
+            </ul>
+        </div>
+    }
+    <span class="small text-muted ms-auto" id="mapStatus" role="status" aria-live="polite"></span>
+</div>
+
+<div class="row g-3">
+    <div class="col" id="mapCol">
+        <div id="mapEmpty" class="text-muted d-none">
+            No maps yet.@(CanEdit ? " Use New map to add a street map or a floorplan, then place cameras on it." : " Someone who can edit cameras can add one.")
+        </div>
+        <div id="mapCanvas" class="lv-map rounded border"></div>
+    </div>
+    @if (CanEdit)
+    {
+        <div class="col-12 col-lg-3 d-none" id="mapEditPanel">
+            <div class="card mb-3">
+                <div class="card-header py-2 small fw-semibold">Selected camera</div>
+                <div class="card-body small" id="mapSelected"><span class="text-muted">Click a camera on the map.</span></div>
+            </div>
+            <div class="card">
+                <div class="card-header py-2 small fw-semibold">Cameras not on this map</div>
+                <div class="card-body small p-2">
+                    <input type="search" class="form-control form-control-sm mb-2" id="mapPaletteFilter" placeholder="Filter" aria-label="Filter cameras" />
+                    <div class="text-muted mb-2">Drag a camera onto the map.</div>
+                    <div class="list-group list-group-flush" id="mapPalette"></div>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@if (CanEdit)
+{
+    <div class="modal fade" id="mapNewModal" tabindex="-1" aria-labelledby="mapNewTitle" aria-hidden="true">
+        <div class="modal-dialog"><div class="modal-content">
+            <div class="modal-header"><h5 class="modal-title" id="mapNewTitle">New map</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+            <div class="modal-body">
+                <label class="form-label small" for="mapNewName">Name</label>
+                <input type="text" class="form-control form-control-sm mb-2" id="mapNewName" maxlength="200" />
+                <div id="mapNewStreetHelp" class="small text-muted">The new map opens where the current street map is showing, or on the whole world. Pan and zoom to your site; <strong>Done editing</strong> saves where it opens.</div>
+                <div id="mapNewFloorplan" class="d-none">
+                    <label class="form-label small" for="mapNewFile">Floorplan image (PNG, JPEG, WebP or GIF, up to 10 MB)</label>
+                    <input type="file" class="form-control form-control-sm" id="mapNewFile" accept="image/png,image/jpeg,image/webp,image/gif" />
+                </div>
+                <div class="small text-danger mt-2" id="mapNewError"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-sm btn-primary" id="mapNewCreate">Create</button>
+            </div>
+        </div></div>
+    </div>
+
+    <div class="modal fade" id="mapTilesModal" tabindex="-1" aria-labelledby="mapTilesTitle" aria-hidden="true">
+        <div class="modal-dialog"><div class="modal-content">
+            <div class="modal-header"><h5 class="modal-title" id="mapTilesTitle">Street map tiles</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+            <div class="modal-body small">
+                <p class="text-muted">Street maps load their pictures from a tile server — OpenStreetMap by default, which needs the
+                    browser to reach the internet. Use your own tile server (over https) for an offline site.</p>
+                <label class="form-label" for="mapTileUrl">Tile URL (https, with {z}, {x} and {y})</label>
+                <input type="text" class="form-control form-control-sm mb-2" id="mapTileUrl" />
+                <label class="form-label" for="mapTileAttribution">Attribution (shown on the map, as the tile server's terms require)</label>
+                <input type="text" class="form-control form-control-sm" id="mapTileAttribution" />
+                <div class="text-danger mt-2" id="mapTilesError"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-sm btn-outline-secondary me-auto" id="mapTilesDefault">Use OpenStreetMap</button>
+                <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-sm btn-primary" id="mapTilesSave">Save</button>
+            </div>
+        </div></div>
+    </div>
+}
+
+<SectionContent SectionName="PageScripts">
+    <script type="application/json" id="mapConfig">@((MarkupString)ConfigJson)</script>
+    <script src="/lib/leaflet/dist/leaflet.js"></script>
+    <script src="/js/map.js"></script>
+</SectionContent>
+
+@code {
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+    [SupplyParameterFromQuery(Name = "mapId")] private Guid? MapIdParam { get; set; }
+
+    private bool CanEdit { get; set; }
+    private string ConfigJson { get; set; } = "{}";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = AuthenticationStateTask is not null
+            ? (await AuthenticationStateTask).User
+            : new ClaimsPrincipal(new ClaimsIdentity());
+        CanEdit = (await AuthorizationService.AuthorizeAsync(user, "Cameras.Edit")).Succeeded;
+
+        // The cameras this viewer can place (edit mode's palette) — those they may view at all.
+        var accessible = await CameraAccess.GetAccessibleCameraIdsAsync(user, CameraAccessActions.View);
+        var cameras = (await CameraService.ListAsync())
+            .Where(c => accessible is null || accessible.Contains(c.Id))
+            .OrderBy(c => c.Name)
+            .Select(c => new { id = c.Id, name = c.Name });
+
+        // System.Text.Json's default encoder escapes <, > and &, so this is safe inside a <script> tag.
+        ConfigJson = JsonSerializer.Serialize(new { canEdit = CanEdit, mapId = MapIdParam, cameras }, JsonSerializerOptions.Web);
+    }
+}

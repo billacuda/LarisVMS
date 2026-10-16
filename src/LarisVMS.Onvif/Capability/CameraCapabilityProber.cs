@@ -47,7 +47,11 @@ public class CameraCapabilityProber(OnvifDeviceClient deviceClient, OnvifMediaCl
         var profileG = hasRecording;
         var hasEvents = capabilities.EventsXAddr is not null;
         var profileM = hasAnalyticsService && hasEvents;
-        var hasAudioOut = profiles.Any(p => p.HasAudioOutputConfig);
+        // A speaker shows up in any of three places depending on the firmware: attached to a profile,
+        // in GetCapabilities' DeviceIO section, or only in the media service's audio output list.
+        var hasAudioOut = profiles.Any(p => p.HasAudioOutputConfig) || capabilities.AudioOutputCount > 0;
+        if (!hasAudioOut && capabilities.MediaXAddr is not null)
+            hasAudioOut = await mediaClient.GetAudioOutputCountAsync(capabilities.MediaXAddr, credentials, ct) > 0;
 
         return new CameraProbeResult(
             deviceInfo, profileS, profileT, profileG, profileM,

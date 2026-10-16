@@ -49,9 +49,6 @@ else
         var showSettings = nav.Has("Settings", "Edit");
         var all = new (string Href, string Icon, string Title, string Description, bool Visible)[]
         {
-            ("/Cameras", "📷", "Cameras", "Add, edit, and stream-configure connected cameras.", nav.Has("Cameras", "View")),
-            ("/Admin/Nodes", "🔌", "Nodes", "LarisNode NVR instances, capacity, and pairing.", nav.Has("Nodes", "Edit")),
-            ("/Admin/NodeBuilds", "🏗️", "Node builds", "Approval queue for recorder-node builds.", nav.Has("Nodes", "Edit")),
             ("/Admin/Proxies", "🔗", "Media proxies", "Relay endpoints for remote and low-bandwidth streams.", nav.Has("Nodes", "Edit")),
             ("/Admin/Settings/Cameras", "📹", "Camera settings", "Daily re-probe and other camera-wide defaults.", showSettings),
             ("/Logs", "📜", "Logs", "System, audit, and diagnostic log streams.", nav.Has("Logs", "View") || nav.Has("SystemLogs", "View")),
@@ -67,9 +64,9 @@ else
             ("/Admin/Settings/Events", "🏷️", "Events", "Event-tag colors and rule defaults.", showSettings),
             ("/Admin/Settings/LiveView", "🖥️", "Live view", "Default grid layout, overlays, and stream quality.", showSettings),
             ("/Admin/Settings/Logs", "📝", "Logging", "Retention, verbosity, and remote log forwarding.", showSettings),
-            ("/Admin/Settings/Nodes", "🖧", "Node defaults", "Per-node defaults for new LarisNode instances.", showSettings),
             ("/Admin/Settings/Recording", "🎥", "Recording defaults", "Codec, bitrate, and continuous vs. motion recording.", showSettings),
             ("/Admin/Settings/ActiveDirectory", "🏢", "Active Directory", "Domain sign-in and AD group to role sync.", showSettings),
+            ("/Admin/Settings/Encryption", "🔐", "Encryption and signing", "Footage encryption, the master key backup, and the signing key.", showSettings),
             ("/Admin/Settings/Security", "🔒", "Security", "IP allow lists and live/playback port configuration.", showSettings),
             ("/Admin/Settings/StorageAndRetention", "🗄️", "Storage & retention", "Disk pools, retention windows, and archiving.", nav.Has("Retention", "Edit")),
             ("/Admin/Alerts", "⚠️", "Alerts", "Alert rules, channels, and thresholds.", nav.Has("Alerts", "Edit")),

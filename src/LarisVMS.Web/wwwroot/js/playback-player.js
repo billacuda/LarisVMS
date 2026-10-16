@@ -54,6 +54,37 @@
     // Play/Pause button and its label) bring that back in sync with the tile it just stopped trying
     // to resume, rather than leaving the button reading "Pause" over a tile that isn't going to play
     // again without a fresh scrub.
+    // A camera's recordings can change codec over time: a privacy mask re-encodes an H.265 camera to
+    // H.264, so one timeline can hold both. Before a segment's first bytes go into its (fresh)
+    // SourceBuffer, read the codec from its init segment ('avc1'/'avc3' = H.264, 'hvc1'/'hev1' =
+    // H.265) and switch the buffer if the camera's codec hint was wrong for this segment. Only the
+    // first chunk is checked, and only its first 64 KB, where the moov box sits. Same detection as
+    // live-view.js's sniffVideoCodec.
+    function matchSegmentCodec(sourceBuffer, bytes, hasAudio) {
+        if (!sourceBuffer || sourceBuffer._larisvmsCodecChecked) return;
+        sourceBuffer._larisvmsCodecChecked = true;
+        var view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+        var limit = Math.min(view.length, 65536);
+        var actual = null;
+        for (var i = 0; i + 4 <= limit && !actual; i++) {
+            var a = view[i], b = view[i + 1], c = view[i + 2], d = view[i + 3];
+            if (a === 0x61 && b === 0x76 && c === 0x63 && (d === 0x31 || d === 0x33)) actual = 'h264';
+            else if (a === 0x68 && ((b === 0x76 && c === 0x63 && d === 0x31) || (b === 0x65 && c === 0x76 && d === 0x31))) actual = 'hevc';
+        }
+        var current = sourceBuffer._larisvmsMime || '';
+        var currentFamily = /hvc1|hev1/.test(current) ? 'hevc' : (/avc1|avc3/.test(current) ? 'h264' : null);
+        if (!actual || actual === currentFamily || typeof sourceBuffer.changeType !== 'function') return;
+        var corrected = pickMimeType(actual, hasAudio);
+        if (!corrected) return;
+        try {
+            sourceBuffer.changeType(corrected);
+            sourceBuffer._larisvmsMime = corrected;
+            console.log('[playback] segment is', actual, '- switched from', current, 'to', corrected);
+        } catch (e) {
+            console.warn('[playback] could not switch codec to', corrected, e);
+        }
+    }
+
     function createTile(cameraId, videoEl, statusEl, codecHint, hasAudio, isPlayingIntent, onPermanentStall) {
         var segments = []; // [{id, startUtc, endUtc}] as epoch ms, sorted by startUtc
         var currentSegmentId = null;
@@ -377,6 +408,7 @@
                     var sourceBuffer;
                     try {
                         sourceBuffer = prefetchedMediaSource.addSourceBuffer(mimeType);
+                        sourceBuffer._larisvmsMime = mimeType;
                     } catch (e) {
                         if (statusEl) statusEl.textContent = 'This browser cannot decode this stream.';
                         hideFreezeFrameForLoadFailure();
@@ -492,6 +524,7 @@
                 var sourceBuffer;
                 try {
                     sourceBuffer = mediaSource.addSourceBuffer(mimeType);
+                    sourceBuffer._larisvmsMime = mimeType;
                 } catch (e) {
                     if (statusEl) statusEl.textContent = 'This browser cannot decode this stream.';
                     hideFreezeFrameForLoadFailure();
@@ -638,6 +671,7 @@
                         return;
                     }
                     try {
+                        matchSegmentCodec(sourceBuffer, result.value, hasAudio);
                         sourceBuffer.appendBuffer(result.value);
                     } catch (e) {
                         console.error('[playback] appendBuffer failed for camera', cameraId, e);
@@ -722,6 +756,7 @@
                 if (autoplay) schedulePrefetch(segment);
             });
             try {
+                matchSegmentCodec(sourceBuffer, bytes, hasAudio);
                 sourceBuffer.appendBuffer(bytes);
             } catch (e) {
                 console.error('[playback] appendBuffer failed for camera', cameraId, e);
@@ -941,6 +976,12 @@
         videoEl.addEventListener('seeked', clearStallTimer);
         videoEl.addEventListener('timeupdate', clearStallTimer);
 
+        // Recorded two-way audio presses play alongside this tile's video (talk-playback.js).
+        var talkPlayback = window.larisvmsTalkPlayback
+            ? window.larisvmsTalkPlayback.attach(cameraId, videoEl, computeCurrentWallClockMs) : null;
+        var speedPlayback = window.larisvmsSpeedPlayback
+            ? window.larisvmsSpeedPlayback.attach(cameraId, videoEl, computeCurrentWallClockMs) : null;
+
         return {
             // Wrapped so a rejection can never escape as an unhandled promise: every caller
             // (seekAll, the 'ended' handler) fires this and moves on without awaiting, so an
@@ -1003,6 +1044,8 @@
                 teardown();
                 clearStallTimer(); // tile is being disposed/rebuilt — a pending timer must not fire recovery on it later
                 hideFreezeFrame(); // tile is being disposed/rebuilt — never leave a frozen frame over a dead tile
+                if (talkPlayback) { talkPlayback.detach(); talkPlayback = null; }
+                if (speedPlayback) { speedPlayback.detach(); speedPlayback = null; }
             }
         };
     }
@@ -1217,7 +1260,7 @@
                 // (audio-controls.js), which isn't a button and shouldn't pick up btn-group's own
                 // joined-corners styling. Same structure as a Views/Play cell's controls.
                 '<div class="position-absolute bottom-0 end-0 m-1 d-flex align-items-center gap-1 pb-fullscreen-controls d-none">' +
-                    window.larisvmsAudioControls.html(cam && cam.hasAudio) +
+                    window.larisvmsAudioControls.html(cam && (cam.hasAudio || cam.hasSpeaker)) +
                     '<div class="btn-group btn-group-sm">' +
                         // The page toolbar's own Play/Pause is a page-level element, so it isn't
                         // rendered at all while a tile holds the fullscreen layer — the timeline gets
@@ -1971,6 +2014,12 @@
                     var url = '/api/cameras/' + primaryCameraId + '/bookmarks?from=' + encodeURIComponent(fromIso) + '&to=' + encodeURIComponent(toIso);
                     return fetch(url).then(function (r) { return r.ok ? r.json() : []; }).catch(function () { return []; });
                 },
+                // Speed-trap measurement markers, per-camera timeline only (same pattern as bookmarks).
+                getSpeedMarkers: function (fromIso, toIso) {
+                    if (!primaryCameraId) return Promise.resolve([]);
+                    var url = '/api/cameras/' + primaryCameraId + '/speeds?from=' + encodeURIComponent(fromIso) + '&to=' + encodeURIComponent(toIso);
+                    return fetch(url).then(function (r) { return r.ok ? r.json() : []; }).catch(function () { return []; });
+                },
                 onScrub: function (ms) { seekAll(ms, playing); },
                 onScrubStart: beginScrubAll,
                 onScrubEnd: endScrubAll,
@@ -2125,6 +2174,10 @@
         if (submitBtn) submitBtn.addEventListener('click', submitExport);
     }
 
+    // Per camera, polygons to black out in its export (redaction-editor.js); kept while the page is
+    // open so reopening the panel doesn't lose what was drawn.
+    var exportRedactions = {};
+
     function populateExportPanel() {
         var camerasEl = opts.exportCamerasId && document.getElementById(opts.exportCamerasId);
         if (camerasEl) {
@@ -2134,8 +2187,10 @@
             // rather than omitted, so picking additional/different cameras is one click away.
             Object.keys(cameraById).forEach(function (id) {
                 var cam = cameraById[id];
+                var wrap = document.createElement('span');
+                wrap.className = 'd-inline-flex align-items-center gap-1';
                 var label = document.createElement('label');
-                label.className = 'form-check form-check-inline mb-0';
+                label.className = 'form-check form-check-inline mb-0 me-0';
                 var input = document.createElement('input');
                 input.type = 'checkbox';
                 input.className = 'form-check-input pbExportCameraCheck';
@@ -2146,7 +2201,35 @@
                 span.textContent = cam ? cam.name : id;
                 label.appendChild(input);
                 label.appendChild(span);
-                camerasEl.appendChild(label);
+                wrap.appendChild(label);
+                // Areas to black out in this camera's export, drawn over a frame from the start time.
+                if (window.larisvmsRedactionEditor) {
+                    var redactBtn = document.createElement('button');
+                    redactBtn.type = 'button';
+                    redactBtn.className = 'btn btn-link btn-sm p-0 me-2';
+                    redactBtn.title = 'Black out areas in this camera’s export';
+                    var refreshLabel = function () {
+                        var n = (exportRedactions[id] || []).length;
+                        redactBtn.textContent = n ? '✏ ' + n + ' redacted' : '✏ Redact';
+                    };
+                    refreshLabel();
+                    redactBtn.addEventListener('click', function () {
+                        var fromEl = opts.exportFromId && document.getElementById(opts.exportFromId);
+                        var fromMs = fromEl ? new Date(fromEl.value).getTime() : playheadMs;
+                        window.larisvmsRedactionEditor.open({
+                            title: cam ? cam.name : id,
+                            imageUrl: '/playback-thumbnail/' + id + '?atUtc=' + encodeURIComponent(new Date(isFinite(fromMs) ? fromMs : playheadMs).toISOString()) + '&exact=true',
+                            polygons: exportRedactions[id] || []
+                        }).then(function (polygons) {
+                            if (!polygons) return;
+                            if (polygons.length) { exportRedactions[id] = polygons; input.checked = true; }
+                            else delete exportRedactions[id];
+                            refreshLabel();
+                        });
+                    });
+                    wrap.appendChild(redactBtn);
+                }
+                camerasEl.appendChild(wrap);
             });
         }
 
@@ -2205,7 +2288,11 @@
             body: JSON.stringify({
                 cameraIds: cameraIds,
                 fromUtc: new Date(fromMs).toISOString(),
-                toUtc: new Date(toMs).toISOString()
+                toUtc: new Date(toMs).toISOString(),
+                redactions: cameraIds.reduce(function (acc, id) {
+                    if (exportRedactions[id] && exportRedactions[id].length) acc[id] = exportRedactions[id];
+                    return acc;
+                }, {})
             })
         }).then(function (resp) {
             if (!resp.ok) return resp.text().then(function (t) { throw new Error(t || ('HTTP ' + resp.status)); });

@@ -82,7 +82,7 @@ public class NodeServiceExpiredSegmentsTests
     }
 
     [Fact]
-    public async Task AnArchivingCamerasPrimaryFootageIsLeftForTheNodeToArchive()
+    public async Task AnArchivingCamerasPrimaryFootageIsLeftForTheNodeToArchiveUntilPastTheArchiveRetention()
     {
         var s = await SeedAsync();
         await s.Settings.SetOverrideAsync(SettingScope.Node, s.NodeId, "Archive.Enabled", "true");
@@ -91,12 +91,16 @@ public class NodeServiceExpiredSegmentsTests
         s.Db.Segments.AddRange(
             Seg(s, now.AddDays(-30), @"D:\v\cam-x\main\primary.mp4"),
             Seg(s, now.AddDays(-30), @"\\nas\archive\cam-x\main\recent-archive.mp4", StorageTier.Archive),
-            Seg(s, now.AddDays(-90), @"\\nas\archive\cam-x\main\old-archive.mp4", StorageTier.Archive));
+            Seg(s, now.AddDays(-90), @"\\nas\archive\cam-x\main\old-archive.mp4", StorageTier.Archive),
+            // Never moved to the archive (camera reassigned away, or an old storage root) and now past
+            // even the archive retention — nothing else will ever remove it.
+            Seg(s, now.AddDays(-90), @"D:\old-root\cam-x\main\never-archived.mp4"));
         await s.Db.SaveChangesAsync();
 
         var expired = await s.Service.ListExpiredSegmentsAsync(s.NodeId, 100);
 
-        Assert.Equal([@"\\nas\archive\cam-x\main\old-archive.mp4"], expired.Select(e => e.FilePath));
+        Assert.Equal([@"D:\old-root\cam-x\main\never-archived.mp4", @"\\nas\archive\cam-x\main\old-archive.mp4"],
+            expired.Select(e => e.FilePath).Order(StringComparer.Ordinal));
     }
 
     [Fact]

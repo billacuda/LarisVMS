@@ -19,7 +19,8 @@ namespace LarisVMS.Infrastructure.Services;
 /// CryptographicOperations.FixedTimeEquals against the stored hash, with PreviousApiKeyHash as a
 /// fallback slot for a future rotation flow (not wired up yet — see Node's doc comment).
 /// </summary>
-public class NodeService(ApplicationDbContext db, ISettingsResolver settings, ILogger<NodeService>? logger = null) : INodeService
+public class NodeService(ApplicationDbContext db, ISettingsResolver settings, ILogger<NodeService>? logger = null,
+    IDetectionEventSink? detectionEvents = null) : INodeService
 {
     // One gate per node for RecordMotionSpansAsync: its check-then-insert/coalesce is not atomic
     // across concurrent report calls, and the node's own flush loop can land two here at once — a
@@ -263,6 +264,9 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         // preference the same way DepartureGraceSeconds does). 0-100; see NodeConfigResponse's own
         // doc comment for why this is deliberately backend-agnostic.
         var snapshotMarginPercent = Math.Clamp(await settings.GetAsync("Detection.SnapshotMarginPercent", 12, ct: ct), 0, 100);
+        var colorClassification = await settings.GetAsync("Detection.ColorClassification", true, ct: ct);
+        // Footage encryption only reaches a node once the master key exists and has been backed up.
+        var encryptionReady = await db.FootageMasterKeys.AnyAsync(k => k.BackupDownloadedAt != null, ct);
         // Node-scoped (Global -> Node, no per-camera override) — one Vision Service process serves
         // every camera on a node from the same loaded model, see NodeConfigResponse.DetectionModelFamily's
         // own doc comment for why that makes this a per-node choice rather than a per-camera one.
@@ -335,6 +339,11 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             .ToListAsync(ct);
         var scheduleWindowsLookup = scheduleWindowsByCamera.ToLookup(w => w.CameraId);
 
+        // Enabled speed traps only; one whose gates no longer parse is skipped rather than sent.
+        var speedTrapsLookup = (await db.SpeedTraps
+            .Where(t => cameraIds.Contains(t.CameraId) && t.IsEnabled)
+            .ToListAsync(ct)).ToLookup(t => t.CameraId);
+
         var cameraDtos = new List<NodeConfigCameraDto>();
         foreach (var c in cameras)
         {
@@ -356,6 +365,14 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             // Box-jitter rejection is per-camera (a driveway with a parked vehicle in view needs it;
             // a street camera doesn't) — off by default, restoring the pre-0.188 movement classifier.
             var rejectMotionJitter = await settings.GetAsync("Detection.RejectMotionJitter", false, cameraId: c.Id, nodeId: nodeId, ct: ct);
+            var privacyBlocksDetections = await settings.GetAsync("Privacy.BlocksDetections", false, cameraId: c.Id, nodeId: nodeId, ct: ct);
+            var encryptFootage = encryptionReady
+                ? NormalizeEncryptMode(await settings.GetAsync("Storage.Encrypt", "Off", cameraId: c.Id, nodeId: nodeId, ct: ct))
+                : "Off";
+            var encryptExistingRaw = await settings.GetAsync("Storage.EncryptExistingRequestedUtc", "", cameraId: c.Id, nodeId: nodeId, ct: ct);
+            DateTime? encryptExisting = DateTime.TryParse(encryptExistingRaw, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out var ee)
+                ? DateTime.SpecifyKind(ee, DateTimeKind.Utc) : null;
             var motionJitterPixels = Math.Clamp(
                 await settings.GetAsync("Detection.MotionJitterPixels", 3, cameraId: c.Id, nodeId: nodeId, ct: ct), 1, 15);
             // Detection.MaxFps, per camera — same Camera -> Node -> Global chain (and the same key)
@@ -376,7 +393,8 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             cameraDtos.Add(new NodeConfigCameraDto(
                 c.Id, c.Name, c.Username, c.Password,
                 c.Streams.Where(s => s.IsEnabled).Select(s => new NodeConfigStreamDto(
-                    s.Id, s.Role.ToString(), s.RtspUri, s.Codec, s.Width, s.Height, s.HasAudio, s.Fps)).ToList(),
+                    s.Id, s.Role.ToString(), s.RtspUri, s.Codec, s.Width, s.Height, s.HasAudio, s.Fps, s.AudioCodec,
+                    s.ConfiguredBitrateKbps)).ToList(),
                 retentionDays, c.QuotaBytes,
                 zonesLookup[c.Id].Select(z => new NodeConfigZoneDto(z.Id, z.Kind.ToString(), z.PolygonJson, z.Sensitivity)).ToList(),
                 recordingMode, motionPreRollSeconds, motionPostRollSeconds,
@@ -391,7 +409,13 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
                 c.AiDetectionEnabled && !disableAiDetection, c.MotionDetectionSource?.ToString(),
                 aiConfidence, aiIou, aiDetectionStreamRole, aiDetectionOrientation, c.ServerMotionEnabled,
                 c.MotionRegionMode.ToString(), c.MotionGridSize, c.MotionGridMask, c.MotionGridSensitivity,
-                archiveEnabled, archiveRetentionDays, rejectMotionJitter, motionJitterPixels, maxFps));
+                archiveEnabled, archiveRetentionDays, rejectMotionJitter, motionJitterPixels, maxFps,
+                PrivacyBlocksDetections: privacyBlocksDetections,
+                SpeedTraps: speedTrapsLookup[c.Id]
+                    .Select(t => SpeedTrapGates.ToVision(t.Id, t.GatesJson, t.DistanceMeters))
+                    .OfType<VisionSpeedTrapDto>().ToList(),
+                EncryptFootage: encryptFootage,
+                EncryptExistingRequestedUtc: encryptFootage == "Off" ? null : encryptExisting));
         }
 
         // Cameras this node has leftover Segments for but doesn't currently record — reassigned to a
@@ -448,6 +472,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             ArchiveRootPath = archiveRoot, SnapshotMotionAccuracy = snapshotMotionAccuracy,
             DepartureGraceSeconds = departureGraceSeconds,
             SnapshotMarginPercent = snapshotMarginPercent,
+            ColorClassification = colorClassification,
             DetectionBackend = detectionBackend,
             ExternalInferenceUrl = externalInferenceUrl,
             ExternalInferenceModel = externalInferenceModel,
@@ -543,7 +568,8 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
     /// every folder that sweep walks, and only the owning node may delete its rows. Resolved per camera
     /// with the same settings chain (camera, then this node, then global) the node's config uses:
     /// primary-tier footage expires after Retention.Days unless that camera archives on this node (then
-    /// it's the node's job to move it, not delete it); archive-tier footage after Archive.RetentionDays.
+    /// it's the node's job to move it, not delete it); archive-tier footage after Archive.RetentionDays,
+    /// as is an archiving camera's primary-tier footage that never got moved.
     /// 0 or less means keep forever. Locked segments are never included.</summary>
     public async Task<List<ExpiredSegmentDto>> ListExpiredSegmentsAsync(Guid nodeId, int limit, CancellationToken ct = default)
     {
@@ -572,12 +598,17 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
                     .ToListAsync(ct));
             }
 
+            // Archive-tier footage past the archive retention — and, for a camera that archives,
+            // primary-tier footage past it too. That footage was due to move to the archive volume at
+            // Retention.Days and be deleted at Archive.RetentionDays; if it never moved (the camera
+            // was reassigned to another node, or it sits under a storage root this node no longer
+            // sweeps) nothing else ever removes it, and it was left on the node indefinitely.
             if (archiveRetentionDays is > 0 && result.Count < limit)
             {
                 var cutoff = now - TimeSpan.FromDays(archiveRetentionDays.Value) - ExpiredSegmentGrace;
                 result.AddRange(await db.Segments.AsNoTracking()
                     .Where(s => s.NodeId == nodeId && s.CameraId == cameraId && !s.IsLocked
-                        && s.StorageTier == StorageTier.Archive && s.EndUtc < cutoff)
+                        && (s.StorageTier == StorageTier.Archive || archiveEnabled) && s.EndUtc < cutoff)
                     .OrderBy(s => s.EndUtc).Take(limit - result.Count)
                     .Select(s => new ExpiredSegmentDto(s.CameraId, s.FilePath))
                     .ToListAsync(ct));
@@ -744,11 +775,13 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         // One recorder node, one 60s segment per camera stream — a handful of rows per minute even
         // at dozens of cameras, nowhere near the volume the plan calls out SqlBulkCopy for
         // (MotionSpans/Detections in M8). Plain inserts are the right amount of engineering here.
+        var added = new List<Segment>();
         foreach (var item in segments)
         {
             if (!Enum.TryParse<CameraStreamRole>(item.StreamRole, out var role)) continue;
 
-            db.Segments.Add(new Segment
+            var hash = item.Sha256?.ToLowerInvariant();
+            var segment = new Segment
             {
                 CameraId = item.CameraId,
                 NodeId = nodeId,
@@ -761,8 +794,11 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
                 Codec = item.Codec,
                 Width = item.Width,
                 Height = item.Height,
-                HasAudio = item.HasAudio
-            });
+                HasAudio = item.HasAudio,
+                ContentSha256 = SegmentChain.IsHash(hash) ? hash : null,
+            };
+            db.Segments.Add(segment);
+            added.Add(segment);
         }
 
         // Most likely failure mode is the FilePath unique constraint — a node that restarted
@@ -784,6 +820,10 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
                 foreach (var entry in ex.Entries) entry.State = EntityState.Detached;
             }
         }
+
+        // Tamper evidence: link what was actually saved (a re-sent duplicate was dropped above) into
+        // each camera's hash chain.
+        await new SegmentChainService(db).ChainAsync(added.Where(s => db.Entry(s).State == EntityState.Unchanged), ct);
     }
 
     public async Task RecordMotionSpansAsync(Guid nodeId, IReadOnlyList<MotionSpanReportItem> spans, CancellationToken ct = default)
@@ -830,6 +870,21 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         // Adds two rows with the same (CameraId, DetectedObjectLabel, StartUtc) and SaveChanges
         // fails the filtered unique index IX_MotionSpans_CameraId_DetectedObjectLabel_StartUtc.
         var pending = new List<MotionSpan>();
+
+        // Every AI-detection span this batch touched, with its category name — published to
+        // detectionEvents once the batch is saved (detection alerts). objectsLoaded: spans already
+        // in the database whose DetectedObjects have been loaded for merging this call.
+        var touched = new Dictionary<MotionSpan, string>();
+        var objectsLoaded = new HashSet<MotionSpan>();
+
+        async Task FoldObjectsAsync(MotionSpan span, MotionSpanReportItem item)
+        {
+            if (item.DetectedObjectCategory is { } categoryName) touched[span] = categoryName;
+            if (item.Objects is not { Count: > 0 } objects) return;
+            if (db.Entry(span).State != EntityState.Added && objectsLoaded.Add(span))
+                await db.Entry(span).Collection(s => s.Objects).LoadAsync(ct);
+            foreach (var o in objects) MergeObject(span, o);
+        }
 
         // Folds one report item's forward progress onto a span already on record — a tracked DB
         // row or a pending Added one: extend EndUtc forward only, running-max Score/MovingCount,
@@ -890,6 +945,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
                 // tracking is already monotonic (a later report's box is never worse than an
                 // earlier one for the same track).
                 Apply(existing, item, bestFrameByConfidence: false);
+                await FoldObjectsAsync(existing, item);
                 continue;
             }
 
@@ -903,6 +959,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             if (pendingExact is not null)
             {
                 Apply(pendingExact, item, bestFrameByConfidence: false);
+                await FoldObjectsAsync(pendingExact, item);
                 continue;
             }
 
@@ -938,6 +995,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
                     // spans at all. The span already exists; coalescing only needs to keep it from
                     // fragmenting into extra cards, not to nudge its start a few seconds earlier.
                     Apply(sibling, item, bestFrameByConfidence: true);
+                    await FoldObjectsAsync(sibling, item);
                     continue;
                 }
 
@@ -951,6 +1009,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
                 if (pendingSibling is not null)
                 {
                     Apply(pendingSibling, item, bestFrameByConfidence: true);
+                    await FoldObjectsAsync(pendingSibling, item);
                     continue;
                 }
             }
@@ -993,6 +1052,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             };
             db.MotionSpans.Add(created);
             pending.Add(created);
+            await FoldObjectsAsync(created, item);
         }
 
         // Detach-and-retry: a row the batch can't save is dropped (not the whole batch). Two causes
@@ -1027,9 +1087,89 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
                             && m.StartUtc == rejected.StartUtc, ct);
                         if (winner is not null) MergeSpanForward(winner, rejected);
                     }
+                    // A dropped span's objects can't be saved without it.
+                    if (entry.Entity is MotionSpan droppedSpan)
+                    {
+                        foreach (var o in droppedSpan.Objects) db.Entry(o).State = EntityState.Detached;
+                    }
                     entry.State = EntityState.Detached;
                 }
             }
+        }
+
+        if (detectionEvents is not null)
+        {
+            foreach (var (span, categoryName) in touched)
+            {
+                if (db.Entry(span).State != EntityState.Unchanged) continue; // dropped above
+                detectionEvents.Publish(new DetectionEvent(span.Id, span.CameraId, categoryName,
+                    span.DetectedObjectLabel ?? "", span.StartUtc, span.EndUtc,
+                    span.BestBoxX, span.BestBoxY, span.BestBoxW, span.BestBoxH, span.BestBoxConfidence,
+                    span.Objects.Select(o => new DetectionEventObject(o.TrackId, o.Label,
+                        o.BoxX, o.BoxY, o.BoxW, o.BoxH, o.PrimaryColor, o.UpperColor, o.LowerColor,
+                        o.SpeedKph, o.SpeedTrapId)).ToList()));
+            }
+        }
+    }
+
+    /// <summary>Storage.Encrypt as one of "Off", "Video", "VideoAndImages" (anything else is Off).</summary>
+    public static string NormalizeEncryptMode(string? mode) =>
+        string.Equals(mode, "Video", StringComparison.OrdinalIgnoreCase) ? "Video"
+        : string.Equals(mode, "VideoAndImages", StringComparison.OrdinalIgnoreCase) ? "VideoAndImages"
+        : "Off";
+
+    /// <summary>Whether a node may hold this camera's footage keys: it records the camera, is its
+    /// backup (camera override or the recording node's default), or already holds its segments.</summary>
+    public async Task<bool> NodeMayHoldCameraAsync(Guid nodeId, Guid cameraId, CancellationToken ct = default)
+    {
+        var camera = await db.Cameras.AsNoTracking().Where(c => c.Id == cameraId)
+            .Select(c => new { c.NodeId, c.BackupNodeIdOverride }).FirstOrDefaultAsync(ct);
+        if (camera is null) return false;
+        if (camera.NodeId == nodeId || camera.BackupNodeIdOverride == nodeId) return true;
+        if (camera.NodeId is { } recorder
+            && await db.Nodes.AsNoTracking().AnyAsync(n => n.Id == recorder && n.BackupNodeId == nodeId, ct)) return true;
+        return await db.Segments.AsNoTracking().AnyAsync(s => s.CameraId == cameraId && s.NodeId == nodeId, ct);
+    }
+
+    /// <summary>Most DetectedObject rows one span keeps. Vision caps each report at 20; this bounds
+    /// a long, busy span across many reports.</summary>
+    private const int MaxObjectsPerSpan = 100;
+
+    /// <summary>Folds one reported object onto its row under <paramref name="span"/> (matched by
+    /// TrackId), adding the row if it's new. Vision's per-track best frame only improves, so a
+    /// reported box replaces the stored one; colors fill in or update but an unknown never erases a
+    /// known one; the first speed measured sticks.</summary>
+    private static void MergeObject(MotionSpan span, VisionDetectedObjectItem o)
+    {
+        var row = span.Objects.FirstOrDefault(x => x.TrackId == o.TrackId);
+        if (row is null)
+        {
+            if (span.Objects.Count >= MaxObjectsPerSpan) return;
+            row = new DetectedObject { TrackId = o.TrackId, FirstSeenUtc = o.FirstSeenUtc, LastSeenUtc = o.LastSeenUtc };
+            span.Objects.Add(row);
+        }
+
+        row.CameraId = span.CameraId;
+        row.Label = o.Label.Length > 100 ? o.Label[..100] : o.Label;
+        if (o.FirstSeenUtc < row.FirstSeenUtc) row.FirstSeenUtc = o.FirstSeenUtc;
+        if (o.LastSeenUtc > row.LastSeenUtc) row.LastSeenUtc = o.LastSeenUtc;
+        if (o.BestFrameAtUtc is not null)
+        {
+            row.BestFrameAtUtc = o.BestFrameAtUtc;
+            row.BoxX = o.X;
+            row.BoxY = o.Y;
+            row.BoxW = o.W;
+            row.BoxH = o.H;
+            row.Confidence = o.Confidence;
+        }
+        if (ObjectColors.Find(o.PrimaryColor) is { } primary) row.PrimaryColor = primary.Name;
+        if (ObjectColors.Find(o.UpperColor) is { } upper) row.UpperColor = upper.Name;
+        if (ObjectColors.Find(o.LowerColor) is { } lower) row.LowerColor = lower.Name;
+        if (row.SpeedKph is null && o.SpeedKph is { } kph && double.IsFinite(kph) && kph >= 0)
+        {
+            row.SpeedKph = kph;
+            row.SpeedTrapId = o.SpeedTrapId;
+            row.SpeedMeasuredAtUtc = o.SpeedMeasuredAtUtc ?? o.BestFrameAtUtc ?? o.LastSeenUtc;
         }
     }
 

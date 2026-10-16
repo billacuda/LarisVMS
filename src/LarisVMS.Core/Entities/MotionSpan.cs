@@ -88,6 +88,10 @@ public class MotionSpan
     /// renders with no count suffix.</summary>
     public int? MovingCount { get; set; }
 
+    /// <summary>AI-detection spans only: each tracked object behind this span, with its colors and
+    /// speed. Empty for every other span and for a span reported by an older Vision Service.</summary>
+    public List<DetectedObject> Objects { get; set; } = [];
+
     public Camera Camera { get; set; } = null!;
     public Zone? Zone { get; set; }
     public EventTagRule? EventTagRule { get; set; }

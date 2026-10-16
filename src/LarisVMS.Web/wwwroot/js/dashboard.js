@@ -1,6 +1,7 @@
-// Dashboard (Pages/Index): polls GET /api/dashboard every 60s and redraws the summary tiles + camera
-// table from that JSON — IDashboardService.GetHealthAsync backs both this and the page's own
-// server-rendered initial load, so the two can never independently drift out of sync. This file is
+// Dashboard (Pages/Index): polls GET /api/dashboard every 60s and redraws the summary tiles, node
+// cards and camera table from that JSON. These are the original sections, now three of the
+// dashboard's widgets (dashboard-widgets.js places them; the list widgets poll their own endpoint).
+// IDashboardService.GetHealthAsync backs both this and the page's own server-rendered initial load, so the two can never independently drift out of sync. This file is
 // the single render path for both the immediate on-load fetch and every subsequent 60s refresh (the
 // server-rendered markup is only ever the pre-JS fallback), which is what lets the thumbnail toggle,
 // sort, and pagination all compose correctly across a refresh — see composeAfterRender().
@@ -9,6 +10,9 @@
 
     var POLL_INTERVAL_MS = 60000;
     var THUMB_TOGGLE_KEY = 'dashboardShowThumbnails';
+    // The thumbnail option is hidden for now (its switch has d-none in Index.razor). Everything behind
+    // it is left in place; set this back to true and drop that d-none to bring it back.
+    var THUMBNAILS_ENABLED = false;
 
     var table = document.getElementById('dashboardTable');
     var tbody = document.getElementById('dashboardTableBody');
@@ -218,7 +222,7 @@
 
     function initThumbToggle() {
         if (!thumbToggle) return;
-        thumbToggle.checked = loadShowThumbnails();
+        thumbToggle.checked = THUMBNAILS_ENABLED && loadShowThumbnails();
         table.classList.toggle('hide-thumb-col', !thumbToggle.checked);
         thumbToggle.addEventListener('change', function () {
             saveShowThumbnails(thumbToggle.checked);

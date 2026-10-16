@@ -48,6 +48,15 @@ public interface ITimelineService
     /// and age — see CameraEventCountRow. Null cameraIds means every camera.</summary>
     Task<List<CameraEventCountRow>> GetEventCountsAsync(IReadOnlyCollection<Guid>? cameraIds, DateTime nowUtc, CancellationToken ct = default);
 
+    /// <summary>The counterpart to GetEventCountsAsync for plain motion only (spans with no custom tag,
+    /// AI category or camera classification), same age buckets, Kind "Motion". Null cameraIds means
+    /// every camera.</summary>
+    Task<List<CameraEventCountRow>> GetPlainMotionCountsAsync(IReadOnlyCollection<Guid>? cameraIds, DateTime nowUtc, CancellationToken ct = default);
+
+    /// <summary>Each camera's oldest segment start and newest segment end — how far back its footage
+    /// goes and when it last recorded. Cameras with no segments are absent.</summary>
+    Task<Dictionary<Guid, (DateTime OldestUtc, DateTime LatestUtc)>> GetRecordingExtentsAsync(CancellationToken ct = default);
+
     /// <summary>Null if segmentId doesn't exist or doesn't belong to cameraId — the /playback-segment
     /// proxy treats that as 404 rather than trusting the caller's cameraId/segmentId pairing.</summary>
     Task<PlaybackSegmentInfo?> GetSegmentForPlaybackAsync(Guid cameraId, long segmentId, CancellationToken ct = default);
@@ -107,6 +116,10 @@ public interface ITimelineService
     /// toggles. A stale "Motion" token (from a saved pref) is ignored. Null/empty means no
     /// additional narrowing.
     ///
+    /// includePlainMotion adds plain motion spans (no tag, class or AI category), which the Snapshots
+    /// page never shows; the dashboard's latest-detections widget can opt in. With a non-empty kinds
+    /// filter they're included alongside the chosen kinds.
+    ///
     /// cameraIds null means every camera; a non-null-but-empty collection genuinely narrows to zero
     /// rows (same "narrow to nothing rather than silently show everything" philosophy as kinds) —
     /// lets the Snapshots page resolve "single camera" / "all cameras" / "camera group" / "view" into
@@ -118,7 +131,11 @@ public interface ITimelineService
     /// rather than folded into it — unlike kinds (null = everything, matching pre-existing behavior),
     /// an empty/null excludedLabels already means "nothing excluded," so no special null-handling is
     /// needed for "everything checked by default."</summary>
-    Task<SnapshotPageDto> GetSnapshotsAsync(IReadOnlyCollection<Guid>? cameraIds, DateTime? fromUtc, DateTime? toUtc, int page, int pageSize, CancellationToken ct = default, IReadOnlyCollection<string>? kinds = null, IReadOnlyCollection<string>? excludedLabels = null);
+    /// <summary>Speed-trap measurements on one camera taken in [fromUtc, toUtc), oldest first, at
+    /// most 2000 — Playback's timeline markers and on-video speed badge.</summary>
+    Task<List<SpeedMarkerDto>> GetSpeedMarkersAsync(Guid cameraId, DateTime fromUtc, DateTime toUtc, CancellationToken ct = default);
+
+    Task<SnapshotPageDto> GetSnapshotsAsync(IReadOnlyCollection<Guid>? cameraIds, DateTime? fromUtc, DateTime? toUtc, int page, int pageSize, CancellationToken ct = default, IReadOnlyCollection<string>? kinds = null, IReadOnlyCollection<string>? excludedLabels = null, bool includePlainMotion = false, SnapshotObjectFilter? objectFilter = null);
 
     /// <summary>Object detection plan decision 5: every currently-known DetectedObjectCategory,
     /// ordered by name — what the Snapshots page's filter checkboxes are built from. Fetched live

@@ -11,8 +11,10 @@ public interface IExportService
 {
     /// <summary>Creates the job and one Queued item per distinct camera id, all pointing at the
     /// same job.</summary>
+    /// <summary>redactionJsonByCamera: per camera, the areas to black out (ExportJobItem.RedactionJson).</summary>
     Task<ExportJob> CreateJobAsync(IReadOnlyList<Guid> cameraIds, DateTime fromUtc, DateTime toUtc,
-        string requestedByUserId, string? requestedByUserName, CancellationToken ct = default);
+        string requestedByUserId, string? requestedByUserName, CancellationToken ct = default,
+        IReadOnlyDictionary<Guid, string>? redactionJsonByCamera = null);
 
     /// <summary>Newest first, with each job's Items eager-loaded — the Exports page's whole feed in
     /// one call.</summary>
@@ -50,6 +52,9 @@ public interface IExportService
     /// connection info, but only when the item is Done — everything else (still running, failed,
     /// unknown id) comes back null and the proxy treats that as 404, same shape as
     /// ITimelineService.GetSegmentForPlaybackAsync.</summary>
+    /// <summary>The signed manifest JSON for a finished export item, or null.</summary>
+    Task<string?> GetManifestAsync(Guid exportItemId, CancellationToken ct = default);
+
     Task<ExportDownloadInfo?> GetDownloadInfoAsync(Guid exportItemId, CancellationToken ct = default);
 
     /// <summary>Pre-check + file locations for the delete endpoint: null if jobId doesn't exist.

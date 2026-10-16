@@ -45,6 +45,7 @@ public class PlayModel(IViewService viewService, ICameraService cameraService, I
                 EventBadgeCornerValue = EventBadgeCorner.Normalize(
                     await settings.GetRawAsync(EventSettingsKeys.EventBadgeCornerKey)),
                 AdaptiveStreamingEnabled = await settings.GetAsync("LiveView.AdaptiveStreamingEnabled", false),
+                TalkCameraIds = await cameraAccess.GetAccessibleCameraIdsAsync(User, CameraAccessActions.Talk),
             };
             return Page();
         }

@@ -127,7 +127,24 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
     {
         var config = await api.GetConfigAsync(ct);
         var storageRoot = string.IsNullOrWhiteSpace(config.StorageRootPath) ? fallbackStorageRoot : config.StorageRootPath;
-        if (!Directory.Exists(storageRoot)) return;
+        if (!Directory.Exists(storageRoot))
+        {
+            // No storage folder yet — a node without cameras never creates one. Nothing local to sweep,
+            // but footage it left elsewhere (an old storage root, cameras that moved to another node)
+            // still has to expire, and only the server-directed pass reaches it.
+            var expiredDeletes = new List<string>();
+            try
+            {
+                var relocatingNow = _pendingRelocationReports.Select(r => r.Item.OldFilePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                await DeleteServerExpiredSegmentsAsync(relocatingNow, expiredDeletes, ct);
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                logger.LogWarning(ex, "Server-directed retention pass failed — will retry next sweep.");
+            }
+            await ReportDeletionsAsync(expiredDeletes, ct);
+            return;
+        }
 
         var now = DateTime.UtcNow;
         var deletedPaths = new List<string>();
@@ -197,6 +214,14 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             // falls back to the segment-seek crop.
             foreach (var staged in SelectExpiredStagedCrops(snapshotsDir, now, camera.RetentionDays))
                 if (TryDelete(staged)) deletedPaths.Add(staged);
+
+            // Two-way audio recordings (TalkSessionHandler) age out with the camera's footage. Not
+            // added to deletedPaths — that list reports Segment rows; Web ages TalkRecording rows out
+            // by the same retention on its own.
+            var talkDir = TalkSessionHandler.TalkDirectory(storageRoot, camera.CameraId);
+            foreach (var clip in SelectExpiredTalkClips(talkDir, now, camera.RetentionDays))
+                TryDelete(clip);
+            if (Directory.Exists(talkDir)) PruneEmptyDirectories(talkDir);
 
             PruneEmptyDirectories(cameraDir);
             if (Directory.Exists(thumbsDir)) PruneEmptyDirectories(thumbsDir);
@@ -273,35 +298,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             }
         }
 
-        // Anything left over from a prior sweep's failed report rides along with this sweep's own
-        // batch — one retry attempt covers both, rather than needing its own separate call.
-        deletedPaths.AddRange(_pendingDeletionReports);
-        _pendingDeletionReports.Clear();
-
-        if (deletedPaths.Count > 0)
-        {
-            logger.LogInformation("Evicted {Count} segment(s) for storage limits.", deletedPaths.Count);
-            var reportedDeletes = 0;
-            foreach (var batch in deletedPaths.Chunk(ReportBatchSize))
-            {
-                try
-                {
-                    await api.DeleteSegmentsAsync([.. batch], ct);
-                    reportedDeletes += batch.Length;
-                }
-                catch (Exception ex) when (!ct.IsCancellationRequested)
-                {
-                    // The files are already gone from disk regardless of whether this succeeds — only
-                    // the *report* is being retried, not the deletion itself. Re-queue only what
-                    // hasn't been reported yet; the batches that already landed are done.
-                    _pendingDeletionReports.AddRange(deletedPaths.Skip(reportedDeletes));
-                    logger.LogWarning(ex, "Failed to report deleted segment(s) to the server after {Reported}/{Total} — will retry the rest next sweep.",
-                        reportedDeletes, deletedPaths.Count);
-                    break;
-                }
-            }
-        }
-        SavePendingDeletions(PendingDeletionsPath, _pendingDeletionReports, logger);
+        await ReportDeletionsAsync(deletedPaths, ct);
 
         // Relocations (archive moves): the source is still on the primary volume — only removed once
         // the web has updated the row to the archive path. A failed report keeps both copies and
@@ -1025,6 +1022,24 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
         return result;
     }
 
+    /// <summary>Talk recordings older than the camera's retention, dated by the UTC start in each file's
+    /// name (yyyyMMddTHHmmss.fffZ.wav). Zero or negative retention keeps them forever, like footage.</summary>
+    internal static List<string> SelectExpiredTalkClips(string talkDir, DateTime now, int? retentionDays)
+    {
+        if (retentionDays is not > 0 || !Directory.Exists(talkDir)) return [];
+        var cutoff = now.AddDays(-retentionDays.Value);
+        var result = new List<string>();
+        foreach (var file in Directory.EnumerateFiles(talkDir, "*.wav", SearchOption.AllDirectories))
+        {
+            if (DateTime.TryParseExact(Path.GetFileNameWithoutExtension(file), "yyyyMMdd'T'HHmmss'.'fff'Z'",
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out var start)
+                && start < cutoff)
+                result.Add(file);
+        }
+        return result;
+    }
+
     /// <summary>Pure so it's unit-testable against a real temp directory without a network round
     /// trip — every cached snapshot-crop file under every camera's own snapshots/ folder.</summary>
     internal static List<string> EnumerateSnapshotFiles(string storageRoot)
@@ -1320,6 +1335,41 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
                 if (now - info.LastWriteTimeUtc > LogRetention) TryDelete(path);
             }
         }
+    }
+
+    /// <summary>Reports deleted segment files to the server so their rows go, along with any reports
+    /// a previous sweep couldn't deliver; whatever doesn't land is saved and retried next sweep.</summary>
+    private async Task ReportDeletionsAsync(List<string> deletedPaths, CancellationToken ct)
+    {
+        // Anything left over from a prior sweep's failed report rides along with this sweep's own
+        // batch — one retry attempt covers both, rather than needing its own separate call.
+        deletedPaths.AddRange(_pendingDeletionReports);
+        _pendingDeletionReports.Clear();
+
+        if (deletedPaths.Count > 0)
+        {
+            logger.LogInformation("Evicted {Count} segment(s) for storage limits.", deletedPaths.Count);
+            var reportedDeletes = 0;
+            foreach (var batch in deletedPaths.Chunk(ReportBatchSize))
+            {
+                try
+                {
+                    await api.DeleteSegmentsAsync([.. batch], ct);
+                    reportedDeletes += batch.Length;
+                }
+                catch (Exception ex) when (!ct.IsCancellationRequested)
+                {
+                    // The files are already gone from disk regardless of whether this succeeds — only
+                    // the *report* is being retried, not the deletion itself. Re-queue only what
+                    // hasn't been reported yet; the batches that already landed are done.
+                    _pendingDeletionReports.AddRange(deletedPaths.Skip(reportedDeletes));
+                    logger.LogWarning(ex, "Failed to report deleted segment(s) to the server after {Reported}/{Total} — will retry the rest next sweep.",
+                        reportedDeletes, deletedPaths.Count);
+                    break;
+                }
+            }
+        }
+        SavePendingDeletions(PendingDeletionsPath, _pendingDeletionReports, logger);
     }
 
     /// <summary>Server-directed retention: deletes this node's segments the server lists as overdue

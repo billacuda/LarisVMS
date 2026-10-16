@@ -76,10 +76,22 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
             .ToListAsync(ct);
 
         var palette = await eventColors.GetAsync(ct);
+        var talk = await TalkSpansAsync(db.TalkRecordings.Where(t => t.CameraId == cameraId), fromUtc, toUtc, ct);
 
         return Bucket(segments.Select(s => (s.StartUtc, s.EndUtc)),
-            motionSpans.Select(m => (m.StartUtc, m.EndUtc, ResolveColor(palette, m.ColorHex, m.DetectionKind, m.AiCategoryName, m.AiCategoryColorHex))),
+            motionSpans.Select(m => (m.StartUtc, m.EndUtc, ResolveColor(palette, m.ColorHex, m.DetectionKind, m.AiCategoryName, m.AiCategoryColorHex)))
+                .Concat(talk),
             fromUtc, toUtc, bucketCount);
+    }
+
+    /// <summary>Recorded two-way audio presses as timeline bands in their own colour — drawn the same
+    /// way as an event, so an operator scrubbing back can see where someone talked through the camera.</summary>
+    private static async Task<List<(DateTime StartUtc, DateTime EndUtc, string? ColorHex)>> TalkSpansAsync(
+        IQueryable<Core.Entities.TalkRecording> query, DateTime fromUtc, DateTime toUtc, CancellationToken ct)
+    {
+        var rows = await query.Where(t => t.StartUtc < toUtc && t.EndUtc > fromUtc)
+            .Select(t => new { t.StartUtc, t.EndUtc }).ToListAsync(ct);
+        return rows.Select(t => (t.StartUtc, t.EndUtc, (string?)EventColors.Talk)).ToList();
     }
 
     public async Task<List<TimelineBucketDto>> GetGlobalBucketsAsync(DateTime fromUtc, DateTime toUtc, int bucketCount, IReadOnlyList<Guid>? cameraIds = null, CancellationToken ct = default)
@@ -124,9 +136,13 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
             .ToListAsync(ct);
 
         var palette = await eventColors.GetAsync(ct);
+        var talkQuery = db.TalkRecordings.AsQueryable();
+        if (cameraIds is { Count: > 0 }) talkQuery = talkQuery.Where(t => cameraIds.Contains(t.CameraId));
+        var talk = await TalkSpansAsync(talkQuery, fromUtc, toUtc, ct);
 
         return Bucket(segments.Select(s => (s.StartUtc, s.EndUtc)),
-            motionSpans.Select(m => (m.StartUtc, m.EndUtc, ResolveColor(palette, m.ColorHex, m.DetectionKind, m.AiCategoryName, m.AiCategoryColorHex))),
+            motionSpans.Select(m => (m.StartUtc, m.EndUtc, ResolveColor(palette, m.ColorHex, m.DetectionKind, m.AiCategoryName, m.AiCategoryColorHex)))
+                .Concat(talk),
             fromUtc, toUtc, bucketCount);
     }
 
@@ -250,6 +266,51 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
             g.Kind switch { 0 => "Tag", 1 => "Ai", _ => "Camera" },
             g.Kind switch { 1 => g.Category, 2 => g.DetectionKind?.ToString(), _ => null },
             g.Bucket, g.Spans, g.Objects)).ToList();
+    }
+
+    public async Task<List<CameraEventCountRow>> GetPlainMotionCountsAsync(IReadOnlyCollection<Guid>? cameraIds, DateTime nowUtc, CancellationToken ct = default)
+    {
+        nowUtc = NormalizeToUtc(nowUtc);
+        var hour = nowUtc.AddHours(-1);
+        var day = nowUtc.AddDays(-1);
+        var week = nowUtc.AddDays(-7);
+        var month = nowUtc.AddDays(-30);
+
+        // Exactly the spans GetEventCountsAsync leaves out, so the two never count one span twice.
+        var query = db.MotionSpans.AsNoTracking()
+            .Where(m => m.StartUtc >= month
+                && m.EventTagRuleId == null && m.DetectionKind == null && m.DetectedObjectCategoryId == null);
+        if (cameraIds is not null) query = query.Where(m => cameraIds.Contains(m.CameraId));
+
+        var grouped = await query
+            .Select(m => new
+            {
+                m.CameraId,
+                Bucket = m.StartUtc >= hour ? 0 : m.StartUtc >= day ? 1 : m.StartUtc >= week ? 2 : 3,
+            })
+            .GroupBy(x => new { x.CameraId, x.Bucket })
+            .Select(g => new { g.Key.CameraId, g.Key.Bucket, Spans = g.Count() })
+            .ToListAsync(ct);
+
+        return grouped.Select(g => new CameraEventCountRow(g.CameraId, "Motion", null, g.Bucket, g.Spans, g.Spans)).ToList();
+    }
+
+    public async Task<Dictionary<Guid, (DateTime OldestUtc, DateTime LatestUtc)>> GetRecordingExtentsAsync(CancellationToken ct = default)
+    {
+        // Correlated MIN/MAX per camera rather than one GROUP BY over every segment: each subquery is a
+        // single seek on the (CameraId, StartUtc) / (CameraId, EndUtc) indexes, where a GROUP BY would
+        // scan the whole Segments table on every dashboard refresh.
+        var rows = await db.Cameras.AsNoTracking()
+            .Select(c => new
+            {
+                c.Id,
+                Oldest = db.Segments.Where(s => s.CameraId == c.Id).Min(s => (DateTime?)s.StartUtc),
+                Latest = db.Segments.Where(s => s.CameraId == c.Id).Max(s => (DateTime?)s.EndUtc),
+            })
+            .ToListAsync(ct);
+
+        return rows.Where(r => r.Oldest is not null && r.Latest is not null)
+            .ToDictionary(r => r.Id, r => (NormalizeToUtc(r.Oldest!.Value), NormalizeToUtc(r.Latest!.Value)));
     }
 
     public async Task<PlaybackSegmentInfo?> GetSegmentForPlaybackAsync(Guid cameraId, long segmentId, CancellationToken ct = default)
@@ -402,7 +463,7 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
         return await db.Segments
             .Where(s => s.CameraId == cameraId && s.StartUtc < toUtc && s.EndUtc > fromUtc)
             .OrderBy(s => s.StartUtc)
-            .Select(s => new SegmentFileInfo(s.FilePath, s.NodeId))
+            .Select(s => new SegmentFileInfo(s.FilePath, s.NodeId, s.StartUtc, s.EndUtc, s.HasAudio, s.ContentSha256))
             .ToListAsync(ct);
     }
 
@@ -462,7 +523,35 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
     /// Snapshots thumbnail — see GetSnapshotsAsync's own comment.</summary>
     internal static readonly TimeSpan SnapshotOffsetIntoRecording = TimeSpan.FromSeconds(1);
 
-    public async Task<SnapshotPageDto> GetSnapshotsAsync(IReadOnlyCollection<Guid>? cameraIds, DateTime? fromUtc, DateTime? toUtc, int page, int pageSize, CancellationToken ct = default, IReadOnlyCollection<string>? kinds = null, IReadOnlyCollection<string>? excludedLabels = null)
+    public async Task<List<SpeedMarkerDto>> GetSpeedMarkersAsync(Guid cameraId, DateTime fromUtc, DateTime toUtc, CancellationToken ct = default)
+    {
+        fromUtc = NormalizeToUtc(fromUtc);
+        toUtc = NormalizeToUtc(toUtc);
+        var rows = await db.DetectedObjects.AsNoTracking()
+            .Where(o => o.CameraId == cameraId && o.SpeedKph != null
+                && o.SpeedMeasuredAtUtc >= fromUtc && o.SpeedMeasuredAtUtc < toUtc)
+            .OrderBy(o => o.SpeedMeasuredAtUtc)
+            .Take(2000)
+            .Select(o => new { o.SpeedMeasuredAtUtc, o.FirstSeenUtc, o.LastSeenUtc, o.Label, o.PrimaryColor, o.UpperColor, o.SpeedKph, o.SpeedTrapId })
+            .ToListAsync(ct);
+        if (rows.Count == 0) return [];
+
+        var trapIds = rows.Where(r => r.SpeedTrapId != null).Select(r => r.SpeedTrapId!.Value).Distinct().ToList();
+        var traps = await db.SpeedTraps.AsNoTracking().Where(t => trapIds.Contains(t.Id))
+            .ToDictionaryAsync(t => t.Id, t => new { t.Name, t.SpeedLimitKph }, ct);
+        var units = settings is null ? SpeedUnits.Default : await settings.GetAsync(SpeedUnits.SettingKey, SpeedUnits.Default, ct: ct);
+
+        return rows.Select(r =>
+        {
+            var trap = r.SpeedTrapId is { } id ? traps.GetValueOrDefault(id) : null;
+            var kph = r.SpeedKph!.Value;
+            return new SpeedMarkerDto(r.SpeedMeasuredAtUtc!.Value, r.FirstSeenUtc, r.LastSeenUtc, r.Label,
+                r.PrimaryColor ?? r.UpperColor, kph, SpeedUnits.Format(kph, units),
+                trap?.SpeedLimitKph is { } limit && kph > limit, trap?.Name);
+        }).ToList();
+    }
+
+    public async Task<SnapshotPageDto> GetSnapshotsAsync(IReadOnlyCollection<Guid>? cameraIds, DateTime? fromUtc, DateTime? toUtc, int page, int pageSize, CancellationToken ct = default, IReadOnlyCollection<string>? kinds = null, IReadOnlyCollection<string>? excludedLabels = null, bool includePlainMotion = false, SnapshotObjectFilter? objectFilter = null)
     {
         pageSize = Math.Clamp(pageSize, 1, MaxSnapshotPageSize);
 
@@ -482,8 +571,11 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
         // Plain-motion rows still exist and still drive the Playback timeline's motion bands
         // (GetBucketsAsync / GetGlobalBucketsAsync) and the live-view motion badge
         // (GetCamerasWithActiveMotionAsync) — all untouched.
-        query = query.Where(m =>
-            m.EventTagRuleId != null || m.DetectionKind != null || m.DetectedObjectCategoryId != null);
+        // includePlainMotion is the dashboard widget's opt-in back to plain motion; the Snapshots page
+        // never passes it.
+        if (!includePlainMotion)
+            query = query.Where(m =>
+                m.EventTagRuleId != null || m.DetectionKind != null || m.DetectedObjectCategoryId != null);
 
         // Admin per-class hide (Admin → Settings → Events → "Snapshots browser"): still useful to
         // drop a specific camera-native class (e.g. Face) from the browser. Only the closed
@@ -530,7 +622,8 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
             query = query.Where(m =>
                 (m.EventTagRuleId != null && wantCustomTag)
                 || (m.DetectionKind != null && wantedDetectionKinds.Contains(m.DetectionKind.Value))
-                || (m.DetectedObjectCategoryId != null && m.DetectedObjectCategory != null && wantedCategoryNames.Contains(m.DetectedObjectCategory.Name)));
+                || (m.DetectedObjectCategoryId != null && m.DetectedObjectCategory != null && wantedCategoryNames.Contains(m.DetectedObjectCategory.Name))
+                || (includePlainMotion && m.EventTagRuleId == null && m.DetectionKind == null && m.DetectedObjectCategoryId == null));
         }
 
         // Filter-tree narrowing, one level below kinds: excludes a specific "{category}:{label}"
@@ -542,6 +635,25 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
             query = query.Where(m =>
                 m.DetectedObjectCategory == null || m.DetectedObjectLabel == null
                 || !excludedSet.Contains(m.DetectedObjectCategory.Name + ":" + m.DetectedObjectLabel));
+        }
+
+        // Object filter (filter tree's Color / Shirt / Pants / Speed sections): one object of the span
+        // has to match every section that has a selection. An EXISTS seek on DetectedObjects' (span,
+        // track) index per candidate span, only added when something is set.
+        if (objectFilter is { IsEmpty: false })
+        {
+            var colors = (objectFilter.Colors ?? []).Select(c => c.ToLowerInvariant()).ToList();
+            var shirts = (objectFilter.Shirts ?? []).Select(c => c.ToLowerInvariant()).ToList();
+            var pants = (objectFilter.Pants ?? []).Select(c => c.ToLowerInvariant()).ToList();
+            var anyColors = colors.Count > 0;
+            var anyShirts = shirts.Count > 0;
+            var anyPants = pants.Count > 0;
+            var minSpeed = objectFilter.MinSpeedKph;
+            query = query.Where(m => m.Objects.Any(o =>
+                (!anyColors || (o.PrimaryColor != null && colors.Contains(o.PrimaryColor)))
+                && (!anyShirts || (o.UpperColor != null && shirts.Contains(o.UpperColor)))
+                && (!anyPants || (o.LowerColor != null && pants.Contains(o.LowerColor)))
+                && (minSpeed == null || (o.SpeedKph != null && o.SpeedKph >= minSpeed))));
         }
 
         var total = await query.CountAsync(ct);
@@ -668,6 +780,22 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
         rows = rows.Where(r => coveredSpanIds.Contains(r.Id) && !suppressedSpanIds.Contains(r.Id)).ToList();
 
         var palette = await eventColors.GetAsync(ct);
+
+        // Color/speed badges: the objects with something to show, for every span on this page.
+        var pageSpanIds = rows.Where(r => r.AiCategoryName is not null).Select(r => r.Id).ToList();
+        var objectsBySpan = (await db.DetectedObjects.AsNoTracking()
+                .Where(o => pageSpanIds.Contains(o.MotionSpanId)
+                    && (o.PrimaryColor != null || o.UpperColor != null || o.LowerColor != null || o.SpeedKph != null))
+                .Select(o => new { o.MotionSpanId, o.Label, o.PrimaryColor, o.UpperColor, o.LowerColor, o.SpeedKph, o.Confidence })
+                .ToListAsync(ct))
+                .ToLookup(o => o.MotionSpanId);
+
+        IReadOnlyList<SnapshotObjectDto> ObjectsFor(IEnumerable<long> spanIds) => spanIds
+            .SelectMany(id => objectsBySpan[id])
+            .OrderByDescending(o => o.SpeedKph is not null).ThenByDescending(o => o.Confidence ?? 0)
+            .Take(8)
+            .Select(o => new SnapshotObjectDto(o.Label, o.PrimaryColor, o.UpperColor, o.LowerColor, o.SpeedKph))
+            .ToList();
 
         // Pass G3: collapse AI-detection spans that overlap in time on the same camera into one card
         // — a person and a dog crossing frame together are separate per-label spans (the per-label
@@ -851,6 +979,7 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
             {
                 Badges = badges,
                 SpanIds = spanIds,
+                Objects = ObjectsFor(spanIds),
             };
         }).Where(x => x is not null).Select(x => x!).ToList();
 

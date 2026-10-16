@@ -64,12 +64,29 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     // ── Motion (M8) ──────────────────────────────────────────────────────────
     public DbSet<Zone> Zones => Set<Zone>();
     public DbSet<MotionSpan> MotionSpans => Set<MotionSpan>();
+    public DbSet<TalkRecording> TalkRecordings => Set<TalkRecording>();
+    public DbSet<ActivityHourlyCount> ActivityHourlyCounts => Set<ActivityHourlyCount>();
+    public DbSet<SiteMap> SiteMaps => Set<SiteMap>();
+    public DbSet<CameraPlacement> CameraPlacements => Set<CameraPlacement>();
     public DbSet<CameraEvent> CameraEvents => Set<CameraEvent>();
     public DbSet<EventTagRule> EventTagRules => Set<EventTagRule>();
     public DbSet<ScheduleWindow> ScheduleWindows => Set<ScheduleWindow>();
 
     // ── Object detection ─────────────────────────────────────────────────────
     public DbSet<DetectedObjectCategory> DetectedObjectCategories => Set<DetectedObjectCategory>();
+    public DbSet<DetectedObject> DetectedObjects => Set<DetectedObject>();
+    public DbSet<SpeedTrap> SpeedTraps => Set<SpeedTrap>();
+    public DbSet<SpeedHourlyStat> SpeedHourlyStats => Set<SpeedHourlyStat>();
+
+    // ── Tamper evidence ──────────────────────────────────────────────────────
+    public DbSet<SigningKey> SigningKeys => Set<SigningKey>();
+    public DbSet<SegmentChainHead> SegmentChainHeads => Set<SegmentChainHead>();
+    public DbSet<ChainCheckpoint> ChainCheckpoints => Set<ChainCheckpoint>();
+    public DbSet<ExportManifest> ExportManifests => Set<ExportManifest>();
+
+    // ── Footage encryption ───────────────────────────────────────────────────
+    public DbSet<FootageMasterKey> FootageMasterKeys => Set<FootageMasterKey>();
+    public DbSet<FootageKey> FootageKeys => Set<FootageKey>();
 
     // ── Views (M6) ───────────────────────────────────────────────────────────
     public DbSet<View> Views => Set<View>();
@@ -233,6 +250,9 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
         {
             e.Property(x => x.Name).HasMaxLength(200).IsRequired();
             e.Property(x => x.LastModifiedBy).HasMaxLength(256);
+            e.Property(x => x.CategoryFilter).HasMaxLength(100);
+            e.Property(x => x.LabelFilter).HasMaxLength(100);
+            e.Property(x => x.ColorFilter).HasMaxLength(20);
         });
         builder.Entity<AlertDelivery>(e =>
         {
@@ -399,6 +419,9 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             // filename is ~90 chars) while staying under that limit for the unique index below.
             e.Property(x => x.FilePath).HasMaxLength(450).IsRequired();
             e.Property(x => x.Codec).HasMaxLength(50);
+            e.Property(x => x.ContentSha256).HasMaxLength(64);
+            e.Property(x => x.PrevChainHash).HasMaxLength(64);
+            e.Property(x => x.ChainHash).HasMaxLength(64);
             e.Property(x => x.StorageTier).HasConversion<byte>();
             e.HasOne(x => x.Camera).WithMany()
                 .HasForeignKey(x => x.CameraId).OnDelete(DeleteBehavior.Cascade);
@@ -460,6 +483,43 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.HasIndex(x => new { x.CameraId, x.Kind });
         });
 
+        // ── SiteMap / CameraPlacement (Map page) ─────────────────────────────
+        builder.Entity<SiteMap>(e =>
+        {
+            e.Property(x => x.Name).HasMaxLength(200).IsRequired();
+            e.Property(x => x.ImageContentType).HasMaxLength(100);
+        });
+        builder.Entity<CameraPlacement>(e =>
+        {
+            e.HasOne(x => x.Map).WithMany(m => m.Placements).HasForeignKey(x => x.MapId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.Camera).WithMany().HasForeignKey(x => x.CameraId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => new { x.MapId, x.CameraId }).IsUnique();
+        });
+
+        // ── ActivityHourlyCount (activity heatmap history) ───────────────────
+        // Every read is "these cameras, this hour range", so cluster on (CameraId, HourUtc); the
+        // all-cameras heatmap's range seek uses the HourUtc index.
+        builder.Entity<ActivityHourlyCount>(e =>
+        {
+            e.HasKey(x => x.Id).IsClustered(false);
+            e.Property(x => x.Group).HasMaxLength(100).IsRequired();
+            e.Property(x => x.Label).HasMaxLength(200);
+            e.HasIndex(x => new { x.CameraId, x.HourUtc }).IsClustered();
+            e.HasIndex(x => x.HourUtc);
+        });
+
+        // ── TalkRecording (two-way audio) ────────────────────────────────────
+        // Every read is "this camera, this time range" (playback), like MotionSpan.
+        builder.Entity<TalkRecording>(e =>
+        {
+            e.HasOne(x => x.Camera).WithMany()
+                .HasForeignKey(x => x.CameraId).OnDelete(DeleteBehavior.Cascade);
+            e.Property(x => x.UserId).HasMaxLength(450);
+            e.Property(x => x.UserName).HasMaxLength(256);
+            e.Property(x => x.FilePath).HasMaxLength(1024).IsRequired();
+            e.HasIndex(x => new { x.CameraId, x.StartUtc });
+        });
+
         // ── MotionSpan (M8) ──────────────────────────────────────────────────
         // Same clustering reasoning as Segment above — see MotionSpan's doc comment.
         builder.Entity<MotionSpan>(e =>
@@ -497,6 +557,81 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.HasIndex(x => new { x.CameraId, x.DetectedObjectLabel, x.StartUtc })
                 .IsUnique()
                 .HasFilter("[DetectedObjectLabel] IS NOT NULL");
+        });
+
+        // ── DetectedObject (per-object records inside an AI-detection span) ─────
+        // Cascades from its span, so span retention and camera deletion cover it. Only that one FK:
+        // Camera and SpeedTrap both already cascade into MotionSpans, and SQL Server rejects a second
+        // cascade path into the same table — see DetectedObject's own doc comment.
+        builder.Entity<DetectedObject>(e =>
+        {
+            e.Property(x => x.Label).HasMaxLength(100).IsRequired();
+            e.Property(x => x.PrimaryColor).HasMaxLength(20);
+            e.Property(x => x.UpperColor).HasMaxLength(20);
+            e.Property(x => x.LowerColor).HasMaxLength(20);
+            e.HasOne(x => x.MotionSpan).WithMany(s => s.Objects)
+                .HasForeignKey(x => x.MotionSpanId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => new { x.MotionSpanId, x.TrackId }).IsUnique();
+            // Speed log, playback markers and the speed heatmap only ever read measured objects.
+            e.HasIndex(x => new { x.CameraId, x.SpeedMeasuredAtUtc }).HasFilter("[SpeedKph] IS NOT NULL");
+            e.HasIndex(x => x.SpeedMeasuredAtUtc).HasFilter("[SpeedKph] IS NOT NULL");
+        });
+
+        // ── Tamper evidence ─────────────────────────────────────────────────────
+        builder.Entity<SigningKey>(e =>
+        {
+            e.Property(x => x.Algorithm).HasMaxLength(50).IsRequired();
+            e.Property(x => x.PublicKeyPem).HasMaxLength(1000).IsRequired();
+            e.Property(x => x.PrivateKey).HasConversion(new EncryptedStringConverter()).HasMaxLength(2000).IsRequired();
+        });
+        builder.Entity<SegmentChainHead>(e =>
+        {
+            e.HasKey(x => x.CameraId);
+            e.Property(x => x.ChainHash).HasMaxLength(64).IsRequired();
+        });
+        builder.Entity<ChainCheckpoint>(e =>
+        {
+            e.Property(x => x.ChainHash).HasMaxLength(64).IsRequired();
+            e.Property(x => x.Signature).HasMaxLength(200).IsRequired();
+            e.HasIndex(x => new { x.CameraId, x.SegmentEndUtc });
+        });
+        builder.Entity<ExportManifest>(e =>
+        {
+            e.HasKey(x => x.ExportJobItemId);
+            e.HasOne<ExportJobItem>().WithOne().HasForeignKey<ExportManifest>(x => x.ExportJobItemId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── Footage encryption ──────────────────────────────────────────────────
+        builder.Entity<FootageMasterKey>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Key).HasConversion(new EncryptedStringConverter()).HasMaxLength(1000).IsRequired();
+        });
+        builder.Entity<FootageKey>(e =>
+        {
+            e.Property(x => x.Wrapped).HasMaxLength(200).IsRequired();
+            // One data key per camera per day; GetOrCreateDataKeyAsync relies on this to settle a race.
+            e.HasIndex(x => new { x.CameraId, x.Day }).IsUnique();
+        });
+
+        // ── SpeedHourlyStat (speed heatmap history) ─────────────────────────────
+        // Same shape of reads as ActivityHourlyCount: "these cameras, this hour range".
+        builder.Entity<SpeedHourlyStat>(e =>
+        {
+            e.HasKey(x => x.Id).IsClustered(false);
+            e.Property(x => x.Label).HasMaxLength(100);
+            e.HasIndex(x => new { x.CameraId, x.HourUtc }).IsClustered();
+            e.HasIndex(x => x.HourUtc);
+        });
+
+        // ── SpeedTrap ───────────────────────────────────────────────────────────
+        builder.Entity<SpeedTrap>(e =>
+        {
+            e.Property(x => x.Name).HasMaxLength(100).IsRequired();
+            e.Property(x => x.GatesJson).HasMaxLength(1000).IsRequired();
+            e.HasOne(x => x.Camera).WithMany()
+                .HasForeignKey(x => x.CameraId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => x.CameraId);
         });
 
         // ── CameraEvent (M8 pass 6) ─────────────────────────────────────────────
@@ -551,6 +686,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.HasOne(x => x.ExportJob).WithMany(j => j.Items)
                 .HasForeignKey(x => x.ExportJobId).OnDelete(DeleteBehavior.Cascade);
             e.Property(x => x.OutputFilePath).HasMaxLength(450);
+            e.Property(x => x.OutputSha256).HasMaxLength(64);
             e.Property(x => x.ErrorMessage).HasMaxLength(2000);
             e.HasIndex(x => new { x.ExportJobId, x.Status });
             // What ExportJobDispatcher's poll scans every cycle.

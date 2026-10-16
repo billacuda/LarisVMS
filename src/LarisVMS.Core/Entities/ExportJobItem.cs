@@ -34,8 +34,23 @@ public class ExportJobItem
 
     /// <summary>Node-local path to the finished mp4, under that node's {storageRoot}/exports/ — what
     /// the download proxy resolves a signed download token against. Null until Done.</summary>
+    /// <summary>Areas to black out in this camera's exported video, drawn when the export was requested:
+    /// a JSON array of polygons in the zone format, <c>[{"points":[[x,y],…]},…]</c>, 0..1 coordinates.
+    /// Null for an unredacted export (a plain remux). Separate from the camera's Privacy zones, which
+    /// are already burnt into the recording itself.</summary>
+    public string? RedactionJson { get; set; }
+
     public string? OutputFilePath { get; set; }
     public long? OutputSizeBytes { get; set; }
+
+    /// <summary>SHA-256 of the exported file, from the node.</summary>
+    public string? OutputSha256 { get; set; }
+
+    /// <summary>When this item's signed export manifest (ExportManifest, built by
+    /// ExportManifestBuilder) was created — null when there is none (exports from before tamper
+    /// evidence, or it couldn't be built). The manifest itself lives in its own table so listing
+    /// exports never loads it.</summary>
+    public DateTime? ManifestSignedUtc { get; set; }
     public string? ErrorMessage { get; set; }
 
     public DateTime? StartedUtc { get; set; }

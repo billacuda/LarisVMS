@@ -275,6 +275,20 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     // fraction of the bytes — the eager crop always goes out as WebP (SkiaSharp needs no probe).
     private const int EagerCropWebpQuality = 80;
 
+    // Object intelligence: each contributing track's own best frame, colors and speed, reported
+    // with its label's span; this camera's speed traps; and a once-a-second check for a monochrome
+    // (IR night mode) frame, during which colors aren't classified — gray pixels there say nothing
+    // about an object's real color.
+    private readonly TrackObjectBook _objects = new();
+    private readonly SpeedTrapMeter _speedMeter;
+    // Tracks a speed trap has timed. Covering the measured distance between the gates is proof of
+    // movement in itself, so these count as Moving even when the centroid rule hasn't fired yet (a
+    // vehicle driving straight toward the camera grows on screen while its centre barely moves).
+    private readonly HashSet<int> _speedMeasuredTrackIds = [];
+    private bool _frameMonochrome;
+    private DateTime _monochromeCheckedUtc = DateTime.MinValue;
+    private static readonly TimeSpan MonochromeCheckInterval = TimeSpan.FromSeconds(1);
+
     public CameraDetectionPipeline(VisionStartCameraRequest request, VisionServiceOptions serviceOptions,
         string resolvedFfmpegPath, string resolvedModelPath, DetectionModelFamily modelFamily, DFineWeights dfineWeights,
         YoloXSize yoloXSize, AspectMode aspectMode, string dfineTensorRtMode, HttpClient http, ILoggerFactory loggerFactory,
@@ -291,6 +305,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         DiscoveredModel? customModel = null)
     {
         _request = request;
+        _speedMeter = new SpeedTrapMeter(request.SpeedTraps ?? []);
         _http = http;
 
         // Detection.RejectMotionJitter (per-camera) off => the classifier keeps its original single
@@ -716,6 +731,14 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             _movement.Prune(liveTrackIds);
             _labelArbiter.Prune(liveTrackIds);
             _snapshottedTrackIds.RemoveWhere(id => !liveTrackIds.Contains(id));
+            _objects.Prune(liveTrackIds, now);
+            _speedMeter.Prune(liveTrackIds);
+            _speedMeasuredTrackIds.RemoveWhere(id => !liveTrackIds.Contains(id));
+            if (_request.ClassifyColors && now - _monochromeCheckedUtc >= MonochromeCheckInterval)
+            {
+                _monochromeCheckedUtc = now;
+                _frameMonochrome = IsFrameMonochrome(frame);
+            }
             foreach (var id in _lastMovingAtByTrack.Keys)
             {
                 if (!liveTrackIds.Contains(id)) _lastMovingAtByTrack.Remove(id);
@@ -754,9 +777,22 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
                 var observation = _movement.Observe(trackId, detection.BoundingBox, detection.Confidence,
                     _sourceWidth, _sourceHeight, now);
 
+                // Speed traps time the box's bottom centre — where the object meets the ground the
+                // gates are drawn on. Done before deciding motionPresent: a completed measurement
+                // makes the track count as moving (see _speedMeasuredTrackIds).
+                var box = detection.BoundingBox;
+                SpeedMeasurement? speed = null;
+                if (_speedMeter.HasTraps
+                    && _speedMeter.Observe(trackId, (box.Left + box.Width / 2.0) / _sourceWidth, box.Bottom / (double)_sourceHeight, now) is { } measured)
+                {
+                    speed = measured;
+                    _speedMeasuredTrackIds.Add(trackId);
+                }
+                var moving = observation.State == MovementState.Moving || _speedMeasuredTrackIds.Contains(trackId);
+
                 // Idle tracks never open/extend a span unless ReportIdleDetections is on — decision
                 // 7's "not interested in static objects" default. A Moving track always does.
-                var motionPresent = observation.State == MovementState.Moving || _request.ReportIdleDetections;
+                var motionPresent = moving || _request.ReportIdleDetections;
 
                 // Only a detection that's actually contributing to this span gets to compete for
                 // "best frame" — otherwise a parked/idle object sharing this label (a driveway's
@@ -767,7 +803,15 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
                 if (motionPresent)
                 {
                     UpdateBestFrameForLabel(label, detection, _sourceWidth, _sourceHeight, now);
-                    if (observation.State == MovementState.Moving) _lastMovingAtByLabel[label] = now;
+                    if (_objects.Observe(trackId, label, now,
+                            box.Left / (double)_sourceWidth, box.Top / (double)_sourceHeight,
+                            box.Width / (double)_sourceWidth, box.Height / (double)_sourceHeight,
+                            detection.Confidence)
+                        && _request.ClassifyColors)
+                    {
+                        _objects.SetColors(trackId, now, ClassifyColors(frame, box, category));
+                    }
+                    if (moving) _lastMovingAtByLabel[label] = now;
 
                     movingThisFrame.Add((label, detection));
                     // Pass G: a track we've never snapshotted starting to move is what triggers this
@@ -777,16 +821,27 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
                     if (_snapshottedTrackIds.Add(trackId)) newMovingTrack = true;
                 }
 
+                // After Observe above, so the entry normally exists (SetSpeed keeps it for later if not).
+                if (speed is not null) _objects.SetSpeed(trackId, speed);
+
                 var hysteresis = GetOrCreateHysteresis(label);
+                var wasActive = hysteresis.IsActive;
                 if (hysteresis.Observe(now, motionPresent, detection.Confidence) is { } closed)
                 {
                     EnqueueReport(closed, label, category);
                 }
+                // Report a span the moment it opens rather than at the first 15 s checkpoint, so a
+                // detection alert (and the Snapshots page) hears about it within seconds.
+                else if (!wasActive && hysteresis.IsActive
+                    && hysteresis.CurrentInProgressSpan(now, CheckpointRecency) is { } opened)
+                {
+                    EnqueueReport(opened, label, category, spanClosed: false);
+                }
 
                 // See _lastMovingAtByTrack: a paused track stays Moving for the viewer until it has
                 // been still for the idle timeout.
-                if (observation.State == MovementState.Moving) _lastMovingAtByTrack[trackId] = now;
-                var liveState = observation.State == MovementState.Moving
+                if (moving) _lastMovingAtByTrack[trackId] = now;
+                var liveState = moving
                     || (_lastMovingAtByTrack.TryGetValue(trackId, out var lastMovingAt) && now - lastMovingAt < liveMovingHold)
                     ? MovementState.Moving
                     : MovementState.Idle;
@@ -797,7 +852,8 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
                     detection.BoundingBox.Top / (double)_sourceHeight,
                     detection.BoundingBox.Width / (double)_sourceWidth,
                     detection.BoundingBox.Height / (double)_sourceHeight,
-                    detection.Confidence));
+                    detection.Confidence,
+                    _objects.SpeedOf(trackId), _objects.ColorOf(trackId)));
             }
 
             // A label with no instance in this frame still needs to observe absence, so its
@@ -1314,6 +1370,63 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         _stagedSnapshotScore = frameScore;
     }
 
+    /// <summary>Colors of one detection, read from the frame buffer the model just ran on. The box is
+    /// in source-pixel space; it's mapped into the buffer the same way the eager snapshot crop maps
+    /// it (slice capture scale, or the letterbox/stretch network geometry). Never throws — a failure
+    /// just means no colors for this frame.</summary>
+    private ObjectColorResult ClassifyColors(byte[] frame, SKRectI sourceBox, string category)
+    {
+        if (_frameMonochrome) return new ObjectColorResult(null, null, null);
+        try
+        {
+            var (pixels, rect) = MapToFrameBuffer(frame, sourceBox);
+            return ObjectColorClassifier.Classify(pixels, rect, category);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Color classification failed for camera {Camera}.", _request.DisplayName);
+            return new ObjectColorResult(null, null, null);
+        }
+    }
+
+    private bool IsFrameMonochrome(byte[] frame)
+    {
+        try
+        {
+            if (_sliceLayout is { } layout)
+            {
+                var pixels = new FramePixels(frame, layout.CaptureWidth, layout.CaptureHeight, _frameIsNv12);
+                return ObjectColorClassifier.IsMonochrome(pixels, new PixelRect(0, 0, layout.CaptureWidth, layout.CaptureHeight));
+            }
+            var c = _profile.ContentRect;
+            return ObjectColorClassifier.IsMonochrome(
+                new FramePixels(frame, _profile.NetworkWidth, _profile.NetworkHeight, _frameIsNv12),
+                new PixelRect(c.Left, c.Top, c.Right, c.Bottom));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Monochrome check failed for camera {Camera}.", _request.DisplayName);
+            return false;
+        }
+    }
+
+    private (FramePixels Pixels, PixelRect Rect) MapToFrameBuffer(byte[] frame, SKRectI b)
+    {
+        if (_sliceLayout is { } layout)
+        {
+            var sx = layout.CaptureWidth / (double)_sourceWidth;
+            var sy = layout.CaptureHeight / (double)_sourceHeight;
+            return (new FramePixels(frame, layout.CaptureWidth, layout.CaptureHeight, _frameIsNv12),
+                new PixelRect((int)Math.Round(b.Left * sx), (int)Math.Round(b.Top * sy),
+                    (int)Math.Round(b.Right * sx), (int)Math.Round(b.Bottom * sy)));
+        }
+        var (x0, y0, x1, y1) = _profile.NormalizedSourceToNetworkPixels(
+            b.Left / (double)_profile.SourceWidth, b.Top / (double)_profile.SourceHeight,
+            b.Right / (double)_profile.SourceWidth, b.Bottom / (double)_profile.SourceHeight);
+        return (new FramePixels(frame, _profile.NetworkWidth, _profile.NetworkHeight, _frameIsNv12),
+            new PixelRect(x0, y0, x1, y1));
+    }
+
     /// <summary>Intersects a rect with <paramref name="bounds"/> — the codebase hand-rolls rect math
     /// rather than depend on a particular SkiaSharp helper surface.</summary>
     private static SKRectI ClampTo(SKRectI r, SKRectI bounds) => new(
@@ -1372,7 +1485,8 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         _pendingReports.Enqueue(new VisionDetectionReportItem(
             _request.CameraId, span.StartUtc, span.EndUtc, span.PeakScore,
             category, label,
-            best?.AtUtc, best?.X, best?.Y, best?.W, best?.H, best?.Confidence, movingCount));
+            best?.AtUtc, best?.X, best?.Y, best?.W, best?.H, best?.Confidence, movingCount,
+            _objects.ForLabel(label, span.StartUtc)));
 
         // A closed span is done contributing best-frame candidates — reset so a later, separate
         // span for this same label runs its own fresh contest instead of being handed a stale
@@ -1382,6 +1496,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             _bestFrames.Reset(label);
             _authoritativeBestByLabel.Remove(label);
             _peakMovingCountByLabel.Remove(label);
+            _objects.ReleaseFinished(label);
             // Once every co-detected label's span has closed, nothing on screen is described by the
             // staged composite score any more — drop it so a later, separate burst of activity runs
             // its own fresh contest instead of being held to a bar (e.g. a two-object frame) it may

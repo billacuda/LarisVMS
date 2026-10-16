@@ -18,6 +18,12 @@ public class CameraStream
     public int? Fps { get; set; }
     public int? BitrateKbps { get; set; }
 
+    /// <summary>The bitrate the camera itself is configured for (ONVIF BitrateLimit), set only by a
+    /// probe. Unlike <see cref="BitrateKbps"/>, which node health reports overwrite with what was
+    /// measured, this is the camera's own setting — what a privacy-mask re-encode targets so it
+    /// matches the original stream. Null when the camera doesn't report one.</summary>
+    public int? ConfiguredBitrateKbps { get; set; }
+
     /// <summary>M11: cumulative ffmpeg reconnect count for this stream since the node process
     /// started — RecordingSession.TotalReconnectCount's own doc comment explains why this is
     /// cumulative rather than the backoff-timing counter that resets on success. Reset to 0 whenever

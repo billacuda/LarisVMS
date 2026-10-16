@@ -49,12 +49,18 @@ public record RecordingSessionOptions(
     /// mask requires a real decode+encode, so a camera with nothing to mask must not pay that cost.</summary>
     IReadOnlyList<string>? PrivacyMaskFilters = null,
     /// <summary>The encoder to transcode with when PrivacyMaskFilters is non-empty — from
-    /// EncoderSelection.ChooseH264Encoder against this node's own detected capabilities. Ignored
+    /// EncoderSelection.ChooseEncoder (the camera's own codec) against this node's own detected capabilities. Ignored
     /// entirely when PrivacyMaskFilters is empty. Null with a non-empty PrivacyMaskFilters is treated
     /// as "fall back to libx264" (see StartFfmpeg) rather than silently keeping `-c copy` — a camera
     /// with a configured privacy zone must never record unmasked footage because of a missing
     /// encoder value.</summary>
-    string? VideoEncoder = null);
+    string? VideoEncoder = null,
+    /// <summary>Re-encode the camera's audio to AAC (video still copied) — set when the camera sends
+    /// G.711 or another codec browsers can't play from fMP4. See AudioTranscode.</summary>
+    bool TranscodeAudioToAac = false,
+    /// <summary>Target bitrate for the masked re-encode (EncoderSelection.TargetBitrateKbps). Null
+    /// leaves it to the encoder's default.</summary>
+    int? VideoBitrateKbps = null);
 
 /// <summary>
 /// Supervises one ffmpeg process recording one camera stream to disk as a sequence of fMP4
@@ -819,17 +825,20 @@ public sealed class RecordingSession(RecordingSessionOptions options, ILogger lo
     /// <summary>M18: `-c copy` (this pipeline's default, zero-CPU-cost path) for a camera with no
     /// enabled Privacy zone, or a real filter+encode for one that has at least one — see
     /// PrivacyMaskFilterBuilder for how a zone becomes a filter expression, and
-    /// EncoderSelection.ChooseH264Encoder for how NodeWorker picks options.VideoEncoder. Audio is
+    /// EncoderSelection.ChooseEncoder for how NodeWorker picks options.VideoEncoder. Audio is
     /// always `-c:a copy` on the transcode path — masking is a video-only concern, nothing about a
     /// camera's audio track needs to change because one of its Privacy zones changed.</summary>
     internal static IReadOnlyList<string> BuildCodecArgs(RecordingSessionOptions options)
     {
-        if (options.PrivacyMaskFilters is not { Count: > 0 } filters) return ["-c", "copy"];
+        // Non-AAC camera audio is re-encoded so browsers can play it — see AudioTranscode.
+        IReadOnlyList<string> audioArgs = options.TranscodeAudioToAac ? AudioTranscode.AacArgs : ["-c:a", "copy"];
+        if (options.PrivacyMaskFilters is not { Count: > 0 } filters)
+            return options.TranscodeAudioToAac ? ["-c:v", "copy", .. audioArgs] : ["-c", "copy"];
 
         var encoder = options.VideoEncoder ?? "libx264";
         var encodeArgs = EncodePipeline.BuildArgs(new EncodePipelineOptions(
-            encoder, VideoFilters: filters, Preset: EncodePipeline.RealtimePreset(encoder)));
-        return [.. encodeArgs, "-c:a", "copy"];
+            encoder, VideoFilters: filters, Preset: EncodePipeline.RealtimePreset(encoder), BitrateKbps: options.VideoBitrateKbps));
+        return [.. encodeArgs, .. EncodePipeline.TeeSafeArgs, .. audioArgs];
     }
 
     internal static string BuildTeeOutputs(int segmentSeconds, string outputPattern) => string.Join('|',

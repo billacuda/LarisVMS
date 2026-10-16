@@ -4,11 +4,13 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core;
+using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
 using LarisVMS.Infrastructure.Alerts;
 using LarisVMS.Infrastructure.Data;
+using LarisVMS.Web.Services;
 
 namespace LarisVMS.Web.Pages.Admin.Alerts;
 
@@ -22,7 +24,8 @@ namespace LarisVMS.Web.Pages.Admin.Alerts;
 /// login credentials rotated often enough that "blank means unchanged" pulls its weight.
 /// </summary>
 [Authorize("Alerts.Edit")]
-public class EditModel(ApplicationDbContext db, ICameraService cameraService, INodeService nodeService, IAuditService auditService) : PageModel
+public class EditModel(ApplicationDbContext db, ICameraService cameraService, INodeService nodeService, IAuditService auditService,
+    ITimelineService timelineService, ISettingsResolver settings, DetectionAlertService detectionAlerts) : PageModel
 {
     [BindProperty] public Guid? Id { get; set; }
     [BindProperty] public string Name { get; set; } = string.Empty;
@@ -32,6 +35,17 @@ public class EditModel(ApplicationDbContext db, ICameraService cameraService, IN
     [BindProperty] public Guid? NodeId { get; set; }
     [BindProperty] public int ThresholdPercent { get; set; } = 10;
     [BindProperty] public int CooldownMinutes { get; set; } = 60;
+
+    // Detection filters (ObjectDetected / SpeedOver).
+    [BindProperty] public string? CategoryFilter { get; set; }
+    [BindProperty] public string? LabelFilter { get; set; }
+    [BindProperty] public string? ColorFilter { get; set; }
+    [BindProperty] public Guid? ZoneId { get; set; }
+    /// <summary>In the display unit (Detection.SpeedUnits); stored as km/h.</summary>
+    [BindProperty] public double SpeedThreshold { get; set; } = 50;
+    [BindProperty] public List<DayOfWeek> ScheduleDays { get; set; } = [];
+    [BindProperty] public TimeOnly? ScheduleStart { get; set; }
+    [BindProperty] public TimeOnly? ScheduleEnd { get; set; }
 
     [BindProperty] public bool EmailEnabled { get; set; }
     [BindProperty] public string? EmailTo { get; set; }
@@ -55,7 +69,13 @@ public class EditModel(ApplicationDbContext db, ICameraService cameraService, IN
 
     public List<Camera> Cameras { get; set; } = [];
     public List<Node> Nodes { get; set; } = [];
+    public List<DetectedObjectCategoryDto> Categories { get; set; } = [];
+    public List<DetectedObjectLabelDto> Labels { get; set; } = [];
+    public List<(Guid Id, Guid CameraId, string Name)> Zones { get; set; } = [];
+    public string SpeedUnit { get; set; } = SpeedUnits.Default;
     public string? ErrorMessage { get; set; }
+
+    public static bool IsDetection(AlertConditionType t) => t is AlertConditionType.ObjectDetected or AlertConditionType.SpeedOver;
 
     public async Task<IActionResult> OnGetAsync(Guid? id, CancellationToken ct)
     {
@@ -73,6 +93,16 @@ public class EditModel(ApplicationDbContext db, ICameraService cameraService, IN
         NodeId = rule.NodeId;
         ThresholdPercent = rule.ThresholdPercent ?? 10;
         CooldownMinutes = rule.CooldownMinutes;
+        CategoryFilter = rule.CategoryFilter;
+        LabelFilter = rule.LabelFilter;
+        ColorFilter = rule.ColorFilter;
+        ZoneId = rule.ZoneId;
+        if (rule.SpeedThresholdKph is { } kph) SpeedThreshold = Math.Round(SpeedUnits.FromKph(kph, SpeedUnit), 1);
+        ScheduleDays = rule.ScheduleDays is { } days and not DayOfWeekFlags.None
+            ? Enum.GetValues<DayOfWeek>().Where(d => days.HasFlag(DayFlag(d))).ToList()
+            : [];
+        ScheduleStart = rule.ScheduleStart;
+        ScheduleEnd = rule.ScheduleEnd;
 
         foreach (var delivery in rule.Deliveries) LoadDelivery(delivery);
         return Page();
@@ -101,8 +131,15 @@ public class EditModel(ApplicationDbContext db, ICameraService cameraService, IN
             AlertConditionType.NodeFailoverActivated when NodeId is null => "Choose a node.",
             AlertConditionType.NodeStorageLow when NodeId is null => "Choose a node.",
             AlertConditionType.NodeStorageLow when ThresholdPercent is < 1 or > 99 => "Threshold must be between 1 and 99.",
+            AlertConditionType.SpeedOver when SpeedThreshold is <= 0 or > 400 => "Enter a speed above 0.",
+            _ when IsDetection(ConditionType) && ZoneId is not null && CameraId is null => "A zone filter needs a camera.",
+            _ when IsDetection(ConditionType) && (ScheduleStart is null) != (ScheduleEnd is null) => "Enter both a start and an end time, or neither.",
+            _ when IsDetection(ConditionType) && !string.IsNullOrWhiteSpace(ColorFilter) && !ObjectColors.IsKnown(ColorFilter) => "Choose a color from the list.",
             _ => (string?)null
         };
+        if (conditionError is null && IsDetection(ConditionType) && ZoneId is { } zoneId
+            && !await db.Zones.AnyAsync(z => z.Id == zoneId && z.CameraId == CameraId, ct))
+            conditionError = "That zone isn't on the chosen camera.";
         if (conditionError is not null)
         {
             ErrorMessage = conditionError;
@@ -131,11 +168,23 @@ public class EditModel(ApplicationDbContext db, ICameraService cameraService, IN
         rule.Name = Name;
         rule.IsEnabled = IsEnabled;
         rule.ConditionType = ConditionType;
-        rule.CameraId = ConditionType == AlertConditionType.CameraNotReporting ? CameraId : null;
+        rule.CameraId = ConditionType == AlertConditionType.CameraNotReporting || IsDetection(ConditionType) ? CameraId : null;
         rule.NodeId = ConditionType is AlertConditionType.NodeOffline or AlertConditionType.NodeStorageLow
             or AlertConditionType.NodeFailoverActivated ? NodeId : null;
         rule.ThresholdPercent = ConditionType == AlertConditionType.NodeStorageLow ? ThresholdPercent : null;
         rule.CooldownMinutes = CooldownMinutes;
+        var detection = IsDetection(ConditionType);
+        rule.CategoryFilter = detection ? NullIfBlank(CategoryFilter) : null;
+        rule.LabelFilter = detection ? NullIfBlank(LabelFilter)?.ToLowerInvariant() : null;
+        rule.ColorFilter = detection ? ObjectColors.Find(ColorFilter)?.Name : null;
+        rule.ZoneId = detection ? ZoneId : null;
+        rule.SpeedThresholdKph = ConditionType == AlertConditionType.SpeedOver
+            ? Math.Round(SpeedUnits.ToKph(SpeedThreshold, await settings.GetAsync(SpeedUnits.SettingKey, SpeedUnits.Default, ct: ct)), 2)
+            : null;
+        var dayFlags = ScheduleDays.Distinct().Aggregate(DayOfWeekFlags.None, (acc, d) => acc | DayFlag(d));
+        rule.ScheduleDays = detection && dayFlags is not (DayOfWeekFlags.None or DayOfWeekFlags.All) ? dayFlags : null;
+        rule.ScheduleStart = detection && ScheduleStart != ScheduleEnd ? ScheduleStart : null;
+        rule.ScheduleEnd = detection && ScheduleStart != ScheduleEnd ? ScheduleEnd : null;
         rule.LastModifiedAt = DateTime.UtcNow;
         rule.LastModifiedBy = User.Identity?.Name;
 
@@ -145,6 +194,7 @@ public class EditModel(ApplicationDbContext db, ICameraService cameraService, IN
         await auditService.LogAsync(Id is null ? "AlertRule.Create" : "AlertRule.Update",
             User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, User.Identity?.Name,
             HttpContext.Connection.RemoteIpAddress?.ToString(), rule.Name, ct);
+        detectionAlerts.InvalidateRules();
 
         return RedirectToPage("Index");
     }
@@ -216,9 +266,17 @@ public class EditModel(ApplicationDbContext db, ICameraService cameraService, IN
     private static T? Deserialize<T>(string? json) where T : class =>
         string.IsNullOrWhiteSpace(json) ? null : JsonSerializer.Deserialize<T>(json);
 
+    private static DayOfWeekFlags DayFlag(DayOfWeek d) => (DayOfWeekFlags)(1 << (int)d);
+
     private async Task LoadPickersAsync(CancellationToken ct)
     {
         Cameras = (await cameraService.ListAsync(ct)).OrderBy(c => c.Name).ToList();
         Nodes = (await nodeService.ListAsync(ct)).OrderBy(n => n.Name).ToList();
+        Categories = await timelineService.GetDetectedObjectCategoriesAsync(ct);
+        Labels = await timelineService.GetDetectedObjectLabelsAsync(ct);
+        Zones = (await db.Zones.AsNoTracking().Where(z => z.Kind != ZoneKind.Privacy)
+                .OrderBy(z => z.Name).Select(z => new { z.Id, z.CameraId, z.Name }).ToListAsync(ct))
+            .Select(z => (z.Id, z.CameraId, z.Name)).ToList();
+        SpeedUnit = SpeedUnits.Normalize(await settings.GetAsync(SpeedUnits.SettingKey, SpeedUnits.Default, ct: ct));
     }
 }

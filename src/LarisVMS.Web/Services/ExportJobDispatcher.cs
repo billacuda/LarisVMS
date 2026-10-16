@@ -128,7 +128,19 @@ public class ExportJobDispatcher(IServiceScopeFactory scopeFactory, IHttpClientF
 
         var segmentPaths = segments.Select(s => s.FilePath).ToList();
         var outputFileName = BuildOutputFileName(candidate.CameraName, candidate.CameraId, node.Name, candidate.FromUtc, candidate.ToUtc);
-        var request = new ExportRequest(candidate.ExportItemId, candidate.CameraId, segmentPaths, outputFileName);
+        // Two-way audio said through the camera during this footage goes into the export too. Only
+        // presses recorded on this same node — the file has to be local to the ffmpeg mixing it.
+        var segmentsStart = segments[0].StartUtc;
+        var segmentsEnd = segments.Max(s => s.EndUtc);
+        var talkClips = await db.TalkRecordings.AsNoTracking()
+            .Where(t => t.CameraId == candidate.CameraId && t.NodeId == nodeId && t.StartUtc < segmentsEnd && t.EndUtc > segmentsStart)
+            .OrderBy(t => t.StartUtc)
+            .Select(t => new ExportTalkClip(t.FilePath, t.StartUtc))
+            .ToListAsync(ct);
+        var request = new ExportRequest(candidate.ExportItemId, candidate.CameraId, segmentPaths, outputFileName,
+            talkClips.Count > 0 ? talkClips : null, segmentsStart, segments.Any(s => s.HasAudio), candidate.RedactionJson,
+            // Tamper evidence: the node re-hashes each source file against these before exporting.
+            segments.Select(s => s.ContentSha256).ToList());
 
         // Marked Running *before* the POST, not after — the node is expected to return 202 quickly
         // and may finish (and report completion) before this method would otherwise get around to

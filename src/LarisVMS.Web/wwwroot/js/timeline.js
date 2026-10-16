@@ -55,6 +55,9 @@ window.larisvmsTimeline = (function () {
         var centerMs = clampCenter(options.initialCenterMs || Date.now());
         var buckets = [];
         var bookmarks = []; // M18: [{ timestampUtc }] — options.getBookmarks is optional, same as getThumbnailUrl
+        // Speed-trap measurements ([{ atUtc, firstSeenUtc, lastSeenUtc, label, color, speedText, overLimit }]),
+        // per-camera timeline only, like bookmarks. Times parsed once on load into atMs/firstMs/lastMs.
+        var speedMarkers = [];
         var loading = false;
         var reloadTimer = null;
         var hour24 = !!options.hour24;
@@ -232,6 +235,18 @@ window.larisvmsTimeline = (function () {
                     bookmarks = [];
                 }
             }
+            if (options.getSpeedMarkers) {
+                try {
+                    speedMarkers = ((await options.getSpeedMarkers(fromIso, toIso)) || []).map(function (m) {
+                        m.atMs = window.larisvmsTime.parse(m.atUtc).getTime();
+                        m.firstMs = window.larisvmsTime.parse(m.firstSeenUtc).getTime();
+                        m.lastMs = window.larisvmsTime.parse(m.lastSeenUtc).getTime();
+                        return m;
+                    });
+                } catch (e) {
+                    speedMarkers = [];
+                }
+            }
             loading = false;
             draw();
             // One coalesced retry, not a queue — every reload fetches the timeline's *current*
@@ -355,6 +370,25 @@ window.larisvmsTimeline = (function () {
                     ctx.fill();
                     // 1px black outline so the amber flag stays legible over a colored bucket or
                     // under the white playhead.
+                    ctx.stroke();
+                });
+            }
+
+            // Speed-trap measurements: a small upward tick at the bar's bottom edge (bookmarks hang
+            // from the top), red when the trap's speed limit was beaten. Hover lists them.
+            if (speedMarkers.length) {
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 1;
+                speedMarkers.forEach(function (m) {
+                    if (m.atMs < r.from || m.atMs > r.to) return;
+                    var x = ((m.atMs - r.from) / span) * w;
+                    ctx.fillStyle = m.overLimit ? '#ef4444' : '#e5e7eb';
+                    ctx.beginPath();
+                    ctx.moveTo(x - 4, barBottom);
+                    ctx.lineTo(x + 4, barBottom);
+                    ctx.lineTo(x, barBottom - 7);
+                    ctx.closePath();
+                    ctx.fill();
                     ctx.stroke();
                 });
             }
@@ -632,7 +666,7 @@ window.larisvmsTimeline = (function () {
         var thumbCache = new Map(); // url -> objectUrl string, or Promise<string|null> while in flight
 
         var previewEl = document.createElement('div');
-        previewEl.style.cssText = 'position:fixed; display:none; max-width:150px; max-height:150px; ' +
+        previewEl.style.cssText = 'position:fixed; display:none; max-width:150px; ' +
             'background:#111; border:1px solid rgba(255,255,255,0.3); border-radius:4px; ' +
             'box-shadow:0 2px 8px rgba(0,0,0,0.5); z-index:2000; pointer-events:none; overflow:hidden;';
         var previewImg = document.createElement('img');
@@ -656,19 +690,50 @@ window.larisvmsTimeline = (function () {
         });
         var previewStatus = document.createElement('div');
         previewStatus.style.cssText = 'color:#aaa; font-size:11px; text-align:center; padding:8px 10px;';
+        // Speed-trap measurements near the cursor, under the thumbnail.
+        var previewSpeed = document.createElement('div');
+        previewSpeed.style.cssText = 'display:none; color:#fff; font-size:11px; padding:3px 6px; line-height:1.35; white-space:nowrap;';
         previewEl.appendChild(previewImg);
         previewEl.appendChild(previewStatus);
+        previewEl.appendChild(previewSpeed);
         document.body.appendChild(previewEl);
 
         // Positioned above the cursor using the container's own max dimensions (150x150 + an 8px
         // gap) for the clamp math rather than measuring the actual rendered size — simpler than
         // re-positioning once an image/error message settles into its final size, and the box is
         // never larger than this assumption anyway.
+        // Anchored by its bottom edge 8px above the timeline, so it grows upward whatever its height
+        // (thumbnail, status line, speed lines).
         function positionPreview(clientX) {
             var rect = canvas.getBoundingClientRect();
             var left = Math.max(4, Math.min(clientX - 75, window.innerWidth - 154));
             previewEl.style.left = left + 'px';
-            previewEl.style.top = (rect.top - 158) + 'px';
+            previewEl.style.top = '';
+            previewEl.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
+        }
+
+        // Measurements whose tick is within a few pixels of the cursor, or whose object was in view at
+        // the hovered instant. Up to three, fastest first.
+        function speedMarkersNear(clientX) {
+            if (!speedMarkers.length) return [];
+            var t = xToTime(clientX);
+            var rr = visibleRange();
+            var tolerance = 6 * (rr.to - rr.from) / Math.max(1, canvas.clientWidth);
+            return speedMarkers
+                .filter(function (m) { return Math.abs(m.atMs - t) <= tolerance || (t >= m.firstMs && t <= m.lastMs); })
+                .sort(function (a, b) { return b.speedKph - a.speedKph; })
+                .slice(0, 3);
+        }
+
+        function showSpeeds(list) {
+            previewSpeed.textContent = '';
+            list.forEach(function (m) {
+                var line = document.createElement('div');
+                line.textContent = '⏱ ' + m.label + (m.color ? ' (' + m.color + ')' : '') + ' ' + m.speedText;
+                if (m.overLimit) line.style.color = '#fca5a5';
+                previewSpeed.appendChild(line);
+            });
+            previewSpeed.style.display = list.length ? 'block' : 'none';
         }
         function showLoading() { previewImg.style.display = 'none'; previewStatus.style.display = 'block'; previewStatus.textContent = 'Loading…'; }
         function showError(msg) { previewImg.style.display = 'none'; previewStatus.style.display = 'block'; previewStatus.textContent = msg; }
@@ -747,6 +812,7 @@ window.larisvmsTimeline = (function () {
             if (!url) { previewEl.style.display = 'none'; return; }
 
             previewEl.style.display = 'block';
+            showSpeeds(speedMarkersNear(e.clientX));
             positionPreview(e.clientX);
             hoverToken++;
             fetchThumbnail(url, hoverToken);

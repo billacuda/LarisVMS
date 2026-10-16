@@ -69,7 +69,7 @@ built-in models download on first use. Models are never committed.
    .\tools\demo-site\start-demo.ps1 -NodeOnly -RegistrationKey <key>
    ```
 
-4. **Settings → Nodes**: open the node (it registers as this PC's hostname) and rename it, for example to `Recorder-01`.
+4. **Nodes**: open the node (it registers as this PC's hostname) and rename it, for example to `Recorder-01`.
 
 After that, `.\tools\demo-site\start-demo.ps1` starts everything and `.\tools\demo-site\stop-demo.ps1`
 stops it. Logs are in `G:\LarisDemo\logs\`.

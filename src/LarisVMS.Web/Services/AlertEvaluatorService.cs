@@ -60,21 +60,30 @@ public class AlertEvaluatorService(IServiceScopeFactory scopeFactory, ILogger<Al
             rule.LastFiredAt = now;
             await db.SaveChangesAsync(ct);
 
-            logger.LogInformation("Alert rule {RuleId} ({Name}) fired: {Message}", rule.Id, rule.Name, message);
-            await auditService.LogAsync("Alert.Fired", null, "System", null, $"{rule.Name}: {message}", ct);
+            await DispatchAsync(rule, message, senderFactory, auditService, logger, ct);
+        }
+    }
 
-            foreach (var delivery in rule.Deliveries.Where(d => d.IsEnabled))
+    /// <summary>Logs, audits and sends one firing through every enabled delivery of the rule.
+    /// Shared with DetectionAlertService. A delivery that throws is logged and skipped so the
+    /// others still go out.</summary>
+    internal static async Task DispatchAsync(Core.Entities.AlertRule rule, string message,
+        AlertChannelSenderFactory senderFactory, IAuditService auditService, ILogger logger, CancellationToken ct)
+    {
+        logger.LogInformation("Alert rule {RuleId} ({Name}) fired: {Message}", rule.Id, rule.Name, message);
+        await auditService.LogAsync("Alert.Fired", null, "System", null, $"{rule.Name}: {message}", ct);
+
+        foreach (var delivery in rule.Deliveries.Where(d => d.IsEnabled))
+        {
+            try
             {
-                try
-                {
-                    var sender = senderFactory.Get(delivery.Channel);
-                    await sender.SendAsync(delivery.ConfigJson, rule.Name, message, ct);
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    logger.LogWarning(ex, "Alert delivery failed for rule {RuleId} ({Name}), channel {Channel}.",
-                        rule.Id, rule.Name, delivery.Channel);
-                }
+                var sender = senderFactory.Get(delivery.Channel);
+                await sender.SendAsync(delivery.ConfigJson, rule.Name, message, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogWarning(ex, "Alert delivery failed for rule {RuleId} ({Name}), channel {Channel}.",
+                    rule.Id, rule.Name, delivery.Channel);
             }
         }
     }

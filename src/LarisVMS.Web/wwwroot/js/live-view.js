@@ -68,6 +68,25 @@
         return null;
     }
 
+    // The video codec an fMP4 init segment actually carries, read from its sample entry ('avc1'/
+    // 'avc3' = H.264, 'hvc1'/'hev1' = H.265), or null when neither is found. The codec hint passed to
+    // start() describes the camera, but the node can re-encode (a privacy mask burns into an H.264
+    // re-encode of an H.265 camera), so what arrives is what counts.
+    function sniffVideoCodec(bytes) {
+        for (var i = 0; i + 4 <= bytes.length; i++) {
+            var a = bytes[i], b = bytes[i + 1], c = bytes[i + 2], d = bytes[i + 3];
+            if (a === 0x61 && b === 0x76 && c === 0x63 && (d === 0x31 || d === 0x33)) return 'h264';          // avc1 / avc3
+            if (a === 0x68 && ((b === 0x76 && c === 0x63 && d === 0x31) || (b === 0x65 && c === 0x76 && d === 0x31))) return 'hevc'; // hvc1 / hev1
+        }
+        return null;
+    }
+
+    function codecFamily(mimeType) {
+        if (/hvc1|hev1/.test(mimeType)) return 'hevc';
+        if (/avc1|avc3/.test(mimeType)) return 'h264';
+        return null;
+    }
+
     // Reconnects are routine self-healing (wifi roams, a slow-client fragment gap — see
     // startSession's own header comment below) but used to blank the tile to a dark box with
     // "Reconnecting…" text for however long the retry takes, which reads as broken even though
@@ -810,6 +829,24 @@
                         console.log('[live-view] fragment', fragmentCount, ',', evt.data.byteLength, 'bytes, video.readyState=', videoEl.readyState, 'video.paused=', videoEl.paused);
                     }
                     statusEl.textContent = '';
+                    // Switch the SourceBuffer to the codec the stream really carries before the
+                    // init segment goes in (see sniffVideoCodec). Without this a re-encoded stream
+                    // fails to decode and the tile reconnects forever.
+                    if (fragmentCount === 1 && sourceBuffer) {
+                        var actual = sniffVideoCodec(new Uint8Array(evt.data));
+                        if (actual && actual !== codecFamily(mimeType)) {
+                            var corrected = pickMimeType(actual, hasAudio);
+                            if (corrected && typeof sourceBuffer.changeType === 'function') {
+                                try {
+                                    sourceBuffer.changeType(corrected);
+                                    console.log('[live-view] stream is', actual, '- switched from', mimeType, 'to', corrected);
+                                    mimeType = corrected;
+                                } catch (e) {
+                                    console.warn('[live-view] could not switch codec to', corrected, e);
+                                }
+                            }
+                        }
+                    }
                     // Anchors the box overlay's presentation clock — see publishLiveTiming.
                     // Recorded here so it marks when the bytes actually arrived, not when the
                     // SourceBuffer got around to accepting them; published once that append
@@ -1172,6 +1209,9 @@
                 if (showConfidence && typeof box.confidence === 'number' && isFinite(box.confidence)) {
                     label += ' ' + Math.round(box.confidence * 100) + '%';
                 }
+                // Object color (once classified) and speed (once it has crossed a speed trap).
+                if (box.color) label += ' · ' + box.color;
+                if (box.speedText) label += ' · ' + box.speedText;
                 labels.push({
                     text: label, color: color, w: ctx.measureText(label).width + 8, h: BOX_LABEL_HEIGHT,
                     box: { x: x, y: y, w: boxW, h: boxH }
@@ -1264,6 +1304,7 @@
                 out.push({
                     trackId: b.trackId, category: b.category, label: b.label,
                     movementState: b.movementState, confidence: b.confidence, colorHex: b.colorHex,
+                    color: b.color, speedText: b.speedText,
                     x: lerp(a.x, b.x, f), y: lerp(a.y, b.y, f),
                     w: lerp(a.w, b.w, f), h: lerp(a.h, b.h, f)
                 });

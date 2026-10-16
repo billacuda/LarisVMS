@@ -25,6 +25,10 @@ public sealed class PlayViewModel
     /// hoc tile for this camera instead of parsing LayoutJson.</summary>
     public Guid? SingleCameraId { get; set; }
 
+    /// <summary>Cameras this user may talk through (CameraAccessActions.Talk); null means all of them.
+    /// A tile only offers push-to-talk when its camera also has an audio output.</summary>
+    public HashSet<Guid>? TalkCameraIds { get; set; }
+
     public bool IsTour { get; set; }
     public List<Guid> TourViewIds { get; set; } = [];
     public int TourIndex { get; set; }

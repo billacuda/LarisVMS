@@ -8,7 +8,10 @@ and administration all run in the browser, on desktop, tablet and phone.
   <a href="https://www.buymeacoffee.com/billacuda"><img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=%E2%98%95&slug=billacuda&button_colour=5F7FFF&font_colour=ffffff&font_family=Cookie&outline_colour=000000&coffee_colour=FFDD00" alt="Buy me a coffee" height="50" /></a>
 </p>
 
-**Current version: [0.216.0](CHANGELOG.md)**
+**Current version: [0.217.0](CHANGELOG.md)**
+
+📖 **[Documentation](https://www.larisvms.com/docs/)**: how to install, set up and use LarisVMS. Worth a
+read before you install.
 
 > **A note on AI-assisted development.** This project is built with the help of AI tooling (Claude
 > Code). Features are planned in detail before implementation, generated code is reviewed as it's
@@ -26,13 +29,15 @@ and administration all run in the browser, on desktop, tablet and phone.
 - Groups for sites, buildings and floors.
 
 **Recording**
-- One Windows-service recorder node per machine, with as many nodes as you need. Recording is `ffmpeg -c copy`, so no re-encoding.
+- One Windows-service recorder node per machine, with as many nodes as you need. Recording is `ffmpeg -c copy`, so no re-encoding (except cameras with a privacy mask, which are re-encoded in their own codec and bitrate).
 - Recording modes: Continuous, Motion, Schedule and Event, set globally or per camera, with pre/post-roll.
 - Retention set globally, per node and per camera, plus per-camera quotas and a disk watermark backstop. Footage left behind when a camera or storage path moves is still aged out and confirmed deleted.
 - An optional archive volume (SMB share or USB drive) that receives aged-out footage instead of deleting it.
 - Recording failover to a backup node, and a maintenance mode.
 - Self-updating nodes: each build is approved once, and then every node installs it.
 - Nodes keep recording through a server or database outage, even across a reboot.
+- Optional footage encryption on the recorders' disks (AES-256-GCM), per camera, for video or for video, snapshots and thumbnails, with a passphrase-protected master key backup.
+- Tamper evidence: every segment is fingerprinted and linked into a per-camera chain the server signs hourly, and every export gets a signed manifest you can check in the browser or with openssl.
 
 **Detection & events**
 - Server-side motion detection with polygon zones or a mask grid, with a live motion overlay synced to the video while you set them up.
@@ -40,6 +45,10 @@ and administration all run in the browser, on desktop, tablet and phone.
 - Built-in LarisVision AI detection (YOLOX, D-FINE, or your own ONNX model) on NVIDIA, AMD, Intel or CPU, or an external HTTP inference service.
 - Live bounding boxes synced to the video, object badges on live tiles, and a cropped snapshot for every detected object.
 - Object tracking (ByteTrack), confidence scores, optional high-resolution snapshots, and a Slice mode that tiles wide or panoramic cameras so small objects are still detected.
+- Object colors, including a person's shirt and pants colors, as badges on snapshots and as Snapshots filters.
+- Speed traps: two lines across a road and the distance between them. Speeds show on live boxes, snapshots and the Playback timeline, in a speed log report, and as a speed heatmap, with an optional speed limit.
+- Privacy masks that black out areas in recordings, live view, snapshots and exports, plus per-export redaction.
+- Activity heatmaps of when events happen on a camera or across all cameras, from 24 hours to a year.
 
 **Viewing**
 - Saved camera-wall views with drag-and-drop layout, a fullscreen kiosk mode and rotation.
@@ -47,7 +56,8 @@ and administration all run in the browser, on desktop, tablet and phone.
 - Synchronized multi-camera playback on a zoomable timeline, with preview thumbnails and 1/32× to 32× speed. Switch any live tile to playback in place.
 - Digital zoom on any live or playback tile: drag a box to zoom in, right-click to reset.
 - Multi-camera exports, bookmarks and a snapshots browser.
-- Basic PTZ controls.
+- Basic PTZ controls, and two-way audio: hold 🎙️ on a live tile to talk through the camera's speaker, with both directions recorded.
+- A camera map on a street map or uploaded floorplans, showing where each camera points and what it sees.
 - Video relayed through the server, through media proxies, or sent directly from node to browser.
 - Phone-friendly layout, installable as an app from Chrome on Android or Safari on iOS, with pinch-to-zoom on timelines and in fullscreen. See [Using it on a phone](#6-use-it-on-your-phone-optional).
 - Dark mode.
@@ -56,8 +66,8 @@ and administration all run in the browser, on desktop, tablet and phone.
 - Roles, a permissions matrix and per-camera/group access control, with auto-expiring role assignments and PTZ priority between roles.
 - Optional Microsoft Entra ID sign-in.
 - Active Directory sign-in, with AD groups synced to roles.
-- Alert rules that watch a camera or node, sent by email (SMTP, Microsoft Graph, Gmail), webhook, ntfy, Pushover, Slack and Teams.
-- Audit log, system logs, scheduled database backups, and a health dashboard with per-camera fps, bitrate and reconnects, plus per-node CPU, memory, network, fps and detection counts.
+- Alert rules that watch a camera or node, or fire on detected objects and speeds, sent by email (SMTP, Microsoft Graph, Gmail), webhook, ntfy, Pushover, Slack and Teams.
+- Audit log, system logs, scheduled database backups, and a customizable dashboard of widgets, each with a full report: per-camera fps, bitrate and reconnects, per-node CPU, memory, network, fps and detection counts, recent alerts, latest detections and more.
 - API keys for automation, and a monitoring status endpoint.
 - IP allow lists, an optional separate port for video traffic, and secrets encrypted at rest.
 - Branding: app name, colors, font and logo.
@@ -78,7 +88,7 @@ Settings are inherited **global → node → camera**, and the most specific val
 
 - **Operating system:** any 64-bit Windows version supported by [.NET 10](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md), for both the server and the recorder nodes.
 - **Server:** SQL Server (Express works) using SQL or Integrated authentication. For SQL Server Express, the server name is `.\SQLEXPRESS`. Building from source also needs the [.NET 10 SDK](https://dotnet.microsoft.com/download); the MSIs don't need any .NET runtime.
-- **.NET version:** developed with the .NET SDK 10.0.401. The 0.216.0 installers were built with it and include the .NET 10.0.12 runtime (ASP.NET Core 10.0.12).
+- **.NET version:** developed with the .NET SDK 10.0.402. The 0.217.0 installers were built with it and include the .NET 10.0.13 runtime (ASP.NET Core 10.0.13).
 - **Each recorder node:** [FFmpeg](https://ffmpeg.org/) (`winget install ffmpeg --scope machine`).
 - **LarisVision (optional):** a GPU and its driver, or CPU only. NVIDIA additionally needs CUDA Toolkit 12.x and cuDNN 9.x (see [LarisVision](#larisvision-ai-detection)) if you want to use CUDA or TensorRT acceleration, otherwise DirectML works out of the box.
 - **Cameras:** ONVIF Profile S or T.
@@ -129,9 +139,9 @@ Double-click an installer to be prompted for its settings, or pass them on the c
 ### 1. Install the web server
 
 ```powershell
-msiexec /i LarisVMS-Web-0.216.0-x64.msi
+msiexec /i LarisVMS-Web-0.217.0-x64.msi
 # silent, with a certificate:
-msiexec /i LarisVMS-Web-0.216.0-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx CERTPASSWORD=secret /qn
+msiexec /i LarisVMS-Web-0.217.0-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx CERTPASSWORD=secret /qn
 ```
 
 | Property | Default | Purpose |
@@ -143,7 +153,7 @@ msiexec /i LarisVMS-Web-0.216.0-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx
 
 ### 2. Run the setup wizard
 
-Browse to `https://<server>:8444/`. The wizard sets up the database connection, the first admin account and the branding, and shows the **node registration key**. You can find the key again later under **Settings → Node defaults**.
+Browse to `https://<server>:8444/`. The wizard sets up the database connection, the first admin account and the branding, and shows the **node registration key**. You can find the key again later under **Nodes → Updates and registration**.
 
 Pointing the wizard at an existing LarisVMS database, for example when reinstalling, uses that database as it is: it's upgraded if needed, nothing is seeded or overwritten, and the wizard's remaining steps are skipped. A database that isn't a LarisVMS one is refused. Once setup is complete, the wizard is closed.
 
@@ -152,7 +162,7 @@ Pointing the wizard at an existing LarisVMS database, for example when reinstall
 Install [FFmpeg](https://ffmpeg.org/) on each recording machine first (`winget install ffmpeg --scope machine`), then:
 
 ```powershell
-msiexec /i LarisVMS-Node-0.216.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> STORAGEROOT=D:\Recordings /qn
+msiexec /i LarisVMS-Node-0.217.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> STORAGEROOT=D:\Recordings /qn
 ```
 
 | Property | Default | Purpose |
@@ -167,12 +177,12 @@ msiexec /i LarisVMS-Node-0.216.0-x64.msi SERVERURL=https://<server>:8444 REGISTR
 | `SERVICEACCOUNT`, `SERVICEPASSWORD` | LocalSystem | Run as an account that can reach SMB storage. |
 | `INSTALLFOLDER` | `C:\Program Files\LarisVMS\Node` | Install location. |
 
-The node registers itself and appears under **Settings → Nodes**.
+The node registers itself and appears under **Nodes**.
 
 ### 4. Install media proxies (optional)
 
 ```powershell
-msiexec /i LarisVMS-Proxy-0.216.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> CLIENTPORT=4443 /qn
+msiexec /i LarisVMS-Proxy-0.217.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> CLIENTPORT=4443 /qn
 ```
 
 Properties: `SERVERURL`, `REGISTRATIONKEY`, `CLIENTPORT` (default 4443), `CLIENTENDPOINTHOST`, `CLIENTPFXPATH`, `CLIENTPFXPASSWORD`, `CLIENTALLOWINSECURE`, `INSECURETLS`, `SERVICEACCOUNT`, `SERVICEPASSWORD`, `INSTALLFOLDER`, with the same meanings as for the node.
@@ -191,7 +201,7 @@ Run the new version's MSI. It finds the existing install and offers the upgrade 
 
 An installation made with the PowerShell scripts is upgraded the same way: the MSI takes over the existing service and keeps its settings and registration, including a node's or proxy's direct-streaming endpoint and its firewall rule.
 
-Recorder nodes and media proxies also **update themselves**. A new web install registers the node and proxy builds it carries as *Pending* under **Settings → Node builds**. Only the newest node build and the newest proxy build wait for approval; older ones move to History as *Superseded*. Once you approve one, every older node downloads it, verifies its SHA-256 and installs it on its next check-in. You can turn this off under **Settings → Node defaults**.
+Recorder nodes and media proxies also **update themselves**. A new web install registers the node and proxy builds it carries as *Pending* in the **Builds** section of **Nodes**. Only the newest node build and the newest proxy build wait for approval; older ones are *Superseded*. Once you approve one, every older node downloads it, verifies its SHA-256 and installs it on its next check-in. You can turn this off under **Nodes → Updates and registration**.
 
 Uninstalling removes the program, its service and firewall rules. Recordings, configuration and everything under `%ProgramData%\LarisVMS` are kept.
 
@@ -253,6 +263,12 @@ sending every frame; higher rates add GPU load without improving results.
   and separately for video traffic. **Settings → Live view** can move video traffic to its own port.
 - **Secret handling.** Secrets are write-only in the UI, and the audit log records that a secret
   changed but never its value.
+- **Footage encryption.** Optional, per camera, under **Settings → Encryption and signing**. The
+  master key is kept on the server and must be backed up to a passphrase-protected file before
+  encryption can be turned on. **Keep that file and passphrase somewhere other than the server.**
+  Without them, encrypted footage can't be recovered after the server is rebuilt.
+- **Tamper evidence.** Recordings are fingerprinted and chained, and exports come with a signed
+  manifest, so edited or missing footage can be detected.
 
 ## Privacy
 
@@ -263,7 +279,7 @@ machines, and you own them: nobody else can see them.
   account, and nothing about your install is collected or shared.
 - **One routine outbound check.** Once a day the server asks GitHub whether a newer LarisVMS release
   is out, and shows a notice in the top bar when there is one. It's a plain request for the public
-  releases list that sends nothing about your install. Turn it off under **Settings → Node defaults →
+  releases list that sends nothing about your install. Turn it off under **Nodes → Updates and registration →
   New versions**.
 - **One other download.** The first time AI detection uses a built-in YOLOX model, the server
   downloads it from the YOLOX project's GitHub releases. Place the model files on the server yourself
@@ -280,7 +296,7 @@ machines, and you own them: nobody else can see them.
 
 ## Building from source
 
-Developed and built with the .NET SDK 10.0.401 (`dotnet --version`). Any later 10.0 SDK should work; there's no `global.json` pinning one.
+Developed and built with the .NET SDK 10.0.402 (`dotnet --version`). Any later 10.0 SDK should work; there's no `global.json` pinning one.
 
 ```powershell
 dotnet tool restore
@@ -320,7 +336,11 @@ tools/export-models         Python: exports detection models to ONNX
 
 ## Known limitations
 
-- Privacy-mask burn-in and camera-side motion zones can be configured, but are **disabled** pending fixes.
+- Camera-side motion zones can be configured, but aren't active yet.
+- Cameras with a privacy mask are re-encoded, which uses CPU or GPU time on their node.
+- Speeds from speed traps are estimates. Their accuracy depends on the measured distance between the lines, the camera's angle and its frame rate.
+- Object colors are best-effort guesses. Complex scenes and lighting (shade, headlights, white balance) can give inaccurate colors, and none are recorded while a camera is in black-and-white night mode.
+- Exported files aren't encrypted, even from cameras whose footage is.
 - Bounding boxes from the camera's own analytics aren't shown; only LarisVision draws boxes.
 - Face detection and object appeared/missing events come from the camera's own analytics. LarisVision doesn't detect these on its own yet.
 - PTZ has not been tested against real PTZ hardware.

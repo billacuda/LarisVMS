@@ -27,6 +27,17 @@ public class Segment
     public int? Height { get; set; }
     public bool HasAudio { get; set; }
 
+    /// <summary>Tamper evidence (SegmentChain): SHA-256 of the file as recorded, hashed on the node
+    /// before it was reported. Null for segments from before this existed, or when the node couldn't
+    /// read the file to hash it.</summary>
+    public string? ContentSha256 { get; set; }
+
+    /// <summary>The previous link in this camera's hash chain (null for the first) and this
+    /// segment's own chain hash — see SegmentChain.Link. Each link carries its predecessor's hash, so
+    /// it can be checked even after retention has deleted the older segments.</summary>
+    public string? PrevChainHash { get; set; }
+    public string? ChainHash { get; set; }
+
     /// <summary>Evidence lock (M10) — excluded from retention deletion. Defined now so the column
     /// exists before the storage manager (M4) needs it.</summary>
     public bool IsLocked { get; set; }

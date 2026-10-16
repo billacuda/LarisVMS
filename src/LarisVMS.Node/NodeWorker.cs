@@ -19,7 +19,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     NodeConfig registration, ILoggerFactory loggerFactory, OnvifEventsClient onvifEventsClient,
     UpdateService updateService, FileLoggerProvider fileLogger,
     ClientEndpointConfig clientEndpoint, CertHolder? certHolder,
-    PartnerHealthTracker partnerHealthTracker) : BackgroundService
+    PartnerHealthTracker partnerHealthTracker, FootageStore footage) : BackgroundService
 {
     private readonly ILogger<NodeWorker> _logger = loggerFactory.CreateLogger<NodeWorker>();
     private string _appliedLogLevel = "Information";
@@ -206,6 +206,23 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// recording is still "up" — the caller decides what to make of it.</summary>
     public int ActiveRecordingCount => _active.Count;
 
+    /// <summary>The camera's config from the most recent reconcile (credentials included), or null when
+    /// this node hasn't been handed that camera — two-way audio uses it to reach the camera directly.</summary>
+    /// <summary>The ffmpeg encoders this node's capability probe found (empty until it has run).</summary>
+    public IReadOnlyList<string> DetectedEncoders => _detectedEncoders ?? [];
+
+    public NodeConfigCameraDto? TryGetCameraConfig(Guid cameraId)
+        => _latestCameraConfig.TryGetValue(cameraId, out var c) ? c : null;
+
+    /// <summary>Every camera config from the most recent reconcile (FootageEncryptionWorker's sweep).</summary>
+    public IReadOnlyCollection<NodeConfigCameraDto> CameraConfigs => _latestCameraConfig.Values.ToList();
+
+    /// <summary>Whether this camera's cached images (thumbnails, snapshots) are encrypted at rest.</summary>
+    public bool EncryptsImages(Guid cameraId) => TryGetCameraConfig(cameraId)?.EncryptFootage == "VideoAndImages";
+
+    /// <summary>The footage store every read and write of footage on this node goes through.</summary>
+    public FootageStore Footage => footage;
+
     /// <summary>The camera's configured name from the most recent reconcile, for log lines — or the
     /// short GUID form when this node hasn't been handed that camera's config yet.</summary>
     public string CameraDisplayName(Guid cameraId)
@@ -236,13 +253,14 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         IReadOnlyList<Mp4Fragment> fragments;
         try
         {
-            fragments = await StorageRetry.ExecuteAsync(_logger, $"Fragment index build for {fullPath}", () =>
+            fragments = await StorageRetry.ExecuteAsync(_logger, $"Fragment index build for {fullPath}", async () =>
             {
-                using var fs = File.OpenRead(fullPath);
-                return Task.FromResult<IReadOnlyList<Mp4Fragment>>(Mp4FragmentIndexer.Build(fs));
+                // Byte offsets are into the plaintext — the same view the playback endpoint serves.
+                await using var fs = await footage.OpenReadAsync(fullPath, ct);
+                return (IReadOnlyList<Mp4Fragment>)Mp4FragmentIndexer.Build(fs);
             }, ct);
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or System.Security.Cryptography.CryptographicException)
         {
             return [];
         }
@@ -307,7 +325,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         }
         try
         {
-            return await ThumbnailCapture.CaptureAsync(ffmpegPath, filePath, offsetSeconds, ct, maxDimension: maxDimension, quality: quality, webp: webp);
+            return await ThumbnailCapture.CaptureAsync(ffmpegPath, await footage.FfmpegInputAsync(filePath, ct), offsetSeconds, ct, maxDimension: maxDimension, quality: quality, webp: webp);
         }
         finally
         {
@@ -325,7 +343,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         await BackgroundThumbnailGate.WaitAsync(ct);
         try
         {
-            return await ThumbnailCapture.CaptureAsync(ffmpegPath, filePath, offsetSeconds, ct, lowPriority: true, webp: webp);
+            return await ThumbnailCapture.CaptureAsync(ffmpegPath, await footage.FfmpegInputAsync(filePath, ct), offsetSeconds, ct, lowPriority: true, webp: webp);
         }
         finally
         {
@@ -375,7 +393,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         }
         try
         {
-            return await SnapshotImageCapture.CaptureAsync(ffmpegPath, filePath, offsetSeconds, boxX, boxY, boxW, boxH, frameWidth, frameHeight, ct, logger: _logger, webp: webp);
+            return await SnapshotImageCapture.CaptureAsync(ffmpegPath, await footage.FfmpegInputAsync(filePath, ct), offsetSeconds, boxX, boxY, boxW, boxH, frameWidth, frameHeight, ct, logger: _logger, webp: webp);
         }
         finally
         {
@@ -879,10 +897,32 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         while (_pendingSegments.TryDequeue(out var item)) batch.Add(item);
         if (batch.Count == 0) return;
 
+        // Tamper evidence: hash each finished file before the server first hears of it, so the
+        // recorded hash is the file as written. Kept on the item, so a failed report doesn't hash
+        // twice. A file that can't be read is reported without a hash (it stays out of the chain)
+        // rather than holding the report back.
+        for (var i = 0; i < batch.Count; i++)
+        {
+            if (batch[i].Sha256 is not null) continue;
+            try
+            {
+                // Through the footage store: a file already encrypted (re-reported after a restart)
+                // is hashed as its original bytes, like every other.
+                batch[i] = batch[i] with { Sha256 = await footage.HashAsync(batch[i].FilePath, ct) };
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException)
+            {
+                _logger.LogWarning(ex, "Couldn't hash segment {Path} for tamper evidence — reporting it without a hash.", batch[i].FilePath);
+            }
+        }
+
         try
         {
             await api.ReportSegmentsAsync(batch, ct);
             _logger.LogInformation("Reported {Count} segment(s).", batch.Count);
+            // Encryption at rest comes after the report, so the recorded hash is of the plain file.
+            // FootageEncryptionWorker skips cameras that don't encrypt.
+            foreach (var item in batch) footage.EnqueueEncryption(item.CameraId, item.FilePath, item.StartUtc);
         }
         catch (Exception ex) when (IsRetryable(ex, ct))
         {
@@ -1087,21 +1127,14 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             // can silently change underneath an already-running ffmpeg process the way, say, retention
             // days can. Same signature-and-restart shape as ReconcileMotion's own zone-change handling.
             //
-            // PrivacyMaskEnabled is a deliberate kill switch, off for now: confirmed live on real
-            // Intel/NVIDIA hardware that a masked camera gets stuck cycling Connecting/Backoff forever
-            // (see CHANGELOG 0.111.0/0.112.0) — one real cause (pairing decode hwaccel with the CPU
-            // drawbox filter) was found and fixed in 0.112.0, but that did not resolve the reported
-            // symptom, and the actual root cause is still unknown. Rather than leave a Privacy zone as
-            // an attractive nuisance that breaks a camera's recording the moment one is saved, this
-            // flag makes it a safe no-op again — same as CameraMotion's own "drawable, saved, does
-            // nothing yet" state — until the real bug is found. Every helper below
-            // (PrivacyMaskFilterBuilder, EncoderSelection, RecordingSession's transcode branch, and
-            // their tests) is untouched and ready for whenever that happens; only this one switch and
-            // the effectiveZones substitution below need to change back.
-            const bool PrivacyMaskEnabled = false;
-            var effectiveZones = PrivacyMaskEnabled ? camera.Zones : [];
-            var privacyEncoder = ChoosePrivacyEncoder(effectiveZones);
-            var privacySignature = BuildPrivacyMaskSignature(effectiveZones, privacyEncoder);
+            // Privacy zones burn in on the recording (and live view). This was switched off from 0.113.0
+            // while masked cameras never produced footage; the cause was the re-encode writing MP4
+            // segments without their H.264 headers — see EncodePipeline.TeeSafeArgs.
+            var effectiveZones = camera.Zones;
+            var privacyStream = camera.Streams.FirstOrDefault(s => s.Role == "Main");
+            var privacyEncoder = ChoosePrivacyEncoder(effectiveZones, privacyStream);
+            var privacyBitrate = PrivacyBitrateKbps(effectiveZones, privacyEncoder, privacyStream);
+            var privacySignature = BuildPrivacyMaskSignature(effectiveZones, privacyEncoder) + "@" + privacyBitrate;
 
             // Recording only ever uses the Main stream — Sub/Third exist for the live wall and
             // motion detection (M5/M8), not for what gets written to disk, per the plan's
@@ -1114,6 +1147,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             // noticed and kept running the old ffmpeg process against the stale URL forever.
             var mainStream = camera.Streams.FirstOrDefault(s => s.Role == "Main");
             var rtspUri = mainStream is null ? null : InjectCredentials(mainStream.RtspUri, camera.Username, camera.Password);
+            var transcodeAudio = mainStream is { HasAudio: true } && AudioTranscode.NeedsAac(mainStream.AudioCodec);
 
             if (_active.TryGetValue(camera.CameraId, out var activeRecorder) && activeRecorder.PrivacyMaskSignature != privacySignature)
             {
@@ -1125,6 +1159,15 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             {
                 _logger.LogInformation("Segment length changed for camera {CameraId} ({Name}) — restarting recording session ({Old}s -> {New}s).",
                     camera.CameraId, camera.Name, activeRecorder.SegmentSeconds, camera.SegmentSeconds);
+                activeRecorder.Cts.Cancel();
+                _active.TryRemove(camera.CameraId, out _);
+            }
+            else if (activeRecorder is not null && activeRecorder.TranscodeAudioToAac != transcodeAudio)
+            {
+                // Usually the first connection to a camera: its audio codec is only known once
+                // ffmpeg has opened the stream and the server has stored it.
+                _logger.LogInformation("Camera {CameraId} ({Name}) sends {Codec} audio — restarting recording to {Action} it.",
+                    camera.CameraId, camera.Name, mainStream?.AudioCodec ?? "no", transcodeAudio ? "convert it to AAC so browsers can play" : "copy");
                 activeRecorder.Cts.Cancel();
                 _active.TryRemove(camera.CameraId, out _);
             }
@@ -1163,7 +1206,8 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                     var sessionLogger = loggerFactory.CreateLogger($"Recording[{camera.Name}]");
                     var session = new RecordingSession(new RecordingSessionOptions(ffmpegPath, rtspUri!, outputDir,
                         SegmentSeconds: camera.SegmentSeconds,
-                        PrivacyMaskFilters: privacyMaskFilters.Count > 0 ? privacyMaskFilters : null, VideoEncoder: privacyEncoder), sessionLogger);
+                        PrivacyMaskFilters: privacyMaskFilters.Count > 0 ? privacyMaskFilters : null, VideoEncoder: privacyEncoder,
+                        TranscodeAudioToAac: transcodeAudio, VideoBitrateKbps: privacyBitrate), sessionLogger);
                     var capturedCameraId = camera.CameraId; // an id never goes stale the way the DTO it came from does
                     session.SegmentCompleted += segment => HandleSegmentCompleted(capturedCameraId, segment);
                     session.StreamResolutionDetected += resolution => _pendingStreamInfo.Enqueue(new StreamInfoReportItem(
@@ -1200,7 +1244,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                         .Union(onDiskNow, StringComparer.OrdinalIgnoreCase);
 
                     var runTask = session.RunAsync(cts.Token, knownPathsForCamera);
-                    _active[camera.CameraId] = new CameraRecorder(cts, runTask, session, rtspUri!, privacySignature, camera.SegmentSeconds);
+                    _active[camera.CameraId] = new CameraRecorder(cts, runTask, session, rtspUri!, privacySignature, camera.SegmentSeconds, transcodeAudio);
                     _logger.LogInformation("Started recording camera {CameraId} ({Name}) -> {OutputDir}", camera.CameraId, camera.Name, outputDir);
                 }
             }
@@ -1613,7 +1657,10 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             // "Custom", but included unconditionally like DFineWeights/YoloXSize above: a change
             // (picking a different discovered model) means a different .onnx/decoder, so it must
             // restart the pipeline the same way switching DFineWeights does.
-            config.LocalModelName);
+            config.LocalModelName,
+            // Speed traps (per camera) and Detection.ColorClassification (global): both change what
+            // the pipeline measures, so a change restarts it. Redrawing a trap only resets tracking.
+            SpeedTrapSignature(camera.SpeedTraps), config.ColorClassification);
 
         if (_activeVision.TryGetValue(camera.CameraId, out var existing) && existing.ConfigSignature == signature) return; // already watching, unchanged
 
@@ -1652,7 +1699,8 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             config.ExternalInferenceTransport,
             // Detection.LocalModelName — only acted on by CameraPipelineManager when ModelFamily is
             // "Custom"; see NodeConfigResponse.LocalModelName's own doc comment.
-            config.LocalModelName);
+            config.LocalModelName,
+            camera.SpeedTraps ?? [], config.ColorClassification);
 
         // Never stack two starts for the same camera — see _visionStartsInFlight's own comment.
         if (!_visionStartsInFlight.TryAdd(camera.CameraId, 0)) return;
@@ -1661,6 +1709,10 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         _ = StartVisionWatchAsync(request);
         _logger.LogInformation("Starting AI detection watch for camera {CameraId} ({Name}).", camera.CameraId, camera.Name);
     }
+
+    private static string SpeedTrapSignature(List<VisionSpeedTrapDto>? traps) =>
+        traps is null or { Count: 0 } ? "" : string.Join(';', traps.OrderBy(t => t.Id).Select(t =>
+            string.Join(',', t.Id, t.AX1, t.AY1, t.AX2, t.AY2, t.BX1, t.BY1, t.BX2, t.BY2, t.DistanceMeters)));
 
     /// <summary>Maps a resolved AiAccelerator to VisionSession's own -hwaccel value. Only Nvidia
     /// maps to a real value: CUDA's scale_cuda GPU-hybrid decode is the only pairing actually
@@ -1849,13 +1901,20 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// other detection source already does.</summary>
     public void ReportVisionDetection(VisionDetectionReportItem item)
     {
+        // A detection centred inside a privacy area is dropped only when the camera is set to — by
+        // default a mask just hides that part of the picture, and events behind it still count.
+        if (_latestCameraConfig.TryGetValue(item.CameraId, out var cameraConfig) && cameraConfig.PrivacyBlocksDetections
+            && item.BestBoxX is { } bx && item.BestBoxY is { } by && item.BestBoxW is { } bw && item.BestBoxH is { } bh
+            && PrivacyGrid(item.CameraId) is { } grid && PrivacyMaskFilterBuilder.IsMasked(grid, bx + bw / 2, by + bh / 2))
+            return;
+
         _pendingMotionSpans.Enqueue(new MotionSpanReportItem(
             item.CameraId, null, item.StartUtc, item.EndUtc, item.Score,
             EventTagRuleId: null, DetectionKind: null,
             DetectedObjectCategory: item.DetectedObjectCategory, DetectedObjectLabel: item.DetectedObjectLabel,
             BestFrameAtUtc: item.BestFrameAtUtc, BestBoxX: item.BestBoxX, BestBoxY: item.BestBoxY,
             BestBoxW: item.BestBoxW, BestBoxH: item.BestBoxH, BestBoxConfidence: item.BestBoxConfidence,
-            MovingCount: item.MovingCount));
+            MovingCount: item.MovingCount, Objects: item.Objects));
 
         if (_activeVision.TryGetValue(item.CameraId, out var recorder)) recorder.RecordDetection(item.EndUtc);
     }
@@ -1886,9 +1945,18 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         }
 
         var subRtspUri = InjectCredentials(subStream.RtspUri, camera.Username, camera.Password);
+        // Only the Main stream's audio codec gets reported; a camera's profiles share one microphone
+        // and almost always one codec, so Main's stands in until Sub has its own.
+        var subAudioCodec = subStream.AudioCodec ?? camera.Streams.FirstOrDefault(s => s.Role == "Main")?.AudioCodec;
+        var subTranscodeAudio = subStream.HasAudio && AudioTranscode.NeedsAac(subAudioCodec);
+        // Privacy masks apply to the Sub stream's live view too, or it would show what the recording hides.
+        var subPrivacyFilters = BuildPrivacyMaskFilters(camera.Zones);
+        var subPrivacyEncoder = ChoosePrivacyEncoder(camera.Zones, subStream);
+        var subPrivacyBitrate = PrivacyBitrateKbps(camera.Zones, subPrivacyEncoder, subStream);
+        var subSignature = subRtspUri + (subTranscodeAudio ? "|aac" : "") + "|" + BuildPrivacyMaskSignature(camera.Zones, subPrivacyEncoder) + "@" + subPrivacyBitrate;
         if (_activeLiveSub.TryGetValue(camera.CameraId, out var existing))
         {
-            if (existing.StreamSignature == subRtspUri) return; // already running, unchanged
+            if (existing.StreamSignature == subSignature) return; // already running, unchanged
             existing.Cts.Cancel();
             _activeLiveSub.TryRemove(camera.CameraId, out _);
             _logger.LogInformation("Sub stream configuration changed for camera {CameraId} ({Name}) — restarting live session.", camera.CameraId, camera.Name);
@@ -1896,25 +1964,56 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
 
         var liveSubCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         var liveSubLogger = loggerFactory.CreateLogger($"LiveSub[{camera.Name}]");
-        var liveSubSession = new SubLiveSession(new SubLiveSessionOptions(ffmpegPath, subRtspUri), liveSubLogger);
+        var liveSubSession = new SubLiveSession(new SubLiveSessionOptions(ffmpegPath, subRtspUri, TranscodeAudioToAac: subTranscodeAudio,
+            PrivacyMaskFilters: subPrivacyFilters.Count > 0 ? subPrivacyFilters : null, VideoEncoder: subPrivacyEncoder,
+            VideoBitrateKbps: subPrivacyBitrate), liveSubLogger);
 
         var liveSubRunTask = liveSubSession.RunAsync(liveSubCts.Token);
-        _activeLiveSub[camera.CameraId] = new CameraLiveSubRecorder(liveSubCts, liveSubRunTask, liveSubSession, subRtspUri);
+        _activeLiveSub[camera.CameraId] = new CameraLiveSubRecorder(liveSubCts, liveSubRunTask, liveSubSession, subSignature);
         _logger.LogInformation("Started Sub live session for camera {CameraId} ({Name}).", camera.CameraId, camera.Name);
     }
 
     // ── Privacy masking (M18) ────────────────────────────────────────────────────
     private static IReadOnlyList<string> BuildPrivacyMaskFilters(List<NodeConfigZoneDto> zones) =>
-        PrivacyMaskFilterBuilder.BuildDrawboxFilters(
-            zones.Where(z => z.Kind == nameof(ZoneKind.Privacy))
-                .Select(z => ZoneRasterizer.ParsePolygon(z.PolygonJson)));
+        PrivacyMaskFilterBuilder.BuildMaskFilters(PrivacyPolygons(zones));
+
+    private static IEnumerable<IReadOnlyList<ZoneRasterizer.Point>> PrivacyPolygons(List<NodeConfigZoneDto> zones) =>
+        zones.Where(z => z.Kind == nameof(ZoneKind.Privacy)).Select(z => ZoneRasterizer.ParsePolygon(z.PolygonJson));
+
+    // Each camera's burnt-in mask as a grid, rebuilt when its Privacy zones change — used to drop
+    // detections of things inside a privacy area, which the Vision Service sees unmasked.
+    private readonly ConcurrentDictionary<Guid, (string Signature, bool[]? Grid)> _privacyGrids = new();
+
+    private bool[]? PrivacyGrid(Guid cameraId)
+    {
+        if (!_latestCameraConfig.TryGetValue(cameraId, out var camera)) return null;
+        var signature = BuildPrivacyMaskSignature(camera.Zones, null);
+        if (_privacyGrids.TryGetValue(cameraId, out var cached) && cached.Signature == signature) return cached.Grid;
+        var grid = PrivacyMaskFilterBuilder.BuildMaskGrid(PrivacyPolygons(camera.Zones));
+        _privacyGrids[cameraId] = (signature, grid);
+        return grid;
+    }
+
+    /// <summary>Whether this camera has any privacy mask — its Vision Service crops (taken from unmasked
+    /// frames) are then discarded, so snapshots come from the masked recording instead.</summary>
+    public bool HasPrivacyMask(Guid cameraId) => PrivacyGrid(cameraId) is not null;
 
     /// <summary>Null when the camera has no enabled Privacy zone at all — RecordingSession never even
     /// looks at VideoEncoder in that case (see BuildCodecArgs), so there's nothing to choose. Also
     /// null when it does but this node's own capability probe hasn't reported an encoder yet — see
-    /// the "masking with software libx264" fallback where this is called from.</summary>
-    private string? ChoosePrivacyEncoder(List<NodeConfigZoneDto> zones) =>
-        zones.Any(z => z.Kind == nameof(ZoneKind.Privacy)) ? EncoderSelection.ChooseH264Encoder(_detectedEncoders ?? []) : null;
+    /// the "masking with software libx264" fallback where this is called from. The stream is
+    /// re-encoded in its own codec (an H.265 camera stays H.265) — see EncoderSelection.ChooseEncoder.</summary>
+    private string? ChoosePrivacyEncoder(List<NodeConfigZoneDto> zones, NodeConfigStreamDto? stream) =>
+        zones.Any(z => z.Kind == nameof(ZoneKind.Privacy)) ? EncoderSelection.ChooseEncoder(_detectedEncoders ?? [], stream?.Codec) : null;
+
+    /// <summary>The masked re-encode's target bitrate: the camera's own configured bitrate, so a mask
+    /// doesn't change picture quality or storage use (EncoderSelection.TargetBitrateKbps). Null when
+    /// the camera has no Privacy zone. A null encoder (probe not in yet) means libx264 — see
+    /// RecordingSession.BuildCodecArgs.</summary>
+    private static int? PrivacyBitrateKbps(List<NodeConfigZoneDto> zones, string? encoder, NodeConfigStreamDto? stream) =>
+        zones.Any(z => z.Kind == nameof(ZoneKind.Privacy))
+            ? EncoderSelection.TargetBitrateKbps(encoder ?? "libx264", stream?.Codec, stream?.ConfiguredBitrateKbps, stream?.Width, stream?.Height, stream?.Fps)
+            : null;
 
     // Content-equality signature (same shape as BuildZoneConfigSignature) covering exactly what
     // RecordingSession's transcode branch actually reads: each enabled Privacy zone's own polygon,

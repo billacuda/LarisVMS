@@ -12,8 +12,14 @@ namespace LarisVMS.Web.Pages.Cameras;
 [Authorize("Cameras.Edit")]
 public class EditModel(ICameraService cameraService, INodeService nodeService,
     ISettingsResolver settings, IZoneService zoneService, IEventTagRuleService eventTagRuleService,
-    IScheduleWindowService scheduleWindowService, IAuditService auditService) : PageModel
+    IScheduleWindowService scheduleWindowService, IAuditService auditService, IFootageKeyService footageKeys) : PageModel
 {
+    /// <summary>Storage.Encrypt for this camera: "" inherits; "Off" / "Video" / "VideoAndImages".</summary>
+    [BindProperty] public string EncryptOverride { get; set; } = "";
+    public string EffectiveEncrypt { get; set; } = "Off";
+    /// <summary>The master key exists and has been backed up — encryption can actually be used.</summary>
+    public bool EncryptionReady { get; set; }
+
     [BindProperty] public Guid? Id { get; set; }
     [BindProperty] public string Name { get; set; } = string.Empty;
     [BindProperty] public string DeviceServiceUri { get; set; } = string.Empty;
@@ -177,6 +183,10 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
         EffectiveArchiveRetentionDays = await settings.GetAsync("Archive.RetentionDays", 0, cameraId: cameraId, nodeId: nodeId);
 
         RecordingModeOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "Recording.Mode") ?? "";
+        EncryptOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "Storage.Encrypt") ?? "";
+        EffectiveEncrypt = LarisVMS.Infrastructure.Services.NodeService.NormalizeEncryptMode(
+            await settings.GetAsync("Storage.Encrypt", "Off", cameraId: cameraId, nodeId: nodeId));
+        EncryptionReady = (await footageKeys.GetStatusAsync()).Ready;
         EffectiveRecordingMode = await settings.GetAsync("Recording.Mode", "Continuous", cameraId: cameraId, nodeId: nodeId);
 
         var ownPreRollOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "Recording.MotionPreRollSeconds");
@@ -289,6 +299,9 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
                 ArchiveRetentionDaysOverride?.ToString(), User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Recording.Mode",
                 string.IsNullOrEmpty(RecordingModeOverride) ? null : RecordingModeOverride, User.Identity?.Name);
+            await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Storage.Encrypt",
+                string.IsNullOrEmpty(EncryptOverride) ? null : LarisVMS.Infrastructure.Services.NodeService.NormalizeEncryptMode(EncryptOverride),
+                User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Recording.MotionPreRollSeconds",
                 MotionPreRollSecondsOverride?.ToString(), User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Recording.MotionPostRollSeconds",
@@ -345,6 +358,18 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
             ErrorMessage = ex.Message;
         }
         return RedirectToPage("Edit", new { id = Id });
+    }
+
+    /// <summary>Asks this camera's recorder to encrypt the footage it already has (not just new
+    /// recordings). The node notices on its next config poll and works through it in the background.</summary>
+    public async Task<IActionResult> OnPostEncryptExistingAsync()
+    {
+        if (Id is null) return Redirect("/Cameras");
+        await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Storage.EncryptExistingRequestedUtc",
+            DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture), User.Identity?.Name);
+        await auditService.LogAsync("Camera.EncryptExisting", User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
+            User.Identity?.Name, HttpContext.Connection.RemoteIpAddress?.ToString(), $"Camera {Id}: encrypt existing footage requested");
+        return RedirectToPage(new { id = Id, encrypting = "existing" });
     }
 
     public async Task<IActionResult> OnPostProbeAsync()

@@ -37,14 +37,16 @@ window.larisvmsPreferences = (function () {
         if (!cache) cache = {};
         cache[key] = stringValue; // updates the local read-back immediately, not just after the PUT resolves
 
-        // Fire-and-forget: a preference write must never block whatever UI action triggered it, and
-        // a failed write just means it doesn't outlive this page load — the same failure mode every
-        // existing localStorage call site already tolerates (private browsing throwing on write).
-        fetch('/api/preferences/' + encodeURIComponent(key), {
+        // Fire-and-forget for most callers: a preference write must never block whatever UI action
+        // triggered it, and a failed write just means it doesn't outlive this page load — the same
+        // failure mode every existing localStorage call site already tolerates (private browsing
+        // throwing on write). The returned promise resolves true/false for a caller that wants to
+        // tell the user a save failed (the dashboard layout does); it never rejects.
+        return fetch('/api/preferences/' + encodeURIComponent(key), {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ value: stringValue })
-        }).catch(function () { /* best-effort */ });
+        }).then(function (resp) { return resp.ok; }, function () { return false; });
     }
 
     return { get: get, set: set, whenReady: function () { return ready; } };

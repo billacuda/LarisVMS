@@ -25,3 +25,17 @@ Playback, thumbnails, and exports work the same from either volume. The node lis
 ## Leftover footage
 
 When a camera moves to another node or is removed, its old footage stays on the previous node until it ages out. The ⚠️ count next to a node's status shows how many cameras still have footage there. It clears on its own.
+
+## Encryption
+
+Footage can be encrypted on the recorders' disks, so a stolen or discarded disk shows nothing. It's off by default.
+
+**Set it up** under **Settings → Encryption and signing**:
+
+1. **Create master key.** It's kept on this server and unlocks every encrypted recording.
+2. **Download a backup** of the master key, protected by a passphrase you choose. Encryption can't be turned on until you have one. Keep the file and the passphrase somewhere other than this server: if the server is rebuilt, **Restore** with the backup is the only way to read encrypted footage again. Lose both and the footage is gone for good.
+3. **Choose what to encrypt:** **Video** (recordings and two-way talk audio), or **Video, snapshots and thumbnails**. That's the default for every camera; each camera can override it on its own page (**Cameras → Edit**, Storage).
+
+Each segment is encrypted on the recorder a moment after it finishes recording, so only the segment being recorded is ever unencrypted on disk. Footage recorded before encryption was turned on stays as it is; **encrypt existing footage** on the camera's page converts it in the background. Turning encryption off later leaves encrypted footage readable.
+
+Playback, thumbnails, snapshots and exports work the same as before. Exported files are not encrypted, since they're meant to be handed on. The recorder fetches each camera's daily key from this server when it needs it and keeps it only in memory, so an encrypted recording can't be played while the recorder can't reach the server.

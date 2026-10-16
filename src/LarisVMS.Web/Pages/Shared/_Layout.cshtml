@@ -68,6 +68,14 @@
 <html lang="en" data-bs-theme="light">
 <head>
     <meta charset="utf-8" />
+    <script>
+        // Back/forward must never land on ERR_CACHE_MISS / "Confirm form resubmission". A page
+        // rendered as the response to a form POST (a settings page after Save, a form redisplayed
+        // with an error) is a POST entry in the browser's history; replacing the entry with its own
+        // URL turns it into a plain GET entry, so returning to it just reloads the page. Harmless on
+        // a page that came from a GET. Keeps the current state and #hash.
+        try { history.replaceState(history.state, '', location.href); } catch (e) { /* not fatal */ }
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     @* PWA: manifest (Program.cs /manifest.webmanifest) + icons make the site installable on phones. *@
     <link rel="manifest" href="/manifest.webmanifest" />
@@ -161,6 +169,7 @@
                 @if (showLive)
                 {
                     <a class="lv-navitem@(IsActive("/Live") ? " active" : "")" href="/Live"><span aria-hidden="true">📡</span> Live</a>
+                    <a class="lv-navitem@(IsActive("/Map") ? " active" : "")" href="/Map"><span aria-hidden="true">🗺️</span> Map</a>
                 }
                 @if (showPlayback)
                 {
@@ -177,6 +186,7 @@
                 @if (showSnapshots)
                 {
                     <a class="lv-navitem@(IsActive("/Snapshots") ? " active" : "")" href="/Snapshots"><span aria-hidden="true">📸</span> Snapshots</a>
+                    <a class="lv-navitem@(IsActive("/Activity") ? " active" : "")" href="/Activity"><span aria-hidden="true">🔥</span> Activity</a>
                 }
                 @if (showViews)
                 {
@@ -186,8 +196,12 @@
                 {
                     <a class="lv-navitem@(IsActive("/Cameras") ? " active" : "")" href="/Cameras"><span aria-hidden="true">📷</span> Cameras</a>
                 }
-                @* Single "Settings" item replaces the old Admin dropdown + top-level Nodes/Logs
-                   buttons — see Pages/Admin/Settings/Index.cshtml, which links out to every
+                @if (showNodes)
+                {
+                    <a class="lv-navitem@(IsActive("/Admin/Nodes") ? " active" : "")" href="/Admin/Nodes"><span aria-hidden="true">🔌</span> Nodes</a>
+                }
+                @* Single "Settings" item replaces the old Admin dropdown + top-level Logs
+                   button — see Pages/Admin/Settings/Index.cshtml, which links out to every
                    permission-gated destination those used to. *@
                 @if (showSettingsHub)
                 {
@@ -235,6 +249,7 @@
     <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js" asp-append-version="true"></script>
     @* Loaded before anything that reads/writes a user preference, including theme.js and
        table-pagination.js right below it. *@
+    <script src="~/js/local-time.js" asp-append-version="true"></script>
     <script src="~/js/user-preferences.js" asp-append-version="true"></script>
     <script src="~/js/theme.js" asp-append-version="true"></script>
     <script src="~/js/pwa.js" asp-append-version="true"></script>

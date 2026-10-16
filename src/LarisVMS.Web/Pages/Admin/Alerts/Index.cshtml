@@ -34,7 +34,7 @@
                         <td><a asp-page="Edit" asp-route-id="@r.Id">@r.Name</a></td>
                         <td class="small">@r.ConditionSummary</td>
                         <td class="small">@(r.ChannelLabels.Count == 0 ? "(none)" : string.Join(", ", r.ChannelLabels))</td>
-                        <td class="small text-muted">@(r.LastFiredAt is { } fired ? fired.ToString("u") : "never")</td>
+                        <td class="small text-muted">@(r.LastFiredAt is { } fired ? fired.ToLocalTime().ToString("g") : "never")</td>
                         <td>
                             @if (r.IsEnabled)
                             {

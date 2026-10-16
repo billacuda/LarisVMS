@@ -566,6 +566,7 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
             current.Height = profile.Height ?? current.Height;
             current.Fps = profile.FrameRateLimit;
             current.BitrateKbps = profile.BitrateLimitKbps;
+            current.ConfiguredBitrateKbps = profile.BitrateLimitKbps ?? current.ConfiguredBitrateKbps;
             current.HasAudio = profile.HasAudio;
             current.AudioCodec = profile.AudioEncoding;
             count++;

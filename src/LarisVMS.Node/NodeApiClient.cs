@@ -116,6 +116,25 @@ public class NodeApiClient
         response.EnsureSuccessStatusCode();
     }
 
+    /// <summary>The camera's footage data key for a UTC day (created on the server if needed); null
+    /// when the server says encryption isn't set up.</summary>
+    public async Task<FootageKeyResponse?> GetFootageKeyForDayAsync(Guid cameraId, DateOnly day, CancellationToken ct)
+    {
+        var response = await _http.PostAsJsonAsync("api/nodes/footage-keys", new FootageKeyRequest(cameraId, day), ct);
+        if (response.StatusCode == System.Net.HttpStatusCode.Conflict) return null;
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<FootageKeyResponse>(ct);
+    }
+
+    /// <summary>A footage data key by id, for reading; null when the server doesn't know it.</summary>
+    public async Task<FootageKeyResponse?> GetFootageKeyAsync(Guid keyId, CancellationToken ct)
+    {
+        var response = await _http.GetAsync($"api/nodes/footage-keys/{keyId}", ct);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<FootageKeyResponse>(ct);
+    }
+
     public async Task<List<string>> GetSegmentFilePathsAsync(CancellationToken ct)
     {
         var response = await _http.GetAsync("api/nodes/segments/paths", ct);

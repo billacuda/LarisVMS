@@ -43,6 +43,42 @@ public record NodeDashboardRow(Guid NodeId, string NodeName, bool Online,
 /// days, each excluding the shorter ones. Objects sums each span's peak simultaneous count.</summary>
 public record CameraEventCountRow(Guid CameraId, string Kind, string? Name, int Bucket, int Spans, int Objects);
 
+/// <summary>One row of a dashboard top-10 widget or its full report. Display is the formatted value
+/// shown in the value column; Value is the raw number it was ranked by (null where ranking isn't by a
+/// number, e.g. a node-health issue). Note is secondary text under the name; Badge/BadgeClass an
+/// optional Bootstrap badge. AssetId is a string so alert/detection rows (long ids) fit too.
+/// NoteTimeUtc fills a "{time}" placeholder in Note — the browser formats it in the viewer's own local
+/// time, since the server can't know the viewer's time zone.</summary>
+public record DashboardWidgetRow(string AssetId, string AssetName, string AssetKind, string? Link,
+    Guid? NodeId, string? NodeName, double? Value, string Display,
+    string? Note = null, string? Badge = null, string? BadgeClass = null, DateTime? NoteTimeUtc = null,
+    /// <summary>Per-column values for a report that declares its own columns
+    /// (DashboardReportPage.Columns), keyed by column key. A "time" cell is a UTC ISO timestamp the
+    /// browser shows in local time.</summary>
+    IReadOnlyDictionary<string, string?>? Cells = null);
+
+/// <summary>A report column. Type is "text", "time" (UTC ISO, shown in local time) or "number"
+/// (right-aligned). SortKey is what the header sends as ?sort= (null = not sortable). CsvOnly columns
+/// go into the CSV download but not the table.</summary>
+public record DashboardReportColumn(string Key, string Header, string Type = "text", string? SortKey = null, bool CsvOnly = false);
+
+/// <summary>One widget's top rows for the dashboard poll. Total is how many rows the full report has.
+/// Snapshots is filled only for the latest-detections widget, which draws thumbnails instead of rows.</summary>
+public record DashboardWidgetResult(string Key, int Total, List<DashboardWidgetRow> Rows, string? EmptyMessage,
+    IReadOnlyList<SnapshotDto>? Snapshots = null);
+
+/// <summary>One page of a widget's full report (the popup opened from a widget's title).</summary>
+public record DashboardReportPage(string Key, string Title, string ValueHeader, int Total, int Page, int PageSize,
+    int TotalPages, List<DashboardWidgetRow> Rows,
+    /// <summary>When set, the popup shows these columns (from each row's Cells) instead of its
+    /// standard rank/name/node/details/value layout.</summary>
+    IReadOnlyList<DashboardReportColumn>? Columns = null);
+
+/// <summary>Per-request options for a widget: Window is "1h"/"24h"/"7d"/"30d" for the event-count
+/// widgets; Ascending flips a direction-toggle widget to lowest first; Kinds is the latest-detections
+/// widget's chosen detection types (null = its default, every type except plain motion).</summary>
+public record DashboardWidgetOptions(string? Window = null, bool Ascending = false, IReadOnlyList<string>? Kinds = null);
+
 /// <summary>One node's row for the M20 monitoring API — every Node, with its own reachability and
 /// disk space.</summary>
 public record NodeStatusRow(Guid NodeId, string NodeName, bool Online,

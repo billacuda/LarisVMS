@@ -5,6 +5,14 @@
 <html lang="en" data-bs-theme="light">
 <head>
     <meta charset="utf-8" />
+    <script>
+        // Back/forward must never land on ERR_CACHE_MISS / "Confirm form resubmission". A page
+        // rendered as the response to a form POST (a settings page after Save, a form redisplayed
+        // with an error) is a POST entry in the browser's history; replacing the entry with its own
+        // URL turns it into a plain GET entry, so returning to it just reloads the page. Harmless on
+        // a page that came from a GET. Keeps the current state and #hash.
+        try { history.replaceState(history.state, '', location.href); } catch (e) { /* not fatal */ }
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     @* PWA: manifest (Program.cs /manifest.webmanifest) + icons make the site installable on phones. *@
     <link rel="manifest" href="/manifest.webmanifest" />

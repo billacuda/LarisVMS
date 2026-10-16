@@ -105,7 +105,8 @@ public class ThumbnailBackfillService(NodeApiClient api, NodeWorker worker, stri
                     var thumbPath = Path.Combine(thumbsDir, Path.ChangeExtension(relative, null)
                         + $"_o00_{LarisVMS.Media.ThumbnailCapture.DefaultMaxDimension}q{LarisVMS.Media.ThumbnailCapture.DefaultQuality}"
                         + LarisVMS.Media.CachedImageFormat.Extension(webp));
-                    await LarisVMS.Media.ThumbnailCapture.SaveToCacheAsync(thumbPath, bytes, ct);
+                    // Sealed when the camera encrypts its images (FootageStore).
+                    await worker.Footage.WriteImageAsync(thumbPath, bytes, worker.EncryptsImages(camera.CameraId) ? camera.CameraId : null, ct);
                 }
                 processed++;
 

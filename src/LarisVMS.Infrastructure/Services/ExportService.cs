@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
@@ -8,10 +10,12 @@ using LarisVMS.Infrastructure.Data;
 namespace LarisVMS.Infrastructure.Services;
 
 /// <inheritdoc cref="IExportService"/>
-public class ExportService(ApplicationDbContext db) : IExportService
+public class ExportService(ApplicationDbContext db, ExportManifestBuilder? manifests = null,
+    ILogger<ExportService>? logger = null) : IExportService
 {
     public async Task<ExportJob> CreateJobAsync(IReadOnlyList<Guid> cameraIds, DateTime fromUtc, DateTime toUtc,
-        string requestedByUserId, string? requestedByUserName, CancellationToken ct = default)
+        string requestedByUserId, string? requestedByUserName, CancellationToken ct = default,
+        IReadOnlyDictionary<Guid, string>? redactionJsonByCamera = null)
     {
         fromUtc = TimelineService.NormalizeToUtc(fromUtc);
         toUtc = TimelineService.NormalizeToUtc(toUtc);
@@ -34,7 +38,8 @@ public class ExportService(ApplicationDbContext db) : IExportService
                 Id = Guid.NewGuid(),
                 ExportJobId = job.Id,
                 CameraId = cameraId,
-                Status = ExportItemStatus.Queued
+                Status = ExportItemStatus.Queued,
+                RedactionJson = redactionJsonByCamera?.GetValueOrDefault(cameraId)
             });
         }
 
@@ -59,7 +64,7 @@ public class ExportService(ApplicationDbContext db) : IExportService
             select new ExportDispatchCandidate(
                 item.Id, item.CameraId, camera != null ? camera.Name : "(deleted camera)",
                 item.NodeId ?? (camera != null ? camera.NodeId : null), item.NodeId != null,
-                job.FromUtc, job.ToUtc)
+                job.FromUtc, job.ToUtc, item.RedactionJson)
         ).ToListAsync(ct);
 
     public async Task SplitItemAcrossNodesAsync(Guid itemId, IReadOnlyList<Guid> nodeIds, CancellationToken ct = default)
@@ -72,7 +77,7 @@ public class ExportService(ApplicationDbContext db) : IExportService
             db.ExportJobItems.Add(new ExportJobItem
             {
                 Id = Guid.NewGuid(), ExportJobId = item.ExportJobId, CameraId = item.CameraId,
-                NodeId = nodeId, Status = ExportItemStatus.Queued
+                NodeId = nodeId, Status = ExportItemStatus.Queued, RedactionJson = item.RedactionJson
             });
         }
 
@@ -118,14 +123,44 @@ public class ExportService(ApplicationDbContext db) : IExportService
             item.Status = report.Success ? ExportItemStatus.Done : ExportItemStatus.Failed;
             item.OutputFilePath = report.Success ? report.OutputFilePath : null;
             item.OutputSizeBytes = report.SizeBytes;
+            item.OutputSha256 = report.Success && SegmentChain.IsHash(report.OutputSha256?.ToLowerInvariant())
+                ? report.OutputSha256!.ToLowerInvariant() : null;
             item.ErrorMessage = report.Success ? null : Truncate(report.ErrorMessage ?? "Export failed.", 2000);
             item.CompletedUtc = DateTime.UtcNow;
             affectedJobIds.Add(item.ExportJobId);
         }
 
         await db.SaveChangesAsync(ct);
+
+        // Tamper evidence: a signed manifest for each finished export. A failure here never fails
+        // the export itself — the file is still there; it just can't be verified.
+        if (manifests is not null)
+        {
+            foreach (var report in items.Where(r => r.Success && r.OutputSha256 is not null))
+            {
+                try
+                {
+                    var json = await manifests.BuildAsync(report.ExportItemId, report, ct);
+                    if (json is null) continue;
+                    var existing = await db.ExportManifests.FirstOrDefaultAsync(m => m.ExportJobItemId == report.ExportItemId, ct);
+                    if (existing is null) db.ExportManifests.Add(new ExportManifest { ExportJobItemId = report.ExportItemId, Json = json });
+                    else { existing.Json = json; existing.CreatedUtc = DateTime.UtcNow; }
+                    var item = await db.ExportJobItems.FirstOrDefaultAsync(i => i.Id == report.ExportItemId, ct);
+                    if (item is not null) item.ManifestSignedUtc = DateTime.UtcNow;
+                    await db.SaveChangesAsync(ct);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    logger?.LogError(ex, "Couldn't build the signed manifest for export item {ExportItemId}.", report.ExportItemId);
+                }
+            }
+        }
+
         foreach (var jobId in affectedJobIds) await RecomputeJobStatusAsync(jobId, ct);
     }
+
+    public async Task<string?> GetManifestAsync(Guid exportItemId, CancellationToken ct = default) =>
+        await db.ExportManifests.AsNoTracking().Where(m => m.ExportJobItemId == exportItemId).Select(m => m.Json).FirstOrDefaultAsync(ct);
 
     public async Task<ExportDownloadInfo?> GetDownloadInfoAsync(Guid exportItemId, CancellationToken ct = default)
     {

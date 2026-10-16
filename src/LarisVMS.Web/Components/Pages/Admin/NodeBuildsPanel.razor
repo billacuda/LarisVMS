@@ -1,0 +1,211 @@
+@* Node and media proxy builds, on the Nodes page: per platform, the build nodes are running toward
+   (the newest approved one) and any build waiting for approval, with Approve / Reject; every build
+   ever registered is in the Build history pop-up. Replaces the separate Node builds page. Each
+   approve/reject is its own named form (one per build), handled here — see Nodes.razor's row forms
+   for why the id is read off the posted form. *@
+@using System.Security.Claims
+@using LarisVMS.Core.Entities
+@using LarisVMS.Core.Enums
+@using LarisVMS.Core.Interfaces
+@inject INodeBuildService NodeBuildService
+@inject IAuditService AuditService
+@inject NavigationManager NavigationManager
+
+<section class="card mb-4" id="builds" aria-labelledby="buildsTitle">
+    <div class="card-header d-flex flex-wrap align-items-center gap-2">
+        <h2 class="h6 mb-0" id="buildsTitle">Builds</h2>
+        @if (Pending.Count > 0)
+        {
+            <span class="badge text-bg-warning">@Pending.Count waiting for approval</span>
+        }
+        <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" data-bs-toggle="modal" data-bs-target="#buildHistoryModal">
+            Build history (@Builds.Count)
+        </button>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small mb-3">
+            Nodes and media proxies update themselves to the newest approved build of their kind. A new build waits here
+            until it's approved; older pending ones are superseded. <a href="/Help/nodes#updates">Learn more</a>
+        </p>
+        @if (Platforms.Count == 0)
+        {
+            <p class="text-muted mb-0">No builds registered yet. Run <code>deploy.ps1</code> to register one.</p>
+        }
+        <div class="row g-3">
+            @foreach (var platform in Platforms)
+            {
+                var latest = Builds.Where(b => b.Platform == platform && b.Status == NodeBuildStatus.Approved)
+                    .OrderByDescending(b => b.UploadedAt).FirstOrDefault();
+                var pending = Pending.Where(b => b.Platform == platform).ToList();
+                <div class="col-lg-6">
+                    <div class="border rounded p-3 h-100">
+                        <div class="fw-semibold mb-2">@PlatformName(platform)</div>
+                        @if (latest is not null)
+                        {
+                            <div class="small">
+                                Current: <strong>@latest.Version</strong>
+                                <span class="text-muted">· approved @(latest.ApprovedAt?.ToLocalTime().ToString("g") ?? "?")@(latest.ApprovedBy is { } by ? $" by {by}" : "")</span>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="small text-muted">No approved build yet.</div>
+                        }
+                        @foreach (var b in pending)
+                        {
+                            <div class="d-flex flex-wrap align-items-center gap-2 mt-2 p-2 rounded bg-warning-subtle">
+                                <div class="small me-auto">
+                                    <strong>@b.Version</strong> waiting for approval
+                                    <span class="text-muted">· registered @b.UploadedAt.ToLocalTime().ToString("g") · @ByteFormat.Format(b.SizeBytes)@(b.VisionFilePath is not null ? " · with AI detection" : "")</span>
+                                    @if (!string.IsNullOrWhiteSpace(b.Notes)) { <div class="text-muted">@b.Notes</div> }
+                                </div>
+                                <EditForm Model="this" FormName="@($"approve-build-{b.Id}")" OnValidSubmit="HandleApproveAsync" class="d-inline">
+                                    <input type="hidden" name="BuildId" value="@b.Id" />
+                                    <button type="submit" class="btn btn-sm btn-success">Approve</button>
+                                </EditForm>
+                                <EditForm Model="this" FormName="@($"reject-build-{b.Id}")" OnValidSubmit="HandleRejectAsync" class="d-inline">
+                                    <input type="hidden" name="BuildId" value="@b.Id" />
+                                    <button type="submit" class="btn btn-sm btn-outline-danger"
+                                            onclick="return confirm('Reject build @b.Version? It stays in the history, but no node will ever be offered it.');">Reject</button>
+                                </EditForm>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+</section>
+
+<div class="modal fade" id="buildHistoryModal" tabindex="-1" aria-labelledby="buildHistoryTitle" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="buildHistoryTitle">Build history</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                @if (Builds.Count == 0)
+                {
+                    <p class="text-muted mb-0">No builds registered yet.</p>
+                }
+                else
+                {
+                    <div class="table-responsive">
+                        <table class="table table-sm align-middle" data-sortable>
+                            <thead>
+                                <tr>
+                                    <th>Version</th>
+                                    <th>Kind</th>
+                                    <th>Status</th>
+                                    <th>Registered</th>
+                                    <th>Decided</th>
+                                    <th data-sort-numeric>Size</th>
+                                    <th>SHA-256</th>
+                                    <th>AI detection</th>
+                                    <th>Notes</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var b in Builds.OrderByDescending(b => b.UploadedAt))
+                                {
+                                    <tr>
+                                        <td>@b.Version</td>
+                                        <td>@PlatformName(b.Platform)</td>
+                                        <td>
+                                            @switch (b.Status)
+                                            {
+                                                case NodeBuildStatus.Pending:
+                                                    <span class="badge text-bg-warning">Pending</span>
+                                                    break;
+                                                case NodeBuildStatus.Approved:
+                                                    <span class="badge text-bg-success">Approved</span>
+                                                    break;
+                                                case NodeBuildStatus.Superseded:
+                                                    <span class="badge text-bg-light border" title="A newer build was registered or approved before this one was">Superseded</span>
+                                                    break;
+                                                default:
+                                                    <span class="badge text-bg-secondary">Rejected</span>
+                                                    break;
+                                            }
+                                        </td>
+                                        <td class="text-nowrap" data-sort-value="@b.UploadedAt.ToString("o")">@b.UploadedAt.ToLocalTime().ToString("g")</td>
+                                        <td class="text-nowrap small">@(b.ApprovedAt?.ToLocalTime().ToString("g"))@(b.ApprovedBy is { } who ? $" · {who}" : "")</td>
+                                        <td data-sort-value="@b.SizeBytes">@ByteFormat.Format(b.SizeBytes)</td>
+                                        <td class="font-monospace small" title="@b.Sha256">@b.Sha256[..12]&hellip;</td>
+                                        <td>@(b.VisionFilePath is not null ? "✅" : "—")</td>
+                                        <td class="small">@b.Notes</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    // Loaded by Nodes.razor, not here: sibling components initialize concurrently and would share the
+    // request's one DbContext ("a second operation was started on this context").
+    [Parameter] public List<NodeBuildVersion> Builds { get; set; } = [];
+    private List<NodeBuildVersion> Pending = [];
+    private List<string> Platforms = [];
+
+    protected override void OnParametersSet()
+    {
+        Pending = Builds.Where(b => b.Status == NodeBuildStatus.Pending).OrderByDescending(b => b.UploadedAt).ToList();
+        Platforms = Builds.Select(b => b.Platform).Distinct()
+            .OrderBy(p => p.StartsWith("proxy", StringComparison.OrdinalIgnoreCase)).ThenBy(p => p).ToList();
+    }
+
+    private ClaimsPrincipal User => HttpContext?.User ?? new ClaimsPrincipal(new ClaimsIdentity());
+
+    private static string PlatformName(string platform) =>
+        platform.StartsWith("proxy-", StringComparison.OrdinalIgnoreCase) ? $"Media proxy ({platform[6..]})" : $"Recorder node ({platform})";
+
+    private Guid PostedBuildId() => Guid.TryParse(HttpContext?.Request.Form["BuildId"].ToString(), out var id) ? id : Guid.Empty;
+
+    private string By => User.FindFirst(ClaimTypes.Name)?.Value ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "unknown";
+
+    private async Task HandleApproveAsync()
+    {
+        var id = PostedBuildId();
+        var build = (await NodeBuildService.ListAsync()).FirstOrDefault(b => b.Id == id);
+        try
+        {
+            await NodeBuildService.ApproveAsync(id, By);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Superseded or rejected since the page loaded (a newer build landed).
+            Navigate(ex.Message, isError: true);
+            return;
+        }
+        await LogAsync("NodeBuild.Approve", build, id);
+        if (build is null) { Navigate("Build approved."); return; }
+        var kind = build.Platform.StartsWith("proxy-", StringComparison.OrdinalIgnoreCase) ? "proxies" : "nodes";
+        Navigate($"{build.Version} approved — {kind} update on their next check-in.");
+    }
+
+    private async Task HandleRejectAsync()
+    {
+        var id = PostedBuildId();
+        var build = (await NodeBuildService.ListAsync()).FirstOrDefault(b => b.Id == id);
+        await NodeBuildService.RejectAsync(id, By);
+        await LogAsync("NodeBuild.Reject", build, id);
+        Navigate(build is null ? "Build rejected." : $"{build.Version} rejected.");
+    }
+
+    private void Navigate(string message, bool isError = false) =>
+        NavigationManager.NavigateTo($"/Admin/Nodes?statusMessage={Uri.EscapeDataString(message)}&statusIsError={isError}#builds");
+
+    /// <summary>Approving a build is fleet-wide (every node picks it up on its next heartbeat), so it's
+    /// audited by version and platform — what an operator recognizes in the log months later.</summary>
+    private Task LogAsync(string action, NodeBuildVersion? build, Guid id) =>
+        AuditService.LogAsync(action, User.FindFirst(ClaimTypes.NameIdentifier)?.Value, User.Identity?.Name,
+            HttpContext?.Connection.RemoteIpAddress?.ToString(), build is null ? id.ToString() : $"{build.Version} ({build.Platform})");
+}

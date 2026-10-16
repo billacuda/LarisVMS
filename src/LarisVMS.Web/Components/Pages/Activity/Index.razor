@@ -1,0 +1,139 @@
+@page "/Activity"
+@attribute [Authorize("Playback.View")]
+@using System.Security.Claims
+@using System.Text.Json
+@using LarisVMS.Core.Entities
+@using LarisVMS.Core.Enums
+@using LarisVMS.Core.Interfaces
+@inject ICameraService CameraService
+@inject ICameraAccessService CameraAccess
+
+<PageTitle>Activity - @AppName</PageTitle>
+
+<div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+    <h1 class="mb-0">Activity</h1>
+    <span class="text-muted small">When things happen on a camera, and how fast, by time of day</span>
+</div>
+
+@if (Cameras.Count == 0)
+{
+    <p class="text-muted">No cameras you can review yet.</p>
+}
+else
+{
+    <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+        <select class="form-select form-select-sm w-auto" id="activityCamera" aria-label="Camera">
+            <option value="all" selected="@AllCameras">All cameras</option>
+            @foreach (var c in Cameras)
+            {
+                <option value="@c.Id" selected="@(!AllCameras && c.Id == SelectedCameraId)">@c.Name</option>
+            }
+        </select>
+        <div class="btn-group btn-group-sm" role="group" aria-label="What to show" id="activityKind">
+            <button type="button" class="btn btn-outline-primary" data-kind="events">Events</button>
+            <button type="button" class="btn btn-outline-primary" data-kind="speeds" title="Speeds measured by speed traps">Speeds</button>
+        </div>
+        <div class="btn-group btn-group-sm" role="group" aria-label="Time range" id="activityRange">
+            @foreach (var (value, label) in RangeOptions)
+            {
+                <button type="button" class="btn btn-outline-secondary" data-range="@value">@label</button>
+            }
+        </div>
+        @* Only for 30 days and up — see activity.js. *@
+        <div class="btn-group btn-group-sm d-none" role="group" aria-label="Layout" id="activityView">
+            <button type="button" class="btn btn-outline-secondary" data-view="pattern" title="Each weekday and hour, totalled over the range">Typical week</button>
+            <button type="button" class="btn btn-outline-secondary" data-view="calendar" title="Every day of the range, left to right">By day</button>
+        </div>
+        <div class="form-check form-switch ms-auto mb-0">
+            <input class="form-check-input" type="checkbox" role="switch" id="activityTableView">
+            <label class="form-check-label small" for="activityTableView">Show as table</label>
+        </div>
+    </div>
+
+    <div class="row g-3">
+        <div class="col-12 col-lg-3">
+            <div class="card" id="activityEventCard">
+                <div class="card-header py-2 d-flex align-items-center">
+                    <span class="fw-semibold small">Event types</span>
+                    <button type="button" class="btn btn-link btn-sm p-0 ms-auto" id="activityResetFilter">Defaults</button>
+                </div>
+                <div class="card-body py-2 small" id="activityFilter"><span class="text-muted">Loading…</span></div>
+            </div>
+            @* Speeds view only — see activity.js. *@
+            <div class="card d-none" id="activitySpeedCard">
+                <div class="card-header py-2"><span class="fw-semibold small">Speeds</span></div>
+                <div class="card-body py-2 small">
+                    <label class="form-label small mb-1" for="activityMetric">Show</label>
+                    <select class="form-select form-select-sm mb-2" id="activityMetric">
+                        <option value="avg">Average speed</option>
+                        <option value="max">Top speed</option>
+                        <option value="over">Number over the limit</option>
+                        <option value="count">Number measured</option>
+                    </select>
+                    <div class="fw-semibold small mb-1">Speed traps</div>
+                    <div id="activitySpeedTraps"><span class="text-muted">Loading…</span></div>
+                </div>
+            </div>
+        </div>
+        <div class="col-12 col-lg-9">
+            <div class="card">
+                <div class="card-body">
+                    <p class="mb-1 fw-semibold" id="activityPeak"></p>
+                    <p class="text-muted small mb-3" id="activitySummary"></p>
+                    <div id="activityChart" class="activity-chart" aria-live="polite"></div>
+                    <div id="activityLegend" class="activity-legend mt-3"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<div id="activityTooltip" class="activity-tooltip d-none" role="tooltip"></div>
+
+<SectionContent SectionName="PageScripts">
+    <script type="application/json" id="activityConfig">@((MarkupString)ConfigJson)</script>
+    <script src="/js/activity.js"></script>
+</SectionContent>
+
+@code {
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+    [SupplyParameterFromQuery(Name = "cameraId")] private string? CameraIdParam { get; set; }
+    [SupplyParameterFromQuery(Name = "view")] private string? ViewParam { get; set; }
+    [SupplyParameterFromQuery(Name = "range")] private string? RangeParam { get; set; }
+    [SupplyParameterFromQuery(Name = "kind")] private string? KindParam { get; set; }
+    [SupplyParameterFromQuery(Name = "metric")] private string? MetricParam { get; set; }
+
+    private static readonly (string Value, string Label)[] RangeOptions =
+        [("24h", "24 hours"), ("7d", "7 days"), ("30d", "30 days"), ("90d", "90 days"), ("1y", "1 year")];
+
+    private List<Camera> Cameras { get; set; } = [];
+    private Guid? SelectedCameraId { get; set; }
+    private bool AllCameras { get; set; }
+    private string ConfigJson { get; set; } = "{}";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = AuthenticationStateTask is not null
+            ? (await AuthenticationStateTask).User
+            : new ClaimsPrincipal(new ClaimsIdentity());
+
+        var accessible = await CameraAccess.GetAccessibleCameraIdsAsync(user, CameraAccessActions.Playback);
+        Cameras = (await CameraService.ListAsync())
+            .Where(c => accessible is null || accessible.Contains(c.Id))
+            .OrderBy(c => c.Name).ToList();
+        AllCameras = string.Equals(CameraIdParam, "all", StringComparison.OrdinalIgnoreCase);
+        var requested = Guid.TryParse(CameraIdParam, out var g) ? g : (Guid?)null;
+        SelectedCameraId = Cameras.FirstOrDefault(c => c.Id == requested)?.Id ?? Cameras.FirstOrDefault()?.Id;
+
+        // System.Text.Json's default encoder escapes <, > and &, so this is safe inside a <script> tag.
+        ConfigJson = JsonSerializer.Serialize(new
+        {
+            cameraId = AllCameras ? "all" : SelectedCameraId?.ToString(),
+            range = LarisVMS.Infrastructure.Services.ActivityHeatmapBuilder.NormalizeRange(RangeParam),
+            view = ViewParam is "calendar" or "pattern" ? ViewParam : null,
+            kind = KindParam is "speeds" or "events" ? KindParam : null,
+            metric = MetricParam is "avg" or "max" or "over" or "count" ? MetricParam : null,
+        }, JsonSerializerOptions.Web);
+    }
+}

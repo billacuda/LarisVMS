@@ -21,7 +21,7 @@ A role is a named set of permissions, managed under **Settings → Roles**. Each
 
 ## Camera access
 
-By default a role can use every camera its permissions allow. **Settings → Camera access** narrows a role down to specific cameras or groups, separately for View, Playback, Export, and PTZ. A role with **no grants is unrestricted**, so adding the first grant is what limits it. Talk and Configure can be granted but aren't enforced yet.
+By default a role can use every camera its permissions allow. **Settings → Camera access** narrows a role down to specific cameras or groups, separately for View, Playback, Export, PTZ, and Talk (two-way audio). A role with **no grants is unrestricted**, so adding the first grant is what limits it. Configure can be granted but isn't enforced yet.
 
 ## Entra
 

@@ -1,0 +1,129 @@
+@* Node-wide settings on the Nodes page (was Settings → Nodes): auto-update, the release check, and
+   the registration key new nodes use. Needs Settings.Edit on top of the page's own Nodes.Edit —
+   Nodes.razor only renders this for people who have it, and the save handler checks again. *@
+@using System.Security.Claims
+@using LarisVMS.Core
+@using LarisVMS.Core.Interfaces
+@using LarisVMS.Web.Services
+@inject ISettingsResolver Settings
+@inject IAuditService AuditService
+@inject IPermissionService PermissionService
+@inject ReleaseCheckState ReleaseCheckState
+
+<section class="card mb-4" id="settings" aria-labelledby="nodeSettingsTitle">
+    <div class="card-header"><h2 class="h6 mb-0" id="nodeSettingsTitle">Updates and registration</h2></div>
+    <div class="card-body">
+        @if (!string.IsNullOrEmpty(SavedMessage))
+        {
+            <div class="alert alert-success py-2">@SavedMessage</div>
+        }
+        <EditForm Model="this" FormName="node-settings" OnSubmit="HandleSaveAsync" data-dirty-guard>
+            <SettingSection Title="Updates">
+                <SettingField Label="Auto-update" Hint="Nodes and proxies install the newest approved build on their next check-in." HelpLink="/Help/nodes#updates">
+                    <div class="form-check mt-1">
+                        <InputCheckbox @bind-Value="NodeAutoUpdateEnabled" class="form-check-input" id="NodeAutoUpdateEnabled" />
+                        <label class="form-check-label" for="NodeAutoUpdateEnabled">Auto-update nodes and media proxies</label>
+                    </div>
+                </SettingField>
+                <SettingField Label="New versions" Hint="Once a day the server checks LarisVMS's GitHub releases and, when a newer version is out, shows a notice in the top bar for people who can change settings. It's the only routine call LarisVMS makes outside your network, and it sends nothing about your install." HelpLink="/Help/installation#updates">
+                    <div class="form-check mt-1">
+                        <InputCheckbox @bind-Value="ReleaseCheckEnabled" class="form-check-input" id="ReleaseCheckEnabled" />
+                        <label class="form-check-label" for="ReleaseCheckEnabled">Check for new LarisVMS versions</label>
+                    </div>
+                </SettingField>
+            </SettingSection>
+            <SettingSection Title="Registration">
+                <SettingField Label="Registration key" Wide Hint="Used by install-node.ps1 when a node first registers. Changing it doesn't affect existing nodes." HelpLink="/Help/installation#nodes">
+                    <div class="input-group">
+                        <InputText @bind-Value="RegistrationKey" type="password" class="form-control font-monospace" id="registrationKeyInput" />
+                        <button type="button" class="btn btn-outline-secondary" data-secret-toggle="registrationKeyInput"
+                                data-secret-label="registration key" aria-pressed="false" aria-label="Show registration key">
+                            <span aria-hidden="true" data-secret-glyph>👁️</span>
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary" id="regenerateKeyBtn">Generate</button>
+                    </div>
+                </SettingField>
+            </SettingSection>
+            <div class="lv-savebar">
+                <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+        </EditForm>
+    </div>
+</section>
+
+<SectionContent SectionName="PageScripts">
+    <script>
+        (function () {
+            var btn = document.getElementById('regenerateKeyBtn');
+            var input = document.getElementById('registrationKeyInput');
+            if (!btn || !input) return;
+            btn.addEventListener('click', function () {
+                var bytes = new Uint8Array(24);
+                crypto.getRandomValues(bytes);
+                input.value = Array.prototype.map.call(bytes, function (b) {
+                    return b.toString(16).padStart(2, '0');
+                }).join('').toUpperCase();
+                // Reveal the freshly generated key so the user can read/copy what they just made.
+                input.dispatchEvent(new Event('secret-reveal:show'));
+            });
+        })();
+    </script>
+</SectionContent>
+
+@code {
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    [SupplyParameterFromForm(FormName = "node-settings")] private string? RegistrationKey { get; set; }
+    [SupplyParameterFromForm(FormName = "node-settings")] private bool NodeAutoUpdateEnabled { get; set; }
+    [SupplyParameterFromForm(FormName = "node-settings")] private bool ReleaseCheckEnabled { get; set; }
+
+    // Loaded by Nodes.razor (see NodeBuildsPanel's Builds for why).
+    [Parameter] public string? InitialRegistrationKey { get; set; }
+    [Parameter] public bool InitialAutoUpdate { get; set; }
+    [Parameter] public bool InitialReleaseCheck { get; set; }
+
+    private string? SavedMessage;
+
+    private ClaimsPrincipal User => HttpContext?.User ?? new ClaimsPrincipal(new ClaimsIdentity());
+
+    protected override void OnParametersSet()
+    {
+        // Skip the form fields on this form's own POST: the submitted values are already bound, and
+        // reloading here would save the old ones back (see Detection.razor's OnInitializedAsync).
+        if (HttpContext?.Request.HasFormContentType == true && HttpContext.Request.Form["_handler"] == "node-settings") return;
+        RegistrationKey = InitialRegistrationKey;
+        NodeAutoUpdateEnabled = InitialAutoUpdate;
+        ReleaseCheckEnabled = InitialReleaseCheck;
+    }
+
+    private async Task HandleSaveAsync()
+    {
+        if (!(await PermissionService.GetGrantedAsync(User)).Has("Settings", "Edit")) return;
+        var by = User.Identity?.Name;
+
+        // Registration key is diffed as a secret — the entry records that it changed, never the key
+        // itself, since the audit log is readable by anyone with Logs.View.
+        var oldRegistrationKey = await Settings.GetRawAsync("Node.RegistrationKey");
+        var oldAutoUpdate = await Settings.GetAsync("NodeAutoUpdate.Enabled", true);
+        var oldReleaseCheck = await Settings.GetAsync(ReleaseCheckService.EnabledKey, ReleaseCheckService.DefaultEnabled);
+
+        // Blank means "leave unchanged" — the form always submits the current key.
+        if (!string.IsNullOrWhiteSpace(RegistrationKey))
+            await Settings.SetGlobalAsync("Node.RegistrationKey", RegistrationKey, by);
+        await Settings.SetGlobalAsync("NodeAutoUpdate.Enabled", NodeAutoUpdateEnabled.ToString(), by);
+        await Settings.SetGlobalAsync(ReleaseCheckService.EnabledKey, ReleaseCheckEnabled.ToString(), by);
+        // Off: the notice goes at once. Back on: check now rather than at the next daily run.
+        if (!ReleaseCheckEnabled) ReleaseCheckState.Set(null);
+        else if (!oldReleaseCheck) ReleaseCheckState.RequestCheck();
+
+        var details = AuditDiff.Build(
+            AuditDiff.Secret("Node.RegistrationKey", oldRegistrationKey,
+                string.IsNullOrWhiteSpace(RegistrationKey) ? oldRegistrationKey : RegistrationKey),
+            AuditDiff.Of("NodeAutoUpdate.Enabled", oldAutoUpdate.ToString(), NodeAutoUpdateEnabled.ToString()),
+            AuditDiff.Of(ReleaseCheckService.EnabledKey, oldReleaseCheck.ToString(), ReleaseCheckEnabled.ToString()));
+        await AuditService.LogAsync("Settings.Update", User.FindFirst(ClaimTypes.NameIdentifier)?.Value, by,
+            HttpContext?.Connection.RemoteIpAddress?.ToString(), details);
+
+        SavedMessage = "Saved.";
+    }
+}

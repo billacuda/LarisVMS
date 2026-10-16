@@ -9,8 +9,22 @@ Alert rules, notification channels, and email provider setup.
 - **Camera not reporting**: the camera has stopped sending health reports.
 - **Node offline**: the node has stopped checking in.
 - **Storage low**: free space has dropped below a percentage.
+- **Object detected**: AI detection saw a matching object.
+- **Speed over a limit**: an object crossed a [speed trap](/Help/ai-detection#speed-traps) at or over a set speed.
 
-Rules are checked once a minute. The **cooldown** is the minimum time between repeat alerts, so a condition that stays true doesn't alert every minute.
+Health rules are checked once a minute. The **cooldown** is the minimum time between repeat alerts, so a condition that stays true doesn't alert every minute.
+
+### Detection alerts
+
+**Object detected** and **Speed over a limit** fire within seconds of the detection. Every filter is optional, and all the ones you set must match:
+
+- **Camera**: one camera, or any camera.
+- **Category** and **label**: for example Vehicle, or just trucks.
+- **Color**: the object's color, or a person's shirt or pants color. See [object colors](/Help/ai-detection#object-colors).
+- **Zone**: only objects standing inside one of the camera's zones (judged by the bottom of the box).
+- **Active**: days of the week and a time window, in the server's time. A window like 22:00 to 06:00 runs overnight.
+
+One detection alerts once. The cooldown applies to the whole rule, so on a rule watching any camera, a detection on one camera holds back the others until it ends.
 
 Each rule can send to email, webhook, ntfy, Pushover, Slack, and Teams. Turn on a channel and fill in its fields.
 

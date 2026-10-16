@@ -36,6 +36,8 @@ public class RecordingSessionPrivacyMaskTests
         Assert.Equal([
             "-vf", "drawbox=x=iw*0.1:y=ih*0.1:w=iw*0.2:h=ih*0.2:color=black:t=fill",
             "-c:v", "libx264", "-preset", "veryfast",
+            // Without these the tee'd MP4 segments come out unreadable — see EncodePipeline.TeeSafeArgs.
+            "-flags", "+global_header", "-force_key_frames", "expr:gte(t,n_forced*2)",
             "-c:a", "copy"
         ], args);
     }

@@ -1,0 +1,206 @@
+@page "/Admin/Settings/Encryption"
+@attribute [Authorize("Settings.Edit")]
+@using System.Security.Claims
+@using LarisVMS.Core.Interfaces
+@using LarisVMS.Infrastructure.Services
+@inject ISettingsResolver Settings
+@inject IFootageKeyService FootageKeys
+@inject IAuditService AuditService
+@inject ISigningKeyService SigningKeys
+
+<PageTitle>Encryption and signing settings - @AppName</PageTitle>
+
+<h1>Settings</h1>
+<SettingsTabs ActiveKey="Encryption" />
+
+@if (!string.IsNullOrEmpty(SavedMessage))
+{
+    <div class="alert alert-success">@SavedMessage</div>
+}
+
+<div class="lv-page-narrow">
+    <div class="alert alert-warning small" role="note">
+        Encrypted footage can only be read with the <strong>master key</strong>. It's kept on this server, but if the server
+        is rebuilt or its keys are lost, the <strong>backup file and its passphrase</strong> are the only way back.
+        Lose both and every encrypted recording is gone for good. Store the backup somewhere other than this server.
+        <a href="/Help/storage#encryption">Learn more</a>
+    </div>
+
+    <SettingSection Title="Master key">
+        <div id="encryptionKeyPanel" class="small lv-wide">
+            @if (!Status.HasMasterKey)
+            {
+                <p class="mb-2">No master key yet. Create one to start using encryption.</p>
+                <button type="button" class="btn btn-primary btn-sm" id="encCreateKey">Create master key</button>
+            }
+            else
+            {
+                <p class="mb-1">Master key <code>@Status.MasterKeyId?.ToString()[..8]</code>, created @Status.CreatedAt?.ToLocalTime().ToString("g").</p>
+                <p class="mb-2">
+                    @if (Status.BackupDownloadedAt is { } backedUp)
+                    {
+                        <span>Backup last downloaded @backedUp.ToLocalTime().ToString("g").</span>
+                    }
+                    else
+                    {
+                        <span class="text-danger fw-semibold">No backup downloaded yet — encryption stays off until you download one.</span>
+                    }
+                </p>
+            }
+
+            @if (Status.HasMasterKey)
+            {
+                <div class="border rounded p-2 mb-3">
+                    <div class="fw-semibold mb-1">Download a backup</div>
+                    <div class="row g-2 align-items-end">
+                        <div class="col-sm-5">
+                            <label class="form-label small mb-0" for="encPass1">Passphrase (at least @FootageKeyService.MinPassphraseLength characters)</label>
+                            <input type="password" class="form-control form-control-sm" id="encPass1" autocomplete="new-password" />
+                        </div>
+                        <div class="col-sm-5">
+                            <label class="form-label small mb-0" for="encPass2">Passphrase again</label>
+                            <input type="password" class="form-control form-control-sm" id="encPass2" autocomplete="new-password" />
+                        </div>
+                        <div class="col-sm-2">
+                            <button type="button" class="btn btn-primary btn-sm w-100" id="encBackup">Download</button>
+                        </div>
+                    </div>
+                    <div class="lv-hint mt-1">Without this passphrase the backup can't be opened. Write it down and keep it apart from the file.</div>
+                </div>
+            }
+
+            <div class="border rounded p-2">
+                <div class="fw-semibold mb-1">Restore from a backup</div>
+                <div class="row g-2 align-items-end">
+                    <div class="col-sm-5">
+                        <label class="form-label small mb-0" for="encRestoreFile">Backup file</label>
+                        <input type="file" class="form-control form-control-sm" id="encRestoreFile" accept=".json,application/json" />
+                    </div>
+                    <div class="col-sm-5">
+                        <label class="form-label small mb-0" for="encRestorePass">Passphrase</label>
+                        <input type="password" class="form-control form-control-sm" id="encRestorePass" autocomplete="off" />
+                    </div>
+                    <div class="col-sm-2">
+                        <button type="button" class="btn btn-outline-primary btn-sm w-100" id="encRestore">Restore</button>
+                    </div>
+                </div>
+                <div class="lv-hint mt-1">For a rebuilt server: brings back the key the existing encrypted footage needs.</div>
+            </div>
+            <div id="encryptionKeyStatus" class="mt-2" role="status" aria-live="polite"></div>
+        </div>
+    </SettingSection>
+
+    <EditForm Model="this" FormName="encryption-settings" OnSubmit="HandleSaveAsync" data-dirty-guard>
+        <SettingSection Title="Encrypt footage" Subtitle="Default for every camera; nodes and cameras can override it.">
+            <SettingField Label="Encryption" For="encMode" Wide Hint="New footage is encrypted on the recorder a moment after each segment finishes." HelpLink="/Help/storage#encryption">
+                <select name="Mode" id="encMode" class="form-select" disabled="@(!Status.Ready)">
+                    <option value="Off" selected="@(Mode == "Off")">Off</option>
+                    <option value="Video" selected="@(Mode == "Video")">Video (recordings and talk audio)</option>
+                    <option value="VideoAndImages" selected="@(Mode == "VideoAndImages")">Video, snapshots and thumbnails</option>
+                </select>
+                @if (!Status.Ready)
+                {
+                    <div class="lv-hint text-danger">Create the master key and download a backup first.</div>
+                }
+            </SettingField>
+        </SettingSection>
+        <div class="lv-savebar">
+            <button type="submit" class="btn btn-primary" disabled="@(!Status.Ready)">Save</button>
+        </div>
+    </EditForm>
+
+    <SettingSection Title="Signing" Subtitle="Always on; nothing to set up.">
+        <div class="small lv-wide">
+            <p class="mb-2">
+                Every recording is linked into a per-camera hash chain, signed hourly, and every export comes with a signed
+                manifest, so edited or missing footage can be detected. Check an export on
+                <a href="/Exports/Verify">Verify an export</a>. <a href="/Help/live-and-playback#verify-an-export">Learn more</a>
+            </p>
+            @if (SigningKeysList.Count == 0)
+            {
+                <p class="text-muted mb-0">No signing key yet. One is created automatically the first time something is signed.</p>
+            }
+            else
+            {
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead><tr><th>Key</th><th>Algorithm</th><th>Created</th><th>Status</th><th data-no-sort></th></tr></thead>
+                        <tbody>
+                            @foreach (var k in SigningKeysList.OrderByDescending(k => k.CreatedAt))
+                            {
+                                <tr>
+                                    <td class="font-monospace" title="SHA-256 fingerprint of the public key">@Fingerprint(k.PublicKeyPem)</td>
+                                    <td>@k.Algorithm</td>
+                                    <td class="text-nowrap">@k.CreatedAt.ToLocalTime().ToString("g")</td>
+                                    <td>
+                                        @if (k.RetiredAt is { } retired)
+                                        {
+                                            <span class="badge text-bg-secondary" title="Retired @retired.ToLocalTime().ToString("g")">Retired</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge text-bg-success">Active</span>
+                                        }
+                                    </td>
+                                    <td class="text-end">
+                                        <a class="btn btn-sm btn-outline-secondary" download="laris-signing-key-@(k.Id.ToString()[..8]).pem"
+                                           href="data:application/x-pem-file;base64,@Convert.ToBase64String(System.Text.Encoding.ASCII.GetBytes(k.PublicKeyPem))">Public key</a>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="lv-hint mt-1">The public key lets anyone check a manifest with openssl, without access to this server.</div>
+            }
+        </div>
+    </SettingSection>
+</div>
+
+<SectionContent SectionName="PageScripts">
+    <script src="/js/encryption-settings.js"></script>
+</SectionContent>
+
+@code {
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+    [SupplyParameterFromForm(FormName = "encryption-settings")] private string? Mode { get; set; }
+
+    private FootageKeyStatus Status { get; set; } = new(false, null, null, null);
+    private string? SavedMessage { get; set; }
+    private List<PublicSigningKey> SigningKeysList { get; set; } = [];
+
+    /// <summary>First 16 bytes of the SHA-256 of the public key (DER), as colon-separated hex.</summary>
+    private static string Fingerprint(string pem)
+    {
+        try
+        {
+            var body = string.Concat(pem.Split('\n').Where(l => !l.StartsWith("-----")).Select(l => l.Trim()));
+            var hash = System.Security.Cryptography.SHA256.HashData(Convert.FromBase64String(body));
+            return string.Join(":", hash.Take(16).Select(b => b.ToString("x2")));
+        }
+        catch (FormatException) { return "?"; }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        Status = await FootageKeys.GetStatusAsync();
+        SigningKeysList = await SigningKeys.ListPublicKeysAsync();
+        Mode ??= NodeService.NormalizeEncryptMode(await Settings.GetAsync("Storage.Encrypt", "Off"));
+    }
+
+    private async Task HandleSaveAsync()
+    {
+        Status = await FootageKeys.GetStatusAsync();
+        if (!Status.Ready) return;
+        var user = AuthenticationStateTask is not null ? (await AuthenticationStateTask).User : null;
+        var by = user?.Identity?.Name;
+        var old = NodeService.NormalizeEncryptMode(await Settings.GetAsync("Storage.Encrypt", "Off"));
+        Mode = NodeService.NormalizeEncryptMode(Mode);
+        await Settings.SetGlobalAsync("Storage.Encrypt", Mode, by);
+        if (old != Mode)
+            await AuditService.LogAsync("Settings.Encryption", user?.FindFirst(ClaimTypes.NameIdentifier)?.Value, by, null,
+                $"Footage encryption default: {old} → {Mode}");
+        SavedMessage = "Saved. Recorders pick it up within about 30 seconds.";
+    }
+}

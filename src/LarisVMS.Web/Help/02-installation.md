@@ -21,7 +21,7 @@ The server needs no .NET runtime; it's included. The certificate can also be cha
 
 Run `LarisVMS-Node.msi` on each recording machine. It needs:
 
-- `SERVERURL` and `REGISTRATIONKEY`: the server's address and the **registration key** from **Settings → Node defaults**. They're only used the first time the node registers. Changing the key doesn't affect existing nodes.
+- `SERVERURL` and `REGISTRATIONKEY`: the server's address and the **registration key** under **Nodes → Updates and registration**. They're only used the first time the node registers. Changing the key doesn't affect existing nodes.
 - **FFmpeg**, which is not bundled. Install it first with `winget install ffmpeg --scope machine`. The installer finds it, or set `FFMPEGPATH`.
 - `STORAGEROOT`: where the node records. It can also be set later on the node's edit page.
 
@@ -29,7 +29,7 @@ Optional: `ARCHIVEROOT`, `LIVEPORT` (default 8554), `INSECURETLS=1` (accept the 
 
 For AI detection, NVIDIA machines also need the CUDA Toolkit 12.x and cuDNN 9.x; the installer copies their DLLs into place when it finds them. See [AI detection](/Help/ai-detection#hardware).
 
-After installing, the node appears under **Settings → Nodes**. Assign cameras to it from each camera's edit page.
+After installing, the node appears under **Nodes**. Assign cameras to it from each camera's edit page.
 
 ## Media proxies
 
@@ -39,9 +39,9 @@ Run `LarisVMS-Proxy.msi` with `SERVERURL`, `REGISTRATIONKEY`, and `CLIENTPORT` (
 
 **Upgrading:** run the newer `.msi`. It finds the existing install and goes straight to **Ready to upgrade**; settings are remembered, so nothing needs to be entered again except a domain service account's password. The web server applies any database changes itself when it starts. Upgrades never touch recordings, configuration files, node registration, or the data-protection keys, and a failed install is rolled back.
 
-**Nodes and proxies update themselves.** A new web install registers the node and proxy builds it carries as **Pending** under **Settings → Node builds**. Only the newest node build and the newest proxy build wait for approval; older ones move to History as **Superseded**. Approve one, and every older node downloads, verifies, and installs it on its next check-in. Turn this off with **Auto-update** under **Settings → Node defaults**.
+**Nodes and proxies update themselves.** A new web install registers the node and proxy builds it carries as **Pending** in the **Builds** section of **Nodes**. Only the newest node build and the newest proxy build wait for approval; older ones are **Superseded**. **Build history** lists every build. Approve one, and every older node downloads, verifies, and installs it on its next check-in. Turn this off with **Auto-update** under **Nodes → Updates and registration**.
 
-**New versions:** once a day (and when the service starts) the server checks LarisVMS's GitHub releases. When a newer version is out, people who can change settings see **✨ Version X is available** in the top bar, linking to its release notes. Nothing about your install is sent. Turn it off with **New versions** under **Settings → Node defaults**.
+**New versions:** once a day (and when the service starts) the server checks LarisVMS's GitHub releases. When a newer version is out, people who can change settings see **✨ Version X is available** in the top bar, linking to its release notes. Nothing about your install is sent. Turn it off with **New versions** under **Nodes → Updates and registration**.
 
 **Uninstalling** removes the program, its service, and firewall rules. Recordings, configuration, and `%ProgramData%\LarisVMS` are kept.
 

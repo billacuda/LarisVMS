@@ -11,7 +11,7 @@ public enum NodeStatus
 /// <summary>Approval gate on an uploaded/registered NodeBuildVersion — only an Approved build is
 /// ever offered to a node's heartbeat (see NodeBuildService.GetLatestForPlatformAsync). A build
 /// lands as Pending, whether registered by deploy.ps1 or (legacy) the admin upload page, and stays
-/// inert until an admin approves it on Admin/NodeBuilds.</summary>
+/// inert until an admin approves it on the Nodes page.</summary>
 public enum NodeBuildStatus
 {
     Pending = 0,

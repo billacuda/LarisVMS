@@ -44,8 +44,8 @@
                         <td>@k.Name</td>
                         <td>@k.RoleName</td>
                         <td class="font-monospace small">@k.KeyPrefix&hellip;</td>
-                        <td class="small text-muted">@k.CreatedAtUtc.ToString("u")</td>
-                        <td class="small text-muted">@(k.LastUsedAtUtc is { } used ? used.ToString("u") : "never")</td>
+                        <td class="small text-muted">@k.CreatedAtUtc.ToLocalTime().ToString("g")</td>
+                        <td class="small text-muted">@(k.LastUsedAtUtc is { } used ? used.ToLocalTime().ToString("g") : "never")</td>
                         <td>
                             @if (k.Revoked)
                             {

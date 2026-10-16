@@ -5,7 +5,10 @@
 }
 <div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-3">
     <h1 class="mb-0">Zones: @Model.CameraName</h1>
-    <a class="btn btn-outline-secondary" asp-page="Edit" asp-route-id="@Model.CameraId">Back to camera</a>
+    <div class="d-flex gap-2">
+        <a class="btn btn-outline-secondary" asp-page="SpeedTraps" asp-route-id="@Model.CameraId">Speed traps</a>
+        <a class="btn btn-outline-secondary" asp-page="Edit" asp-route-id="@Model.CameraId">Back to camera</a>
+    </div>
 </div>
 
 <div class="d-flex flex-wrap align-items-center gap-3 mb-3">
@@ -13,6 +16,9 @@
         <button type="button" id="modeToggleGrid" class="btn btn-outline-primary">Grid</button>
         <button type="button" id="modeTogglePolygon" class="btn btn-outline-primary">Polygon zones</button>
     </div>
+    @* Privacy masks are drawn here whichever motion method is active — this button only changes what
+       the editor shows, never how the camera detects motion. *@
+    <button type="button" id="modeTogglePrivacy" class="btn btn-outline-dark">🔒 Privacy masks</button>
     <span class="text-muted small">One method is active at a time; switching keeps the other's settings. <a href="/Help/motion#zones">Learn more</a></span>
 </div>
 <div class="alert alert-info py-2 small mb-3" role="note">
@@ -26,8 +32,9 @@
 </div>
 <div id="polygonPane" style="display: none;">
     <p class="text-muted small">
-        Draw a <strong>Motion</strong> zone to watch, or an <strong>Ignore</strong> zone to exclude part of the frame.
-        Camera-side and Privacy zones are saved but not active yet.
+        Draw a <strong>Motion</strong> zone to watch, an <strong>Ignore</strong> zone to exclude part of the frame,
+        or a <strong>Privacy</strong> zone to black out an area in recordings, live view, snapshots and exports.
+        Camera-side zones are saved but not active yet. To reshape a zone, select it and drag its corners, then Save.
     </p>
 </div>
 
@@ -66,10 +73,22 @@
         </div>
         <p id="polygonHint" class="text-muted small mt-1" style="display: none;">
             Click to place each corner (needs at least 3). Click the first point again, or
-            double-click, to close the shape.
+            double-click, to close the shape. Right-click removes the last point.
         </p>
     </div>
     <div class="col-lg-4" id="polygonSidebar" style="display: none;">
+        @* Privacy masks view only. *@
+        <div id="privacyOptions" class="border rounded p-2 mb-3 small" style="display: none;">
+            <div class="form-check form-switch mb-1">
+                <input class="form-check-input" type="checkbox" role="switch" id="privacyBlocksDetections">
+                <label class="form-check-label" for="privacyBlocksDetections">Also ignore detections inside privacy masks</label>
+            </div>
+            <div class="text-muted">
+                Off: a mask only hides that part of the picture. Anything detected behind it is still an event,
+                with its snapshot masked like the video. On: nothing detected inside a mask is reported.
+            </div>
+            <div class="text-muted" id="privacyOptionsStatus" role="status" aria-live="polite"></div>
+        </div>
         <div id="zoneListPanel">
             <p class="text-muted small">Loading zones…</p>
         </div>
@@ -126,6 +145,10 @@
 
             modeToggleGridId: 'modeToggleGrid',
             modeTogglePolygonId: 'modeTogglePolygon',
+            modeTogglePrivacyId: 'modeTogglePrivacy',
+            privacyOptionsId: 'privacyOptions',
+            privacyBlocksDetectionsId: 'privacyBlocksDetections',
+            privacyOptionsStatusId: 'privacyOptionsStatus',
             gridPaneId: 'gridPane',
             polygonPaneId: 'polygonPane',
             gridControlsId: 'gridControls',

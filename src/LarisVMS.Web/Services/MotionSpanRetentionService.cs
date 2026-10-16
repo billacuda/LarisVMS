@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core.Interfaces;
 using LarisVMS.Infrastructure.Data;
+using LarisVMS.Infrastructure.Services;
 
 namespace LarisVMS.Web.Services;
 
@@ -41,7 +42,13 @@ public class MotionSpanRetentionService(IServiceScopeFactory scopeFactory, ILogg
                 using var scope = scopeFactory.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
                 var settings = scope.ServiceProvider.GetRequiredService<ISettingsResolver>();
+                // Count every span into the activity history before any of them can be deleted —
+                // a small-quota camera's spans can go within hours of being recorded.
+                await scope.ServiceProvider.GetRequiredService<ActivityRollupService>().RollupAsync(DateTime.UtcNow, stoppingToken);
+                // Same for speed-trap measurements, which go with their spans.
+                await scope.ServiceProvider.GetRequiredService<SpeedRollupService>().RollupAsync(DateTime.UtcNow, stoppingToken);
                 await SweepAsync(db, settings, stoppingToken);
+                await SweepTalkRecordingsAsync(db, stoppingToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -102,5 +109,29 @@ public class MotionSpanRetentionService(IServiceScopeFactory scopeFactory, ILogg
 
             if (batch.Count < BatchSize) break;
         }
+    }
+
+    /// <summary>Two-way audio recordings expire with the footage around them, by the same rule as
+    /// motion spans: once the camera's earliest remaining segment starts after the press ended (or the
+    /// camera has no footage left). The node deletes the WAV itself by the camera's retention.</summary>
+    internal static async Task SweepTalkRecordingsAsync(ApplicationDbContext db, CancellationToken ct)
+    {
+        var cameras = await db.TalkRecordings.Select(t => t.CameraId).Distinct().ToListAsync(ct);
+        if (cameras.Count == 0) return;
+
+        var earliestSegmentByCamera = await db.Segments
+            .Where(s => cameras.Contains(s.CameraId))
+            .GroupBy(s => s.CameraId)
+            .Select(g => new { CameraId = g.Key, EarliestStartUtc = g.Min(s => s.StartUtc) })
+            .ToDictionaryAsync(x => x.CameraId, x => x.EarliestStartUtc, ct);
+
+        foreach (var cameraId in cameras)
+        {
+            var stale = earliestSegmentByCamera.TryGetValue(cameraId, out var earliest)
+                ? db.TalkRecordings.Where(t => t.CameraId == cameraId && t.EndUtc < earliest)
+                : db.TalkRecordings.Where(t => t.CameraId == cameraId);
+            db.TalkRecordings.RemoveRange(await stale.ToListAsync(ct));
+        }
+        await db.SaveChangesAsync(ct);
     }
 }

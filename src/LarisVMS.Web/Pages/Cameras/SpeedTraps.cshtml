@@ -1,0 +1,100 @@
+@page "{id:guid}"
+@model LarisVMS.Web.Pages.Cameras.SpeedTrapsModel
+@{
+    ViewData["Title"] = "Speed traps: " + Model.CameraName;
+    var metric = Model.SpeedUnit != LarisVMS.Core.SpeedUnits.Mph;
+}
+<div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-3">
+    <h1 class="mb-0">Speed traps: @Model.CameraName</h1>
+    <div class="d-flex gap-2">
+        <a class="btn btn-outline-secondary" asp-page="Zones" asp-route-id="@Model.CameraId">Zones</a>
+        <a class="btn btn-outline-secondary" asp-page="Edit" asp-route-id="@Model.CameraId">Back to camera</a>
+    </div>
+</div>
+
+@if (!Model.AiDetectionEnabled)
+{
+    <div class="alert alert-warning py-2 small" role="note">
+        AI detection is off for this camera, so speed traps won't measure anything until it's turned on (Cameras → Edit).
+    </div>
+}
+
+<div class="alert alert-info py-2 small mb-3" role="note">
+    Draw two lines across the road, <strong>A</strong> and <strong>B</strong>, and enter the real distance between them along
+    the direction of travel. Each tracked object is timed between the lines (either direction), using the bottom middle of its
+    box, where it touches the ground. For a good reading, put the lines on flat ground, across the direction of travel, and as
+    far apart as the view allows while vehicles stay clearly visible. Check it once with a vehicle driven at a known speed.
+    Saving restarts this camera's AI detection, which can take up to 30 seconds.
+    <a href="/Help/ai-detection#speed-traps">Learn more</a>
+</div>
+
+<div class="row g-3">
+    <div class="col-lg-8">
+        <div class="border rounded bg-body-tertiary position-relative" style="aspect-ratio: 16/9; overflow: hidden;">
+            <video id="trapLiveVideo" style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:contain;" muted playsinline></video>
+            <canvas id="trapCanvas" style="position:absolute; top:0; left:0; width: 100%; height: 100%; cursor: crosshair;"></canvas>
+        </div>
+        <div class="d-flex flex-wrap gap-2 mt-2 align-items-center">
+            <button type="button" id="trapNewBtn" class="btn btn-primary btn-sm">New speed trap</button>
+            <button type="button" id="trapRedrawBtn" class="btn btn-outline-secondary btn-sm" style="display: none;">Redraw lines</button>
+            <div class="form-check form-switch mb-0 ms-2">
+                <input class="form-check-input" type="checkbox" role="switch" id="trapShowBoxes" checked>
+                <label class="form-check-label small" for="trapShowBoxes">Show moving objects and their speed</label>
+            </div>
+            <span id="trapStatus" class="text-muted small" role="status" aria-live="polite"></span>
+        </div>
+        <p id="trapHint" class="text-muted small mt-1">Select a speed trap to adjust it, or start a new one.</p>
+    </div>
+    <div class="col-lg-4">
+        <div id="trapListPanel"><p class="text-muted small">Loading speed traps…</p></div>
+
+        <div id="trapFormPanel" class="border rounded p-3 mt-3" style="display: none;">
+            <h6 id="trapFormTitle">New speed trap</h6>
+            <div class="mb-2">
+                <label class="form-label small" for="trapFormName">Name</label>
+                <input type="text" id="trapFormName" class="form-control form-control-sm" maxlength="100" placeholder="e.g. Street, eastbound" />
+            </div>
+            <div class="mb-2">
+                <label class="form-label small" for="trapFormDistance">Distance between A and B</label>
+                <div class="input-group input-group-sm">
+                    <input type="number" id="trapFormDistance" class="form-control" min="0.1" step="any" />
+                    <select id="trapFormDistanceUnit" class="form-select" style="max-width: 6rem;" aria-label="Distance unit">
+                        <option value="m" selected="@metric">metres</option>
+                        <option value="ft" selected="@(!metric)">feet</option>
+                    </select>
+                </div>
+                <div class="lv-hint">Measure along the road, not along the lines. Pace it out or use a map's measuring tool.</div>
+            </div>
+            <div class="mb-2">
+                <label class="form-label small" for="trapFormLimit">Speed limit (@LarisVMS.Core.SpeedUnits.Label(Model.SpeedUnit)), optional</label>
+                <input type="number" id="trapFormLimit" class="form-control form-control-sm" min="1" step="any" />
+                <div class="lv-hint">Speeds over this are highlighted and counted in the speed heatmap.</div>
+            </div>
+            <div class="form-check mb-2">
+                <input type="checkbox" id="trapFormEnabled" class="form-check-input" checked />
+                <label class="form-check-label small" for="trapFormEnabled">Enabled</label>
+            </div>
+            <div id="trapFormError" class="text-danger small mb-2" role="alert"></div>
+            <div class="d-flex gap-2">
+                <button type="button" id="trapFormSaveBtn" class="btn btn-primary btn-sm">Save</button>
+                <button type="button" id="trapFormCancelBtn" class="btn btn-outline-secondary btn-sm">Cancel</button>
+                <button type="button" id="trapFormDeleteBtn" class="btn btn-outline-danger btn-sm ms-auto" style="display: none;">Delete</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+    <script src="~/js/media-endpoint.js" asp-append-version="true"></script>
+    <script src="~/js/live-view.js" asp-append-version="true"></script>
+    <script src="~/js/speed-trap-editor.js" asp-append-version="true"></script>
+    <script>
+        window.larisvmsSpeedTrapEditor.init({
+            cameraId: '@Model.CameraId',
+            snapshotUrl: '/api/cameras/@Model.CameraId/snapshot',
+            codecHint: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Codec)),
+            hasAudio: @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.HasAudio)),
+            speedUnit: '@Model.SpeedUnit'
+        });
+    </script>
+}

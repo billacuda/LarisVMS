@@ -2,7 +2,7 @@
 
 Recorder nodes: status, streaming paths, media proxies, failover, maintenance, and updates.
 
-**Settings → Nodes** lists every node with its status, address, version, camera count, and disk usage. Click a node to edit its settings. The **⋯** menu has these actions:
+**Nodes** in the sidebar lists every node with its status, address, version, camera count, and disk usage. Click a node to edit its settings. The **⋯** menu has these actions:
 
 - **Restart service**: restarts the node's Windows service, not the machine. Recording pauses for a few seconds.
 - **Reset auth**: clears the node's check-in token, for a node stuck failing authentication after a missed heartbeat. It has no effect on a healthy node.
@@ -29,4 +29,6 @@ The node page warns when the backup has different AI hardware, or is recording-o
 
 ## Updates
 
-Nodes and proxies update themselves from approved builds (see [Installation](/Help/installation#updates)). **Settings → Node defaults → Auto-update** turns this on or off for every node.
+Nodes and proxies update themselves from approved builds (see [Installation](/Help/installation#updates)). **Nodes → Updates and registration → Auto-update** turns this on or off for every node.
+
+The **Builds** section of the Nodes page shows the build each kind of node is running toward and any build waiting for approval, with **Approve** and **Reject**. **Build history** lists every build, including approved, superseded and rejected ones.

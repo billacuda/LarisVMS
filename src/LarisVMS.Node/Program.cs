@@ -193,18 +193,23 @@ builder.Services.AddSingleton<PartnerHealthTracker>();
 builder.Services.AddSingleton<IHostedService>(sp => new PartnerProbeService(
     sp.GetRequiredService<PartnerHealthTracker>(),
     sp.GetRequiredService<ILoggerFactory>().CreateLogger<PartnerProbeService>()));
+// Footage encryption at rest: every footage read/write goes through FootageStore, and the worker
+// encrypts finished files for cameras that ask for it.
+builder.Services.AddSingleton(sp => new FootageStore(apiClient, livePort, sp.GetRequiredService<ILoggerFactory>().CreateLogger<FootageStore>()));
 builder.Services.AddSingleton(sp => new NodeWorker(
     apiClient, ffmpegPath, fallbackStorageRoot, livePort, config, sp.GetRequiredService<ILoggerFactory>(), onvifEventsClient,
     sp.GetRequiredService<UpdateService>(), nodeFileLogger, clientEndpoint, certHolder,
-    sp.GetRequiredService<PartnerHealthTracker>()));
+    sp.GetRequiredService<PartnerHealthTracker>(), sp.GetRequiredService<FootageStore>()));
 builder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<NodeWorker>());
+builder.Services.AddSingleton<IHostedService>(sp => new FootageEncryptionWorker(sp.GetRequiredService<FootageStore>(),
+    sp.GetRequiredService<NodeWorker>(), sp.GetRequiredService<ILoggerFactory>().CreateLogger<FootageEncryptionWorker>()));
 builder.Services.AddSingleton<IHostedService>(sp => new StorageManager(
     apiClient, fallbackStorageRoot, sp.GetRequiredService<ILoggerFactory>().CreateLogger<StorageManager>()));
 builder.Services.AddSingleton<IHostedService>(sp => new ThumbnailBackfillService(
     apiClient, sp.GetRequiredService<NodeWorker>(), fallbackStorageRoot,
     sp.GetRequiredService<ILoggerFactory>().CreateLogger<ThumbnailBackfillService>()));
 builder.Services.AddSingleton(sp => new ExportRunner(
-    apiClient, ffmpegPath, sp.GetRequiredService<ILoggerFactory>().CreateLogger<ExportRunner>()));
+    apiClient, ffmpegPath, sp.GetRequiredService<ILoggerFactory>().CreateLogger<ExportRunner>(), sp.GetRequiredService<FootageStore>()));
 
 var app = builder.Build();
 // Tidy up after the last auto-update, and say so in this log if it never got applied.
@@ -293,6 +298,72 @@ app.Map("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWork
         liveLogger.LogInformation("Live stream ended: {CameraName} ({Role}) -> client {ClientIp} ({Via}) after {Seconds:F0}s.",
             cameraName, roleLabel, clientIp, via, (DateTime.UtcNow - startedAt).TotalSeconds);
     }
+});
+
+// Two-way audio (see TalkSessionHandler). Only LarisVMS.Web connects here — it authorizes the
+// operator (CameraAccessActions.Talk) and relays the browser's socket — so the same per-camera media
+// token as /live is enough.
+var talkLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Talk");
+app.Map("/talk/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWorker worker) =>
+{
+    if (!ctx.WebSockets.IsWebSocketRequest)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+    var currentKey = worker.MediaSigningKey;
+    var storageRoot = worker.StorageRoot;
+    if (currentKey is null || storageRoot is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
+        return;
+    }
+    if (!MediaToken.TryValidate(ExtractToken(ctx), cameraId, currentKey, out var tokenError))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync(tokenError);
+        return;
+    }
+    var camera = worker.TryGetCameraConfig(cameraId);
+    if (camera is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+        await ctx.Response.WriteAsync("This camera isn't assigned to this node.");
+        return;
+    }
+
+    using var socket = await ctx.WebSockets.AcceptWebSocketAsync();
+    talkLogger.LogInformation("Two-way audio opened: {CameraName}.", camera.Name);
+    await TalkSessionHandler.RunAsync(socket, cameraId, camera, storageRoot, talkLogger, ctx.RequestAborted,
+        (path, startUtc) => worker.Footage.EnqueueEncryption(cameraId, path, startUtc));
+    talkLogger.LogInformation("Two-way audio closed: {CameraName}.", camera.Name);
+});
+
+// A recorded talk clip, for playback. Same path-bound, single-use token as /playback-segment; the
+// path must be a .wav under this camera's talk directory.
+app.MapGet("/talk-audio/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWorker worker, SeenTokenCache seenTokens) =>
+{
+    var path = ctx.Request.Query["path"].ToString();
+    var currentKey = worker.MediaSigningKey;
+    var storageRoot = worker.StorageRoot;
+    if (currentKey is null || storageRoot is null) return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+    if (string.IsNullOrEmpty(path)
+        || !MediaToken.TryValidateSegment(ExtractToken(ctx), cameraId, path, currentKey, out _, out var jti)
+        || !seenTokens.TryConsume(jti))
+        return Results.Unauthorized();
+
+    string fullPath;
+    try { fullPath = Path.GetFullPath(path); }
+    catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return Results.BadRequest(); }
+
+    var talkDir = Path.GetFullPath(TalkSessionHandler.TalkDirectory(storageRoot, cameraId)) + Path.DirectorySeparatorChar;
+    if (!fullPath.StartsWith(talkDir, StringComparison.OrdinalIgnoreCase)
+        || !fullPath.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) || !File.Exists(fullPath))
+        return Results.NotFound();
+    if (!LarisVMS.Core.FootageCrypto.IsEncrypted(fullPath)) return Results.File(fullPath, "audio/wav", enableRangeProcessing: true);
+    try { return Results.Stream(await worker.Footage.OpenReadAsync(fullPath, ctx.RequestAborted), "audio/wav", enableRangeProcessing: true); }
+    catch (FootageKeyUnavailableException) { return Results.StatusCode(StatusCodes.Status503ServiceUnavailable); }
 });
 
 // Object detection plan decision 6: live-view box overlay — a separate WS from the video stream
@@ -480,12 +551,13 @@ app.MapGet("/playback-segment/{cameraId:guid}", async (HttpContext ctx, Guid cam
             // Opened (and retried) before anything is written to the response — a transient storage
             // blip here just falls through to the whole-file path below, rather than failing the
             // request outright, since nothing has been committed to the client yet at this point.
-            FileStream? fileStream = null;
+            Stream? fileStream = null;
             try
             {
+                // Decrypted transparently when the segment is encrypted at rest; the fragment offsets
+                // above are into the same plaintext view.
                 fileStream = await StorageRetry.ExecuteAsync(playbackLogger, $"Opening {fullPath} for partial fetch", () =>
-                    Task.FromResult(new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1, useAsync: true)),
-                    ctx.RequestAborted);
+                    worker.Footage.OpenReadAsync(fullPath, ctx.RequestAborted), ctx.RequestAborted);
             }
             catch (IOException ex)
             {
@@ -535,7 +607,38 @@ app.MapGet("/playback-segment/{cameraId:guid}", async (HttpContext ctx, Guid cam
         return;
     }
 
+    if (LarisVMS.Core.FootageCrypto.IsEncrypted(fullPath))
+    {
+        try
+        {
+            await using var plain = await worker.Footage.OpenReadAsync(fullPath, ctx.RequestAborted);
+            ctx.Response.ContentLength = plain.Length;
+            await plain.CopyToAsync(ctx.Response.Body, ctx.RequestAborted);
+        }
+        catch (FootageKeyUnavailableException ex)
+        {
+            playbackLogger.LogWarning("Can't play encrypted segment {Path}: {Reason}", fullPath, ex.Message);
+            if (!ctx.Response.HasStarted) ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        }
+        return;
+    }
     await ctx.Response.SendFileAsync(fullPath, ctx.RequestAborted);
+});
+
+// Footage encryption at rest: ffmpeg (thumbnails, snapshot crops, exports) can't read an encrypted
+// file, so FootageStore.FfmpegInputAsync hands it this URL instead. Loopback callers only, and only
+// with a token FootageStore issued for one file; ranges are honored so ffmpeg can still seek.
+app.MapGet("/footage-plain/{token}", async (HttpContext ctx, string token, NodeWorker worker) =>
+{
+    if (!IPAddress.IsLoopback(ctx.Connection.RemoteIpAddress ?? IPAddress.None)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+    var path = worker.Footage.ResolveLoopback(token);
+    if (path is null || !File.Exists(path)) return Results.NotFound();
+    try
+    {
+        var contentType = path.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) ? "audio/wav" : "video/mp4";
+        return Results.Stream(await worker.Footage.OpenReadAsync(path, ctx.RequestAborted), contentType, enableRangeProcessing: true);
+    }
+    catch (FootageKeyUnavailableException) { return Results.StatusCode(StatusCodes.Status503ServiceUnavailable); }
 });
 
 // M7 pass 2: hover-thumbnail proxy target — same shape as /playback-segment above (token binds
@@ -634,7 +737,7 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid c
     if (cached is not null)
     {
         ctx.Response.ContentType = CachedImageFormat.ContentType(cached);
-        await ctx.Response.SendFileAsync(cached, ctx.RequestAborted);
+        await worker.Footage.SendFileAsync(ctx, cached, ctx.RequestAborted);
         return;
     }
 
@@ -653,7 +756,7 @@ app.MapGet("/playback-thumbnail/{cameraId:guid}", async (HttpContext ctx, Guid c
     // comment for why (a naive write straight to thumbPath let a concurrent reader see a
     // still-being-written, truncated file — confirmed live as the browser's broken-image icon
     // appearing right after "Loading…").
-    await LarisVMS.Media.ThumbnailCapture.SaveToCacheAsync(thumbPath, bytes, CancellationToken.None);
+    await worker.Footage.WriteImageAsync(thumbPath, bytes, worker.EncryptsImages(cameraId) ? cameraId : null, CancellationToken.None);
 
     ctx.Response.ContentType = CachedImageFormat.ContentType(thumbPath);
     await ctx.Response.Body.WriteAsync(bytes, ctx.RequestAborted);
@@ -766,7 +869,7 @@ app.MapGet("/snapshot-image/{cameraId:guid}", async (HttpContext ctx, Guid camer
     if (cachedSnapshot is not null)
     {
         ctx.Response.ContentType = CachedImageFormat.ContentType(cachedSnapshot);
-        await ctx.Response.SendFileAsync(cachedSnapshot, ctx.RequestAborted);
+        await worker.Footage.SendFileAsync(ctx, cachedSnapshot, ctx.RequestAborted);
         return;
     }
 
@@ -784,17 +887,17 @@ app.MapGet("/snapshot-image/{cameraId:guid}", async (HttpContext ctx, Guid camer
         {
             try
             {
-                var staged = await File.ReadAllBytesAsync(stagedPath, ctx.RequestAborted);
+                var staged = await worker.Footage.ReadAllBytesAsync(stagedPath, ctx.RequestAborted);
                 if (staged.Length > 0)
                 {
                     var promoted = snapshotStem + Path.GetExtension(stagedPath);
-                    await LarisVMS.Media.ThumbnailCapture.SaveToCacheAsync(promoted, staged, CancellationToken.None);
+                    await worker.Footage.WriteImageAsync(promoted, staged, worker.EncryptsImages(cameraId) ? cameraId : null, CancellationToken.None);
                     ctx.Response.ContentType = CachedImageFormat.ContentType(promoted);
                     await ctx.Response.Body.WriteAsync(staged, ctx.RequestAborted);
                     return;
                 }
             }
-            catch (IOException ex)
+            catch (Exception ex) when (ex is IOException or System.Security.Cryptography.CryptographicException)
             {
                 logger.LogWarning(ex, "Snapshot-image: eager crop {StagedPath} for span {SpanId} could not be read — falling back to a segment crop.", stagedPath, spanId);
             }
@@ -815,7 +918,7 @@ app.MapGet("/snapshot-image/{cameraId:guid}", async (HttpContext ctx, Guid camer
 
     // Same atomic cache write as /playback-thumbnail above.
     var snapshotPath = snapshotStem + CachedImageFormat.Extension(webp);
-    await LarisVMS.Media.ThumbnailCapture.SaveToCacheAsync(snapshotPath, bytes, CancellationToken.None);
+    await worker.Footage.WriteImageAsync(snapshotPath, bytes, worker.EncryptsImages(cameraId) ? cameraId : null, CancellationToken.None);
 
     ctx.Response.ContentType = CachedImageFormat.ContentType(snapshotPath);
     await ctx.Response.Body.WriteAsync(bytes, ctx.RequestAborted);
@@ -1024,7 +1127,27 @@ app.MapPost("/export/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, Ex
     // Fire-and-forget: the request is already acknowledged above. CancellationToken.None, not
     // ctx.RequestAborted — this must keep running (and eventually report back) even though the HTTP
     // request that started it has already completed.
-    _ = Task.Run(() => exportRunner.RunAsync(request.ExportItemId, cameraId, validatedPaths, storageRoot, outputFileName, CancellationToken.None));
+    // Talk clips must be WAVs in this camera's own talk directory; anything else is dropped rather
+    // than failing the export — the footage itself is still worth having.
+    var talkDir = Path.GetFullPath(TalkSessionHandler.TalkDirectory(storageRoot, cameraId)) + Path.DirectorySeparatorChar;
+    var talkClips = new List<ExportRunner.TalkClip>();
+    if (request.TalkClips is { Count: > 0 } && request.SegmentsStartUtc is { } segmentsStart)
+    {
+        foreach (var clip in request.TalkClips)
+        {
+            string full;
+            try { full = Path.GetFullPath(clip.FilePath); }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { continue; }
+            if (full.StartsWith(talkDir, StringComparison.OrdinalIgnoreCase) && full.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) && File.Exists(full))
+                talkClips.Add(new ExportRunner.TalkClip(full, (clip.StartUtc - segmentsStart).TotalSeconds));
+        }
+    }
+
+    var redactionFilters = ExportRunner.RedactionFilters(request.RedactionJson);
+    var redactionEncoder = redactionFilters.Count > 0 ? EncoderSelection.ChooseH264Encoder(worker.DetectedEncoders) : null;
+
+    _ = Task.Run(() => exportRunner.RunAsync(request.ExportItemId, cameraId, validatedPaths, storageRoot, outputFileName, CancellationToken.None,
+        talkClips, request.SegmentsHaveAudio, redactionFilters, redactionEncoder, request.SegmentSha256));
 });
 
 // Export download side — serves exactly one finished export item's file to LarisVMS.Web's
@@ -1211,6 +1334,9 @@ app.MapPost("/detections/crop", async (HttpContext ctx, VisionDetectionCropItem 
     var storageRoot = worker.StorageRoot;
     if (storageRoot is null) { ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable; return; }
     if (item.Image is not { Length: > 0 }) { ctx.Response.StatusCode = StatusCodes.Status400BadRequest; return; }
+    // The Vision Service crops from unmasked frames. For a camera with a privacy mask, drop the crop:
+    // its snapshot falls back to a crop of the (masked) recording instead.
+    if (worker.HasPrivacyMask(item.CameraId)) { ctx.Response.StatusCode = StatusCodes.Status204NoContent; return; }
 
     try
     {
@@ -1218,10 +1344,9 @@ app.MapPost("/detections/crop", async (HttpContext ctx, VisionDetectionCropItem 
         Directory.CreateDirectory(dir);
         // The eager crop is always WebP — SkiaSharp encodes it directly in the Vision Service, no
         // ffmpeg/libwebp probe involved (see CameraDetectionPipeline.EagerCropWebpQuality).
-        var tmp = Path.Combine(dir, $"{item.AtUtc.Ticks}{CachedImageFormat.WebpExtension}.tmp");
         var final = Path.Combine(dir, $"{item.AtUtc.Ticks}{CachedImageFormat.WebpExtension}");
-        await File.WriteAllBytesAsync(tmp, item.Image, ctx.RequestAborted);
-        File.Move(tmp, final, overwrite: true);
+        // Atomic, and sealed when the camera encrypts its images.
+        await worker.Footage.WriteImageAsync(final, item.Image, worker.EncryptsImages(item.CameraId) ? item.CameraId : null, ctx.RequestAborted);
         ctx.Response.StatusCode = StatusCodes.Status204NoContent;
     }
     catch (IOException ex)

@@ -1,5 +1,6 @@
 @page "{id:guid?}"
 @model LarisVMS.Web.Pages.Admin.Alerts.EditModel
+@using LarisVMS.Core
 @using LarisVMS.Core.Enums
 @{
     ViewData["Title"] = Model.Id is null ? "Add alert rule" : "Edit alert rule";
@@ -40,13 +41,15 @@
                         <option value="@AlertConditionType.NodeOffline">Node offline</option>
                         <option value="@AlertConditionType.NodeStorageLow">Node storage low</option>
                         <option value="@AlertConditionType.NodeFailoverActivated">Node failover activated</option>
+                        <option value="@AlertConditionType.ObjectDetected">Object detected</option>
+                        <option value="@AlertConditionType.SpeedOver">Speed over a limit</option>
                     </select>
                 </div>
 
                 <div class="col-sm-6" id="cameraField">
                     <label class="form-label">Camera</label>
-                    <select asp-for="CameraId" class="form-select">
-                        <option value="">(choose a camera)</option>
+                    <select asp-for="CameraId" id="cameraSelect" class="form-select">
+                        <option value="" id="cameraEmptyOption">(choose a camera)</option>
                         @foreach (var c in Model.Cameras)
                         {
                             <option value="@c.Id">@c.Name</option>
@@ -69,6 +72,78 @@
                     </label>
                     <input type="number" asp-for="ThresholdPercent" class="form-control" min="1" max="99" />
                     <div class="lv-hint">Fires when free space drops below this.</div>
+                </div>
+            </div>
+
+            @* Detection alerts: every filter is optional and they all have to match. *@
+            <div id="detectionFields" class="row g-3 mt-1">
+                <div class="col-12"><hr class="my-1" /><div class="small text-muted">
+                    Fires within seconds of a matching AI detection. Leave a filter empty to match anything.
+                    Needs AI detection on the camera; colors and zones use each object's own box.
+                </div></div>
+                <div class="col-sm-3" id="speedField">
+                    <label class="form-label">Speed limit (@SpeedUnits.Label(Model.SpeedUnit))</label>
+                    <input type="number" asp-for="SpeedThreshold" class="form-control" min="1" step="any" />
+                    <div class="lv-hint">Fires at or over this. Speeds come from speed traps (Cameras → Speed traps).</div>
+                </div>
+                <div class="col-sm-3">
+                    <label class="form-label">Category</label>
+                    <select asp-for="CategoryFilter" class="form-select">
+                        <option value="">(any)</option>
+                        @foreach (var name in Model.Categories.Select(c => c.Name))
+                        {
+                            <option value="@name">@name</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-sm-3">
+                    <label class="form-label">Label</label>
+                    <input type="text" asp-for="LabelFilter" class="form-control" list="alertLabelList" placeholder="e.g. truck" />
+                    <datalist id="alertLabelList">
+                        @foreach (var l in Model.Labels.Select(l => l.Label).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(l => l))
+                        {
+                            <option value="@l"></option>
+                        }
+                    </datalist>
+                </div>
+                <div class="col-sm-3">
+                    <label class="form-label">Color</label>
+                    <select asp-for="ColorFilter" class="form-select">
+                        <option value="">(any)</option>
+                        @foreach (var name in ObjectColors.All.Select(c => c.Name))
+                        {
+                            <option value="@name">@ObjectColors.Display(name)</option>
+                        }
+                    </select>
+                    <div class="lv-hint">For people, matches the shirt or the pants.</div>
+                </div>
+                <div class="col-sm-4">
+                    <label class="form-label">Zone</label>
+                    <select asp-for="ZoneId" id="zoneSelect" class="form-select">
+                        <option value="">(anywhere in view)</option>
+                        @foreach (var z in Model.Zones)
+                        {
+                            <option value="@z.Id" data-camera="@z.CameraId">@z.Name</option>
+                        }
+                    </select>
+                    <div class="lv-hint">Where the object stands (the bottom of its box). Pick a camera first.</div>
+                </div>
+                <div class="col-sm-8">
+                    <label class="form-label d-block">Active</label>
+                    <div class="d-flex flex-wrap gap-2 align-items-center">
+                        @foreach (var d in new[] { DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday, DayOfWeek.Friday, DayOfWeek.Saturday, DayOfWeek.Sunday })
+                        {
+                            <div class="form-check form-check-inline me-0">
+                                <input class="form-check-input" type="checkbox" name="ScheduleDays" value="@d" id="day-@d"
+                                       checked="@Model.ScheduleDays.Contains(d)" />
+                                <label class="form-check-label small" for="day-@d">@d.ToString()[..3]</label>
+                            </div>
+                        }
+                        <input type="time" asp-for="ScheduleStart" class="form-control form-control-sm" style="width: 8rem;" aria-label="From" />
+                        <span class="small">to</span>
+                        <input type="time" asp-for="ScheduleEnd" class="form-control form-control-sm" style="width: 8rem;" aria-label="Until" />
+                    </div>
+                    <div class="lv-hint">No days ticked = every day; no times = all day. 22:00 to 06:00 runs overnight. Server time.</div>
                 </div>
             </div>
         </div>
@@ -172,20 +247,45 @@
             var cameraField = document.getElementById('cameraField');
             var nodeField = document.getElementById('nodeField');
             var thresholdField = document.getElementById('thresholdField');
+            var detectionFields = document.getElementById('detectionFields');
+            var speedField = document.getElementById('speedField');
+            var cameraSelect = document.getElementById('cameraSelect');
+            var cameraEmptyOption = document.getElementById('cameraEmptyOption');
+            var zoneSelect = document.getElementById('zoneSelect');
             if (!conditionType) return;
 
+            // The options carry enum names (that's what the select tag helper binds), so compare names.
             function update() {
                 var value = conditionType.value;
-                var isCamera = value === '@((int)AlertConditionType.CameraNotReporting)';
-                var isNodeOffline = value === '@((int)AlertConditionType.NodeOffline)';
-                var isStorageLow = value === '@((int)AlertConditionType.NodeStorageLow)';
-                var isFailover = value === '@((int)AlertConditionType.NodeFailoverActivated)';
-                cameraField.style.display = isCamera ? '' : 'none';
+                var isCamera = value === '@nameof(AlertConditionType.CameraNotReporting)';
+                var isNodeOffline = value === '@nameof(AlertConditionType.NodeOffline)';
+                var isStorageLow = value === '@nameof(AlertConditionType.NodeStorageLow)';
+                var isFailover = value === '@nameof(AlertConditionType.NodeFailoverActivated)';
+                var isSpeed = value === '@nameof(AlertConditionType.SpeedOver)';
+                var isDetection = isSpeed || value === '@nameof(AlertConditionType.ObjectDetected)';
+                cameraField.style.display = (isCamera || isDetection) ? '' : 'none';
+                cameraEmptyOption.textContent = isDetection ? '(any camera)' : '(choose a camera)';
                 nodeField.style.display = (isNodeOffline || isStorageLow || isFailover) ? '' : 'none';
                 thresholdField.style.display = isStorageLow ? '' : 'none';
+                detectionFields.style.display = isDetection ? '' : 'none';
+                speedField.style.display = isSpeed ? '' : 'none';
+            }
+
+            // Only the chosen camera's zones are offered.
+            function updateZones() {
+                var cam = cameraSelect.value;
+                Array.prototype.forEach.call(zoneSelect.options, function (opt) {
+                    if (!opt.value) return;
+                    var show = cam && opt.getAttribute('data-camera') === cam;
+                    opt.hidden = !show;
+                    if (!show && opt.selected) zoneSelect.value = '';
+                });
+                zoneSelect.disabled = !cam;
             }
             conditionType.addEventListener('change', update);
+            cameraSelect.addEventListener('change', updateZones);
             update();
+            updateZones();
         })();
     </script>
 }

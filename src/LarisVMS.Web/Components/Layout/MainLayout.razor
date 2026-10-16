@@ -44,6 +44,7 @@
             @if (_showLive)
             {
                 <a class="lv-navitem@(IsActive("/Live") ? " active" : "")" href="/Live"><span aria-hidden="true">📡</span> Live</a>
+                <a class="lv-navitem@(IsActive("/Map") ? " active" : "")" href="/Map"><span aria-hidden="true">🗺️</span> Map</a>
             }
             @if (_showPlayback)
             {
@@ -60,6 +61,7 @@
             @if (_showSnapshots)
             {
                 <a class="lv-navitem@(IsActive("/Snapshots") ? " active" : "")" href="/Snapshots"><span aria-hidden="true">📸</span> Snapshots</a>
+                <a class="lv-navitem@(IsActive("/Activity") ? " active" : "")" href="/Activity"><span aria-hidden="true">🔥</span> Activity</a>
             }
             @if (_showViews)
             {
@@ -68,6 +70,10 @@
             @if (_showCameras)
             {
                 <a class="lv-navitem@(IsActive("/Cameras") ? " active" : "")" href="/Cameras"><span aria-hidden="true">📷</span> Cameras</a>
+            }
+            @if (_showNodes)
+            {
+                <a class="lv-navitem@(IsActive("/Admin/Nodes") ? " active" : "")" href="/Admin/Nodes"><span aria-hidden="true">🔌</span> Nodes</a>
             }
             @if (_showSettingsHub)
             {

@@ -63,6 +63,37 @@ Each tracked object gets a snapshot, cropped from its best frame.
 - **Snapshot motion accuracy**: closes a snapshot soon after its object leaves, so a later object of the same type isn't merged into it. **Departure grace** is how long to wait. If it's too short, an object that pauses gets split into two snapshots.
 - **Snapshot crop margin**: extra room around the object, as a percentage of its box.
 
+Several objects of the same type in one snapshot show as a count (×2). Each one is also kept separately with its own colors and speed.
+
+## Object colors
+
+Each tracked object's color is read from its clearest frame: one color for vehicles, animals and other objects, and shirt and pants colors for people. Snapshots show a badge for each, painted in that color, and the **Color**, **Shirt** and **Pants** sections of the Snapshots filter narrow results to the colors you tick. Detection alerts can filter by color too.
+
+Colors come from the picture, not the model, so they work with any detector. The colors just outside the box are sampled as well and set aside, so the lawn around a dog or the road around a car doesn't win. They're still best-effort guesses: busy scenes, overlapping objects and lighting can all give the wrong color. Lighting matters most: shade, headlights and white balance shift colors, and a light gray car may read as silver or white. While a camera is in black-and-white night (IR) mode no colors are recorded. Turn it off with **Object colors** under **Settings → AI detection**.
+
+## Speed traps
+
+A speed trap times objects between two lines across a road. On the camera's **Speed traps** page (from **Cameras → Edit**), click **New speed trap**, click the two ends of line **A**, then the two ends of line **B**, and enter the real distance between the lines, measured along the road. Every tracked object that crosses both lines, in either direction, gets a speed, shown on its live box and its snapshot. **Speed units** (km/h or mph) are under **Settings → AI detection**.
+
+An object a trap times is recorded as moving even if it otherwise looks still, such as a vehicle driving straight toward the camera. The timing uses the bottom middle of each box, where the object touches the ground, so draw the lines on the road surface. For a good reading:
+
+- Draw the lines across the direction of travel, on flat ground, and as far apart as the view allows while objects stay clearly in view.
+- Measure the distance carefully: pace it out, or use a map's measuring tool.
+- Check it once with a vehicle driven past at a known speed, and adjust the distance if the reading is off.
+
+Readings are estimates. The camera's detection frame rate limits how precisely a crossing is timed, so short traps and fast vehicles are least accurate. Saving a trap restarts the camera's AI detection.
+
+A trap can have a **speed limit** (optional). Speeds over it are shown in red and counted separately in the speed heatmap.
+
+Measured speeds show up in several places:
+
+- **Live view**: on each object's box while it's in view.
+- **Snapshots**: a ⏱ badge on the card, and a **Speed** filter ("at or over") in the filter list.
+- **Playback**: a tick on the timeline at each measurement (red when over the limit; hover for details), and a badge over the video while the object is on screen.
+- **Dashboard**: the **Speed log** widget shows the latest measurements. Click its title for the full log, with sorting, filtering and CSV download.
+- **Activity**: switch to **Speeds** for a heatmap of average speed, top speed, number over the limit or number measured, by day and hour. History is kept as long as the activity history, long after the footage is gone.
+- **Alerts**: a "Speed over a limit" rule.
+
 ## Jitter
 
 A distant parked vehicle's box can wobble from frame to frame and look like movement. **Stationary-object jitter rejection** smooths this out, and the **jitter threshold** is the minimum movement in pixels that counts. It can also hold a genuinely slow-moving object as idle, so it's off by default. Turn it on for the specific cameras that have a parked vehicle in view.

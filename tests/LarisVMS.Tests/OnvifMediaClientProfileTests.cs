@@ -111,4 +111,26 @@ public class OnvifMediaClientProfileTests
         Assert.Null(profiles[0].VideoSourceToken);
         Assert.Equal("MainStream", profiles[0].Name);
     }
+
+    /// <summary>The ONVIF schema puts a profile's audio output configuration inside its Extension
+    /// element — where compliant cameras send it — so a speaker there must be detected.</summary>
+    [Fact]
+    public async Task AudioOutputInsideTheProfileExtensionIsDetected()
+    {
+        var profiles = await GetProfilesAsync(Envelope("""
+            <trt:Profiles token="Profile_1" fixed="true">
+              <tt:Name>MainStream</tt:Name>
+              <tt:Extension>
+                <tt:AudioOutputConfiguration token="AudioOut_1"><tt:Name>AudioOut</tt:Name><tt:OutputToken>AudioOut_1</tt:OutputToken></tt:AudioOutputConfiguration>
+                <tt:AudioDecoderConfiguration token="AudioDec_1"><tt:Name>AudioDec</tt:Name></tt:AudioDecoderConfiguration>
+              </tt:Extension>
+            </trt:Profiles>
+            <trt:Profiles token="Profile_2" fixed="true">
+              <tt:Name>SubStream</tt:Name>
+            </trt:Profiles>
+            """));
+
+        Assert.True(profiles[0].HasAudioOutputConfig);
+        Assert.False(profiles[1].HasAudioOutputConfig);
+    }
 }

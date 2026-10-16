@@ -36,7 +36,12 @@ public class OnvifMediaClient(OnvifSoapClient soap)
 
             var aec = p.Elements().FirstOrDefault(e => e.Name.LocalName == "AudioEncoderConfiguration");
             var audioEncoding = aec?.Elements().FirstOrDefault(e => e.Name.LocalName == "Encoding")?.Value;
-            var hasAudioOutputConfig = p.Elements().Any(e => e.Name.LocalName == "AudioOutputConfiguration");
+            // In the ONVIF schema a profile's audio output (and decoder) configuration sit inside its
+            // <Extension> element, not directly under the profile — looking only at direct children
+            // missed every compliant camera's speaker.
+            var hasAudioOutputConfig = p.Elements().Any(e => e.Name.LocalName == "AudioOutputConfiguration")
+                || p.Elements().Where(e => e.Name.LocalName == "Extension")
+                    .Elements().Any(e => e.Name.LocalName == "AudioOutputConfiguration");
 
             // Which physical sensor this profile draws from — see OnvifMediaProfile's own comment.
             // The SourceToken *inside* VideoSourceConfiguration, not the configuration element's own
@@ -51,6 +56,22 @@ public class OnvifMediaClient(OnvifSoapClient soap)
                 string.IsNullOrWhiteSpace(videoSourceToken) ? null : videoSourceToken));
         }
         return profiles;
+    }
+
+    /// <summary>How many audio outputs (speakers / line-outs) the media service reports, whether or not
+    /// any profile has one attached yet. 0 when the device doesn't implement the call.</summary>
+    public async Task<int> GetAudioOutputCountAsync(Uri mediaServiceUri, OnvifCredentials? credentials, CancellationToken ct = default)
+    {
+        try
+        {
+            var body = $"""<GetAudioOutputs xmlns="{MediaNs}"/>""";
+            var response = await soap.PostAsync(mediaServiceUri, $"{MediaNs}/GetAudioOutputs", body, credentials, ct);
+            return response.Elements().Count(e => e.Name.LocalName == "AudioOutputs");
+        }
+        catch (OnvifFaultException)
+        {
+            return 0;
+        }
     }
 
     public async Task<Uri?> GetStreamUriAsync(

@@ -16,6 +16,10 @@
         var sub = c.Streams.FirstOrDefault(s => s.Role == CameraStreamRole.Sub && s.IsEnabled);
         return new { id = c.Id, name = c.Name, codec = main?.Codec, hasAudio = main?.HasAudio ?? false,
             hasPtz = c.Capabilities != null && c.Capabilities.HasPtz,
+            hasSpeaker = c.Capabilities != null && c.Capabilities.HasAudioOut,
+            // Two-way audio: the camera reports an audio output and this user holds Talk on it.
+            canTalk = c.Capabilities != null && c.Capabilities.HasAudioOut
+                && (Model.TalkCameraIds is null || Model.TalkCameraIds.Contains(c.Id)),
             hasSub = sub != null, subCodec = sub?.Codec, subHasAudio = sub?.HasAudio ?? false,
             width = main?.Width, height = main?.Height };
     }));
@@ -23,11 +27,14 @@
 <script src="~/js/aspect-ratio.js" asp-append-version="true"></script>
 <script src="~/js/audio-controls.js" asp-append-version="true"></script>
 <script src="~/js/ptz-controls.js" asp-append-version="true"></script>
+<script src="~/js/talk.js" asp-append-version="true"></script>
 <script src="~/js/catchup-badge.js" asp-append-version="true"></script>
 <script src="~/js/media-endpoint.js" asp-append-version="true"></script>
 <script src="~/js/live-view.js" asp-append-version="true"></script>
 <script src="~/js/fullscreen-tile.js" asp-append-version="true"></script>
 <script src="~/js/timeline.js" asp-append-version="true"></script>
+<script src="~/js/talk-playback.js" asp-append-version="true"></script>
+<script src="~/js/speed-playback.js" asp-append-version="true"></script>
 <script src="~/js/playback-player.js" asp-append-version="true"></script>
 <script src="~/js/view-play.js" asp-append-version="true"></script>
 <script>

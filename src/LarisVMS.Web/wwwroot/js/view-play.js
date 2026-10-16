@@ -139,7 +139,9 @@ window.larisvmsViewPlay = (function () {
                     // slider (audio-controls.js) that isn't a button and shouldn't inherit
                     // btn-group's own joined-corners styling. The remaining buttons keep their group.
                     '<div class="position-absolute bottom-0 end-0 m-1 d-flex align-items-center gap-1 view-cell-controls d-none">' +
-                        window.larisvmsAudioControls.html(cam && cam.hasAudio) +
+                        // Push-to-talk (talk.js) — only when the camera has a speaker and this user may use it.
+                        (window.larisvmsTalk ? window.larisvmsTalk.html(cam && cam.canTalk) : '') +
+                        window.larisvmsAudioControls.html(cam && (cam.hasAudio || cam.hasSpeaker)) +
                         '<div class="btn-group btn-group-sm">' +
                             (cam && cam.hasPtz
                                 ? '<button type="button" class="btn btn-outline-light view-cell-ptz-toggle" style="padding:.1rem .35rem;" title="PTZ controls" aria-label="PTZ controls">🕹️</button>'
@@ -257,6 +259,7 @@ window.larisvmsViewPlay = (function () {
         // same <video> element, which otherwise resets it to the `muted` attribute's default. Wired
         // once here, not per mode, so it spans every live/playback transition this cell makes.
         window.larisvmsAudioControls.wire(controls, video);
+        if (window.larisvmsTalk) window.larisvmsTalk.wire(controls, cell.cameraId);
         // Shared with Live/Playback (fullscreen-tile.js) — fullscreens frameEl (video + controls),
         // not the bare <video>, and wires the double-click gesture, same as those two pages. This
         // page's own fullscreenBtn just drives the same handle rather than calling

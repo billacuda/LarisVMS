@@ -44,9 +44,13 @@ public class OnvifDeviceClient(OnvifSoapClient soap)
             return xAddrText is not null && Uri.TryCreate(xAddrText, UriKind.Absolute, out var u) ? u : null;
         }
 
+        var deviceIo = caps?.Element(Dev + "Extension")?.Elements().FirstOrDefault(e => e.Name.LocalName == "DeviceIO")
+            ?? caps?.Elements().FirstOrDefault(e => e.Name.LocalName == "DeviceIO");
+        var audioOutputs = int.TryParse(deviceIo?.Elements().FirstOrDefault(e => e.Name.LocalName == "AudioOutputs")?.Value, out var n) ? n : 0;
+
         return new OnvifCapabilitiesResult(
             XAddrOf("Media"), XAddrOf("PTZ"), XAddrOf("Imaging"), XAddrOf("Events"),
-            XAddrOf("DeviceIO"), XAddrOf("Analytics"), raw);
+            XAddrOf("DeviceIO"), XAddrOf("Analytics"), raw, audioOutputs);
     }
 
     public async Task<IReadOnlyList<OnvifServiceEntry>> GetServicesAsync(

@@ -50,7 +50,9 @@
                     '<button type="button" class="btn btn-sm btn-outline-secondary ms-1 js-retry-export" data-item-id="' + item.id + '">Retry</button>';
             }
             var nodeSuffix = item.nodeName ? ' <span class="text-muted">(' + escapeHtml(item.nodeName) + ')</span>' : '';
-            return '<li class="mb-1">' + escapeHtml(item.cameraName) + nodeSuffix + ' <span class="badge ' + itemBadge + '">' + item.status + '</span>' + extra + '</li>';
+            // A redacted export has had areas blacked out — it isn't the footage exactly as recorded.
+            var redacted = item.redacted ? ' <span class="badge text-bg-dark" title="Areas were blacked out in this export">Redacted</span>' : '';
+            return '<li class="mb-1">' + escapeHtml(item.cameraName) + nodeSuffix + ' <span class="badge ' + itemBadge + '">' + item.status + '</span>' + redacted + extra + '</li>';
         }).join('');
 
         var deleteBtn = inProgress ? '' :

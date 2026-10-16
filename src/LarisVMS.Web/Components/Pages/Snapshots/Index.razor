@@ -1,6 +1,7 @@
 @page "/Snapshots"
 @attribute [Authorize("Playback.View")]
 @using System.Security.Claims
+@using LarisVMS.Core
 @using LarisVMS.Core.Dtos
 @using LarisVMS.Core.Entities
 @using LarisVMS.Core.Enums
@@ -12,6 +13,7 @@
 @inject ICameraGroupService CameraGroupService
 @inject IViewService ViewService
 @inject IServiceScopeFactory ScopeFactory
+@inject ISettingsResolver Settings
 
 <PageTitle>Snapshots - @AppName</PageTitle>
 
@@ -124,6 +126,42 @@
                     </details>
                 }
             }
+
+            @* Color sections: unlike the categories above these start unticked and narrow the
+               results only when something is ticked — "show me red ones" rather than "hide the red
+               ones". OR within a section, AND across sections, on the same object. *@
+            @foreach (var (group, title, selected) in ColorGroups)
+            {
+                <details class="snapshot-color-filter mt-1" open="@(selected.Count > 0)">
+                    <summary class="small d-flex align-items-center gap-1">
+                        <span class="snapshot-tree-caret" aria-hidden="true">▸</span>@title
+                        @if (selected.Count > 0) { <span class="badge bg-primary ms-1">@selected.Count</span> }
+                    </summary>
+                    <div class="d-flex flex-wrap gap-1 mt-1 ms-3">
+                        @foreach (var c in ObjectColors.All)
+                        {
+                            var id = $"{group}-{c.Name}";
+                            <input type="checkbox" class="btn-check" id="@id" name="@group" value="@c.Name" autocomplete="off"
+                                   checked="@selected.Contains(c.Name)" form="snapshotFilterForm" />
+                            <label class="btn btn-sm py-0 px-2 snapshot-color-chip" for="@id"
+                                   style="--chip-bg: @c.SwatchHex; --chip-fg: @c.TextHex;">@ObjectColors.Display(c.Name)</label>
+                        }
+                    </div>
+                </details>
+            }
+            @* Speed: snapshots with an object measured at or over this speed by a speed trap. *@
+            <details class="snapshot-color-filter mt-1" open="@(MinSpeed is not null)">
+                <summary class="small d-flex align-items-center gap-1">
+                    <span class="snapshot-tree-caret" aria-hidden="true">▸</span>⏱ Speed
+                    @if (MinSpeed is not null) { <span class="badge bg-primary ms-1">1</span> }
+                </summary>
+                <div class="d-flex align-items-center gap-1 mt-1 ms-3 small">
+                    <label for="snapshotMinSpeed" class="text-nowrap">At or over</label>
+                    <input type="number" id="snapshotMinSpeed" name="minSpeed" min="1" step="any" value="@MinSpeed"
+                           class="form-control form-control-sm" style="width: 5rem;" form="snapshotFilterForm" />
+                    <span>@SpeedUnits.Label(SpeedUnit)</span>
+                </div>
+            </details>
         </div>
     </aside>
 
@@ -172,6 +210,15 @@
                                 {<span class="snapshot-badge-count" title="@n moving at once">&times;@n</span>}@if (badge.Confidence is { } c)
                                 {<span class="snapshot-badge-confidence" title="Detection confidence">@FormatConfidence(c)</span>}
                             </span>
+                        }
+                        @foreach (var (text, color, count) in ColorBadges(s.Objects))
+                        {
+                            <span class="badge snapshot-color-badge" style="background-color: @color.SwatchHex; color: @color.TextHex;"
+                                  title="Detected color">@text@if (count > 1) {<span class="snapshot-badge-count">&times;@count</span>}</span>
+                        }
+                        @if (s.Objects.Where(o => o.SpeedKph is not null).Select(o => o.SpeedKph!.Value).DefaultIfEmpty().Max() is var fastest && fastest > 0)
+                        {
+                            <span class="badge bg-dark" title="Measured by a speed trap">⏱ @SpeedUnits.Format(fastest, SpeedUnit)</span>
                         }
                         <span class="badge bg-secondary" title="How long this event lasted">@FormatDuration(s.Duration)</span>
                         <div class="d-flex align-items-center gap-2 mt-1">
@@ -227,6 +274,45 @@
     [SupplyParameterFromQuery(Name = "pageNumber")] private int PageNumber { get; set; }
     [SupplyParameterFromQuery(Name = "kinds")] private string[]? Kinds { get; set; }
     [SupplyParameterFromQuery(Name = "excludedLabels")] private string[]? ExcludedLabels { get; set; }
+    [SupplyParameterFromQuery(Name = "colors")] private string[]? Colors { get; set; }
+    [SupplyParameterFromQuery(Name = "shirts")] private string[]? Shirts { get; set; }
+    [SupplyParameterFromQuery(Name = "pants")] private string[]? Pants { get; set; }
+    /// <summary>In the display unit (Detection.SpeedUnits).</summary>
+    [SupplyParameterFromQuery(Name = "minSpeed")] private double? MinSpeedParam { get; set; }
+
+    private double? MinSpeed => MinSpeedParam is > 0 and < 1000 ? MinSpeedParam : null;
+
+    private string SpeedUnit { get; set; } = SpeedUnits.Default;
+
+    private static List<string> KnownColors(string[]? names) =>
+        (names ?? []).Select(n => ObjectColors.Find(n)?.Name).OfType<string>().Distinct().ToList();
+
+    private IEnumerable<(string Group, string Title, List<string> Selected)> ColorGroups =>
+    [
+        ("colors", "🎨 Color", KnownColors(Colors)),
+        ("shirts", "👕 Shirt (people)", KnownColors(Shirts)),
+        ("pants", "👖 Pants (people)", KnownColors(Pants)),
+    ];
+
+    /// <summary>One badge per distinct color+object ("Red car", "Blue shirt"), counted when several
+    /// objects share it.</summary>
+    private static IEnumerable<(string Text, ObjectColors.ObjectColor Color, int Count)> ColorBadges(IReadOnlyList<SnapshotObjectDto> objects)
+    {
+        var badges = new List<(string Text, ObjectColors.ObjectColor Color)>();
+        foreach (var o in objects)
+        {
+            if (o.UpperColor is not null || o.LowerColor is not null)
+            {
+                if (ObjectColors.Find(o.UpperColor) is { } upper) badges.Add(($"{ObjectColors.Display(upper.Name)} shirt", upper));
+                if (ObjectColors.Find(o.LowerColor) is { } lower) badges.Add(($"{ObjectColors.Display(lower.Name)} pants", lower));
+            }
+            else if (ObjectColors.Find(o.PrimaryColor) is { } primary)
+            {
+                badges.Add(($"{ObjectColors.Display(primary.Name)} {o.Label}", primary));
+            }
+        }
+        return badges.GroupBy(b => b.Text).Select(g => (g.Key, g.First().Color, g.Count())).Take(6);
+    }
 
     private SnapshotPageDto Results { get; set; } = new([], 1, 1);
     private List<Camera> Cameras { get; set; } = [];
@@ -260,10 +346,12 @@
     {
         var kindsQuery = Kinds is null ? "" : string.Concat(Kinds.Select(k => "&kinds=" + Uri.EscapeDataString(k)));
         var excludedLabelsQuery = ExcludedLabels is null ? "" : string.Concat(ExcludedLabels.Select(l => "&excludedLabels=" + Uri.EscapeDataString(l)));
+        var colorQuery = string.Concat(ColorGroups.SelectMany(g => g.Selected.Select(c => $"&{g.Group}={c}")))
+            + (MinSpeed is { } ms ? $"&minSpeed={ms.ToString(System.Globalization.CultureInfo.InvariantCulture)}" : "");
         // Absolute path, not a bare "?query" — App.razor's <base href="/"> makes the browser resolve a
         // relative query-only href against "/" (the Dashboard route), not the current page, so a bare
         // "?mode=..." pagination link silently sent every click to "/" instead of staying on /Snapshots.
-        return $"/Snapshots?mode={Mode}&cameraId={CameraId}&groupId={GroupId}&viewId={ViewId}&from={From}&to={To}&pageNumber={p}{kindsQuery}{excludedLabelsQuery}";
+        return $"/Snapshots?mode={Mode}&cameraId={CameraId}&groupId={GroupId}&viewId={ViewId}&from={From}&to={To}&pageNumber={p}{kindsQuery}{excludedLabelsQuery}{colorQuery}";
     }
 
     protected override async Task OnInitializedAsync()
@@ -319,7 +407,10 @@
         var fromUtc = LocalDateFilter.StartOfDayUtc(From);
         var toUtc = LocalDateFilter.EndOfDayUtc(To);
 
-        Results = await TimelineService.GetSnapshotsAsync(cameraIds, fromUtc, toUtc, PageNumber < 1 ? 1 : PageNumber, PageSize, default, Kinds, ExcludedLabels);
+        SpeedUnit = await Settings.GetAsync(SpeedUnits.SettingKey, SpeedUnits.Default);
+        Results = await TimelineService.GetSnapshotsAsync(cameraIds, fromUtc, toUtc, PageNumber < 1 ? 1 : PageNumber, PageSize, default, Kinds, ExcludedLabels,
+            objectFilter: new SnapshotObjectFilter(KnownColors(Colors), KnownColors(Shirts), KnownColors(Pants),
+                MinSpeed is { } minSpeed ? SpeedUnits.ToKph(minSpeed, SpeedUnit) : null));
     }
 
     private async Task<List<Guid>> ResolveViewCameraIdsAsync(string userId, Guid viewId)

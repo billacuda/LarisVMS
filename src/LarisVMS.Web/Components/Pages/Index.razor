@@ -1,19 +1,53 @@
 @page "/"
 @attribute [Authorize]
 @using System.Globalization
+@using System.Text.Json
+@using LarisVMS.Core
+@using LarisVMS.Core.Enums
 @using LarisVMS.Core.Interfaces
+@using Microsoft.AspNetCore.Authorization
 @inject IDashboardService DashboardService
+@inject IDashboardWidgetService DashboardWidgets
+@inject IAuthorizationService AuthorizationService
+@inject ITimelineService TimelineService
+@inject ICameraService CameraService
+@inject ICameraAccessService CameraAccess
 
 <PageTitle>Dashboard - @AppName</PageTitle>
+
+<HeadContent>
+    <link rel="stylesheet" href="/lib/gridstack/dist/gridstack.min.css" />
+</HeadContent>
 
 <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
     <h1 class="mb-0">Dashboard</h1>
     @* dashboard.js's poll() fills this in ("Updated h:mm:ss a") after every successful refresh —
        server-rendered blank so a JS-disabled/failed-to-load page doesn't show a stale claim. *@
     <span id="dashboardRefreshStatus" class="text-muted small"></span>
+    @* Customizing needs the full 12-column grid: on a phone it collapses to one column, and a layout
+       dragged around there would overwrite the desktop one. dashboard-widgets.js hides this bar
+       whenever the grid isn't 12 columns wide. *@
+    <div class="ms-auto d-flex gap-2" id="dashboardCustomizeBar">
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="dashboardCustomize">Customize</button>
+        <span class="d-none gap-2" id="dashboardEditControls">
+            <button type="button" class="btn btn-sm btn-primary" id="dashboardAddWidget">Add widget</button>
+            <button type="button" class="btn btn-sm btn-outline-danger" id="dashboardResetLayout">Reset layout</button>
+            <button type="button" class="btn btn-sm btn-success" id="dashboardDone">Done</button>
+        </span>
+    </div>
 </div>
 
-<div class="row g-3 mb-3" id="dashboardSummary">
+<div class="alert alert-warning py-2 small d-none" id="dashboardLayoutStatus" role="status"></div>
+
+@* dashboard-widgets.js builds the user's saved layout here. *@
+<div class="grid-stack dashboard-grid" id="dashboardGrid"></div>
+
+@* The original dashboard sections, server-rendered as before and kept up to date by dashboard.js.
+   dashboard-widgets.js moves each one into its widget when that widget is on the user's layout;
+   sections not on the layout stay here, hidden. *@
+<div id="dashboardWidgetPool" class="d-none">
+<div data-widget-body="summary">
+<div class="row g-3" id="dashboardSummary">
     <div class="col-6 col-md-3">
         <div class="card text-center">
             <div class="card-body">
@@ -50,7 +84,10 @@
 
 @* One card per node. dashboard.js renderNodes() re-renders this from /api/dashboard with the same
    markup — keep the two in step (this is only the pre-JS first paint). *@
-<div class="row g-3 mb-4" id="dashboardNodes">
+</div>
+
+<div data-widget-body="node-cards">
+<div class="row g-3" id="dashboardNodes">
     @foreach (var n in Nodes)
     {
         <div class="col-12 col-md-6 col-xl-4">
@@ -96,13 +133,17 @@
         </div>
     }
 </div>
+</div>
 
+<div data-widget-body="camera-table">
 <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
     @* Persisted server-side (see user-preferences.js) so the choice survives a reload and follows the
        signed-in user across devices — same convention as the theme toggle. Kept as its own switch
        rather than folded into the generic column picker: showing a thumbnail is a heavier per-row
        network fetch, not just a display toggle on data already present. *@
-    <div class="form-check form-switch mb-0">
+    @* Hidden for now (THUMBNAILS_ENABLED in dashboard.js) — the switch and the thumbnail column are
+       kept so the option can come back without rebuilding it. *@
+    <div class="form-check form-switch mb-0 d-none">
         <input class="form-check-input" type="checkbox" role="switch" id="dashboardThumbToggle">
         <label class="form-check-label" for="dashboardThumbToggle">Show thumbnails</label>
     </div>
@@ -209,10 +250,94 @@
     </table>
     <div data-paginate-controls-for="dashboardTable" class="mt-2"></div>
 </div>
+</div>
+</div>
+
+@* Widget picker. *@
+<div class="modal fade" id="dashboardAddModal" tabindex="-1" aria-labelledby="dashboardAddModalTitle" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="dashboardAddModalTitle">Add widgets</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body" id="dashboardAddList"></div>
+        </div>
+    </div>
+</div>
+
+@* Latest detections' type picker (its ⚙ button) — see dashboard-widgets.js. *@
+<div class="modal fade" id="dashboardKindsModal" tabindex="-1" aria-labelledby="dashboardKindsTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="dashboardKindsTitle">Show these detections</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body" id="dashboardKindsList"></div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-sm btn-outline-secondary me-auto" id="dashboardKindsDefault">Defaults</button>
+                <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-sm btn-primary" id="dashboardKindsSave">Save</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* Full report behind a widget's title — see dashboard-report.js. *@
+<div class="modal fade" id="dashboardReportModal" tabindex="-1" aria-labelledby="dashboardReportTitle" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="dashboardReportTitle">Report</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                    <input type="search" class="form-control form-control-sm" id="dashboardReportFilter"
+                           placeholder="Filter by name, node or details" style="max-width: 280px;" aria-label="Filter" />
+                    <select class="form-select form-select-sm w-auto" id="dashboardReportNode" aria-label="Node">
+                        <option value="">All nodes</option>
+                    </select>
+                    <span class="small text-muted ms-auto" id="dashboardReportCount"></span>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="dashboardReportCsv">Download CSV</button>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover align-middle mb-2">
+                        <thead id="dashboardReportHead">
+                            <tr>
+                                <th class="text-muted" style="width: 3rem;">#</th>
+                                <th><button type="button" class="btn btn-link btn-sm p-0 text-reset fw-semibold text-decoration-none" data-report-sort="name">Name</button></th>
+                                <th data-report-node-col><button type="button" class="btn btn-link btn-sm p-0 text-reset fw-semibold text-decoration-none" data-report-sort="node">Node</button></th>
+                                <th>Details</th>
+                                <th class="text-end"><button type="button" class="btn btn-link btn-sm p-0 text-reset fw-semibold text-decoration-none" data-report-sort="value" id="dashboardReportValueHeader">Value</button></th>
+                            </tr>
+                        </thead>
+                        <tbody id="dashboardReportBody"></tbody>
+                    </table>
+                </div>
+                <nav class="d-flex align-items-center gap-2" id="dashboardReportPager">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="dashboardReportPrev">&lsaquo; Previous</button>
+                    <span class="small text-muted" id="dashboardReportPage"></span>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="dashboardReportNext">Next &rsaquo;</button>
+                </nav>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* Read by dashboard-widgets.js: the widgets this user may add, the default layout, and the nodes for
+   the report popup's node filter. *@
+<script type="application/json" id="dashboardConfig">@((MarkupString)ConfigJson)</script>
 
 @* Renders after App.razor's global helper scripts (user-preferences.js etc.) via SectionOutlet,
-   not inline here — dashboard.js depends on larisvmsPreferences already existing. *@
+   not inline here — dashboard.js depends on larisvmsPreferences already existing. GridStack and the
+   widget scripts load before dashboard.js so the original sections are already in place in the grid
+   when its first refresh runs. *@
 <SectionContent SectionName="PageScripts">
+    <script src="/lib/gridstack/dist/gridstack-all.js"></script>
+    <script src="/js/dashboard-report.js"></script>
+    <script src="/js/dashboard-widgets.js"></script>
     <script src="/js/dashboard.js"></script>
 </SectionContent>
 
@@ -242,6 +367,51 @@
         NodesOnlineCount = health.NodesOnlineCount;
         NodesTotalCount = health.NodesTotalCount;
         Nodes = health.Nodes ?? [];
+
+        var viewer = new DashboardViewer(user,
+            CanViewAlerts: (await AuthorizationService.AuthorizeAsync(user, "Alerts.Edit")).Succeeded,
+            CanOpenNodes: (await AuthorizationService.AuthorizeAsync(user, "Nodes.Edit")).Succeeded);
+        // System.Text.Json's default encoder escapes <, > and &, so this is safe inside a <script> tag.
+        ConfigJson = JsonSerializer.Serialize(new
+        {
+            available = DashboardWidgets.GetAvailable(viewer),
+            defaultLayout = DashboardWidgetCatalog.DefaultLayout,
+            nodes = Nodes.OrderBy(n => n.NodeName).Select(n => new { id = n.NodeId, name = n.NodeName }),
+            detectionKinds = await DetectionKindOptionsAsync(),
+            // For the Camera activity widget's camera picker — only cameras this user can review.
+            activityCameras = await ActivityCamerasAsync(user),
+        }, JsonSerializerOptions.Web);
+    }
+
+    private string ConfigJson { get; set; } = "{}";
+
+    private async Task<List<object>> ActivityCamerasAsync(System.Security.Claims.ClaimsPrincipal user)
+    {
+        var accessible = await CameraAccess.GetAccessibleCameraIdsAsync(user, CameraAccessActions.Playback);
+        return (await CameraService.ListAsync())
+            .Where(c => accessible is null || accessible.Contains(c.Id))
+            .OrderBy(c => c.Name)
+            .Select(c => (object)new { id = c.Id, name = c.Name })
+            .ToList();
+    }
+
+    /// <summary>The latest-detections widget's type choices: the same top-level types the Snapshots
+    /// filter lists (camera classes, then AI categories not already covered by one), plus custom tags
+    /// and plain motion. Plain motion is off by default.</summary>
+    private async Task<List<object>> DetectionKindOptionsAsync()
+    {
+        var options = new List<object>();
+        foreach (var kind in DetectionDisplay.AllKinds)
+            options.Add(new { token = kind.ToString(), label = DetectionDisplay.Label(kind), emoji = DetectionDisplay.Emoji(kind), byDefault = true });
+        var kindNames = DetectionDisplay.AllKinds.Select(k => k.ToString()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var categoryNames = (await TimelineService.GetDetectedObjectCategoriesAsync())
+            .Select(category => category.Name)
+            .Where(name => !kindNames.Contains(name));
+        foreach (var name in categoryNames)
+            options.Add(new { token = name, label = name, emoji = CocoCategoryMap.Emoji(name), byDefault = true });
+        options.Add(new { token = LarisVMS.Infrastructure.Services.TimelineService.CustomTagKindToken, label = "Custom tags", emoji = "🏷️", byDefault = true });
+        options.Add(new { token = DashboardWidgetCatalog.MotionKindToken, label = "Motion with nothing identified", emoji = EventColors.MotionEmoji, byDefault = false });
+        return options;
     }
 
     private List<LarisVMS.Core.Dtos.NodeDashboardRow> Nodes { get; set; } = [];

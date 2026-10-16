@@ -14,14 +14,21 @@
 @inject IHttpClientFactory HttpFactory
 @inject MediaRelayMetrics RelayMetrics
 @inject NavigationManager NavigationManager
+@inject IPermissionService PermissionService
+@inject INodeBuildService NodeBuildService
+@inject ISetupService SetupService
 
 <PageTitle>Nodes - @AppName</PageTitle>
 
-<h1>Recorder nodes</h1>
+<h1>Nodes</h1>
 <p class="text-muted">
     Each node is a Windows service that records its cameras. Click a node to edit its settings.
     <a href="/Help/nodes">How nodes work</a>
 </p>
+<nav class="d-flex flex-wrap gap-2 mb-3 small" aria-label="On this page">
+    <a href="#nodes">Recorder nodes</a> &middot; <a href="#builds">Builds</a>
+    @if (CanEditSettings) { <text>&middot; <a href="#settings">Updates and registration</a></text> }
+</nav>
 
 @if (!string.IsNullOrEmpty(StatusMessage))
 {
@@ -44,6 +51,7 @@
     </div>
 }
 
+<h2 class="h5" id="nodes">Recorder nodes</h2>
 @if (NodeRows.Count == 0)
 {
     <p class="text-muted">No nodes have registered yet. See <a href="/Help/installation">Installation</a>.</p>
@@ -184,6 +192,18 @@ else
     </p>
 }
 
+@* Rendered only once everything below is loaded: the panels must not mount (and so run) while this
+   page's queries are still using the request's DbContext. *@
+@if (Loaded)
+{
+    <NodeBuildsPanel Builds="Builds" />
+
+    @if (CanEditSettings)
+    {
+        <NodeSettingsPanel InitialRegistrationKey="@RegistrationKey" InitialAutoUpdate="AutoUpdate" InitialReleaseCheck="ReleaseCheck" />
+    }
+}
+
 @code {
     /// <summary>One row of the stale-camera warning's tooltip. Status says when this camera's last
     /// remaining segment on this node ages past retention, that it's kept indefinitely, or — once well
@@ -223,10 +243,31 @@ else
     private List<string> MissingNodeStaleCameras { get; set; } = [];
     private string? StatusMessage;
     private bool StatusIsError;
+    // Updates and registration are settings (was Settings → Nodes), so they also need Settings.Edit.
+    private bool CanEditSettings;
+    private List<NodeBuildVersion> Builds = [];
+    private string? RegistrationKey;
+    private bool AutoUpdate;
+    private bool ReleaseCheck;
+    private bool Loaded;
 
     protected override async Task OnInitializedAsync()
     {
+        CanEditSettings = (await PermissionService.GetGrantedAsync(User)).Has("Settings", "Edit");
         await LoadAsync();
+
+        // deploy.ps1 inserts Pending rows straight into the table, so tidy the queue on every visit.
+        await NodeBuildService.SupersedeOutdatedPendingAsync();
+        Builds = await NodeBuildService.ListAsync();
+        if (CanEditSettings)
+        {
+            // Get-or-create rather than a bare read: a deployment whose setup predates the wizard's Node
+            // step (or whose Settings row was deleted) would otherwise render an empty field.
+            RegistrationKey = await SetupService.GetOrCreateNodeRegistrationKeyAsync();
+            AutoUpdate = await Settings.GetAsync("NodeAutoUpdate.Enabled", true);
+            ReleaseCheck = await Settings.GetAsync(ReleaseCheckService.EnabledKey, ReleaseCheckService.DefaultEnabled);
+        }
+        Loaded = true;
 
         if (!string.IsNullOrEmpty(QueryStatusMessage))
         {

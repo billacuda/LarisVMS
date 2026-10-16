@@ -43,7 +43,7 @@ public interface INodeBuildService
 }
 
 /// <summary>Registers the node and media-proxy builds shipped inside the web install (its
-/// <c>packages\</c> folder, filled by the Web MSI or install-web.ps1) as Pending on Admin/NodeBuilds,
+/// <c>packages\</c> folder, filled by the Web MSI or install-web.ps1) as Pending on the Nodes page,
 /// and seeds the CUDA provider library NVIDIA nodes download. Run once at startup; idempotent — a
 /// version already registered for its platform is skipped.</summary>
 public interface IBundledBuildRegistrar

@@ -63,6 +63,9 @@ public static class EventColors
     public const string DefaultMotion = "#28e070";
     public const string DefaultRecording = "#1e6fd9";
 
+    /// <summary>Two-way audio: a recorded push-to-talk press on the timeline.</summary>
+    public const string Talk = "#20c9c9";
+
     public const string MotionKey = "Timeline.Color.Motion";
     public const string RecordingKey = "Timeline.Color.Recording";
 

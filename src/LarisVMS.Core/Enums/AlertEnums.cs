@@ -22,7 +22,18 @@ public enum AlertConditionType
     /// <summary>Recording failover activated for a node (LarisVMS failover plan, phase 3) — a quorum
     /// of voters agreed its service was down, or an admin put it in maintenance, and its cameras
     /// moved to the backup node. Fires once per failover activation, not per tick.</summary>
-    NodeFailoverActivated = 3
+    NodeFailoverActivated = 3,
+
+    /// <summary>An AI detection matching the rule's filters (category, label, color, zone,
+    /// schedule) on the rule's camera, or on any camera when CameraId is null. Event-driven rather
+    /// than ticked — DetectionAlertService evaluates each span as it is recorded, so a detection
+    /// alerts within seconds. Fires once per detection event; the cooldown then holds it.</summary>
+    ObjectDetected = 4,
+
+    /// <summary>An object measured by a speed trap at or above the rule's SpeedThresholdKph, with
+    /// the same optional category/label/color/schedule filters as ObjectDetected. Event-driven the
+    /// same way.</summary>
+    SpeedOver = 5
 }
 
 /// <summary>Where an AlertDelivery sends a firing. BrowserPush is deliberately not in this list yet —

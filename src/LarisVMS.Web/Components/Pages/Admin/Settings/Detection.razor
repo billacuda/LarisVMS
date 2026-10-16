@@ -233,6 +233,21 @@
         </SettingField>
     </SettingSection>
 
+    <SettingSection Title="Object details">
+        <SettingField Label="Object colors" Hint="Names each object's color (and a person's shirt and pants) for snapshots, filters and alerts." HelpLink="/Help/ai-detection#object-colors">
+            <div class="form-check mt-1">
+                <InputCheckbox @bind-Value="ColorClassification" class="form-check-input" id="colorClassification" />
+                <label class="form-check-label" for="colorClassification">Classify colors</label>
+            </div>
+        </SettingField>
+        <SettingField Label="Speed units" For="speedUnitsSelect" Hint="How speed trap readings are shown. Set up traps on each camera's Speed traps page." HelpLink="/Help/ai-detection#speed-traps">
+            <select name="SpeedUnits" id="speedUnitsSelect" class="form-select">
+                <option value="@SpeedUnits.Kmh" selected="@(SpeedUnit == SpeedUnits.Kmh)">km/h</option>
+                <option value="@SpeedUnits.Mph" selected="@(SpeedUnit == SpeedUnits.Mph)">mph</option>
+            </select>
+        </SettingField>
+    </SettingSection>
+
     <div class="lv-savebar">
         <button type="submit" name="Action" value="Save" class="btn btn-primary">Save</button>
     </div>
@@ -332,6 +347,8 @@
     [SupplyParameterFromForm(FormName = "detection-settings")] private int DepartureGraceSeconds { get; set; }
     [SupplyParameterFromForm(FormName = "detection-settings")] private int SnapshotMarginPercent { get; set; }
     [SupplyParameterFromForm(FormName = "detection-settings")] private int MaxFps { get; set; }
+    [SupplyParameterFromForm(FormName = "detection-settings")] private bool ColorClassification { get; set; }
+    [SupplyParameterFromForm(FormName = "detection-settings", Name = "SpeedUnits")] private string? SpeedUnit { get; set; }
     [SupplyParameterFromForm(FormName = "detection-settings")] private string? ModelFamily { get; set; }
     [SupplyParameterFromForm(FormName = "detection-settings")] private string? DFineWeights { get; set; }
     [SupplyParameterFromForm(FormName = "detection-settings")] private string? DFineTensorRtMode { get; set; }
@@ -388,6 +405,8 @@
         MotionJitterPixels = await Settings.GetAsync("Detection.MotionJitterPixels", 3);
         DepartureGraceSeconds = await Settings.GetAsync("Detection.DepartureGraceSeconds", 5);
         SnapshotMarginPercent = await Settings.GetAsync("Detection.SnapshotMarginPercent", 12);
+        ColorClassification = await Settings.GetAsync("Detection.ColorClassification", true);
+        SpeedUnit = SpeedUnits.Normalize(await Settings.GetAsync(SpeedUnits.SettingKey, SpeedUnits.Default));
         MaxFps = await Settings.GetAsync("Detection.MaxFps", 7);
         ModelFamily = await Settings.GetAsync("Detection.ModelFamily", "Auto");
         DFineWeights = await Settings.GetAsync("Detection.DFineWeights", "Obj2Coco");
@@ -430,6 +449,9 @@
         var oldDepartureGraceSeconds = await Settings.GetAsync("Detection.DepartureGraceSeconds", 5);
         var oldSnapshotMarginPercent = await Settings.GetAsync("Detection.SnapshotMarginPercent", 12);
         var oldMaxFps = await Settings.GetAsync("Detection.MaxFps", 7);
+        var oldColorClassification = await Settings.GetAsync("Detection.ColorClassification", true);
+        var oldSpeedUnit = SpeedUnits.Normalize(await Settings.GetAsync(SpeedUnits.SettingKey, SpeedUnits.Default));
+        SpeedUnit = SpeedUnits.Normalize(SpeedUnit);
         var oldModelFamily = await Settings.GetAsync("Detection.ModelFamily", "Auto");
         var oldDFineWeights = await Settings.GetAsync("Detection.DFineWeights", "Obj2Coco");
         var oldDFineTensorRtMode = await Settings.GetAsync("Detection.DFineTensorRtMode", "Off");
@@ -520,6 +542,8 @@
         await Settings.SetGlobalAsync("Detection.DepartureGraceSeconds", DepartureGraceSeconds.ToString(), by);
         await Settings.SetGlobalAsync("Detection.SnapshotMarginPercent", SnapshotMarginPercent.ToString(), by);
         await Settings.SetGlobalAsync("Detection.MaxFps", MaxFps.ToString(), by);
+        await Settings.SetGlobalAsync("Detection.ColorClassification", ColorClassification.ToString(), by);
+        await Settings.SetGlobalAsync(SpeedUnits.SettingKey, SpeedUnit, by);
         // RfDetr still renders disabled (no decoder); ModelFamily is "Auto", "DFine" or "YoloX" here.
         await Settings.SetGlobalAsync("Detection.ModelFamily", ModelFamily, by);
         await Settings.SetGlobalAsync("Detection.DFineWeights", DFineWeights, by);
@@ -553,6 +577,8 @@
             AuditDiff.Of("Detection.DepartureGraceSeconds", oldDepartureGraceSeconds.ToString(), DepartureGraceSeconds.ToString()),
             AuditDiff.Of("Detection.SnapshotMarginPercent", oldSnapshotMarginPercent.ToString(), SnapshotMarginPercent.ToString()),
             AuditDiff.Of("Detection.MaxFps", oldMaxFps.ToString(), MaxFps.ToString()),
+            AuditDiff.Of("Detection.ColorClassification", oldColorClassification.ToString(), ColorClassification.ToString()),
+            AuditDiff.Of(SpeedUnits.SettingKey, oldSpeedUnit, SpeedUnit),
             AuditDiff.Of("Detection.ModelFamily", oldModelFamily, ModelFamily),
             AuditDiff.Of("Detection.DFineWeights", oldDFineWeights, DFineWeights),
             AuditDiff.Of("Detection.DFineTensorRtMode", oldDFineTensorRtMode, DFineTensorRtMode),

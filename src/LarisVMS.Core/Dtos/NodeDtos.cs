@@ -121,7 +121,13 @@ public record NodeConfigStreamDto(Guid StreamId, string Role, string RtspUri,
     /// <summary>The stream's probed frame rate (CameraStream.Fps), or null if not probed yet — used
     /// only to decide whether Detection.MaxFps's fps= filter would actually cap (vs pointlessly
     /// duplicating a stream that's already at or below the target).</summary>
-    int? Fps = null);
+    int? Fps = null,
+    /// <summary>The stream's audio codec as the node last reported it (CameraStream.AudioCodec), or
+    /// null if unknown — the node re-encodes anything that isn't AAC (see AudioTranscode).</summary>
+    string? AudioCodec = null,
+    /// <summary>The camera's own configured bitrate (CameraStream.ConfiguredBitrateKbps) — what a
+    /// privacy-mask re-encode targets. Null when unknown.</summary>
+    int? ConfiguredBitrateKbps = null);
 
 /// <summary>M8/M18: ServerMotion, Ignore, and (as of M18) Privacy zones are sent here — CameraMotion
 /// is the one left out, since nothing pushes it to a device yet (that push happens from LarisVMS.Web
@@ -259,7 +265,28 @@ public record NodeConfigCameraDto(Guid CameraId, string Name, string? Username, 
     /// own default, so an older, not-yet-updated node build's deserialization lands on the same
     /// ceiling it always had. Appended last so the positional NodeService construction stays
     /// stable.</summary>
-    int MaxFps = 7);
+    int MaxFps = 7,
+    /// <summary>Whether this camera's privacy masks also stop detections inside them (no event,
+    /// snapshot or count). Off by default: a mask is there to hide part of the picture, and anything
+    /// happening behind it is still recorded as an event — with its snapshot masked like the video.
+    /// Setting "Privacy.BlocksDetections", Camera → Node → Global.</summary>
+    bool PrivacyBlocksDetections = false,
+    /// <summary>This camera's enabled speed traps, passed straight through to Vision. Null from an
+    /// older web server.</summary>
+    List<VisionSpeedTrapDto>? SpeedTraps = null,
+    /// <summary>Footage encryption at rest (setting Storage.Encrypt, Camera → Node → Global): "Off",
+    /// "Video" (recordings and talk audio) or "VideoAndImages" (also cached thumbnails and snapshots).
+    /// Always "Off" while the server has no master key or no backup of it.</summary>
+    string EncryptFootage = "Off",
+    /// <summary>When someone last asked for this camera's existing footage to be encrypted; the node
+    /// sweeps the camera's older files when this is newer than its last sweep. Null = never.</summary>
+    DateTime? EncryptExistingRequestedUtc = null);
+
+/// <summary>Node → Web: POST /api/nodes/footage-keys — the camera's data key for a UTC day.</summary>
+public record FootageKeyRequest(Guid CameraId, DateOnly Day);
+
+/// <summary>A footage data key (base64, 32 bytes) for the node to hold in memory only.</summary>
+public record FootageKeyResponse(Guid KeyId, Guid CameraId, string Key);
 /// <summary>A camera this node has leftover Segments for but is no longer assigned to record
 /// (reassigned to a different node, or deleted) — StorageManager's orphaned-folder sweep uses
 /// RetentionDays here so leftover footage still ages out on the same schedule it always would have,
@@ -456,7 +483,10 @@ public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? Stor
     /// DetectionModelFamily itself resolves to "Custom" (see DetectionModelSelection.Choose). Appended
     /// last so the positional NodeService construction stays stable; blank default keeps an older node
     /// on its existing family/weights/size selection with no behavior change.</summary>
-    string LocalModelName = "");
+    string LocalModelName = "",
+    /// <summary>Detection.ColorClassification (global, default on) — passed to every
+    /// VisionStartCameraRequest and part of NodeWorker's restart signature.</summary>
+    bool ColorClassification = true);
 
 /// <summary>One completed MotionSpan, batch-reported the same way SegmentReportItem is — see
 /// NodeService.RecordMotionSpansAsync for why plain REST + EF insert is enough here despite the
@@ -490,7 +520,10 @@ public record MotionSpanReportItem(Guid CameraId, Guid? ZoneId, DateTime StartUt
     /// "x2" / "x3" snapshot badge count). Null for a non-AiDetection span and for an older node that
     /// doesn't report it; NodeService keeps the running max across checkpoint/coalesce updates the
     /// same way it does Score.</summary>
-    int? MovingCount = null);
+    int? MovingCount = null,
+    /// <summary>AI detection only: each tracked object behind this span (colors, speed), upserted
+    /// into DetectedObjects by (span, TrackId). Null for every other source and an older node.</summary>
+    List<VisionDetectedObjectItem>? Objects = null);
 
 /// <summary>M8 pass 6: one raw ONVIF PullPoint notification, reported the same batched way a
 /// MotionSpan or Segment is. IsMotion (see CameraEventClassifier, run on the node as each
@@ -499,7 +532,11 @@ public record MotionSpanReportItem(Guid CameraId, Guid? ZoneId, DateTime StartUt
 public record CameraEventReportItem(Guid CameraId, string OnvifTopic, DateTime ReceivedUtc, string? PayloadJson, bool IsMotion);
 
 public record SegmentReportItem(Guid CameraId, string StreamRole, DateTime StartUtc, DateTime EndUtc,
-    string FilePath, long SizeBytes, string? Codec, int? Width, int? Height, bool HasAudio);
+    string FilePath, long SizeBytes, string? Codec, int? Width, int? Height, bool HasAudio,
+    /// <summary>SHA-256 of the file (lowercase hex), hashed on the node before reporting — the
+    /// segment's content hash in its camera's tamper-evidence chain. Null from an older node or when
+    /// the file couldn't be read.</summary>
+    string? Sha256 = null);
 
 public record NodeStatusReportItem(Guid CameraId, string State, DateTime? LastSegmentAt, string? Error);
 

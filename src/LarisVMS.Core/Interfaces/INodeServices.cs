@@ -46,6 +46,10 @@ public interface INodeService
 
     /// <summary>M8: persists completed motion spans a node's substream pipeline reported. See
     /// MotionSpanReportItem's doc comment for why plain inserts, not SqlBulkCopy, are enough here.</summary>
+    /// <summary>Whether a node may hold this camera's footage encryption keys: it records the camera,
+    /// is its backup, or already holds its segments.</summary>
+    Task<bool> NodeMayHoldCameraAsync(Guid nodeId, Guid cameraId, CancellationToken ct = default);
+
     Task RecordMotionSpansAsync(Guid nodeId, IReadOnlyList<MotionSpanReportItem> spans, CancellationToken ct = default);
 
     /// <summary>M8 pass 6: persists raw ONVIF PullPoint notifications a node's event polling
