@@ -191,7 +191,18 @@ public record VisionStartCameraRequest(
     List<VisionSpeedTrapDto>? SpeedTraps = null,
     /// <summary>Detection.ColorClassification (global, default on) — whether each tracked object's
     /// colors are classified from its best frame. Appended last; defaults true.</summary>
-    bool ClassifyColors = true)
+    bool ClassifyColors = true,
+    /// <summary>Detection.MovementMode for this camera: "Standard" (default) or "Legacy" (the
+    /// pre-0.218 rule, tuned by <see cref="RejectMotionJitter"/>). Part of NodeWorker's restart
+    /// signature. Appended last.</summary>
+    string MovementMode = "Standard",
+    /// <summary>Detection.MovementSensitivity for this camera: "Low", "Normal" (default), or "High".
+    /// Only Standard mode uses it. Part of NodeWorker's restart signature. Appended last.</summary>
+    string MovementSensitivity = "Normal",
+    /// <summary>Detection.MovingObjects: which kinds of object can count as moving (see
+    /// CocoCategoryMap.ParseMovingObjects). Anything else is only ever reported idle. Part of
+    /// NodeWorker's restart signature. Appended last.</summary>
+    string MovingObjects = CocoCategoryMap.DefaultMovingObjects)
 {
     /// <summary>What this camera should be called in a log line. The operator's own name when there
     /// is one, otherwise the first block of the camera id — short enough to scan a column of, and
@@ -228,7 +239,10 @@ public record VisionDetectedObjectItem(
     double? SpeedKph = null,
     Guid? SpeedTrapId = null,
     /// <summary>When the object crossed the trap's second gate. Null from an older Vision build.</summary>
-    DateTime? SpeedMeasuredAtUtc = null);
+    DateTime? SpeedMeasuredAtUtc = null,
+    /// <summary>Where the object went while moving: box centres as SceneHeat.FormatPath text. Feeds
+    /// the scene heatmap. Null when it never moved, or from an older Vision build.</summary>
+    string? Path = null);
 
 /// <summary>Node -&gt; Vision Service: stop watching a camera (disabled, reassigned, or the node is
 /// shutting down this camera's session).</summary>

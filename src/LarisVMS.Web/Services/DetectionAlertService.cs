@@ -9,13 +9,14 @@ using LarisVMS.Infrastructure.Data;
 namespace LarisVMS.Web.Services;
 
 /// <summary>
-/// Real-time detection alerts (ObjectDetected / SpeedOver). NodeService publishes every recorded
-/// AI-detection span here (<see cref="IDetectionEventSink"/>) — on open, each checkpoint and close —
-/// and this evaluates them on its own task, so recording never waits on alert delivery.
+/// Real-time detection and motion alerts (ObjectDetected / SpeedOver / MotionDetected). NodeService
+/// publishes every recorded AI-detection and plain motion span here (<see cref="IDetectionEventSink"/>)
+/// — on open, each checkpoint and close — and this evaluates them on its own task, so recording never
+/// waits on alert delivery.
 ///
 /// A span is reported several times and a color or speed can arrive on a later report, so each rule
 /// remembers what it has already handled: (rule, span) for ObjectDetected, (rule, span, track) for
-/// SpeedOver. Something matched during the cooldown is marked handled too, so it doesn't fire late
+/// SpeedOver, (rule, span) for MotionDetected. Something matched during the cooldown is marked handled too, so it doesn't fire late
 /// when the cooldown ends. The memory is in-process; after a restart a still-running span could alert
 /// once more, which the persisted cooldown normally holds back.
 ///
@@ -28,7 +29,8 @@ public sealed class DetectionAlertService(IServiceScopeFactory scopeFactory, ILo
     private static readonly TimeSpan RulesMaxAge = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan HandledRetention = TimeSpan.FromHours(3);
 
-    private readonly Channel<DetectionEvent> _queue = Channel.CreateBounded<DetectionEvent>(
+    // DetectionEvent or MotionEvent.
+    private readonly Channel<object> _queue = Channel.CreateBounded<object>(
         new BoundedChannelOptions(2000) { FullMode = BoundedChannelFullMode.DropOldest, SingleReader = true });
 
     private List<DetectionRule> _rules = [];
@@ -39,6 +41,8 @@ public sealed class DetectionAlertService(IServiceScopeFactory scopeFactory, ILo
 
     public void Publish(DetectionEvent detection) => _queue.Writer.TryWrite(detection);
 
+    public void PublishMotion(MotionEvent motion) => _queue.Writer.TryWrite(motion);
+
     /// <summary>Reload rules before the next event — called after a rule is saved or deleted.</summary>
     public void InvalidateRules() => _rulesStale = true;
 
@@ -46,15 +50,17 @@ public sealed class DetectionAlertService(IServiceScopeFactory scopeFactory, ILo
     {
         try
         {
-            await foreach (var detection in _queue.Reader.ReadAllAsync(stoppingToken))
+            await foreach (var item in _queue.Reader.ReadAllAsync(stoppingToken))
             {
                 try
                 {
-                    await HandleAsync(detection, stoppingToken);
+                    if (item is DetectionEvent detection) await HandleAsync(detection, stoppingToken);
+                    else if (item is MotionEvent motion) await HandleMotionAsync(motion, stoppingToken);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    logger.LogError(ex, "Detection alert evaluation failed for span {SpanId}.", detection.SpanId);
+                    logger.LogError(ex, "Alert evaluation failed for span {SpanId}.",
+                        item is DetectionEvent d ? d.SpanId : ((MotionEvent)item).SpanId);
                 }
             }
         }
@@ -68,11 +74,10 @@ public sealed class DetectionAlertService(IServiceScopeFactory scopeFactory, ILo
         if (_rules.Count == 0) return;
         PruneHandled(now);
 
-        var local = DateTime.Now;
         foreach (var rule in _rules)
         {
             if (!DetectionAlertMatcher.MatchesEvent(rule, e)) continue;
-            if (!DetectionAlertMatcher.InSchedule(rule.ScheduleDays, rule.ScheduleStart, rule.ScheduleEnd, local)) continue;
+            if (!DetectionAlertMatcher.InSchedule(rule, now)) continue;
 
             if (rule.Condition == AlertConditionType.ObjectDetected)
             {
@@ -104,6 +109,25 @@ public sealed class DetectionAlertService(IServiceScopeFactory scopeFactory, ILo
         }
     }
 
+    private async Task HandleMotionAsync(MotionEvent m, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        if (_rulesStale || now - _rulesLoadedUtc > RulesMaxAge) await LoadRulesAsync(ct);
+        if (_rules.Count == 0) return;
+        PruneHandled(now);
+
+        foreach (var rule in _rules)
+        {
+            if (!DetectionAlertMatcher.MatchesMotion(rule, m)) continue;
+            if (!DetectionAlertMatcher.InSchedule(rule, now)) continue;
+            var key = $"{rule.Id}:{m.SpanId}";
+            if (_handled.ContainsKey(key)) continue;
+            _handled[key] = now;
+            var where = rule.MotionZoneName is { } zone ? $" in zone \"{zone}\"" : "";
+            await FireAsync(rule, m.CameraId, null, (camera, _, _) => $"Motion detected on camera \"{camera}\"{where}.", now, ct);
+        }
+    }
+
     /// <summary>Re-reads the rule (cooldown, deliveries) and fires it if the cooldown allows.
     /// <paramref name="message"/> gets the camera name, the speed units setting and a " (trap name)"
     /// suffix (empty when there's no trap).</summary>
@@ -114,7 +138,20 @@ public sealed class DetectionAlertService(IServiceScopeFactory scopeFactory, ILo
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
         var entity = await db.AlertRules.Include(r => r.Deliveries).FirstOrDefaultAsync(r => r.Id == rule.Id && r.IsEnabled, ct);
         if (entity is null) return;
-        if (!AlertEvaluationPolicy.ShouldFire(entity.LastFiredAt, now, entity.CooldownMinutes)) return;
+
+        // A rule watching one camera keeps its single, persisted cooldown. A rule watching several
+        // (a node's cameras, or all of them) cools down per camera, so a detection on one camera
+        // doesn't silence the others for the cooldown.
+        if (entity.CameraId is not null)
+        {
+            if (!AlertEvaluationPolicy.ShouldFire(entity.LastFiredAt, now, entity.CooldownMinutes)) return;
+        }
+        else
+        {
+            var cooldownKey = $"{rule.Id}:{cameraId}";
+            if (!AlertEvaluationPolicy.ShouldFire(_cameraFiredAt.GetValueOrDefault(cooldownKey), now, entity.CooldownMinutes)) return;
+            _cameraFiredAt[cooldownKey] = now;
+        }
 
         // Stamped before dispatching, the same as AlertEvaluatorService: a delivery that throws
         // must not leave the rule able to fire again on the very next detection.
@@ -131,8 +168,14 @@ public sealed class DetectionAlertService(IServiceScopeFactory scopeFactory, ILo
 
         await AlertEvaluatorService.DispatchAsync(entity, text,
             scope.ServiceProvider.GetRequiredService<AlertChannelSenderFactory>(),
-            scope.ServiceProvider.GetRequiredService<IAuditService>(), logger, ct);
+            scope.ServiceProvider.GetRequiredService<IAuditService>(), logger, ct,
+            scope.ServiceProvider.GetRequiredService<INotificationService>(), cameraId,
+            $"/Playback?cameraId={cameraId}&atUtc={now:o}");
     }
+
+    // Per-camera cooldowns for multi-camera rules: "{ruleId}:{cameraId}" → last fired. In-process,
+    // like _handled; after a restart a multi-camera rule may fire once more per camera.
+    private readonly Dictionary<string, DateTime?> _cameraFiredAt = [];
 
     private async Task LoadRulesAsync(CancellationToken ct)
     {
@@ -140,19 +183,39 @@ public sealed class DetectionAlertService(IServiceScopeFactory scopeFactory, ILo
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
         _rulesStale = false;
         var rules = await db.AlertRules.AsNoTracking()
-            .Where(r => r.IsEnabled && (r.ConditionType == AlertConditionType.ObjectDetected || r.ConditionType == AlertConditionType.SpeedOver))
+            .Where(r => r.IsEnabled && (r.ConditionType == AlertConditionType.ObjectDetected || r.ConditionType == AlertConditionType.SpeedOver
+                || r.ConditionType == AlertConditionType.MotionDetected))
             .ToListAsync(ct);
 
         var zoneIds = rules.Where(r => r.ZoneId is not null).Select(r => r.ZoneId!.Value).Distinct().ToList();
-        var zones = zoneIds.Count == 0
-            ? new Dictionary<Guid, string>()
-            : await db.Zones.AsNoTracking().Where(z => zoneIds.Contains(z.Id)).ToDictionaryAsync(z => z.Id, z => z.PolygonJson, ct);
+        var zoneRows = zoneIds.Count == 0
+            ? []
+            : await db.Zones.AsNoTracking().Where(z => zoneIds.Contains(z.Id)).Select(z => new { z.Id, z.Name, z.PolygonJson }).ToListAsync(ct);
+        var zones = zoneRows.ToDictionary(z => z.Id, z => z.PolygonJson);
+        var zoneNames = zoneRows.ToDictionary(z => z.Id, z => z.Name);
 
-        _rules = rules.Select(r => new DetectionRule(r.Id, r.Name, r.ConditionType, r.CameraId,
-            r.CategoryFilter, r.LabelFilter, r.ColorFilter,
-            HasZoneFilter: r.ZoneId is not null,
-            ZonePolygon: r.ZoneId is { } zid ? DetectionAlertMatcher.ParsePolygon(zones.GetValueOrDefault(zid)) : null,
-            r.SpeedThresholdKph, r.ScheduleDays, r.ScheduleStart, r.ScheduleEnd)).ToList();
+        // Node-scoped rules: the node's cameras right now (refreshed with the rules every 30 s).
+        var scopeNodeIds = rules.Where(r => r.CameraId is null && r.NodeId is not null).Select(r => r.NodeId!.Value).Distinct().ToList();
+        var camerasByNode = scopeNodeIds.Count == 0
+            ? new Dictionary<Guid, HashSet<Guid>>()
+            : (await db.Cameras.AsNoTracking().Where(c => c.NodeId != null && scopeNodeIds.Contains(c.NodeId.Value))
+                    .Select(c => new { c.Id, NodeId = c.NodeId!.Value }).ToListAsync(ct))
+                .GroupBy(c => c.NodeId).ToDictionary(g => g.Key, g => g.Select(c => c.Id).ToHashSet());
+
+        _rules = rules.Select(r =>
+        {
+            // A motion rule's zone is matched by id (the zone that saw the motion), not by polygon.
+            var motion = r.ConditionType == AlertConditionType.MotionDetected;
+            return new DetectionRule(r.Id, r.Name, r.ConditionType, r.CameraId,
+                r.CategoryFilter, r.LabelFilter, r.ColorFilter,
+                HasZoneFilter: !motion && r.ZoneId is not null,
+                ZonePolygon: !motion && r.ZoneId is { } zid ? DetectionAlertMatcher.ParsePolygon(zones.GetValueOrDefault(zid)) : null,
+                r.SpeedThresholdKph, r.ScheduleDays, r.ScheduleStart, r.ScheduleEnd,
+                ScopeCameraIds: r.CameraId is null && r.NodeId is { } nodeId ? camerasByNode.GetValueOrDefault(nodeId) ?? [] : null,
+                TimeZone: DetectionAlertMatcher.ResolveTimeZone(r.TimeZoneId),
+                MotionZoneId: motion ? r.ZoneId : null,
+                MotionZoneName: motion && r.ZoneId is { } mzid ? zoneNames.GetValueOrDefault(mzid, "(deleted zone)") : null);
+        }).ToList();
         _rulesLoadedUtc = DateTime.UtcNow;
     }
 
@@ -163,6 +226,11 @@ public sealed class DetectionAlertService(IServiceScopeFactory scopeFactory, ILo
         foreach (var (key, at) in _handled)
         {
             if (now - at > HandledRetention) _handled.Remove(key);
+        }
+        // Longer than any cooldown an admin would set; an entry past it can't hold anything back.
+        foreach (var (key, at) in _cameraFiredAt)
+        {
+            if (at is null || now - at > TimeSpan.FromDays(2)) _cameraFiredAt.Remove(key);
         }
     }
 }

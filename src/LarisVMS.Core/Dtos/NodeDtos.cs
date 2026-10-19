@@ -11,7 +11,8 @@ public record NodeRegisterRequest(string RegistrationKey, string Hostname, strin
     /// with no global default. Null from an older install-node.ps1 — the node then has no storage
     /// path and records nothing until an admin sets one on Admin/Nodes.</summary>
     string? StorageRootPath = null, string? ArchiveRootPath = null);
-public record NodeRegisterResponse(Guid NodeId, string Secret, string MediaSigningKey);
+/// <param name="UpdateSigningKeyPem">The server's public signing key; the node keeps it and only installs updates signed with it.</param>
+public record NodeRegisterResponse(Guid NodeId, string Secret, string MediaSigningKey, string? UpdateSigningKeyPem = null);
 
 /// <summary>SentAtUtc is the node's own DateTime.UtcNow at the moment it builds this request — the
 /// web server compares that against its own receive-time to measure this node's OS clock skew (see
@@ -52,7 +53,24 @@ public record NodeHeartbeatRequest(string? Version, long? FreeBytes = null, long
     List<NodePartnerHealthReport>? PartnerHealthReports = null,
     /// <summary>The node machine's own CPU, memory and network load, for the dashboard. Null from an
     /// older node build, or one that can't measure them (non-Windows).</summary>
-    NodeHostStats? HostStats = null);
+    NodeHostStats? HostStats = null,
+    /// <summary>Evidence locks: the primary volume is over its watermark and only locked footage is
+    /// left to free, so nothing more can be deleted. Shown on the Nodes page.</summary>
+    bool StorageBlockedByEvidenceLocks = false,
+    /// <summary>What AI detection is actually running on (the Vision Service's own report). Null
+    /// from an older node, or while its Vision Service isn't running.</summary>
+    NodeVisionBackendDto? VisionBackend = null);
+
+/// <summary>Node -&gt; server (POST /api/nodes/motion-heat): grid-mode motion heat for one camera and
+/// UTC hour — how many analysed frames had motion in each cell of the camera's N x N grid, as
+/// SceneHeat.EncodeCells' non-zero cells (Base64). Running totals for the hour from one node run
+/// (RunId): each report replaces the run's earlier one, so a retry can't count twice.</summary>
+public record NodeMotionHeatReport(Guid CameraId, DateTime HourUtc, int GridSize, Guid RunId, string Cells);
+
+/// <summary>Which execution provider a node's AI detection ended up on, and why when it isn't the
+/// one asked for — e.g. requested Nvidia, running DirectML because cuDNN is missing, which is several
+/// times slower. Shown on the Nodes page; a newly degraded backend notifies Super Admins.</summary>
+public record NodeVisionBackendDto(string Requested, string Provider, bool NeedsAttention, List<string> Notes);
 
 /// <summary>A node machine's host load, sampled each heartbeat. CPU is percent busy across all cores
 /// since the previous sample; network is total bytes/s across its active adapters since then.</summary>
@@ -84,7 +102,9 @@ public record NodePartnerHealthReport(Guid NodeId, bool ServiceRunning, DateTime
 /// present. Riding the same Version as the Node exe rather than carrying its own — LarisVMS.Vision.Service
 /// is a build artifact of the same release, not independently versioned.</summary>
 public record NodeUpdateInfoDto(string Version, string DownloadUrl, string Sha256, long SizeBytes,
-    string? VisionDownloadUrl = null, string? VisionSha256 = null, long? VisionSizeBytes = null);
+    string? VisionDownloadUrl = null, string? VisionSha256 = null, long? VisionSizeBytes = null,
+    // UpdateSignature.UpdatePayload signed with the server's key, and that key's public half.
+    string? Signature = null, string? SigningKeyPem = null);
 
 /// <summary>NextNonce (failover plan phase 5a): the single-use value the node must echo on its next
 /// heartbeat (NodeHeartbeatRequest.Nonce). Issued fresh every heartbeat that passes validation. Null
@@ -96,8 +116,9 @@ public record NodeUpdateInfoDto(string Version, string DownloadUrl, string Sha25
 /// a replayed/forged check-in can never harvest one. The server keeps the old secret working
 /// (PreviousApiKeyHash) until the node first authenticates with the new one, so there is no downtime
 /// window.</summary>
+/// <param name="ServerCertificateCheck">How the node checks this server's certificate (ServerCertificateCheck name).</param>
 public record NodeHeartbeatResponse(int IntervalSeconds, NodeUpdateInfoDto? UpdateAvailable = null,
-    string? NextNonce = null, string? NewSecret = null);
+    string? NextNonce = null, string? NewSecret = null, string? ServerCertificateCheck = null);
 
 /// <summary>Metadata for a large Vision Service native dependency the node package doesn't bundle and
 /// fetches from the server on demand — currently only <c>onnxruntime_providers_cuda.dll</c> (~320 MB),
@@ -105,7 +126,7 @@ public record NodeHeartbeatResponse(int IntervalSeconds, NodeUpdateInfoDto? Upda
 /// serves the file from a cache directory seeded by <c>deploy.ps1</c>; <see cref="Sha256"/> is
 /// verified by the node before the file is put in place. Null from the endpoint means the server has
 /// no copy seeded.</summary>
-public record VisionNativeInfo(string Name, string Sha256, long SizeBytes);
+public record VisionNativeInfo(string Name, string Sha256, long SizeBytes, string? Signature = null, string? SigningKeyPem = null);
 
 /// <summary>Failover plan phase 3: the body of the recorder node's unauthenticated
 /// <c>GET /health</c> on its plain-HTTP LAN Kestrel port. A quorum voter (the partner node, central,
@@ -280,7 +301,12 @@ public record NodeConfigCameraDto(Guid CameraId, string Name, string? Username, 
     string EncryptFootage = "Off",
     /// <summary>When someone last asked for this camera's existing footage to be encrypted; the node
     /// sweeps the camera's older files when this is newer than its last sweep. Null = never.</summary>
-    DateTime? EncryptExistingRequestedUtc = null);
+    DateTime? EncryptExistingRequestedUtc = null,
+    /// <summary>Detection.MovementMode / Detection.MovementSensitivity (Camera &rarr; Node &rarr;
+    /// Global): which rule decides that a tracked object is moving ("Standard", the default, or
+    /// "Legacy", the pre-0.218 rule that RejectMotionJitter tunes), and how readily Standard calls it
+    /// ("Low", "Normal", "High"). Appended last; an older server's config means Standard/Normal.</summary>
+    string MovementMode = "Standard", string MovementSensitivity = "Normal");
 
 /// <summary>Node → Web: POST /api/nodes/footage-keys — the camera's data key for a UTC day.</summary>
 public record FootageKeyRequest(Guid CameraId, DateOnly Day);
@@ -486,7 +512,21 @@ public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? Stor
     string LocalModelName = "",
     /// <summary>Detection.ColorClassification (global, default on) — passed to every
     /// VisionStartCameraRequest and part of NodeWorker's restart signature.</summary>
-    bool ColorClassification = true);
+    bool ColorClassification = true,
+    /// <summary>Evidence locks: footage the node must never delete, per camera — every lock that is
+    /// still protecting (active, or removed within its grace period), for assigned and leftover
+    /// cameras alike. Checked by every StorageManager deletion pass and by NodeWorker before a
+    /// recording-mode discard. Null from an older server.</summary>
+    List<NodeConfigProtectedRangeDto>? ProtectedRanges = null,
+    /// <summary>Detection.MovingObjects (global): which kinds of object can count as moving —
+    /// category names and specific object names, comma-separated (see
+    /// CocoCategoryMap.ParseMovingObjects). Passed to every VisionStartCameraRequest and part of
+    /// NodeWorker's restart signature. Appended last; an older server means people, vehicles, and
+    /// animals.</summary>
+    string MovingObjects = CocoCategoryMap.DefaultMovingObjects);
+
+/// <summary>One evidence lock's footage range, as the node needs it.</summary>
+public record NodeConfigProtectedRangeDto(Guid CameraId, DateTime FromUtc, DateTime ToUtc);
 
 /// <summary>One completed MotionSpan, batch-reported the same way SegmentReportItem is — see
 /// NodeService.RecordMotionSpansAsync for why plain REST + EF insert is enough here despite the

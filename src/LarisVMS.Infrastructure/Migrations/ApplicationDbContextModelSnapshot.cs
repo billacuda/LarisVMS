@@ -17,7 +17,7 @@ namespace LarisVMS.Infrastructure.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.10")
+                .HasAnnotation("ProductVersion", "10.0.13")
                 .HasAnnotation("Relational:MaxIdentifierLength", 128);
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
@@ -211,6 +211,9 @@ namespace LarisVMS.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<bool>("AllowSubscribe")
+                        .HasColumnType("bit");
+
                     b.Property<Guid?>("CameraId")
                         .HasColumnType("uniqueidentifier");
 
@@ -256,6 +259,10 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.Property<Guid?>("NodeId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<string>("OwnerUserId")
+                        .HasMaxLength(450)
+                        .HasColumnType("nvarchar(450)");
+
                     b.Property<int?>("ScheduleDays")
                         .HasColumnType("int");
 
@@ -271,12 +278,58 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.Property<int?>("ThresholdPercent")
                         .HasColumnType("int");
 
+                    b.Property<string>("TimeZoneId")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
                     b.Property<Guid?>("ZoneId")
                         .HasColumnType("uniqueidentifier");
 
                     b.HasKey("Id");
 
+                    b.HasIndex("OwnerUserId");
+
                     b.ToTable("AlertRules");
+                });
+
+            modelBuilder.Entity("LarisVMS.Core.Entities.AlertSubscription", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("AlertRuleId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<bool>("Browser")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("CreatedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<bool>("Email")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("MutedUntilUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("nvarchar(450)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId");
+
+                    b.HasIndex("AlertRuleId", "UserId")
+                        .IsUnique();
+
+                    b.ToTable("AlertSubscriptions");
                 });
 
             modelBuilder.Entity("LarisVMS.Core.Entities.ApiKey", b =>
@@ -839,6 +892,38 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.ToTable("CameraPlacements");
                 });
 
+            modelBuilder.Entity("LarisVMS.Core.Entities.CameraSceneImage", b =>
+                {
+                    b.Property<Guid>("CameraId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ContentType")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<int>("Height")
+                        .HasColumnType("int");
+
+                    b.Property<byte[]>("Image")
+                        .IsRequired()
+                        .HasColumnType("varbinary(max)");
+
+                    b.Property<string>("UploadedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<DateTime>("UploadedUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("Width")
+                        .HasColumnType("int");
+
+                    b.HasKey("CameraId");
+
+                    b.ToTable("CameraSceneImages");
+                });
+
             modelBuilder.Entity("LarisVMS.Core.Entities.CameraStream", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1002,6 +1087,9 @@ namespace LarisVMS.Infrastructure.Migrations
 
                     b.Property<long>("MotionSpanId")
                         .HasColumnType("bigint");
+
+                    b.Property<string>("Path")
+                        .HasColumnType("nvarchar(max)");
 
                     b.Property<string>("PrimaryColor")
                         .HasMaxLength(20)
@@ -1220,6 +1308,75 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.HasIndex("CameraId", "Name");
 
                     b.ToTable("EventTagRules");
+                });
+
+            modelBuilder.Entity("LarisVMS.Core.Entities.EvidenceLock", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("CameraId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("CreatedByUserId")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("nvarchar(450)");
+
+                    b.Property<string>("CreatedByUserName")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<DateTime?>("ExpiredAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("ExpiresAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("ExpiryWarnedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("FromUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("GraceEndedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<DateTime?>("RemovalNotifiedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("RemovalReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<DateTime?>("RemovedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("RemovedByUserId")
+                        .HasMaxLength(450)
+                        .HasColumnType("nvarchar(450)");
+
+                    b.Property<string>("RemovedByUserName")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<DateTime>("ToUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CameraId", "FromUtc", "ToUtc");
+
+                    b.ToTable("EvidenceLocks");
                 });
 
             modelBuilder.Entity("LarisVMS.Core.Entities.ExportJob", b =>
@@ -1534,6 +1691,10 @@ namespace LarisVMS.Infrastructure.Migrations
 
                     b.HasIndex("DetectedObjectCategoryId");
 
+                    b.HasIndex("EndUtc");
+
+                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("EndUtc"), new[] { "CameraId", "DetectionKind" });
+
                     b.HasIndex("EventTagRuleId");
 
                     b.HasIndex("ZoneId");
@@ -1545,6 +1706,8 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.HasIndex("CameraId", "DetectedObjectLabel", "StartUtc")
                         .IsUnique()
                         .HasFilter("[DetectedObjectLabel] IS NOT NULL");
+
+                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("CameraId", "DetectedObjectLabel", "StartUtc"), new[] { "EndUtc", "ZoneId", "EventTagRuleId", "DetectionKind" });
 
                     b.ToTable("MotionSpans");
                 });
@@ -1594,6 +1757,9 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.Property<string>("CheckInNonce")
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
+
+                    b.Property<bool>("CheckInNonceEchoed")
+                        .HasColumnType("bit");
 
                     b.Property<string>("ClientCertPfxPassword")
                         .HasMaxLength(500)
@@ -1724,6 +1890,9 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.Property<int>("Status")
                         .HasColumnType("int");
 
+                    b.Property<bool>("StorageBlockedByEvidenceLocks")
+                        .HasColumnType("bit");
+
                     b.Property<long?>("StorageFreeBytes")
                         .HasColumnType("bigint");
 
@@ -1746,6 +1915,9 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.Property<string>("Version")
                         .HasMaxLength(50)
                         .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("VisionBackendJson")
+                        .HasColumnType("nvarchar(max)");
 
                     b.HasKey("Id");
 
@@ -1853,6 +2025,53 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.ToTable("Permissions");
                 });
 
+            modelBuilder.Entity("LarisVMS.Core.Entities.PushSubscription", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Auth")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("DeviceLabel")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Endpoint")
+                        .IsRequired()
+                        .HasMaxLength(800)
+                        .HasColumnType("nvarchar(800)");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("LastSuccessAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("P256dh")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("nvarchar(450)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Endpoint")
+                        .IsUnique();
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("PushSubscriptions");
+                });
+
             modelBuilder.Entity("LarisVMS.Core.Entities.RoleAssignmentExpiry", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1923,6 +2142,55 @@ namespace LarisVMS.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("RoleProfiles");
+                });
+
+            modelBuilder.Entity("LarisVMS.Core.Entities.SceneHeatHourly", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<Guid>("CameraId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<byte[]>("Cells")
+                        .IsRequired()
+                        .HasColumnType("varbinary(max)");
+
+                    b.Property<int>("Cols")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("HourUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<int>("Rows")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("RunId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Source")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    SqlServerKeyBuilderExtensions.IsClustered(b.HasKey("Id"), false);
+
+                    b.HasIndex("HourUtc");
+
+                    b.HasIndex("CameraId", "Source", "HourUtc", "Label", "RunId")
+                        .IsUnique();
+
+                    SqlServerIndexBuilderExtensions.IsClustered(b.HasIndex("CameraId", "Source", "HourUtc", "Label", "RunId"));
+
+                    b.ToTable("SceneHeatHourlies");
                 });
 
             modelBuilder.Entity("LarisVMS.Core.Entities.ScheduleWindow", b =>
@@ -2035,6 +2303,18 @@ namespace LarisVMS.Infrastructure.Migrations
                     SqlServerIndexBuilderExtensions.IsClustered(b.HasIndex("CameraId", "StartUtc"));
 
                     b.HasIndex("CameraId", "StorageTier");
+
+                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("CameraId", "StorageTier"), new[] { "SizeBytes" });
+
+                    b.HasIndex("NodeId", "CameraId");
+
+                    b.HasIndex("StorageTier", "ArchivedAt");
+
+                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("StorageTier", "ArchivedAt"), new[] { "NodeId", "SizeBytes" });
+
+                    b.HasIndex("StorageTier", "StartUtc");
+
+                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("StorageTier", "StartUtc"), new[] { "NodeId", "SizeBytes" });
 
                     b.ToTable("Segments");
                 });
@@ -2623,6 +2903,17 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.Navigation("AlertRule");
                 });
 
+            modelBuilder.Entity("LarisVMS.Core.Entities.AlertSubscription", b =>
+                {
+                    b.HasOne("LarisVMS.Core.Entities.AlertRule", "AlertRule")
+                        .WithMany("Subscriptions")
+                        .HasForeignKey("AlertRuleId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("AlertRule");
+                });
+
             modelBuilder.Entity("LarisVMS.Core.Entities.Camera", b =>
                 {
                     b.HasOne("LarisVMS.Core.Entities.Node", null)
@@ -2689,6 +2980,15 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.Navigation("Map");
                 });
 
+            modelBuilder.Entity("LarisVMS.Core.Entities.CameraSceneImage", b =>
+                {
+                    b.HasOne("LarisVMS.Core.Entities.Camera", null)
+                        .WithOne()
+                        .HasForeignKey("LarisVMS.Core.Entities.CameraSceneImage", "CameraId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("LarisVMS.Core.Entities.CameraStream", b =>
                 {
                     b.HasOne("LarisVMS.Core.Entities.Camera", "Camera")
@@ -2717,6 +3017,17 @@ namespace LarisVMS.Infrastructure.Migrations
                         .WithMany()
                         .HasForeignKey("CameraId")
                         .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Camera");
+                });
+
+            modelBuilder.Entity("LarisVMS.Core.Entities.EvidenceLock", b =>
+                {
+                    b.HasOne("LarisVMS.Core.Entities.Camera", "Camera")
+                        .WithMany()
+                        .HasForeignKey("CameraId")
+                        .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
                     b.Navigation("Camera");
@@ -2907,6 +3218,8 @@ namespace LarisVMS.Infrastructure.Migrations
             modelBuilder.Entity("LarisVMS.Core.Entities.AlertRule", b =>
                 {
                     b.Navigation("Deliveries");
+
+                    b.Navigation("Subscriptions");
                 });
 
             modelBuilder.Entity("LarisVMS.Core.Entities.Camera", b =>

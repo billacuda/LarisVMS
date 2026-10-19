@@ -267,6 +267,22 @@ body {
 .column-picker > summary::-webkit-details-marker {
     display: none;
 }
+
+/* Per-column filter row (list-filter.js, <table data-column-filters>): compact controls directly under
+   the column headings, so the filters line up with what they filter without crowding the table. */
+.lv-filter-row > th {
+    padding-top: 0.15rem;
+    padding-bottom: 0.35rem;
+    font-weight: normal;
+    vertical-align: top;
+}
+.lv-filter-row .form-control-sm,
+.lv-filter-row .form-select-sm {
+    min-width: 6rem;
+    font-size: 0.8rem;
+    padding-top: 0.1rem;
+    padding-bottom: 0.1rem;
+}
 .column-picker-menu {
     position: absolute;
     z-index: 1000;
@@ -680,6 +696,30 @@ body {
     margin-top: 1.5rem;
 }
 
+/* Camera device settings (camera-device-settings.js): small group headings inside an .lv-section so
+   related settings sit together without each needing its own card. */
+.ds-group-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--bs-secondary-color);
+    border-bottom: 1px solid var(--bs-border-color-translucent);
+    padding-bottom: 0.2rem;
+    margin-top: 0.25rem;
+}
+.ds-pills .nav-link { font-size: 0.875rem; }
+.ds-dirty-dot {
+    display: inline-block;
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 50%;
+    background: var(--bs-warning);
+    vertical-align: middle;
+}
+.ds-applyto-menu { min-width: 18rem; }
+.ds-results li { padding: 0.1rem 0; }
+
 /* Help pages (Components/Pages/Help) — rendered Markdown. */
 .lv-help-layout {
     display: grid;
@@ -761,6 +801,21 @@ body {
 .activity-legend { display: flex; align-items: center; gap: 3px; flex-wrap: wrap; }
 .activity-legend .small:first-child { margin-right: .35rem; }
 .activity-legend .small:last-child { margin-left: .35rem; }
+
+/* Scene heatmap (Activity → Scene, scene-heatmap.js): the camera's picture with a blurred heat canvas
+   laid exactly over it. */
+.scene-heatmap { position: relative; width: 100%; max-width: 100%; margin: 0 auto; line-height: 0; border-radius: .375rem; overflow: hidden; }
+.scene-heatmap-image { display: block; width: 100%; height: auto; }
+.scene-heatmap-image--missing { background: var(--bs-secondary-bg); }
+.scene-heatmap-heat { position: absolute; top: 0; left: 0; pointer-events: none; }
+/* In a view's grid every camera gets the same 16:9 frame; scene-heatmap.js fits the picture inside it. */
+.scene-heatmap--framed { aspect-ratio: 16 / 9; background: #000; display: flex; align-items: center; justify-content: center; }
+.scene-heatmap-fit { position: relative; line-height: 0; }
+.scene-heatmap--framed .scene-heatmap-image { max-width: none; }
+/* A view's cameras side by side, each with its own heatmap. */
+.scene-heatmap-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 26rem), 1fr)); gap: 1rem; justify-content: center; }
+.scene-heatmap-panel { min-width: 0; }
+.scene-heatmap-legend { display: inline-block; width: 12rem; height: .75rem; border-radius: .25rem; opacity: .8; }
 .activity-swatch { display: inline-block; width: 18px; height: 12px; border-radius: 3px; }
 .activity-tooltip {
     position: fixed; z-index: 1080; pointer-events: none; padding: .3rem .5rem; border-radius: .375rem;
@@ -800,3 +855,24 @@ body {
 /* Leaflet colours every link in the map; keep Bootstrap buttons in the popup their own colours. */
 .leaflet-container .lv-map-popup a.btn-primary { color: #fff; }
 .leaflet-container .lv-map-popup a.btn-outline-secondary { color: #565e64; } /* the popup is white in both themes */
+
+/* In-page notifications (notifications.js) — shown when the browser hasn't been allowed to show
+   system notifications. Bottom-right, above the sticky save bars. */
+.lv-toasts {
+    position: fixed;
+    right: 1rem;
+    bottom: 1rem;
+    z-index: 1080;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-width: min(22rem, calc(100vw - 2rem));
+}
+.lv-toast {
+    background: var(--bs-body-bg);
+    color: var(--bs-body-color);
+    border: 1px solid var(--bs-border-color);
+    border-left: 4px solid var(--bs-primary);
+    border-radius: 0.375rem;
+    padding: 0.5rem 0.75rem;
+}

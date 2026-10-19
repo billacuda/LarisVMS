@@ -55,6 +55,7 @@ window.larisvmsTimeline = (function () {
         var centerMs = clampCenter(options.initialCenterMs || Date.now());
         var buckets = [];
         var bookmarks = []; // M18: [{ timestampUtc }] — options.getBookmarks is optional, same as getThumbnailUrl
+        var lockRanges = []; // Evidence locks: [{ fromMs, toMs }] — options.getLocks is optional, per-camera only
         // Speed-trap measurements ([{ atUtc, firstSeenUtc, lastSeenUtc, label, color, speedText, overLimit }]),
         // per-camera timeline only, like bookmarks. Times parsed once on load into atMs/firstMs/lastMs.
         var speedMarkers = [];
@@ -235,6 +236,15 @@ window.larisvmsTimeline = (function () {
                     bookmarks = [];
                 }
             }
+            if (options.getLocks) {
+                try {
+                    lockRanges = ((await options.getLocks(fromIso, toIso)) || []).map(function (l) {
+                        return { fromMs: window.larisvmsTime.parse(l.fromUtc).getTime(), toMs: window.larisvmsTime.parse(l.toUtc).getTime() };
+                    });
+                } catch (e) {
+                    lockRanges = [];
+                }
+            }
             if (options.getSpeedMarkers) {
                 try {
                     speedMarkers = ((await options.getSpeedMarkers(fromIso, toIso)) || []).map(function (m) {
@@ -349,6 +359,18 @@ window.larisvmsTimeline = (function () {
                     ctx.lineTo(nowX + 0.5, h);
                     ctx.stroke();
                 }
+            }
+
+            // Evidence locks: a violet band along the top edge over each locked stretch, so locked
+            // footage is visible at a glance. Drawn before bookmarks so their flags sit on top.
+            if (lockRanges.length) {
+                ctx.fillStyle = '#a855f7';
+                lockRanges.forEach(function (l) {
+                    if (l.toMs < r.from || l.fromMs > r.to) return;
+                    var x1 = Math.max(0, ((l.fromMs - r.from) / span) * w);
+                    var x2 = Math.min(w, ((l.toMs - r.from) / span) * w);
+                    ctx.fillRect(x1, barTop, Math.max(2, x2 - x1), 3);
+                });
             }
 
             // M18: bookmark markers — a small downward-pointing flag at the top edge of the bar for

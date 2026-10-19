@@ -78,6 +78,9 @@ param(
     # an inbound firewall allow rule, added below, or LarisVMS.Web can reach the port but every
     # connection attempt just hangs until it times out — confirmed on a real node.
     [int]$LivePort             = 8554,
+    # Who may reach -LivePort: the LarisVMS server and any proxies, as IPs or CIDR blocks. Blank
+    # allows any address.
+    [string[]]$LiveAllowFrom   = @(),
 
     # ── Failover plan phase 1: direct-to-node client HTTPS endpoint ────────────────────────────────
     # 0 (the default) leaves it off. A non-zero port stands up a second Kestrel listener that a
@@ -494,7 +497,15 @@ $exePath = Join-Path $InstallDir 'LarisVMS.Node.exe'
 # --ffmpeg-path is passed only when -FfmpegPath was given explicitly; otherwise the node's own
 # FfmpegPathResolver discovers ffmpeg (PATH / WinGet package store) at every startup, so an ffmpeg
 # upgrade needs no re-run of this script.
-$argParts = @('--server-url', $ServerUrl, '--registration-key', $RegistrationKey, '--live-port', $LivePort)
+# The registration key goes in a locked-down file the service reads (and deletes) on first start,
+# not on its command line, which every local user can read from the registry.
+$regKeyPath = Join-Path $env:ProgramData 'LarisVMS\registration.key'
+New-Item -ItemType Directory -Force -Path (Split-Path $regKeyPath) | Out-Null
+Set-Content -Path $regKeyPath -Value $RegistrationKey -NoNewline -Encoding UTF8
+$regKeyGrants = @('/grant:r', '*S-1-5-18:(F)', '/grant:r', '*S-1-5-32-544:(F)')
+if ($ServiceCredential) { $regKeyGrants += @('/grant:r', "$($ServiceCredential.UserName):(R)") }
+& icacls $regKeyPath /inheritance:r @regKeyGrants | Out-Null
+$argParts = @('--server-url', $ServerUrl, '--live-port', $LivePort)
 if (-not [string]::IsNullOrWhiteSpace($FfmpegPath)) { $argParts += @('--ffmpeg-path', $resolvedFfmpeg) }
 if ($StorageRoot) { $argParts += @('--storage-root', $StorageRoot) }
 # --archive-root is read only during first-run registration (to persist it on the Node row); after
@@ -574,8 +585,13 @@ Write-Ok "Recovery configured (restart on 1st/2nd/3rd failure; reset after 1 day
 Write-Step "Configuring firewall for live view (TCP $LivePort)"
 $firewallRuleName = "LarisVMS Node Live View"
 Get-NetFirewallRule -DisplayName $firewallRuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
-New-NetFirewallRule -DisplayName $firewallRuleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort $LivePort | Out-Null
-Write-Ok "Allowed inbound TCP $LivePort"
+if ($LiveAllowFrom.Count -gt 0) {
+    New-NetFirewallRule -DisplayName $firewallRuleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort $LivePort -RemoteAddress $LiveAllowFrom | Out-Null
+    Write-Ok "Allowed inbound TCP $LivePort from $($LiveAllowFrom -join ', ')"
+} else {
+    New-NetFirewallRule -DisplayName $firewallRuleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort $LivePort | Out-Null
+    Write-Ok "Allowed inbound TCP $LivePort (any address; -LiveAllowFrom limits it to the server and proxies)"
+}
 
 # ── Failover plan phase 1: direct-to-node client HTTPS endpoint ────────────────────────────────────
 # The client port can also be enabled entirely server-side (Admin -> Nodes' ClientEndpoint fields,

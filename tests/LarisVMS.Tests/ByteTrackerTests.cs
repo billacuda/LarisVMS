@@ -227,6 +227,197 @@ public sealed class ByteTrackerTests
         Assert.NotEqual(f1[0].Id, f1[1].Id);
     }
 
+    // Detection running at a few frames a second: a walking person or a passing car moves most of, or
+    // more than, its own width between analysed frames, so consecutive boxes barely overlap or don't
+    // at all. Plain IoU never confirmed such a track — no box was ever shown, Moving or Idle.
+    [Theory]
+    [InlineData(45)]   // 0.9 of its width per frame
+    [InlineData(75)]   // 1.5 of its width per frame
+    public void AnObjectMovingFurtherThanItsWidthPerFrameIsTrackedFromItsSecondFrame(int step)
+    {
+        var tracker = new ByteTracker();
+        var ids = new List<int?>();
+        for (var i = 0; i < 6; i++)
+        {
+            var output = tracker.Update([FakeDetection.Box(100 + step * i, 300, 50, 110)]);
+            ids.Add(output.Count == 1 ? output[0].Id : null);
+        }
+
+        Assert.All(ids.Skip(1), id => Assert.NotNull(id));
+        Assert.Single(ids.Skip(1).Distinct());
+        Assert.Equal(0, tracker.TracksDroppedUnconfirmed);
+    }
+
+    [Fact]
+    public void TwoParkedObjectsSideBySideNeverSwap()
+    {
+        var tracker = new ByteTracker();
+        var first = tracker.Update([FakeDetection.Box(100, 100, 80, 60), FakeDetection.Box(190, 100, 80, 60)]);
+        var idsByX = first.ToDictionary(d => d.BoundingBox.Left, d => d.Id);
+        for (var i = 0; i < 20; i++)
+        {
+            var jitter = i % 2 == 0 ? 2 : -2;
+            var output = tracker.Update([FakeDetection.Box(100 + jitter, 100, 80, 60), FakeDetection.Box(190 - jitter, 100, 80, 60)]);
+            foreach (var d in output)
+                Assert.Equal(idsByX[d.BoundingBox.Left < 150 ? 100 : 190], d.Id);
+        }
+    }
+
+    [Fact]
+    public void AParkedCarsTrackDoesNotHopToTheCarBesideItWhenItsBoxFlickers()
+    {
+        // Car A tracked; its detection drops for a frame just as car B, parked beside it, is first
+        // detected. B must get its own track, not A's — a hop like that reads as A driving off.
+        var tracker = new ByteTracker();
+        int? carA = null;
+        for (var i = 0; i < 5; i++)
+            carA = tracker.Update([FakeDetection.Box(100, 100, 120, 70, classId: 2)])[0].Id;
+
+        tracker.Update([FakeDetection.Box(230, 100, 120, 70, classId: 2)]);
+        var after = tracker.Update([FakeDetection.Box(230, 100, 120, 70, classId: 2)]);
+
+        Assert.All(after, d => Assert.NotEqual(carA, d.Id));
+    }
+
+    [Fact]
+    public void APersonWalkingPastAParkedCarKeepsBothIds()
+    {
+        var tracker = new ByteTracker();
+        int? carId = null, personId = null;
+        for (var i = 0; i < 10; i++)
+        {
+            var output = tracker.Update([
+                FakeDetection.Box(400, 300, 300, 150, classId: 2),
+                FakeDetection.Box(250 + 60 * i, 260, 50, 120, classId: 0),
+            ]);
+            foreach (var d in output)
+            {
+                if (d.Label?.Index == 2) { carId ??= d.Id; Assert.Equal(carId, d.Id); }
+                else if (i > 0) { personId ??= d.Id; Assert.Equal(personId, d.Id); }
+            }
+        }
+        Assert.NotNull(carId);
+        Assert.NotNull(personId);
+    }
+
+    // ── Behind a tree: a moving object hidden for a while comes back as the same track ────────
+
+    /// <summary>Walks a 50x80 box right by 30 px a frame for 8 frames from x=100, then hides it for
+    /// <paramref name="hidden"/> frames. Returns its id and where it was last seen.</summary>
+    private static (int? Id, int LastX) WalkThenHide(ByteTracker tracker, int hidden, int y = 100, int classId = 0)
+    {
+        int? id = null;
+        var x = 100;
+        for (var i = 0; i < 8; i++, x += 30)
+            id = tracker.Update([FakeDetection.Box(x, y, 50, 80, classId: classId)]).Single().Id;
+        for (var i = 0; i < hidden; i++) Assert.Empty(tracker.Update(Array.Empty<FakeDetection>()));
+        return (id, x - 30);
+    }
+
+    [Fact]
+    public void AMovingObjectComingOutFromBehindATreeKeepsItsId()
+    {
+        // Hidden 6 frames, and slower behind the tree: its prediction is far past where it comes out.
+        var tracker = new ByteTracker();
+        var (id, lastX) = WalkThenHide(tracker, hidden: 6);
+        var back = tracker.Update([FakeDetection.Box(lastX + 90, 100, 50, 80)]);
+        Assert.Equal(id, Assert.Single(back).Id);
+        Assert.Equal(id, Assert.Single(tracker.Rejoins).Into);
+        Assert.Equal(id, tracker.Update([FakeDetection.Box(lastX + 120, 100, 50, 80)]).Single().Id);
+    }
+
+    [Fact]
+    public void AnObjectFirstSeenHalfBehindTheTreeStillKeepsItsId()
+    {
+        // A sliver first (too narrow to be it), then the whole object: the sliver's young track is
+        // folded into the hidden one.
+        var tracker = new ByteTracker();
+        var (id, lastX) = WalkThenHide(tracker, hidden: 5);
+        tracker.Update([FakeDetection.Box(lastX + 60, 100, 16, 80)]);
+        var whole = tracker.Update([FakeDetection.Box(lastX + 60, 100, 50, 80)]);
+        Assert.Equal(id, Assert.Single(whole).Id);
+        Assert.Equal(id, tracker.Update([FakeDetection.Box(lastX + 90, 100, 50, 80)]).Single().Id);
+    }
+
+    [Theory]
+    [InlineData(-150, 0)]   // behind where it went out of sight
+    [InlineData(90, 200)]   // well off its line
+    [InlineData(900, 0)]    // further than it could have gone
+    public void SomethingElseComingIntoViewGetsItsOwnId(int dx, int dy)
+    {
+        var tracker = new ByteTracker();
+        var (id, lastX) = WalkThenHide(tracker, hidden: 6);
+        tracker.Update([FakeDetection.Box(lastX + dx, 100 + dy, 50, 80)]);
+        var next = tracker.Update([FakeDetection.Box(lastX + dx + 5, 100 + dy, 50, 80)]);
+        Assert.All(next, d => Assert.NotEqual(id, d.Id));
+        Assert.Empty(tracker.Rejoins);
+    }
+
+    [Fact]
+    public void ADifferentSizedObjectGetsItsOwnId()
+    {
+        var tracker = new ByteTracker();
+        var (id, lastX) = WalkThenHide(tracker, hidden: 6);
+        tracker.Update([FakeDetection.Box(lastX + 90, 60, 50, 160)]);
+        var next = tracker.Update([FakeDetection.Box(lastX + 95, 60, 50, 160)]);
+        Assert.All(next, d => Assert.NotEqual(id, d.Id));
+    }
+
+    [Fact]
+    public void AParkedObjectsTrackNeverRejoins()
+    {
+        // Still for 10 frames, gone, then something turns up just beside it: not the parked object.
+        var tracker = new ByteTracker();
+        int? parked = null;
+        for (var i = 0; i < 10; i++) parked = tracker.Update([FakeDetection.Box(100, 100, 50, 80)]).Single().Id;
+        for (var i = 0; i < 4; i++) tracker.Update(Array.Empty<FakeDetection>());
+        tracker.Update([FakeDetection.Box(170, 100, 50, 80)]);
+        var next = tracker.Update([FakeDetection.Box(172, 100, 50, 80)]);
+        Assert.All(next, d => Assert.NotEqual(parked, d.Id));
+    }
+
+    [Fact]
+    public void TheCallerCanRefuseARejoin()
+    {
+        // The pipeline says no (a different color): a new object.
+        var tracker = new ByteTracker();
+        var (id, lastX) = WalkThenHide(tracker, hidden: 6);
+        tracker.Update([FakeDetection.Box(lastX + 90, 100, 50, 80)], (_, _) => false);
+        var next = tracker.Update([FakeDetection.Box(lastX + 120, 100, 50, 80)], (_, _) => false);
+        Assert.All(next, d => Assert.NotEqual(id, d.Id));
+    }
+
+    [Fact]
+    public void HiddenLongerThanTheBufferGetsANewId()
+    {
+        var tracker = new ByteTracker(new ByteTrackOptions { TrackBuffer = 3, FrameRate = 30 });
+        var (id, lastX) = WalkThenHide(tracker, hidden: 5);
+        tracker.Update([FakeDetection.Box(lastX + 90, 100, 50, 80)]);
+        var next = tracker.Update([FakeDetection.Box(lastX + 120, 100, 50, 80)]);
+        Assert.All(next, d => Assert.NotEqual(id, d.Id));
+    }
+
+    [Fact]
+    public void TwoObjectsHiddenAtOnceEachGetTheirOwnIdBack()
+    {
+        var tracker = new ByteTracker();
+        int? top = null, bottom = null;
+        var x = 100;
+        for (var i = 0; i < 8; i++, x += 30)
+        {
+            foreach (var d in tracker.Update([FakeDetection.Box(x, 100, 50, 80), FakeDetection.Box(x, 400, 50, 80)]))
+            {
+                if (d.BoundingBox.Top < 200) top = d.Id;
+                else bottom = d.Id;
+            }
+        }
+        for (var i = 0; i < 6; i++) tracker.Update(Array.Empty<FakeDetection>());
+        var back = tracker.Update([FakeDetection.Box(x + 60, 400, 50, 80), FakeDetection.Box(x + 60, 100, 50, 80)]);
+        Assert.Equal(2, back.Count);
+        Assert.Equal(top, back.Single(d => d.BoundingBox.Top < 200).Id);
+        Assert.Equal(bottom, back.Single(d => d.BoundingBox.Top >= 200).Id);
+    }
+
     private static void AssertNear(int actual, int expected, int tolerance)
     {
         Assert.True(

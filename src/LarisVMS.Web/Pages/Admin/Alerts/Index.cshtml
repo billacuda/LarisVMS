@@ -6,8 +6,17 @@
 <h1>Alerts</h1>
 
 <p class="text-muted small">
-    Watch a camera or node and notify by email, webhook, ntfy, Pushover, Slack or Teams. Checked every minute. <a href="/Help/alerts">Learn more</a>
+    Watch a camera or node and notify by email, webhook, ntfy, Pushover, Slack, or Teams, or as personal notifications to the users who subscribe.
+    Checked every minute; detections within seconds. <a href="/Help/alerts">Learn more</a>
 </p>
+
+@if (Model.IsSuperAdmin)
+{
+    <ul class="nav nav-tabs mb-3">
+        <li class="nav-item"><a class="nav-link @(Model.Personal ? "" : "active")" href="/Admin/Alerts">Shared rules</a></li>
+        <li class="nav-item"><a class="nav-link @(Model.Personal ? "active" : "")" href="/Admin/Alerts?personal=true">Users' personal notifications</a></li>
+    </ul>
+}
 
 @if (!string.IsNullOrEmpty(Model.ErrorMessage))
 {
@@ -21,7 +30,8 @@
                 <tr>
                     <th>Name</th>
                     <th>Condition</th>
-                    <th>Deliveries</th>
+                    <th>@(Model.Personal ? "Owner" : "Team channels")</th>
+                    <th>Subscribers</th>
                     <th>Last fired</th>
                     <th>Status</th>
                     <th></th>
@@ -31,10 +41,17 @@
                 @foreach (var r in Model.Rules)
                 {
                     <tr>
-                        <td><a asp-page="Edit" asp-route-id="@r.Id">@r.Name</a></td>
+                        <td>
+                            @if (Model.Personal) { @r.Name } else { <a asp-page="Edit" asp-route-id="@r.Id">@r.Name</a> }
+                            @if (r.TypeTurnedOff)
+                            {
+                                <span class="badge text-bg-warning ms-1" title="This notification type is turned off for users in Settings → Notifications. Team channels still get it.">paused for users</span>
+                            }
+                        </td>
                         <td class="small">@r.ConditionSummary</td>
-                        <td class="small">@(r.ChannelLabels.Count == 0 ? "(none)" : string.Join(", ", r.ChannelLabels))</td>
-                        <td class="small text-muted">@(r.LastFiredAt is { } fired ? fired.ToLocalTime().ToString("g") : "never")</td>
+                        <td class="small">@(Model.Personal ? r.OwnerName : r.ChannelList)</td>
+                        <td class="small">@r.Subscribers@(r.AllowSubscribe ? " · open" : "")</td>
+                        <td class="small text-muted">@if (r.LastFiredAt is { } fired) {<time datetime="@fired.ToUtcIso()" data-local="g">@fired.ToLocalTime().ToString("g")</time>} else {<text>never</text>}</td>
                         <td>
                             @if (r.IsEnabled)
                             {
@@ -46,13 +63,13 @@
                             }
                         </td>
                         <td class="text-end text-nowrap">
-                            <form method="post" asp-page-handler="ToggleEnabled" asp-route-id="@r.Id" class="d-inline">
+                            <form method="post" asp-page-handler="ToggleEnabled" asp-route-id="@r.Id" asp-route-personal="@Model.Personal" class="d-inline">
                                 <button type="submit" class="btn btn-sm btn-outline-secondary">
                                     @(r.IsEnabled ? "Disable" : "Enable")
                                 </button>
                             </form>
-                            <form method="post" asp-page-handler="Delete" asp-route-id="@r.Id" class="d-inline"
-                                  onclick="return confirm('Delete alert rule &quot;@r.Name&quot;?');">
+                            <form method="post" asp-page-handler="Delete" asp-route-id="@r.Id" asp-route-personal="@Model.Personal" class="d-inline"
+                                  data-confirm="Delete alert rule &quot;@r.Name&quot;?">
                                 <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
                             </form>
                         </td>
@@ -60,11 +77,14 @@
                 }
                 @if (Model.Rules.Count == 0)
                 {
-                    <tr><td colspan="6" class="text-center text-muted py-3">No alert rules yet.</td></tr>
+                    <tr><td colspan="7" class="text-center text-muted py-3">@(Model.Personal ? "No personal notifications yet." : "No alert rules yet.")</td></tr>
                 }
             </tbody>
         </table>
     </div>
 </div>
 
-<a asp-page="Edit" class="btn btn-primary">Add rule</a>
+@if (!Model.Personal)
+{
+    <a asp-page="Edit" class="btn btn-primary">Add rule</a>
+}

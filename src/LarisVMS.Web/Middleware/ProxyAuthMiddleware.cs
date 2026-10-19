@@ -49,6 +49,13 @@ public class ProxyAuthMiddleware(RequestDelegate next)
             return;
         }
 
+        // A proxy that's off (a newly registered one waits here for an admin) may only check in.
+        if (!proxy.Enabled && !path.Equals("/api/proxies/heartbeat", StringComparison.OrdinalIgnoreCase))
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            return;
+        }
+
         context.Items[HttpContextItemKey] = proxy;
         await next(context);
     }

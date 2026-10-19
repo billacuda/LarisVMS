@@ -7,6 +7,7 @@
 @using LarisVMS.Core.Interfaces
 @inject ICameraService CameraService
 @inject ICameraAccessService CameraAccess
+@inject IViewService ViewService
 
 <PageTitle>Activity - @AppName</PageTitle>
 
@@ -26,12 +27,23 @@ else
             <option value="all" selected="@AllCameras">All cameras</option>
             @foreach (var c in Cameras)
             {
-                <option value="@c.Id" selected="@(!AllCameras && c.Id == SelectedCameraId)">@c.Name</option>
+                <option value="@c.Id" selected="@(SelectedViewKey is null && !AllCameras && c.Id == SelectedCameraId)">@c.Name</option>
+            }
+            @* Scene only — activity.js hides these for Events and Speeds. *@
+            @if (Views.Count > 0)
+            {
+                <optgroup label="Views" data-view-option>
+                    @foreach (var v in Views)
+                    {
+                        <option value="view:@v.Id" data-view-option selected="@(SelectedViewKey == "view:" + v.Id)">@v.Name</option>
+                    }
+                </optgroup>
             }
         </select>
         <div class="btn-group btn-group-sm" role="group" aria-label="What to show" id="activityKind">
             <button type="button" class="btn btn-outline-primary" data-kind="events">Events</button>
             <button type="button" class="btn btn-outline-primary" data-kind="speeds" title="Speeds measured by speed traps">Speeds</button>
+            <button type="button" class="btn btn-outline-primary" data-kind="scene" title="Where in the picture things move">Scene</button>
         </div>
         <div class="btn-group btn-group-sm" role="group" aria-label="Time range" id="activityRange">
             @foreach (var (value, label) in RangeOptions)
@@ -44,7 +56,7 @@ else
             <button type="button" class="btn btn-outline-secondary" data-view="pattern" title="Each weekday and hour, totalled over the range">Typical week</button>
             <button type="button" class="btn btn-outline-secondary" data-view="calendar" title="Every day of the range, left to right">By day</button>
         </div>
-        <div class="form-check form-switch ms-auto mb-0">
+        <div class="form-check form-switch ms-auto mb-0" id="activityTableSwitch">
             <input class="form-check-input" type="checkbox" role="switch" id="activityTableView">
             <label class="form-check-label small" for="activityTableView">Show as table</label>
         </div>
@@ -74,6 +86,53 @@ else
                     <div id="activitySpeedTraps"><span class="text-muted">Loading…</span></div>
                 </div>
             </div>
+            @* Scene view only — see activity.js and scene-heatmap.js. *@
+            <div class="card d-none" id="activitySceneCard">
+                <div class="card-header py-2"><span class="fw-semibold small">Scene</span></div>
+                <div class="card-body py-2 small">
+                    <div class="fw-semibold small mb-1">Show</div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="activitySceneSource" id="activitySceneObjects" value="objects">
+                        <label class="form-check-label" for="activitySceneObjects">Objects moving</label>
+                    </div>
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="radio" name="activitySceneSource" id="activitySceneMotion" value="motion">
+                        <label class="form-check-label" for="activitySceneMotion">Motion</label>
+                    </div>
+                    <div id="activitySceneCategories">
+                        <div class="fw-semibold small mb-1">Objects</div>
+                        @foreach (var (key, text) in SceneCategories)
+                        {
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="activityScene@(key)" data-scene-cat="@key" checked>
+                                <label class="form-check-label" for="activityScene@(key)">@text</label>
+                            </div>
+                        }
+                    </div>
+                    <div class="fw-semibold small mt-2 mb-1">Time of day</div>
+                    <div class="d-flex align-items-center gap-1">
+                        <select class="form-select form-select-sm" id="activitySceneFrom" aria-label="From">
+                            @for (var h = 0; h < 24; h++) { <option value="@h">@HourText(h)</option> }
+                        </select>
+                        <span class="text-muted">to</span>
+                        <select class="form-select form-select-sm" id="activitySceneTo" aria-label="To">
+                            @for (var h = 0; h < 24; h++) { <option value="@h">@HourText(h)</option> }
+                        </select>
+                    </div>
+                    <div class="text-muted mt-1">The same hour twice means all day.</div>
+                    @* Shown by activity.js for one camera, to people who can configure it. *@
+                    <div class="d-none mt-3" id="activitySceneBackground">
+                        <div class="fw-semibold small mb-1">Background</div>
+                        <div><span data-bg-status>Camera picture</span></div>
+                        <div class="d-flex flex-wrap gap-2">
+                            <button type="button" class="btn btn-link btn-sm p-0" data-bg-upload>Use my own picture…</button>
+                            <button type="button" class="btn btn-link btn-sm p-0 d-none" data-bg-remove>Use the camera's picture</button>
+                        </div>
+                        <div class="text-danger" data-bg-error role="status"></div>
+                        <input type="file" class="d-none" id="activitySceneBackgroundFile" accept="image/png,image/jpeg,image/gif,image/webp" />
+                    </div>
+                </div>
+            </div>
         </div>
         <div class="col-12 col-lg-9">
             <div class="card">
@@ -92,7 +151,8 @@ else
 
 <SectionContent SectionName="PageScripts">
     <script type="application/json" id="activityConfig">@((MarkupString)ConfigJson)</script>
-    <script src="/js/activity.js"></script>
+    <PageScript Src="/js/scene-heatmap.js" />
+    <PageScript Src="/js/activity.js" />
 </SectionContent>
 
 @code {
@@ -104,10 +164,21 @@ else
     [SupplyParameterFromQuery(Name = "kind")] private string? KindParam { get; set; }
     [SupplyParameterFromQuery(Name = "metric")] private string? MetricParam { get; set; }
 
+    private static readonly (string Key, string Text)[] SceneCategories =
+        [("Human", "People"), ("Vehicle", "Vehicles"), ("Animal", "Animals"), ("Object", "Other")];
+
+    private static string HourText(int h)
+    {
+        var twelveHour = h % 12 == 0 ? 12 : h % 12;
+        return $"{twelveHour} {(h < 12 ? "AM" : "PM")}";
+    }
+
     private static readonly (string Value, string Label)[] RangeOptions =
         [("24h", "24 hours"), ("7d", "7 days"), ("30d", "30 days"), ("90d", "90 days"), ("1y", "1 year")];
 
     private List<Camera> Cameras { get; set; } = [];
+    private List<View> Views { get; set; } = [];
+    private string? SelectedViewKey { get; set; }
     private Guid? SelectedCameraId { get; set; }
     private bool AllCameras { get; set; }
     private string ConfigJson { get; set; } = "{}";
@@ -126,13 +197,25 @@ else
         var requested = Guid.TryParse(CameraIdParam, out var g) ? g : (Guid?)null;
         SelectedCameraId = Cameras.FirstOrDefault(c => c.Id == requested)?.Id ?? Cameras.FirstOrDefault()?.Id;
 
+        // Views for Scene: each with the cameras in it this viewer can review, in layout order.
+        var userId = user.FindFirstValue(ClaimTypes.NameIdentifier) ?? "";
+        var reviewable = Cameras.Select(c => c.Id).ToHashSet();
+        Views = (await ViewService.ListVisibleToAsync(userId)).OrderBy(v => v.Name).ToList();
+        var viewCameras = Views.ToDictionary(v => v.Id,
+            v => LarisVMS.Web.Helpers.ViewLayout.CameraIds(v.LayoutJson).Where(reviewable.Contains).Distinct().ToList());
+        if (CameraIdParam?.StartsWith("view:", StringComparison.OrdinalIgnoreCase) == true
+            && Guid.TryParse(CameraIdParam[5..], out var viewId) && Views.Any(v => v.Id == viewId))
+            SelectedViewKey = "view:" + viewId;
+
         // System.Text.Json's default encoder escapes <, > and &, so this is safe inside a <script> tag.
         ConfigJson = JsonSerializer.Serialize(new
         {
-            cameraId = AllCameras ? "all" : SelectedCameraId?.ToString(),
+            cameraId = SelectedViewKey ?? (AllCameras ? "all" : SelectedCameraId?.ToString()),
+            firstCameraId = Cameras.FirstOrDefault()?.Id.ToString(),
+            views = Views.Select(v => new { id = v.Id, name = v.Name, cameraIds = viewCameras[v.Id] }),
             range = LarisVMS.Infrastructure.Services.ActivityHeatmapBuilder.NormalizeRange(RangeParam),
             view = ViewParam is "calendar" or "pattern" ? ViewParam : null,
-            kind = KindParam is "speeds" or "events" ? KindParam : null,
+            kind = KindParam is "speeds" or "events" or "scene" ? KindParam : null,
             metric = MetricParam is "avg" or "max" or "over" or "count" ? MetricParam : null,
         }, JsonSerializerOptions.Web);
     }

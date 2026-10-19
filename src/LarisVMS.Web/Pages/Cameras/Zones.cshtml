@@ -22,7 +22,7 @@
     <span class="text-muted small">One method is active at a time; switching keeps the other's settings. <a href="/Help/motion#zones">Learn more</a></span>
 </div>
 <div class="alert alert-info py-2 small mb-3" role="note">
-    Changes here (switching between Grid and Polygon zones, saving the grid, or adding, editing or deleting a
+    Changes here (switching between Grid and Polygon zones, saving the grid, or adding, editing, or deleting a
     zone) can take up to 30 seconds to take effect on the recorder node. The motion overlay updates once the
     node picks them up.
 </div>
@@ -33,7 +33,7 @@
 <div id="polygonPane" style="display: none;">
     <p class="text-muted small">
         Draw a <strong>Motion</strong> zone to watch, an <strong>Ignore</strong> zone to exclude part of the frame,
-        or a <strong>Privacy</strong> zone to black out an area in recordings, live view, snapshots and exports.
+        or a <strong>Privacy</strong> zone to black out an area in recordings, live view, snapshots, and exports.
         Camera-side zones are saved but not active yet. To reshape a zone, select it and drag its corners, then Save.
     </p>
 </div>
@@ -134,7 +134,7 @@
     <script src="~/js/media-endpoint.js" asp-append-version="true"></script>
     <script src="~/js/live-view.js" asp-append-version="true"></script>
     <script src="~/js/zones-editor.js" asp-append-version="true"></script>
-    <script>
+    <script nonce="@Csp.Value">
         window.larisvmsZonesEditor.init({
             cameraId: '@Model.CameraId',
             snapshotUrl: '/api/cameras/@Model.CameraId/snapshot',

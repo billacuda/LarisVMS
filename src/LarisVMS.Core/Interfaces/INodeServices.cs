@@ -9,7 +9,8 @@ namespace LarisVMS.Core.Interfaces;
 /// the heartbeat handler responds 401 and ignores the other two fields. Otherwise
 /// <paramref name="NextNonce"/> is the value the node must echo next time, and
 /// <paramref name="NewSecret"/> is a freshly rotated bearer secret (or null when none is due).</summary>
-public record NodeCheckInSecurity(bool ReplayRejected, string? NextNonce, string? NewSecret);
+/// <param name="IpChangedFrom">The node's previous address when this check-in moved it (empty when it had none).</param>
+public record NodeCheckInSecurity(bool ReplayRejected, string? NextNonce, string? NewSecret, string? IpChangedFrom = null);
 
 /// <summary>Failover plan phase 1/2/3: the media-routing and failover fields an admin edits on the
 /// Nodes page — direct-to-node client endpoint (phase 1), primary/backup proxy assignment (phase 2),
@@ -110,7 +111,16 @@ public interface INodeService
         bool storagePressureActive = false, int? clientEndpointReportedPort = null,
         DateTime? clientEndpointCertNotAfter = null, bool? clientEndpointCertIsSelfSigned = null,
         string? clientEndpointLastError = null, List<NodePartnerHealthReport>? partnerHealthReports = null,
-        NodeHostStats? hostStats = null, CancellationToken ct = default);
+        NodeHostStats? hostStats = null, CancellationToken ct = default, bool storageBlockedByEvidenceLocks = false);
+
+    /// <summary>Stores the node's reported AI detection backend. Returns true when it has just become
+    /// degraded (or degraded for a different reason) — the moment to tell an admin. Null leaves the
+    /// stored report as it is.</summary>
+    Task<bool> RecordVisionBackendAsync(Guid nodeId, NodeVisionBackendDto? backend, CancellationToken ct = default);
+
+    /// <summary>Stores grid-mode motion heat a node reported for its own cameras: each report replaces
+    /// that node run's earlier one for the camera and hour.</summary>
+    Task RecordMotionHeatAsync(Guid nodeId, IReadOnlyList<NodeMotionHeatReport> reports, CancellationToken ct = default);
 
     /// <summary>Rough "days of retention remaining" per node: free bytes divided by that node's
     /// measured write rate over the last 24h. Null for a node with no free-space report yet or no
@@ -149,7 +159,10 @@ public interface INodeService
     /// is old enough, or <see cref="Node.PendingSecretRotation"/> is set — mints and stores a new
     /// secret (old hash preserved in PreviousApiKeyHash for the grace window). Only ever called for an
     /// already-authenticated node.</summary>
-    Task<NodeCheckInSecurity> ApplyCheckInSecurityAsync(Guid nodeId, string? presentedNonce, CancellationToken ct = default);
+    Task<NodeCheckInSecurity> ApplyCheckInSecurityAsync(Guid nodeId, string? presentedNonce, CancellationToken ct = default, string? remoteIp = null);
+
+    /// <summary>Lets a node that registered (and waits as Pending) record and report.</summary>
+    Task<bool> ApproveAsync(Guid nodeId, CancellationToken ct = default);
 
     /// <summary>Failover plan phase 5a: admin recovery for a node whose rolling nonce got wedged (a
     /// heartbeat response that never arrived). Clears <see cref="Node.CheckInNonce"/> so the node's

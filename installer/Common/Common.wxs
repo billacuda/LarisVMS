@@ -22,6 +22,7 @@
     <CustomAction Id="CopyCudaDeps" BinaryRef="LarisCA" DllEntry="CopyCudaDeps" Execute="deferred" Impersonate="no" Return="ignore" />
     <CustomAction Id="RemoveCudaDeps" BinaryRef="LarisCA" DllEntry="RemoveCudaDeps" Execute="deferred" Impersonate="no" Return="ignore" />
     <CustomAction Id="WriteEndpointConfig" BinaryRef="LarisCA" DllEntry="WriteEndpointConfig" Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
+    <CustomAction Id="WriteRegistrationKey" BinaryRef="LarisCA" DllEntry="WriteRegistrationKey" Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
     <CustomAction Id="SeedWebConfig" BinaryRef="LarisCA" DllEntry="SeedWebConfig" Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
     <CustomAction Id="SeedWebConfigRollback" BinaryRef="LarisCA" DllEntry="SeedWebConfigRollback" Execute="rollback" Impersonate="no" Return="ignore" />
     <CustomAction Id="SeedWebConfigCommit" BinaryRef="LarisCA" DllEntry="SeedWebConfigCommit" Execute="commit" Impersonate="no" Return="ignore" />

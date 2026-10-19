@@ -1,0 +1,218 @@
+@page "/EvidenceLocks"
+@attribute [Authorize("Playback.View")]
+@using LarisVMS.Core.Dtos
+@using LarisVMS.Core.Enums
+@using LarisVMS.Core.Interfaces
+@inject IEvidenceLockService LockService
+@inject ICameraAccessService CameraAccess
+@inject IPermissionService Permissions
+@inject LarisVMS.Infrastructure.Data.ApplicationDbContext Db
+
+<PageTitle>Evidence locks - @AppName</PageTitle>
+
+<h1>Evidence locks</h1>
+<p class="text-muted small">
+    Footage that retention won't delete. Lock footage from the Playback page.
+    A removed lock keeps protecting its footage for 24 hours, in case it was removed by mistake.
+    <a href="/Help/live-and-playback#evidence-locks">Learn more</a>
+</p>
+
+@if (!string.IsNullOrEmpty(Message))
+{
+    <div class="alert @(MessageIsError ? "alert-danger" : "alert-success") py-2">@Message</div>
+}
+
+<div class="row g-2 align-items-center mb-2">
+    <div class="col-sm-4">
+        <input type="search" class="form-control" data-filter-table="locksTable" placeholder="Filter by camera, reason, person&hellip;" />
+    </div>
+    <div class="col-sm-auto">
+        <a class="btn btn-sm btn-outline-secondary" href="@(ShowAll ? "/EvidenceLocks" : "/EvidenceLocks?all=true")">
+            @(ShowAll ? "Show only locks protecting footage" : "Also show expired and released locks")
+        </a>
+    </div>
+    @if (Locks.Count > 0)
+    {
+        <div class="col-sm-auto ms-sm-auto small text-muted">
+            @Locks.Count(l => l.Status is "Active" or "RemovedInGrace") protecting · @ByteFormat.Format(Locks.Where(l => l.Status is "Active" or "RemovedInGrace").Sum(l => l.SizeBytes)) of footage
+        </div>
+    }
+</div>
+
+@if (Locks.Count == 0)
+{
+    <p class="text-muted">No evidence locks@(ShowAll ? "" : " protecting footage right now").</p>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table align-middle" id="locksTable" data-sortable data-paginate>
+            <thead>
+                <tr>
+                    <th>Camera</th>
+                    <th>Footage</th>
+                    <th>Reason</th>
+                    <th>Locked by</th>
+                    <th>Kept until</th>
+                    <th data-sort-numeric>Size</th>
+                    <th>Status</th>
+                    <th data-no-sort></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var l in Locks)
+                {
+                    <tr>
+                        <td>@l.CameraName</td>
+                        <td class="small text-nowrap" data-sort-value="@l.FromUtc.Ticks">
+                            <time datetime="@l.FromUtc.ToUtcIso()" data-local="g">@l.FromUtc.ToLocalTime().ToString("g")</time>
+                            &ndash; <time datetime="@l.ToUtc.ToUtcIso()" data-local="g">@l.ToUtc.ToLocalTime().ToString("g")</time>
+                        </td>
+                        <td class="small">@l.Reason</td>
+                        <td class="small text-muted">
+                            @(l.CreatedByUserName ?? "—")<br />
+                            <time datetime="@l.CreatedAtUtc.ToUtcIso()" data-local="g">@l.CreatedAtUtc.ToLocalTime().ToString("g")</time>
+                        </td>
+                        <td class="small text-nowrap" data-sort-value="@(l.ProtectedUntilUtc?.Ticks ?? long.MaxValue)">
+                            @if (l.ProtectedUntilUtc is { } until)
+                            {
+                                <time datetime="@until.ToUtcIso()" data-local="g">@until.ToLocalTime().ToString("g")</time>
+                            }
+                            else
+                            {
+                                <span>Indefinitely</span>
+                            }
+                        </td>
+                        <td class="small" data-sort-value="@l.SizeBytes">@ByteFormat.Format(l.SizeBytes)</td>
+                        <td class="small">
+                            @switch (l.Status)
+                            {
+                                case "Active":
+                                    <span class="badge text-bg-primary">🔒 Active</span>
+                                    break;
+                                case "RemovedInGrace":
+                                    <span class="badge text-bg-warning" title="Removed by @(l.RemovedByUserName ?? "?"): @l.RemovalReason">Removed, protected for now</span>
+                                    break;
+                                case "Expired":
+                                    <span class="badge text-bg-secondary">Expired</span>
+                                    break;
+                                default:
+                                    <span class="badge text-bg-secondary" title="Removed by @(l.RemovedByUserName ?? "?"): @l.RemovalReason">Released</span>
+                                    break;
+                            }
+                        </td>
+                        <td class="text-end text-nowrap">
+                            <a class="btn btn-sm btn-outline-primary" href="/Playback?cameraId=@l.CameraId&atUtc=@l.FromUtc.ToUtcIso()">▶ Play</a>
+                            @if (l.CanManage && l.Status == "Active")
+                            {
+                                <details class="d-inline-block position-relative column-picker">
+                                    <summary class="btn btn-sm btn-outline-danger">Remove&hellip;</summary>
+                                    <div class="column-picker-menu" style="min-width: 18rem;">
+                                        @* FormName unique per row — see Bookmarks/Index.razor. *@
+                                        <EditForm Model="this" FormName="@($"remove-lock-{l.Id}")" OnValidSubmit="HandleRemoveAsync">
+                                            <input type="hidden" name="Id" value="@l.Id" />
+                                            <label class="form-label small mb-1" for="@($"reason-{l.Id}")">Why remove it?</label>
+                                            <input type="text" class="form-control form-control-sm mb-2" id="@($"reason-{l.Id}")" name="Reason" maxlength="500" required />
+                                            <div class="small text-muted mb-2">The footage stays protected for another 24 hours, and the lock can be restored until then.</div>
+                                            <button type="submit" class="btn btn-sm btn-danger">Remove lock</button>
+                                        </EditForm>
+                                    </div>
+                                </details>
+                            }
+                            @if (l.CanManage && l.Status == "RemovedInGrace")
+                            {
+                                <EditForm Model="this" FormName="@($"restore-lock-{l.Id}")" OnValidSubmit="HandleRestoreAsync" class="d-inline">
+                                    <input type="hidden" name="Id" value="@l.Id" />
+                                    <button type="submit" class="btn btn-sm btn-outline-secondary">↶ Undo removal</button>
+                                </EditForm>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    <div data-paginate-controls-for="locksTable" class="mt-2"></div>
+}
+
+@code {
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+    [SupplyParameterFromQuery(Name = "all")] private bool ShowAll { get; set; }
+
+    private IReadOnlyList<EvidenceLockDto> Locks { get; set; } = [];
+    private string? Message { get; set; }
+    private bool MessageIsError { get; set; }
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task<System.Security.Claims.ClaimsPrincipal> UserAsync()
+        => AuthenticationStateTask is not null
+            ? (await AuthenticationStateTask).User
+            : new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity());
+
+    private async Task<EvidenceLockActor> ActorAsync()
+    {
+        var user = await UserAsync();
+        var granted = await Permissions.GetGrantedAsync(user);
+        return new EvidenceLockActor(
+            user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? string.Empty,
+            user.Identity?.Name, granted.IsAdministrator, HttpContext?.Connection.RemoteIpAddress?.ToString());
+    }
+
+    private async Task LoadAsync()
+    {
+        var user = await UserAsync();
+        var accessible = await CameraAccess.GetAccessibleCameraIdsAsync(user, CameraAccessActions.Playback);
+        Locks = await LockService.ListAsync(accessible?.ToList(), null, null, ShowAll, await ActorAsync());
+    }
+
+    private Guid FormId() => Guid.TryParse(HttpContext?.Request.Form["Id"].ToString(), out var id) ? id : Guid.Empty;
+
+    private async Task HandleRemoveAsync()
+    {
+        if (await LarisVMS.Web.Services.EvidenceLockAccess.ManageForbiddenAsync(await UserAsync(), FormId(), Db, Permissions, CameraAccess) is { } denied)
+        {
+            Message = denied;
+            MessageIsError = true;
+            await LoadAsync();
+            return;
+        }
+        try
+        {
+            await LockService.RemoveAsync(FormId(), HttpContext?.Request.Form["Reason"].ToString() ?? "", await ActorAsync());
+            Message = "Lock removed. The footage stays protected for another 24 hours — undo the removal here until then.";
+            MessageIsError = false;
+        }
+        catch (Exception ex) when (ex is EvidenceLockValidationException or EvidenceLockForbiddenException or KeyNotFoundException)
+        {
+            Message = ex.Message;
+            MessageIsError = true;
+        }
+        await LoadAsync();
+    }
+
+    private async Task HandleRestoreAsync()
+    {
+        if (await LarisVMS.Web.Services.EvidenceLockAccess.ManageForbiddenAsync(await UserAsync(), FormId(), Db, Permissions, CameraAccess) is { } denied)
+        {
+            Message = denied;
+            MessageIsError = true;
+            await LoadAsync();
+            return;
+        }
+        try
+        {
+            await LockService.RestoreAsync(FormId(), await ActorAsync());
+            Message = "Lock restored.";
+            MessageIsError = false;
+        }
+        catch (Exception ex) when (ex is EvidenceLockValidationException or EvidenceLockForbiddenException or KeyNotFoundException)
+        {
+            Message = ex.Message;
+            MessageIsError = true;
+        }
+        await LoadAsync();
+    }
+}

@@ -7,7 +7,7 @@ your own site.
 | Piece | What it is |
 |---|---|
 | `setup-network.ps1` | Hyper-V internal switch `LarisDemo`: host `10.77.0.1`, cameras `10.77.0.11`–`.19`. Can't be reached from your LAN. |
-| `FakeOnvif/` | .NET app that acts as the cameras in `cameras.json`: ONVIF device, media and events (PullPoint motion events), JPEG snapshots, and WS-Discovery replies. |
+| `FakeOnvif/` | .NET app that acts as the cameras in `cameras.json`: the ONVIF device, media, media2 (H.265 cameras only), imaging, and events (PullPoint motion events) services; encoder, image, and audio settings that can be changed (kept in memory until it restarts); JPEG snapshots; and WS-Discovery replies. |
 | MediaMTX | RTSP server (`rtsp://10.77.0.1x:554/camNN_main` and `_sub`) looping each camera's clip with `ffmpeg -c copy`. |
 | `fetch-clips.ps1` | Downloads the clips and encodes camera-like Main (1080p25) and Sub (360p15) streams. |
 | LarisVMS | Web from this repo's source (`dotnet run`). The recorder node and Vision Service are unpacked from the release MSI (see [Why the node comes from the MSI](#why-the-node-comes-from-the-msi)). |

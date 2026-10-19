@@ -9,6 +9,7 @@ using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
 using LarisVMS.Infrastructure.Data;
+using LarisVMS.Core.Security;
 using LarisVMS.Infrastructure.Security;
 
 namespace LarisVMS.Infrastructure.Services;
@@ -42,6 +43,8 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         // through the response timing.
         if (string.IsNullOrEmpty(expectedKey) || !SecretHash.FixedTimeEquals(request.RegistrationKey ?? "", expectedKey))
             throw new UnauthorizedAccessException("Invalid registration key.");
+        if (!HostNames.IsValid(request.Hostname))
+            throw new ArgumentException("The hostname must be letters, digits, dots, hyphens, or underscores.");
 
         var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         var node = new Node
@@ -62,7 +65,9 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             // one on Admin/Nodes — see GetConfigAsync.
             StorageRootPath = string.IsNullOrWhiteSpace(request.StorageRootPath) ? null : request.StorageRootPath,
             ArchiveRootPath = string.IsNullOrWhiteSpace(request.ArchiveRootPath) ? null : request.ArchiveRootPath,
-            Status = NodeStatus.Active,
+            // Waits for an admin to approve it on the Nodes page before it gets any cameras or may
+            // report anything; until then only its heartbeat is accepted (NodeAuthMiddleware).
+            Status = NodeStatus.Pending,
             LastSeenAt = DateTime.UtcNow,
             CreatedAt = DateTime.UtcNow
         };
@@ -84,8 +89,12 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         if (!matchesCurrent && !matchesPrevious) return null;
 
         node.LastSeenAt = DateTime.UtcNow;
-        node.Status = NodeStatus.Active;
-        if (remoteIp is not null) node.LastIpAddress = remoteIp;
+        // Pending (not yet approved) and Disabled stay as they are. The address the server sends live
+        // and talk traffic to only moves on a heartbeat that passed the nonce check
+        // (ApplyCheckInSecurityAsync), not on any authenticated call; a node with no address yet takes
+        // the first one it calls from.
+        if (node.Status is not (NodeStatus.Pending or NodeStatus.Disabled)) node.Status = NodeStatus.Active;
+        if (remoteIp is not null && node.LastIpAddress is null) node.LastIpAddress = remoteIp;
         // Failover plan phase 5b: the post-rotation grace window closes the first time the node
         // actually authenticates with the *new* secret (matches current, not previous) — until then
         // an in-flight request or a node that hasn't applied NewSecret yet still works off the old one.
@@ -96,7 +105,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         return node;
     }
 
-    public async Task<NodeCheckInSecurity> ApplyCheckInSecurityAsync(Guid nodeId, string? presentedNonce, CancellationToken ct = default)
+    public async Task<NodeCheckInSecurity> ApplyCheckInSecurityAsync(Guid nodeId, string? presentedNonce, CancellationToken ct = default, string? remoteIp = null)
     {
         var node = await db.Nodes.FirstOrDefaultAsync(n => n.Id == nodeId, ct);
         if (node is null) return new NodeCheckInSecurity(ReplayRejected: false, NextNonce: null, NewSecret: null);
@@ -107,16 +116,30 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         //    the stored value so it isn't stuck failing the moment it does update.
         //  - stored nonce, node echoes the wrong one -> replay (or a corrupted node.config); reject
         //    401 and touch nothing, so the legitimate node still holding the real nonce passes next.
+        //  - a node that has echoed a nonce before and now sends none -> refused: that's someone with
+        //    the secret leaving the nonce out, not an old build.
         if (node.CheckInNonce is not null)
         {
             if (presentedNonce is null)
             {
+                if (node.CheckInNonceEchoed) return new NodeCheckInSecurity(ReplayRejected: true, NextNonce: null, NewSecret: null);
                 node.CheckInNonce = null;
             }
             else if (!SecretHash.FixedTimeEquals(presentedNonce, node.CheckInNonce))
             {
                 return new NodeCheckInSecurity(ReplayRejected: true, NextNonce: null, NewSecret: null);
             }
+            else
+            {
+                node.CheckInNonceEchoed = true;
+            }
+        }
+
+        string? ipChangedFrom = null;
+        if (remoteIp is not null && remoteIp != node.LastIpAddress)
+        {
+            ipChangedFrom = node.LastIpAddress ?? "";
+            node.LastIpAddress = remoteIp;
         }
 
         var nextNonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
@@ -138,7 +161,36 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         }
 
         await db.SaveChangesAsync(ct);
-        return new NodeCheckInSecurity(ReplayRejected: false, NextNonce: nextNonce, NewSecret: newSecret);
+        return new NodeCheckInSecurity(ReplayRejected: false, NextNonce: nextNonce, NewSecret: newSecret, IpChangedFrom: ipChangedFrom);
+    }
+
+    public async Task<bool> ApproveAsync(Guid nodeId, CancellationToken ct = default)
+    {
+        var node = await db.Nodes.FirstOrDefaultAsync(n => n.Id == nodeId, ct);
+        if (node is null || node.Status != NodeStatus.Pending) return false;
+        node.Status = NodeStatus.Active;
+        await db.SaveChangesAsync(ct);
+        return true;
+    }
+
+    /// <summary>Of <paramref name="cameraIds"/>, the cameras this node may report recordings, motion,
+    /// and events for: cameras assigned to it, cameras it backs up (failover), and cameras it already
+    /// holds footage for (a node reassigned away still flushes what it recorded). Same rules as
+    /// <see cref="NodeMayHoldCameraAsync"/>, for a batch.</summary>
+    private async Task<HashSet<Guid>> CamerasNodeMayReportAsync(Guid nodeId, IEnumerable<Guid> cameraIds, CancellationToken ct)
+    {
+        var ids = cameraIds.Distinct().ToList();
+        if (ids.Count == 0) return [];
+        var cameras = await db.Cameras.AsNoTracking().Where(c => ids.Contains(c.Id))
+            .Select(c => new { c.Id, c.NodeId, c.BackupNodeIdOverride, RecorderBackup = c.Node != null ? c.Node.BackupNodeId : null })
+            .ToListAsync(ct);
+        var allowed = cameras.Where(c => c.NodeId == nodeId || c.BackupNodeIdOverride == nodeId || c.RecorderBackup == nodeId)
+            .Select(c => c.Id).ToHashSet();
+        var rest = cameras.Select(c => c.Id).Where(id => !allowed.Contains(id)).ToList();
+        if (rest.Count > 0)
+            allowed.UnionWith(await db.Segments.AsNoTracking().Where(s => s.NodeId == nodeId && rest.Contains(s.CameraId))
+                .Select(s => s.CameraId).Distinct().ToListAsync(ct));
+        return allowed;
     }
 
     public async Task ResetAuthAsync(Guid nodeId, bool rotateSecretNow, CancellationToken ct = default)
@@ -146,6 +198,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         var node = await db.Nodes.FirstOrDefaultAsync(n => n.Id == nodeId, ct);
         if (node is null) return;
         node.CheckInNonce = null;
+        node.CheckInNonceEchoed = false;
         node.AllowReregistration = true;
         if (rotateSecretNow) node.PendingSecretRotation = true;
         await db.SaveChangesAsync(ct);
@@ -265,6 +318,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         // doc comment for why this is deliberately backend-agnostic.
         var snapshotMarginPercent = Math.Clamp(await settings.GetAsync("Detection.SnapshotMarginPercent", 12, ct: ct), 0, 100);
         var colorClassification = await settings.GetAsync("Detection.ColorClassification", true, ct: ct);
+        var movingObjects = await settings.GetRawAsync("Detection.MovingObjects", ct: ct) ?? CocoCategoryMap.DefaultMovingObjects;
         // Footage encryption only reaches a node once the master key exists and has been backed up.
         var encryptionReady = await db.FootageMasterKeys.AnyAsync(k => k.BackupDownloadedAt != null, ct);
         // Node-scoped (Global -> Node, no per-camera override) — one Vision Service process serves
@@ -375,6 +429,15 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
                 ? DateTime.SpecifyKind(ee, DateTimeKind.Utc) : null;
             var motionJitterPixels = Math.Clamp(
                 await settings.GetAsync("Detection.MotionJitterPixels", 3, cameraId: c.Id, nodeId: nodeId, ct: ct), 1, 15);
+            // Which rule decides an object is moving, and how readily; per camera like the jitter
+            // settings above. Anything unrecognized falls back to the defaults.
+            var movementMode = await settings.GetAsync("Detection.MovementMode", "Standard", cameraId: c.Id, nodeId: nodeId, ct: ct) is "Legacy" ? "Legacy" : "Standard";
+            var movementSensitivity = await settings.GetAsync("Detection.MovementSensitivity", "Normal", cameraId: c.Id, nodeId: nodeId, ct: ct) switch
+            {
+                "Low" => "Low",
+                "High" => "High",
+                _ => "Normal",
+            };
             // Detection.MaxFps, per camera — same Camera -> Node -> Global chain (and the same key)
             // as the node-scoped maxDetectionFps above; a camera-level override here wins, otherwise
             // this resolves to that same node/global value. A driveway camera that never needs 10 fps
@@ -415,7 +478,8 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
                     .Select(t => SpeedTrapGates.ToVision(t.Id, t.GatesJson, t.DistanceMeters))
                     .OfType<VisionSpeedTrapDto>().ToList(),
                 EncryptFootage: encryptFootage,
-                EncryptExistingRequestedUtc: encryptFootage == "Off" ? null : encryptExisting));
+                EncryptExistingRequestedUtc: encryptFootage == "Off" ? null : encryptExisting,
+                MovementMode: movementMode, MovementSensitivity: movementSensitivity));
         }
 
         // Cameras this node has leftover Segments for but doesn't currently record — reassigned to a
@@ -463,16 +527,26 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             orphanedCameraDtos.Add(new NodeConfigOrphanedCameraDto(orphanedCameraId, retentionDays, orphanArchiveEnabled, orphanArchiveRetentionDays));
         }
 
+        // Evidence locks: every range still protected, system-wide rather than only this node's
+        // cameras — a node can hold footage for cameras it no longer records (moved away, or hosted
+        // during failover), and the list is small.
+        var protectedRanges = await db.EvidenceLocks.AsNoTracking()
+            .Where(EvidenceLockQueries.Protecting(DateTime.UtcNow))
+            .Select(l => new NodeConfigProtectedRangeDto(l.CameraId, l.FromUtc, l.ToUtc))
+            .ToListAsync(ct);
+
         return new NodeConfigResponse(cameraDtos, storageRoot, watermarkPercent, mediaSigningKey, orphanedCameraDtos,
             adaptiveStreamingEnabled, (aiAccelerator ?? AiAccelerator.Auto).ToString(),
             reportIdleDetections, aspectMode, detectionModelFamily, dfineWeights, aiIdleTimeoutSeconds,
             gpuPreprocessing, logLevel)
         {
+            ProtectedRanges = protectedRanges,
             YoloXSize = yoloXSize, MaxDetectionFps = maxDetectionFps, DFineTensorRtMode = dfineTensorRtMode,
             ArchiveRootPath = archiveRoot, SnapshotMotionAccuracy = snapshotMotionAccuracy,
             DepartureGraceSeconds = departureGraceSeconds,
             SnapshotMarginPercent = snapshotMarginPercent,
             ColorClassification = colorClassification,
+            MovingObjects = movingObjects,
             DetectionBackend = detectionBackend,
             ExternalInferenceUrl = externalInferenceUrl,
             ExternalInferenceModel = externalInferenceModel,
@@ -570,7 +644,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
     /// primary-tier footage expires after Retention.Days unless that camera archives on this node (then
     /// it's the node's job to move it, not delete it); archive-tier footage after Archive.RetentionDays,
     /// as is an archiving camera's primary-tier footage that never got moved.
-    /// 0 or less means keep forever. Locked segments are never included.</summary>
+    /// 0 or less means keep forever. Segments under an evidence lock (and IsLocked ones) are never included.</summary>
     public async Task<List<ExpiredSegmentDto>> ListExpiredSegmentsAsync(Guid nodeId, int limit, CancellationToken ct = default)
     {
         var now = DateTime.UtcNow;
@@ -591,8 +665,9 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             {
                 var cutoff = now - TimeSpan.FromDays(retentionDays.Value) - ExpiredSegmentGrace;
                 result.AddRange(await db.Segments.AsNoTracking()
-                    .Where(s => s.NodeId == nodeId && s.CameraId == cameraId && !s.IsLocked
+                    .Where(s => s.NodeId == nodeId && s.CameraId == cameraId
                         && s.StorageTier == StorageTier.Primary && s.EndUtc < cutoff)
+                    .NotLocked(db, now)
                     .OrderBy(s => s.EndUtc).Take(limit - result.Count)
                     .Select(s => new ExpiredSegmentDto(s.CameraId, s.FilePath))
                     .ToListAsync(ct));
@@ -607,8 +682,9 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             {
                 var cutoff = now - TimeSpan.FromDays(archiveRetentionDays.Value) - ExpiredSegmentGrace;
                 result.AddRange(await db.Segments.AsNoTracking()
-                    .Where(s => s.NodeId == nodeId && s.CameraId == cameraId && !s.IsLocked
+                    .Where(s => s.NodeId == nodeId && s.CameraId == cameraId
                         && (s.StorageTier == StorageTier.Archive || archiveEnabled) && s.EndUtc < cutoff)
+                    .NotLocked(db, now)
                     .OrderBy(s => s.EndUtc).Take(limit - result.Count)
                     .Select(s => new ExpiredSegmentDto(s.CameraId, s.FilePath))
                     .ToListAsync(ct));
@@ -637,7 +713,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         bool storagePressureActive = false, int? clientEndpointReportedPort = null,
         DateTime? clientEndpointCertNotAfter = null, bool? clientEndpointCertIsSelfSigned = null,
         string? clientEndpointLastError = null, List<NodePartnerHealthReport>? partnerHealthReports = null,
-        NodeHostStats? hostStats = null, CancellationToken ct = default)
+        NodeHostStats? hostStats = null, CancellationToken ct = default, bool storageBlockedByEvidenceLocks = false)
     {
         var skew = ComputeClockSkewSeconds(nodeSentAtUtc, serverReceivedUtc);
         var encodersJson = detectedEncoders is not null ? System.Text.Json.JsonSerializer.Serialize(detectedEncoders) : null;
@@ -667,6 +743,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             .SetProperty(n => n.ArchiveTotalBytes, archiveTotalBytes)
             .SetProperty(n => n.ArchiveStatsUpdatedAt, n => archiveFreeBytes != null ? now : n.ArchiveStatsUpdatedAt)
             .SetProperty(n => n.StoragePressureActive, storagePressureActive)
+            .SetProperty(n => n.StorageBlockedByEvidenceLocks, storageBlockedByEvidenceLocks)
             .SetProperty(n => n.StoragePressureSince, n => storagePressureActive
                 ? (n.StoragePressureActive ? n.StoragePressureSince : now)
                 : (DateTime?)null)
@@ -693,6 +770,62 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             .SetProperty(n => n.NetReceiveBytesPerSec, netReceiveBytesPerSec)
             .SetProperty(n => n.NetSendBytesPerSec, netSendBytesPerSec)
             .SetProperty(n => n.HostStatsUpdatedAt, hostStatsUpdatedAt), ct);
+    }
+
+    public async Task RecordMotionHeatAsync(Guid nodeId, IReadOnlyList<NodeMotionHeatReport> reports, CancellationToken ct = default)
+    {
+        var reportable = await CamerasNodeMayReportAsync(nodeId, reports.Select(r => r.CameraId), ct);
+        var now = DateTime.UtcNow;
+        foreach (var r in reports.Take(500))
+        {
+            if (!reportable.Contains(r.CameraId) || r.GridSize is not (16 or 32 or 64)) continue;
+            var hour = DateTime.SpecifyKind(r.HourUtc, DateTimeKind.Utc);
+            if (hour > now || hour < now.AddDays(-7) || hour.Minute != 0 || hour.Second != 0) continue;
+
+            // Re-encoded from what was sent, keeping only cells inside the grid: this comes from the
+            // node, and only a well-formed grid goes into the database.
+            byte[] sent;
+            try { sent = Convert.FromBase64String(r.Cells); }
+            catch (FormatException) { continue; }
+            if (sent.Length > r.GridSize * r.GridSize * 6) continue;
+            var counts = new long[r.GridSize * r.GridSize];
+            SceneHeat.AddCells(sent, counts);
+            var cells = SceneHeat.EncodeCells(counts.Select(c => (int)Math.Min(c, int.MaxValue)).ToArray());
+
+            var row = await db.SceneHeatHourlies.FirstOrDefaultAsync(s => s.CameraId == r.CameraId
+                && s.Source == SceneHeatSource.Motion && s.HourUtc == hour && s.Label == "" && s.RunId == r.RunId, ct);
+            if (row is null)
+            {
+                db.SceneHeatHourlies.Add(new SceneHeatHourly
+                {
+                    CameraId = r.CameraId, HourUtc = hour, Source = SceneHeatSource.Motion, Label = "",
+                    Cols = r.GridSize, Rows = r.GridSize, Cells = cells, RunId = r.RunId,
+                });
+            }
+            else
+            {
+                row.Cols = r.GridSize;
+                row.Rows = r.GridSize;
+                row.Cells = cells;
+            }
+        }
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task<bool> RecordVisionBackendAsync(Guid nodeId, NodeVisionBackendDto? backend, CancellationToken ct = default)
+    {
+        if (backend is null) return false;
+        var previousJson = await db.Nodes.Where(n => n.Id == nodeId).Select(n => n.VisionBackendJson).FirstOrDefaultAsync(ct);
+        var json = System.Text.Json.JsonSerializer.Serialize(backend);
+        if (json == previousJson) return false;
+        await db.Nodes.Where(n => n.Id == nodeId).ExecuteUpdateAsync(s => s.SetProperty(n => n.VisionBackendJson, json), ct);
+
+        if (!backend.NeedsAttention) return false;
+        NodeVisionBackendDto? previous = null;
+        try { if (previousJson is not null) previous = System.Text.Json.JsonSerializer.Deserialize<NodeVisionBackendDto>(previousJson); }
+        catch (System.Text.Json.JsonException) { }
+        return previous is null || !previous.NeedsAttention || previous.Provider != backend.Provider
+            || !previous.Notes.SequenceEqual(backend.Notes);
     }
 
     /// <summary>Every field is coalesce-preserve (`item.X ?? s.X`), not a blind overwrite — M11 added
@@ -776,9 +909,21 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         // at dozens of cameras, nowhere near the volume the plan calls out SqlBulkCopy for
         // (MotionSpans/Detections in M8). Plain inserts are the right amount of engineering here.
         var added = new List<Segment>();
+        // A node only reports recordings of its own cameras (see CamerasNodeMayReportAsync).
+        var reportable = await CamerasNodeMayReportAsync(nodeId, segments.Select(s => s.CameraId), ct);
+        // Segments the server already has are skipped up front: a re-sent one would fail the whole
+        // insert batch on the unique FilePath index, and the retry below can only drop every entry
+        // EF blames — which can be the entire batch, good rows included.
+        var paths = segments.Select(s => s.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var chunk in paths.Chunk(500))
+            existing.UnionWith(await db.Segments.AsNoTracking().Where(s => chunk.Contains(s.FilePath)).Select(s => s.FilePath).ToListAsync(ct));
         foreach (var item in segments)
         {
+            if (!reportable.Contains(item.CameraId)) continue;
             if (!Enum.TryParse<CameraStreamRole>(item.StreamRole, out var role)) continue;
+            // Also catches a path repeated within this one report.
+            if (!existing.Add(item.FilePath)) continue;
 
             var hash = item.Sha256?.ToLowerInvariant();
             var segment = new Segment
@@ -801,13 +946,11 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             added.Add(segment);
         }
 
-        // Most likely failure mode is the FilePath unique constraint — a node that restarted
-        // mid-session and rescanned its output directory with no memory of what it already reported
-        // (in-session de-duplication lives in RecordingSession's HashSet, which a process restart
-        // clears) will occasionally re-send a segment the server already has. One bad row shouldn't
-        // cost the rest of the batch: retry, each time detaching exactly the entries EF identifies
-        // as the cause of that attempt's failure, until either everything savable is saved or a
-        // failure can't be attributed to specific entries (in which case it propagates normally).
+        // Backstop for what the check above can't see: two reports of the same new segment racing
+        // each other (the FilePath unique constraint), or a camera removed meanwhile (its FK). One
+        // bad row shouldn't cost the rest of the batch: retry, each time detaching the entries EF
+        // identifies as the cause of that attempt's failure, until either everything savable is
+        // saved or a failure can't be attributed to specific entries (then it propagates normally).
         while (true)
         {
             try
@@ -828,6 +971,12 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
 
     public async Task RecordMotionSpansAsync(Guid nodeId, IReadOnlyList<MotionSpanReportItem> spans, CancellationToken ct = default)
     {
+        // A node only reports motion and detections for its own cameras.
+        var reportable = await CamerasNodeMayReportAsync(nodeId, spans.Select(s => s.CameraId), ct);
+        if (spans.Any(s => !reportable.Contains(s.CameraId)))
+            spans = spans.Where(s => reportable.Contains(s.CameraId)).ToList();
+        if (spans.Count == 0) return;
+
         var gate = _recordSpansGates.GetOrAdd(nodeId, _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(ct);
         try
@@ -875,11 +1024,15 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         // detectionEvents once the batch is saved (detection alerts). objectsLoaded: spans already
         // in the database whose DetectedObjects have been loaded for merging this call.
         var touched = new Dictionary<MotionSpan, string>();
+        // Plain motion spans (server motion or camera-pushed motion) this batch touched — published
+        // the same way, for motion alerts.
+        var motionTouched = new HashSet<MotionSpan>();
         var objectsLoaded = new HashSet<MotionSpan>();
 
         async Task FoldObjectsAsync(MotionSpan span, MotionSpanReportItem item)
         {
             if (item.DetectedObjectCategory is { } categoryName) touched[span] = categoryName;
+            else if (item.EventTagRuleId is null && item.DetectionKind is null && item.DetectedObjectLabel is null) motionTouched.Add(span);
             if (item.Objects is not { Count: > 0 } objects) return;
             if (db.Entry(span).State != EntityState.Added && objectsLoaded.Add(span))
                 await db.Entry(span).Collection(s => s.Objects).LoadAsync(ct);
@@ -1109,6 +1262,11 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
                         o.BoxX, o.BoxY, o.BoxW, o.BoxH, o.PrimaryColor, o.UpperColor, o.LowerColor,
                         o.SpeedKph, o.SpeedTrapId)).ToList()));
             }
+            foreach (var span in motionTouched)
+            {
+                if (db.Entry(span).State != EntityState.Unchanged) continue; // dropped above
+                detectionEvents.PublishMotion(new MotionEvent(span.Id, span.CameraId, span.ZoneId, span.StartUtc, span.EndUtc));
+            }
         }
     }
 
@@ -1171,7 +1329,19 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             row.SpeedTrapId = o.SpeedTrapId;
             row.SpeedMeasuredAtUtc = o.SpeedMeasuredAtUtc ?? o.BestFrameAtUtc ?? o.LastSeenUtc;
         }
+        // An object's path only grows from one report to the next, so the longer one is newer. Parsed
+        // and re-written rather than stored as sent: it comes from the node, and only well-formed,
+        // bounded paths go into the database.
+        if (!string.IsNullOrEmpty(o.Path))
+        {
+            var reported = SceneHeat.ParsePath(o.Path);
+            if (reported.Count > MaxPathPoints) reported = reported.TakeLast(MaxPathPoints).ToList();
+            if (reported.Count > 1 && reported.Count > SceneHeat.ParsePath(row.Path).Count)
+                row.Path = SceneHeat.FormatPath(reported);
+        }
     }
+
+    private const int MaxPathPoints = 200;
 
     /// <summary>Folds one AI-detection span's forward progress into another — later EndUtc, higher
     /// Score, and a best frame that's at least as confident as the one on record. Same monotonic
@@ -1251,6 +1421,8 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
     /// that would need collapsing.</summary>
     public async Task RecordCameraEventsAsync(Guid nodeId, IReadOnlyList<CameraEventReportItem> events, CancellationToken ct = default)
     {
+        var reportable = await CamerasNodeMayReportAsync(nodeId, events.Select(e => e.CameraId), ct);
+        events = events.Where(e => reportable.Contains(e.CameraId)).ToList();
         if (events.Count == 0) return;
 
         db.CameraEvents.AddRange(events.Select(item => new CameraEvent
@@ -1309,6 +1481,8 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         {
             node.DirectStreamingMode = string.IsNullOrWhiteSpace(ce.DirectStreamingMode) ? null : ce.DirectStreamingMode;
             node.AllowInsecureClientEndpoint = ce.AllowInsecureClientEndpoint;
+            if (!string.IsNullOrWhiteSpace(ce.ClientEndpointHost) && !HostNames.IsValid(ce.ClientEndpointHost.Trim()))
+                throw new ArgumentException("The client endpoint host must be a hostname or an IP address.");
             node.ClientEndpointHost = string.IsNullOrWhiteSpace(ce.ClientEndpointHost) ? null : ce.ClientEndpointHost.Trim();
             node.ClientCertPfxPath = string.IsNullOrWhiteSpace(ce.ClientCertPfxPath) ? null : ce.ClientCertPfxPath.Trim();
             // Write-only, like every other secret field on the admin forms: null = leave as-is,

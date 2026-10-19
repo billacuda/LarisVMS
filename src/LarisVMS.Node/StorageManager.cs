@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
 
 namespace LarisVMS.Node;
@@ -150,6 +151,11 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
         var deletedPaths = new List<string>();
         var relocations = new List<PendingRelocation>();
 
+        // Evidence locks: footage the server says must never be deleted. Every deletion pass below
+        // skips a file that may hold locked footage (archiving it is still fine — that's a move).
+        var locked = new ProtectedFootage(config.ProtectedRanges);
+        _lockedSkippedThisSweep = 0;
+
         // Archive storage (phase 2): the archive volume is usable when it's configured, sits outside
         // the storage root (or its files would be re-imported as new primary segments), and passes a
         // read/write probe. Checked once per sweep — a per-file failure inside TryArchiveFile is
@@ -198,12 +204,13 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             // 30-day default before this DTO is ever built). When archiving is on for this camera, a
             // retention eviction MOVES the file to the archive volume instead of deleting it — see
             // ArchiveOrDelete.
-            foreach (var f in SelectRetentionEvictions(files, now, camera.RetentionDays))
+            foreach (var f in Unlocked(SelectRetentionEvictions(files, now, camera.RetentionDays), camera.CameraId, locked))
                 if (ArchiveOrDelete(f, cameraDir, thumbsDir, snapshotsDir, archiveCameraMainDir, archiveThisCamera, archiveRoot, deletedPaths, relocations))
                     files.Remove(f);
 
             // Per-camera quota: oldest-first until back under the cap. Same archive-or-delete branch.
-            foreach (var f in SelectQuotaEvictions(files, camera.QuotaBytes))
+            // Locked files still count toward the quota but are never chosen.
+            foreach (var f in SelectQuotaEvictions(files, camera.QuotaBytes, f => IsLocked(locked, camera.CameraId, f)))
                 if (ArchiveOrDelete(f, cameraDir, thumbsDir, snapshotsDir, archiveCameraMainDir, archiveThisCamera, archiveRoot, deletedPaths, relocations))
                     files.Remove(f);
 
@@ -220,7 +227,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             // by the same retention on its own.
             var talkDir = TalkSessionHandler.TalkDirectory(storageRoot, camera.CameraId);
             foreach (var clip in SelectExpiredTalkClips(talkDir, now, camera.RetentionDays))
-                TryDelete(clip);
+                if (!locked.CoversFile(camera.CameraId, File.GetLastWriteTimeUtc(clip))) TryDelete(clip);
             if (Directory.Exists(talkDir)) PruneEmptyDirectories(talkDir);
 
             PruneEmptyDirectories(cameraDir);
@@ -232,11 +239,16 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
         // the file's own mtime, which TryArchiveFile anchored to the recording time). Genuinely gone
         // now — reported through the normal delete path so the row is removed.
         if (archiveUsable && archiveRoot is not null)
-            ExpireArchivedFootage(config, archiveRoot, now, deletedPaths);
+            ExpireArchivedFootage(config, archiveRoot, now, deletedPaths, locked);
 
-        SweepOrphanedCameraFolders(config, storageRoot, archiveRoot, archiveUsable, now, deletedPaths, relocations);
+        SweepOrphanedCameraFolders(config, storageRoot, archiveRoot, archiveUsable, now, deletedPaths, relocations, locked);
 
-        ApplyWatermark(config, storageRoot, archiveRoot, archiveUsable, now, deletedPaths, relocations);
+        EvidenceLockStorageState.BlockedByEvidenceLocks =
+            ApplyWatermark(config, storageRoot, archiveRoot, archiveUsable, now, deletedPaths, relocations, locked);
+
+        if (_lockedSkippedThisSweep > 0)
+            logger.LogInformation("Kept {Count} segment(s) that retention would have removed — they hold footage under an evidence lock.",
+                _lockedSkippedThisSweep);
 
         try
         {
@@ -437,7 +449,8 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
     /// <summary>Deletes archive-volume footage past that camera's ArchiveRetentionDays — measured
     /// from the file's own mtime, which TryArchiveFile stamped to the recording time. Reuses the
     /// same pure age selector the primary retention sweep uses.</summary>
-    private void ExpireArchivedFootage(NodeConfigResponse config, string archiveRoot, DateTime now, List<string> deletedPaths)
+    private void ExpireArchivedFootage(NodeConfigResponse config, string archiveRoot, DateTime now, List<string> deletedPaths,
+        ProtectedFootage locked)
     {
         foreach (var camera in config.Cameras)
         {
@@ -447,7 +460,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             var archiveThumbsDir = Path.Combine(archiveRoot, $"cam-{camera.CameraId}", "thumbs");
             var archiveSnapshotsDir = Path.Combine(archiveRoot, $"cam-{camera.CameraId}", "snapshots");
 
-            foreach (var f in SelectRetentionEvictions(EnumerateEvictable(archiveCameraDir, now), now, camera.ArchiveRetentionDays))
+            foreach (var f in Unlocked(SelectRetentionEvictions(EnumerateEvictable(archiveCameraDir, now), now, camera.ArchiveRetentionDays), camera.CameraId, locked))
             {
                 if (TryDelete(f.FullName))
                 {
@@ -480,7 +493,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
     private static readonly TimeSpan OrphanedCameraFallbackRetention = TimeSpan.FromDays(30);
 
     private void SweepOrphanedCameraFolders(NodeConfigResponse config, string storageRoot, string? archiveRoot,
-        bool archiveUsable, DateTime now, List<string> deletedPaths, List<PendingRelocation> relocations)
+        bool archiveUsable, DateTime now, List<string> deletedPaths, List<PendingRelocation> relocations, ProtectedFootage locked)
     {
         var orphanById = config.OrphanedCameras.ToDictionary(o => o.CameraId, o => o);
         var assignedIds = config.Cameras.Select(c => c.CameraId).ToList();
@@ -497,7 +510,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             var archiveCameraMainDir = archiveRoot is null ? "" : Path.Combine(archiveRoot, $"cam-{cameraId}", "main");
             var archiveThisOrphan = (orphan?.ArchiveEnabled ?? false) && archiveUsable;
 
-            foreach (var f in SelectRetentionEvictions(EnumerateEvictable(mainDir, now), now, retentionDays))
+            foreach (var f in Unlocked(SelectRetentionEvictions(EnumerateEvictable(mainDir, now), now, retentionDays), cameraId, locked))
                 ArchiveOrDelete(f, mainDir, thumbsDir, snapshotsDir, archiveCameraMainDir, archiveThisOrphan, archiveRoot, deletedPaths, relocations);
 
             PruneEmptyDirectories(mainDir);
@@ -515,7 +528,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
                 var thumbsDir = Path.Combine(Path.GetDirectoryName(mainDir)!, "thumbs");
                 var snapshotsDir = Path.Combine(Path.GetDirectoryName(mainDir)!, "snapshots");
 
-                foreach (var f in SelectRetentionEvictions(EnumerateEvictable(mainDir, now), now, archiveRetentionDays))
+                foreach (var f in Unlocked(SelectRetentionEvictions(EnumerateEvictable(mainDir, now), now, archiveRetentionDays), cameraId, locked))
                 {
                     if (TryDelete(f.FullName))
                     {
@@ -565,14 +578,17 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
     // whenever the archive volume is unreachable, full, or the copy keeps failing.
     private const int WatermarkArchiveHeadroomPercent = 7;
 
-    private void ApplyWatermark(NodeConfigResponse config, string storageRoot, string? archiveRoot,
-        bool archiveUsable, DateTime now, List<string> deletedPaths, List<PendingRelocation> relocations)
+    /// <summary>Returns true when the volume is over the watermark and evidence-locked footage is what
+    /// stands in the way: locked files are never deleted here (the user chose that over keeping
+    /// recording going), so the node reports it in its heartbeat and the Nodes page shows it.</summary>
+    private bool ApplyWatermark(NodeConfigResponse config, string storageRoot, string? archiveRoot,
+        bool archiveUsable, DateTime now, List<string> deletedPaths, List<PendingRelocation> relocations, ProtectedFootage locked)
     {
         var usage = DiskSpace.TryGetUsage(storageRoot);
-        if (usage is not { } u || u.TotalBytes <= 0) return;
+        if (usage is not { } u || u.TotalBytes <= 0) return false;
         var usedBytes = u.TotalBytes - u.FreeBytes;
         var usedPercent = 100.0 * usedBytes / u.TotalBytes;
-        if (usedPercent <= config.WatermarkPercent) return;
+        if (usedPercent <= config.WatermarkPercent) return false;
 
         var archiveEnabledByCamera = config.Cameras.ToDictionary(c => c.CameraId, c => c.ArchiveEnabled);
 
@@ -603,7 +619,20 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             .SelectMany(x => EnumerateEvictable(x.MainDir, now).Select(f => (x.CameraId, x.MainDir, File: f)))
             .Where(x => !alreadyHandled.Contains(x.File.FullName))
             .OrderBy(x => x.File.LastWriteTimeUtc);
-        var candidates = orphanCandidates.Concat(assignedCandidates);
+        // Evidence-locked files are never candidates, even here. Their bytes still count as used.
+        var allCandidates = orphanCandidates.Concat(assignedCandidates).ToList();
+        var lockedCandidates = allCandidates.Where(x => locked.CoversFile(x.CameraId, x.File.LastWriteTimeUtc)).ToList();
+        var candidates = allCandidates.Except(lockedCandidates).ToList();
+
+        // Blocked by locks: even deleting every unlocked candidate wouldn't get back under the
+        // watermark, and locked footage makes up the difference.
+        var unlockedBytes = candidates.Sum(x => x.File.Length);
+        var ceilingBytes = config.WatermarkPercent / 100.0 * u.TotalBytes;
+        var blockedByLocks = lockedCandidates.Count > 0 && usedBytes - unlockedBytes > ceilingBytes;
+        if (blockedByLocks)
+            logger.LogWarning(
+                "Primary volume {StorageRoot} is over the {Watermark}% watermark and {LockedCount} segment(s) ({LockedBytes:N0} bytes) are under evidence locks, which are never deleted. Recording will stop if the volume fills — end or remove locks, export the footage elsewhere, or add storage.",
+                storageRoot, config.WatermarkPercent, lockedCandidates.Count, lockedCandidates.Sum(x => x.File.Length));
 
         // Projection assumes each selected segment frees its own length — exact for a deletion,
         // optimistic for an archive move (whose primary copy isn't freed until the relocation report
@@ -611,7 +640,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
         // rest next sweep, where TryArchiveFile treats the already-copied target as done so the retry
         // is a re-report, not a re-copy.
         var toHandle = SelectWatermarkEvictions(candidates, usedBytes, u.TotalBytes, config.WatermarkPercent);
-        if (toHandle.Count == 0) return;
+        if (toHandle.Count == 0) return blockedByLocks;
 
         long freed = 0;
         var deleted = 0;
@@ -647,7 +676,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             if (archiveEnabled) archiveEnabledDeleted++;
         }
 
-        if (deleted == 0 && archived == 0) return;
+        if (deleted == 0 && archived == 0) return blockedByLocks;
 
         if (archived > 0)
             logger.LogInformation(
@@ -680,9 +709,10 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
                     storageRoot, config.WatermarkPercent, archived);
             else
                 logger.LogError(
-                    "Primary volume {StorageRoot} is still over the {Watermark}% watermark after deleting {Deleted} segment(s) — every remaining segment is younger than the {MinAge:N0}-minute safety floor, or deletions are failing. Recording will stop if the volume fills completely.",
+                    "Primary volume {StorageRoot} is still over the {Watermark}% watermark after deleting {Deleted} segment(s) — every remaining segment is younger than the {MinAge:N0}-minute safety floor, under an evidence lock, or deletions are failing. Recording will stop if the volume fills completely.",
                     storageRoot, config.WatermarkPercent, deleted, MinAge.TotalMinutes);
         }
+        return blockedByLocks;
     }
 
     /// <summary>Oldest-first, across every camera, the segments to evict (delete, or move to the
@@ -838,6 +868,11 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
         return true;
     }
 
+    /// <summary>What the import sweep treats as already known: every path the server has, plus the
+    /// ones mid-relocation (still on the primary volume, row about to move).</summary>
+    internal static List<string> PathsKnownForImport(List<string> serverPaths, IReadOnlyCollection<string> relocatingOldPaths) =>
+        relocatingOldPaths.Count > 0 ? serverPaths.Concat(relocatingOldPaths).ToList() : serverPaths;
+
     private async Task<bool> ReconcileAsync(NodeConfigResponse config, string storageRoot, string? archiveRoot,
         HashSet<string> relocatingOldPaths, List<string> deletedPaths, CancellationToken ct)
     {
@@ -851,6 +886,11 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
             logger.LogWarning(ex, "Reconciliation sweep could not fetch this node's known segment paths — will retry next sweep.");
             return false;
         }
+
+        // The import below gets every path the server knows plus the ones mid-relocation: a file
+        // being moved to the archive is still on the primary volume with its row at that path, and
+        // must never look like unreported footage (it did, and was re-reported as a duplicate).
+        var knownForImport = PathsKnownForImport(knownPaths, relocatingOldPaths);
 
         // A segment mid-relocation: its source is deliberately still on the primary volume (so
         // File.Exists says "present"), but its row is (or is about to be) at the archive path.
@@ -867,7 +907,7 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
                 storageRoot);
             return false;
         }
-        await ImportOrphanedSegmentsAsync(config, storageRoot, archiveRoot, knownPaths, ct);
+        await ImportOrphanedSegmentsAsync(config, storageRoot, archiveRoot, knownForImport, ct);
 
         // A known path can live on either volume — gate the "missing -> delete the row" inference on
         // the reachability of whichever volume it's on, so an archive-share outage never deletes rows
@@ -1270,6 +1310,12 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
     /// <summary>Oldest-first files to delete until the camera's total footprint is back at or under
     /// quotaBytes. Null/non-positive quotaBytes means "no quota — shares the pool".</summary>
     internal static List<FileInfo> SelectQuotaEvictions(List<FileInfo> files, long? quotaBytes)
+        => SelectQuotaEvictions(files, quotaBytes, static _ => false);
+
+    /// <summary>As above, never choosing a file <paramref name="isLocked"/> says holds evidence-locked
+    /// footage. Locked files still count toward the camera's total, so the next-oldest unlocked files
+    /// go instead; when only locked files are left the camera simply stays over its quota.</summary>
+    internal static List<FileInfo> SelectQuotaEvictions(List<FileInfo> files, long? quotaBytes, Func<FileInfo, bool> isLocked)
     {
         if (quotaBytes is not > 0) return [];
 
@@ -1278,12 +1324,29 @@ public class StorageManager(NodeApiClient api, string fallbackStorageRoot, ILogg
         foreach (var f in files.OrderBy(f => f.LastWriteTimeUtc))
         {
             if (total <= quotaBytes) break;
+            if (isLocked(f)) continue;
             result.Add(f);
             total -= f.Length;
         }
 
         return result;
     }
+
+    // ── Evidence locks ────────────────────────────────────────────────────────────────────────
+
+    // Files a pass would have removed but kept for a lock this sweep — logged once at the end.
+    private int _lockedSkippedThisSweep;
+
+    private bool IsLocked(ProtectedFootage locked, Guid cameraId, FileInfo f)
+    {
+        if (!locked.CoversFile(cameraId, f.LastWriteTimeUtc)) return false;
+        _lockedSkippedThisSweep++;
+        return true;
+    }
+
+    /// <summary>The files a retention-style pass selected, minus any that may hold locked footage.</summary>
+    private List<FileInfo> Unlocked(List<FileInfo> selected, Guid cameraId, ProtectedFootage locked)
+        => locked.IsEmpty ? selected : selected.Where(f => !IsLocked(locked, cameraId, f)).ToList();
 
     // Generous relative to how long a browser download realistically takes, but still bounded —
     // this is finished export output sitting on local disk, not something with its own retention

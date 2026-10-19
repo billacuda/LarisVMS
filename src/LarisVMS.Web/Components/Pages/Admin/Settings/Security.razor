@@ -15,6 +15,9 @@
 @inject ApplicationDbContext Db
 @inject IOptionsMonitorCache<OpenIdConnectOptions> OidcOptionsCache
 @inject IAuditService AuditService
+@inject WebServerProtocols ServerProtocols
+@inject ClientEndpointCspCache CspCache
+@inject LarisVMS.Web.Security.CspReports CspReports
 
 <PageTitle>Security settings - @AppName</PageTitle>
 
@@ -37,12 +40,12 @@
             <InputTextArea @bind-Value="ManagementAllowList" class="form-control font-monospace" rows="5"
                            placeholder="10.0.0.0/24&#10;192.168.1.50&#10;# office VPN"></InputTextArea>
         </SettingField>
-        <SettingField Label="Live view / playback" Hint="Live video, playback, thumbnails, exports and snapshots.">
+        <SettingField Label="Live view / playback" Hint="Live video, playback, thumbnails, exports, and snapshots.">
             <InputTextArea @bind-Value="LiveViewAllowList" class="form-control font-monospace" rows="5"
                            placeholder="10.0.0.0/24"></InputTextArea>
         </SettingField>
     </SettingSection>
-    <SettingSection Title="Entra ID sign-in" Subtitle="Adds “Sign in with Microsoft” for existing accounts with a matching email.">
+    <SettingSection Title="Entra ID sign-in" Subtitle="Adds “Sign in with Microsoft” for accounts an admin has linked on the Users page.">
         <SettingField Label="Status" Wide Hint="@($"Redirect URI: https://{HttpContext?.Request.Host}/signin-oidc")" HelpLink="/Help/users#entra">
             <div class="form-check form-switch mt-1">
                 <InputCheckbox @bind-Value="EntraEnabled" class="form-check-input" id="entraEnabled" />
@@ -58,6 +61,63 @@
         <SettingField Label="Client secret" ShowWhen="EntraEnabled=true" Hint="Leave blank to keep the current secret.">
             <InputText @bind-Value="EntraClientSecret" type="password" class="form-control" autocomplete="off"
                        placeholder="@(HasStoredEntraClientSecret ? "(unchanged)" : "")" />
+        </SettingField>
+    </SettingSection>
+    <SettingSection Title="Web server">
+        <SettingField Label="HTTP/3" Wide Hint="Faster connections for browsers that support it. Needs UDP open on the HTTPS port and a service restart." HelpLink="/Help/security#http3">
+            <div class="form-check form-switch mt-1">
+                <InputCheckbox @bind-Value="Http3Enabled" class="form-check-input" id="http3Enabled" disabled="@(!ServerProtocols.Http3Supported)" />
+                <label class="form-check-label" for="http3Enabled">Enabled</label>
+            </div>
+            <div class="small text-muted">
+                @if (!ServerProtocols.Http3Supported)
+                {
+                    <span>Not supported on this version of Windows.</span>
+                }
+                else
+                {
+                    <span>Running now: @(ServerProtocols.Http3Active ? "on" : "off").</span>
+                    @if (Http3Enabled != ServerProtocols.Http3Active)
+                    {
+                        <span> Restart the service to apply.</span>
+                    }
+                }
+            </div>
+        </SettingField>
+        <SettingField Label="Strict script policy" Wide Hint="Browsers run only this site's own scripts, so script injected into a page can't run. Off, anything it would block is reported below instead." HelpLink="/Help/security#strict-script-policy">
+            <div class="form-check form-switch mt-1">
+                <InputCheckbox @bind-Value="StrictScripts" class="form-check-input" id="strictScripts" />
+                <label class="form-check-label" for="strictScripts">Enforce</label>
+            </div>
+            <div class="small text-muted">
+                @if (CspReports.Total == 0)
+                {
+                    <span>No reports since the service started.</span>
+                }
+                else
+                {
+                    <span>@CspReports.Total report(s) since the service started@(CspReports.Total > RecentReports.Count ? $"; the latest {RecentReports.Count}:" : ":")</span>
+                }
+            </div>
+            @if (RecentReports.Count > 0)
+            {
+                <div class="table-responsive mt-1" style="max-height: 16rem;">
+                    <table class="table table-sm small mb-0">
+                        <thead><tr><th>When</th><th>Directive</th><th>Blocked</th><th>Where</th></tr></thead>
+                        <tbody>
+                            @foreach (var r in RecentReports)
+                            {
+                                <tr>
+                                    <td class="text-nowrap"><time datetime="@r.AtUtc.ToUtcIso()" data-local="G">@r.AtUtc.ToLocalTime().ToString("G")</time></td>
+                                    <td>@r.Directive</td>
+                                    <td class="text-break">@r.Blocked</td>
+                                    <td class="text-break">@r.Source</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
         </SettingField>
     </SettingSection>
     <div class="lv-savebar">
@@ -80,6 +140,10 @@
     // since the real value is never round-tripped back to the browser.
     [SupplyParameterFromForm(FormName = "security-settings")] private string? EntraClientSecret { get; set; }
     private bool HasStoredEntraClientSecret { get; set; }
+    [SupplyParameterFromForm(FormName = "security-settings")] private bool Http3Enabled { get; set; }
+    [SupplyParameterFromForm(FormName = "security-settings")] private bool StrictScripts { get; set; }
+
+    private IReadOnlyList<LarisVMS.Web.Security.CspReports.Entry> RecentReports = [];
 
     private string? SavedMessage;
     private string? ErrorMessage;
@@ -88,6 +152,7 @@
     {
         var entra = await Db.EntraSsoSettings.AsNoTracking().FirstOrDefaultAsync();
         HasStoredEntraClientSecret = !string.IsNullOrEmpty(entra?.ClientSecret);
+        RecentReports = CspReports.Recent();
 
         // Skip the form fields on a POST: the submitted values are already bound, and reloading here
         // would save the old ones back (see Detection.razor's OnInitializedAsync).
@@ -97,6 +162,8 @@
         EntraEnabled = entra?.IsEnabled ?? false;
         EntraTenantId = entra?.TenantId;
         EntraClientId = entra?.ClientId;
+        Http3Enabled = await Settings.GetAsync(WebServerProtocols.Http3SettingKey, true);
+        StrictScripts = await Settings.GetAsync(LarisVMS.Web.Security.CspNonce.StrictSettingKey, false);
     }
 
     private async Task HandleSaveAsync()
@@ -133,6 +200,14 @@
             HasStoredEntraClientSecret = hadStoredSecret;
             return;
         }
+        // Sign-in has to be limited to your own directory: the multi-tenant endpoints would accept
+        // accounts from any Microsoft tenant.
+        if (EntraEnabled && EntraTenantId!.Trim().ToLowerInvariant() is "common" or "organizations" or "consumers")
+        {
+            ErrorMessage = "Enter your own directory's Tenant ID (a GUID or yourcompany.onmicrosoft.com), not a multi-tenant value.";
+            HasStoredEntraClientSecret = hadStoredSecret;
+            return;
+        }
 
         var user = AuthenticationStateTask is not null
             ? (await AuthenticationStateTask).User
@@ -141,9 +216,16 @@
         var oldManagement = await Settings.GetRawAsync(IpAllowListMiddleware.ManagementSettingKey) ?? string.Empty;
         var oldLiveView = await Settings.GetRawAsync(IpAllowListMiddleware.LiveViewSettingKey) ?? string.Empty;
         var oldEntraEnabled = entra?.IsEnabled ?? false;
+        var oldHttp3 = await Settings.GetAsync(WebServerProtocols.Http3SettingKey, true);
+        var oldStrict = await Settings.GetAsync(LarisVMS.Web.Security.CspNonce.StrictSettingKey, false);
+        // A disabled switch posts nothing; keep the saved value rather than turning it off.
+        if (!ServerProtocols.Http3Supported) Http3Enabled = oldHttp3;
 
         await Settings.SetGlobalAsync(IpAllowListMiddleware.ManagementSettingKey, ManagementAllowList, by);
         await Settings.SetGlobalAsync(IpAllowListMiddleware.LiveViewSettingKey, LiveViewAllowList, by);
+        await Settings.SetGlobalAsync(WebServerProtocols.Http3SettingKey, Http3Enabled.ToString(), by);
+        await Settings.SetGlobalAsync(LarisVMS.Web.Security.CspNonce.StrictSettingKey, StrictScripts.ToString(), by);
+        CspCache.Invalidate();
 
         var isNewEntraRow = entra is null;
         entra ??= new EntraSsoSettings { Id = Guid.NewGuid() };
@@ -165,6 +247,8 @@
             AuditDiff.Of("Management/API allow list", oldManagement, ManagementAllowList),
             AuditDiff.Of("Live View/playback allow list", oldLiveView, LiveViewAllowList),
             AuditDiff.Of("Entra sign-in enabled", oldEntraEnabled.ToString(), EntraEnabled.ToString()),
+            AuditDiff.Of("HTTP/3 enabled", oldHttp3.ToString(), Http3Enabled.ToString()),
+            AuditDiff.Of("Strict script policy", oldStrict.ToString(), StrictScripts.ToString()),
             AuditDiff.SecretChanged("Entra client secret", !string.IsNullOrWhiteSpace(EntraClientSecret)));
 
         await AuditService.LogAsync("Settings.Update",

@@ -1,10 +1,13 @@
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using LarisVMS.Core.Entities;
 using LarisVMS.Core.Interfaces;
 
 namespace LarisVMS.Web.Pages.Setup;
 
-public class AdminModel(ISetupService setupService, IRoleSeedService roleSeed, ICameraGroupSeedService cameraGroupSeed) : PageModel
+public class AdminModel(ISetupService setupService, IRoleSeedService roleSeed, ICameraGroupSeedService cameraGroupSeed,
+    SignInManager<ApplicationUser> signInManager) : PageModel
 {
     [BindProperty] public string Email { get; set; } = string.Empty;
     [BindProperty] public string Password { get; set; } = string.Empty;
@@ -24,6 +27,8 @@ public class AdminModel(ISetupService setupService, IRoleSeedService roleSeed, I
             await roleSeed.SeedAsync();
             await cameraGroupSeed.SeedAsync();
             await setupService.CompleteSetupAsync(Email, Password);
+            // The remaining steps are only open to a signed-in Super Admin (SetupMiddleware).
+            await signInManager.PasswordSignInAsync(Email, Password, isPersistent: false, lockoutOnFailure: false);
             return RedirectToPage("Storage");
         }
         catch (Exception ex)

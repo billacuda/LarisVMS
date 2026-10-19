@@ -13,6 +13,7 @@
 @inject RoleManager<IdentityRole> RoleManagerService
 @inject ISettingsResolver Settings
 @inject IAuditService AuditService
+@inject IPermissionService PermissionService
 
 <PageTitle>Permissions — Roles - @AppName</PageTitle>
 
@@ -21,7 +22,7 @@
 <PermissionsTabs ActiveKey="Roles" />
 
 <p class="text-muted small">
-    Each role's scope, expiry and PTZ priority. Grant permissions on the <a href="/Admin/Settings/Permissions/Matrix">Permissions matrix</a>. <a href="/Help/users#roles">Learn more</a>
+    Each role's scope, expiry, and PTZ priority. Grant permissions on the <a href="/Admin/Settings/Permissions/Matrix">Permissions matrix</a>. <a href="/Help/users#roles">Learn more</a>
 </p>
 
 @if (!string.IsNullOrEmpty(SavedMessage))
@@ -158,7 +159,7 @@
                 <EditForm Model="this" FormName="@($"delete-role-{role.Id}")" OnValidSubmit="HandleDeleteAsync" class="d-inline">
                     <input type="hidden" name="DeleteRoleId" value="@role.Id" />
                     <button type="submit" class="btn btn-outline-danger btn-sm"
-                            onclick="@(role.UserCount > 0 ? "return false;" : "return confirm('Delete role \"" + role.Name + "\"?');")"
+                            data-confirm="@(role.UserCount > 0 ? null : $"Delete role \"{role.Name}\"?")"
                             disabled="@(role.UserCount > 0)"
                             title="@(role.UserCount > 0 ? "Move its users to another role first." : null)">
                         Delete
@@ -289,6 +290,21 @@
         var profile = await Db.RoleProfiles.FirstOrDefaultAsync(p => p.RoleId == role.Id);
         var isProtected = RoleManagementPolicy.IsProtected(profile?.Tag);
         var fields = new List<AuditDiff.Field>();
+
+        var scope = await AdminScope.ForAsync(Db, PermissionService, User);
+        if (!isProtected && !scope.CanEditRole(role.Id))
+        {
+            ErrorMessage = AdminScope.OwnRoleMessage;
+            await LoadAsync();
+            return;
+        }
+        if (Enum.TryParse<RoleScopeTier>(SaveMaxScopeTierRaw, out var requestedTier) && !scope.CanSetTier(requestedTier)
+            && requestedTier != profile?.MaxScopeTier)
+        {
+            ErrorMessage = "You can't give a role wider reach than your own.";
+            await LoadAsync();
+            return;
+        }
 
         var newName = (SaveName ?? string.Empty).Trim();
         if (!string.Equals(role.Name, newName, StringComparison.Ordinal))

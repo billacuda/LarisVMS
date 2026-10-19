@@ -151,7 +151,7 @@
         var thumbHtml = showThumbnails
             ? '<img src="/playback-thumbnail/' + r.cameraId + '/latest" loading="lazy" ' +
               'style="width:64px;height:36px;object-fit:cover;" class="rounded" alt="" ' +
-              'onerror="this.style.display=\'none\'">'
+              'data-on-error="hide">'
             : '';
 
         var fps = r.healthFresh && r.fps !== null && r.fps !== undefined ? r.fps : null;

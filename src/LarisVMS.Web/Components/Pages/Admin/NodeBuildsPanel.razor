@@ -44,7 +44,7 @@
                         {
                             <div class="small">
                                 Current: <strong>@latest.Version</strong>
-                                <span class="text-muted">· approved @(latest.ApprovedAt?.ToLocalTime().ToString("g") ?? "?")@(latest.ApprovedBy is { } by ? $" by {by}" : "")</span>
+                                <span class="text-muted">· approved @if (latest.ApprovedAt is { } approvedAt) {<time datetime="@approvedAt.ToUtcIso()" data-local="g">@approvedAt.ToLocalTime().ToString("g")</time>} else {<text>?</text>}@(latest.ApprovedBy is { } by ? $" by {by}" : "")</span>
                             </div>
                         }
                         else
@@ -56,7 +56,7 @@
                             <div class="d-flex flex-wrap align-items-center gap-2 mt-2 p-2 rounded bg-warning-subtle">
                                 <div class="small me-auto">
                                     <strong>@b.Version</strong> waiting for approval
-                                    <span class="text-muted">· registered @b.UploadedAt.ToLocalTime().ToString("g") · @ByteFormat.Format(b.SizeBytes)@(b.VisionFilePath is not null ? " · with AI detection" : "")</span>
+                                    <span class="text-muted">· registered <time datetime="@b.UploadedAt.ToUtcIso()" data-local="g">@b.UploadedAt.ToLocalTime().ToString("g")</time> · @ByteFormat.Format(b.SizeBytes)@(b.VisionFilePath is not null ? " · with AI detection" : "")</span>
                                     @if (!string.IsNullOrWhiteSpace(b.Notes)) { <div class="text-muted">@b.Notes</div> }
                                 </div>
                                 <EditForm Model="this" FormName="@($"approve-build-{b.Id}")" OnValidSubmit="HandleApproveAsync" class="d-inline">
@@ -66,7 +66,7 @@
                                 <EditForm Model="this" FormName="@($"reject-build-{b.Id}")" OnValidSubmit="HandleRejectAsync" class="d-inline">
                                     <input type="hidden" name="BuildId" value="@b.Id" />
                                     <button type="submit" class="btn btn-sm btn-outline-danger"
-                                            onclick="return confirm('Reject build @b.Version? It stays in the history, but no node will ever be offered it.');">Reject</button>
+                                            data-confirm="@($"Reject build {b.Version}? It stays in the history, but no node will ever be offered it.")">Reject</button>
                                 </EditForm>
                             </div>
                         }
@@ -129,8 +129,8 @@
                                                     break;
                                             }
                                         </td>
-                                        <td class="text-nowrap" data-sort-value="@b.UploadedAt.ToString("o")">@b.UploadedAt.ToLocalTime().ToString("g")</td>
-                                        <td class="text-nowrap small">@(b.ApprovedAt?.ToLocalTime().ToString("g"))@(b.ApprovedBy is { } who ? $" · {who}" : "")</td>
+                                        <td class="text-nowrap" data-sort-value="@b.UploadedAt.ToString("o")"><time datetime="@b.UploadedAt.ToUtcIso()" data-local="g">@b.UploadedAt.ToLocalTime().ToString("g")</time></td>
+                                        <td class="text-nowrap small">@if (b.ApprovedAt is { } buildApprovedAt) {<time datetime="@buildApprovedAt.ToUtcIso()" data-local="g">@buildApprovedAt.ToLocalTime().ToString("g")</time>}@(b.ApprovedBy is { } who ? $" · {who}" : "")</td>
                                         <td data-sort-value="@b.SizeBytes">@ByteFormat.Format(b.SizeBytes)</td>
                                         <td class="font-monospace small" title="@b.Sha256">@b.Sha256[..12]&hellip;</td>
                                         <td>@(b.VisionFilePath is not null ? "✅" : "—")</td>

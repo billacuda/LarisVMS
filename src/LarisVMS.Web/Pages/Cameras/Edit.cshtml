@@ -17,6 +17,11 @@
     @if (!Model.IsNew)
     {
         <div class="btn-group">
+            @if (!string.IsNullOrWhiteSpace(Model.DeviceServiceUri))
+            {
+                <a class="btn btn-outline-secondary" asp-page="DeviceSettings" asp-route-id="@Model.Id"
+                   title="Change the camera's own stream, image, and audio settings">Device settings</a>
+            }
             <a class="btn btn-outline-secondary" asp-page="Zones" asp-route-id="@Model.Id">Zones</a>
             <a class="btn btn-outline-secondary" asp-page="SpeedTraps" asp-route-id="@Model.Id">Speed traps</a>
             <a class="btn btn-outline-secondary" href="/Cameras/EventTags/@Model.Id">Event tags</a>
@@ -49,7 +54,7 @@
         <form method="post">
             <input type="hidden" asp-for="Id" />
             <button type="submit" asp-page-handler="SplitChannels" class="btn btn-warning"
-                    onclick="return confirm('Add one camera per channel on this device?');">
+                    data-confirm="Add one camera per channel on this device?">
                 <span aria-hidden="true">🔀</span> Split into @Model.DetectedChannelCount cameras
             </button>
         </form>
@@ -234,10 +239,10 @@
                 <div class="lv-field">
                     <label class="form-label" asp-for="EncryptOverride">Encryption</label>
                     <select asp-for="EncryptOverride" class="form-select" disabled="@(!Model.EncryptionReady)">
-                        <option value="">inherit — @(Model.EffectiveEncrypt switch { "Video" => "video", "VideoAndImages" => "video, snapshots and thumbnails", _ => "off" })</option>
+                        <option value="">inherit — @(Model.EffectiveEncrypt switch { "Video" => "video", "VideoAndImages" => "video, snapshots, and thumbnails", _ => "off" })</option>
                         <option value="Off">Off</option>
                         <option value="Video">Video (recordings and talk audio)</option>
-                        <option value="VideoAndImages">Video, snapshots and thumbnails</option>
+                        <option value="VideoAndImages">Video, snapshots, and thumbnails</option>
                     </select>
                     <div class="lv-hint">
                         @if (!Model.EncryptionReady)
@@ -338,13 +343,32 @@
                     <div class="lv-hint">Lower saves GPU/CPU. 0 is no cap.</div>
                 </div>
                 <div class="lv-field" data-show-when="AiDetectionEnabled=true">
+                    <label class="form-label" asp-for="MovementModeOverride">Movement detection</label>
+                    <select asp-for="MovementModeOverride" class="form-select">
+                        <option value="">inherit — @Model.EffectiveMovementMode</option>
+                        <option value="Standard">Standard</option>
+                        <option value="Legacy">Legacy</option>
+                    </select>
+                    <div class="lv-hint">How an object is judged to be moving. <a href="/Help/ai-detection#movement">Learn more</a></div>
+                </div>
+                <div class="lv-field" data-show-when="AiDetectionEnabled=true">
+                    <label class="form-label" asp-for="MovementSensitivityOverride">Movement sensitivity</label>
+                    <select asp-for="MovementSensitivityOverride" class="form-select">
+                        <option value="">inherit — @Model.EffectiveMovementSensitivity</option>
+                        <option value="Low">Low</option>
+                        <option value="Normal">Normal</option>
+                        <option value="High">High</option>
+                    </select>
+                    <div class="lv-hint">Standard only. Higher picks up movement sooner; lower ignores more box wobble.</div>
+                </div>
+                <div class="lv-field" data-show-when="AiDetectionEnabled=true">
                     <label class="form-label" asp-for="RejectMotionJitterOverride">Stationary-object jitter rejection</label>
                     <select asp-for="RejectMotionJitterOverride" class="form-select">
                         <option value="">inherit — @(Model.EffectiveRejectMotionJitter ? "on" : "off")</option>
                         <option value="True">On</option>
                         <option value="False">Off</option>
                     </select>
-                    <div class="lv-hint">Stops parked cars' box wobble counting as motion. <a href="/Help/ai-detection#jitter">Learn more</a></div>
+                    <div class="lv-hint">Legacy only. Stops parked cars' box wobble counting as motion. <a href="/Help/ai-detection#jitter">Learn more</a></div>
                 </div>
                 <div class="lv-field" data-show-when="AiDetectionEnabled=true">
                     <label class="form-label" for="jitterPixelsOverrideSlider">Jitter threshold (pixels)</label>
@@ -358,7 +382,7 @@
                                disabled="@(!Model.MotionJitterPixelsOverride.HasValue)" />
                         <output class="text-muted small" style="min-width: 2.5em;" id="jitterPixelsOverrideReadout">@(Model.MotionJitterPixelsOverride ?? Model.EffectiveMotionJitterPixels)</output>
                     </div>
-                    <div class="lv-hint">Used only when jitter rejection is on.</div>
+                    <div class="lv-hint">The smallest box movement that ever counts as moving. Legacy uses it only with jitter rejection on.</div>
                 </div>
             </div>
         </section>
@@ -402,7 +426,7 @@
     <details class="lv-section mt-3">
         <summary class="lv-section-head" style="cursor: pointer;">
             <span class="lv-section-title">Device</span>
-            <span class="lv-section-sub ms-2">Integration, capabilities and streams</span>
+            <span class="lv-section-sub ms-2">Integration, capabilities, and streams</span>
         </summary>
         <div class="p-3">
             @if (Model.Integration is { } integration)
@@ -415,7 +439,7 @@
 
             @if (Model.Capabilities is { } cap)
             {
-                <h3 class="h6">Capabilities <span class="text-muted small fw-normal">probed @cap.ProbedAt.ToLocalTime().ToString("g")</span></h3>
+                <h3 class="h6">Capabilities <span class="text-muted small fw-normal">probed <time datetime="@cap.ProbedAt.ToUtcIso()" data-local="g">@cap.ProbedAt.ToLocalTime().ToString("g")</time></span></h3>
                 <div class="d-flex flex-wrap gap-1 mb-3">
                     @foreach (var (label, has) in new[] {
                         ("Profile S", cap.ProfileS), ("Profile T", cap.ProfileT), ("Profile G", cap.ProfileG), ("Profile M", cap.ProfileM),
@@ -475,13 +499,13 @@
     <div class="lv-danger-zone d-flex flex-wrap align-items-center gap-2">
         <div class="flex-grow-1 small">Deleting a camera removes it from LarisVMS.</div>
         <button type="submit" form="cameraForm" asp-page-handler="Delete" class="btn btn-sm btn-outline-danger"
-                onclick="return confirm('Delete this camera?');">Delete camera</button>
+                data-confirm="Delete this camera?">Delete camera</button>
     </div>
 }
 </div>
 
 @section Scripts {
-    <script>
+    <script nonce="@Csp.Value">
         // Override slider readouts, wired by id. A disabled range fires no 'input' events, so re-sync
         // when the Override toggle flips.
         (function () {

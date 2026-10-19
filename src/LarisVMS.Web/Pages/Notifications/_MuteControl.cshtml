@@ -1,0 +1,27 @@
+@model (Guid RuleId, DateTime MutedUntilUtc, string ReturnTab)
+@* Mute one subscription for a while. MutedUntilUtc is default(DateTime) when not muted. *@
+@{
+    var muted = Model.MutedUntilUtc > DateTime.UtcNow;
+}
+<form method="post" asp-page-handler="Mute" class="d-flex align-items-center gap-1">
+    <input type="hidden" name="ruleId" value="@Model.RuleId" />
+    <input type="hidden" name="returnTab" value="@Model.ReturnTab" />
+    @if (muted)
+    {
+        <span class="small text-muted">
+            Muted @if (Model.MutedUntilUtc == DateTime.MaxValue) { <text>until turned back on</text> }
+            else { <text>until <time datetime="@Model.MutedUntilUtc.ToUtcIso()" data-local="g">@Model.MutedUntilUtc.ToLocalTime().ToString("g")</time></text> }
+        </span>
+        <button type="submit" name="muteFor" value="off" class="btn btn-sm btn-outline-secondary">Unmute</button>
+    }
+    else
+    {
+        <select name="muteFor" class="form-select form-select-sm" style="width: auto;" aria-label="Mute" data-submit-on-change>
+            <option value="">Mute…</option>
+            <option value="1">for 1 hour</option>
+            <option value="8">for 8 hours</option>
+            <option value="24">for 1 day</option>
+            <option value="forever">until I turn it back on</option>
+        </select>
+    }
+</form>

@@ -15,6 +15,7 @@
 @inject ActiveDirectorySyncTrigger SyncTrigger
 @inject IAuthorizationService AuthorizationService
 @inject IAuditService AuditService
+@inject IPermissionService PermissionService
 
 <PageTitle>Active Directory settings - @AppName</PageTitle>
 
@@ -87,7 +88,7 @@
             else
             {
                 <div>
-                    Started @Current.LastSyncStartedAt.Value.ToLocalTime().ToString("g")
+                    Started <time datetime="@Current.LastSyncStartedAt.Value.ToUtcIso()" data-local="g">@Current.LastSyncStartedAt.Value.ToLocalTime().ToString("g")</time>
                     @if (Current.LastSyncError is not null)
                     {
                         <div class="text-danger small">Failed: @Current.LastSyncError No accounts were changed.</div>
@@ -152,7 +153,7 @@
                                 <EditForm Model="this" FormName="@($"ad-remove-link-{link.Id}")" OnSubmit="HandleRemoveLinkAsync" class="d-inline">
                                     <input type="hidden" name="RemoveLinkId" value="@link.Id" />
                                     <button type="submit" class="btn btn-sm btn-outline-danger"
-                                            onclick="@($"return confirm('Unlink \"{link.GroupName}\"? Its members lose this role at the next sync.');")">
+                                            data-confirm="@($"Unlink \"{link.GroupName}\"? Its members lose this role at the next sync.")">
                                         Remove
                                     </button>
                                 </EditForm>
@@ -193,7 +194,7 @@
 </div>
 
 <SectionContent SectionName="PageScripts">
-    <script src="/js/ad-group-autocomplete.js"></script>
+    <PageScript Src="/js/ad-group-autocomplete.js" />
 </SectionContent>
 
 @code {
@@ -494,7 +495,8 @@
 
         var roleTier = await Db.RoleProfiles.Where(p => p.RoleId == roleId).Select(p => (RoleScopeTier?)p.MaxScopeTier).FirstOrDefaultAsync()
             ?? RoleScopeTier.Group;
-        if (!RoleScopePolicy.CanAssignRole(await HighestScopeTierAsync(CurrentUserId), roleTier))
+        if (!RoleScopePolicy.CanAssignRole(await HighestScopeTierAsync(CurrentUserId), roleTier)
+            || !(await AdminScope.ForAsync(Db, PermissionService, User)).CanBindRole(roleId))
         {
             ErrorMessage = "You can't assign that role.";
             return false;

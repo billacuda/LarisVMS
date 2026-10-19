@@ -16,6 +16,7 @@ namespace LarisVMS.Web.Pages.Cameras;
 /// other page that plays live video — null/false on a camera that's never connected yet, which
 /// pickMimeType (live-view.js) already handles the same way those other pages do.</summary>
 [Authorize("Cameras.Edit")]
+[LarisVMS.Web.Auth.RequireCameraConfigure]
 public class ZonesModel(ICameraService cameraService) : PageModel
 {
     public Guid CameraId { get; set; }

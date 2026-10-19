@@ -25,10 +25,10 @@
 
 <EditForm Model="this" FormName="branding-settings" OnSubmit="HandleSaveAsync" data-dirty-guard>
     <SettingSection Title="Identity">
-        <SettingField Label="Application name" For="AppNameField" Hint="Navbar, browser tab and footer.">
+        <SettingField Label="Application name" For="AppNameField" Hint="Navbar, browser tab, and footer.">
             <InputText @bind-Value="FormAppName" id="AppNameField" class="form-control" maxlength="100" />
         </SettingField>
-        <SettingField Label="Logo" For="LogoFile" Wide Hint="@($"PNG, JPEG, GIF or WebP under {MaxLogoBytes / 1024}KB. SVG isn't accepted.")">
+        <SettingField Label="Logo" For="LogoFile" Wide Hint="@($"PNG, JPEG, GIF, or WebP under {MaxLogoBytes / 1024}KB. SVG isn't accepted.")">
             <div class="d-flex align-items-center gap-3 mb-2">
                 <img id="logoPreview" src="@(LogoDataUri ?? "")" alt="Current logo preview"
                      class="border rounded bg-body-tertiary p-1"
@@ -86,7 +86,7 @@
 </div>
 
 <SectionContent SectionName="PageScripts">
-    <script>
+    <script nonce="@Csp.Value">
         (function () {
             // Keeps each color picker and its text input in step, in both directions.
             function linkColor(pickerId, textId) {
@@ -183,7 +183,7 @@
         else if (!string.IsNullOrWhiteSpace(AccentColor) && LarisVMS.Core.Branding.NormalizeColor(AccentColor) is null)
             ErrorMessage = "Accent color must be a hex value like #212529.";
         else if (!RemoveLogo && !string.IsNullOrWhiteSpace(LogoDataUri) && LarisVMS.Core.Branding.NormalizeLogoDataUri(LogoDataUri) is null)
-            ErrorMessage = $"The logo must be a PNG, JPEG, GIF or WebP image under {MaxLogoBytes / 1024}KB. " +
+            ErrorMessage = $"The logo must be a PNG, JPEG, GIF, or WebP image under {MaxLogoBytes / 1024}KB. " +
                 "SVG isn't accepted, since an SVG can carry script.";
 
         if (ErrorMessage is not null) return;

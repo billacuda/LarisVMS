@@ -28,7 +28,12 @@ public class SmtpEmailProvider : IEmailProvider
         message.Body = builder.ToMessageBody();
 
         using var client = new SmtpClient();
-        var socketOptions = config.UseSsl ? SecureSocketOptions.Auto : SecureSocketOptions.StartTlsWhenAvailable;
+        // The password never goes in clear: port 465 is TLS from the start; otherwise STARTTLS is
+        // required (not just used when offered, which a man in the middle can strip) whenever SSL is
+        // on or the server needs a sign-in. Only an anonymous relay with SSL off may stay plain.
+        var socketOptions = config.Port == 465 ? SecureSocketOptions.SslOnConnect
+            : config.UseSsl || !string.IsNullOrEmpty(config.Username) ? SecureSocketOptions.StartTls
+            : SecureSocketOptions.StartTlsWhenAvailable;
         await client.ConnectAsync(config.Host, config.Port, socketOptions, ct);
         if (!string.IsNullOrEmpty(config.Username))
             await client.AuthenticateAsync(config.Username, config.Password ?? string.Empty, ct);

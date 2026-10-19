@@ -1,4 +1,5 @@
 using LarisVMS.Core.Entities;
+using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
 using LarisVMS.Web.Services;
 
@@ -51,6 +52,15 @@ public class NodeAuthMiddleware(RequestDelegate next)
         if (node is null)
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            return;
+        }
+
+        // Until an admin approves it (or while it's disabled) a node may only check in, so it shows on
+        // the Nodes page; it gets no cameras and may not report anything.
+        if (node.Status is NodeStatus.Pending or NodeStatus.Disabled
+            && !path.Equals("/api/nodes/heartbeat", StringComparison.OrdinalIgnoreCase))
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
             return;
         }
 

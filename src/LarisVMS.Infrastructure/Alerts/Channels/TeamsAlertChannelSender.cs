@@ -21,7 +21,7 @@ public class TeamsAlertChannelSender : IAlertChannelSender
                 ?? throw new InvalidOperationException("Teams delivery configuration is malformed.");
 
         using var http = new HttpClient();
-        var payload = JsonSerializer.Serialize(new { text = $"**LarisVMS alert: {ruleName}**\n\n{message}" });
+        var payload = JsonSerializer.Serialize(new { text = $"**LarisVMS alert: {ChatText.Teams(ruleName)}**\n\n{ChatText.Teams(message)}" });
         using var content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
         var response = await http.PostAsync(config.WebhookUrl, content, ct);
         response.EnsureSuccessStatusCode();

@@ -222,7 +222,7 @@ else
                         <text>Listening on :@cePort</text>
                         @if (n.ClientEndpointCertNotAfter is { } na)
                         {
-                            <text> &middot; cert valid to @na.ToLocalTime().ToString("d")</text>
+                            <text> &middot; cert valid to <time datetime="@na.ToUtcIso()" data-local="d">@na.ToLocalTime().ToString("d")</time></text>
                         }
                         @if (n.ClientEndpointCertIsSelfSigned == true)
                         {
@@ -315,7 +315,7 @@ else
                 <div class="small">
                     @if (n.LastSeenAt is { } seen)
                     {
-                        <span title="@seen.ToString("u")">@seen.ToLocalTime().ToString("g")</span>
+                        <time datetime="@seen.ToUtcIso()" data-local="g">@seen.ToLocalTime().ToString("g")</time>
                     }
                     else
                     {
@@ -360,7 +360,7 @@ else
 </div>
 
 <SectionContent SectionName="PageScripts">
-    <script>
+    <script nonce="@Csp.Value">
         // "Custom" model family: "Refresh" asks this node which .onnx models it has and repopulates
         // the picker, flagging any whose metadata didn't resolve rather than hiding it.
         document.querySelectorAll('[data-refresh-local-models]').forEach(function (btn) {

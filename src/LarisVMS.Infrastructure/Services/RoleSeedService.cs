@@ -170,6 +170,116 @@ public class RoleSeedService(
 
             await db.SaveChangesAsync(ct);
         }
+
+        await ApplyOneTimeGrantsAsync(ct);
+        await FailClosedUpgradeAsync(ct);
+    }
+
+    private const CameraAccessActions AllCameraActions = CameraAccessActions.View | CameraAccessActions.Playback |
+        CameraAccessActions.Export | CameraAccessActions.Ptz | CameraAccessActions.Talk | CameraAccessActions.Configure;
+
+    /// <summary>Camera access used to fail open: a user whose roles had no Camera Access rows could
+    /// reach every camera. It now fails closed. Once, this keeps existing installs exactly as they
+    /// were: a role with no rows whose members all relied on the open default gets an "all cameras,
+    /// every action" row, and any other user who relied on it gets one of their own. A fresh install
+    /// (no users yet) instead gives Guest/Viewer view-only access to every camera.</summary>
+    internal async Task FailClosedUpgradeAsync(CancellationToken ct)
+    {
+        const string markerKey = "CameraAccess.FailClosed.v1";
+        if (await db.Settings.AnyAsync(s => s.Key == markerKey, ct)) return;
+
+        var userIds = await db.Users.Select(u => u.Id).ToListAsync(ct);
+        if (userIds.Count == 0)
+        {
+            var guestRoleId = await db.RoleProfiles.Where(p => p.Tag == RoleTags.GuestViewer).Select(p => p.RoleId).FirstOrDefaultAsync(ct);
+            if (guestRoleId is not null && !await db.CameraAccesses.AnyAsync(a => a.PrincipalType == CameraAccessPrincipalType.Role && a.PrincipalId == guestRoleId, ct))
+                db.CameraAccesses.Add(AllCamerasRow(CameraAccessPrincipalType.Role, guestRoleId, CameraAccessActions.View));
+        }
+        else
+        {
+            var superRoleIds = (await db.RoleProfiles.Where(p => p.Tag == RoleTags.SuperAdmin).Select(p => p.RoleId).ToListAsync(ct)).ToHashSet();
+            var rows = await db.CameraAccesses.AsNoTracking().Select(a => new { a.PrincipalType, a.PrincipalId }).ToListAsync(ct);
+            var rolesWithRows = rows.Where(r => r.PrincipalType == CameraAccessPrincipalType.Role).Select(r => r.PrincipalId).ToHashSet();
+            var usersWithRows = rows.Where(r => r.PrincipalType == CameraAccessPrincipalType.User).Select(r => r.PrincipalId).ToHashSet();
+            var memberships = await db.UserRoles.AsNoTracking().Select(ur => new { ur.UserId, ur.RoleId }).ToListAsync(ct);
+            var rolesOf = memberships.ToLookup(m => m.UserId, m => m.RoleId);
+            var membersOf = memberships.ToLookup(m => m.RoleId, m => m.UserId);
+
+            bool IsSuper(string userId) => rolesOf[userId].Any(superRoleIds.Contains);
+            bool HasRows(string userId) => usersWithRows.Contains(userId) || rolesOf[userId].Any(rolesWithRows.Contains);
+
+            // Role-level first, where it reproduces the old result for every member.
+            var roleIds = await db.Roles.Select(r => r.Id).ToListAsync(ct);
+            foreach (var roleId in roleIds.Where(r => !superRoleIds.Contains(r) && !rolesWithRows.Contains(r)).ToList())
+            {
+                if (membersOf[roleId].All(u => IsSuper(u) || !HasRows(u)))
+                {
+                    db.CameraAccesses.Add(AllCamerasRow(CameraAccessPrincipalType.Role, roleId, AllCameraActions));
+                    rolesWithRows.Add(roleId);
+                }
+            }
+            // Then anyone still left with nothing.
+            foreach (var userId in userIds.Where(u => !IsSuper(u) && !HasRows(u)))
+                db.CameraAccesses.Add(AllCamerasRow(CameraAccessPrincipalType.User, userId, AllCameraActions));
+        }
+
+        db.Settings.Add(new Setting
+        {
+            Id = Guid.NewGuid(), Key = markerKey, Value = "done", IsSystemSetting = true,
+            Description = "Camera access fails closed; grants preserving earlier access were added once.", CreatedAt = DateTime.UtcNow
+        });
+        await db.SaveChangesAsync(ct);
+    }
+
+    private static CameraAccess AllCamerasRow(CameraAccessPrincipalType type, string principalId, CameraAccessActions actions) => new()
+    {
+        Id = Guid.NewGuid(),
+        PrincipalType = type,
+        PrincipalId = principalId,
+        ScopeType = CameraAccessScopeType.All,
+        ScopeId = null,
+        Actions = actions
+    };
+
+    /// <summary>Permissions added after roles were first seeded: SeedAsync never touches a seeded role
+    /// again, so each new permission is granted here exactly once — on new and existing installs alike
+    /// — guarded by a marker Setting. After that, admins own the matrix.</summary>
+    private async Task ApplyOneTimeGrantsAsync(CancellationToken ct)
+    {
+        // Evidence locks: whoever can export footage can also lock it.
+        await GrantOnceAsync("Grants.EvidenceLocks.v1", ("EvidenceLocks", "Create"),
+            _ => db.Permissions.Where(p => p.Resource == "Exports" && p.Action == "View")
+                .Select(p => p.RoleId).Distinct().ToListAsync(ct), ct);
+
+        // Notifications: every role may subscribe to shared notifications and create its own.
+        await GrantOnceAsync("Grants.Notifications.Subscribe.v1", ("Notifications", "Subscribe"), Task.FromResult, ct);
+        await GrantOnceAsync("Grants.Notifications.CreateOwn.v1", ("Notifications", "CreateOwn"), Task.FromResult, ct);
+    }
+
+    private async Task GrantOnceAsync(string markerKey, (string Resource, string Action) permission,
+        Func<List<string>, Task<List<string>>> selectRoleIds, CancellationToken ct)
+    {
+        if (await db.Settings.AnyAsync(s => s.Key == markerKey, ct)) return;
+
+        // selectRoleIds gets every role id and returns the ones to grant to.
+        var allRoleIds = await db.Roles.Select(r => r.Id).ToListAsync(ct);
+        var targetRoleIds = await selectRoleIds(allRoleIds);
+        var alreadyHave = await db.Permissions
+            .Where(p => p.Resource == permission.Resource && p.Action == permission.Action)
+            .Select(p => p.RoleId).ToListAsync(ct);
+
+        foreach (var roleId in targetRoleIds.Except(alreadyHave))
+            db.Permissions.Add(new Permission
+            {
+                Id = Guid.NewGuid(), RoleId = roleId, Resource = permission.Resource, Action = permission.Action, IsSystemPermission = true
+            });
+
+        db.Settings.Add(new Setting
+        {
+            Id = Guid.NewGuid(), Key = markerKey, Value = "done", IsSystemSetting = true,
+            Description = "One-time permission grant applied at startup.", CreatedAt = DateTime.UtcNow
+        });
+        await db.SaveChangesAsync(ct);
     }
 
     private async Task<IdentityRole?> ResolveOrCreateRoleAsync(BuiltInRole builtIn, CancellationToken ct)

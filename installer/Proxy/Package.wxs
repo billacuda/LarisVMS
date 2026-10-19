@@ -77,6 +77,7 @@
       <Custom Action="RemoveLegacyInstall" Before="StopServices" Condition="LEGACYINSTALL AND NOT REMOVE~=&quot;ALL&quot;" />
       <Custom Action="SetFailureFlag" After="InstallServices" Condition="NOT REMOVE~=&quot;ALL&quot;" />
       <Custom Action="WriteEndpointConfig" After="InstallFiles" Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="WriteRegistrationKey" After="WriteEndpointConfig" Condition="REGISTRATIONKEY AND NOT REMOVE~=&quot;ALL&quot;" />
       <Custom Action="SaveSettings" Before="InstallFinalize" Condition="NOT REMOVE~=&quot;ALL&quot;" />
       <Custom Action="ForgetSettings" Before="InstallFinalize" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
     </InstallExecuteSequence>

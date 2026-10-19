@@ -9,6 +9,7 @@
 @inject IAuditService AuditService
 @inject IPermissionService PermissionService
 @inject ReleaseCheckState ReleaseCheckState
+@inject LarisVMS.Relay.CertHolder Certificates
 
 <section class="card mb-4" id="settings" aria-labelledby="nodeSettingsTitle">
     <div class="card-header"><h2 class="h6 mb-0" id="nodeSettingsTitle">Updates and registration</h2></div>
@@ -16,6 +17,10 @@
         @if (!string.IsNullOrEmpty(SavedMessage))
         {
             <div class="alert alert-success py-2">@SavedMessage</div>
+        }
+        @if (!string.IsNullOrEmpty(ErrorMessage))
+        {
+            <div class="alert alert-danger py-2">@ErrorMessage</div>
         }
         <EditForm Model="this" FormName="node-settings" OnSubmit="HandleSaveAsync" data-dirty-guard>
             <SettingSection Title="Updates">
@@ -44,15 +49,50 @@
                     </div>
                 </SettingField>
             </SettingSection>
+            <SettingSection Title="Server certificate">
+                <SettingField Label="Server certificate check" Wide HelpLink="/Help/nodes#server-certificate"
+                              Hint="How nodes and proxies check this server's HTTPS certificate. Certificates from a trusted CA always work, including renewed ones.">
+                    <select name="CertificateCheck" class="form-select" style="max-width: 22rem;">
+                        @foreach (var option in Enum.GetValues<LarisVMS.Core.Security.ServerCertificateCheck>())
+                        {
+                            <option value="@option" selected="@(option == CertificateCheck)">@ServerCertificateSettings.Label(option)</option>
+                        }
+                    </select>
+                    @if (Certificates.IsSelfSigned)
+                    {
+                        <div class="alert alert-warning small mt-2 mb-0">
+                            This server uses a self-signed certificate. Nodes trust it on first use. If the certificate
+                            changes, every node and proxy has to be re-registered. Install a certificate from a trusted CA
+                            to avoid this.
+                            @if (Certificates.Current is { } cert && cert.NotAfter.ToUniversalTime() - DateTime.UtcNow < ServerCertificateSettings.ExpiryWarning)
+                            {
+                                <div class="mt-1">
+                                    It expires on <time datetime="@cert.NotAfter.ToUniversalTime().ToUtcIso()" data-local="d">@cert.NotAfter.ToString("d")</time>.
+                                    Nodes keep trusting it after that; browsers show an extra warning.
+                                </div>
+                            }
+                        </div>
+                    }
+                </SettingField>
+            </SettingSection>
             <div class="lv-savebar">
                 <button type="submit" class="btn btn-primary">Save</button>
             </div>
         </EditForm>
+        @if (Certificates.IsSelfSigned)
+        {
+            <EditForm Model="this" FormName="regenerate-server-certificate" OnSubmit="HandleRegenerateAsync" class="mt-2">
+                <button type="submit" class="btn btn-sm btn-outline-danger"
+                        data-confirm="Make a new self-signed certificate? Every node and proxy that trusts the current one has to be re-registered, and browsers have to accept the new one.">
+                    Regenerate self-signed certificate
+                </button>
+            </EditForm>
+        }
     </div>
 </section>
 
 <SectionContent SectionName="PageScripts">
-    <script>
+    <script nonce="@Csp.Value">
         (function () {
             var btn = document.getElementById('regenerateKeyBtn');
             var input = document.getElementById('registrationKeyInput');
@@ -76,6 +116,7 @@
     [SupplyParameterFromForm(FormName = "node-settings")] private string? RegistrationKey { get; set; }
     [SupplyParameterFromForm(FormName = "node-settings")] private bool NodeAutoUpdateEnabled { get; set; }
     [SupplyParameterFromForm(FormName = "node-settings")] private bool ReleaseCheckEnabled { get; set; }
+    [SupplyParameterFromForm(FormName = "node-settings")] private LarisVMS.Core.Security.ServerCertificateCheck CertificateCheck { get; set; }
 
     // Loaded by Nodes.razor (see NodeBuildsPanel's Builds for why).
     [Parameter] public string? InitialRegistrationKey { get; set; }
@@ -83,6 +124,7 @@
     [Parameter] public bool InitialReleaseCheck { get; set; }
 
     private string? SavedMessage;
+    private string? ErrorMessage;
 
     private ClaimsPrincipal User => HttpContext?.User ?? new ClaimsPrincipal(new ClaimsIdentity());
 
@@ -96,10 +138,40 @@
         ReleaseCheckEnabled = InitialReleaseCheck;
     }
 
+    protected override async Task OnInitializedAsync()
+    {
+        if (HttpContext?.Request.HasFormContentType == true && HttpContext.Request.Form["_handler"] == "node-settings") return;
+        CertificateCheck = LarisVMS.Core.Security.ServerCertificateTrust.Parse(
+            await Settings.GetRawAsync(ServerCertificateSettings.CheckKey));
+    }
+
+    private async Task HandleRegenerateAsync()
+    {
+        if (!(await PermissionService.GetGrantedAsync(User)).Has("Settings", "Edit")) return;
+        if (!Certificates.RegenerateSelfSigned())
+        {
+            ErrorMessage = Certificates.LastError ?? "The certificate couldn't be regenerated.";
+            return;
+        }
+        await ServerCertificateSettings.TrackAsync(Certificates, Settings, AuditService);
+        await AuditService.LogAsync("Server.CertificateRegenerated", User.FindFirst(ClaimTypes.NameIdentifier)?.Value, User.Identity?.Name,
+            HttpContext?.Connection.RemoteIpAddress?.ToString(), "Self-signed certificate regenerated");
+        SavedMessage = "A new self-signed certificate is in use. Re-register every node and proxy.";
+    }
+
     private async Task HandleSaveAsync()
     {
         if (!(await PermissionService.GetGrantedAsync(User)).Has("Settings", "Edit")) return;
         var by = User.Identity?.Name;
+
+        // Nodes would lose the server the moment they got this setting.
+        if (CertificateCheck == LarisVMS.Core.Security.ServerCertificateCheck.TrustedOnly && Certificates.IsSelfSigned)
+        {
+            ErrorMessage = "Install a certificate from a trusted CA before choosing \"Trusted certificate only\": nodes would refuse this server's self-signed one.";
+            return;
+        }
+        var oldCertificateCheck = LarisVMS.Core.Security.ServerCertificateTrust.Parse(await Settings.GetRawAsync(ServerCertificateSettings.CheckKey));
+        await Settings.SetGlobalAsync(ServerCertificateSettings.CheckKey, CertificateCheck.ToString(), by);
 
         // Registration key is diffed as a secret — the entry records that it changed, never the key
         // itself, since the audit log is readable by anyone with Logs.View.
@@ -120,7 +192,8 @@
             AuditDiff.Secret("Node.RegistrationKey", oldRegistrationKey,
                 string.IsNullOrWhiteSpace(RegistrationKey) ? oldRegistrationKey : RegistrationKey),
             AuditDiff.Of("NodeAutoUpdate.Enabled", oldAutoUpdate.ToString(), NodeAutoUpdateEnabled.ToString()),
-            AuditDiff.Of(ReleaseCheckService.EnabledKey, oldReleaseCheck.ToString(), ReleaseCheckEnabled.ToString()));
+            AuditDiff.Of(ReleaseCheckService.EnabledKey, oldReleaseCheck.ToString(), ReleaseCheckEnabled.ToString()),
+            AuditDiff.Of("Server certificate check", oldCertificateCheck.ToString(), CertificateCheck.ToString()));
         await AuditService.LogAsync("Settings.Update", User.FindFirst(ClaimTypes.NameIdentifier)?.Value, by,
             HttpContext?.Connection.RemoteIpAddress?.ToString(), details);
 

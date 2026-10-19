@@ -45,18 +45,45 @@ namespace LarisVMS.Installer
                 foreach (var entry in Directory.EnumerateFileSystemEntries(installDir))
                 {
                     if (keep.Contains(Path.GetFileName(entry))) continue;
-                    try
+                    // The CUDA/cuDNN runtime copied next to the AI backend, and the downloaded CUDA
+                    // provider, aren't the script's files: losing them drops detection to DirectML.
+                    if (product.Key == "Node" && string.Equals(Path.GetFileName(entry), "onnxruntime-backends", StringComparison.OrdinalIgnoreCase)
+                        && Directory.Exists(entry))
                     {
-                        if (Directory.Exists(entry)) Directory.Delete(entry, recursive: true);
-                        else File.Delete(entry);
+                        ClearBackendsKeepingCuda(session, entry);
+                        continue;
                     }
-                    catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
-                    {
-                        session.Log("Could not remove " + entry + ": " + ex.Message);
-                    }
+                    TryDelete(session, entry);
                 }
             }
             return ActionResult.Success;
+        }
+
+        private static void ClearBackendsKeepingCuda(Session session, string backendsDir)
+        {
+            foreach (var entry in Directory.EnumerateFileSystemEntries(backendsDir))
+            {
+                if (string.Equals(Path.GetFileName(entry), "cuda", StringComparison.OrdinalIgnoreCase) && Directory.Exists(entry))
+                {
+                    foreach (var inner in Directory.EnumerateFileSystemEntries(entry))
+                        if (Directory.Exists(inner) || !Util.IsMachineCudaFile(inner)) TryDelete(session, inner);
+                    continue;
+                }
+                TryDelete(session, entry);
+            }
+        }
+
+        private static void TryDelete(Session session, string entry)
+        {
+            try
+            {
+                if (Directory.Exists(entry)) Directory.Delete(entry, recursive: true);
+                else File.Delete(entry);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                session.Log("Could not remove " + entry + ": " + ex.Message);
+            }
         }
 
         /// <summary>FFmpeg and the vision service are children of the node; when the node stops
@@ -90,17 +117,18 @@ namespace LarisVMS.Installer
                 if (!Directory.Exists(cudaDir) || !HasNvidiaGpu()) return ActionResult.Success;
 
                 var required = new[] { "cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll", "cufft64_11.dll", "cudnn64_9.dll" };
-                var searchDirs = new List<string> { cudaDir, installDir, Environment.SystemDirectory };
+                var searchDirs = new List<string> { cudaDir, installDir, Util.System64() };
                 searchDirs.AddRange(PathEntries());
                 var missing = required.Where(dll => !searchDirs.Any(d => SafeExists(d, dll))).ToList();
                 if (missing.Count == 0) return ActionResult.Success;
 
                 var sources = CudaSourceDirectories(data["UserLocalAppData"], data["UserAppData"]);
                 var copied = new List<string>();
+                var notFound = new List<string>();
                 foreach (var dll in missing)
                 {
                     var source = sources.FirstOrDefault(d => SafeExists(d, dll));
-                    if (source is null) { session.Log("CUDA dependency not found: " + dll); continue; }
+                    if (source is null) { session.Log("CUDA dependency not found: " + dll); notFound.Add(dll); continue; }
                     var pattern = dll.StartsWith("cudnn", StringComparison.OrdinalIgnoreCase) ? "cudnn*.dll" : dll;
                     foreach (var file in Directory.EnumerateFiles(source, pattern))
                     {
@@ -112,6 +140,23 @@ namespace LarisVMS.Installer
                 if (copied.Count > 0)
                     File.WriteAllLines(Path.Combine(cudaDir, CudaManifest), copied.Distinct(StringComparer.OrdinalIgnoreCase));
                 session.Log("Copied CUDA dependencies: " + string.Join(", ", copied));
+
+                // The two the node can't run CUDA without. Shown as a warning in an interactive
+                // install, and in the log of a quiet one.
+                var blocking = notFound.Where(d => d.StartsWith("cudnn", StringComparison.OrdinalIgnoreCase)
+                    || d.StartsWith("cudart", StringComparison.OrdinalIgnoreCase)).ToList();
+                if (blocking.Count > 0)
+                {
+                    var text = "LarisVMS couldn't find " + string.Join(" and ", blocking) + " on this computer, so AI detection " +
+                        "will run on DirectML, which is much slower than CUDA. Install the CUDA Toolkit 12.x and cuDNN 9.x for " +
+                        "CUDA 12 (developer.nvidia.com/cudnn, or: pip install nvidia-cudnn-cu12), then repair this installation.";
+                    using (var record = new Record(1) { FormatString = "[1]" })
+                    {
+                        record.SetString(1, text);
+                        session.Message(InstallMessage.Warning | (InstallMessage)MessageButtons.OK | (InstallMessage)MessageIcon.Warning, record);
+                    }
+                    session.Log(text);
+                }
             }
             catch (Exception ex)
             {
@@ -164,6 +209,41 @@ namespace LarisVMS.Installer
 
             Directory.CreateDirectory(Util.ProgramDataLaris);
             File.WriteAllText(path, "{\r\n  " + string.Join(",\r\n  ", fields) + "\r\n}\r\n", new UTF8Encoding(false));
+            return ActionResult.Success;
+        }
+
+        /// <summary>Node/proxy: writes the registration key to %ProgramData%\LarisVMS\registration.key,
+        /// readable only by SYSTEM, Administrators, and the service account. The service reads it on
+        /// its first start, registers, and deletes it.</summary>
+        [CustomAction]
+        public static ActionResult WriteRegistrationKey(Session session)
+        {
+            var data = session.CustomActionData;
+            var key = data["Key"];
+            if (string.IsNullOrEmpty(key)) return ActionResult.Success;
+
+            Directory.CreateDirectory(Util.ProgramDataLaris);
+            var path = Path.Combine(Util.ProgramDataLaris, "registration.key");
+            File.WriteAllText(path, key, new UTF8Encoding(false));
+
+            var security = new System.Security.AccessControl.FileSecurity();
+            security.SetAccessRuleProtection(true, false);
+            void Allow(System.Security.Principal.IdentityReference who) => security.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
+                who, System.Security.AccessControl.FileSystemRights.FullControl, System.Security.AccessControl.AccessControlType.Allow));
+            Allow(new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.LocalSystemSid, null));
+            Allow(new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.BuiltinAdministratorsSid, null));
+            var account = data["ServiceAccount"];
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(account))
+                    Allow(new System.Security.Principal.NTAccount(account).Translate(typeof(System.Security.Principal.SecurityIdentifier)));
+                File.SetAccessControl(path, security);
+            }
+            catch (Exception ex) when (ex is System.Security.Principal.IdentityNotMappedException or SystemException)
+            {
+                // The service still has to be able to read it; keep the folder's own permissions.
+                session.Log("Could not restrict registration.key to the service account: " + ex.Message);
+            }
             return ActionResult.Success;
         }
 
@@ -366,7 +446,8 @@ namespace LarisVMS.Installer
         /// install-node.ps1's Get-NativeDllSourceDirectories for why).</summary>
         private static List<string> CudaSourceDirectories(string userLocalAppData, string userAppData)
         {
-            var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            // 64-bit Program Files: this runs in a 32-bit host (see Util.ProgramFiles64).
+            var programFiles = Util.ProgramFiles64();
             var result = new List<string>();
             void AddGlob(string root, Func<string, IEnumerable<string>> expand)
             {

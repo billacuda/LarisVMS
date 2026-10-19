@@ -106,4 +106,22 @@ public class SegmentImportTests
         }
         finally { Directory.Delete(dir, recursive: true); }
     }
+
+    // A file being moved to the archive is still on the primary volume with its row at that path:
+    // the import must see it as known, not as unreported footage (it was re-reported as a duplicate).
+    [Fact]
+    public void AFileMidRelocationIsNeverImported()
+    {
+        var dir = Directory.CreateTempSubdirectory().FullName;
+        try
+        {
+            var start = new DateTime(2026, 10, 17, 3, 12, 0, DateTimeKind.Utc);
+            var moving = WriteFile(dir, "moving.mp4", "data", created: start, written: start.AddMinutes(1));
+            var known = StorageManager.PathsKnownForImport(["other.mp4"], new HashSet<string> { moving.FullName });
+
+            Assert.Empty(StorageManager.SelectImportableSegments(Guid.NewGuid(), [moving], new HashSet<string>(known, StringComparer.OrdinalIgnoreCase)));
+            Assert.Contains("other.mp4", known);
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
 }

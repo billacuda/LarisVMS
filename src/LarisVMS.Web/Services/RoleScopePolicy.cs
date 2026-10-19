@@ -5,10 +5,8 @@ namespace LarisVMS.Web.Services;
 /// <summary>
 /// Pure decision logic behind Admin → Settings → Camera Access's scope-tier enforcement (roles/
 /// permissions overhaul, pass 2). A role's RoleProfile.MaxScopeTier caps how wide a CameraAccess
-/// grant it can be given — Org-tier roles are unrestricted, Site-tier roles can be scoped to a site
-/// (a top-level CameraGroup) or narrower but never to every camera, and Group-tier roles can be
-/// scoped to a non-site group or a single camera but never to a whole site or every camera. A single
-/// Camera scope is always the narrowest possible grant, so every tier can be given one.
+/// grant it can be given: only an Org-tier role can be granted every camera; any role can be granted
+/// any camera group (a site or a group inside one) or single cameras.
 /// </summary>
 public static class RoleScopePolicy
 {
@@ -21,16 +19,15 @@ public static class RoleScopePolicy
         scopeType switch
         {
             CameraAccessScopeType.All => maxScopeTier == RoleScopeTier.Org,
-            CameraAccessScopeType.Group => maxScopeTier != RoleScopeTier.Group || !targetIsSite,
+            CameraAccessScopeType.Group => true,
             _ => true
         };
 
     /// <summary>User-facing reason a denied grant was denied, for the admin page's error message.
     /// Only meaningful when CanGrant returned false for the same arguments.</summary>
     public static string DenialReason(RoleScopeTier maxScopeTier, CameraAccessScopeType scopeType) =>
-        scopeType == CameraAccessScopeType.All
-            ? $"This role is limited to {maxScopeTier} scope and can't be granted every camera."
-            : $"This role is limited to {maxScopeTier} scope and can't be granted a whole site — choose a narrower group or a single camera.";
+        $"This role is limited to {maxScopeTier} scope and can't be granted every camera — choose a camera group or single cameras, " +
+        "or raise the role's scope tier under Settings → Permissions → Roles.";
 
     /// <summary>Pass 3's Roles.Assign tier cap (permission_matrix.txt row "Assign roles &amp;
     /// permissions"): an Org-tier actor can assign any role; anyone else can assign any role except

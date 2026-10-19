@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Identity;
 using LarisVMS.Core.Interfaces;
 
 namespace LarisVMS.Web.Middleware;
@@ -42,6 +44,15 @@ public class SetupMiddleware(RequestDelegate next, IServiceScopeFactory scopeFac
         {
             if (!_setupFinalized && await IsSetupFinalizedAsync()) _setupFinalized = true;
             if (_setupFinalized) { context.Response.Redirect("/"); return; }
+
+            // Once the admin account exists the rest of the wizard (storage, node key, branding) is
+            // only for a signed-in Super Admin. Before this, a wizard abandoned after the Admin step
+            // stayed open to anyone: the node registration key, or repointing the database.
+            if (await IsSetupCompleteAsync() && !await IsSuperAdminAsync(context))
+            {
+                context.Response.Redirect("/Identity/Account/Login?ReturnUrl=" + Uri.EscapeDataString(context.Request.Path + context.Request.QueryString));
+                return;
+            }
         }
 
         if (_setupComplete) { await next(context); return; }
@@ -67,6 +78,16 @@ public class SetupMiddleware(RequestDelegate next, IServiceScopeFactory scopeFac
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         return await scope.ServiceProvider.GetRequiredService<ISetupService>().IsSetupFinalizedAsync();
+    }
+
+    // This runs before UseAuthentication, so it reads the sign-in cookie itself.
+    private async Task<bool> IsSuperAdminAsync(HttpContext context)
+    {
+        var auth = await context.AuthenticateAsync(IdentityConstants.ApplicationScheme);
+        if (auth.Principal?.Identity?.IsAuthenticated != true) return false;
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var granted = await scope.ServiceProvider.GetRequiredService<IPermissionService>().GetGrantedAsync(auth.Principal, context.RequestAborted);
+        return granted.IsAdministrator;
     }
 
     private async Task<bool> IsSetupCompleteAsync()

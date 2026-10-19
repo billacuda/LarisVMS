@@ -319,7 +319,7 @@
             ? s.badges.map(function (b) { return (b.emoji ? b.emoji + ' ' : '') + b.label; }).join(', ')
             : (s.emoji ? s.emoji + ' ' : '') + s.label;
         var at = window.larisvmsTime.parse(s.atUtc) || new Date(NaN);
-        return '<img src="' + src + '" loading="lazy" alt="" class="rounded" onerror="this.style.visibility=\'hidden\'">' +
+        return '<img src="' + src + '" loading="lazy" alt="" class="rounded" data-on-error="invisible">' +
             '<div class="small text-truncate">' + escapeHtml(labels) + '</div>' +
             '<div class="small text-muted text-truncate" title="' + escapeHtml(at.toISOString()) + '">' +
                 escapeHtml(s.cameraName) + ' · ' + escapeHtml(at.toLocaleString()) + '</div>';

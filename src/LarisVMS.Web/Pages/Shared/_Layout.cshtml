@@ -68,7 +68,7 @@
 <html lang="en" data-bs-theme="light">
 <head>
     <meta charset="utf-8" />
-    <script>
+    <script nonce="@Csp.Value">
         // Back/forward must never land on ERR_CACHE_MISS / "Confirm form resubmission". A page
         // rendered as the response to a form POST (a settings page after Save, a form redisplayed
         // with an error) is a POST entry in the browser's history; replacing the entry with its own
@@ -120,7 +120,7 @@
             }
         </style>
     }
-    <script>
+    <script nonce="@Csp.Value">
         // Anti-flash: applies the stored theme (or the system preference, when unset — 'auto' is
         // the default) before first paint.
         (function () {
@@ -132,6 +132,7 @@
             }
         })();
     </script>
+    <script src="~/js/inline-actions.js" asp-append-version="true"></script>
     @await RenderSectionAsync("Styles", required: false)
 </head>
 <body>
@@ -182,6 +183,7 @@
                 @if (showBookmarks)
                 {
                     <a class="lv-navitem@(IsActive("/Bookmarks") ? " active" : "")" href="/Bookmarks"><span aria-hidden="true">🔖</span> Bookmarks</a>
+                    <a class="lv-navitem@(IsActive("/EvidenceLocks") ? " active" : "")" href="/EvidenceLocks"><span aria-hidden="true">🔒</span> Evidence locks</a>
                 }
                 @if (showSnapshots)
                 {
@@ -209,6 +211,7 @@
                 }
                 @if (isAuthenticated)
                 {
+                    <a class="lv-navitem@(IsActive("/Notifications") ? " active" : "")" href="/Notifications"><span aria-hidden="true">🔔</span> Notifications</a>
                     <a class="lv-navitem@(IsActive("/Help") ? " active" : "")" href="/Help"><span aria-hidden="true">❓</span> Help</a>
                 }
             </nav>
@@ -232,7 +235,7 @@
                            title="See what's new in @availableRelease.Version">✨ <span class="d-none d-sm-inline">Version </span>@availableRelease.Version<span class="d-none d-sm-inline"> is available</span></a>
                     }
                     <button class="lv-darktoggle" id="themeToggle" type="button"
-                            onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme"><span id="themeIcon" aria-hidden="true">🌙</span></button>
+                            data-action="toggle-theme" title="Toggle theme" aria-label="Toggle theme"><span id="themeIcon" aria-hidden="true">🌙</span></button>
                     <partial name="_LoginPartial" />
                 </div>
             </div>
@@ -253,6 +256,7 @@
     <script src="~/js/user-preferences.js" asp-append-version="true"></script>
     <script src="~/js/theme.js" asp-append-version="true"></script>
     <script src="~/js/pwa.js" asp-append-version="true"></script>
+    <script src="~/js/notifications.js" asp-append-version="true"></script>
     <script src="~/js/sortable-table.js" asp-append-version="true"></script>
     <script src="~/js/list-filter.js" asp-append-version="true"></script>
     <script src="~/js/table-pagination.js" asp-append-version="true"></script>

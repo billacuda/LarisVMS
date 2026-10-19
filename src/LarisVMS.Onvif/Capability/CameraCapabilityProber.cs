@@ -67,6 +67,17 @@ public class CameraCapabilityProber(OnvifDeviceClient deviceClient, OnvifMediaCl
             HasRelayOutputs: capabilities.DeviceIOXAddr is not null,
             HasDigitalInputs: capabilities.DeviceIOXAddr is not null,
             Profiles: profiles,
-            RawXAddrs: capabilities.RawCategoryXAddrs);
+            RawXAddrs: WithMedia2(capabilities.RawCategoryXAddrs, services));
+    }
+
+    /// <summary>GetCapabilities predates media2, so its category map never has it — the media2 XAddr
+    /// only comes from GetServices. It's stored under "Media2" alongside the others so callers (device
+    /// settings) find every service address in one place.</summary>
+    private static IReadOnlyDictionary<string, string> WithMedia2(
+        IReadOnlyDictionary<string, string> raw, IReadOnlyList<OnvifServiceEntry> services)
+    {
+        var media2 = services.FirstOrDefault(s => s.Namespace.Contains("ver20/media/wsdl", StringComparison.OrdinalIgnoreCase));
+        if (media2 is null) return raw;
+        return new Dictionary<string, string>(raw) { ["Media2"] = media2.XAddr.ToString() };
     }
 }

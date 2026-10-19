@@ -105,6 +105,9 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     // against the bar it has to clear, instead of inferred.
     private readonly float _trackerNewTrackThreshold;
     private readonly MovementClassifier _movement;
+    // Detection.MovingObjects: the kinds of object that can count as moving. Anything else (a potted
+    // plant whose box keeps changing shape, say) is only ever idle.
+    private readonly HashSet<string> _movingObjects;
     private readonly HttpClient _http;
     private readonly ILogger _logger;
     private readonly CancellationTokenSource _cts = new();
@@ -281,10 +284,12 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     // about an object's real color.
     private readonly TrackObjectBook _objects = new();
     private readonly SpeedTrapMeter _speedMeter;
-    // Tracks a speed trap has timed. Covering the measured distance between the gates is proof of
-    // movement in itself, so these count as Moving even when the centroid rule hasn't fired yet (a
-    // vehicle driving straight toward the camera grows on screen while its centre barely moves).
-    private readonly HashSet<int> _speedMeasuredTrackIds = [];
+    // A speed reading counts only for a track the movement rule called moving within this long. (A
+    // reading used to make a track moving on its own; the movement rule now catches a vehicle coming
+    // straight at the camera by its growing box, and a reading alone can come from a jumping box.)
+    private static readonly TimeSpan SpeedNeedsMovementWithin = TimeSpan.FromSeconds(3);
+    // A hidden track rejoins only if it was moving this recently (it has been out of sight meanwhile).
+    private static readonly TimeSpan RejoinNeedsMovementWithin = TimeSpan.FromSeconds(10);
     private bool _frameMonochrome;
     private DateTime _monochromeCheckedUtc = DateTime.MinValue;
     private static readonly TimeSpan MonochromeCheckInterval = TimeSpan.FromSeconds(1);
@@ -308,15 +313,23 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         _speedMeter = new SpeedTrapMeter(request.SpeedTraps ?? []);
         _http = http;
 
-        // Detection.RejectMotionJitter (per-camera) off => the classifier keeps its original single
-        // oldest-vs-newest centroid comparison (the default / fast revert path); on => averaged
-        // endpoints + the Detection.MotionJitterPixels absolute floor so a parked vehicle's box
-        // jitter can't read as Moving.
+        // Detection.MovementMode (per camera): Standard decides from the shape of each track's recent
+        // path, scaled to its box size (see MovementMode.Standard); Legacy keeps the pre-0.218 rule,
+        // where Detection.RejectMotionJitter picks between its two variants. MotionJitterPixels is
+        // the smallest travel that ever counts, in both.
         _movement = new MovementClassifier(new MovementClassifierOptions
         {
+            Mode = request.MovementMode == "Legacy" ? MovementMode.Legacy : MovementMode.Standard,
+            Sensitivity = request.MovementSensitivity switch
+            {
+                "Low" => MovementSensitivity.Low,
+                "High" => MovementSensitivity.High,
+                _ => MovementSensitivity.Normal,
+            },
             JitterRejectionEnabled = request.RejectMotionJitter,
             MinNetDisplacementPixels = request.MotionJitterPixels,
         });
+        _movingObjects = CocoCategoryMap.ParseMovingObjects(request.MovingObjects);
         _departureGrace = TimeSpan.FromSeconds(Math.Clamp(request.DepartureGraceSeconds, 1, 10));
         // The camera's own name rather than its GUID — see VisionStartCameraRequest.DisplayName. The
         // full id still reaches the log on the pipeline-start line below and on every failure, so a
@@ -705,7 +718,18 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
 
             MarkInferenceOk();
 
-            var tracked = _tracker.Update(detections);
+            var tracked = _tracker.Update(detections, (hiddenId, index) => CanRejoin(hiddenId, detections[index], frame, captured.Value.CapturedUtc));
+            foreach (var (fromId, intoId, framesHidden) in _tracker.Rejoins)
+            {
+                if (fromId != 0)
+                {
+                    _objects.Merge(fromId, intoId);
+                    if (_snapshottedTrackIds.Remove(fromId)) _snapshottedTrackIds.Add(intoId);
+                }
+                _logger.LogInformation("Track {TrackId} ({Label}) back in view after {Frames} frame(s){Joined}.",
+                    intoId, _labelArbiter.LabelOf(intoId) ?? "object", framesHidden,
+                    fromId != 0 ? $"; joined new track {fromId}" : "");
+            }
 
             if (detections.Count > _cadencePeakDetections) _cadencePeakDetections = detections.Count;
             if (tracked.Count > _cadencePeakTracked) _cadencePeakTracked = tracked.Count;
@@ -729,11 +753,12 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             // a MovementWindow's worth of samples. See ByteTracker.LiveTrackIds.
             var liveTrackIds = _tracker.LiveTrackIds;
             _movement.Prune(liveTrackIds);
+            foreach (var missed in _movement.TakeMissedTracks())
+                _logger.LogInformation("Movement not detected for {Summary}.", missed);
             _labelArbiter.Prune(liveTrackIds);
             _snapshottedTrackIds.RemoveWhere(id => !liveTrackIds.Contains(id));
             _objects.Prune(liveTrackIds, now);
             _speedMeter.Prune(liveTrackIds);
-            _speedMeasuredTrackIds.RemoveWhere(id => !liveTrackIds.Contains(id));
             if (_request.ClassifyColors && now - _monochromeCheckedUtc >= MonochromeCheckInterval)
             {
                 _monochromeCheckedUtc = now;
@@ -752,6 +777,10 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             // all of them at once.
             var movingThisFrame = new List<(string Label, YoloDotNet.Models.ObjectDetection Detection)>();
             var newMovingTrack = false;
+
+            // Every box in this frame, so the classifier can tell an object's edge from one hidden
+            // behind something else being tracked.
+            _movement.BeginFrame(tracked.Where(d => d.Id is not null).Select(d => (d.Id!.Value, d.BoundingBox)));
 
             foreach (var detection in tracked)
             {
@@ -775,20 +804,33 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
                 // before the tracker (and therefore this loop) ever sees it. Normalizing against the
                 // wrong dimensions would silently misplace every box on a non-Stretch camera.
                 var observation = _movement.Observe(trackId, detection.BoundingBox, detection.Confidence,
-                    _sourceWidth, _sourceHeight, now);
+                    _sourceWidth, _sourceHeight, now, label);
 
                 // Speed traps time the box's bottom centre — where the object meets the ground the
-                // gates are drawn on. Done before deciding motionPresent: a completed measurement
-                // makes the track count as moving (see _speedMeasuredTrackIds).
+                // gates are drawn on. A reading only counts for a track the movement rule has called
+                // moving in the last few seconds: a parked car's box that jumps (cut at a slice seam, or
+                // its track hopping to the car next to it) can cross both lines too, and a speed must
+                // never make something moving on its own.
                 var box = detection.BoundingBox;
+                var classifiedMoving = observation.State == MovementState.Moving;
                 SpeedMeasurement? speed = null;
                 if (_speedMeter.HasTraps
                     && _speedMeter.Observe(trackId, (box.Left + box.Width / 2.0) / _sourceWidth, box.Bottom / (double)_sourceHeight, now) is { } measured)
                 {
-                    speed = measured;
-                    _speedMeasuredTrackIds.Add(trackId);
+                    var recentlyMoving = classifiedMoving
+                        || (_lastMovingAtByTrack.TryGetValue(trackId, out var movedAt) && now - movedAt < SpeedNeedsMovementWithin);
+                    if (recentlyMoving) speed = measured;
+                    else
+                        _logger.LogInformation("Speed reading ignored for track {TrackId} ({Label}): it wasn't moving.", trackId, label);
                 }
-                var moving = observation.State == MovementState.Moving || _speedMeasuredTrackIds.Contains(trackId);
+                var moving = classifiedMoving && CocoCategoryMap.CountsAsMoving(_movingObjects, category, label);
+                if (observation.Reason is { } why)
+                {
+                    // Once per track, when it first counts as moving: which rule decided it and where,
+                    // so a parked object reported as moving can be traced to its cause.
+                    _logger.LogInformation("Track {TrackId} ({Label}) moving: {Rule}, box {W}x{H} at ({X},{Y}).",
+                        trackId, label, why, box.Width, box.Height, box.Left, box.Top);
+                }
 
                 // Idle tracks never open/extend a span unless ReportIdleDetections is on — decision
                 // 7's "not interested in static objects" default. A Moving track always does.
@@ -806,7 +848,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
                     if (_objects.Observe(trackId, label, now,
                             box.Left / (double)_sourceWidth, box.Top / (double)_sourceHeight,
                             box.Width / (double)_sourceWidth, box.Height / (double)_sourceHeight,
-                            detection.Confidence)
+                            detection.Confidence, moving)
                         && _request.ClassifyColors)
                     {
                         _objects.SetColors(trackId, now, ClassifyColors(frame, box, category));
@@ -1185,6 +1227,18 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             ? "decode delay n/a (no arrival stamps)"
             : $"decode delay avg {decodeAvgMs:F0} ms, max {decodeMaxMs:F0} ms";
 
+        // New tracks in the window, and how many never got a second frame: many dropped means objects
+        // are lost before any box shows (detection running too few frames a second for how fast they move).
+        var tracker = _tracker;
+        var trackSummary = $" Tracks: {tracker.TracksStarted - _cadenceTracksStarted} started, " +
+            $"{tracker.TracksConfirmed - _cadenceTracksConfirmed} confirmed, " +
+            $"{tracker.TracksDroppedUnconfirmed - _cadenceTracksDropped} dropped after one frame, " +
+            $"{tracker.TracksRejoined - _cadenceTracksRejoined} back in view after being hidden.";
+        _cadenceTracksStarted = tracker.TracksStarted;
+        _cadenceTracksConfirmed = tracker.TracksConfirmed;
+        _cadenceTracksDropped = tracker.TracksDroppedUnconfirmed;
+        _cadenceTracksRejoined = tracker.TracksRejoined;
+
         _logger.LogInformation(
             "Camera {Camera} detection cadence over {Seconds:F0}s: capture {CaptureFps:F1} fps, " +
             "inference {InferenceFps:F1} fps, {Dropped} frame(s) dropped ({DropPercent:F0}%), " +
@@ -1193,7 +1247,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             "to start a track). Live boxes now: {LiveBoxes}. Process-wide over the same window: " +
             "{Gen2} gen2 collection(s), {AllocatedMbPerSec:F0} MB/s allocated, {GcPauseMs:F0} ms paused in GC, " +
             "memory load {MemoryLoad:F0}% (GC goes aggressive at {HighLoad:F0}%), heap {HeapMb:F0} MB." +
-            "{SliceSummary}{FailureSummary}{TransportSummary}",
+            "{TrackSummary}{SliceSummary}{FailureSummary}{TransportSummary}",
             _request.DisplayName, seconds, deltaPublished / seconds, deltaConsumed / seconds,
             deltaPublished - deltaConsumed,
             deltaPublished == 0 ? 0 : (deltaPublished - deltaConsumed) * 100.0 / deltaPublished,
@@ -1201,8 +1255,10 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             peakDetections, peakTracked, bestScore, _trackerNewTrackThreshold, liveSummary,
             deltaGen2, deltaAllocated / seconds / (1024.0 * 1024.0), deltaGcPause.TotalMilliseconds,
             memoryLoadPercent, highLoadPercent, gcInfo.HeapSizeBytes / (1024.0 * 1024.0),
-            sliceSummary, failureSummary, transportSummary);
+            trackSummary, sliceSummary, failureSummary, transportSummary);
     }
+
+    private int _cadenceTracksStarted, _cadenceTracksConfirmed, _cadenceTracksDropped, _cadenceTracksRejoined;
 
     /// <summary>Pass G: crops one JPEG from the frame the model just ran on, covering the union of
     /// every currently-Moving box, and becomes the authoritative snapshot for every one of those
@@ -1368,6 +1424,22 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
         }
 
         _stagedSnapshotScore = frameScore;
+    }
+
+    /// <summary>Whether a detection coming into view may be hidden track <paramref name="hiddenId"/>
+    /// (ByteTracker step 4c, which has already checked it lies ahead on its line): the track was
+    /// really moving, by the movement rules, not just a box that drifted; the same kind of object;
+    /// and, when both can be told, a matching color.</summary>
+    private bool CanRejoin(int hiddenId, YoloDotNet.Models.ObjectDetection detection, byte[] frame, DateTime nowUtc)
+    {
+        if (!_lastMovingAtByTrack.TryGetValue(hiddenId, out var movedAt) || nowUtc - movedAt > RejoinNeedsMovementWithin)
+            return false;
+        var hiddenLabel = _labelArbiter.LabelOf(hiddenId);
+        var category = CocoCategoryMap.Resolve(detection.Label?.Name ?? "object");
+        if (hiddenLabel is not null && !string.Equals(CocoCategoryMap.Resolve(hiddenLabel), category, StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (!_request.ClassifyColors || _frameMonochrome || _objects.ColorOf(hiddenId) is not { } hiddenColor) return true;
+        return ObjectColorClassifier.CouldBeSameColor(hiddenColor, ClassifyColors(frame, detection.BoundingBox, category).Primary);
     }
 
     /// <summary>Colors of one detection, read from the frame buffer the model just ran on. The box is

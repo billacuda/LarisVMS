@@ -2,6 +2,7 @@
 @attribute [Authorize("Cameras.Edit")]
 @using LarisVMS.Core.Interfaces
 @inject ICameraService CameraService
+@inject ICameraAccessService CameraAccess
 @inject NavigationManager Nav
 
 <PageTitle>Event tags: @CameraName - @AppName</PageTitle>
@@ -71,8 +72,8 @@
 </div>
 
 <SectionContent SectionName="PageScripts">
-    <script src="/js/event-tag-rules-editor.js"></script>
-    <script>
+    <PageScript Src="/js/event-tag-rules-editor.js" />
+    <script nonce="@Csp.Value">
         window.larisvmsEventTagRulesEditor.init({
             cameraId: '@CameraId',
             listPanelId: 'eventTagListPanel',
@@ -102,10 +103,16 @@
     private Guid CameraId { get; set; }
     private string CameraName { get; set; } = string.Empty;
 
+    [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+
     protected override async Task OnInitializedAsync()
     {
         var camera = await CameraService.GetAsync(Id);
         if (camera is null) { Nav.NavigateTo("/Cameras", forceLoad: true); return; }
+        // Needs Configure access to this camera, like its other settings pages.
+        var user = AuthenticationStateTask is not null ? (await AuthenticationStateTask).User : new System.Security.Claims.ClaimsPrincipal();
+        var configurable = await CameraAccess.GetAccessibleCameraIdsAsync(user, LarisVMS.Core.Enums.CameraAccessActions.Configure);
+        if (configurable is not null && !configurable.Contains(Id)) { Nav.NavigateTo("/Identity/Account/AccessDenied", forceLoad: true); return; }
 
         CameraId = Id;
         CameraName = camera.Name;

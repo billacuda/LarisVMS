@@ -2014,6 +2014,13 @@
                     var url = '/api/cameras/' + primaryCameraId + '/bookmarks?from=' + encodeURIComponent(fromIso) + '&to=' + encodeURIComponent(toIso);
                     return fetch(url).then(function (r) { return r.ok ? r.json() : []; }).catch(function () { return []; });
                 },
+                // Evidence locks on the per-camera timeline (same pattern as bookmarks), including
+                // removed locks still in their grace period — their footage is still protected.
+                getLocks: function (fromIso, toIso) {
+                    if (!primaryCameraId) return Promise.resolve([]);
+                    var url = '/api/evidence-locks?cameraId=' + primaryCameraId + '&fromUtc=' + encodeURIComponent(fromIso) + '&toUtc=' + encodeURIComponent(toIso);
+                    return fetch(url).then(function (r) { return r.ok ? r.json() : []; }).catch(function () { return []; });
+                },
                 // Speed-trap measurement markers, per-camera timeline only (same pattern as bookmarks).
                 getSpeedMarkers: function (fromIso, toIso) {
                     if (!primaryCameraId) return Promise.resolve([]);
@@ -2089,6 +2096,7 @@
         wireArrowKeyNudge();
         wireExportPanel();
         wireBookmark();
+        wireLockPanel();
 
         if (o.deepLinkCameraId) {
             // A deliberate specific navigation (Bookmarks/Snapshots "▶ Play") outranks "whichever
@@ -2152,6 +2160,79 @@
         }
     }
 
+    // ── Camera picker (Export and Lock panels) ─────────────────────────────
+    // A dropdown (<details class="column-picker">) with one checkbox per camera, so a site with many
+    // cameras doesn't spread them across the panel. The summary names what's chosen.
+    function fillCameraPicker(menuEl, checkClass, isChecked, decorate) {
+        var picker = menuEl.closest('details');
+        if (picker) picker.open = false;
+        menuEl.innerHTML = '';
+        var ids = Object.keys(cameraById);
+        if (ids.length > 1) {
+            var bar = document.createElement('div');
+            bar.className = 'small mb-1 pb-1 border-bottom';
+            [['Select all', true], ['None', false]].forEach(function (pair, i) {
+                if (i) bar.appendChild(document.createTextNode(' · '));
+                var b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'btn btn-link btn-sm p-0 align-baseline';
+                b.textContent = pair[0];
+                b.addEventListener('click', function () {
+                    Array.prototype.forEach.call(menuEl.querySelectorAll('.' + checkClass), function (cb) { cb.checked = pair[1]; });
+                    updateCameraPickerSummary(menuEl, checkClass);
+                });
+                bar.appendChild(b);
+            });
+            menuEl.appendChild(bar);
+        }
+        ids.forEach(function (id) {
+            var cam = cameraById[id];
+            var row = document.createElement('div');
+            row.className = 'd-flex align-items-center gap-2';
+            var label = document.createElement('label');
+            label.className = 'form-check mb-0 flex-grow-1 text-truncate';
+            var input = document.createElement('input');
+            input.type = 'checkbox';
+            input.className = 'form-check-input ' + checkClass;
+            input.value = id;
+            input.checked = isChecked(id);
+            input.addEventListener('change', function () { updateCameraPickerSummary(menuEl, checkClass); });
+            var span = document.createElement('span');
+            span.className = 'form-check-label small';
+            span.textContent = cam ? cam.name : id;
+            label.appendChild(input);
+            label.appendChild(span);
+            row.appendChild(label);
+            if (decorate) decorate(id, row, input);
+            menuEl.appendChild(row);
+        });
+        updateCameraPickerSummary(menuEl, checkClass);
+    }
+
+    function updateCameraPickerSummary(menuEl, checkClass) {
+        var picker = menuEl.closest('details');
+        var summary = picker && picker.querySelector('summary');
+        if (!summary) return;
+        var names = Array.prototype.slice.call(menuEl.querySelectorAll('.' + checkClass + ':checked')).map(function (cb) {
+            var cam = cameraById[cb.value];
+            return cam ? cam.name : cb.value;
+        });
+        summary.textContent = names.length === 0 ? 'Choose cameras'
+            : names.length === 1 ? names[0]
+            : names[0] + ' + ' + (names.length - 1) + ' more';
+        summary.title = names.join(', ');
+    }
+
+    // Closes the dropdown on a click outside it, as column-picker.js does, except inside a modal: the
+    // redaction editor opens over it.
+    function wireCameraPicker(menuEl) {
+        var picker = menuEl && menuEl.closest('details');
+        if (!picker) return;
+        document.addEventListener('click', function (e) {
+            if (picker.open && !picker.contains(e.target) && !(e.target.closest && e.target.closest('.modal'))) picker.open = false;
+        });
+    }
+
     // ── Export (multi-camera video export trigger) ──────────────────────────
     // Small inline form, not a modal — checkboxes for every camera on this account (not just
     // whatever the currently selected view happens to render — with no view picked, or a
@@ -2170,6 +2251,8 @@
             panel.classList.toggle('d-none');
         });
 
+        wireCameraPicker(opts.exportCamerasId && document.getElementById(opts.exportCamerasId));
+
         var submitBtn = opts.exportSubmitId && document.getElementById(opts.exportSubmitId);
         if (submitBtn) submitBtn.addEventListener('click', submitExport);
     }
@@ -2181,55 +2264,38 @@
     function populateExportPanel() {
         var camerasEl = opts.exportCamerasId && document.getElementById(opts.exportCamerasId);
         if (camerasEl) {
-            camerasEl.innerHTML = '';
             // Checked by default only for cameras in the currently selected view (the "export what
             // I'm looking at" common case) — every other camera is still listed, just unchecked,
             // rather than omitted, so picking additional/different cameras is one click away.
-            Object.keys(cameraById).forEach(function (id) {
-                var cam = cameraById[id];
-                var wrap = document.createElement('span');
-                wrap.className = 'd-inline-flex align-items-center gap-1';
-                var label = document.createElement('label');
-                label.className = 'form-check form-check-inline mb-0 me-0';
-                var input = document.createElement('input');
-                input.type = 'checkbox';
-                input.className = 'form-check-input pbExportCameraCheck';
-                input.value = id;
-                input.checked = !!tiles[id];
-                var span = document.createElement('span');
-                span.className = 'form-check-label small';
-                span.textContent = cam ? cam.name : id;
-                label.appendChild(input);
-                label.appendChild(span);
-                wrap.appendChild(label);
+            fillCameraPicker(camerasEl, 'pbExportCameraCheck', function (id) { return !!tiles[id]; }, function (id, row, input) {
                 // Areas to black out in this camera's export, drawn over a frame from the start time.
-                if (window.larisvmsRedactionEditor) {
-                    var redactBtn = document.createElement('button');
-                    redactBtn.type = 'button';
-                    redactBtn.className = 'btn btn-link btn-sm p-0 me-2';
-                    redactBtn.title = 'Black out areas in this camera’s export';
-                    var refreshLabel = function () {
-                        var n = (exportRedactions[id] || []).length;
-                        redactBtn.textContent = n ? '✏ ' + n + ' redacted' : '✏ Redact';
-                    };
-                    refreshLabel();
-                    redactBtn.addEventListener('click', function () {
-                        var fromEl = opts.exportFromId && document.getElementById(opts.exportFromId);
-                        var fromMs = fromEl ? new Date(fromEl.value).getTime() : playheadMs;
-                        window.larisvmsRedactionEditor.open({
-                            title: cam ? cam.name : id,
-                            imageUrl: '/playback-thumbnail/' + id + '?atUtc=' + encodeURIComponent(new Date(isFinite(fromMs) ? fromMs : playheadMs).toISOString()) + '&exact=true',
-                            polygons: exportRedactions[id] || []
-                        }).then(function (polygons) {
-                            if (!polygons) return;
-                            if (polygons.length) { exportRedactions[id] = polygons; input.checked = true; }
-                            else delete exportRedactions[id];
-                            refreshLabel();
-                        });
+                if (!window.larisvmsRedactionEditor) return;
+                var cam = cameraById[id];
+                var redactBtn = document.createElement('button');
+                redactBtn.type = 'button';
+                redactBtn.className = 'btn btn-link btn-sm p-0 text-nowrap';
+                redactBtn.title = 'Black out areas in this camera’s export';
+                var refreshLabel = function () {
+                    var n = (exportRedactions[id] || []).length;
+                    redactBtn.textContent = n ? '✏ ' + n + ' redacted' : '✏ Redact';
+                };
+                refreshLabel();
+                redactBtn.addEventListener('click', function () {
+                    var fromEl = opts.exportFromId && document.getElementById(opts.exportFromId);
+                    var fromMs = fromEl ? new Date(fromEl.value).getTime() : playheadMs;
+                    window.larisvmsRedactionEditor.open({
+                        title: cam ? cam.name : id,
+                        imageUrl: '/playback-thumbnail/' + id + '?atUtc=' + encodeURIComponent(new Date(isFinite(fromMs) ? fromMs : playheadMs).toISOString()) + '&exact=true',
+                        polygons: exportRedactions[id] || []
+                    }).then(function (polygons) {
+                        if (!polygons) return;
+                        if (polygons.length) { exportRedactions[id] = polygons; input.checked = true; }
+                        else delete exportRedactions[id];
+                        refreshLabel();
+                        updateCameraPickerSummary(camerasEl, 'pbExportCameraCheck');
                     });
-                    wrap.appendChild(redactBtn);
-                }
-                camerasEl.appendChild(wrap);
+                });
+                row.appendChild(redactBtn);
             });
         }
 
@@ -2385,6 +2451,143 @@
             if (timeline) timeline.reload();
         }).catch(function (err) {
             setStatus('Failed to save bookmark: ' + (err && err.message ? err.message : err), 'danger');
+        }).finally(function () {
+            if (submitBtn) submitBtn.disabled = false;
+        });
+    }
+
+    // ── Evidence lock ─────────────────────────────────────────────────────
+    // Same inline-panel shape as Export: cameras (pre-checked for what's on screen), a range around
+    // the playhead, how long to keep it, and a reason. Longer than 30 days shows a storage warning
+    // with a shortcut to export the same range instead. Absent from the page (no button) for users
+    // without the Evidence locks permission.
+    var LONG_LOCK_DAYS = 30;
+
+    function wireLockPanel() {
+        var btn = opts.lockBtnId && document.getElementById(opts.lockBtnId);
+        var panel = opts.lockPanelId && document.getElementById(opts.lockPanelId);
+        if (!btn || !panel) return;
+
+        btn.addEventListener('click', function () {
+            var wasHidden = panel.classList.contains('d-none');
+            if (wasHidden) populateLockPanel();
+            panel.classList.toggle('d-none');
+        });
+
+        var durationEl = document.getElementById(opts.lockDurationId);
+        var untilEl = document.getElementById(opts.lockUntilId);
+        if (durationEl) durationEl.addEventListener('change', updateLockWarning);
+        if (untilEl) untilEl.addEventListener('change', updateLockWarning);
+
+        var exportInsteadBtn = document.getElementById(opts.lockExportInsteadId);
+        if (exportInsteadBtn) exportInsteadBtn.addEventListener('click', exportLockRangeInstead);
+
+        wireCameraPicker(document.getElementById(opts.lockCamerasId));
+
+        var submitBtn = document.getElementById(opts.lockSubmitId);
+        if (submitBtn) submitBtn.addEventListener('click', submitLock);
+    }
+
+    function populateLockPanel() {
+        var camerasEl = document.getElementById(opts.lockCamerasId);
+        if (camerasEl) fillCameraPicker(camerasEl, 'pbLockCameraCheck', function (id) { return id === primaryCameraId; });
+        var fromEl = document.getElementById(opts.lockFromId);
+        var toEl = document.getElementById(opts.lockToId);
+        var nowMs = Date.now();
+        if (fromEl) fromEl.value = msToLocalDatetimeInputValue(playheadMs - 5 * 60 * 1000);
+        if (toEl) toEl.value = msToLocalDatetimeInputValue(Math.min(playheadMs + 5 * 60 * 1000, nowMs));
+        var reasonEl = document.getElementById(opts.lockReasonId);
+        if (reasonEl) reasonEl.value = '';
+        var statusEl = document.getElementById(opts.lockStatusId);
+        if (statusEl) { statusEl.textContent = ''; statusEl.className = 'small'; }
+        updateLockWarning();
+    }
+
+    // The chosen expiry as ms, null for indefinite, or NaN when "until a date" has no date yet.
+    function lockExpiryMs() {
+        var duration = (document.getElementById(opts.lockDurationId) || {}).value || '7d';
+        if (duration === 'indefinite') return null;
+        if (duration === 'custom') {
+            var untilEl = document.getElementById(opts.lockUntilId);
+            return untilEl && untilEl.value ? new Date(untilEl.value + 'T23:59:59').getTime() : NaN;
+        }
+        return Date.now() + parseInt(duration, 10) * 24 * 60 * 60 * 1000;
+    }
+
+    function updateLockWarning() {
+        var duration = (document.getElementById(opts.lockDurationId) || {}).value;
+        var untilWrap = document.getElementById(opts.lockUntilWrapId);
+        if (untilWrap) untilWrap.classList.toggle('d-none', duration !== 'custom');
+        var expiry = lockExpiryMs();
+        var long = expiry === null || (isFinite(expiry) && expiry - Date.now() > LONG_LOCK_DAYS * 24 * 60 * 60 * 1000);
+        var warning = document.getElementById(opts.lockWarningId);
+        if (warning) warning.classList.toggle('d-none', !long);
+    }
+
+    // Hands the same cameras and range to the Export panel, which is the better home for footage
+    // that has to be kept a long time.
+    function exportLockRangeInstead() {
+        var exportPanel = opts.exportPanelId && document.getElementById(opts.exportPanelId);
+        var lockPanel = document.getElementById(opts.lockPanelId);
+        if (!exportPanel) return;
+        var chosen = Array.prototype.slice.call(document.querySelectorAll('.pbLockCameraCheck:checked')).map(function (cb) { return cb.value; });
+        var fromValue = (document.getElementById(opts.lockFromId) || {}).value;
+        var toValue = (document.getElementById(opts.lockToId) || {}).value;
+        populateExportPanel();
+        Array.prototype.forEach.call(document.querySelectorAll('.pbExportCameraCheck'), function (cb) { cb.checked = chosen.indexOf(cb.value) !== -1; });
+        var exportCamerasEl = opts.exportCamerasId && document.getElementById(opts.exportCamerasId);
+        if (exportCamerasEl) updateCameraPickerSummary(exportCamerasEl, 'pbExportCameraCheck');
+        var fromEl = opts.exportFromId && document.getElementById(opts.exportFromId);
+        var toEl = opts.exportToId && document.getElementById(opts.exportToId);
+        if (fromEl && fromValue) fromEl.value = fromValue;
+        if (toEl && toValue) toEl.value = toValue;
+        exportPanel.classList.remove('d-none');
+        if (lockPanel) lockPanel.classList.add('d-none');
+        exportPanel.scrollIntoView({ block: 'nearest' });
+    }
+
+    function submitLock() {
+        var statusEl = document.getElementById(opts.lockStatusId);
+        var submitBtn = document.getElementById(opts.lockSubmitId);
+        function setStatus(text, kind) {
+            if (!statusEl) return;
+            statusEl.textContent = text;
+            statusEl.className = 'small' + (kind ? ' alert alert-' + kind + ' py-1 px-2 mb-0' : '');
+        }
+
+        var cameraIds = Array.prototype.slice.call(document.querySelectorAll('.pbLockCameraCheck:checked')).map(function (cb) { return cb.value; });
+        if (cameraIds.length === 0) { setStatus('Select at least one camera.', 'danger'); return; }
+        var fromMs = new Date((document.getElementById(opts.lockFromId) || {}).value).getTime();
+        var toMs = new Date((document.getElementById(opts.lockToId) || {}).value).getTime();
+        if (!isFinite(fromMs) || !isFinite(toMs) || toMs <= fromMs) { setStatus('End time must be after start time.', 'danger'); return; }
+        var reason = ((document.getElementById(opts.lockReasonId) || {}).value || '').trim();
+        if (!reason) { setStatus('Enter a reason for the lock.', 'danger'); return; }
+        var duration = (document.getElementById(opts.lockDurationId) || {}).value || '7d';
+        var expiry = lockExpiryMs();
+        if (duration === 'custom' && !isFinite(expiry)) { setStatus('Choose the date the lock should end.', 'danger'); return; }
+
+        setStatus('Locking…', null);
+        if (submitBtn) submitBtn.disabled = true;
+        fetch('/api/evidence-locks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                cameraIds: cameraIds,
+                fromUtc: new Date(fromMs).toISOString(),
+                toUtc: new Date(toMs).toISOString(),
+                duration: duration,
+                customUntilUtc: duration === 'custom' ? new Date(expiry).toISOString() : null,
+                reason: reason
+            })
+        }).then(function (resp) {
+            if (!resp.ok) return resp.json().then(function (p) { throw new Error((p && (p.detail || p.title)) || ('HTTP ' + resp.status)); },
+                function () { throw new Error('HTTP ' + resp.status); });
+            return resp.json();
+        }).then(function (created) {
+            setStatus('Locked ' + created.length + ' camera' + (created.length === 1 ? '' : 's') + '. See the Evidence locks page.', 'success');
+            if (timeline) timeline.reload();
+        }).catch(function (err) {
+            setStatus('Couldn’t lock the footage: ' + (err && err.message ? err.message : err), 'danger');
         }).finally(function () {
             if (submitBtn) submitBtn.disabled = false;
         });

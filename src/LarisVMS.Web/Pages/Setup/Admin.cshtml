@@ -15,8 +15,8 @@
         <input asp-for="Email" type="email" class="form-control" required />
     </div>
     <div class="mb-3">
-        <label class="form-label">Password (min. 8 characters)</label>
-        <input asp-for="Password" type="password" class="form-control" required minlength="8" />
+        <label class="form-label">Password (at least 12 characters)</label>
+        <input asp-for="Password" type="password" class="form-control" required minlength="12" />
     </div>
     <button type="submit" class="btn btn-primary">Create account &amp; continue</button>
 </form>

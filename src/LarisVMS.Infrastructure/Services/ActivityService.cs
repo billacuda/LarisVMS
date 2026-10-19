@@ -1,7 +1,9 @@
 using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
+using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
+using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
 using LarisVMS.Infrastructure.Data;
@@ -59,6 +61,59 @@ public class ActivityService(ApplicationDbContext db, ActivityRollupService roll
 
         return ActivityHeatmapBuilder.Build(cameraId ?? Guid.Empty, name, zone, range, now, counts, selection,
             CultureInfo.CurrentCulture.DateTimeFormat.FirstDayOfWeek, view);
+    }
+
+    public async Task<SceneHeatDto?> GetSceneHeatAsync(Guid cameraId, IReadOnlySet<Guid>? accessible, string? range, string? source,
+        IReadOnlyList<string>? categories, int? fromHour, int? toHour, CancellationToken ct = default)
+    {
+        if (accessible is not null && !accessible.Contains(cameraId)) return null;
+        var camera = await db.Cameras.AsNoTracking().Where(c => c.Id == cameraId)
+            .Select(c => new { c.Name, c.TimeZoneId, c.ServerMotionEnabled, c.MotionRegionMode, c.MotionGridSize }).FirstOrDefaultAsync(ct);
+        if (camera is null) return null;
+
+        range = ActivityHeatmapBuilder.NormalizeRange(range);
+        var motion = string.Equals(source, "motion", StringComparison.OrdinalIgnoreCase);
+        var heatSource = motion ? SceneHeatSource.Motion : SceneHeatSource.Objects;
+        var now = DateTime.UtcNow;
+        var from = ActivityRollupService.FloorHour(now - ActivityHeatmapBuilder.RangeSpan(range));
+        var zone = ResolveZone(camera.TimeZoneId);
+        var wanted = categories is { Count: > 0 } ? new HashSet<string>(categories, StringComparer.OrdinalIgnoreCase) : null;
+
+        var rows = await db.SceneHeatHourlies.AsNoTracking()
+            .Where(s => s.CameraId == cameraId && s.Source == heatSource && s.HourUtc >= from)
+            .ToListAsync(ct);
+        if (!motion)
+        {
+            // The hours since the last rollup, straight from the objects' paths.
+            var watermark = await new SceneHeatRollupService(db).GetWatermarkAsync(ct) ?? from;
+            var tailFrom = watermark > from ? watermark : from;
+            rows.RemoveAll(r => r.HourUtc >= tailFrom);
+            rows.AddRange(await SceneHeatRollupService.AggregateAsync(db, [cameraId], tailFrom, now, ct));
+        }
+
+        var (cols, gridRows) = motion
+            ? (camera.MotionGridSize, camera.MotionGridSize)
+            : await SceneHeatRollupService.GridShapeAsync(db, cameraId, ct);
+        var sums = new long[cols * gridRows];
+        foreach (var row in rows)
+        {
+            if (wanted is not null && !wanted.Contains(row.Label)) continue;
+            if (!InHours(TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(row.HourUtc, DateTimeKind.Utc), zone).Hour, fromHour, toHour)) continue;
+            SceneHeat.AddCellsResampled(row.Cells, row.Cols, row.Rows, sums, cols, gridRows);
+        }
+
+        var max = sums.Length == 0 ? 0 : sums.Max();
+        var cells = sums.Select(c => max == 0 ? 0 : (double)c / max).ToArray();
+        var motionAvailable = camera.ServerMotionEnabled && camera.MotionRegionMode == MotionRegionMode.Grid;
+        return new SceneHeatDto(cameraId, camera.Name, motion ? "motion" : "objects", range, cols, gridRows, cells, max, motionAvailable);
+    }
+
+    /// <summary>Whether a local hour is in [from, to) — wrapping past midnight when from is after to
+    /// (22 to 6 is the night). No bounds means every hour.</summary>
+    internal static bool InHours(int hour, int? fromHour, int? toHour)
+    {
+        if (fromHour is not { } f || toHour is not { } t || f == t) return true;
+        return f < t ? hour >= f && hour < t : hour >= f || hour < t;
     }
 
     public async Task<SpeedHeatmapDto?> GetSpeedHeatmapAsync(Guid? cameraId, IReadOnlySet<Guid>? accessible, string? range, string? view,

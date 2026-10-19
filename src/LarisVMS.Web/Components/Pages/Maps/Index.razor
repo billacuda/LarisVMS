@@ -78,7 +78,7 @@
                 <input type="text" class="form-control form-control-sm mb-2" id="mapNewName" maxlength="200" />
                 <div id="mapNewStreetHelp" class="small text-muted">The new map opens where the current street map is showing, or on the whole world. Pan and zoom to your site; <strong>Done editing</strong> saves where it opens.</div>
                 <div id="mapNewFloorplan" class="d-none">
-                    <label class="form-label small" for="mapNewFile">Floorplan image (PNG, JPEG, WebP or GIF, up to 10 MB)</label>
+                    <label class="form-label small" for="mapNewFile">Floorplan image (PNG, JPEG, WebP, or GIF, up to 10 MB)</label>
                     <input type="file" class="form-control form-control-sm" id="mapNewFile" accept="image/png,image/jpeg,image/webp,image/gif" />
                 </div>
                 <div class="small text-danger mt-2" id="mapNewError"></div>
@@ -114,8 +114,8 @@
 
 <SectionContent SectionName="PageScripts">
     <script type="application/json" id="mapConfig">@((MarkupString)ConfigJson)</script>
-    <script src="/lib/leaflet/dist/leaflet.js"></script>
-    <script src="/js/map.js"></script>
+    <PageScript Src="/lib/leaflet/dist/leaflet.js" />
+    <PageScript Src="/js/map.js" />
 </SectionContent>
 
 @code {

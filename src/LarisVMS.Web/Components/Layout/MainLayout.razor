@@ -57,6 +57,7 @@
             @if (_showBookmarks)
             {
                 <a class="lv-navitem@(IsActive("/Bookmarks") ? " active" : "")" href="/Bookmarks"><span aria-hidden="true">🔖</span> Bookmarks</a>
+                <a class="lv-navitem@(IsActive("/EvidenceLocks") ? " active" : "")" href="/EvidenceLocks"><span aria-hidden="true">🔒</span> Evidence locks</a>
             }
             @if (_showSnapshots)
             {
@@ -81,6 +82,7 @@
             }
             @if (_isAuthenticated)
             {
+                <a class="lv-navitem@(IsActive("/Notifications") ? " active" : "")" href="/Notifications"><span aria-hidden="true">🔔</span> Notifications</a>
                 <a class="lv-navitem@(IsActive("/Help") ? " active" : "")" href="/Help"><span aria-hidden="true">❓</span> Help</a>
             }
         </nav>
@@ -104,7 +106,7 @@
                        title="See what's new in @_availableRelease.Version">✨ <span class="d-none d-sm-inline">Version </span>@_availableRelease.Version<span class="d-none d-sm-inline"> is available</span></a>
                 }
                 <button class="lv-darktoggle" id="themeToggle" type="button"
-                        onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme"><span id="themeIcon" aria-hidden="true">🌙</span></button>
+                        data-action="toggle-theme" title="Toggle theme" aria-label="Toggle theme"><span id="themeIcon" aria-hidden="true">🌙</span></button>
                 <LoginPartial />
             </div>
         </div>

@@ -5,6 +5,7 @@ using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Interfaces;
 using LarisVMS.Infrastructure.Data;
+using LarisVMS.Core.Security;
 using LarisVMS.Infrastructure.Security;
 
 namespace LarisVMS.Infrastructure.Services;
@@ -26,6 +27,8 @@ public class ProxyService(ApplicationDbContext db, ISettingsResolver settings) :
         var expectedKey = await settings.GetRawAsync("Node.RegistrationKey", ct: ct);
         if (string.IsNullOrEmpty(expectedKey) || !SecretHash.FixedTimeEquals(request.RegistrationKey ?? "", expectedKey))
             throw new UnauthorizedAccessException("Invalid registration key.");
+        if (!HostNames.IsValid(request.Hostname))
+            throw new ArgumentException("The hostname must be letters, digits, dots, hyphens, or underscores.");
 
         var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         var proxy = new MediaProxy
@@ -36,7 +39,8 @@ public class ProxyService(ApplicationDbContext db, ISettingsResolver settings) :
             Host = request.Hostname,
             ApiKeyHash = SecretHash.Hash(secret),
             Version = request.Version,
-            Enabled = true,
+            // Off until an admin turns it on under Admin → Proxies; until then it may only check in.
+            Enabled = false,
             LastSeenAt = DateTime.UtcNow,
             CreatedAt = DateTime.UtcNow,
         };
@@ -158,6 +162,8 @@ public class ProxyService(ApplicationDbContext db, ISettingsResolver settings) :
     {
         var proxy = await db.MediaProxies.FirstOrDefaultAsync(p => p.Id == id, ct)
             ?? throw new InvalidOperationException("Proxy not found.");
+        if (!HostNames.IsValid(host.Trim()))
+            throw new ArgumentException("The host must be a hostname or an IP address.");
         proxy.Name = name;
         proxy.Host = host.Trim();
         proxy.Port = port;

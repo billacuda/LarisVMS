@@ -46,6 +46,62 @@ public static class MediaToken
         return $"{payload}.{Sign(payload, signingKeyHex)}";
     }
 
+    /// <summary>Server→node actions beyond watching: a token for one of these only opens that route,
+    /// and a live-view token (which a browser holds in direct streaming) opens none of them.</summary>
+    public static class Purposes
+    {
+        public const string Talk = "talk";
+        public const string Snapshot = "snapshot";
+        public const string MotionZones = "motionzones";
+    }
+
+    /// <summary>Like <see cref="Issue"/>, but only valid for <paramref name="purpose"/>
+    /// (<see cref="Purposes"/>). Its payload starts with "p:", so <see cref="TryValidate"/> rejects it.</summary>
+    public static string IssueFor(string purpose, Guid cameraId, string signingKeyHex, TimeSpan validFor)
+    {
+        var exp = DateTimeOffset.UtcNow.Add(validFor).ToUnixTimeSeconds();
+        var payload = $"p:{purpose}:{cameraId:N}:{exp}";
+        return $"{payload}.{Sign(payload, signingKeyHex)}";
+    }
+
+    public static bool TryValidateFor(string? token, string purpose, Guid expectedCameraId, string signingKeyHex, out string error)
+    {
+        if (!TryVerifySignature(token, signingKeyHex, out var payload, out error)) return false;
+        var parts = payload.Split(':');
+        if (parts.Length != 4 || parts[0] != "p" || !Guid.TryParse(parts[2], out var cameraId) || !long.TryParse(parts[3], out var exp))
+        {
+            error = "malformed payload";
+            return false;
+        }
+        if (parts[1] != purpose) { error = "wrong token purpose"; return false; }
+        if (cameraId != expectedCameraId) { error = "camera mismatch"; return false; }
+        if (DateTimeOffset.UtcNow.ToUnixTimeSeconds() > exp) { error = "expired"; return false; }
+        return true;
+    }
+
+    private static bool TryVerifySignature(string? token, string signingKeyHex, out string payload, out string error)
+    {
+        payload = "";
+        error = "";
+        if (string.IsNullOrEmpty(token)) { error = "missing token"; return false; }
+        var dot = token.LastIndexOf('.');
+        if (dot < 0) { error = "malformed token"; return false; }
+        payload = token[..dot];
+        byte[] provided, expected;
+        try
+        {
+            provided = Convert.FromHexString(token[(dot + 1)..]);
+            expected = Convert.FromHexString(Sign(payload, signingKeyHex));
+        }
+        catch (FormatException)
+        {
+            error = "malformed signature";
+            return false;
+        }
+        if (!CryptographicOperations.FixedTimeEquals(provided, expected)) { error = "signature mismatch"; return false; }
+        return true;
+    }
+
     public static bool TryValidate(string? token, Guid expectedCameraId, string signingKeyHex, out string error)
     {
         error = "";

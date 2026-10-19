@@ -62,7 +62,7 @@
 
 @section Scripts {
     <script src="~/js/schedule-editor.js" asp-append-version="true"></script>
-    <script>
+    <script nonce="@Csp.Value">
         window.larisvmsScheduleEditor.init({
             cameraId: '@Model.CameraId',
             listPanelId: 'scheduleListPanel',

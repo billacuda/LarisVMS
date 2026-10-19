@@ -43,4 +43,34 @@ public sealed class CertHolderTests : IDisposable
         Assert.True(holder.IsSelfSigned);
         Assert.Contains("Could not load pfx", holder.LastError);
     }
+
+    [Fact]
+    public void SelfSignedUsesARandomPasswordAndKeepsItsCertificateAcrossRestarts()
+    {
+        var self = Path.Combine(_dir, "self.pfx");
+        var first = Holder(null!, "");
+        Assert.True(first.Load());
+        Assert.True(File.Exists(self + ".key"));
+        Assert.ThrowsAny<CryptographicException>(() => X509CertificateLoader.LoadPkcs12FromFile(self, "larisvms-endpoint"));
+
+        var second = Holder(null!, "");
+        Assert.True(second.Load());
+        Assert.Equal(first.Current!.Thumbprint, second.Current!.Thumbprint);
+    }
+
+    [Fact]
+    public void AnOlderSelfSignedFileIsReSavedWithTheSameThumbprint()
+    {
+        var self = Path.Combine(_dir, "self.pfx");
+        using var rsa = RSA.Create(2048);
+        var req = new CertificateRequest("CN=old", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        using var old = req.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddYears(5));
+        File.WriteAllBytes(self, old.Export(X509ContentType.Pkcs12, "larisvms-endpoint"));
+
+        var holder = Holder(null!, "");
+        Assert.True(holder.Load());
+        Assert.Equal(old.Thumbprint, holder.Current!.Thumbprint);
+        Assert.True(File.Exists(self + ".key"));
+        Assert.ThrowsAny<CryptographicException>(() => X509CertificateLoader.LoadPkcs12FromFile(self, "larisvms-endpoint"));
+    }
 }

@@ -9,12 +9,26 @@ public class ProxyApiClient
 {
     private readonly HttpClient _http;
 
+    /// <summary>Checks the server's certificate per <paramref name="trust"/> (Settings → Nodes).</summary>
+    public ProxyApiClient(string serverUrl, LarisVMS.Core.Security.ServerCertificateTrust trust)
+        : this(serverUrl, trust.CreateHandler())
+    {
+    }
+
     public ProxyApiClient(string serverUrl, bool acceptAnyCertificate)
+        : this(serverUrl, AcceptAnyHandler(acceptAnyCertificate))
+    {
+    }
+
+    private static HttpClientHandler AcceptAnyHandler(bool acceptAnyCertificate)
     {
         var handler = new HttpClientHandler();
-        if (acceptAnyCertificate)
-            handler.ServerCertificateCustomValidationCallback = (_, _, _, _) => true;
+        if (acceptAnyCertificate) handler.ServerCertificateCustomValidationCallback = (_, _, _, _) => true;
+        return handler;
+    }
 
+    private ProxyApiClient(string serverUrl, HttpClientHandler handler)
+    {
         _http = new HttpClient(handler)
         {
             BaseAddress = new Uri(serverUrl.TrimEnd('/') + "/"),

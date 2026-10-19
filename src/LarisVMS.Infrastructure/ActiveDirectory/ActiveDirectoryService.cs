@@ -68,6 +68,10 @@ public sealed class ActiveDirectoryService : IActiveDirectoryService
         try
         {
             using var userConnection = Connect(settings, new NetworkCredential(samAccountName, password, domain));
+            // Negotiate can fall back to the domain's Guest account when it's enabled, so a successful
+            // bind alone doesn't prove the password was this user's: ask who we're bound as.
+            if (BoundAccountName(userConnection) is { } bound && !string.Equals(bound, samAccountName, StringComparison.OrdinalIgnoreCase))
+                throw new AdInvalidCredentialsException();
         }
         catch (LdapException ex) when (ex.ErrorCode == InvalidCredentials)
         {
@@ -99,6 +103,25 @@ public sealed class ActiveDirectoryService : IActiveDirectoryService
 
         return ToUserEntry(entry, memberOf);
     }, ct);
+
+    /// <summary>The account name the connection is bound as (LDAP "Who am I?", RFC 4532), from
+    /// "u:DOMAIN\name"; null when the server doesn't answer it.</summary>
+    private static string? BoundAccountName(LdapConnection connection)
+    {
+        try
+        {
+            if (connection.SendRequest(new ExtendedRequest("1.3.6.1.4.1.4203.1.11.3")) is not ExtendedResponse { ResponseValue: { Length: > 0 } value })
+                return null;
+            var identity = System.Text.Encoding.UTF8.GetString(value);
+            if (identity.StartsWith("u:", StringComparison.OrdinalIgnoreCase)) identity = identity[2..];
+            var slash = identity.LastIndexOf('\\');
+            return slash >= 0 ? identity[(slash + 1)..] : identity;
+        }
+        catch (Exception ex) when (ex is LdapException or DirectoryOperationException)
+        {
+            return null;
+        }
+    }
 
     public Task<IReadOnlyList<AdGroupEntry>> SearchGroupsAsync(ActiveDirectorySettings settings, string prefix, int take,
         CancellationToken ct = default) => Task.Run<IReadOnlyList<AdGroupEntry>>(() =>

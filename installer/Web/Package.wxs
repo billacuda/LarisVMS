@@ -61,6 +61,8 @@
     <Component Id="WebFirewall" Directory="INSTALLFOLDER" Guid="2F8C6D93-1E4A-4B57-A3D2-7C9E5B1F8D55">
       <CreateFolder />
       <fw:FirewallException Id="FwWeb" Name="LarisVMS Web" Port="[HTTPSPORT]" Protocol="tcp" Scope="any" />
+      <!-- HTTP/3 (QUIC) on the same port number. -->
+      <fw:FirewallException Id="FwWebHttp3" Name="LarisVMS Web (HTTP/3)" Port="[HTTPSPORT]" Protocol="udp" Scope="any" />
     </Component>
 
     <!-- A non-LocalSystem service account needs write access here: the setup wizard writes

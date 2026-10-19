@@ -115,7 +115,15 @@ $cfg | ConvertTo-Json | Set-Content -Path (Join-Path $cfgDir 'proxy-endpoint.jso
 Write-Ok "Wrote $(Join-Path $cfgDir 'proxy-endpoint.json')"
 
 # ── register / update service ────────────────────────────────────────────────
-$argParts = @('--server-url', $ServerUrl, '--registration-key', $RegistrationKey)
+# The registration key goes in a locked-down file the service reads (and deletes) on first start,
+# not on its command line, which every local user can read from the registry.
+$regKeyPath = Join-Path $env:ProgramData 'LarisVMS\registration.key'
+New-Item -ItemType Directory -Force -Path (Split-Path $regKeyPath) | Out-Null
+Set-Content -Path $regKeyPath -Value $RegistrationKey -NoNewline -Encoding UTF8
+$regKeyGrants = @('/grant:r', '*S-1-5-18:(F)', '/grant:r', '*S-1-5-32-544:(F)')
+if ($ServiceCredential) { $regKeyGrants += @('/grant:r', "$($ServiceCredential.UserName):(R)") }
+& icacls $regKeyPath /inheritance:r @regKeyGrants | Out-Null
+$argParts = @('--server-url', $ServerUrl)
 if ($InsecureTls) { $argParts += '--insecure-tls' }
 $binPath = (Format-ServiceArg $exePath) + ' ' + (($argParts | ForEach-Object { Format-ServiceArg $_ }) -join ' ')
 

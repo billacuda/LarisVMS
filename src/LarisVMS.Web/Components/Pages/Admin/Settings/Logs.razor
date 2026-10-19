@@ -43,6 +43,9 @@
         <SettingField Label="Audit log retention (days)" Hint="0 keeps forever (the default, for compliance).">
             <InputNumber @bind-Value="AuditLogRetentionDays" min="0" class="form-control" />
         </SettingField>
+        <SettingField Label="Camera event log retention (days)" Hint="The raw events cameras send, used to list a camera's event topics for event tags. Events and their footage aren't affected. 0 keeps forever.">
+            <InputNumber @bind-Value="CameraEventRetentionDays" min="0" class="form-control" />
+        </SettingField>
     </SettingSection>
     <div class="lv-savebar">
         <button type="submit" class="btn btn-primary">Save</button>
@@ -57,6 +60,7 @@
 
     [SupplyParameterFromForm(FormName = "log-settings")] private int LogRetentionDays { get; set; }
     [SupplyParameterFromForm(FormName = "log-settings")] private int AuditLogRetentionDays { get; set; }
+    [SupplyParameterFromForm(FormName = "log-settings")] private int CameraEventRetentionDays { get; set; }
     [SupplyParameterFromForm(FormName = "log-settings")] private string? LogLevel { get; set; }
 
     private static string[] LogLevelOptions => LogLevels.Selectable;
@@ -76,6 +80,7 @@
         if (HttpContext?.Request.HasFormContentType == true) return;
         LogRetentionDays = await Settings.GetAsync(LogsRetentionService.RetentionDaysKey, LogsRetentionService.DefaultRetentionDays);
         AuditLogRetentionDays = await Settings.GetAsync(AuditLogRetentionService.RetentionDaysKey, AuditLogRetentionService.DefaultRetentionDays);
+        CameraEventRetentionDays = await Settings.GetAsync(MotionSpanRetentionService.CameraEventRetentionDaysKey, MotionSpanRetentionService.DefaultCameraEventRetentionDays);
         LogLevel = await Settings.GetAsync("Logging.Level", "Information");
     }
 
@@ -89,6 +94,7 @@
         var oldLogRetention = await Settings.GetAsync(LogsRetentionService.RetentionDaysKey, LogsRetentionService.DefaultRetentionDays);
         var oldAuditRetention = await Settings.GetAsync(AuditLogRetentionService.RetentionDaysKey, AuditLogRetentionService.DefaultRetentionDays);
         var oldLogLevel = await Settings.GetAsync("Logging.Level", "Information");
+        var oldEventRetention = await Settings.GetAsync(MotionSpanRetentionService.CameraEventRetentionDaysKey, MotionSpanRetentionService.DefaultCameraEventRetentionDays);
 
         var newLogRetention = Math.Max(0, LogRetentionDays);
         var newAuditRetention = Math.Max(0, AuditLogRetentionDays);
@@ -96,6 +102,9 @@
         await Settings.SetGlobalAsync(LogsRetentionService.RetentionDaysKey, newLogRetention.ToString(), by);
         await Settings.SetGlobalAsync(AuditLogRetentionService.RetentionDaysKey, newAuditRetention.ToString(), by);
         await Settings.SetGlobalAsync("Logging.Level", newLogLevel, by);
+        var newEventRetention = Math.Max(0, CameraEventRetentionDays);
+        await Settings.SetGlobalAsync(MotionSpanRetentionService.CameraEventRetentionDaysKey, newEventRetention.ToString(), by);
+        CameraEventRetentionDays = newEventRetention;
         LogRetentionDays = newLogRetention;
         AuditLogRetentionDays = newAuditRetention;
         LogLevel = newLogLevel;
@@ -107,7 +116,8 @@
         var details = AuditDiff.Build(
             AuditDiff.Of(LogsRetentionService.RetentionDaysKey, oldLogRetention.ToString(), newLogRetention.ToString()),
             AuditDiff.Of(AuditLogRetentionService.RetentionDaysKey, oldAuditRetention.ToString(), newAuditRetention.ToString()),
-            AuditDiff.Of("Logging.Level", oldLogLevel, newLogLevel));
+            AuditDiff.Of("Logging.Level", oldLogLevel, newLogLevel),
+            AuditDiff.Of(MotionSpanRetentionService.CameraEventRetentionDaysKey, oldEventRetention.ToString(), newEventRetention.ToString()));
 
         await AuditService.LogAsync("Settings.Update",
             user.FindFirst(ClaimTypes.NameIdentifier)?.Value, by,

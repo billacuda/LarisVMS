@@ -42,3 +42,16 @@ public record SpeedTrapOptionDto(string Id, string Name, int Count);
 public record SpeedHourStat(DateTime HourUtc, Guid? TrapId, string? Label, int Count, double SumKph, double MaxKph, int OverLimit);
 
 public record ActivityHourCount(DateTime HourUtc, string Group, string? Label, int Count);
+
+/// <summary>A scene heatmap: a <paramref name="Cols"/> x <paramref name="Rows"/> grid laid over the
+/// camera's picture, row-major. <paramref name="Cells"/> are 0-1, scaled to the busiest cell
+/// (<paramref name="MaxCount"/>: objects that passed through it, or frames with motion there).
+/// <paramref name="MotionAvailable"/> says whether the camera has grid-mode motion to show.
+/// <paramref name="HasCustomBackground"/>: someone uploaded the picture shown under it;
+/// <paramref name="CanChangeBackground"/>: this viewer may upload or remove one.</summary>
+public record SceneHeatDto(Guid CameraId, string CameraName, string Source, string Range, int Cols, int Rows,
+    double[] Cells, long MaxCount, bool MotionAvailable, bool HasCustomBackground = false, bool CanChangeBackground = false,
+    long BackgroundVersion = 0);
+
+/// <summary>An uploaded scene heatmap background: the image as Base64 and its pixel size.</summary>
+public record SceneBackgroundUpload(string ImageBase64, int Width, int Height);

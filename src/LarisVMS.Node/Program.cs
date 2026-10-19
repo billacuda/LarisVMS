@@ -27,11 +27,32 @@ const double MinSeekSecondsForPartialFetch = 2.0;
 // If node.config doesn't exist yet, this run must be given --server-url and --registration-key
 // (what install-node.ps1 passes) to register once; the assigned NodeId/secret are then persisted
 // and every subsequent run just loads them.
+// node.config, certificates, logs, and update staging live under %ProgramData%\LarisVMS: SYSTEM,
+// Administrators, and this service only. In the background, since the first run after an upgrade can
+// take a while when recordings are kept there.
+_ = Task.Run(() =>
+{
+    if (LarisVMS.Core.Security.LocalDataAcl.SecureRoot() is { } aclError)
+        Console.Error.WriteLine($"Could not restrict access to {LarisVMS.Core.Security.LocalDataAcl.Root}: {aclError}");
+});
+
+// How this node checks the server's certificate: trust on first use by default, then whatever the
+// server's Settings → Nodes says. --insecure-tls is accepted for older installers but no longer turns
+// checking off; --reset-server-pin forgets the pinned certificate so the next one is trusted.
+var trust = NodeConfigStore.CreateTrust(NodeConfigStore.Load());
+if (HasFlag(args, "--reset-server-pin"))
+{
+    trust.ResetPin();
+    Console.WriteLine("The pinned server certificate was cleared; the next one this node sees is trusted.");
+    return;
+}
+
 var config = NodeConfigStore.Load();
 if (config is null)
 {
     var serverUrl = GetArg(args, "--server-url") ?? Environment.GetEnvironmentVariable("LARISVMS_SERVER_URL");
-    var registrationKey = GetArg(args, "--registration-key") ?? Environment.GetEnvironmentVariable("LARISVMS_REGISTRATION_KEY");
+    var registrationKey = GetArg(args, "--registration-key") ?? Environment.GetEnvironmentVariable("LARISVMS_REGISTRATION_KEY")
+        ?? LarisVMS.Core.Security.RegistrationKeyFile.Read(); // left by the installer
     if (serverUrl is null || registrationKey is null)
     {
         Console.Error.WriteLine("Not yet registered. Run with --server-url <url> --registration-key <key> " +
@@ -41,7 +62,7 @@ if (config is null)
     }
 
     var insecure = HasFlag(args, "--insecure-tls") || Environment.GetEnvironmentVariable("LARISVMS_INSECURE_TLS") == "1";
-    var registerClient = new NodeApiClient(serverUrl, insecure);
+    var registerClient = new NodeApiClient(serverUrl, trust);
     // "win-x64" (a RID, not Environment.OSVersion.Platform.ToString()'s "Win32NT") — this is what
     // LarisVMS.Web's heartbeat handler matches against NodeBuildVersion.Platform to decide whether an
     // uploaded build applies to this node (see NodeVersionComparer/Program.cs's auto-update check).
@@ -59,13 +80,16 @@ if (config is null)
             registerStorageRoot, registerArchiveRoot),
         CancellationToken.None);
 
-    config = new NodeConfig(serverUrl, response.NodeId, response.Secret, response.MediaSigningKey);
+    config = new NodeConfig(serverUrl, response.NodeId, response.Secret, response.MediaSigningKey,
+        UpdateSigningKeyPem: response.UpdateSigningKeyPem);
     NodeConfigStore.Save(config);
     Console.WriteLine($"Registered as node {response.NodeId}.");
 }
+// Registered: the one-time key isn't needed any more.
+LarisVMS.Core.Security.RegistrationKeyFile.Delete();
 
 var insecureTls = HasFlag(args, "--insecure-tls") || Environment.GetEnvironmentVariable("LARISVMS_INSECURE_TLS") == "1";
-var apiClient = new NodeApiClient(config.ServerUrl, insecureTls);
+var apiClient = new NodeApiClient(config.ServerUrl, trust);
 apiClient.SetCredentials(config.NodeId, config.Secret);
 
 var ffmpegPath = FfmpegPathResolver.Resolve(
@@ -289,9 +313,19 @@ app.Map("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWork
     var startedAt = DateTime.UtcNow;
     liveLogger.LogInformation("Live stream started: {CameraName} ({Role}) -> client {ClientIp} ({Via}).",
         cameraName, roleLabel, clientIp, via);
+    // A browser connected directly holds its own ticket and never passes the web server again, so
+    // its session is capped: the player reconnects with a fresh ticket, which needs a signed-in,
+    // enabled account. Relayed sessions are the web server's to end.
+    using var sessionLimit = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
+    if (!string.IsNullOrEmpty(origin)) sessionLimit.CancelAfter(MaxDirectLiveSession);
     try
     {
-        await LiveViewerHandler.RunAsync(socket, session, liveLogger, ctx.RequestAborted);
+        await LiveViewerHandler.RunAsync(socket, session, liveLogger, sessionLimit.Token);
+    }
+    catch (OperationCanceledException) when (sessionLimit.IsCancellationRequested && !ctx.RequestAborted.IsCancellationRequested)
+    {
+        liveLogger.LogInformation("Direct live stream for {CameraName} reached its {Minutes}-minute limit; the viewer reconnects with a new ticket.",
+            cameraName, MaxDirectLiveSession.TotalMinutes);
     }
     finally
     {
@@ -301,8 +335,8 @@ app.Map("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWork
 });
 
 // Two-way audio (see TalkSessionHandler). Only LarisVMS.Web connects here — it authorizes the
-// operator (CameraAccessActions.Talk) and relays the browser's socket — so the same per-camera media
-// token as /live is enough.
+// operator (CameraAccessActions.Talk) and relays the browser's socket — with a talk-purpose token,
+// so a live-view token (which a browser holds in direct streaming) can't open it.
 var talkLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Talk");
 app.Map("/talk/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWorker worker) =>
 {
@@ -319,7 +353,7 @@ app.Map("/talk/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWork
         await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
         return;
     }
-    if (!MediaToken.TryValidate(ExtractToken(ctx), cameraId, currentKey, out var tokenError))
+    if (!MediaToken.TryValidateFor(ExtractToken(ctx), MediaToken.Purposes.Talk, cameraId, currentKey, out var tokenError))
     {
         ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
         await ctx.Response.WriteAsync(tokenError);
@@ -416,7 +450,7 @@ app.Map("/live/{cameraId:guid}/motion-zones", async (HttpContext ctx, Guid camer
         await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
         return;
     }
-    if (!MediaToken.TryValidate(token, cameraId, currentKey, out var tokenError))
+    if (!MediaToken.TryValidateFor(token, MediaToken.Purposes.MotionZones, cameraId, currentKey, out var tokenError))
     {
         ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
         await ctx.Response.WriteAsync(tokenError);
@@ -1048,7 +1082,7 @@ app.MapGet("/vision/models", async (HttpContext ctx, NodeWorker worker, SeenToke
 // /playback-segment's own check, so a compromised/rogue Web tier can't point this at a path outside
 // this camera's own recording directory. Responds 202 immediately (after validating and staging
 // everything ffmpeg needs) and runs the actual concat on a background Task.Run.
-app.MapPost("/export/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ExportRequest request, NodeWorker worker, ExportRunner exportRunner) =>
+app.MapPost("/export/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ExportRequest request, NodeWorker worker, ExportRunner exportRunner, SeenTokenCache seenTokens) =>
 {
     var token = ExtractToken(ctx);
     var currentKey = worker.MediaSigningKey;
@@ -1064,10 +1098,17 @@ app.MapPost("/export/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, Ex
         await ctx.Response.WriteAsync("cameraId mismatch");
         return;
     }
-    if (!MediaToken.TryValidateExport(token, cameraId, request.ExportItemId, currentKey, out var tokenError))
+    if (!MediaToken.TryValidateExport(token, cameraId, request.ExportItemId, currentKey, out var tokenError, out var tokenJti))
     {
         ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
         await ctx.Response.WriteAsync(tokenError);
+        return;
+    }
+    // One request per token, like segment fetches: a repeat inside the TTL is a replay.
+    if (!seenTokens.TryConsume(tokenJti))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync("token already used");
         return;
     }
 
@@ -1154,7 +1195,7 @@ app.MapPost("/export/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, Ex
 // /export-download proxy, same "IIS/this proxy relays every byte, browser never reached directly"
 // shape as /playback-segment, using the export-download token family (binds exportItemId + this
 // exact path) rather than the export-trigger family above.
-app.MapGet("/export-file/{exportItemId:guid}", async (HttpContext ctx, Guid exportItemId, NodeWorker worker) =>
+app.MapGet("/export-file/{exportItemId:guid}", async (HttpContext ctx, Guid exportItemId, NodeWorker worker, SeenTokenCache seenTokens) =>
 {
     var token = ExtractToken(ctx);
     var path = ctx.Request.Query["path"].ToString();
@@ -1171,10 +1212,17 @@ app.MapGet("/export-file/{exportItemId:guid}", async (HttpContext ctx, Guid expo
         await ctx.Response.WriteAsync("missing path");
         return;
     }
-    if (!MediaToken.TryValidateExportDownload(token, exportItemId, path, currentKey, out var tokenError))
+    if (!MediaToken.TryValidateExportDownload(token, exportItemId, path, currentKey, out var tokenError, out var tokenJti))
     {
         ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
         await ctx.Response.WriteAsync(tokenError);
+        return;
+    }
+    // One request per token, like segment fetches: a repeat inside the TTL is a replay.
+    if (!seenTokens.TryConsume(tokenJti))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync("token already used");
         return;
     }
 
@@ -1212,7 +1260,7 @@ app.MapGet("/export-file/{exportItemId:guid}", async (HttpContext ctx, Guid expo
 // on StorageManager's own 7-day export-retention sweep. Same path-prefix validation as the GET
 // above, just with TryValidateExportDelete's own token family so a leaked download URL can't also
 // delete the file it points to.
-app.MapDelete("/export-file/{exportItemId:guid}", async (HttpContext ctx, Guid exportItemId, NodeWorker worker) =>
+app.MapDelete("/export-file/{exportItemId:guid}", async (HttpContext ctx, Guid exportItemId, NodeWorker worker, SeenTokenCache seenTokens) =>
 {
     var token = ExtractToken(ctx);
     var path = ctx.Request.Query["path"].ToString();
@@ -1229,10 +1277,17 @@ app.MapDelete("/export-file/{exportItemId:guid}", async (HttpContext ctx, Guid e
         await ctx.Response.WriteAsync("missing path");
         return;
     }
-    if (!MediaToken.TryValidateExportDelete(token, exportItemId, path, currentKey, out var tokenError))
+    if (!MediaToken.TryValidateExportDelete(token, exportItemId, path, currentKey, out var tokenError, out var tokenJti))
     {
         ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
         await ctx.Response.WriteAsync(tokenError);
+        return;
+    }
+    // One request per token, like segment fetches: a repeat inside the TTL is a replay.
+    if (!seenTokens.TryConsume(tokenJti))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await ctx.Response.WriteAsync("token already used");
         return;
     }
 
@@ -1281,7 +1336,7 @@ app.MapGet("/snapshot/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, N
         await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
         return;
     }
-    if (!MediaToken.TryValidate(token, cameraId, currentKey, out var tokenError))
+    if (!MediaToken.TryValidateFor(token, MediaToken.Purposes.Snapshot, cameraId, currentKey, out var tokenError))
     {
         ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
         await ctx.Response.WriteAsync(tokenError);
@@ -1429,4 +1484,10 @@ static async Task CopyExactAsync(Stream source, Stream destination, long count, 
         await destination.WriteAsync(buffer.AsMemory(0, read), ct);
         remaining -= read;
     }
+}
+
+partial class Program
+{
+    /// <summary>Longest a directly connected browser keeps one live socket (see /live).</summary>
+    internal static readonly TimeSpan MaxDirectLiveSession = TimeSpan.FromMinutes(20);
 }

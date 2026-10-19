@@ -33,6 +33,12 @@ public class MotionSpanRetentionService(IServiceScopeFactory scopeFactory, ILogg
     private static readonly TimeSpan SweepInterval = TimeSpan.FromHours(6);
     internal const int BatchSize = 1000;
 
+    /// <summary>How long raw camera events (the ONVIF event log behind event-tag rules' topic list)
+    /// are kept. 0 keeps them forever.</summary>
+    public const string CameraEventRetentionDaysKey = "Events.RawRetentionDays";
+    public const int DefaultCameraEventRetentionDays = 30;
+    internal const int CameraEventBatchSize = 5000;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
@@ -47,8 +53,14 @@ public class MotionSpanRetentionService(IServiceScopeFactory scopeFactory, ILogg
                 await scope.ServiceProvider.GetRequiredService<ActivityRollupService>().RollupAsync(DateTime.UtcNow, stoppingToken);
                 // Same for speed-trap measurements, which go with their spans.
                 await scope.ServiceProvider.GetRequiredService<SpeedRollupService>().RollupAsync(DateTime.UtcNow, stoppingToken);
+                // And object paths, for the scene heatmap.
+                await scope.ServiceProvider.GetRequiredService<SceneHeatRollupService>().RollupAsync(DateTime.UtcNow, stoppingToken);
                 await SweepAsync(db, settings, stoppingToken);
                 await SweepTalkRecordingsAsync(db, stoppingToken);
+                var eventDays = await settings.GetAsync(CameraEventRetentionDaysKey, DefaultCameraEventRetentionDays, ct: stoppingToken);
+                var removedEvents = await SweepCameraEventsAsync(db, eventDays, stoppingToken);
+                if (removedEvents > 0)
+                    logger.LogInformation("Removed {Count} camera event(s) older than {Days} days.", removedEvents, eventDays);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -69,11 +81,9 @@ public class MotionSpanRetentionService(IServiceScopeFactory scopeFactory, ILogg
         var camerasWithSpans = await db.MotionSpans.Select(m => m.CameraId).Distinct().ToListAsync(ct);
         if (camerasWithSpans.Count == 0) return;
 
-        var earliestSegmentByCamera = await db.Segments
-            .Where(s => camerasWithSpans.Contains(s.CameraId))
-            .GroupBy(s => s.CameraId)
-            .Select(g => new { CameraId = g.Key, EarliestStartUtc = g.Min(s => s.StartUtc) })
-            .ToDictionaryAsync(x => x.CameraId, x => x.EarliestStartUtc, ct);
+        // Evidence locks: cut-off from the earliest unlocked footage; spans inside a lock are kept.
+        var (earliestSegmentByCamera, locked) = await LarisVMS.Infrastructure.Services.EvidenceLockQueries
+            .LoadRetentionCutoffsAsync(db, camerasWithSpans, DateTime.UtcNow, ct);
 
         var preRollByCameraId = new Dictionary<Guid, int>();
 
@@ -95,6 +105,7 @@ public class MotionSpanRetentionService(IServiceScopeFactory scopeFactory, ILogg
 
             var stale = batch.Where(m =>
             {
+                if (locked.Covers(m.CameraId, m.StartUtc, m.EndUtc)) return false;
                 if (!earliestSegmentByCamera.TryGetValue(m.CameraId, out var earliest)) return true;
                 var preRoll = preRollByCameraId.GetValueOrDefault(m.CameraId, 10);
                 var playFromUtc = m.StartUtc - TimeSpan.FromSeconds(preRoll);
@@ -111,6 +122,39 @@ public class MotionSpanRetentionService(IServiceScopeFactory scopeFactory, ILogg
         }
     }
 
+    /// <summary>Raw camera events older than <paramref name="retentionDays"/> (0 keeps them forever),
+    /// camera by camera so each delete seeks the (CameraId, ReceivedUtc) clustered index, and in
+    /// batches so a first run over months of events doesn't become one huge transaction. A set-based
+    /// DELETE on SQL Server; the InMemory provider the tests use has no ExecuteDelete, so there it
+    /// removes tracked stubs instead. Returns how many were removed.</summary>
+    internal static async Task<int> SweepCameraEventsAsync(ApplicationDbContext db, int retentionDays, CancellationToken ct)
+    {
+        if (retentionDays <= 0) return 0;
+        var cutoff = DateTime.UtcNow.AddDays(-retentionDays);
+        var cameras = await db.Cameras.AsNoTracking().Select(c => c.Id).ToListAsync(ct);
+        var removed = 0;
+        foreach (var cameraId in cameras)
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                var ids = await db.CameraEvents.AsNoTracking()
+                    .Where(e => e.CameraId == cameraId && e.ReceivedUtc < cutoff)
+                    .OrderBy(e => e.ReceivedUtc).Select(e => e.Id).Take(CameraEventBatchSize).ToListAsync(ct);
+                if (ids.Count == 0) break;
+                if (db.Database.IsRelational())
+                    await db.CameraEvents.Where(e => ids.Contains(e.Id)).ExecuteDeleteAsync(ct);
+                else
+                {
+                    db.CameraEvents.RemoveRange(await db.CameraEvents.Where(e => ids.Contains(e.Id)).ToListAsync(ct));
+                    await db.SaveChangesAsync(ct);
+                }
+                removed += ids.Count;
+                if (ids.Count < CameraEventBatchSize) break;
+            }
+        }
+        return removed;
+    }
+
     /// <summary>Two-way audio recordings expire with the footage around them, by the same rule as
     /// motion spans: once the camera's earliest remaining segment starts after the press ended (or the
     /// camera has no footage left). The node deletes the WAV itself by the camera's retention.</summary>
@@ -119,18 +163,16 @@ public class MotionSpanRetentionService(IServiceScopeFactory scopeFactory, ILogg
         var cameras = await db.TalkRecordings.Select(t => t.CameraId).Distinct().ToListAsync(ct);
         if (cameras.Count == 0) return;
 
-        var earliestSegmentByCamera = await db.Segments
-            .Where(s => cameras.Contains(s.CameraId))
-            .GroupBy(s => s.CameraId)
-            .Select(g => new { CameraId = g.Key, EarliestStartUtc = g.Min(s => s.StartUtc) })
-            .ToDictionaryAsync(x => x.CameraId, x => x.EarliestStartUtc, ct);
+        var (earliestSegmentByCamera, locked) = await LarisVMS.Infrastructure.Services.EvidenceLockQueries
+            .LoadRetentionCutoffsAsync(db, cameras, DateTime.UtcNow, ct);
 
         foreach (var cameraId in cameras)
         {
             var stale = earliestSegmentByCamera.TryGetValue(cameraId, out var earliest)
                 ? db.TalkRecordings.Where(t => t.CameraId == cameraId && t.EndUtc < earliest)
                 : db.TalkRecordings.Where(t => t.CameraId == cameraId);
-            db.TalkRecordings.RemoveRange(await stale.ToListAsync(ct));
+            // Evidence locks: a talk recording inside locked footage is kept with it.
+            db.TalkRecordings.RemoveRange((await stale.ToListAsync(ct)).Where(t => !locked.Covers(cameraId, t.StartUtc, t.EndUtc)));
         }
         await db.SaveChangesAsync(ct);
     }

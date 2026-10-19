@@ -87,4 +87,21 @@ public class MediaPathResolverTests
         var full = Path.GetFullPath($@"D:\temp\cam-{other}\main\seg.mp4");
         Assert.False(MediaPathResolver.IsAllowed(full, Cam, StorageRoot, ArchiveRoot));
     }
+
+    [Theory]
+    [InlineData(@"\\attacker\share\cam-{0}\main\seg.mp4")]
+    [InlineData(@"\\?\UNC\attacker\share\cam-{0}\main\seg.mp4")]
+    [InlineData(@"D:\temp\cam-{0}\main\notes.txt")]
+    public void TheOutOfRootFallbackIsOnlyForLocalSegmentFiles(string pattern)
+    {
+        var full = string.Format(pattern, Cam);
+        Assert.False(MediaPathResolver.IsAllowed(full, Cam, StorageRoot, ArchiveRoot));
+    }
+
+    [Fact]
+    public void AConfiguredShareRootStillWorks()
+    {
+        var full = Path.GetFullPath($@"\\nas\rec\cam-{Cam}\main\seg.mp4");
+        Assert.True(MediaPathResolver.IsAllowed(full, Cam, @"\\nas\rec", ArchiveRoot));
+    }
 }

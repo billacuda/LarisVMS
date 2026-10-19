@@ -963,6 +963,18 @@
     }
 
     var BOX_LABEL_HEIGHT = 16;
+    // Box border width — the travel path is drawn at the same width.
+    var BOX_LINE_WIDTH = 2;
+    // Travel paths (startDetectionOverlay's setShowPath): a new point once the box's centre has
+    // moved this many screen pixels; an object whose point hasn't moved for PATH_STILL_MS counts
+    // as stopped; a path then stays for the linger time (Settings -> Live view, setPathLinger) and
+    // dissolves from its start over PATH_DISSOLVE_MS, with the erasing end fading over its first
+    // PATH_FADE_SEGMENTS segments.
+    var PATH_MIN_STEP_PX = 2;
+    var PATH_STILL_MS = 1000;
+    var PATH_DISSOLVE_MS = 1500;
+    var PATH_FADE_SEGMENTS = 6;
+    var PATH_MAX_POINTS = 300;
 
     // Where each AI box's label goes: kept inside the visible video (a box at the right edge used to
     // push its label off-screen) and clear of every other label. labels: [{w, h, box: {x, y, w, h}}],
@@ -1131,6 +1143,15 @@
         // is why updateActiveState below ignores it entirely and the toolbar disables it while both
         // of the two above are off (there would be nothing for it to decorate).
         var showConfidence = false;
+        // Travel paths: one per moving track, from the centre of its box. Only drawn with Moving boxes on. trackId -> { points: [{x, y}] (normalized),
+        // colorHex, lastMovedMs, dissolveStartMs (null while the object is still moving) }.
+        var showPath = false;
+        // Label parts: an object's speed (once a speed trap has timed it) and its color. On unless
+        // turned off on the toolbar.
+        var showSpeed = true;
+        var showColor = true;
+        var trails = {};
+        var pathLingerMs = 5000;
         var stopped = false;
         var reconnectTimer = null;
         // Detection ticks on a client-relative *capture* timeline: each tick's captureAtMs is when
@@ -1179,6 +1200,12 @@
             ctx.clearRect(0, 0, w, h);
             ctx.font = '12px sans-serif';
 
+            // Paths under the boxes and labels.
+            if (showPath && showMoving) {
+                updateTrails(Date.now(), dw, dh);
+                drawTrails(ctx, offsetX, offsetY, dw, dh);
+            }
+
             // Boxes first, labels after: a label is placed against every other label (see
             // placeBoxLabels), so all of them have to be known before any is drawn.
             var labels = [];
@@ -1193,7 +1220,7 @@
                 var color = box.colorHex || '#22d3ee';
 
                 ctx.strokeStyle = color;
-                ctx.lineWidth = 2;
+                ctx.lineWidth = BOX_LINE_WIDTH;
                 ctx.strokeRect(x, y, boxW, boxH);
 
                 // Percentage rather than the raw 0-1 score: this sits on a moving video at 12px, and
@@ -1210,8 +1237,8 @@
                     label += ' ' + Math.round(box.confidence * 100) + '%';
                 }
                 // Object color (once classified) and speed (once it has crossed a speed trap).
-                if (box.color) label += ' · ' + box.color;
-                if (box.speedText) label += ' · ' + box.speedText;
+                if (showColor && box.color) label += ' · ' + box.color;
+                if (showSpeed && box.speedText) label += ' · ' + box.speedText;
                 labels.push({
                     text: label, color: color, w: ctx.measureText(label).width + 8, h: BOX_LABEL_HEIGHT,
                     box: { x: x, y: y, w: boxW, h: boxH }
@@ -1226,6 +1253,92 @@
                 ctx.fillStyle = readableTextColor(l.color);
                 ctx.fillText(l.text, p.x + 4, p.y + 12);
             });
+        }
+
+        // How far a dissolving path has been erased, as a fractional point index (0 = nothing yet).
+        function erasedPoints(trail, nowMs) {
+            if (trail.dissolveStartMs === null || nowMs <= trail.dissolveStartMs) return 0;
+            return Math.min(1, (nowMs - trail.dissolveStartMs) / PATH_DISSOLVE_MS) * (trail.points.length - 1);
+        }
+
+        // Extends each moving track's path from this frame's (interpolated) boxes, and starts
+        // dissolving the path of a track that has stopped, gone Idle, or left.
+        function updateTrails(nowMs, dw, dh) {
+            var moving = {};
+            latestBoxes.forEach(function (box) {
+                if (box.movementState !== 'Moving' || box.trackId === undefined || box.trackId === null) return;
+                moving[box.trackId] = true;
+                var px = box.x + box.w / 2, py = box.y + box.h / 2;
+                var trail = trails[box.trackId];
+                if (!trail) {
+                    trails[box.trackId] = { points: [{ x: px, y: py }], colorHex: box.colorHex, lastMovedMs: nowMs, dissolveStartMs: null };
+                    return;
+                }
+                trail.colorHex = box.colorHex;
+                var last = trail.points[trail.points.length - 1];
+                var dx = (px - last.x) * dw, dy = (py - last.y) * dh;
+                if (dx * dx + dy * dy < PATH_MIN_STEP_PX * PATH_MIN_STEP_PX) return;
+                // Moving again while dissolving: keep what's left and carry on from there.
+                if (trail.dissolveStartMs !== null) {
+                    trail.points = trail.points.slice(Math.floor(erasedPoints(trail, nowMs)));
+                    trail.dissolveStartMs = null;
+                }
+                trail.points.push({ x: px, y: py });
+                if (trail.points.length > PATH_MAX_POINTS) trail.points.shift();
+                trail.lastMovedMs = nowMs;
+            });
+            Object.keys(trails).forEach(function (id) {
+                var trail = trails[id];
+                if (trail.dissolveStartMs === null && (!moving[id] || nowMs - trail.lastMovedMs > PATH_STILL_MS)) {
+                    // Stays whole for the linger time, then dissolves.
+                    trail.dissolveStartMs = nowMs + pathLingerMs;
+                }
+                if (trail.dissolveStartMs !== null && nowMs - trail.dissolveStartMs >= PATH_DISSOLVE_MS) delete trails[id];
+            });
+        }
+
+        function drawTrails(ctx, offsetX, offsetY, dw, dh) {
+            var nowMs = Date.now();
+            ctx.save();
+            ctx.lineWidth = BOX_LINE_WIDTH;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            Object.keys(trails).forEach(function (id) {
+                var trail = trails[id];
+                var pts = trail.points;
+                if (pts.length < 2) return;
+                ctx.strokeStyle = trail.colorHex || '#22d3ee';
+                function sx(p) { return offsetX + p.x * dw; }
+                function sy(p) { return offsetY + p.y * dh; }
+
+                var erased = erasedPoints(trail, nowMs);
+                if (erased === 0) {
+                    ctx.globalAlpha = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(sx(pts[0]), sy(pts[0]));
+                    for (var i = 1; i < pts.length; i++) ctx.lineTo(sx(pts[i]), sy(pts[i]));
+                    ctx.stroke();
+                    return;
+                }
+
+                // Dissolving: start from the erase point, part-way along its segment, and fade in
+                // over the first few segments after it so the end dissolves rather than being cut.
+                var first = Math.floor(erased);
+                var frac = erased - first;
+                if (first >= pts.length - 1) return;
+                var a = pts[first], b = pts[first + 1];
+                var start = { x: a.x + (b.x - a.x) * frac, y: a.y + (b.y - a.y) * frac };
+                var prev = start;
+                for (var j = first + 1; j < pts.length; j++) {
+                    ctx.globalAlpha = Math.min(1, (j - erased) / PATH_FADE_SEGMENTS);
+                    ctx.beginPath();
+                    ctx.moveTo(sx(prev), sy(prev));
+                    ctx.lineTo(sx(pts[j]), sy(pts[j]));
+                    ctx.stroke();
+                    prev = pts[j];
+                }
+            });
+            ctx.restore();
         }
 
         // Derives this camera's "currently moving" AI badges straight from the same per-frame boxes
@@ -1335,6 +1448,10 @@
             var latency = videoLatencyMs();
             var presentationNowMs = Date.now() - latency;
             var boxes = boxesAt(presentationNowMs);
+            if (!boxes && showPath && Object.keys(trails).length > 0) {
+                // No new position to show, but a path may still be dissolving.
+                draw();
+            }
             if (boxes) {
                 latestBoxes = boxes;
                 latestAlignmentMs = latency;
@@ -1425,6 +1542,7 @@
             socket.onclose = function () {
                 socket = null;
                 pendingTicks = [];
+                trails = {};
                 if (stopped || !(showMoving || showIdle)) return;
                 // Routine reconnect, same fixed-delay spirit as the freeze-overlay/retry story the
                 // video socket already has — this feed is lower-stakes (a missed box or two is not
@@ -1445,6 +1563,7 @@
                 if (socket) { try { socket.close(); } catch (e) {} socket = null; }
                 pendingTicks = [];
                 latestBoxes = [];
+                trails = {};
                 draw();
                 clearAiBadgeState();
             }
@@ -1456,11 +1575,20 @@
             // No updateActiveState: this changes what a box's label says, never whether any box is
             // drawn, so it must not open or close the detections socket.
             setShowConfidence: function (on) { showConfidence = !!on; draw(); },
+            // Travel paths for moving boxes. Same as Confidence: decoration only, so the socket is
+            // left alone. Turning it off forgets every path.
+            setShowPath: function (on) { showPath = !!on; if (!showPath) trails = {}; draw(); },
+            // Speed and color in each box's label. Decoration only, like Confidence.
+            setShowSpeed: function (on) { showSpeed = !!on; draw(); },
+            setShowColor: function (on) { showColor = !!on; draw(); },
+            // How long a path stays after its object stops or leaves, before it dissolves.
+            setPathLinger: function (ms) { if (typeof ms === 'number' && isFinite(ms) && ms >= 0) pathLingerMs = ms; },
             stop: function () {
                 stopped = true;
                 if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
                 if (rafHandle !== null) { window.cancelAnimationFrame(rafHandle); rafHandle = null; }
                 pendingTicks = [];
+                trails = {};
                 if (socket) { try { socket.close(); } catch (e) {} }
                 if (canvas.parentElement) canvas.parentElement.removeChild(canvas);
                 clearAiBadgeState();

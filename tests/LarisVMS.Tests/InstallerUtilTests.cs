@@ -135,4 +135,28 @@ public sealed class InstallerUtilTests
         }
         finally { File.Delete(path); }
     }
+
+    // What a node takeover or upgrade must leave in onnxruntime-backends\cuda: losing these is what
+    // silently dropped a node's AI detection to DirectML.
+    [Theory]
+    [InlineData("cudnn64_9.dll", true)]
+    [InlineData("cudnn_engines_precompiled64_9.dll", true)]
+    [InlineData("CUDART64_12.DLL", true)]
+    [InlineData("cublasLt64_12.dll", true)]
+    [InlineData("cufft64_11.dll", true)]
+    [InlineData("onnxruntime_providers_cuda.dll", true)]
+    [InlineData("onnxruntime.dll", false)]
+    [InlineData("onnxruntime_providers_tensorrt.dll", false)]
+    [InlineData("msi-copied-cuda.txt", false)]
+    [InlineData("cudnn-notes.txt", false)]
+    public void MachineCudaFilesAreRecognized(string name, bool kept) =>
+        Assert.Equal(kept, Util.IsMachineCudaFile(name));
+
+    [Fact]
+    public void TheNative64BitFoldersAreUsedNotTheX86Ones()
+    {
+        if (!OperatingSystem.IsWindows() || !Environment.Is64BitOperatingSystem) return;
+        Assert.DoesNotContain("(x86)", Util.ProgramFiles64());
+        Assert.DoesNotContain("SysWOW64", Util.System64(), StringComparison.OrdinalIgnoreCase);
+    }
 }

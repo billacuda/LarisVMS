@@ -151,6 +151,14 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
         camera.AiDetectionEnabled = aiDetectionEnabled;
         camera.MotionDetectionSource = motionDetectionSource;
         camera.ServerMotionEnabled = serverMotionEnabled;
+        // The saved credentials only go to the host they were entered for: moving the camera to
+        // another host needs its password typed again, so editing the address can't send them to a
+        // machine of the editor's choosing (the probe below would log in there).
+        if (!string.IsNullOrWhiteSpace(deviceServiceUri) && Uri.TryCreate(deviceServiceUri, UriKind.Absolute, out var newUri)
+            && !string.Equals(newUri.Host, camera.Host, StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrWhiteSpace(password) && !string.IsNullOrEmpty(camera.Password))
+            throw new ArgumentException("Enter the camera's password again to change its address to a different host.");
+
         // Blank fields leave the stored credential alone — the edit form never round-trips the
         // decrypted password back to the browser, so an empty submission must mean "unchanged",
         // not "clear it".
@@ -291,6 +299,14 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
         // must still be deletable, since deleting a broken row is exactly what a user reaches for
         // when they see one. CameraCapabilities/CameraStream rows cascade at the database level
         // (DeleteBehavior.Cascade in OnModelCreating).
+        //
+        // Evidence locks: a camera whose footage is still under a lock (active, or removed within its
+        // grace period) can't be deleted — deleting it would orphan footage someone chose to keep.
+        // Locks that no longer protect anything are history; the audit log already holds their story,
+        // so they're cleared to satisfy the Restrict foreign key.
+        if (await db.EvidenceLocks.AnyAsync(EvidenceLockQueries.Protecting(DateTime.UtcNow).AndCamera(id), ct))
+            throw new InvalidOperationException("This camera has footage under an evidence lock. Remove or wait out its locks (Evidence locks page) before deleting the camera.");
+        await db.EvidenceLocks.Where(l => l.CameraId == id).ExecuteDeleteAsync(ct);
         await db.Cameras.Where(c => c.Id == id).ExecuteDeleteAsync(ct);
     }
 

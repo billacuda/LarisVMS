@@ -11,6 +11,7 @@ namespace LarisVMS.Web.Pages.Cameras;
 /// and every create/update/delete go through speed-trap-editor.js against /api/cameras/{id}/speed-traps
 /// and /api/speed-traps/{id}.</summary>
 [Authorize("Cameras.Edit")]
+[LarisVMS.Web.Auth.RequireCameraConfigure]
 public class SpeedTrapsModel(ICameraService cameraService, ISettingsResolver settings) : PageModel
 {
     public Guid CameraId { get; set; }

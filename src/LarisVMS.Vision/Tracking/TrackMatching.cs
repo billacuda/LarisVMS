@@ -38,6 +38,54 @@ internal static class TrackMatching
         return cost;
     }
 
+    /// <summary>
+    /// 1 - IoU with both boxes enlarged by <paramref name="buffer"/> times their own width and height
+    /// on every side (buffered IoU, as in C-BIoU). For an object that moved further than its own size
+    /// between analysed frames — a car when detection runs at a few frames a second — the plain boxes
+    /// don't overlap at all; the enlarged ones still do. Only a same-class pair of similar size (area
+    /// within 2x) can match.
+    /// </summary>
+    public static float[,] BufferedIouDistance(IReadOnlyList<STrack> tracks, IReadOnlyList<STrack> detections, float buffer)
+    {
+        var cost = new float[tracks.Count, detections.Count];
+
+        Span<float> a = stackalloc float[4];
+        Span<float> b = stackalloc float[4];
+
+        for (var i = 0; i < tracks.Count; i++)
+        {
+            tracks[i].GetTlbr(a);
+            var areaA = Math.Max(0f, a[2] - a[0]) * Math.Max(0f, a[3] - a[1]);
+            Expand(a, buffer);
+
+            for (var j = 0; j < detections.Count; j++)
+            {
+                detections[j].GetTlbr(b);
+                var areaB = Math.Max(0f, b[2] - b[0]) * Math.Max(0f, b[3] - b[1]);
+                if (tracks[i].ClassId != detections[j].ClassId || areaA <= 0f || areaB <= 0f
+                    || areaA > 2f * areaB || areaB > 2f * areaA)
+                {
+                    cost[i, j] = 1f;
+                    continue;
+                }
+                Expand(b, buffer);
+                cost[i, j] = 1f - Iou(a, b);
+            }
+        }
+
+        return cost;
+    }
+
+    private static void Expand(Span<float> tlbr, float buffer)
+    {
+        var dx = (tlbr[2] - tlbr[0]) * buffer;
+        var dy = (tlbr[3] - tlbr[1]) * buffer;
+        tlbr[0] -= dx;
+        tlbr[1] -= dy;
+        tlbr[2] += dx;
+        tlbr[3] += dy;
+    }
+
     private static float Iou(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
     {
         var left = Math.Max(a[0], b[0]);

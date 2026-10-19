@@ -66,19 +66,10 @@ public class PtzService(ApplicationDbContext db, Func<HttpClient> httpClientFact
 
         if (row is null || !row.HasPtz || row.RawProbeJson is null || string.IsNullOrEmpty(row.MainProfileToken)) return null;
 
-        Uri? ptzXAddr;
-        try
-        {
-            var rawXAddrs = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(row.RawProbeJson);
-            var xAddrText = rawXAddrs?.GetValueOrDefault("PTZ");
-            if (xAddrText is null || !Uri.TryCreate(xAddrText, UriKind.Absolute, out ptzXAddr)) return null;
-        }
-        catch (System.Text.Json.JsonException)
-        {
-            return null; // corrupted or pre-PTZ RawProbeJson shape — treat as unresolvable, not fatal
-        }
+        // Corrupted or pre-PTZ RawProbeJson shape resolves to null — unresolvable, not fatal.
+        var ptzXAddr = OnvifServiceAddresses.Get(row.RawProbeJson, "PTZ");
+        if (ptzXAddr is null) return null;
 
-        var credentials = row.Username is null ? null : new OnvifCredentials(row.Username, row.Password ?? string.Empty);
-        return new PtzTarget(ptzXAddr, row.MainProfileToken, credentials);
+        return new PtzTarget(ptzXAddr, row.MainProfileToken, OnvifServiceAddresses.Credentials(row.Username, row.Password));
     }
 }

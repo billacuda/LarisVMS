@@ -16,6 +16,9 @@ window.larisvmsViewPlay = (function () {
     // off: a viewer who turns the boxes back on should get their confidence choice back with them,
     // not silently reset to off.
     var DETECTION_SHOW_CONFIDENCE_KEY = 'liveDetectionShowConfidence';
+    var DETECTION_SHOW_PATH_KEY = 'liveDetectionShowPath';
+    var DETECTION_SHOW_SPEED_KEY = 'liveDetectionShowSpeed';
+    var DETECTION_SHOW_COLOR_KEY = 'liveDetectionShowColor';
     var phoneQuery = window.matchMedia('(max-width: 767.98px)');
     // A phone held sideways is wider than the phone breakpoint but only ~400px tall, so it used to
     // fall through to the desktop grid — 12 columns squeezed into ~840px (≈70px each) while rows
@@ -54,6 +57,10 @@ window.larisvmsViewPlay = (function () {
     var showMovingDetections = false;
     var showIdleDetections = false;
     var showConfidenceDetections = false;
+    var showPathDetections = false;
+    // On by default: labels showed speed and color before these switches existed.
+    var showSpeedDetections = true;
+    var showColorDetections = true;
 
     // Playback-toggle is single-cell-at-a-time, same as the flat Live grid this was ported from —
     // switching a second cell into playback mode reverts whichever cell was previously toggled back
@@ -418,6 +425,10 @@ window.larisvmsViewPlay = (function () {
         detectionOverlay.setShowMoving(showMovingDetections);
         detectionOverlay.setShowIdle(showIdleDetections);
         detectionOverlay.setShowConfidence(showConfidenceDetections);
+        detectionOverlay.setShowPath(showPathDetections);
+        detectionOverlay.setShowSpeed(showSpeedDetections);
+        detectionOverlay.setShowColor(showColorDetections);
+        if (typeof opts.pathLingerSeconds === 'number') detectionOverlay.setPathLinger(opts.pathLingerSeconds * 1000);
         detectionOverlays[cell.id] = detectionOverlay;
 
         stopFns[cell.id] = function () {
@@ -708,6 +719,9 @@ window.larisvmsViewPlay = (function () {
         var movingCb = o.detectionShowMovingId && document.getElementById(o.detectionShowMovingId);
         var idleCb = o.detectionShowIdleId && document.getElementById(o.detectionShowIdleId);
         var confidenceCb = o.detectionShowConfidenceId && document.getElementById(o.detectionShowConfidenceId);
+        var pathCb = o.detectionShowPathId && document.getElementById(o.detectionShowPathId);
+        var speedCb = o.detectionShowSpeedId && document.getElementById(o.detectionShowSpeedId);
+        var colorCb = o.detectionShowColorId && document.getElementById(o.detectionShowColorId);
         if (!movingCb || !idleCb) return;
 
         function apply() {
@@ -715,6 +729,9 @@ window.larisvmsViewPlay = (function () {
                 detectionOverlays[id].setShowMoving(showMovingDetections);
                 detectionOverlays[id].setShowIdle(showIdleDetections);
                 detectionOverlays[id].setShowConfidence(showConfidenceDetections);
+                detectionOverlays[id].setShowPath(showPathDetections);
+                detectionOverlays[id].setShowSpeed(showSpeedDetections);
+                detectionOverlays[id].setShowColor(showColorDetections);
             });
         }
 
@@ -723,8 +740,22 @@ window.larisvmsViewPlay = (function () {
         // it stays remembered and comes back the moment boxes are switched on again. Bootstrap dims
         // the paired label off :disabled on its own, so nothing to do for the greying itself.
         function syncConfidenceEnabled() {
-            if (!confidenceCb) return;
+            // Paths belong to moving boxes, so Path needs Moving on, the same way Confidence needs
+            // some boxes. Its checked state is kept either way.
+            if (pathCb) {
+                pathCb.disabled = !showMovingDetections;
+                pathCb.title = showMovingDetections
+                    ? 'Show the path each moving object has taken'
+                    : 'Turn on Moving first — paths follow moving objects';
+            }
+            // Speed and Color label boxes too, like Confidence.
             var anyBoxes = showMovingDetections || showIdleDetections;
+            [[speedCb, 'Show each object’s speed once a speed trap has timed it'], [colorCb, 'Show each object’s color']].forEach(function (pair) {
+                if (!pair[0]) return;
+                pair[0].disabled = !anyBoxes;
+                pair[0].title = anyBoxes ? pair[1] : 'Turn on Moving or Idle first — there are no boxes to label';
+            });
+            if (!confidenceCb) return;
             confidenceCb.disabled = !anyBoxes;
             confidenceCb.title = anyBoxes
                 ? 'Show each box’s detection confidence'
@@ -750,6 +781,27 @@ window.larisvmsViewPlay = (function () {
                 apply();
             });
         }
+        if (pathCb) {
+            pathCb.addEventListener('change', function () {
+                showPathDetections = pathCb.checked;
+                window.larisvmsPreferences.set(DETECTION_SHOW_PATH_KEY, showPathDetections);
+                apply();
+            });
+        }
+        if (speedCb) {
+            speedCb.addEventListener('change', function () {
+                showSpeedDetections = speedCb.checked;
+                window.larisvmsPreferences.set(DETECTION_SHOW_SPEED_KEY, showSpeedDetections);
+                apply();
+            });
+        }
+        if (colorCb) {
+            colorCb.addEventListener('change', function () {
+                showColorDetections = colorCb.checked;
+                window.larisvmsPreferences.set(DETECTION_SHOW_COLOR_KEY, showColorDetections);
+                apply();
+            });
+        }
 
         // Preferences load asynchronously (one GET on page load, shared across every script on the
         // page — see user-preferences.js's own doc comment); render() has already run by the time
@@ -761,9 +813,15 @@ window.larisvmsViewPlay = (function () {
             showMovingDetections = window.larisvmsPreferences.get(DETECTION_SHOW_MOVING_KEY, 'false') === 'true';
             showIdleDetections = window.larisvmsPreferences.get(DETECTION_SHOW_IDLE_KEY, 'false') === 'true';
             showConfidenceDetections = window.larisvmsPreferences.get(DETECTION_SHOW_CONFIDENCE_KEY, 'false') === 'true';
+            showPathDetections = window.larisvmsPreferences.get(DETECTION_SHOW_PATH_KEY, 'false') === 'true';
+            showSpeedDetections = window.larisvmsPreferences.get(DETECTION_SHOW_SPEED_KEY, 'true') === 'true';
+            showColorDetections = window.larisvmsPreferences.get(DETECTION_SHOW_COLOR_KEY, 'true') === 'true';
             movingCb.checked = showMovingDetections;
             idleCb.checked = showIdleDetections;
             if (confidenceCb) confidenceCb.checked = showConfidenceDetections;
+            if (pathCb) pathCb.checked = showPathDetections;
+            if (speedCb) speedCb.checked = showSpeedDetections;
+            if (colorCb) colorCb.checked = showColorDetections;
             syncConfidenceEnabled();
             apply();
         });

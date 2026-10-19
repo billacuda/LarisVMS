@@ -30,9 +30,10 @@ public class RoleScopePolicyTests
     }
 
     [Fact]
-    public void GroupTierRoleCannotBeGrantedABareSite()
+    public void GroupTierRoleCanBeGrantedAWholeSite()
     {
-        Assert.False(RoleScopePolicy.CanGrant(RoleScopeTier.Group, CameraAccessScopeType.Group, targetIsSite: true));
+        // Any role may be granted any camera group, a whole site included; only "every camera" is capped.
+        Assert.True(RoleScopePolicy.CanGrant(RoleScopeTier.Group, CameraAccessScopeType.Group, targetIsSite: true));
     }
 
     [Fact]

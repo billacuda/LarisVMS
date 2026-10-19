@@ -13,9 +13,7 @@ namespace LarisVMS.Tests;
 /// <summary>
 /// GetAccessibleCameraIdsAsync end to end — CameraAccessServiceTests covers Resolve's pure logic
 /// once rows are already fetched; this covers the parts around it (Administrator short-circuit,
-/// resolving role-name claims to real role Ids, and the zero-rows-means-unrestricted default that
-/// keeps every existing deployment's every existing user seeing everything unless an admin
-/// deliberately adds a grant).
+/// resolving a user's roles from the database, and the zero-rows-means-no-cameras default).
 /// </summary>
 public class CameraAccessServiceIntegrationTests
 {
@@ -38,6 +36,19 @@ public class CameraAccessServiceIntegrationTests
         return new ClaimsPrincipal(new ClaimsIdentity(claims, "TestAuth"));
     }
 
+    /// <summary>A signed-in user who really holds <paramref name="roles"/> (user-role rows, which is
+    /// what CameraAccessService reads), with matching role claims.</summary>
+    private static async Task<ClaimsPrincipal> SignedInAsync(ApplicationDbContext db, string userId, params string[] roles)
+    {
+        foreach (var name in roles)
+        {
+            var role = await db.Roles.FirstOrDefaultAsync(r => r.Name == name);
+            if (role is not null) db.UserRoles.Add(new IdentityUserRole<string> { UserId = userId, RoleId = role.Id });
+        }
+        await db.SaveChangesAsync();
+        return AuthenticatedAs(userId, roles);
+    }
+
     [Fact]
     public async Task ASuperAdminIsAlwaysUnrestrictedEvenWithGrantsPresentForOtherRoles()
     {
@@ -54,20 +65,41 @@ public class CameraAccessServiceIntegrationTests
         db.RoleProfiles.Add(new RoleProfile { RoleId = superAdmin!.Id, Tag = RoleTags.SuperAdmin });
         await db.SaveChangesAsync();
 
-        var result = await service.GetAccessibleCameraIdsAsync(AuthenticatedAs("admin-1", "Super Admin"), CameraAccessActions.View);
+        var result = await service.GetAccessibleCameraIdsAsync(await SignedInAsync(db, "admin-1", "Super Admin"), CameraAccessActions.View);
 
         Assert.Null(result);
     }
 
     [Fact]
-    public async Task APrincipalWithNoGrantsAtAllIsUnrestricted()
+    public async Task APrincipalWithNoGrantsAtAllHasNoCameras()
     {
         var (db, roles, service) = NewHarness();
         await roles.CreateAsync(new IdentityRole("Viewer"));
 
+        var result = await service.GetAccessibleCameraIdsAsync(await SignedInAsync(db, "user-1", "Viewer"), CameraAccessActions.View);
+
+        Assert.NotNull(result);
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public async Task RolesComeFromTheDatabaseNotTheCookie()
+    {
+        var (db, roles, service) = NewHarness();
+        await roles.CreateAsync(new IdentityRole("Viewer"));
+        var viewer = await roles.FindByNameAsync("Viewer");
+        db.CameraAccesses.Add(new CameraAccess
+        {
+            Id = Guid.NewGuid(), PrincipalType = CameraAccessPrincipalType.Role, PrincipalId = viewer!.Id,
+            ScopeType = CameraAccessScopeType.All, Actions = CameraAccessActions.View
+        });
+        await db.SaveChangesAsync();
+
+        // The cookie still claims Viewer, but the role was taken away.
         var result = await service.GetAccessibleCameraIdsAsync(AuthenticatedAs("user-1", "Viewer"), CameraAccessActions.View);
 
-        Assert.Null(result);
+        Assert.NotNull(result);
+        Assert.Empty(result);
     }
 
     [Fact]
@@ -85,7 +117,7 @@ public class CameraAccessServiceIntegrationTests
         });
         await db.SaveChangesAsync();
 
-        var result = await service.GetAccessibleCameraIdsAsync(AuthenticatedAs("user-1", "Viewer"), CameraAccessActions.View);
+        var result = await service.GetAccessibleCameraIdsAsync(await SignedInAsync(db, "user-1", "Viewer"), CameraAccessActions.View);
 
         Assert.Equal([camId], result);
     }
@@ -104,11 +136,11 @@ public class CameraAccessServiceIntegrationTests
         });
         await db.SaveChangesAsync();
 
-        // "Operator" has no grants of its own — unrestricted, per the zero-rows default — but the
-        // real thing under test is that Viewer's specific camera grant plays no part in that answer.
-        var result = await service.GetAccessibleCameraIdsAsync(AuthenticatedAs("user-2", "Operator"), CameraAccessActions.View);
+        // "Operator" has no grants of its own, so no cameras; Viewer's grant plays no part in that.
+        var result = await service.GetAccessibleCameraIdsAsync(await SignedInAsync(db, "user-2", "Operator"), CameraAccessActions.View);
 
-        Assert.Null(result);
+        Assert.NotNull(result);
+        Assert.Empty(result);
     }
 
     [Fact]

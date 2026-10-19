@@ -17,7 +17,8 @@ namespace LarisVMS.Infrastructure.Services;
 /// changes are ISettingsResolver (Global scope) in place of rsolva's flat db.Settings table, and no
 /// restore counterpart (deliberately out of scope for this pass; an admin restores by other means).
 /// </summary>
-public class BackupService(ApplicationDbContext db, ISettingsResolver settings, ILogger<BackupService> logger) : IBackupService
+public class BackupService(ApplicationDbContext db, ISettingsResolver settings, ILogger<BackupService> logger,
+    Microsoft.Extensions.Configuration.IConfiguration? configuration = null) : IBackupService
 {
     // One backup at a time, app-wide.
     private static readonly SemaphoreSlim Gate = new(1, 1);
@@ -42,7 +43,7 @@ public class BackupService(ApplicationDbContext db, ISettingsResolver settings, 
             await db.SaveChangesAsync(ct);
 
             var directory = (await settings.GetRawAsync("Backup.Directory", ct: ct))?.Trim();
-            var directoryError = ValidateDirectory(directory);
+            var directoryError = ValidateDirectory(directory, AllowedRoots(configuration));
             if (directoryError != null)
             {
                 entry.Status = BackupStatus.Failed;
@@ -70,8 +71,14 @@ public class BackupService(ApplicationDbContext db, ISettingsResolver settings, 
                 // BACKUP DATABASE doesn't accept parameters — the path is validated above
                 // (rooted, no quote/semicolon/bracket characters) and the db name is bracket-escaped.
                 // COMPRESSION is deliberately omitted: SQL Express doesn't support it.
+                // With a server certificate named in settings (created in SQL Server by its admin), the
+                // .bak is encrypted, so a copy taken elsewhere is useless without that certificate.
+                var certificate = (await settings.GetRawAsync(EncryptionCertificateKey, ct: ct))?.Trim();
+                var encryption = IsValidCertificateName(certificate)
+                    ? $", ENCRYPTION (ALGORITHM = AES_256, SERVER CERTIFICATE = [{certificate!.Replace("]", "]]")}])"
+                    : "";
                 cmd.CommandText = $"BACKUP DATABASE [{databaseName.Replace("]", "]]")}] " +
-                                  $"TO DISK = N'{fullPath.Replace("'", "''")}' WITH INIT";
+                                  $"TO DISK = N'{fullPath.Replace("'", "''")}' WITH INIT{encryption}";
                 cmd.CommandTimeout = 600;
                 await cmd.ExecuteNonQueryAsync(ct);
             }
@@ -130,7 +137,18 @@ public class BackupService(ApplicationDbContext db, ISettingsResolver settings, 
         }
     }
 
-    internal static string? ValidateDirectory(string? directory)
+    public const string EncryptionCertificateKey = "Backup.EncryptionCertificate";
+
+    /// <summary>Backups:AllowedRoots in appsettings (set by whoever runs the server, not from the web
+    /// UI): when present, backups may only go to these folders or shares, or below them.</summary>
+    public static string[] AllowedRoots(Microsoft.Extensions.Configuration.IConfiguration? configuration) =>
+        configuration?.GetSection("Backups:AllowedRoots").GetChildren().Select(c => c.Value ?? "")
+            .Where(v => v.Length > 0).ToArray() ?? [];
+
+    public static bool IsValidCertificateName(string? name) =>
+        !string.IsNullOrWhiteSpace(name) && name.Length <= 128 && name.All(c => char.IsLetterOrDigit(c) || c is '_' or '-' or ' ');
+
+    internal static string? ValidateDirectory(string? directory, IReadOnlyList<string>? allowedRoots = null)
     {
         if (string.IsNullOrWhiteSpace(directory))
             return "No backup directory is configured. Set one on Admin → Backups.";
@@ -138,7 +156,16 @@ public class BackupService(ApplicationDbContext db, ISettingsResolver settings, 
             return "The backup directory contains invalid characters.";
         if (!Path.IsPathRooted(directory))
             return "The backup directory must be an absolute path (e.g. D:\\Backups\\LarisVMS).";
+        if (allowedRoots is { Count: > 0 } && !IsUnderAny(directory, allowedRoots))
+            return "That backup folder isn't one of the allowed backup locations (Backups:AllowedRoots).";
         return null;
+    }
+
+    /// <summary>Whether <paramref name="directory"/> is one of <paramref name="roots"/> or below one.</summary>
+    public static bool IsUnderAny(string directory, IReadOnlyList<string> roots)
+    {
+        static string Norm(string p) => p.Trim().Replace('/', '\\').TrimEnd('\\') + "\\";
+        return roots.Any(root => Norm(directory).StartsWith(Norm(root), StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>True when the SQL Server in the connection string runs on this machine — the only

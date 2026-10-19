@@ -63,7 +63,7 @@
                 @foreach (var log in Logs)
                 {
                     <tr>
-                        <td class="small text-muted text-nowrap" title="@log.OccurredAt.ToString("u")">@log.OccurredAt.ToLocalTime().ToString("g")</td>
+                        <td class="small text-muted text-nowrap" ><time datetime="@log.OccurredAt.ToUtcIso()" data-local="g">@log.OccurredAt.ToLocalTime().ToString("g")</time></td>
                         <td class="small font-monospace">@log.Action</td>
                         <td class="small">@(log.UserName ?? log.UserId ?? "system")</td>
                         <td class="small">@log.Details</td>

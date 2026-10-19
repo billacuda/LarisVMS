@@ -49,6 +49,11 @@ public class Node
     /// and no standalone value, same as dploid's Agent.CheckInNonce.</summary>
     public string? CheckInNonce { get; set; }
 
+    /// <summary>Set the first time this node echoes a check-in nonce. From then on a heartbeat with no
+    /// nonce is refused, so a stolen secret can't skip the check by leaving it out; a build that never
+    /// echoes (older than the nonce) keeps working. Reset auth clears it.</summary>
+    public bool CheckInNonceEchoed { get; set; }
+
     /// <summary>Replay hardening (failover plan phase 5b): when the current secret was last rotated.
     /// Null = never rotated (still the registration secret). Compared against <see cref="SecretRotationDays"/>
     /// on each authenticated heartbeat to decide whether to hand back a fresh secret.</summary>
@@ -106,6 +111,11 @@ public class Node
     /// current stretch of pressure began. Surfaced as a warning next to the node on Admin/Nodes.</summary>
     public bool StoragePressureActive { get; set; }
     public DateTime? StoragePressureSince { get; set; }
+
+    /// <summary>Over the watermark with only evidence-locked footage left to free: locked footage is
+    /// never deleted, so the volume keeps filling until a lock ends or space is added. Set/cleared on
+    /// every heartbeat; shown on Admin/Nodes.</summary>
+    public bool StorageBlockedByEvidenceLocks { get; set; }
 
     /// <summary>How far this node's own OS clock disagrees with the web server's, measured every
     /// heartbeat: (web server's receive-time UtcNow) - (SentAtUtc the node stamped when building the
@@ -275,6 +285,11 @@ public class Node
     /// acts on — the node always uses its own freshly-probed local result, not a value fetched back
     /// from the server. Null for a node that hasn't reported yet or predates this field.</summary>
     public string? DetectedAcceleratorsJson { get; set; }
+
+    /// <summary>The node's last reported AI detection backend (NodeVisionBackendDto as JSON): which
+    /// provider inference actually runs on, and the reason when it fell back from the one requested.
+    /// Null for a node that hasn't reported one.</summary>
+    public string? VisionBackendJson { get; set; }
 
     public ICollection<Camera> Cameras { get; set; } = [];
 }

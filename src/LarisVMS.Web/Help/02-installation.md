@@ -8,7 +8,7 @@ Each part has its own installer: `LarisVMS-Web`, `LarisVMS-Node`, and `LarisVMS-
 
 1. Have a SQL Server reachable from the server (Integrated Security or SQL Authentication).
 2. Run `LarisVMS-Web.msi`. Settings:
-   - `HTTPSPORT`: the HTTPS port (default 8444). The installer opens it in the firewall.
+   - `HTTPSPORT`: the HTTPS port (default 8444). The installer opens it in the firewall, for TCP and for UDP ([HTTP/3](/Help/security#http3)).
    - `CERTPATH`, `CERTPASSWORD`: the server certificate (`.pfx`). Leave blank to use a self-signed certificate until you have one. The installer checks that the file opens with the password before continuing; a file share must also be readable by the service account.
    - `SERVICEACCOUNT`, `SERVICEPASSWORD`: run the service as a specific account, for example one with SQL Integrated Security rights. Blank runs it as LocalSystem.
 3. Browse to `https://<host>:8444/`. The setup wizard walks through the database, the first admin account, storage, and node registration.
@@ -25,21 +25,21 @@ Run `LarisVMS-Node.msi` on each recording machine. It needs:
 - **FFmpeg**, which is not bundled. Install it first with `winget install ffmpeg --scope machine`. The installer finds it, or set `FFMPEGPATH`.
 - `STORAGEROOT`: where the node records. It can also be set later on the node's edit page.
 
-Optional: `ARCHIVEROOT`, `LIVEPORT` (default 8554), `INSECURETLS=1` (accept the server's self-signed certificate), the direct-streaming endpoint (`CLIENTPORT`, `CLIENTENDPOINTHOST`, `CLIENTPFXPATH`, `CLIENTPFXPASSWORD`), and `SERVICEACCOUNT` / `SERVICEPASSWORD` for an account that can reach SMB storage.
+Optional: `ARCHIVEROOT`, `LIVEPORT` (default 8554), `LIVEALLOWFROM` (addresses allowed through the firewall to the live port, as IPs or CIDR blocks separated by commas: the LarisVMS server and any proxies; blank allows any), `INSECURETLS=1` (no longer needed: nodes trust the server's self-signed certificate on first use, see [Server certificate](/Help/nodes#server-certificate)), the direct-streaming endpoint (`CLIENTPORT`, `CLIENTENDPOINTHOST`, `CLIENTPFXPATH`, `CLIENTPFXPASSWORD`), and `SERVICEACCOUNT` / `SERVICEPASSWORD` for an account that can reach SMB storage.
 
 For AI detection, NVIDIA machines also need the CUDA Toolkit 12.x and cuDNN 9.x; the installer copies their DLLs into place when it finds them. See [AI detection](/Help/ai-detection#hardware).
 
-After installing, the node appears under **Nodes**. Assign cameras to it from each camera's edit page.
+After installing, the node appears under **Nodes** as **waiting for approval**. It records nothing and gets no cameras until you click **Approve**, so only approve a node you installed yourself. Then assign cameras to it from each camera's edit page.
 
 ## Media proxies
 
-Run `LarisVMS-Proxy.msi` with `SERVERURL`, `REGISTRATIONKEY`, and `CLIENTPORT` (default 4443), plus the same optional certificate settings as a node. Then choose it on each node's page (see [Nodes](/Help/nodes#proxies)).
+Run `LarisVMS-Proxy.msi` with `SERVERURL`, `REGISTRATIONKEY`, and `CLIENTPORT` (default 4443), plus the same optional certificate settings as a node. A new proxy starts turned off: turn on **Enabled** for it under **Settings → Media proxies**, then choose it on each node's page (see [Nodes](/Help/nodes#proxies)).
 
 ## Updates
 
 **Upgrading:** run the newer `.msi`. It finds the existing install and goes straight to **Ready to upgrade**; settings are remembered, so nothing needs to be entered again except a domain service account's password. The web server applies any database changes itself when it starts. Upgrades never touch recordings, configuration files, node registration, or the data-protection keys, and a failed install is rolled back.
 
-**Nodes and proxies update themselves.** A new web install registers the node and proxy builds it carries as **Pending** in the **Builds** section of **Nodes**. Only the newest node build and the newest proxy build wait for approval; older ones are **Superseded**. **Build history** lists every build. Approve one, and every older node downloads, verifies, and installs it on its next check-in. Turn this off with **Auto-update** under **Nodes → Updates and registration**.
+**Nodes and proxies update themselves.** A new web install registers the node and proxy builds it carries as **Pending** in the **Builds** section of **Nodes**. Only the newest node build and the newest proxy build wait for approval; older ones are **Superseded**. **Build history** lists every build. Approve one, and every older node downloads, verifies, and installs it on its next check-in. The server signs every update with its signing key (see **Settings → Encryption and signing**); nodes and proxies keep that key from when they registered and install nothing that isn't signed with it, even if their connection to the server were tampered with. Turn this off with **Auto-update** under **Nodes → Updates and registration**.
 
 **New versions:** once a day (and when the service starts) the server checks LarisVMS's GitHub releases. When a newer version is out, people who can change settings see **✨ Version X is available** in the top bar, linking to its release notes. Nothing about your install is sent. Turn it off with **New versions** under **Nodes → Updates and registration**.
 

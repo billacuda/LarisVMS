@@ -20,7 +20,12 @@ public class IpAllowListMiddleware(RequestDelegate next)
     {
         if (SetupMiddleware.IsSetupPending(context)) { await next(context); return; }
 
-        var key = MediaRoutes.IsMediaPath(context.Request.Path) ? LiveViewSettingKey : ManagementSettingKey;
+        // A live ticket hands out a token for direct-to-node video, which never passes this server
+        // again, so it's held to the live/playback list too (but isn't a media route: port
+        // segmentation keeps it on the page's own port).
+        var isLive = MediaRoutes.IsMediaPath(context.Request.Path)
+            || context.Request.Path.StartsWithSegments("/api/media/live-ticket", StringComparison.OrdinalIgnoreCase);
+        var key = isLive ? LiveViewSettingKey : ManagementSettingKey;
         var raw = await settings.GetRawAsync(key, ct: context.RequestAborted);
         var parsed = IpAllowListPolicy.Parse(raw);
 

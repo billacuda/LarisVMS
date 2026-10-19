@@ -9,6 +9,7 @@ namespace LarisVMS.Web.Pages;
 // failed — the ASP.NET Core template default.
 #pragma warning disable S4502
 [IgnoreAntiforgeryToken]
+[Microsoft.AspNetCore.Authorization.AllowAnonymous]
 #pragma warning restore S4502
 public class ErrorModel : PageModel
 {

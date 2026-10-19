@@ -21,6 +21,10 @@ public sealed class PlayViewModel
     public string EventBadgeCornerValue { get; set; } = EventBadgeCorner.Default;
     public bool AdaptiveStreamingEnabled { get; set; }
 
+    /// <summary>LiveView.PathLingerSeconds: how long a travel path stays after its object stops or
+    /// leaves, before it dissolves.</summary>
+    public int PathLingerSeconds { get; set; } = PathLinger.Default;
+
     /// <summary>Set only for the single-camera picker — non-null tells the client to render one ad
     /// hoc tile for this camera instead of parsing LayoutJson.</summary>
     public Guid? SingleCameraId { get; set; }

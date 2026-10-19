@@ -119,6 +119,27 @@ public sealed class ByteTracker
 
     private int NextTrackId() => ++_nextTrackId;
 
+    // Buffered-IoU fallback (TrackMatching.BufferedIouDistance): box enlargements tried, in order, for
+    // pairs the plain overlap passes left unmatched, and the most cost (1 - buffered IoU) accepted.
+    private static readonly float[] Buffers = [0.5f, 1.0f];
+    private const float BufferedMatchThreshold = 0.7f;
+
+    /// <summary>Running totals for the cadence log: new candidate tracks, those confirmed by a second
+    /// frame (and so reported), and those dropped after one frame. Many dropped means objects are
+    /// being lost before they can show — usually because detection runs too few frames a second.</summary>
+    public int TracksStarted { get; private set; }
+    public int TracksConfirmed { get; private set; }
+    public int TracksDroppedUnconfirmed { get; private set; }
+
+    /// <summary>Hidden tracks picked up again by step 4c, in total.</summary>
+    public int TracksRejoined { get; private set; }
+
+    /// <summary>This frame's rejoins (step 4c): a hidden track that came back into view.
+    /// <c>From</c> is the young track folded into it (its id is gone from now on), or 0 when it was
+    /// picked up from a fresh detection; <c>FramesHidden</c> is how long it was out of sight.</summary>
+    public IReadOnlyList<(int From, int Into, int FramesHidden)> Rejoins => _rejoins;
+    private readonly List<(int From, int Into, int FramesHidden)> _rejoins = [];
+
     /// <summary>
     /// Every track ByteTrack still considers alive after the most recent <see cref="Update{T}"/>: the
     /// ones it emitted this frame plus the ones it is coasting through a brief gap (state Lost, kept
@@ -155,11 +176,16 @@ public sealed class ByteTracker
     /// Writing into those properties rather than returning a parallel structure is what lets
     /// YoloDotNet's Draw() render IDs and motion trails unchanged -- it is the same contract
     /// its own SortTracker uses.
+    ///
+    /// <paramref name="canRejoin"/> (hidden track id, detection index) has the last word on whether
+    /// an object coming back into view may be that hidden track (step 4c) — the caller knows its
+    /// label and colors. Without it, the same class is enough.
     /// </summary>
-    public IReadOnlyList<T> Update<T>(IReadOnlyList<T> detections)
+    public IReadOnlyList<T> Update<T>(IReadOnlyList<T> detections, Func<int, int, bool>? canRejoin = null)
         where T : class, IDetection
     {
         _frameId++;
+        _rejoins.Clear();
 
         var activated = new List<STrack>();
         var refound = new List<STrack>();
@@ -240,6 +266,40 @@ public sealed class ByteTracker
             track.DetectionIndex = detection.DetectionIndex;
         }
 
+        // Step 2b - an object that moved further than its own size since the last analysed frame
+        // doesn't overlap its prediction at all, and a just-confirmed track's speed estimate is still
+        // too small to predict it. Match what's left on enlarged boxes — but only for a track that is
+        // either brand new (no reliable speed yet) or already moving, toward a detection ahead of it.
+        // A parked object's track never qualifies, so it can't hop onto the car beside it when that
+        // car's box flickers into view. Lost tracks never qualify either.
+        var leftTracks = unmatchedTracks.Where(i => BufferedMatchAllowed(pool[i])).ToList();
+        var leftHigh = unmatchedHigh.ToList();
+        foreach (var buffer in Buffers)
+        {
+            if (leftTracks.Count == 0 || leftHigh.Count == 0) break;
+            var tracksLeft = leftTracks.Select(i => pool[i]).ToList();
+            var highLeft = leftHigh.Select(i => high[i]).ToList();
+            var bufferedCost = TrackMatching.BufferedIouDistance(tracksLeft, highLeft, buffer);
+            for (var t = 0; t < tracksLeft.Count; t++)
+                for (var d = 0; d < highLeft.Count; d++)
+                    if (!AheadOf(tracksLeft[t], highLeft[d])) bufferedCost[t, d] = 1f;
+            var (bufferedMatches, _, _) = TrackMatching.LinearAssignment(bufferedCost, tracksLeft.Count, highLeft.Count, BufferedMatchThreshold);
+            var usedTracks = new HashSet<int>();
+            var usedHigh = new HashSet<int>();
+            foreach (var (t, d) in bufferedMatches)
+            {
+                tracksLeft[t].Update(_filter, highLeft[d], _frameId);
+                tracksLeft[t].DetectionIndex = highLeft[d].DetectionIndex;
+                activated.Add(tracksLeft[t]);
+                usedTracks.Add(leftTracks[t]);
+                usedHigh.Add(leftHigh[d]);
+            }
+            leftTracks.RemoveAll(usedTracks.Contains);
+            leftHigh.RemoveAll(usedHigh.Contains);
+            unmatchedTracks.RemoveAll(usedTracks.Contains);
+            unmatchedHigh.RemoveAll(usedHigh.Contains);
+        }
+
         // Step 3 - second association, against low confidence detections. This is the part that
         // carries identity through occlusion.
         var stillTracked = unmatchedTracks
@@ -275,7 +335,8 @@ public sealed class ByteTracker
             var track = stillTracked[index];
             if (track.State != TrackState.Lost)
             {
-                track.MarkLost();
+                // Seen over a few frames and moving: it has a direction, so it may rejoin (step 4c).
+                track.MarkLost(track.FrameId - track.StartFrame >= YoungTrackFrames - 1 && IsMoving(track, RejoinSpeedShare));
                 newlyLost.Add(track);
             }
         }
@@ -299,11 +360,104 @@ public sealed class ByteTracker
             activated.Add(track);
         }
 
+        // Step 4b - a new track's second frame: it has no speed estimate yet, so a fast object (or one
+        // seen at a few frames a second) can have moved further than its own size and not overlap its
+        // first box at all. Match what's left on enlarged boxes, same class and similar size only.
+        // Confirmed tracks don't get this: their own motion prediction follows a real mover, and on
+        // them it only lets a track hop onto the parked car next to it when that car's box flickers.
+        var leftUnconfirmed = unmatchedUnconfirmed.ToList();
+        var leftRemaining = stillUnmatchedHigh.ToList();
+        foreach (var buffer in Buffers)
+        {
+            if (leftUnconfirmed.Count == 0 || leftRemaining.Count == 0) break;
+            var tracksLeft = leftUnconfirmed.Select(i => unconfirmed[i]).ToList();
+            var highLeft = leftRemaining.Select(i => remainingHigh[i]).ToList();
+            var (bufferedMatches, _, _) = TrackMatching.LinearAssignment(
+                TrackMatching.BufferedIouDistance(tracksLeft, highLeft, buffer), tracksLeft.Count, highLeft.Count, BufferedMatchThreshold);
+            var usedTracks = new HashSet<int>();
+            var usedHigh = new HashSet<int>();
+            foreach (var (t, d) in bufferedMatches)
+            {
+                var track = tracksLeft[t];
+                track.Update(_filter, highLeft[d], _frameId);
+                track.DetectionIndex = highLeft[d].DetectionIndex;
+                activated.Add(track);
+                usedTracks.Add(leftUnconfirmed[t]);
+                usedHigh.Add(leftRemaining[d]);
+            }
+            leftUnconfirmed.RemoveAll(usedTracks.Contains);
+            leftRemaining.RemoveAll(usedHigh.Contains);
+        }
+        unmatchedUnconfirmed = leftUnconfirmed;
+        stillUnmatchedHigh = leftRemaining;
+        TracksConfirmed += unconfirmed.Count - unmatchedUnconfirmed.Count;
+
+        // Step 4c - an object that went behind something (a tree, a post) and comes out further along
+        // its line. Nothing above can find its hidden track: after a second or more out of sight at a
+        // few frames a second, the prediction rarely overlaps where it reappears. So a track that was
+        // moving when lost may take a detection — or a track only a few frames old, its partly hidden
+        // first sighting — that lies ahead of it on the same line, at a believable distance, and is
+        // about its size. A parked object's track is never eligible.
+        var rejoinable = _lost.Where(t => t.State == TrackState.Lost && t.MovingWhenLost
+            && _frameId - t.FrameId <= _maxTimeLost).ToList();
+        if (rejoinable.Count > 0)
+        {
+            var byDetection = new Dictionary<int, STrack>();
+            foreach (var d in high.Concat(low)) byDetection[d.DetectionIndex] = d;
+
+            // Candidates: (detection, young track it's matched to this frame, or null).
+            var candidates = stillUnmatchedHigh.Select(i => (Detection: remainingHigh[i], Young: (STrack?)null, HighIndex: i)).ToList();
+            foreach (var young in activated)
+            {
+                if (young.TrackId == 0 || _frameId - young.StartFrame > YoungTrackFrames) continue;
+                if (byDetection.TryGetValue(young.DetectionIndex, out var seen)) candidates.Add((seen, young, -1));
+            }
+
+            if (candidates.Count > 0)
+            {
+                var rejoinCost = new float[rejoinable.Count, candidates.Count];
+                for (var t = 0; t < rejoinable.Count; t++)
+                {
+                    for (var c = 0; c < candidates.Count; c++)
+                    {
+                        var (detection, young, _) = candidates[c];
+                        var allowed = (young is null || young.StartFrame > rejoinable[t].FrameId)
+                            && (canRejoin?.Invoke(rejoinable[t].TrackId, detection.DetectionIndex)
+                                ?? rejoinable[t].ClassId == detection.ClassId);
+                        rejoinCost[t, c] = allowed && RejoinCost(rejoinable[t], detection) is { } fit ? fit : 1f;
+                    }
+                }
+
+                var (rejoined, _, _) = TrackMatching.LinearAssignment(rejoinCost, rejoinable.Count, candidates.Count, RejoinMaxCost);
+                var usedHigh = new HashSet<int>();
+                foreach (var (t, c) in rejoined)
+                {
+                    var hidden = rejoinable[t];
+                    var (detection, young, highIndex) = candidates[c];
+                    var framesHidden = _frameId - hidden.FrameId;
+                    hidden.ReActivate(_filter, detection, _frameId, newTrackId: null);
+                    hidden.DetectionIndex = detection.DetectionIndex;
+                    refound.Add(hidden);
+                    if (young is not null)
+                    {
+                        activated.Remove(young);
+                        young.MarkRemoved();
+                        removed.Add(young);
+                    }
+                    else usedHigh.Add(highIndex);
+                    _rejoins.Add((young?.TrackId ?? 0, hidden.TrackId, framesHidden));
+                    TracksRejoined++;
+                }
+                stillUnmatchedHigh.RemoveAll(usedHigh.Contains);
+            }
+        }
+
         foreach (var index in unmatchedUnconfirmed)
         {
             var track = unconfirmed[index];
             track.MarkRemoved();
             removed.Add(track);
+            TracksDroppedUnconfirmed++;
         }
 
         // Step 5 - start tracks for confident leftovers.
@@ -317,6 +471,7 @@ public sealed class ByteTracker
 
             detection.Activate(_filter, _frameId, NextTrackId());
             activated.Add(detection);
+            TracksStarted++;
         }
 
         // Step 6 - retire tracks lost for too long.
@@ -362,6 +517,79 @@ public sealed class ByteTracker
         }
 
         return output;
+    }
+
+    // A track this many frames old or younger has no reliable speed estimate yet.
+    private const int YoungTrackFrames = 3;
+    // Moving: centre speed of at least this share of the box's size per frame.
+    private const float MovingSpeedShare = 0.05f;
+    // Lower for rejoining (step 4c), so a slow walker still qualifies; the caller's canRejoin and
+    // the direction gate keep parked objects out.
+    private const float RejoinSpeedShare = 0.02f;
+    // Step 4c cost is the distance from the predicted spot over the allowed spread; above this, no.
+    private const float RejoinMaxCost = 0.99f;
+
+    /// <summary>How well a detection fits a hidden track coming back into view (step 4c), 0 best,
+    /// or null when it can't be that object: a different size, behind where it was hidden, off its
+    /// line, or further than it could have gone.</summary>
+    private float? RejoinCost(STrack hidden, STrack detection)
+    {
+        var last = hidden.LastSeenTlwh;
+        var box = detection.Tlwh;
+        if (last[2] <= 0 || last[3] <= 0) return null;
+
+        // About its height; narrower allowed, since it may still be half behind the tree.
+        var heightRatio = box[3] / last[3];
+        var widthRatio = box[2] / last[2];
+        if (heightRatio < 0.6f || heightRatio > 1.67f || widthRatio < 0.35f || widthRatio > 2f) return null;
+
+        var speed = MathF.Sqrt(hidden.LostVx * hidden.LostVx + hidden.LostVy * hidden.LostVy);
+        if (speed <= 0) return null;
+        var ux = hidden.LostVx / speed;
+        var uy = hidden.LostVy / speed;
+        var diag = MathF.Sqrt(last[2] * last[2] + last[3] * last[3]);
+        var frames = _frameId - hidden.FrameId;
+
+        var dx = box[0] + box[2] / 2f - (last[0] + last[2] / 2f);
+        var dy = box[1] + box[3] / 2f - (last[1] + last[3] / 2f);
+        var along = dx * ux + dy * uy;
+        var side = MathF.Abs(dx * uy - dy * ux);
+        var reach = speed * frames;
+
+        // Ahead (it may have slowed or paused behind the tree), not past where it could get to, and
+        // close to its line.
+        if (along < -0.25f * diag || along > 2.5f * reach + diag) return null;
+        if (side > MathF.Max(0.6f * diag, 0.35f * along)) return null;
+
+        // Closest to where it would be at its old speed wins.
+        var px = last[0] + last[2] / 2f + hidden.LostVx * frames;
+        var py = last[1] + last[3] / 2f + hidden.LostVy * frames;
+        var miss = MathF.Sqrt((box[0] + box[2] / 2f - px) * (box[0] + box[2] / 2f - px) + (box[1] + box[3] / 2f - py) * (box[1] + box[3] / 2f - py));
+        return MathF.Min(RejoinMaxCost - 0.01f, miss / (2f * (diag + reach)));
+    }
+
+    /// <summary>Whether a track may be matched on enlarged boxes (step 2b): currently tracked, and
+    /// either young or moving.</summary>
+    private bool BufferedMatchAllowed(STrack track) =>
+        track.State == TrackState.Tracked && (_frameId - track.StartFrame <= YoungTrackFrames || IsMoving(track));
+
+    private static bool IsMoving(STrack track, float share = MovingSpeedShare)
+    {
+        if (track.Mean is not { } m) return false;
+        var size = Math.Max(m[3], m[2] * m[3]);
+        return size > 0 && MathF.Sqrt(m[4] * m[4] + m[5] * m[5]) >= share * size;
+    }
+
+    /// <summary>For a moving track, the detection lies ahead of where it was predicted, not behind
+    /// it or off to the side; a young track has no direction yet, so anything goes.</summary>
+    private static bool AheadOf(STrack track, STrack detection)
+    {
+        if (!IsMoving(track) || track.Mean is not { } m) return true;
+        Span<float> box = stackalloc float[4];
+        detection.GetTlbr(box);
+        var dx = (box[0] + box[2]) / 2f - m[0];
+        var dy = (box[1] + box[3]) / 2f - m[1];
+        return dx * m[4] + dy * m[5] >= 0f;
     }
 
     private List<SKPoint> UpdateTail(STrack track)

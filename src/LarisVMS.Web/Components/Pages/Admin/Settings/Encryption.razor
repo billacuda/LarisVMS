@@ -35,11 +35,11 @@
             }
             else
             {
-                <p class="mb-1">Master key <code>@Status.MasterKeyId?.ToString()[..8]</code>, created @Status.CreatedAt?.ToLocalTime().ToString("g").</p>
+                <p class="mb-1">Master key <code>@Status.MasterKeyId?.ToString()[..8]</code>, created @if (Status.CreatedAt is { } keyCreated) {<time datetime="@keyCreated.ToUtcIso()" data-local="g">@keyCreated.ToLocalTime().ToString("g")</time>}.</p>
                 <p class="mb-2">
                     @if (Status.BackupDownloadedAt is { } backedUp)
                     {
-                        <span>Backup last downloaded @backedUp.ToLocalTime().ToString("g").</span>
+                        <span>Backup last downloaded <time datetime="@backedUp.ToUtcIso()" data-local="g">@backedUp.ToLocalTime().ToString("g")</time>.</span>
                     }
                     else
                     {
@@ -96,7 +96,7 @@
                 <select name="Mode" id="encMode" class="form-select" disabled="@(!Status.Ready)">
                     <option value="Off" selected="@(Mode == "Off")">Off</option>
                     <option value="Video" selected="@(Mode == "Video")">Video (recordings and talk audio)</option>
-                    <option value="VideoAndImages" selected="@(Mode == "VideoAndImages")">Video, snapshots and thumbnails</option>
+                    <option value="VideoAndImages" selected="@(Mode == "VideoAndImages")">Video, snapshots, and thumbnails</option>
                 </select>
                 @if (!Status.Ready)
                 {
@@ -131,11 +131,12 @@
                                 <tr>
                                     <td class="font-monospace" title="SHA-256 fingerprint of the public key">@Fingerprint(k.PublicKeyPem)</td>
                                     <td>@k.Algorithm</td>
-                                    <td class="text-nowrap">@k.CreatedAt.ToLocalTime().ToString("g")</td>
+                                    <td class="text-nowrap"><time datetime="@k.CreatedAt.ToUtcIso()" data-local="g">@k.CreatedAt.ToLocalTime().ToString("g")</time></td>
                                     <td>
                                         @if (k.RetiredAt is { } retired)
                                         {
-                                            <span class="badge text-bg-secondary" title="Retired @retired.ToLocalTime().ToString("g")">Retired</span>
+                                            <span class="badge text-bg-secondary" title="Retired @retired.ToLocalTime().ToString("g")"
+                                                  data-local-title="@retired.ToUtcIso()" data-local-title-prefix="Retired ">Retired</span>
                                         }
                                         else
                                         {
@@ -158,7 +159,7 @@
 </div>
 
 <SectionContent SectionName="PageScripts">
-    <script src="/js/encryption-settings.js"></script>
+    <PageScript Src="/js/encryption-settings.js" />
 </SectionContent>
 
 @code {

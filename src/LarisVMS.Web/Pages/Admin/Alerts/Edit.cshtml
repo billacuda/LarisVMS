@@ -41,8 +41,11 @@
                         <option value="@AlertConditionType.NodeOffline">Node offline</option>
                         <option value="@AlertConditionType.NodeStorageLow">Node storage low</option>
                         <option value="@AlertConditionType.NodeFailoverActivated">Node failover activated</option>
+                        <option value="@AlertConditionType.MotionDetected">Motion detected</option>
                         <option value="@AlertConditionType.ObjectDetected">Object detected</option>
                         <option value="@AlertConditionType.SpeedOver">Speed over a limit</option>
+                        <option value="@AlertConditionType.EvidenceLockExpiringSoon">Evidence lock ending soon</option>
+                        <option value="@AlertConditionType.EvidenceLockRemoved">Evidence lock removed</option>
                     </select>
                 </div>
 
@@ -57,9 +60,9 @@
                     </select>
                 </div>
                 <div class="col-sm-6" id="nodeField">
-                    <label class="form-label">Node</label>
-                    <select asp-for="NodeId" class="form-select">
-                        <option value="">(choose a node)</option>
+                    <label class="form-label" id="nodeLabel">Node</label>
+                    <select asp-for="NodeId" id="nodeSelect" class="form-select">
+                        <option value="" id="nodeEmptyOption">(choose a node)</option>
                         @foreach (var n in Model.Nodes)
                         {
                             <option value="@n.Id">@n.Name</option>
@@ -75,18 +78,21 @@
                 </div>
             </div>
 
-            @* Detection alerts: every filter is optional and they all have to match. *@
+            @* Detection and motion alerts: every filter is optional and they all have to match. Motion
+               uses only the zone and the schedule. *@
             <div id="detectionFields" class="row g-3 mt-1">
-                <div class="col-12"><hr class="my-1" /><div class="small text-muted">
+                <div class="col-12"><hr class="my-1" /><div class="small text-muted" data-detection-only>
                     Fires within seconds of a matching AI detection. Leave a filter empty to match anything.
                     Needs AI detection on the camera; colors and zones use each object's own box.
+                </div><div class="small text-muted" data-motion-only>
+                    Fires within seconds of motion on the camera, or only in one server motion zone.
                 </div></div>
                 <div class="col-sm-3" id="speedField">
                     <label class="form-label">Speed limit (@SpeedUnits.Label(Model.SpeedUnit))</label>
                     <input type="number" asp-for="SpeedThreshold" class="form-control" min="1" step="any" />
                     <div class="lv-hint">Fires at or over this. Speeds come from speed traps (Cameras → Speed traps).</div>
                 </div>
-                <div class="col-sm-3">
+                <div class="col-sm-3" data-detection-only>
                     <label class="form-label">Category</label>
                     <select asp-for="CategoryFilter" class="form-select">
                         <option value="">(any)</option>
@@ -96,7 +102,7 @@
                         }
                     </select>
                 </div>
-                <div class="col-sm-3">
+                <div class="col-sm-3" data-detection-only>
                     <label class="form-label">Label</label>
                     <input type="text" asp-for="LabelFilter" class="form-control" list="alertLabelList" placeholder="e.g. truck" />
                     <datalist id="alertLabelList">
@@ -106,7 +112,7 @@
                         }
                     </datalist>
                 </div>
-                <div class="col-sm-3">
+                <div class="col-sm-3" data-detection-only>
                     <label class="form-label">Color</label>
                     <select asp-for="ColorFilter" class="form-select">
                         <option value="">(any)</option>
@@ -120,13 +126,14 @@
                 <div class="col-sm-4">
                     <label class="form-label">Zone</label>
                     <select asp-for="ZoneId" id="zoneSelect" class="form-select">
-                        <option value="">(anywhere in view)</option>
+                        <option value="" id="zoneAnyOption">(anywhere in view)</option>
                         @foreach (var z in Model.Zones)
                         {
-                            <option value="@z.Id" data-camera="@z.CameraId">@z.Name</option>
+                            <option value="@z.Id" data-camera="@z.CameraId" data-kind="@z.Kind">@z.Name</option>
                         }
                     </select>
-                    <div class="lv-hint">Where the object stands (the bottom of its box). Pick a camera first.</div>
+                    <div class="lv-hint" data-detection-only>Where the object stands (the bottom of its box). Pick a camera first.</div>
+                    <div class="lv-hint" data-motion-only>Server motion zones only. Pick a camera first.</div>
                 </div>
                 <div class="col-sm-8">
                     <label class="form-label d-block">Active</label>
@@ -143,14 +150,31 @@
                         <span class="small">to</span>
                         <input type="time" asp-for="ScheduleEnd" class="form-control form-control-sm" style="width: 8rem;" aria-label="Until" />
                     </div>
-                    <div class="lv-hint">No days ticked = every day; no times = all day. 22:00 to 06:00 runs overnight. Server time.</div>
+                    <div class="lv-hint">No days ticked = every day; no times = all day. 22:00 to 06:00 runs overnight. In <span id="tzName">@(Model.ScheduleTimeZoneName ?? "your time zone")</span>.</div>
+                    <input type="hidden" asp-for="TimeZoneId" id="timeZoneId" />
                 </div>
             </div>
         </div>
     </div>
 
     <div class="card mb-3">
-        <div class="card-header fw-semibold">Deliveries</div>
+        <div class="card-header fw-semibold">Notifications to users</div>
+        <div class="card-body">
+            <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" asp-for="AllowSubscribe" id="allowSubscribe" />
+                <label class="form-check-label" for="allowSubscribe">Let users subscribe</label>
+            </div>
+            <div class="lv-hint">Users can then turn this on for themselves under My notifications, in the browser or by email.
+                Each user only gets it for cameras they can view. <a href="/Help/alerts#notifications">Learn more</a></div>
+            @if (Model.Id is null)
+            {
+                <div class="small text-muted mt-2">Save the rule to add subscribers.</div>
+            }
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header fw-semibold">Team channels</div>
         <div class="card-body">
             <p class="text-muted small">At most one delivery per channel. Turn a channel on and fill
                 in its fields to send a firing there.</p>
@@ -240,8 +264,81 @@
     <a asp-page="Index" class="btn btn-outline-secondary">Cancel</a>
 </form>
 
+@if (Model.Id is { } ruleId)
+{
+    <div class="card my-3">
+        <div class="card-header fw-semibold">Subscribers</div>
+        <div class="card-body">
+            @if (Model.Subscribers.Count == 0)
+            {
+                <p class="text-muted small">Nobody gets this as a personal notification yet.</p>
+            }
+            else
+            {
+                <table class="table table-sm align-middle">
+                    <thead><tr><th>User</th><th>Browser</th><th>Email</th><th>Muted</th><th></th></tr></thead>
+                    <tbody>
+                        @foreach (var sub in Model.Subscribers)
+                        {
+                            <tr>
+                                <td>@sub.UserName</td>
+                                <td>@(sub.Browser ? "✓" : "—")</td>
+                                <td>@(sub.Email ? "✓" : "—")</td>
+                                <td class="small">
+                                    @if (sub.MutedUntilUtc is { } muted && muted > DateTime.UtcNow)
+                                    {
+                                        @if (muted == DateTime.MaxValue) { <span>until turned back on</span> }
+                                        else { <span>until <time datetime="@muted.ToUtcIso()" data-local="g">@muted.ToLocalTime().ToString("g")</time></span> }
+                                    }
+                                    else { <span class="text-muted">—</span> }
+                                </td>
+                                <td class="text-end">
+                                    <form method="post" asp-page-handler="RemoveSubscriber" asp-route-id="@ruleId" class="d-inline">
+                                        <input type="hidden" name="subscriptionId" value="@sub.Id" />
+                                        <button type="submit" class="btn btn-sm btn-outline-danger">Remove</button>
+                                    </form>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+            <form method="post" asp-page-handler="AddSubscribers" asp-route-id="@ruleId" class="row g-2 align-items-end">
+                <div class="col-sm-4">
+                    <label class="form-label small mb-0" for="addUserId">Add a user</label>
+                    <select name="addUserId" id="addUserId" class="form-select form-select-sm">
+                        <option value="">(none)</option>
+                        @foreach (var u in Model.Users) { <option value="@u.Id">@u.Name</option> }
+                    </select>
+                </div>
+                <div class="col-sm-3">
+                    <label class="form-label small mb-0" for="addRoleId">or everyone in a role</label>
+                    <select name="addRoleId" id="addRoleId" class="form-select form-select-sm">
+                        <option value="">(none)</option>
+                        @foreach (var r in Model.Roles) { <option value="@r.Id">@r.Name</option> }
+                    </select>
+                </div>
+                <div class="col-sm-auto">
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="checkbox" name="addBrowser" value="true" id="addBrowser" checked />
+                        <label class="form-check-label small" for="addBrowser">Browser</label>
+                    </div>
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="checkbox" name="addEmail" value="true" id="addEmail" />
+                        <label class="form-check-label small" for="addEmail">Email</label>
+                    </div>
+                </div>
+                <div class="col-sm-auto">
+                    <button type="submit" class="btn btn-sm btn-outline-primary">Add</button>
+                </div>
+                <div class="col-12 lv-hint">Each person can change how they get it, mute it, or unsubscribe under My notifications.</div>
+            </form>
+        </div>
+    </div>
+}
+
 @section Scripts {
-    <script>
+    <script nonce="@Csp.Value">
         (function () {
             var conditionType = document.getElementById('conditionType');
             var cameraField = document.getElementById('cameraField');
@@ -252,7 +349,16 @@
             var cameraSelect = document.getElementById('cameraSelect');
             var cameraEmptyOption = document.getElementById('cameraEmptyOption');
             var zoneSelect = document.getElementById('zoneSelect');
+            var nodeLabel = document.getElementById('nodeLabel');
+            var nodeEmptyOption = document.getElementById('nodeEmptyOption');
             if (!conditionType) return;
+
+            // The schedule runs in the zone of whoever saves the rule.
+            var tz = document.getElementById('timeZoneId');
+            try {
+                var zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                if (tz && zone) tz.value = zone;
+            } catch (e) { /* leave the stored zone */ }
 
             // The options carry enum names (that's what the select tag helper binds), so compare names.
             function update() {
@@ -263,20 +369,33 @@
                 var isFailover = value === '@nameof(AlertConditionType.NodeFailoverActivated)';
                 var isSpeed = value === '@nameof(AlertConditionType.SpeedOver)';
                 var isDetection = isSpeed || value === '@nameof(AlertConditionType.ObjectDetected)';
-                cameraField.style.display = (isCamera || isDetection) ? '' : 'none';
-                cameraEmptyOption.textContent = isDetection ? '(any camera)' : '(choose a camera)';
-                nodeField.style.display = (isNodeOffline || isStorageLow || isFailover) ? '' : 'none';
+                var isLock = value === '@nameof(AlertConditionType.EvidenceLockExpiringSoon)' || value === '@nameof(AlertConditionType.EvidenceLockRemoved)';
+                var isMotion = value === '@nameof(AlertConditionType.MotionDetected)';
+                var cameraScoped = isDetection || isLock || isMotion;
+                var nodeCondition = isNodeOffline || isStorageLow || isFailover;
+                cameraField.style.display = (isCamera || cameraScoped) ? '' : 'none';
+                cameraEmptyOption.textContent = cameraScoped ? '(any camera)' : '(choose a camera)';
+                // Camera-scoped types can be limited to one node's cameras when no camera is chosen.
+                nodeField.style.display = (nodeCondition || (cameraScoped && !cameraSelect.value)) ? '' : 'none';
+                nodeLabel.textContent = nodeCondition ? 'Node' : 'Only cameras on node';
+                nodeEmptyOption.textContent = nodeCondition ? '(choose a node)' : '(any node)';
                 thresholdField.style.display = isStorageLow ? '' : 'none';
-                detectionFields.style.display = isDetection ? '' : 'none';
+                detectionFields.style.display = (isDetection || isMotion) ? '' : 'none';
                 speedField.style.display = isSpeed ? '' : 'none';
+                Array.prototype.forEach.call(detectionFields.querySelectorAll('[data-detection-only]'), function (el) { el.style.display = isMotion ? 'none' : ''; });
+                Array.prototype.forEach.call(detectionFields.querySelectorAll('[data-motion-only]'), function (el) { el.style.display = isMotion ? '' : 'none'; });
+                document.getElementById('zoneAnyOption').textContent = isMotion ? '(whole camera)' : '(anywhere in view)';
+                updateZones();
             }
 
-            // Only the chosen camera's zones are offered.
+            // Only the chosen camera's zones are offered; for motion, only its server motion zones.
             function updateZones() {
                 var cam = cameraSelect.value;
+                var motionOnly = conditionType.value === '@nameof(AlertConditionType.MotionDetected)';
                 Array.prototype.forEach.call(zoneSelect.options, function (opt) {
                     if (!opt.value) return;
-                    var show = cam && opt.getAttribute('data-camera') === cam;
+                    var show = cam && opt.getAttribute('data-camera') === cam
+                        && (!motionOnly || opt.getAttribute('data-kind') === '@nameof(ZoneKind.ServerMotion)');
                     opt.hidden = !show;
                     if (!show && opt.selected) zoneSelect.value = '';
                 });
@@ -284,6 +403,7 @@
             }
             conditionType.addEventListener('change', update);
             cameraSelect.addEventListener('change', updateZones);
+            cameraSelect.addEventListener('change', update);
             update();
             updateZones();
         })();

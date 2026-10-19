@@ -24,6 +24,8 @@ param(
     [string]$OutputDir     = (Join-Path $PSScriptRoot 'publish\installers'),
     [switch]$SkipNodeVision,
     [switch]$SkipVersionSyncCheck,
+    # Skips refusing to build when a NuGet package has a known High or Critical vulnerability.
+    [switch]$SkipVulnerabilityCheck,
     # Optional code-signing certificate (CurrentUser\My or LocalMachine\My) used for the MSIs.
     [string]$SignThumbprint = '',
     [string]$TimestampUrl   = 'http://timestamp.digicert.com'
@@ -58,6 +60,22 @@ if ($SkipVersionSyncCheck) {
             'LarisVMS.NodeUpdater' = (Join-Path $PSScriptRoot 'src\LarisVMS.NodeUpdater\LarisVMS.NodeUpdater.csproj')
         }
     Write-Ok "Release $version"
+}
+
+# ── known vulnerabilities ────────────────────────────────────────────────────
+if (-not $SkipVulnerabilityCheck) {
+    Write-Step "Checking packages for known vulnerabilities"
+    $report = & dotnet list (Join-Path $PSScriptRoot 'LarisVMS.slnx') package --vulnerable --include-transitive 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) { throw "Couldn't check packages for vulnerabilities:`n$report" }
+    if ($report -match '(?m)^\s*>\s.*\b(High|Critical)\b') {
+        Write-Host $report
+        throw "A package has a known High or Critical vulnerability. Update it, or pass -SkipVulnerabilityCheck."
+    }
+    if ($report -match 'has the following vulnerable packages') {
+        Write-Host $report
+        Write-Warning "Some packages have known Low or Moderate vulnerabilities."
+    }
+    Write-Ok "No High or Critical package vulnerabilities"
 }
 
 # ── node and proxy packages ──────────────────────────────────────────────────

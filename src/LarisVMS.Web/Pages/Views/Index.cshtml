@@ -62,7 +62,7 @@ else
                         <td class="text-end text-nowrap">
                             <a class="btn btn-sm btn-outline-secondary" asp-page="Editor" asp-route-id="@v.Id">Edit</a>
                             <form method="post" asp-page-handler="Delete" asp-route-id="@v.Id" class="d-inline"
-                                  onclick="return confirm('Delete view &quot;@v.Name&quot;? This only removes the saved layout, not any cameras or recordings.');">
+                                  data-confirm="Delete view &quot;@v.Name&quot;? This only removes the saved layout, not any cameras or recordings.">
                                 <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
                             </form>
                         </td>

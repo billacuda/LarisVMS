@@ -208,4 +208,27 @@ public class MotionSpanRetentionServiceTests
         Assert.Equal(3, remaining.Count);
         Assert.All(remaining, s => Assert.Equal(freshCamera, s.CameraId));
     }
+
+    // Raw camera events older than the setting go; newer ones, and every camera's, are judged alone.
+    [Fact]
+    public async Task OldCameraEventsAreRemoved()
+    {
+        using var db = NewDb();
+        var cameraA = Guid.NewGuid();
+        var cameraB = Guid.NewGuid();
+        db.Cameras.AddRange(
+            new Camera { Id = cameraA, Name = "A", Host = "h", DeviceServiceUri = "http://h/onvif/device_service" },
+            new Camera { Id = cameraB, Name = "B", Host = "h", DeviceServiceUri = "http://h/onvif/device_service" });
+        var now = DateTime.UtcNow;
+        foreach (var (cam, ageDays) in new[] { (cameraA, 40), (cameraA, 31), (cameraA, 2), (cameraB, 45), (cameraB, 1) })
+            db.CameraEvents.Add(new CameraEvent { CameraId = cam, OnvifTopic = "tns1:VideoSource/MotionAlarm", ReceivedUtc = now.AddDays(-ageDays) });
+        await db.SaveChangesAsync();
+
+        Assert.Equal(3, await MotionSpanRetentionService.SweepCameraEventsAsync(db, 30, default));
+        var left = await db.CameraEvents.ToListAsync();
+        Assert.Equal(2, left.Count);
+        Assert.All(left, e => Assert.True(e.ReceivedUtc > now.AddDays(-30)));
+
+        Assert.Equal(0, await MotionSpanRetentionService.SweepCameraEventsAsync(db, 0, default)); // 0 keeps forever
+    }
 }

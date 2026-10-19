@@ -7,6 +7,7 @@
 @inject INodeService NodeService
 @inject ISettingsResolver Settings
 @inject ICameraAccessService CameraAccess
+@inject IPermissionService Permissions
 @inject IServiceScopeFactory ScopeFactory
 
 <PageTitle>Cameras - @AppName</PageTitle>
@@ -19,6 +20,11 @@
         <a class="btn btn-primary" href="/Cameras/Edit">Add manually</a>
     </div>
 </div>
+
+@if (!string.IsNullOrEmpty(ErrorMessage))
+{
+    <div class="alert alert-danger py-2">@ErrorMessage</div>
+}
 
 @if (Cameras.Count == 0)
 {
@@ -41,6 +47,7 @@ else
                 <option value="all">All</option>
             </select>
         </div>
+        <div class="col-sm-auto small text-muted" data-filter-status-for="camerasTable" data-filter-noun="cameras" aria-live="polite"></div>
         <div class="col-sm-auto ms-sm-auto">
             <ColumnPicker TableId="camerasTable" />
         </div>
@@ -57,37 +64,47 @@ else
     </EditForm>
 
     <div class="d-flex align-items-center gap-2 mb-2">
-        <select name="NodeId" form="reassignCamerasForm" class="form-select form-select-sm" style="max-width: 16rem;">
-            <option value="">(unassign)</option>
-            @foreach (var n in Nodes)
-            {
-                <option value="@n.Id">@n.Name</option>
-            }
-        </select>
-        <button type="submit" form="reassignCamerasForm" class="btn btn-sm btn-outline-primary" id="bulkReassignBtn" disabled>
-            Reassign selected to node
+        @if (_canEdit)
+        {
+            <select name="NodeId" form="reassignCamerasForm" class="form-select form-select-sm" style="max-width: 16rem;">
+                <option value="">(unassign)</option>
+                @foreach (var n in Nodes)
+                {
+                    <option value="@n.Id">@n.Name</option>
+                }
+            </select>
+            <button type="submit" form="reassignCamerasForm" class="btn btn-sm btn-outline-primary" id="bulkReassignBtn" disabled>
+                Reassign selected to node
+            </button>
+        }
+        <button type="button" class="btn btn-sm btn-outline-primary" id="bulkDeviceSettingsBtn" disabled
+                title="Change stream, image, and audio settings on the selected cameras at once">
+            Device settings&hellip;
         </button>
         <span id="bulkSelectedCount" class="text-muted small"></span>
     </div>
 
     <div class="table-responsive">
-        <table class="table table-hover align-middle" id="camerasTable" data-sortable data-paginate data-column-picker>
+        @* data-filter on a header gives that column a filter control (list-filter.js); data-filter-value on
+           a cell is what it filters on when the cell's text isn't (emoji, badges, several groups). *@
+        <table class="table table-hover align-middle" id="camerasTable" data-sortable data-paginate data-column-picker data-column-filters>
             <thead>
                 <tr>
-                    <th data-no-sort><input type="checkbox" class="form-check-input" id="selectAllCameras" /></th>
-                    <th data-no-sort>Status</th>
-                    <th>Name</th>
-                    <th data-col="host">Host</th>
-                    <th data-no-sort data-col="https">HTTPS</th>
-                    <th data-col="group">Group</th>
-                    <th data-col="node">Node</th>
-                    <th data-col="model">Manufacturer / Model</th>
-                    <th data-col="profiles">Profiles</th>
-                    <th data-col="capabilities">Capabilities</th>
-                    <th data-sort-numeric data-col="streams">Streams</th>
-                    <th data-sort-numeric data-col="storage">Storage used</th>
-                    <th data-sort-numeric data-col="retention">Retention</th>
-                    <th data-col="probed">Last probed</th>
+                    <th data-no-sort><input type="checkbox" class="form-check-input" id="selectAllCameras" aria-label="Select all matching cameras" /></th>
+                    <th data-no-sort data-filter="select" data-filter-key="status">Status</th>
+                    <th data-filter="text" data-filter-key="name">Name</th>
+                    <th data-col="host" data-filter="text">Host</th>
+                    <th data-no-sort data-col="https" data-filter="select">HTTPS</th>
+                    <th data-col="group" data-filter="select">Group</th>
+                    <th data-col="node" data-filter="select">Node</th>
+                    <th data-col="make" data-filter="select">Make</th>
+                    <th data-col="model" data-filter="select">Model</th>
+                    <th data-col="profiles" data-filter="select">Profiles</th>
+                    <th data-col="capabilities" data-filter="select">Capabilities</th>
+                    <th data-sort-numeric data-col="streams" data-filter="select">Streams</th>
+                    <th data-sort-numeric data-col="storage" data-filter="select" data-filter-options="@string.Join("|", StorageBuckets)">Storage used</th>
+                    <th data-sort-numeric data-col="retention" data-filter="select">Retention</th>
+                    <th data-col="probed" data-filter="date">Last probed</th>
                     <th data-no-sort></th>
                 </tr>
             </thead>
@@ -95,9 +112,18 @@ else
                 @foreach (var c in Cameras)
                 {
                     var staleNodeIds = StaleSegmentNodeIds.GetValueOrDefault(c.Id);
+                    Uri.TryCreate(c.DeviceServiceUri, UriKind.Absolute, out var deviceUri);
+                    var storageUsed = StorageUsedBytes.GetValueOrDefault(c.Id);
                     <tr>
-                        <td><input type="checkbox" class="form-check-input camera-select" name="Ids" form="reassignCamerasForm" value="@c.Id" /></td>
-                        <td>
+                        <td><input type="checkbox" class="form-check-input camera-select" name="Ids" form="reassignCamerasForm" value="@c.Id"
+                                   data-make="@c.Manufacturer?.Trim()" data-model="@c.Model?.Trim()" aria-label="Select @c.Name" /></td>
+                        <td data-filter-value="@(c.IsEnabled ? "Enabled" : "Disabled")">
+                            @if (!MayChange(c.Id))
+                            {
+                                <span style="font-size: 1.1rem; line-height: 1;" title="@(c.IsEnabled ? "Enabled" : "Disabled")">@(c.IsEnabled ? "🟢" : "🔴")</span>
+                            }
+                            else
+                            {
                             @* FormName unique per row — see probe-camera's own copy of this comment below. *@
                             <EditForm Model="this" FormName="@($"toggle-camera-enabled-{c.Id}")" OnValidSubmit="HandleToggleEnabledAsync" class="d-inline">
                                 <input type="hidden" name="Id" value="@c.Id" />
@@ -106,6 +132,7 @@ else
                                     @(c.IsEnabled ? "🟢" : "🔴")
                                 </button>
                             </EditForm>
+                            }
                         </td>
                         <td>
                             <a href="/Cameras/Edit/@c.Id">@c.Name</a>
@@ -129,18 +156,18 @@ else
                             }
                         </td>
                         <td>@c.Host</td>
-                        <td>
+                        <td data-filter-value="@(deviceUri?.Scheme == Uri.UriSchemeHttps ? "Yes" : "No")">
                             @* DeviceServiceUri is stored with its scheme (http:// or https://) — AddAsync/
                                UpdateAsync both validate it as an absolute URI before saving, so parsing it
                                back out here is safe rather than tracking a second, separately-settable
                                "use HTTPS" flag that could drift from what the URL itself actually says. *@
-                            @if (Uri.TryCreate(c.DeviceServiceUri, UriKind.Absolute, out var deviceUri) && deviceUri.Scheme == Uri.UriSchemeHttps)
+                            @if (deviceUri?.Scheme == Uri.UriSchemeHttps)
                             {
                                 <span title="This camera's device service URL uses HTTPS">🔒</span>
                             }
                         </td>
-                        <td>@(c.Groups.Count > 0 ? string.Join(", ", c.Groups.Select(g => g.Name)) : "—")</td>
-                        <td>
+                        <td data-filter-value="@(c.Groups.Count > 0 ? string.Join("|", c.Groups.Select(g => g.Name)) : "(none)")">@(c.Groups.Count > 0 ? string.Join(", ", c.Groups.Select(g => g.Name)) : "—")</td>
+                        <td data-filter-value="@(c.Node?.Name ?? "unassigned")">
                             @if (c.Node is { } node)
                             {
                                 <a href="/Admin/Nodes">@node.Name</a>
@@ -150,8 +177,9 @@ else
                                 <span class="text-muted" title="No node assigned — this camera won't record">unassigned</span>
                             }
                         </td>
-                        <td>@c.Manufacturer @c.Model</td>
-                        <td>
+                        <td>@(string.IsNullOrWhiteSpace(c.Manufacturer) ? "—" : c.Manufacturer.Trim())</td>
+                        <td>@(string.IsNullOrWhiteSpace(c.Model) ? "—" : c.Model.Trim())</td>
+                        <td data-filter-value="@ProfilesFilterValue(c.Capabilities)">
                             @if (c.Capabilities is { } cap)
                             {
                                 if (cap.ProfileS) { <span class="badge text-bg-primary me-1">S</span> }
@@ -164,7 +192,7 @@ else
                                 <span class="text-muted">not probed</span>
                             }
                         </td>
-                        <td>
+                        <td data-filter-value="@CapabilitiesFilterValue(c.Capabilities)">
                             @if (c.Capabilities is { } cap2)
                             {
                                 if (cap2.HasPtz) { <span class="badge bg-body-secondary text-body border me-1" title="PTZ">PTZ</span> }
@@ -174,18 +202,19 @@ else
                             }
                         </td>
                         <td>@c.Streams.Count</td>
-                        <td data-sort-value="@StorageUsedBytes.GetValueOrDefault(c.Id)">
-                            @ByteFormat.Format(StorageUsedBytes.GetValueOrDefault(c.Id))
+                        <td data-sort-value="@storageUsed" data-filter-value="@StorageBucket(storageUsed)">
+                            @ByteFormat.Format(storageUsed)
                             @if (c.QuotaBytes is { } quota)
                             {
                                 <span class="text-muted">/ @ByteFormat.Format(quota)</span>
                             }
                         </td>
                         <td data-sort-value="@EffectiveRetentionDays.GetValueOrDefault(c.Id, 30)">@EffectiveRetentionDays.GetValueOrDefault(c.Id, 30) day(s)</td>
-                        <td data-sort-value="@(c.LastProbedAt?.Ticks ?? 0)">
+                        <td data-sort-value="@(c.LastProbedAt?.Ticks ?? 0)"
+                            data-filter-value="@(c.LastProbedAt is { } probedAt ? new DateTimeOffset(DateTime.SpecifyKind(probedAt, DateTimeKind.Utc)).ToUnixTimeMilliseconds().ToString() : "")">
                             @if (c.LastProbedAt is { } probed)
                             {
-                                <span title="@probed.ToString("u")">@probed.ToLocalTime().ToString("g")</span>
+                                <time datetime="@probed.ToUtcIso()" data-local="g">@probed.ToLocalTime().ToString("g")</time>
                             }
                             else
                             {
@@ -200,10 +229,13 @@ else
                                "more than one named submit event with the name X" otherwise. Read
                                from HttpContext.Request.Form in the handler instead of
                                [SupplyParameterFromForm], which needs a compile-time constant name. *@
-                            <EditForm Model="this" FormName="@($"probe-camera-{c.Id}")" OnValidSubmit="HandleProbeAsync" class="d-inline">
-                                <input type="hidden" name="ProbeId" value="@c.Id" />
-                                <button type="submit" class="btn btn-sm btn-outline-secondary" title="Re-probe" aria-label="Re-probe"><span aria-hidden="true">🔍</span></button>
-                            </EditForm>
+                            @if (MayChange(c.Id))
+                            {
+                                <EditForm Model="this" FormName="@($"probe-camera-{c.Id}")" OnValidSubmit="HandleProbeAsync" class="d-inline">
+                                    <input type="hidden" name="ProbeId" value="@c.Id" />
+                                    <button type="submit" class="btn btn-sm btn-outline-secondary" title="Re-probe" aria-label="Re-probe"><span aria-hidden="true">🔍</span></button>
+                                </EditForm>
+                            }
                         </td>
                     </tr>
                 }
@@ -214,26 +246,55 @@ else
 }
 
 <SectionContent SectionName="PageScripts">
-    <script>
+    <script nonce="@Csp.Value">
         (function () {
             var selectAll = document.getElementById('selectAllCameras');
             var reassignBtn = document.getElementById('bulkReassignBtn');
+            var deviceSettingsBtn = document.getElementById('bulkDeviceSettingsBtn');
             var countLabel = document.getElementById('bulkSelectedCount');
             var reassignForm = document.getElementById('reassignCamerasForm');
-            if (!selectAll || !reassignBtn || !reassignForm) return;
+            if (!selectAll || !reassignForm) return;
 
             function checkboxes() {
                 return Array.prototype.slice.call(document.querySelectorAll('.camera-select'));
             }
 
+            // A row matches the current filters when it's shown, or hidden only for being on another
+            // page (table-pagination.js marks those data-pg-hidden). Rows the filters hide don't count,
+            // so "filter by Model, then Select all" selects exactly that model's cameras.
+            function matchesFilters(cb) {
+                var row = cb.closest('tr');
+                return row.style.display !== 'none' || row.dataset.pgHidden === '1';
+            }
+
+            function checked() { return checkboxes().filter(function (cb) { return cb.checked; }); }
+
+            // Bulk device settings need one make and model across the whole selection.
+            function sameModel(list) {
+                if (list.length === 0) return false;
+                var key = function (cb) { return (cb.dataset.make + '' + cb.dataset.model).toUpperCase(); };
+                return list.every(function (cb) { return cb.dataset.make && cb.dataset.model && key(cb) === key(list[0]); });
+            }
+
             function updateBulkState() {
-                var checked = checkboxes().filter(function (cb) { return cb.checked; });
-                reassignBtn.disabled = checked.length === 0;
-                countLabel.textContent = checked.length > 0 ? checked.length + ' selected' : '';
+                var list = checked();
+                var matching = checkboxes().filter(matchesFilters);
+                if (reassignBtn) reassignBtn.disabled = list.length === 0;
+                if (deviceSettingsBtn) {
+                    var ok = sameModel(list);
+                    deviceSettingsBtn.disabled = !ok;
+                    deviceSettingsBtn.title = list.length === 0
+                        ? 'Select cameras of the same make and model to change their settings together'
+                        : ok ? 'Change stream, image, and audio settings on the selected cameras at once'
+                             : 'Select cameras of the same make and model';
+                }
+                countLabel.textContent = list.length > 0 ? list.length + ' selected' : '';
+                selectAll.checked = matching.length > 0 && matching.every(function (cb) { return cb.checked; });
+                selectAll.indeterminate = list.length > 0 && !selectAll.checked;
             }
 
             selectAll.addEventListener('change', function () {
-                checkboxes().forEach(function (cb) { cb.checked = selectAll.checked; });
+                checkboxes().forEach(function (cb) { cb.checked = selectAll.checked && matchesFilters(cb); });
                 updateBulkState();
             });
 
@@ -241,9 +302,25 @@ else
                 if (e.target.classList && e.target.classList.contains('camera-select')) updateBulkState();
             });
 
-            reassignForm.addEventListener('submit', function (e) {
-                if (checkboxes().filter(function (cb) { return cb.checked; }).length === 0) e.preventDefault();
+            // A filter change unticks cameras it hides, so a bulk action never reaches a camera that
+            // isn't in the filtered list on screen.
+            document.addEventListener('larisvms:table-changed', function (e) {
+                if (!e.detail || e.detail.tableId !== 'camerasTable') return;
+                checkboxes().forEach(function (cb) { if (cb.checked && !matchesFilters(cb)) cb.checked = false; });
+                updateBulkState();
             });
+
+            if (deviceSettingsBtn) deviceSettingsBtn.addEventListener('click', function () {
+                var ids = checked().map(function (cb) { return cb.value; });
+                if (!sameModel(checked())) return;
+                window.location.href = '/Cameras/DeviceSettings/' + ids[0] + (ids.length > 1 ? '?with=' + ids.slice(1).join(',') : '');
+            });
+
+            reassignForm.addEventListener('submit', function (e) {
+                if (checked().length === 0) e.preventDefault();
+            });
+
+            updateBulkState();
         })();
     </script>
 </SectionContent>
@@ -267,6 +344,31 @@ else
     [SupplyParameterFromForm(FormName = "reassign-cameras")] private List<Guid>? Ids { get; set; }
     [SupplyParameterFromForm(FormName = "reassign-cameras")] private Guid? NodeId { get; set; }
 
+    // Changing a camera (enable/disable, re-probe, node assignment) needs Cameras.Edit plus
+    // configuration access to that camera; viewing the list only needs Cameras.View.
+    private bool _canEdit;
+    private HashSet<Guid>? _configurable;
+    private string? ErrorMessage;
+
+    private bool MayChange(Guid cameraId) => _canEdit && (_configurable is null || _configurable.Contains(cameraId));
+
+    private async Task LoadChangePermissionsAsync(System.Security.Claims.ClaimsPrincipal user)
+    {
+        _canEdit = (await Permissions.GetGrantedAsync(user)).Has("Cameras", "Edit");
+        _configurable = await CameraAccess.GetAccessibleCameraIdsAsync(user, CameraAccessActions.Configure);
+    }
+
+    private async Task<bool> EnsureMayChangeAsync(IEnumerable<Guid> cameraIds)
+    {
+        var user = AuthenticationStateTask is not null
+            ? (await AuthenticationStateTask).User
+            : new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity());
+        await LoadChangePermissionsAsync(user);
+        if (cameraIds.All(MayChange)) return true;
+        ErrorMessage = "You don't have permission to change that camera.";
+        return false;
+    }
+
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
     private async Task LoadAsync()
@@ -278,11 +380,11 @@ else
         Cameras = await CameraService.ListAsync();
 
         // Narrows to whatever CameraAccess grants this principal for View — null means unrestricted
-        // (Administrator, an All-scope grant, or — the common case for every deployment that has never
-        // touched this feature — zero CameraAccess rows at all for this user/their roles).
+        // (Super Admin or an All-scope grant).
         var accessible = await CameraAccess.GetAccessibleCameraIdsAsync(user, CameraAccessActions.View);
         if (accessible is not null) Cameras = Cameras.Where(c => accessible.Contains(c.Id)).ToList();
 
+        await LoadChangePermissionsAsync(user);
         Nodes = await NodeService.ListAsync();
         StorageUsedBytes = await CameraService.GetStorageUsageAsync();
         StaleSegmentNodeIds = await CameraService.GetStaleSegmentNodeIdsAsync();
@@ -321,20 +423,50 @@ else
     private async Task HandleToggleEnabledAsync()
     {
         Id = Guid.TryParse(HttpContext?.Request.Form["Id"].ToString(), out var id) ? id : Guid.Empty;
-        await CameraService.ToggleEnabledAsync(Id);
+        if (await EnsureMayChangeAsync([Id])) await CameraService.ToggleEnabledAsync(Id);
         await LoadAsync();
     }
 
     private async Task HandleProbeAsync()
     {
         ProbeId = Guid.TryParse(HttpContext?.Request.Form["ProbeId"].ToString(), out var probeId) ? probeId : Guid.Empty;
-        await CameraService.ProbeAsync(ProbeId);
+        if (await EnsureMayChangeAsync([ProbeId])) await CameraService.ProbeAsync(ProbeId);
         await LoadAsync();
     }
 
     private async Task HandleReassignAsync()
     {
-        await NodeService.ReassignCamerasAsync(Ids ?? [], NodeId);
+        if (await EnsureMayChangeAsync(Ids ?? [])) await NodeService.ReassignCamerasAsync(Ids ?? [], NodeId);
         await LoadAsync();
+    }
+
+    // Filter values for list-filter.js (data-filter-value): what each badge/emoji cell filters on.
+    private static readonly string[] StorageBuckets = ["Under 1 GB", "1–100 GB", "100 GB–1 TB", "Over 1 TB"];
+
+    private static string StorageBucket(long bytes) => bytes switch
+    {
+        < 1L << 30 => StorageBuckets[0],
+        < 100L << 30 => StorageBuckets[1],
+        < 1L << 40 => StorageBuckets[2],
+        _ => StorageBuckets[3],
+    };
+
+    private static string ProfilesFilterValue(CameraCapabilities? cap)
+    {
+        if (cap is null) return "Not probed";
+        var profiles = new[] { (cap.ProfileS, "S"), (cap.ProfileT, "T"), (cap.ProfileG, "G"), (cap.ProfileM, "M") }
+            .Where(p => p.Item1).Select(p => "Profile " + p.Item2).ToList();
+        return profiles.Count > 0 ? string.Join("|", profiles) : "(none)";
+    }
+
+    private static string CapabilitiesFilterValue(CameraCapabilities? cap)
+    {
+        if (cap is null) return "(none)";
+        var list = new List<string>();
+        if (cap.HasPtz) list.Add("PTZ");
+        if (cap.HasAudioOut) list.Add("Talk");
+        if (cap.HasAnalyticsMetadata) list.Add("Meta");
+        if (cap.HasRelayOutputs || cap.HasDigitalInputs) list.Add("I/O");
+        return list.Count > 0 ? string.Join("|", list) : "(none)";
     }
 }

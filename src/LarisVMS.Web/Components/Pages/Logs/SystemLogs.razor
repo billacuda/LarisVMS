@@ -18,7 +18,7 @@ else
 {
     <form method="get" class="row g-2 mb-3">
         <div class="col-auto">
-            <select name="date" class="form-select form-select-sm" onchange="this.form.submit()">
+            <select name="date" class="form-select form-select-sm" data-submit-on-change>
                 @foreach (var d in AvailableDates)
                 {
                     <option value="@d" selected="@(d == SelectedDate)">@d</option>

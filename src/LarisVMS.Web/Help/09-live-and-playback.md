@@ -1,6 +1,6 @@
 # Live view & playback
 
-Views, live tiles, the playback timeline, exports, bookmarks, snapshots, and activity.
+Views, live tiles, the playback timeline, exports, bookmarks, evidence locks, snapshots, activity, and the map.
 
 ## Views
 
@@ -12,6 +12,7 @@ A **view** is a saved camera layout. Build views under **Views** by dragging and
 - Each tile with audio has its own mute and volume control. Tiles always start muted.
 - **Adaptive streaming** (under **Settings → Live view**) shows small tiles the Sub stream and switches to Main when the tile is large or fullscreen. Each tile also has a manual Auto/HD/SD choice.
 - Badges show motion and detected objects. **Settings → Events** sets their colors and corner.
+- The toolbar's AI switches draw a box around each detected object: **Moving**, **Idle**, or both. **Confidence** adds each box's score, and **Speed** and **Color** (on by default) add its speed, once a speed trap has timed it, and its color. **Path** (with Moving on) draws the line each moving object has taken from the centre of its box, in the box's color. The line stays while the object keeps moving. Once it stops or leaves, the line stays for the **Path linger** time (**Settings → Live view**, 5 seconds by default), then dissolves from its start.
 - PTZ cameras get a direction pad and zoom.
 
 ## Talking through a camera
@@ -20,7 +21,7 @@ Cameras with a speaker show a 🎙️ button on their live tile. Hold it (or foc
 
 - Your browser asks for microphone access the first time. It only allows this when the site is opened over **HTTPS**; see [Certificates](/Help/security#certificates).
 - Only one person can talk through a camera at a time.
-- It needs the **Talk** permission on the camera (**Settings → Camera access**). The camera must support ONVIF two-way audio (an audio output on its ONVIF profile). Dahua, Amcrest, Lorex and EmpireTech cameras whose firmware doesn't offer that fall back to the camera's own audio API.
+- It needs the **Talk** permission on the camera (**Settings → Camera access**). The camera must support ONVIF two-way audio (an audio output on its ONVIF profile). Dahua, Amcrest, Lorex, and EmpireTech cameras whose firmware doesn't offer that fall back to the camera's own audio API.
 - Everything said is recorded. The camera's own microphone is part of the video recording as usual, and each press of the button is saved alongside the footage. Presses show on the playback timeline in teal and play back in sync with the video, using the tile's volume. Exports include them, mixed with the camera's own audio. They're kept as long as the camera's footage.
 - Each session is written to the audit log.
 
@@ -47,7 +48,7 @@ Your position and zoom are remembered between visits.
 
 ### Verify an export
 
-Every recorded segment is fingerprinted (SHA-256) as it's written, and each camera's segments are linked into a chain: each link covers its segment's fingerprint and the link before it, so changing, removing or reordering recorded footage breaks the chain. Once an hour the server signs where each camera's chain has got to.
+Every recorded segment is fingerprinted (SHA-256) as it's written, and each camera's segments are linked into a chain: each link covers its segment's fingerprint and the link before it, so changing, removing, or reordering recorded footage breaks the chain. Once an hour the server signs where each camera's chain has got to.
 
 Each finished export also gets a signed **🔏 Manifest** on the Exports page. It records the exported file's fingerprint, the source footage and its place in the chain, and whether every source file still matched its fingerprint when it was exported.
 
@@ -57,13 +58,24 @@ To check an export, open **Exports → Verify an export** and choose the manifes
 - the video is exactly the exported file;
 - the source footage hadn't changed since it was recorded, and links up to a signed checkpoint.
 
-Keep the manifest with the video when you hand an export on. Anyone can check the signature without LarisVMS: save the manifest's `publicKeyPem` to `key.pem`, its `signedPayload` text to `payload.txt` and its base64-decoded `signatureDer` to `sig.der`, then run `openssl dgst -sha256 -verify key.pem -signature sig.der payload.txt`. Footage recorded before this feature has no fingerprints, so only the export itself can be checked.
+Keep the manifest with the video when you hand an export on. Anyone can check the signature without LarisVMS: save the manifest's `publicKeyPem` to `key.pem`, its `signedPayload` text to `payload.txt`, and its base64-decoded `signatureDer` to `sig.der`, then run `openssl dgst -sha256 -verify key.pem -signature sig.der payload.txt`. Footage recorded before this feature has no fingerprints, so only the export itself can be checked.
 
 Signing is always on. The server's signing key, with a download of its public key, is under **Settings → Encryption and signing**.
 
 ## Bookmarks
 
 Mark a moment during Playback with a note. **Bookmarks** lists them all, with a link back to the exact moment. Bookmarks are shared with everyone who can view playback, and expire when their footage ages out.
+
+## Evidence locks
+
+An evidence lock keeps footage from being deleted by retention. On Playback, click **🔒 Lock…**, pick the cameras and the start and end, choose how long to keep it (1, 3, 7, 14, or 30 days, until a date, or indefinitely), and give a reason. Locked stretches show as a violet band along the top of the timeline. One lock covers up to 7 days of footage.
+
+- **Locked footage is never deleted**, not by retention, quotas, or archive expiry, and not even when the disk is full. If a recorder fills up with locked footage, its Nodes entry shows **full of locked footage**, and recording stops once the disk is full. End or remove locks, export the footage, or add storage.
+- **Long locks**: anything over 30 days shows a warning. When storage is tight, it's better to export the video (**Export this range instead**) and keep it somewhere else.
+- **Removing a lock**: **Evidence locks** lists every lock with its size and expiry. The person who placed a lock, or a Super Admin, can remove it with a reason. The footage stays protected for another **24 hours** in case the removal was a mistake, and **Undo removal** restores the lock until then.
+- **Logged**: placing, removing, restoring, and expiring a lock are all written to the audit log.
+
+A camera with footage still under a lock can't be deleted. Placing locks needs the **Lock footage** permission, which roles that can export have by default. [Notifications](/Help/alerts#notifications) can tell you when a lock is about to end or was removed.
 
 ## Snapshots
 
@@ -83,6 +95,17 @@ Mark a moment during Playback with a note. **Bookmarks** lists them all, with a 
 - Activity history is kept for 400 days (setting `Activity.HistoryDays`), even after the footage itself has been deleted, so the longer ranges show the whole period. History builds up from when this was installed: events already deleted along with their footage can't be recovered.
 - The view is in the page address, so you can bookmark or share it. The dashboard's **Camera activity** widget shows the last 7 days for one camera or all of them.
 
+### Scene
+
+**Scene** shows *where* in a camera's picture things move: a heat layer over a recent full-size frame from the camera's recordings. Red is where the most happens, then orange, yellow, green, and blue for very little. Spots with nothing stay clear.
+
+- **Objects moving** counts how many objects passed through each spot. Narrow it to **People**, **Vehicles**, **Animals**, or **Other**.
+- **Motion** shows where the camera's server-side motion detection saw motion, for cameras using it in **Grid** mode.
+- Pick a range, and optionally a **Time of day** (for example 10 PM to 6 AM for nights).
+- The heat is added up once an hour (motion every 10 minutes) and kept as long as the rest of the activity history. The paths behind it are kept with their events, so they go when the footage does.
+- Pick a camera, or a **view** (listed under **Views** in the camera list) to see a heatmap for each camera in it side by side. Each camera has its own scale, so a quiet camera still shows where its activity is. It can't be shown for all cameras at once.
+- **Background**: if you can configure the camera, you can replace its frame with your own picture (a clear daytime shot, say) with **Use my own picture…**. It has to be from the same camera with the same framing, at its full width or the same shape, so the heat lines up. **Use the camera's picture** goes back to the automatic frame.
+
 ## Map
 
 **Map** (under Live) shows where your cameras are and what they look at. Each camera is an icon with a cone for its view: the direction it points, how wide it sees, and how far. The colour shows its state: green is recording, red is offline, grey is disabled. Click a camera for its latest picture, with links to Live and Playback. Statuses refresh every 30 seconds. The map reopens where you left it, separately for each person and each map.
@@ -90,7 +113,7 @@ Mark a moment during Playback with a note. **Bookmarks** lists them all, with a 
 There are two kinds of map, and you can have as many of each as you like:
 
 - **Street map**: a normal map of the area (OpenStreetMap by default). Range is in metres.
-- **Floorplan**: a picture you upload (PNG, JPEG, WebP or GIF, up to 10 MB), such as a building plan or a site drawing. Range is in pixels of that picture.
+- **Floorplan**: a picture you upload (PNG, JPEG, WebP, or GIF, up to 10 MB), such as a building plan or a site drawing. Range is in pixels of that picture.
 
 People who can edit cameras can set maps up:
 

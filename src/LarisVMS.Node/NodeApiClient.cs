@@ -13,6 +13,14 @@ public class NodeApiClient
     // server: a YOLOX detection model (yolox_x.onnx is ~100 MB+), fetched once per size and cached.
     private readonly HttpClient _downloadHttp;
 
+    /// <summary>Checks the server's certificate per <paramref name="trust"/> (Settings → Nodes).</summary>
+    public NodeApiClient(string serverUrl, LarisVMS.Core.Security.ServerCertificateTrust trust)
+    {
+        var baseAddress = new Uri(serverUrl.TrimEnd('/') + "/");
+        _http = new HttpClient(trust.CreateHandler()) { BaseAddress = baseAddress, Timeout = TimeSpan.FromSeconds(15) };
+        _downloadHttp = new HttpClient(trust.CreateHandler()) { BaseAddress = baseAddress, Timeout = TimeSpan.FromMinutes(10) };
+    }
+
     public NodeApiClient(string serverUrl, bool acceptAnyCertificate)
     {
         HttpClientHandler MakeHandler()
@@ -174,6 +182,13 @@ public class NodeApiClient
     {
         if (spans.Count == 0) return;
         var response = await _http.PostAsJsonAsync("api/nodes/motion-spans", spans, ct);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task ReportMotionHeatAsync(List<NodeMotionHeatReport> reports, CancellationToken ct)
+    {
+        if (reports.Count == 0) return;
+        var response = await _http.PostAsJsonAsync("api/nodes/motion-heat", reports, ct);
         response.EnsureSuccessStatusCode();
     }
 

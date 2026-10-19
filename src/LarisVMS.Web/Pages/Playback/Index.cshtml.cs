@@ -13,7 +13,8 @@ namespace LarisVMS.Web.Pages.Playback;
 /// timeline instead of live video. No standalone camera picker here; a one-off arrangement is what
 /// Views/Editor is for.</summary>
 [Authorize("Playback.View")]
-public class IndexModel(ICameraService cameraService, IViewService viewService, ICameraAccessService cameraAccess) : PageModel
+public class IndexModel(ICameraService cameraService, IViewService viewService, ICameraAccessService cameraAccess,
+    IPermissionService permissions) : PageModel
 {
     public List<Camera> Cameras { get; set; } = [];
     public List<View> Views { get; set; } = [];
@@ -30,8 +31,12 @@ public class IndexModel(ICameraService cameraService, IViewService viewService, 
     [BindProperty(SupportsGet = true)]
     public DateTime? AtUtc { get; set; }
 
+    /// <summary>Shows the 🔒 Lock button: the EvidenceLocks.Create permission.</summary>
+    public bool CanLock { get; set; }
+
     public async Task OnGetAsync()
     {
+        CanLock = (await permissions.GetGrantedAsync(User)).Has("EvidenceLocks", "Create");
         var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
 
         // Same filter as Live/Views: only cameras that could actually answer a playback request.

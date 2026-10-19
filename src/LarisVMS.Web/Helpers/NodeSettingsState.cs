@@ -101,27 +101,30 @@ public sealed record NodeSettingsState(
 }
 
 /// <summary>confirm() prompts for the node actions — shared by the Nodes list's action menu and the
-/// node edit page. Razor HTML-encodes the result, so no manual entity-escaping is needed.</summary>
+/// node edit page, rendered into a data-confirm attribute (wwwroot/js/inline-actions.js asks). The
+/// text is only ever shown, never run as script, so Razor's attribute encoding is all it needs.</summary>
 public static class NodeConfirm
 {
+    private const string Gap = "\n\n";
+
+    public static string Approve(string name) =>
+        $"Approve node \"{name}\"? Only approve a node you installed yourself.";
+
     public static string Restart(string name, int cameraCount) =>
-        $"return confirm('Restart the LarisVMS node service on \"{name}\"?\\n\\nRecording on its {cameraCount} camera(s) will stop for a few seconds. This restarts the service only, not the machine.');";
+        $"Restart the LarisVMS node service on \"{name}\"?{Gap}Recording on its {cameraCount} camera(s) will stop for a few seconds. This restarts the service only, not the machine.";
 
     public static string ResetAuth(string name) =>
-        $"return confirm('Reset the check-in nonce for \"{name}\"?\\n\\nUse this only if the node shows repeated auth failures after a missed heartbeat — it clears the rolling nonce so the node re-syncs on its next check-in. No effect on a healthy node.');";
+        $"Reset the check-in nonce for \"{name}\"?{Gap}Use this only if the node shows repeated auth failures after a missed heartbeat — it clears the rolling nonce so the node re-syncs on its next check-in. No effect on a healthy node.";
 
     public static string Maintenance(bool currentlyInMaintenance, int cameraCount, string? backupNodeName)
     {
-        string message;
         if (currentlyInMaintenance)
-            message = "Take this node out of maintenance? Its cameras return to it once it is a confirmed-healthy quorum.";
-        else if (backupNodeName is not null)
-            message = $"Put this node into maintenance? Its {cameraCount} camera(s) fail over to node {backupNodeName} for recording within about 15 seconds, and will not fail back until you turn maintenance off.";
-        else
-            message = $"Put this node into maintenance? It has NO backup node - its {cameraCount} camera(s) will STOP recording until maintenance is turned off.";
-        return $"return confirm('{message}');";
+            return "Take this node out of maintenance? Its cameras return to it once it is a confirmed-healthy quorum.";
+        if (backupNodeName is not null)
+            return $"Put this node into maintenance? Its {cameraCount} camera(s) fail over to node {backupNodeName} for recording within about 15 seconds, and will not fail back until you turn maintenance off.";
+        return $"Put this node into maintenance? It has NO backup node - its {cameraCount} camera(s) will STOP recording until maintenance is turned off.";
     }
 
     public static string Delete(string name) =>
-        $"return confirm('Delete node \"{name}\"? Cameras assigned to it will be unassigned, not deleted. Past recordings are unaffected.');";
+        $"Delete node \"{name}\"? Cameras assigned to it will be unassigned, not deleted. Past recordings are unaffected.";
 }

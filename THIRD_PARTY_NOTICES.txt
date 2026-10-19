@@ -12,6 +12,14 @@ carries its own standard OSS license via NuGet/npm, not separately re-stated her
 RUNTIME DEPENDENCIES
 --------------------
 
+Firebase JavaScript SDK 10.12.2 (firebase-app-compat.js, firebase-messaging-compat.js)
+    Apache-2.0
+    https://github.com/firebase/firebase-js-sdk
+    Copyright Google LLC
+    Served from src/LarisVMS.Web/wwwroot/lib/firebase, unmodified, as published at
+    https://www.gstatic.com/firebasejs/10.12.2/. Only loaded when a browser turns on notifications
+    and the server uses Firebase Cloud Messaging.
+
 YoloDotNet 4.2.0
     MIT
     https://github.com/NickSwardh/YoloDotNet

@@ -24,7 +24,8 @@ namespace LarisVMS.Web.Pages.Admin.Settings;
 /// permission model.
 /// </summary>
 [Authorize("Backups.Edit")]
-public class BackupsModel(ApplicationDbContext db, IBackupService backupService, ISettingsResolver settings, IAuditService auditService) : PageModel
+public class BackupsModel(ApplicationDbContext db, IBackupService backupService, ISettingsResolver settings, IAuditService auditService,
+    IPermissionService permissions, IConfiguration configuration, LarisVMS.Web.Services.INotificationService notifications) : PageModel
 {
     [TempData] public string? Message { get; set; }
     [TempData] public string? ErrorMessage { get; set; }
@@ -36,6 +37,7 @@ public class BackupsModel(ApplicationDbContext db, IBackupService backupService,
     [BindProperty] public bool BackupEnabled { get; set; }
     [BindProperty] public string BackupTime { get; set; } = "03:00";
     [BindProperty] public string? BackupDirectory { get; set; }
+    [BindProperty] public string? EncryptionCertificate { get; set; }
     [BindProperty] public int RetentionCount { get; set; } = 14;
 
     public async Task OnGetAsync()
@@ -43,6 +45,7 @@ public class BackupsModel(ApplicationDbContext db, IBackupService backupService,
         BackupEnabled = await settings.GetAsync("Backup.Enabled", false);
         BackupTime = await settings.GetRawAsync("Backup.Time") ?? "03:00";
         BackupDirectory = await settings.GetRawAsync("Backup.Directory");
+        EncryptionCertificate = await settings.GetRawAsync(LarisVMS.Infrastructure.Services.BackupService.EncryptionCertificateKey);
         RetentionCount = await settings.GetAsync("Backup.RetentionCount", 14);
         if (RetentionCount <= 0) RetentionCount = 14;
 
@@ -82,22 +85,53 @@ public class BackupsModel(ApplicationDbContext db, IBackupService backupService,
         var oldTime = await settings.GetRawAsync("Backup.Time") ?? "03:00";
         var oldDirectory = await settings.GetRawAsync("Backup.Directory");
         var oldRetention = await settings.GetAsync("Backup.RetentionCount", 14);
+        var oldCertificate = await settings.GetRawAsync(LarisVMS.Infrastructure.Services.BackupService.EncryptionCertificateKey);
+
+        // Where the whole database goes, and whether it's encrypted, is a Super Admin's call: a
+        // folder or share someone else controls would hand them a copy of everything.
+        var directoryChanged = !string.Equals(oldDirectory?.Trim() ?? "", BackupDirectory?.Trim() ?? "", StringComparison.OrdinalIgnoreCase);
+        var certificateChanged = !string.Equals(oldCertificate?.Trim() ?? "", EncryptionCertificate?.Trim() ?? "", StringComparison.Ordinal);
+        if ((directoryChanged || certificateChanged) && !(await permissions.GetGrantedAsync(User)).IsAdministrator)
+        {
+            ErrorMessage = "Only a Super Admin can change the backup folder or its encryption.";
+            return RedirectToPage();
+        }
+        if (directoryChanged && !string.IsNullOrWhiteSpace(BackupDirectory)
+            && LarisVMS.Infrastructure.Services.BackupService.AllowedRoots(configuration) is { Length: > 0 } roots
+            && !LarisVMS.Infrastructure.Services.BackupService.IsUnderAny(BackupDirectory, roots))
+        {
+            ErrorMessage = $"Backups can only go to: {string.Join(", ", roots)}.";
+            return RedirectToPage();
+        }
+        if (!string.IsNullOrWhiteSpace(EncryptionCertificate) && !LarisVMS.Infrastructure.Services.BackupService.IsValidCertificateName(EncryptionCertificate.Trim()))
+        {
+            ErrorMessage = "Enter the certificate's name as created in SQL Server (letters, digits, spaces, _ and -).";
+            return RedirectToPage();
+        }
 
         var newRetention = Math.Max(1, RetentionCount);
         await settings.SetGlobalAsync("Backup.Enabled", BackupEnabled.ToString(), by);
         await settings.SetGlobalAsync("Backup.Time", BackupTime.Trim(), by);
         await settings.SetGlobalAsync("Backup.Directory", BackupDirectory?.Trim() ?? string.Empty, by);
         await settings.SetGlobalAsync("Backup.RetentionCount", newRetention.ToString(), by);
+        await settings.SetGlobalAsync(LarisVMS.Infrastructure.Services.BackupService.EncryptionCertificateKey, EncryptionCertificate?.Trim() ?? string.Empty, by);
 
         var details = AuditDiff.Build(
             AuditDiff.Of("Enabled", oldEnabled.ToString(), BackupEnabled.ToString()),
             AuditDiff.Of("Time", oldTime, BackupTime.Trim()),
             AuditDiff.Of("Directory", oldDirectory, BackupDirectory?.Trim()),
-            AuditDiff.Of("Retention", oldRetention.ToString(), newRetention.ToString()));
+            AuditDiff.Of("Retention", oldRetention.ToString(), newRetention.ToString()),
+            AuditDiff.Of("Encryption certificate", oldCertificate, EncryptionCertificate?.Trim()));
 
         await auditService.LogAsync("Backup.SettingsUpdate",
             User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, by,
             HttpContext.Connection.RemoteIpAddress?.ToString(), details);
+
+        // Where the whole database goes is worth every Super Admin knowing about.
+        if (directoryChanged || certificateChanged)
+            await notifications.NotifySuperAdminsAsync("Backup settings changed",
+                $"{by ?? "Someone"} changed {(directoryChanged ? $"the backup folder to {BackupDirectory?.Trim()}" : "backup encryption")}.",
+                "/Admin/Settings/Backups");
 
         Message = "Backup settings saved.";
         return RedirectToPage();

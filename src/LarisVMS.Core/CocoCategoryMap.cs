@@ -129,4 +129,31 @@ public static class CocoCategoryMap
         Object => DetectionKind.Other,
         _ => null
     };
+
+    /// <summary>Detection.MovingObjects when nothing is set: people, vehicles, and animals count as
+    /// moving; every other kind of object is only ever idle.</summary>
+    public const string DefaultMovingObjects = Human + "," + Vehicle + "," + Animal;
+
+    /// <summary>The common detector's object names outside people, vehicles, and animals, offered
+    /// on Settings → AI detection to opt in one by one, in alphabetical order (a package left at the door is usually a
+    /// suitcase, backpack, or handbag to the model). A custom model's own names can be typed in.</summary>
+    public static readonly IReadOnlyList<string> OtherObjectLabels =
+    [
+        "backpack", "baseball bat", "baseball glove", "bench", "book", "bottle", "cell phone", "chair",
+        "cup", "fire hydrant", "frisbee", "handbag", "kite", "laptop", "parking meter", "potted plant",
+        "skateboard", "skis", "snowboard", "sports ball", "stop sign", "suitcase", "surfboard",
+        "teddy bear", "tennis racket", "traffic light", "umbrella",
+    ];
+
+    /// <summary>Parses Detection.MovingObjects: category names (Human, Vehicle, Animal, Object) and
+    /// specific object names, comma-separated, case-insensitive. Null means the default; an empty
+    /// string means nothing counts as moving.</summary>
+    public static HashSet<string> ParseMovingObjects(string? value) =>
+        new((value ?? DefaultMovingObjects).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+            StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Whether an object of this category and specific name can count as moving: its whole
+    /// category is switched on, or that one object is.</summary>
+    public static bool CountsAsMoving(IReadOnlySet<string> movingObjects, string categoryName, string? specificLabel) =>
+        movingObjects.Contains(categoryName) || (specificLabel is not null && movingObjects.Contains(specificLabel));
 }

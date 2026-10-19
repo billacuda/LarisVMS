@@ -20,6 +20,7 @@ builder.Services.AddSingleton(demo);
 builder.Services.AddSingleton<EventHub>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<EventHub>());
 builder.Services.AddSingleton<SnapshotCache>();
+builder.Services.AddSingleton<DeviceSettingsStore>();
 builder.Services.AddHostedService<WsDiscoveryResponder>();
 builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
 
@@ -33,7 +34,7 @@ var app = builder.Build();
 CameraConfig? CameraFor(HttpContext ctx) =>
     ctx.Connection.LocalIpAddress is { } ip ? demo.FindByIp(ip.MapToIPv4().ToString()) : null;
 
-app.MapPost("/onvif/{**path}", async (HttpContext ctx, string? path, EventHub events, ILogger<Program> log) =>
+app.MapPost("/onvif/{**path}", async (HttpContext ctx, string? path, EventHub events, DeviceSettingsStore deviceSettings, ILogger<Program> log) =>
 {
     var camera = CameraFor(ctx);
     if (camera is null) return Results.NotFound();
@@ -60,6 +61,9 @@ app.MapPost("/onvif/{**path}", async (HttpContext ctx, string? path, EventHub ev
 
     var name = operation.Name.LocalName;
     log.LogDebug("{Camera} {Operation}", camera.Id, name);
+    var settings = deviceSettings.For(camera);
+    var media2 = operation.Name.NamespaceName.Contains("ver20/media", StringComparison.OrdinalIgnoreCase);
+    if (media2 && !settings.Media2) return Xml(Soap.Fault("ActionNotSupported", "Media2 is not supported by this device."), 400);
 
     string? body = name switch
     {
@@ -68,11 +72,24 @@ app.MapPost("/onvif/{**path}", async (HttpContext ctx, string? path, EventHub ev
         "GetServices" => Soap.Services(camera),
         "GetSystemDateAndTime" => Soap.SystemDateAndTime(),
         "GetScopes" => Soap.Scopes(camera),
-        "GetProfiles" => Soap.Profiles(camera),
+        "GetProfiles" => Soap.Profiles(camera, settings),
         "GetVideoSources" => Soap.VideoSources(),
         "GetStreamUri" => Soap.StreamUri(camera, demo.RtspPort, Arg("ProfileToken")),
         "GetSnapshotUri" => Soap.SnapshotUri(camera),
         "GetEventProperties" => EventHub.EventProperties(),
+        // Device settings (see DeviceSettings.cs). A null body here means an unknown configuration token.
+        "GetVideoEncoderConfiguration" => DeviceSettingsSoap.GetVideoEncoderConfiguration(settings, Arg("ConfigurationToken")),
+        "GetVideoEncoderConfigurations" => DeviceSettingsSoap.GetVideoEncoderConfigurations(settings, Arg("ConfigurationToken")),
+        "GetVideoEncoderConfigurationOptions" => media2
+            ? DeviceSettingsSoap.Media2Options(settings, Arg("ConfigurationToken"))
+            : DeviceSettingsSoap.Media1Options(settings, Arg("ConfigurationToken")),
+        "SetVideoEncoderConfiguration" => DeviceSettingsSoap.SetVideoEncoderConfiguration(settings, operation, media2),
+        "GetAudioEncoderConfiguration" when camera.Audio => DeviceSettingsSoap.GetAudioEncoderConfiguration(settings),
+        "GetAudioEncoderConfigurationOptions" when camera.Audio => DeviceSettingsSoap.AudioOptions(),
+        "SetAudioEncoderConfiguration" when camera.Audio => DeviceSettingsSoap.SetAudioEncoderConfiguration(settings, operation),
+        "GetImagingSettings" => DeviceSettingsSoap.GetImagingSettings(settings),
+        "GetOptions" => DeviceSettingsSoap.ImagingOptions(),
+        "SetImagingSettings" => DeviceSettingsSoap.SetImagingSettings(settings, operation),
         "CreatePullPointSubscription" => events.CreatePullPoint(camera, Duration("InitialTerminationTime")),
         "PullMessages" when subscriptionId is not null => await events.PullAsync(subscriptionId,
             Duration("Timeout") ?? TimeSpan.FromSeconds(10),
@@ -82,7 +99,7 @@ app.MapPost("/onvif/{**path}", async (HttpContext ctx, string? path, EventHub ev
         _ => "",
     };
 
-    if (body is null) return Xml(Soap.Fault("InvalidArgVal", "Unknown or expired subscription."), 400);
+    if (body is null) return Xml(Soap.Fault("InvalidArgVal", "Unknown token, or an expired subscription."), 400);
     if (body.Length == 0)
     {
         log.LogInformation("{Camera}: {Operation} isn't implemented; returned ActionNotSupported", camera.Id, name);

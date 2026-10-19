@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 using LarisVMS.Core;
@@ -118,6 +119,22 @@ var dataProtectionPath = Path.Combine(
     Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "keys");
 EnsureWritableDirectory(dataProtectionPath);
 
+// %ProgramData%\LarisVMS (key ring, node builds, certificates) and the config files next to the
+// program that can hold passwords: SYSTEM, Administrators, and this service only. In the background,
+// since the first run after an upgrade can take a while on a large folder.
+_ = Task.Run(() =>
+{
+    var aclLogger = webFileLogger.CreateLogger("Startup");
+    if (LarisVMS.Core.Security.LocalDataAcl.SecureRoot() is { } rootError)
+        aclLogger.LogWarning("Could not restrict access to {Path}: {Error}", LarisVMS.Core.Security.LocalDataAcl.Root, rootError);
+    foreach (var file in new[] { "setup-generated.json", "appsettings.Production.json" })
+    {
+        var path = Path.Combine(builder.Environment.ContentRootPath, file);
+        if (LarisVMS.Core.Security.LocalDataAcl.ProtectFile(path) is { } fileError)
+            aclLogger.LogWarning("Could not restrict access to {Path}: {Error}", path, fileError);
+    }
+});
+
 var dpBuilder = builder.Services.AddDataProtection()
     .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionPath))
     .SetApplicationName("Rcordr");
@@ -129,13 +146,33 @@ if (OperatingSystem.IsWindows())
 #pragma warning restore CA1416
 }
 
+// ── Rate limits ───────────────────────────────────────────────────────────────
+// Sign-in and registration attempts per client address; test notifications and new exports per
+// person. Anything over gets 429.
+builder.Services.AddRateLimiter(o =>
+{
+    o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    static System.Threading.RateLimiting.FixedWindowRateLimiterOptions PerMinute(int permits) =>
+        new() { PermitLimit = permits, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 };
+    o.AddPolicy("sign-in", ctx => HttpMethods.IsPost(ctx.Request.Method)
+        ? System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(ctx.Connection.RemoteIpAddress?.ToString() ?? "", _ => PerMinute(10))
+        : System.Threading.RateLimiting.RateLimitPartition.GetNoLimiter(""));
+    o.AddPolicy("register", ctx =>
+        System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(ctx.Connection.RemoteIpAddress?.ToString() ?? "", _ => PerMinute(10)));
+    o.AddPolicy("per-user", ctx =>
+        System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+            ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? ctx.Connection.RemoteIpAddress?.ToString() ?? "",
+            _ => PerMinute(20)));
+});
+
 // ── Identity ──────────────────────────────────────────────────────────────────
 builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
     {
         options.Password.RequireDigit = false;
         options.Password.RequireNonAlphanumeric = false;
         options.Password.RequireUppercase = false;
-        options.Password.RequiredLength = 8;
+        // Length over complexity rules; applies to new and changed passwords.
+        options.Password.RequiredLength = 12;
         options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
         options.Lockout.MaxFailedAccessAttempts = 5;
         options.Lockout.AllowedForNewUsers = true;
@@ -149,6 +186,9 @@ builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
     .AddDefaultTokenProviders()
     .AddDefaultUI();
 
+// The cookie property holding when the user actually signed in (session lifetime is measured from it).
+const string SignedInAtKey = ".larisvms.signedInUtc";
+
 builder.Services.ConfigureApplicationCookie(options =>
 {
     options.LoginPath = "/Identity/Account/Login";
@@ -161,6 +201,16 @@ builder.Services.ConfigureApplicationCookie(options =>
     options.ExpireTimeSpan = TimeSpan.FromDays(397); // just past a year — common browser cookie norms
     options.SlidingExpiration = true;
     options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+
+    // The moment of signing in, kept with the cookie: the cookie's own issue time moves every time it
+    // is renewed (including the security-stamp refresh every 30 minutes), so the per-role session
+    // limit below would otherwise only ever measure idle time. A re-sign-in that keeps the
+    // properties (role changes) keeps the original time.
+    options.Events.OnSigningIn = ctx =>
+    {
+        ctx.Properties.Items.TryAdd(SignedInAtKey, DateTimeOffset.UtcNow.ToString("o"));
+        return Task.CompletedTask;
+    };
 
     options.Events.OnSignedIn = async ctx =>
     {
@@ -216,7 +266,13 @@ builder.Services.ConfigureApplicationCookie(options =>
             }
         }
 
-        var issuedUtc = ctx.Properties.IssuedUtc;
+        // Measured from the actual sign-in (see OnSigningIn); a cookie from before that existed falls
+        // back to its issue time.
+        var issuedUtc = ctx.Properties.Items.TryGetValue(SignedInAtKey, out var signedInRaw)
+            && DateTimeOffset.TryParse(signedInRaw, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind, out var signedIn)
+            ? signedIn
+            : ctx.Properties.IssuedUtc;
         if (issuedUtc is null) return; // no issued time to measure age against — fail open, not closed
 
         var roleNames = ctx.Principal.FindAll(System.Security.Claims.ClaimTypes.Role)
@@ -276,6 +332,10 @@ builder.Services.AddSingleton<IConfigureOptions<OpenIdConnectOptions>, EntraOidc
 // ── Authorization / RBAC ──────────────────────────────────────────────────────
 builder.Services.AddAuthorization(options =>
 {
+    // Anything without its own policy needs a signed-in user, so a page or endpoint that forgets one
+    // is closed rather than public. The few public ones say AllowAnonymous (sign-in, setup, health,
+    // the app manifest, the error page, and the node/proxy APIs, which authenticate themselves).
+    options.FallbackPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build();
     // "Administrator" renamed to "Super Admin" by the roles/permissions overhaul (see
     // RoleSeedService) — this policy is currently unreferenced anywhere, but kept correct so it
     // doesn't silently break the day something wires it up.
@@ -315,6 +375,8 @@ builder.Services.AddSingleton<DetectedObjectCategoryColorCache>();
 builder.Services.AddScoped<LarisVMS.Web.Services.MediaRoutingService>();
 builder.Services.AddSingleton<LarisVMS.Web.Services.MediaRelayMetrics>();
 builder.Services.AddSingleton<LarisVMS.Web.Middleware.ClientEndpointCspCache>();
+builder.Services.AddScoped<LarisVMS.Web.Security.CspNonce>();
+builder.Services.AddSingleton<LarisVMS.Web.Security.CspReports>();
 builder.Services.AddSingleton<LarisVMS.Web.Services.DetectionModelDistributor>();
 builder.Services.AddSingleton<LarisVMS.Web.Services.NodeControlClient>();
 builder.Services.AddSingleton<LarisVMS.Web.Services.HelpContentService>();
@@ -322,6 +384,7 @@ builder.Services.AddSingleton<LarisVMS.Web.Services.VisionNativeDistributor>();
 builder.Services.AddScoped<IZoneService, ZoneService>();
 builder.Services.AddScoped<ISpeedTrapService, SpeedTrapService>();
 builder.Services.AddScoped<SpeedRollupService>();
+builder.Services.AddScoped<SceneHeatRollupService>();
 // Tamper evidence: the signing key, segment hash chains, and signed export manifests.
 builder.Services.AddScoped<ISigningKeyService, SigningKeyService>();
 builder.Services.AddScoped<IFootageKeyService, FootageKeyService>();
@@ -347,7 +410,20 @@ builder.Services.AddScoped<IDashboardWidgetService, DashboardWidgetService>();
 builder.Services.AddScoped<IBrandingService, BrandingService>();
 builder.Services.AddScoped<IEventColorService, EventColorService>();
 builder.Services.AddScoped<IPtzService, PtzService>();
+builder.Services.AddScoped<ICameraDeviceSettingsService, CameraDeviceSettingsService>();
 builder.Services.AddScoped<IBookmarkService, BookmarkService>();
+builder.Services.AddScoped<IEvidenceLockService, EvidenceLockService>();
+
+// Personal notifications (browser and email) for alert-rule subscribers. NotificationHub holds the open
+// tabs' event streams (the on-premises transport); FcmClient caches its OAuth token, so both are
+// singletons. The "push" client talks to browser vendors' push services and Firebase.
+builder.Services.AddSingleton<NotificationHub>();
+// Web Push endpoints come from users' browsers, so this client only reaches public addresses.
+builder.Services.AddHttpClient("push", client => client.Timeout = TimeSpan.FromSeconds(15))
+    .ConfigurePrimaryHttpMessageHandler(LarisVMS.Infrastructure.Security.OutboundGuard.PublicOnlyHandler);
+builder.Services.AddSingleton(sp => new LarisVMS.Infrastructure.Notifications.FcmClient(
+    () => sp.GetRequiredService<IHttpClientFactory>().CreateClient("push")));
+builder.Services.AddScoped<INotificationService, NotificationService>();
 builder.Services.AddScoped<IApiKeyService, ApiKeyService>();
 builder.Services.AddSingleton<UserConnectionRegistry>();
 builder.Services.AddScoped<UserDisableService>();
@@ -400,8 +476,10 @@ builder.Services.AddSingleton<IDetectionEventSink>(sp => sp.GetRequiredService<D
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DetectionAlertService>());
 builder.Services.AddHostedService<BookmarkRetentionService>();
 builder.Services.AddHostedService<MotionSpanRetentionService>();
+builder.Services.AddHostedService<DatabaseMaintenanceService>();
 builder.Services.AddHostedService<ActivityRollupBackgroundService>();
 builder.Services.AddHostedService<RoleAssignmentExpirySweepService>();
+builder.Services.AddHostedService<EvidenceLockSweepService>();
 builder.Services.AddHostedService<ActiveDirectorySyncService>();
 builder.Services.AddHostedService<LarisVMS.Web.Services.WebLogLevelInitializer>();
 // Failover plan phase 2: poll each media proxy's /health and write MediaProxy.Healthy.
@@ -424,7 +502,7 @@ builder.Services.AddHostedService<ReleaseCheckService>();
 // to cameras the user has explicitly added by IP/hostname on their own network, so the usual
 // MITM concern a browser's cert warning protects against doesn't apply here the same way. Scoped
 // narrowly to this named client so it can't accidentally weaken TLS for any other outbound call.
-builder.Services.AddHttpClient("onvif", client => client.Timeout = TimeSpan.FromSeconds(8))
+builder.Services.AddHttpClient("onvif", client => { client.Timeout = TimeSpan.FromSeconds(8); client.MaxResponseContentBufferSize = LarisVMS.Onvif.Soap.SafeXml.MaxCharacters; })
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
     {
         // Deliberate, see above: camera self-signed certificates can't chain to anything.
@@ -476,7 +554,9 @@ builder.Services.AddCascadingAuthenticationState();
 // custom port just doesn't come up until the next successful restart. "Change requires a service
 // restart" — same accepted model as ClientEndpointConfig/SegmentSeconds elsewhere in this codebase —
 // see PortSegmentationMiddleware's and LiveViewModel.CustomPort's doc comments.
+// WebServer.Http3Enabled is read here too, for the same reason: Kestrel's protocols are fixed at startup.
 int? webMediaPort = null;
+var http3Enabled = true;
 var earlyConnectionString = builder.Configuration.GetConnectionString("DefaultConnection");
 if (!string.IsNullOrWhiteSpace(earlyConnectionString))
 {
@@ -487,16 +567,27 @@ if (!string.IsNullOrWhiteSpace(earlyConnectionString))
         using var earlyConn = new SqlConnection(new SqlConnectionStringBuilder(earlyConnectionString) { ConnectTimeout = 5 }.ConnectionString);
         await earlyConn.OpenAsync();
         using var earlyCmd = earlyConn.CreateCommand();
-        earlyCmd.CommandText = "SELECT Value FROM Settings WHERE [Key] = @Key";
-        earlyCmd.Parameters.AddWithValue("@Key", PortSegmentationMiddleware.SettingKey);
-        if (await earlyCmd.ExecuteScalarAsync() is string rawMediaPort
-            && int.TryParse(rawMediaPort, out var parsedMediaPort) && parsedMediaPort is > 0 and <= 65535)
-            webMediaPort = parsedMediaPort;
+        earlyCmd.CommandText = "SELECT [Key], Value FROM Settings WHERE [Key] IN (@MediaPortKey, @Http3Key)";
+        earlyCmd.Parameters.AddWithValue("@MediaPortKey", PortSegmentationMiddleware.SettingKey);
+        earlyCmd.Parameters.AddWithValue("@Http3Key", WebServerProtocols.Http3SettingKey);
+        using var earlyReader = await earlyCmd.ExecuteReaderAsync();
+        while (await earlyReader.ReadAsync())
+        {
+            var key = earlyReader.GetString(0);
+            var raw = earlyReader.IsDBNull(1) ? null : earlyReader.GetString(1);
+            if (key == PortSegmentationMiddleware.SettingKey)
+            {
+                if (int.TryParse(raw, out var parsedMediaPort) && parsedMediaPort is > 0 and <= 65535)
+                    webMediaPort = parsedMediaPort;
+            }
+            else if (bool.TryParse(raw, out var parsedHttp3))
+                http3Enabled = parsedHttp3;
+        }
     }
     catch (Exception ex) when (ex is not OperationCanceledException)
     {
         // The file log, not the console — a service's console output goes nowhere.
-        webFileLogger.CreateLogger("Startup").LogWarning(ex, "Could not read {Key} at startup: {Message}", PortSegmentationMiddleware.SettingKey, ex.Message);
+        webFileLogger.CreateLogger("Startup").LogWarning(ex, "Could not read startup settings: {Message}", ex.Message);
     }
 }
 
@@ -525,38 +616,50 @@ var selfSignedPfxPath = Path.Combine(
 // leave a brand-new install completely unreachable (no way to even get to the setup wizard). Matches
 // Node's own default behavior; the admin swaps in a real cert and restarts whenever ready.
 var certHolder = new CertHolder(
-    new CertHolderOptions(pfxPath, pfxPassword, AllowInsecure: true, Environment.MachineName, selfSignedPfxPath),
+    new CertHolderOptions(pfxPath, pfxPassword, AllowInsecure: true, Environment.MachineName, selfSignedPfxPath,
+        AutoRenewSelfSigned: false),
     certLogger);
 certHolder.Load(); // logs the outcome (and LastError) to the file log itself
 
 var httpsPort = builder.Configuration.GetValue<int?>("Kestrel:HttpsPort") ?? 8444;
+#pragma warning disable CA1416 // IsSupported is itself the platform check
+var webServerProtocols = new WebServerProtocols(http3Enabled, System.Net.Quic.QuicListener.IsSupported);
+#pragma warning restore CA1416
+string http3State;
+if (webServerProtocols.Http3Active) http3State = "enabled";
+else if (!webServerProtocols.Http3Supported) http3State = "unavailable on this OS; using HTTP/2";
+else http3State = "turned off in Settings; using HTTP/2";
+webFileLogger.CreateLogger("Startup").LogInformation("HTTP/3 {State}", http3State);
 builder.WebHost.ConfigureKestrel(o =>
 {
     // IIS's own requestFiltering maxAllowedContentLength silently provided a ceiling on request size
     // before — that ceiling disappears once Kestrel hosts directly unless set explicitly here.
-    o.Limits.MaxRequestBodySize = 2L * 1024 * 1024 * 1024; // 2 GiB — matches current export/upload usage
-    // HTTP/1.1 only — confirmed live that Chrome, once it has an HTTP/2 connection open to this origin
-    // (from the page/API calls), tries to multiplex a new WebSocket onto it via HTTP/2's "extended
-    // CONNECT" (RFC 8441) instead of opening a fresh HTTP/1.1 connection for the classic Upgrade
-    // handshake — and this Kestrel configuration answers that CONNECT attempt with a bare 405,
-    // silently killing /live/{cameraId}/detections (the one WS route sharing this origin/port with
-    // heavy other HTTP/2 traffic; the direct-to-node video WS never hits this because each node origin
-    // has no prior HTTP/2 connection for Chrome to prefer reusing). IIS/ANCM in-process hosting never
-    // exposed the app to this at all — the browser's own ALPN negotiation terminated at IIS, not here.
-    // Restricting to Http1 forces every WS handshake through the universally-reliable classic Upgrade
-    // path instead of relying on HTTP/2 WebSocket support this configuration doesn't actually have.
+    // 10 MB by default; the few endpoints that take more (floor plan images, node reports) raise it
+    // themselves with RequestSizeLimitAttribute, so an anonymous request can't stream gigabytes.
+    o.Limits.MaxRequestBodySize = 10L * 1024 * 1024;
+    o.AddServerHeader = false; // no "Server: Kestrel" banner
+    // HTTP/2 lets every tab's requests share one connection; HTTP/1.1's six-per-host limit let a few
+    // tabs' long-lived streams (notifications SSE) stall page loads. Browsers send WebSockets over
+    // HTTP/2 as an extended CONNECT (RFC 8441), so every WebSocket route accepts CONNECT as well as
+    // GET (WebSocketMethods below). HTTP/3 (QUIC, UDP on the same port) is added when the OS supports
+    // it and Settings → Security leaves it on; Kestrel advertises it via Alt-Svc. WebSockets never use
+    // HTTP/3 — Kestrel doesn't implement RFC 9220, so browsers keep them on HTTP/2 or HTTP/1.1.
+    var protocols = webServerProtocols.Http3Active
+        ? Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http1AndHttp2AndHttp3
+        : Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http1AndHttp2;
     if (certHolder.Current is not null)
         o.ListenAnyIP(httpsPort, lo => lo.UseHttps(h =>
         {
             h.ServerCertificateSelector = (_, _) => certHolder.Current;
-        }).Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http1);
+        }).Protocols = protocols);
     if (webMediaPort is { } mediaPort && certHolder.Current is not null)
         o.ListenAnyIP(mediaPort, lo => lo.UseHttps(h =>
         {
             h.ServerCertificateSelector = (_, _) => certHolder.Current;
-        }).Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http1);
+        }).Protocols = protocols);
 });
 builder.Services.AddSingleton(certHolder);
+builder.Services.AddSingleton(webServerProtocols);
 if (certHolder.Current is not null)
     builder.Services.AddSingleton<IHostedService>(sp => new CertWatcherService(
         certHolder, sp.GetRequiredService<ILoggerFactory>().CreateLogger<CertWatcherService>()));
@@ -583,8 +686,9 @@ else
 }
 
 app.UseHttpsRedirection();
-app.UseStaticFiles();
+// Headers first, so static files (scripts, the service worker) get nosniff, frame and CSP headers too.
 app.UseSecurityHeaders();
+app.UseStaticFiles();
 app.UseSetupRedirect();
 app.UseRegistrationDisabled();
 // After the setup gate, not before: pre-setup there may be no Settings table to read yet, and every
@@ -599,6 +703,8 @@ app.UseRouting();
 // WebSocket rather than being treated as a normal HTTP request that happens to ask for an upgrade.
 app.UseWebSockets();
 app.UseAuthentication();
+// Cross-site WebSockets and API calls riding the sign-in cookie are refused (OriginCheckMiddleware).
+app.UseMiddleware<OriginCheckMiddleware>();
 // Runs after cookie auth but before authorization, mirroring dploid's AgentAuthMiddleware
 // placement — it establishes the node principal (via HttpContext.Items, not a ClaimsPrincipal,
 // since these endpoints don't carry [Authorize] policies) independently of the cookie scheme.
@@ -610,6 +716,7 @@ app.UseMiddleware<ProxyAuthMiddleware>();
 // HttpContext.Items the way NodeAuthMiddleware does.
 app.UseMiddleware<ApiKeyAuthMiddleware>();
 app.UseAuthorization();
+app.UseRateLimiter();
 // Must come after UseRouting/UseAuthorization, before endpoint mapping — required by Blazor's
 // enhanced forms (AntiforgeryToken) and by ordinary Razor Pages POST handlers alike.
 app.UseAntiforgery();
@@ -674,22 +781,35 @@ adminNodesApi.MapGet("/{id:guid}/vision-models", async (Guid id, INodeService no
 });
 
 // HttpContext.Items rather than from a ClaimsPrincipal.
-var nodesApi = app.MapGroup("/api/nodes");
+var nodesApi = app.MapGroup("/api/nodes")
+    // Nodes aren't signed-in users: NodeAuthMiddleware checks their bearer secret instead.
+    .AllowAnonymous()
+    // Segment, motion, and event report batches can be several MB after a node was offline.
+    .WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(64L * 1024 * 1024));
 
-nodesApi.MapPost("/register", async (NodeRegisterRequest request, INodeService nodeService, CancellationToken ct) =>
+nodesApi.MapPost("/register", async (HttpContext ctx, NodeRegisterRequest request, INodeService nodeService, ISigningKeyService signing,
+    INotificationService notifications, CancellationToken ct) =>
 {
     try
     {
-        return Results.Json(await nodeService.RegisterAsync(request, ct));
+        var registered = await nodeService.RegisterAsync(request, ct);
+        await notifications.NotifySuperAdminsAsync("Node waiting for approval",
+            $"\"{request.Hostname}\" registered from {ctx.Connection.RemoteIpAddress}. Approve it on the Nodes page if you installed it.", "/Admin/Nodes", ct);
+        return Results.Json(registered with { UpdateSigningKeyPem = await signing.GetActivePublicKeyPemAsync(ct) });
     }
     catch (UnauthorizedAccessException)
     {
         return Results.Unauthorized();
     }
-});
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(ex.Message);
+    }
+}).RequireRateLimiting("register").WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(64 * 1024));
 
 nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest request, INodeService nodeService,
-    INodeBuildService nodeBuildService, ISettingsResolver settings, IAuditService auditService, CancellationToken ct) =>
+    INodeBuildService nodeBuildService, ISettingsResolver settings, IAuditService auditService, ISigningKeyService signing,
+    INotificationService notifications, CancellationToken ct) =>
 {
     // LastSeenAt/Status/LastIpAddress are already updated by NodeAuthMiddleware's AuthenticateAsync
     // call for every authenticated request. Version/LivePort can only be updated here, not in the
@@ -700,27 +820,37 @@ nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest requ
     // ── Failover plan phase 5: rolling-nonce replay check + secret rotation ───────────────────────
     // Runs before any state write below. A replayed heartbeat (a stale echoed nonce) is rejected
     // outright and gets nothing — not a storage-stats update, not an update offer, not a new nonce.
-    var security = await nodeService.ApplyCheckInSecurityAsync(node.Id, request.Nonce, ct);
+    var security = await nodeService.ApplyCheckInSecurityAsync(node.Id, request.Nonce, ct,
+        IpAllowListPolicy.ToUrlHost(ctx.Connection.RemoteIpAddress));
     if (security.ReplayRejected)
     {
         await auditService.LogAsync("Node.AuthReplay", null, node.Name, ctx.Connection.RemoteIpAddress?.ToString(),
-            $"{node.Name} ({node.Id}) sent a stale check-in nonce — heartbeat rejected as a possible replay.", ct);
+            $"{node.Name} ({node.Id}) sent a stale or missing check-in nonce — heartbeat rejected as a possible replay.", ct);
         return Results.Unauthorized();
     }
+    if (security.IpChangedFrom is { } previousIp)
+        await auditService.LogAsync("Node.AddressChanged", null, node.Name, ctx.Connection.RemoteIpAddress?.ToString(),
+            $"{node.Name} ({node.Id}) now checks in from {ctx.Connection.RemoteIpAddress} (was {(previousIp.Length == 0 ? "unknown" : previousIp)}).", ct);
 
     await nodeService.RecordHeartbeatAsync(node.Id, request.FreeBytes, request.TotalBytes, request.Version, request.LivePort,
         request.SentAtUtc, DateTime.UtcNow, request.DetectedEncoders, request.DetectedAccelerators,
         request.ArchiveFreeBytes, request.ArchiveTotalBytes, request.StoragePressureActive,
         request.ClientEndpointReportedPort, request.ClientEndpointCertNotAfterUtc,
         request.ClientEndpointCertIsSelfSigned, request.ClientEndpointLastError, request.PartnerHealthReports,
-        request.HostStats, ct);
+        request.HostStats, ct, request.StorageBlockedByEvidenceLocks);
+    // AI detection on a slower backend than the one asked for (say DirectML instead of CUDA, because
+    // cuDNN went missing) is otherwise only a line in the node's log — tell someone who can fix it.
+    if (await nodeService.RecordVisionBackendAsync(node.Id, request.VisionBackend, ct) && request.VisionBackend is { } degraded)
+        await notifications.NotifySuperAdminsAsync("AI detection running slow",
+            $"{node.Name} is running AI detection on {degraded.Provider} instead of {degraded.Requested}. {string.Join(" ", degraded.Notes)}",
+            "/Admin/Nodes", ct);
 
     // ── Auto-update check ────────────────────────────────────────────────
     // Global-only gate (the Nodes page's NodeAutoUpdate.Enabled) — no per-node override for this
     // first pass, unlike Retention/Recording.Mode which do walk Camera -> Node -> Global.
     NodeUpdateInfoDto? updateAvailable = null;
     var autoUpdateEnabled = await settings.GetAsync("NodeAutoUpdate.Enabled", true, ct: ct);
-    if (autoUpdateEnabled)
+    if (autoUpdateEnabled && node.Status is not (NodeStatus.Pending or NodeStatus.Disabled))
     {
         // node.Platform is set once at registration (NodeRegisterRequest.Platform) and never
         // updated by a heartbeat — same as dploid's agent.OSPlatform. Falls back to "win-x64" for
@@ -734,16 +864,21 @@ nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest requ
             // Service binary — see NodeBuildVersion.VisionFilePath's own doc comment for why a build
             // can legitimately have none (a package built with -SkipNodeVision, or an older build
             // that predates this column).
+            var visionSha256 = latestBuild.VisionFilePath is not null ? latestBuild.VisionSha256 : null;
+            var signature = await signing.SignAsync(
+                UpdateSignature.UpdatePayload(platform, latestBuild.Version, latestBuild.Sha256, visionSha256), ct);
             updateAvailable = new NodeUpdateInfoDto(
                 latestBuild.Version, $"{baseUrl}/api/nodes/download/{latestBuild.Id}",
                 latestBuild.Sha256, latestBuild.SizeBytes,
                 latestBuild.VisionFilePath is not null ? $"{baseUrl}/api/nodes/download/{latestBuild.Id}/vision" : null,
-                latestBuild.VisionSha256, latestBuild.VisionSizeBytes);
+                visionSha256, latestBuild.VisionSizeBytes,
+                signature.Signature, signature.PublicKeyPem);
         }
     }
 
     return Results.Json(new NodeHeartbeatResponse(IntervalSeconds: 30, updateAvailable,
-        security.NextNonce, security.NewSecret));
+        security.NextNonce, security.NewSecret,
+        await settings.GetAsync(LarisVMS.Web.Services.ServerCertificateSettings.CheckKey, nameof(ServerCertificateCheck.TrustOnFirstUse), ct: ct)));
 });
 
 // Recorder-node auto-update download — same nodesApi group as everything else here, so it's
@@ -801,11 +936,14 @@ nodesApi.MapGet("/detection-model/{family}/{variant}", async (
 // onnxruntime_providers_cuda.dll (~320 MB), which only NVIDIA nodes load. Seeded into the server's
 // cache by deploy.ps1; a node with no seeded file keeps running DirectML. Bearer-auth like the rest
 // of /api/nodes/*.
-nodesApi.MapGet("/vision-native/{name}/info", (string name, LarisVMS.Web.Services.VisionNativeDistributor distributor) =>
+nodesApi.MapGet("/vision-native/{name}/info", async (string name, LarisVMS.Web.Services.VisionNativeDistributor distributor,
+    ISigningKeyService signing, CancellationToken ct) =>
 {
     if (!LarisVMS.Web.Services.VisionNativeDistributor.IsKnown(name)) return Results.NotFound();
     var info = distributor.GetInfo(name);
-    return info is null ? Results.NotFound() : Results.Json(info);
+    if (info is null) return Results.NotFound();
+    var signature = await signing.SignAsync(UpdateSignature.NativePayload(info.Name, info.Sha256), ct);
+    return Results.Json(info with { Signature = signature.Signature, SigningKeyPem = signature.PublicKeyPem });
 });
 
 nodesApi.MapGet("/vision-native/{name}", (string name) =>
@@ -889,6 +1027,14 @@ nodesApi.MapPost("/motion-spans", async (HttpContext ctx, List<MotionSpanReportI
     return Results.Ok();
 });
 
+// Scene heatmap: grid-mode motion heat, the running totals for an hour from one node run.
+nodesApi.MapPost("/motion-heat", async (HttpContext ctx, List<NodeMotionHeatReport> reports, INodeService nodeService, CancellationToken ct) =>
+{
+    var node = (Node)ctx.Items[NodeAuthMiddleware.HttpContextItemKey]!;
+    await nodeService.RecordMotionHeatAsync(node.Id, reports, ct);
+    return Results.Ok();
+});
+
 // M8 pass 6: raw ONVIF PullPoint notifications — separate from /motion-spans since a motion-
 // classified event lands in both (this table for the full log, MotionSpans via its own report call
 // for the timeline/gating pipeline), not one-or-the-other.
@@ -934,16 +1080,24 @@ nodesApi.MapPost("/exports/complete", async (HttpContext ctx, List<ExportComplet
 // ── Failover plan phase 2: proxy control plane ──────────────────────────────────────────────────
 // /register is anonymous (the one-time node registration key, reused); the rest is authenticated by
 // ProxyAuthMiddleware, which stashes the MediaProxy on HttpContext.Items.
-var proxiesApi = app.MapGroup("/api/proxies");
+var proxiesApi = app.MapGroup("/api/proxies").AllowAnonymous(); // ProxyAuthMiddleware checks the proxy's secret
 
-proxiesApi.MapPost("/register", async (ProxyRegisterRequest request, IProxyService proxyService, CancellationToken ct) =>
+proxiesApi.MapPost("/register", async (HttpContext ctx, ProxyRegisterRequest request, IProxyService proxyService, ISigningKeyService signing,
+    INotificationService notifications, CancellationToken ct) =>
 {
-    try { return Results.Json(await proxyService.RegisterAsync(request, ct)); }
+    try
+    {
+        var registered = await proxyService.RegisterAsync(request, ct);
+        await notifications.NotifySuperAdminsAsync("Media proxy waiting to be turned on",
+            $"\"{request.Hostname}\" registered from {ctx.Connection.RemoteIpAddress}. Turn it on under Settings → Media proxies if you installed it.", "/Admin/Proxies", ct);
+        return Results.Json(registered with { UpdateSigningKeyPem = await signing.GetActivePublicKeyPemAsync(ct) });
+    }
     catch (UnauthorizedAccessException) { return Results.Unauthorized(); }
-});
+    catch (ArgumentException ex) { return Results.BadRequest(ex.Message); }
+}).RequireRateLimiting("register").WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(64 * 1024));
 
 proxiesApi.MapPost("/heartbeat", async (HttpContext ctx, ProxyHeartbeatRequest request, IProxyService proxyService,
-    INodeBuildService nodeBuildService, ISettingsResolver settings, IAuditService auditService, CancellationToken ct) =>
+    INodeBuildService nodeBuildService, ISettingsResolver settings, IAuditService auditService, ISigningKeyService signing, CancellationToken ct) =>
 {
     var proxy = (MediaProxy)ctx.Items[ProxyAuthMiddleware.HttpContextItemKey]!;
 
@@ -970,12 +1124,16 @@ proxiesApi.MapPost("/heartbeat", async (HttpContext ctx, ProxyHeartbeatRequest r
         if (latestBuild is not null && NodeVersionComparer.IsNewer(latestBuild.Version, request.Version))
         {
             var baseUrl = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
+            var signature = await signing.SignAsync(
+                UpdateSignature.UpdatePayload("proxy-win-x64", latestBuild.Version, latestBuild.Sha256, null), ct);
             updateAvailable = new ProxyUpdateInfoDto(latestBuild.Version,
-                $"{baseUrl}/api/proxies/download/{latestBuild.Id}", latestBuild.Sha256, latestBuild.SizeBytes);
+                $"{baseUrl}/api/proxies/download/{latestBuild.Id}", latestBuild.Sha256, latestBuild.SizeBytes,
+                signature.Signature, signature.PublicKeyPem);
         }
     }
 
-    return Results.Json(new ProxyHeartbeatResponse(IntervalSeconds: 30, security.NextNonce, updateAvailable));
+    return Results.Json(new ProxyHeartbeatResponse(IntervalSeconds: 30, security.NextNonce, updateAvailable,
+        await settings.GetAsync(LarisVMS.Web.Services.ServerCertificateSettings.CheckKey, nameof(ServerCertificateCheck.TrustOnFirstUse), ct: ct)));
 });
 
 // Proxy auto-update download — authenticated by ProxyAuthMiddleware exactly like the rest of
@@ -995,6 +1153,9 @@ proxiesApi.MapGet("/config", async (HttpContext ctx, IProxyService proxyService,
     return Results.Json(await proxyService.GetConfigAsync(proxy.Id, ct));
 });
 
+// Browsers open WebSockets with GET over HTTP/1.1 and CONNECT over HTTP/2 (RFC 8441).
+string[] WebSocketMethods = ["GET", "CONNECT"];
+
 // ── Live view media proxy (M5) ───────────────────────────────────────────────
 // The browser only ever talks to this host, over the cert that already works — never directly to a
 // node (see the plan's "Media path" section for why: nodes never need their own TLS certificate this
@@ -1002,7 +1163,7 @@ proxiesApi.MapGet("/config", async (HttpContext ctx, IProxyService proxyService,
 // process opens outbound to the node's own Kestrel port on the LAN (plain HTTP — the short-lived
 // signed token below is what keeps that port from being wide open to anything else on the LAN that
 // knows the URL shape).
-app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICameraService cameraService,
+app.MapMethods("/live/{cameraId:guid}", WebSocketMethods, async (HttpContext ctx, Guid cameraId, ICameraService cameraService,
     ICameraAccessService cameraAccess, IAuditService auditService, LarisVMS.Web.Services.MediaRelayMetrics relayMetrics,
     LarisVMS.Web.Services.MediaRoutingService routing, UserConnectionRegistry connections, CancellationToken ct) =>
 {
@@ -1016,8 +1177,7 @@ app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICame
     // CameraAccess narrows that to *this* camera. Previously unchecked here — the camera/view list
     // pages already filter by this same call, but this endpoint (the one that actually streams
     // video) took only the global gate, so a CameraAccess-restricted user could still open any other
-    // camera's live feed directly by GUID. null means unrestricted (admin, an All-scope grant, or a
-    // principal with zero CameraAccess rows — see GetAccessibleCameraIdsAsync's own doc comment).
+    // camera's live feed directly by GUID. null means unrestricted (Super Admin or an All-scope grant).
     var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.View, ct);
     if (accessible is not null && !accessible.Contains(cameraId))
     {
@@ -1067,10 +1227,16 @@ app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICame
     catch (Exception ex) when (ex is not OperationCanceledException)
     {
         ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
-        await ctx.Response.WriteAsync($"Could not reach recorder node: {ex.Message}");
+        await ctx.Response.WriteAsync(NodeUnreachable(ctx, ex));
         return;
     }
 
+    using var socketSlot = LarisVMS.Web.Services.SocketLimiter.TryEnter(ctx);
+    if (socketSlot is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status429TooManyRequests; // too many open live sockets for this person
+        return;
+    }
     using var browserSocket = await ctx.WebSockets.AcceptWebSocketAsync();
     // Failover plan phase 1: gauge how many live streams are still being relayed through this tier —
     // with the direct-streaming toggle on, this trends to zero (browsers connect straight to the node
@@ -1094,7 +1260,7 @@ app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICame
 // directly from the node: it's a few KB/s, and keeping it here puts the permission check, the
 // one-talker-per-camera lock and the audit trail in one place. Gated like PTZ: Cameras.View globally,
 // narrowed per camera by CameraAccessActions.Talk.
-app.MapGet("/talk/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICameraService cameraService,
+app.MapMethods("/talk/{cameraId:guid}", WebSocketMethods, async (HttpContext ctx, Guid cameraId, ICameraService cameraService,
     ICameraAccessService cameraAccess, IAuditService auditService, ITalkRecordingService recordings,
     LarisVMS.Web.Services.MediaRoutingService routing, LarisVMS.Web.Services.TalkSessionRegistry talkers,
     UserConnectionRegistry connections, ILoggerFactory loggerFactory, CancellationToken ct) =>
@@ -1129,6 +1295,12 @@ app.MapGet("/talk/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICame
 
     var userId = ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
     var userName = ctx.User.Identity?.Name ?? "someone";
+    using var socketSlot = LarisVMS.Web.Services.SocketLimiter.TryEnter(ctx);
+    if (socketSlot is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status429TooManyRequests; // too many open live sockets for this person
+        return;
+    }
     using var browserSocket = await ctx.WebSockets.AcceptWebSocketAsync();
 
     // Accepted first, refused over the socket: a WebSocket handshake can't carry a readable error
@@ -1149,7 +1321,7 @@ app.MapGet("/talk/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICame
     }
     try
     {
-        var token = MediaToken.Issue(cameraId, key, TimeSpan.FromSeconds(60));
+        var token = MediaToken.IssueFor(MediaToken.Purposes.Talk, cameraId, key, TimeSpan.FromSeconds(60));
         using var nodeSocket = new ClientWebSocket();
         nodeSocket.Options.SetRequestHeader("Authorization", $"Bearer {token}");
         try
@@ -1180,7 +1352,7 @@ app.MapGet("/talk/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ICame
 // viewing its video). Unlike ProxyLiveViewAsync's pure byte relay, this one parses each JSON tick
 // and attaches each box's category color before forwarding — Node and Vision Service both have no
 // database access at all, so this proxy is the only tier that can.
-app.MapGet("/live/{cameraId:guid}/detections", async (HttpContext ctx, Guid cameraId, ICameraService cameraService,
+app.MapMethods("/live/{cameraId:guid}/detections", WebSocketMethods, async (HttpContext ctx, Guid cameraId, ICameraService cameraService,
     ICameraAccessService cameraAccess, DetectedObjectCategoryColorCache colorCache, ISettingsResolver settings,
     LarisVMS.Web.Services.MediaRoutingService routing, UserConnectionRegistry connections, CancellationToken ct) =>
 {
@@ -1219,13 +1391,19 @@ app.MapGet("/live/{cameraId:guid}/detections", async (HttpContext ctx, Guid came
     catch (Exception ex) when (ex is not OperationCanceledException)
     {
         ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
-        await ctx.Response.WriteAsync($"Could not reach recorder node: {ex.Message}");
+        await ctx.Response.WriteAsync(NodeUnreachable(ctx, ex));
         return;
     }
 
     // Read once per connection: speeds go to the browser already formatted in the configured unit.
     var speedUnit = await settings.GetAsync(SpeedUnits.SettingKey, SpeedUnits.Default, ct: ct);
 
+    using var socketSlot = LarisVMS.Web.Services.SocketLimiter.TryEnter(ctx);
+    if (socketSlot is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status429TooManyRequests; // too many open live sockets for this person
+        return;
+    }
     using var browserSocket = await ctx.WebSockets.AcceptWebSocketAsync();
     using var lease = connections.Register(ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, ct);
     await ProxyDetectionOverlayAsync(nodeSocket, browserSocket, colorCache, speedUnit, lease.Token);
@@ -1237,7 +1415,7 @@ app.MapGet("/live/{cameraId:guid}/detections", async (HttpContext ctx, Guid came
 // Unlike that overlay, Node already has everything the browser needs (a raw score plus the zone id
 // the editor already has loaded from /api/cameras/{id}/zones) — no per-tick DB augmentation, so this
 // is a pure relay rather than a parse-and-reattach proxy.
-app.MapGet("/live/{cameraId:guid}/motion-zones", async (HttpContext ctx, Guid cameraId, ICameraService cameraService,
+app.MapMethods("/live/{cameraId:guid}/motion-zones", WebSocketMethods, async (HttpContext ctx, Guid cameraId, ICameraService cameraService,
     ICameraAccessService cameraAccess, LarisVMS.Web.Services.MediaRoutingService routing, UserConnectionRegistry connections,
     CancellationToken ct) =>
 {
@@ -1264,7 +1442,7 @@ app.MapGet("/live/{cameraId:guid}/motion-zones", async (HttpContext ctx, Guid ca
         return;
     }
 
-    var token = MediaToken.Issue(cameraId, key, TimeSpan.FromSeconds(60));
+    var token = MediaToken.IssueFor(MediaToken.Purposes.MotionZones, cameraId, key, TimeSpan.FromSeconds(60));
     var nodeUri = new Uri($"ws://{ip}:{port}/live/{cameraId}/motion-zones?token={Uri.EscapeDataString(token)}");
 
     using var nodeSocket = new ClientWebSocket();
@@ -1276,10 +1454,16 @@ app.MapGet("/live/{cameraId:guid}/motion-zones", async (HttpContext ctx, Guid ca
     catch (Exception ex) when (ex is not OperationCanceledException)
     {
         ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
-        await ctx.Response.WriteAsync($"Could not reach recorder node: {ex.Message}");
+        await ctx.Response.WriteAsync(NodeUnreachable(ctx, ex));
         return;
     }
 
+    using var socketSlot = LarisVMS.Web.Services.SocketLimiter.TryEnter(ctx);
+    if (socketSlot is null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status429TooManyRequests; // too many open live sockets for this person
+        return;
+    }
     using var browserSocket = await ctx.WebSockets.AcceptWebSocketAsync();
     using var lease = connections.Register(ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, ct);
     await ProxyMotionZoneScoresAsync(nodeSocket, browserSocket, lease.Token);
@@ -1311,7 +1495,7 @@ app.MapGet("/api/cameras/{cameraId:guid}/snapshot", async (HttpContext ctx, Guid
             statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 
-    var token = MediaToken.Issue(cameraId, key, TimeSpan.FromSeconds(60));
+    var token = MediaToken.IssueFor(MediaToken.Purposes.Snapshot, cameraId, key, TimeSpan.FromSeconds(60));
     var nodeUri = $"http://{ip}:{port}/snapshot/{cameraId}?token={Uri.EscapeDataString(token)}";
 
     var client = httpFactory.CreateClient();
@@ -1331,7 +1515,7 @@ app.MapGet("/api/cameras/{cameraId:guid}/snapshot", async (HttpContext ctx, Guid
     }
     catch (Exception ex) when (ex is not OperationCanceledException)
     {
-        return Results.Problem($"Could not reach recorder node: {ex.Message}", statusCode: StatusCodes.Status502BadGateway);
+        return Results.Problem(NodeUnreachable(ctx, ex), statusCode: StatusCodes.Status502BadGateway);
     }
 
     if (!nodeResponse.IsSuccessStatusCode) return Results.StatusCode((int)nodeResponse.StatusCode);
@@ -1395,7 +1579,7 @@ ptzApi.MapPost("/move", async (HttpContext ctx, Guid cameraId, PtzMoveRequest re
     }
     catch (Exception ex) when (ex is not OperationCanceledException)
     {
-        return Results.Problem($"Could not reach camera: {ex.Message}", statusCode: StatusCodes.Status502BadGateway);
+        return Results.Problem("Could not reach the camera.", statusCode: StatusCodes.Status502BadGateway);
     }
 });
 
@@ -1428,21 +1612,177 @@ ptzApi.MapPost("/stop", async (HttpContext ctx, Guid cameraId,
     }
     catch (Exception ex) when (ex is not OperationCanceledException)
     {
-        return Results.Problem($"Could not reach camera: {ex.Message}", statusCode: StatusCodes.Status502BadGateway);
+        return Results.Problem("Could not reach the camera.", statusCode: StatusCodes.Status502BadGateway);
     }
 });
+
+// ── Device settings ──────────────────────────────────────────────────────────
+// The camera's own encoder, imaging, and audio configuration, read and written live over ONVIF
+// (ICameraDeviceSettingsService) — called straight from Web like PTZ, no node hop. Cameras.Edit plus
+// per-camera CameraAccessActions.Configure, same as the snapshot endpoint. After a stream or audio
+// change the service re-probes the camera, and the endpoint nudges the recording node to reconcile
+// now instead of on its next 30s poll, so the new stream format is picked up within seconds.
+var deviceSettingsApi = app.MapGroup("/api/cameras/{cameraId:guid}/device-settings").RequireAuthorization("Cameras.Edit");
+
+static async Task<IResult> DeviceSettingsCall(Func<Task<IResult>> action)
+{
+    try { return await action(); }
+    catch (KeyNotFoundException) { return Results.Problem("Camera not found.", statusCode: StatusCodes.Status404NotFound); }
+    catch (DeviceSettingsValidationException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status400BadRequest); }
+    catch (DeviceSettingsUnavailableException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status409Conflict); }
+    catch (OnvifFaultException ex) { return Results.Problem($"The camera rejected the request: {ex.Message}", statusCode: StatusCodes.Status502BadGateway); }
+    catch (TaskCanceledException ex) when (ex.InnerException is TimeoutException)
+    {
+        return Results.Problem("The camera didn't respond in time.", statusCode: StatusCodes.Status502BadGateway);
+    }
+    catch (HttpRequestException) { return Results.Problem("Couldn't reach the camera.", statusCode: StatusCodes.Status502BadGateway); }
+}
+
+// Browser-supplied text bound for the log: one line, bounded, so it can't forge entries.
+static string? LogSafe(string? value) =>
+    value is null ? null : new string(value.Take(200).Select(c => char.IsControl(c) ? ' ' : c).ToArray());
+
+// What the browser is told when the server can't reach a recorder node: the error itself (with the
+// node's internal address) goes to the server log, not to the client.
+static string NodeUnreachable(HttpContext context, Exception ex)
+{
+    context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("NodeRelay")
+        .LogWarning(ex, "Could not reach the recorder node for {Path}: {Message}", context.Request.Path, ex.Message);
+    return "Could not reach the recorder node. The server log has the details.";
+}
+
+static async Task<IResult?> DeviceSettingsForbidden(HttpContext ctx, ICameraAccessService cameraAccess, IEnumerable<Guid> cameraIds, CancellationToken ct)
+{
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Configure, ct);
+    return accessible is not null && cameraIds.Any(id => !accessible.Contains(id))
+        ? Results.Problem("You don't have configuration access to this camera.", statusCode: StatusCodes.Status403Forbidden)
+        : null;
+}
+
+static async Task ReconcileCameraNodesAsync(IEnumerable<Guid> cameraIds, ICameraService cameraService,
+    LarisVMS.Web.Services.MediaRoutingService routing, LarisVMS.Web.Services.NodeControlClient nodeControl, CancellationToken ct)
+{
+    var nodes = new Dictionary<Guid, Node>();
+    foreach (var id in cameraIds)
+    {
+        if (await routing.GetEffectiveRecordingNodeAsync(await cameraService.GetAsync(id, ct), ct) is { } node) nodes.TryAdd(node.Id, node);
+    }
+    // Best effort: a node that can't be reached still picks the change up on its next poll.
+    foreach (var node in nodes.Values) await nodeControl.TriggerReconcileAsync(node, ct);
+}
+
+static Task AuditDeviceSettingsAsync(IAuditService audit, HttpContext ctx, string details, CancellationToken ct)
+    => audit.LogAsync("Camera.DeviceSettings", ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
+        ctx.User.Identity?.Name, ctx.Connection.RemoteIpAddress?.ToString(), details, ct);
+
+static string DescribeChange(object change) => System.Text.Json.JsonSerializer.Serialize(change,
+    new System.Text.Json.JsonSerializerOptions { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull });
+
+deviceSettingsApi.MapGet("", async (HttpContext ctx, Guid cameraId, ICameraDeviceSettingsService deviceSettings,
+    ICameraAccessService cameraAccess, CancellationToken ct) =>
+{
+    if (await DeviceSettingsForbidden(ctx, cameraAccess, [cameraId], ct) is { } forbidden) return forbidden;
+    return await DeviceSettingsCall(async () => await deviceSettings.GetAsync(cameraId, ct) is { } dto
+        ? Results.Json(dto)
+        : Results.Problem("Camera not found.", statusCode: StatusCodes.Status404NotFound));
+});
+
+deviceSettingsApi.MapPut("/video/{role}", async (HttpContext ctx, Guid cameraId, string role, VideoEncoderValues change,
+    ICameraDeviceSettingsService deviceSettings, ICameraAccessService cameraAccess, ICameraService cameraService,
+    LarisVMS.Web.Services.MediaRoutingService routing, LarisVMS.Web.Services.NodeControlClient nodeControl,
+    IAuditService audit, CancellationToken ct) =>
+{
+    if (await DeviceSettingsForbidden(ctx, cameraAccess, [cameraId], ct) is { } forbidden) return forbidden;
+    return await DeviceSettingsCall(async () =>
+    {
+        await deviceSettings.UpdateVideoAsync(cameraId, role, change, ct);
+        await AuditDeviceSettingsAsync(audit, ctx, $"Camera {cameraId}: {role} stream encoder set to {DescribeChange(change)}", ct);
+        await ReconcileCameraNodesAsync([cameraId], cameraService, routing, nodeControl, ct);
+        return Results.NoContent();
+    });
+});
+
+deviceSettingsApi.MapPut("/image", async (HttpContext ctx, Guid cameraId, ImageSettingsValues change,
+    ICameraDeviceSettingsService deviceSettings, ICameraAccessService cameraAccess, IAuditService audit, CancellationToken ct) =>
+{
+    if (await DeviceSettingsForbidden(ctx, cameraAccess, [cameraId], ct) is { } forbidden) return forbidden;
+    return await DeviceSettingsCall(async () =>
+    {
+        await deviceSettings.UpdateImageAsync(cameraId, change, ct);
+        await AuditDeviceSettingsAsync(audit, ctx, $"Camera {cameraId}: image settings set to {DescribeChange(change)}", ct);
+        return Results.NoContent();
+    });
+});
+
+deviceSettingsApi.MapPut("/audio/{configToken}", async (HttpContext ctx, Guid cameraId, string configToken, AudioEncoderValues change,
+    ICameraDeviceSettingsService deviceSettings, ICameraAccessService cameraAccess, ICameraService cameraService,
+    LarisVMS.Web.Services.MediaRoutingService routing, LarisVMS.Web.Services.NodeControlClient nodeControl,
+    IAuditService audit, CancellationToken ct) =>
+{
+    if (await DeviceSettingsForbidden(ctx, cameraAccess, [cameraId], ct) is { } forbidden) return forbidden;
+    return await DeviceSettingsCall(async () =>
+    {
+        await deviceSettings.UpdateAudioAsync(cameraId, configToken, change, ct);
+        await AuditDeviceSettingsAsync(audit, ctx, $"Camera {cameraId}: audio encoder set to {DescribeChange(change)}", ct);
+        await ReconcileCameraNodesAsync([cameraId], cameraService, routing, nodeControl, ct);
+        return Results.NoContent();
+    });
+});
+
+// Other cameras of the same make and model this user can configure — the bulk-apply target list.
+deviceSettingsApi.MapGet("/peers", async (HttpContext ctx, Guid cameraId, ICameraDeviceSettingsService deviceSettings,
+    ICameraAccessService cameraAccess, CancellationToken ct) =>
+{
+    if (await DeviceSettingsForbidden(ctx, cameraAccess, [cameraId], ct) is { } forbidden) return forbidden;
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Configure, ct);
+    var peers = await deviceSettings.GetSameModelPeersAsync(cameraId, ct);
+    return Results.Json(accessible is null ? peers : peers.Where(p => accessible.Contains(p.CameraId)).ToList());
+});
+
+// One change applied to several cameras of the same make and model. Cameras this user can't configure
+// are reported as failed and never touched; the rest each get their own result.
+app.MapPost("/api/device-settings/bulk", async (HttpContext ctx, BulkDeviceSettingsRequest request,
+    ICameraDeviceSettingsService deviceSettings, ICameraAccessService cameraAccess, ICameraService cameraService,
+    LarisVMS.Web.Services.MediaRoutingService routing, LarisVMS.Web.Services.NodeControlClient nodeControl,
+    IAuditService audit, CancellationToken ct) =>
+{
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Configure, ct);
+    var allowed = request.CameraIds.Distinct().Where(id => accessible is null || accessible.Contains(id)).ToList();
+    var denied = request.CameraIds.Distinct().Except(allowed).ToList();
+    if (allowed.Count == 0)
+        return Results.Problem("You don't have configuration access to any of these cameras.", statusCode: StatusCodes.Status403Forbidden);
+
+    return await DeviceSettingsCall(async () =>
+    {
+        var results = (await deviceSettings.ApplyBulkAsync(request with { CameraIds = allowed }, ct)).ToList();
+        foreach (var id in denied)
+        {
+            var name = (await cameraService.GetAsync(id, ct))?.Name ?? id.ToString();
+            results.Add(new BulkDeviceSettingsCameraResult(id, name, BulkDeviceSettingsStatus.Failed,
+                ["You don't have configuration access to this camera."]));
+        }
+
+        var changed = results.Where(r => r.Status is BulkDeviceSettingsStatus.Applied or BulkDeviceSettingsStatus.Partial).ToList();
+        await AuditDeviceSettingsAsync(audit, ctx,
+            $"Bulk device settings applied to {changed.Count} of {results.Count} camera(s) ({string.Join(", ", changed.Select(r => r.CameraName))}): " +
+            DescribeChange(new { request.Video, request.Image, request.Audio }), ct);
+        if (request.Video is { Count: > 0 } || request.Audio is not null)
+            await ReconcileCameraNodesAsync(changed.Select(r => r.CameraId), cameraService, routing, nodeControl, ct);
+        return Results.Json(results);
+    });
+}).RequireAuthorization("Cameras.Edit");
 
 // ── Zones (M8) ────────────────────────────────────────────────────────────────
 // Cameras.Edit throughout — drawing/editing zones is camera configuration, same gate as the
 // snapshot endpoint above that feeds the editor's background image.
-var zonesApi = app.MapGroup("/api/cameras/{cameraId:guid}/zones").RequireAuthorization("Cameras.Edit");
+var zonesApi = app.MapGroup("/api/cameras/{cameraId:guid}/zones").RequireAuthorization("Cameras.Edit").RequireCameraConfigure();
 
 // Per-camera privacy-mask options (zones page, Privacy masks view). BlocksDetections: whether a mask also
 // stops detections inside it — off by default, stored as a camera override of Privacy.BlocksDetections
 // (removed rather than stored as "false", so a node/global default still applies when off).
 app.MapGet("/api/cameras/{cameraId:guid}/privacy-settings", async (Guid cameraId, ISettingsResolver settings, CancellationToken ct) =>
     Results.Json(new { blocksDetections = await settings.GetAsync("Privacy.BlocksDetections", false, cameraId: cameraId, ct: ct) })
-).RequireAuthorization("Cameras.Edit");
+).RequireAuthorization("Cameras.Edit").RequireCameraConfigure();
 
 app.MapPut("/api/cameras/{cameraId:guid}/privacy-settings", async (HttpContext ctx, Guid cameraId, PrivacySettingsRequest request,
     ISettingsResolver settings, IAuditService auditService, CancellationToken ct) =>
@@ -1453,7 +1793,7 @@ app.MapPut("/api/cameras/{cameraId:guid}/privacy-settings", async (HttpContext c
         ctx.User.Identity?.Name, ctx.Connection.RemoteIpAddress?.ToString(),
         $"Camera {cameraId}: privacy masks {(request.BlocksDetections ? "block" : "don't block")} detections", ct);
     return Results.NoContent();
-}).RequireAuthorization("Cameras.Edit");
+}).RequireAuthorization("Cameras.Edit").RequireCameraConfigure();
 
 zonesApi.MapGet("", async (Guid cameraId, IZoneService zones, CancellationToken ct) =>
     Results.Json((await zones.ListAsync(cameraId, ct)).Select(ToZoneDto)));
@@ -1468,7 +1808,7 @@ zonesApi.MapPost("", async (Guid cameraId, SaveZoneRequest request, IZoneService
 // Not nested under {cameraId} — an update/delete only needs the zone's own id, and nesting it would
 // just be one more value the client has to keep in sync with no actual authorization benefit (the
 // zone's real owning camera is read from the row itself, not trusted from the URL).
-var zoneApi = app.MapGroup("/api/zones/{id:guid}").RequireAuthorization("Cameras.Edit");
+var zoneApi = app.MapGroup("/api/zones/{id:guid}").RequireAuthorization("Cameras.Edit").RequireCameraConfigure(LarisVMS.Web.Services.CameraConfigureFilter.ZoneOwner);
 
 zoneApi.MapPut("", async (Guid id, SaveZoneRequest request, IZoneService zones, CancellationToken ct) =>
 {
@@ -1485,7 +1825,7 @@ zoneApi.MapDelete("", async (Guid id, IZoneService zones, CancellationToken ct) 
 
 // Speed traps (Cameras → Speed traps). Cameras.Edit throughout, same as zones. Saving one changes the
 // camera's node config, which restarts its detection pipeline on the next config poll.
-var speedTrapsApi = app.MapGroup("/api/cameras/{cameraId:guid}/speed-traps").RequireAuthorization("Cameras.Edit");
+var speedTrapsApi = app.MapGroup("/api/cameras/{cameraId:guid}/speed-traps").RequireAuthorization("Cameras.Edit").RequireCameraConfigure();
 
 speedTrapsApi.MapGet("", async (Guid cameraId, ISpeedTrapService traps, CancellationToken ct) =>
     Results.Json((await traps.ListAsync(cameraId, ct)).Select(ToSpeedTrapDto)));
@@ -1501,7 +1841,7 @@ speedTrapsApi.MapPost("", async (HttpContext ctx, Guid cameraId, SaveSpeedTrapRe
     return Results.Json(ToSpeedTrapDto(trap));
 });
 
-var speedTrapApi = app.MapGroup("/api/speed-traps/{id:guid}").RequireAuthorization("Cameras.Edit");
+var speedTrapApi = app.MapGroup("/api/speed-traps/{id:guid}").RequireAuthorization("Cameras.Edit").RequireCameraConfigure(LarisVMS.Web.Services.CameraConfigureFilter.SpeedTrapOwner);
 
 speedTrapApi.MapPut("", async (HttpContext ctx, Guid id, SaveSpeedTrapRequest request, ISpeedTrapService traps,
     IAuditService auditService, CancellationToken ct) =>
@@ -1544,7 +1884,7 @@ static ZoneDto ToZoneDto(Zone z) => new(z.Id, z.CameraId, z.Name, z.Kind.ToStrin
 // Cameras.Edit throughout, same gate as Zones/snapshot above — switching the active masking method
 // or editing the grid mask is camera configuration. Read by both the Zones and MotionGrid editors
 // (each needs to know whether it's the currently active method, to show its own "not active" banner).
-var motionRegionApi = app.MapGroup("/api/cameras/{cameraId:guid}/motion-region").RequireAuthorization("Cameras.Edit");
+var motionRegionApi = app.MapGroup("/api/cameras/{cameraId:guid}/motion-region").RequireAuthorization("Cameras.Edit").RequireCameraConfigure();
 
 motionRegionApi.MapGet("", async (Guid cameraId, ICameraService cameraService, CancellationToken ct) =>
 {
@@ -1573,7 +1913,7 @@ motionRegionApi.MapPut("/grid", async (Guid cameraId, SaveMotionGridRequest requ
 // Same shape as Zones above: nested-under-camera for list/create (needs the camera to attach to and
 // to scope observed-topics), flat by-id for update/delete. Cameras.Edit throughout — configuring
 // which ONVIF topics drive recording/tagging is camera configuration, same as drawing a zone.
-var eventTagRulesApi = app.MapGroup("/api/cameras/{cameraId:guid}/event-tag-rules").RequireAuthorization("Cameras.Edit");
+var eventTagRulesApi = app.MapGroup("/api/cameras/{cameraId:guid}/event-tag-rules").RequireAuthorization("Cameras.Edit").RequireCameraConfigure();
 
 eventTagRulesApi.MapGet("", async (Guid cameraId, IEventTagRuleService rules, CancellationToken ct) =>
     Results.Json((await rules.ListAsync(cameraId, ct)).Select(r => new EventTagRuleDto(
@@ -1592,7 +1932,7 @@ eventTagRulesApi.MapGet("/observed-topics", async (Guid cameraId, IEventTagRuleS
 
 // Not nested under {cameraId} — same reasoning as the flat /api/zones/{id} group: an update/delete
 // only needs the rule's own id, its owning camera is read from the row itself.
-var eventTagRuleApi = app.MapGroup("/api/event-tag-rules/{id:guid}").RequireAuthorization("Cameras.Edit");
+var eventTagRuleApi = app.MapGroup("/api/event-tag-rules/{id:guid}").RequireAuthorization("Cameras.Edit").RequireCameraConfigure(LarisVMS.Web.Services.CameraConfigureFilter.EventTagRuleOwner);
 
 eventTagRuleApi.MapPut("", async (Guid id, SaveEventTagRuleRequest request, IEventTagRuleService rules, CancellationToken ct) =>
 {
@@ -1610,7 +1950,7 @@ eventTagRuleApi.MapDelete("", async (Guid id, IEventTagRuleService rules, Cancel
 // ── Schedule windows (M8 Schedule mode) ──────────────────────────────────────
 // Same shape as Zones/Event tag rules above: nested-under-camera for list/create, flat by-id for
 // update/delete. Cameras.Edit throughout — same reasoning as those two.
-var scheduleWindowsApi = app.MapGroup("/api/cameras/{cameraId:guid}/schedule-windows").RequireAuthorization("Cameras.Edit");
+var scheduleWindowsApi = app.MapGroup("/api/cameras/{cameraId:guid}/schedule-windows").RequireAuthorization("Cameras.Edit").RequireCameraConfigure();
 
 scheduleWindowsApi.MapGet("", async (Guid cameraId, IScheduleWindowService windows, CancellationToken ct) =>
     Results.Json(await windows.ListAsync(cameraId, ct)));
@@ -1623,7 +1963,7 @@ scheduleWindowsApi.MapPost("", async (Guid cameraId, SaveScheduleWindowRequest r
 });
 
 // Not nested under {cameraId} — same reasoning as the flat /api/zones/{id} group.
-var scheduleWindowApi = app.MapGroup("/api/schedule-windows/{id:guid}").RequireAuthorization("Cameras.Edit");
+var scheduleWindowApi = app.MapGroup("/api/schedule-windows/{id:guid}").RequireAuthorization("Cameras.Edit").RequireCameraConfigure(LarisVMS.Web.Services.CameraConfigureFilter.ScheduleWindowOwner);
 
 scheduleWindowApi.MapPut("", async (Guid id, SaveScheduleWindowRequest request, IScheduleWindowService windows, CancellationToken ct) =>
 {
@@ -1680,6 +2020,114 @@ playbackApi.MapGet("/activity", async (HttpContext ctx, Guid cameraId, string? r
     return heatmap is null ? Results.NotFound() : Results.Json(heatmap);
 });
 
+// Scene heatmap: where in the camera's picture objects moved, or grid motion happened, over a range.
+// Repeated ?cat= values narrow objects to categories. Cached 5 minutes per question: the history only
+// changes hourly, and the page is often reopened or flipped between options.
+playbackApi.MapGet("/scene-heat", async (HttpContext ctx, Guid cameraId, string? range, string? source, int? fromHour, int? toHour,
+    IActivityService activity, ICameraAccessService cameraAccess, IPermissionService permissions, ApplicationDbContext db,
+    IMemoryCache cache, CancellationToken ct) =>
+{
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Playback, ct);
+    if (accessible is not null && !accessible.Contains(cameraId))
+        return Results.Problem("You don't have playback access to this camera.", statusCode: StatusCodes.Status403Forbidden);
+    var categories = ctx.Request.Query["cat"].Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s!).Take(10).Order().ToList();
+    var key = $"scene-heat|{cameraId}|{range}|{source}|{fromHour}|{toHour}|{string.Join(',', categories)}";
+    if (!cache.TryGetValue(key, out SceneHeatDto? heat))
+    {
+        heat = await activity.GetSceneHeatAsync(cameraId, accessible, range, source, categories, fromHour, toHour, ct);
+        if (heat is not null) cache.Set(key, heat, TimeSpan.FromMinutes(5));
+    }
+    if (heat is null) return Results.NotFound();
+
+    // Per viewer and always current, so not part of the cached answer: whether a picture was uploaded
+    // for under the heat, and whether this viewer may change it (Cameras.Edit and Configure access).
+    var uploaded = await db.CameraSceneImages.AsNoTracking().Where(i => i.CameraId == cameraId)
+        .Select(i => (DateTime?)i.UploadedUtc).FirstOrDefaultAsync(ct);
+    var configurable = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Configure, ct);
+    var canChange = (await permissions.GetGrantedAsync(ctx.User, ct)).Has("Cameras", "Edit")
+        && (configurable is null || configurable.Contains(cameraId));
+    return Results.Json(heat with
+    {
+        HasCustomBackground = uploaded is not null,
+        CanChangeBackground = canChange,
+        BackgroundVersion = uploaded?.Ticks ?? 0,
+    });
+});
+
+// The picture under the scene heatmap: one uploaded for this camera, or else a sharp frame (1920 px)
+// from its latest recording — the hover thumbnail the page used before is only 150 px across.
+playbackApi.MapGet("/scene-background", async (HttpContext ctx, Guid cameraId, ApplicationDbContext db, ITimelineService timeline,
+    ICameraAccessService cameraAccess, IHttpClientFactory httpFactory, CancellationToken ct) =>
+{
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Playback, ct);
+    if (accessible is not null && !accessible.Contains(cameraId))
+        return Results.Problem("You don't have playback access to this camera.", statusCode: StatusCodes.Status403Forbidden);
+
+    var uploaded = await db.CameraSceneImages.AsNoTracking().Where(i => i.CameraId == cameraId)
+        .Select(i => new { i.Image, i.ContentType }).FirstOrDefaultAsync(ct);
+    ctx.Response.Headers["X-Content-Type-Options"] = "nosniff";
+    // An hour: the page adds the upload's version to the address, so a new upload still shows at once.
+    ctx.Response.Headers.CacheControl = "private, max-age=3600";
+    if (uploaded is not null) return Results.File(uploaded.Image, uploaded.ContentType);
+    return await ProxyThumbnailAsync(cameraId, await timeline.GetLatestThumbnailInfoAsync(cameraId, ct), httpFactory, ct, ctx,
+        longLivedCache: false, maxDimension: 1920, quality: 3);
+});
+
+// Uploading or removing that picture: camera configuration, like zones and speed traps.
+var sceneBackgroundApi = app.MapGroup("/api/cameras/{cameraId:guid}/scene-background")
+    .RequireAuthorization("Cameras.Edit").RequireCameraConfigure();
+
+sceneBackgroundApi.MapPut("", async (HttpContext ctx, Guid cameraId, SceneBackgroundUpload upload, ApplicationDbContext db,
+    IAuditService auditService, CancellationToken ct) =>
+{
+    byte[] image;
+    try { image = Convert.FromBase64String(upload.ImageBase64 ?? ""); }
+    catch (FormatException) { return Results.Problem("That isn't a valid image.", statusCode: StatusCodes.Status400BadRequest); }
+    if (image.Length == 0 || image.Length > 10 * 1024 * 1024)
+        return Results.Problem("The picture must be under 10 MB.", statusCode: StatusCodes.Status400BadRequest);
+    // From the file's own bytes, never the browser's claim; PNG, JPEG, GIF or WebP only.
+    var contentType = LarisVMS.Web.Helpers.SiteMapImage.DetectContentType(image);
+    if (contentType is null)
+        return Results.Problem("Use a PNG, JPEG, GIF or WebP picture.", statusCode: StatusCodes.Status400BadRequest);
+    if (upload.Width is <= 0 or > 20000 || upload.Height is <= 0 or > 20000)
+        return Results.Problem("That isn't a valid image.", statusCode: StatusCodes.Status400BadRequest);
+
+    // The heat is laid over the picture edge to edge, so it has to be the camera's own shape.
+    var (cols, rows) = await LarisVMS.Infrastructure.Services.SceneHeatRollupService.CameraShapeAsync(db, cameraId, ct);
+    if (cols > 0 && rows > 0 && !LarisVMS.Web.Helpers.SceneBackground.ShapeMatches(upload.Width, upload.Height, cols, rows))
+        return Results.Problem($"Use a picture from this camera, at its full width ({cols} x {rows} or the same shape).",
+            statusCode: StatusCodes.Status400BadRequest);
+
+    var by = ctx.User.Identity?.Name;
+    var row = await db.CameraSceneImages.FirstOrDefaultAsync(i => i.CameraId == cameraId, ct);
+    if (row is null)
+    {
+        row = new CameraSceneImage { CameraId = cameraId };
+        db.CameraSceneImages.Add(row);
+    }
+    row.Image = image;
+    row.ContentType = contentType;
+    row.Width = upload.Width;
+    row.Height = upload.Height;
+    row.UploadedUtc = DateTime.UtcNow;
+    row.UploadedBy = by;
+    await db.SaveChangesAsync(ct);
+    await auditService.LogAsync("Camera.SceneBackgroundSet", ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, by,
+        ctx.Connection.RemoteIpAddress?.ToString(), $"Camera {cameraId}: scene heatmap picture uploaded ({upload.Width} x {upload.Height}).", ct);
+    return Results.NoContent();
+}).WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(16L * 1024 * 1024));
+
+sceneBackgroundApi.MapDelete("", async (HttpContext ctx, Guid cameraId, ApplicationDbContext db, IAuditService auditService, CancellationToken ct) =>
+{
+    var row = await db.CameraSceneImages.FirstOrDefaultAsync(i => i.CameraId == cameraId, ct);
+    if (row is null) return Results.NoContent();
+    db.CameraSceneImages.Remove(row);
+    await db.SaveChangesAsync(ct);
+    await auditService.LogAsync("Camera.SceneBackgroundRemoved", ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
+        ctx.User.Identity?.Name, ctx.Connection.RemoteIpAddress?.ToString(), $"Camera {cameraId}: scene heatmap picture removed.", ct);
+    return Results.NoContent();
+});
+
 // ── Map page ─────────────────────────────────────────────────────────────────
 // Maps (street or floorplan) with cameras placed on them. Viewing follows Cameras.View, narrowed per
 // camera by CameraAccess View like every live surface; placing cameras and managing maps is Cameras.Edit.
@@ -1698,8 +2146,11 @@ mapsApi.MapGet("/{id:guid}", async (HttpContext ctx, Guid id, IMapService maps, 
     return map is null ? Results.NotFound() : Results.Json(map);
 });
 
-mapsApi.MapGet("/{id:guid}/image", async (HttpContext ctx, Guid id, IMapService maps, CancellationToken ct) =>
+mapsApi.MapGet("/{id:guid}/image", async (HttpContext ctx, Guid id, IMapService maps, ICameraAccessService cameraAccess, CancellationToken ct) =>
 {
+    // Same visibility as the map itself.
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.View, ct);
+    if (await maps.GetAsync(id, accessible, ct) is null) return Results.NotFound();
     var image = await maps.GetImageAsync(id, ct);
     if (image is not { } img) return Results.NotFound();
     ctx.Response.Headers["X-Content-Type-Options"] = "nosniff";
@@ -1720,14 +2171,15 @@ mapsApi.MapPost("", async (HttpContext ctx, CreateSiteMapRequest request, IMapSe
         if (image.Length > 10 * 1024 * 1024) return Results.BadRequest("Floorplan images can be up to 10 MB.");
         // By the file's own signature, not the name or the browser's claim. No SVG: it can carry script.
         var detected = SiteMapImage.DetectContentType(image);
-        if (detected is null) return Results.BadRequest("Use a PNG, JPEG, WebP or GIF image.");
+        if (detected is null) return Results.BadRequest("Use a PNG, JPEG, WebP, or GIF image.");
         request = request with { ImageContentType = detected };
     }
     var map = await maps.CreateAsync(request, image, ct);
     await auditService.LogAsync("Map.Create", ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
         ctx.User.Identity?.Name, ctx.Connection.RemoteIpAddress?.ToString(), $"{map.Kind} map '{map.Name}'", ct);
     return Results.Json(new { id = map.Id });
-}).RequireAuthorization("Cameras.Edit");
+}).RequireAuthorization("Cameras.Edit")
+    .WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(16L * 1024 * 1024)); // floor plan images up to 10 MB, as base64
 
 mapsApi.MapPut("/{id:guid}", async (Guid id, UpdateSiteMapRequest request, IMapService maps, CancellationToken ct) =>
     await maps.UpdateAsync(id, request, ct) ? Results.NoContent() : Results.NotFound()
@@ -1747,11 +2199,11 @@ mapsApi.MapPut("/{id:guid}/placements/{cameraId:guid}", async (Guid id, Guid cam
         || !double.IsFinite(request.FovDeg) || !double.IsFinite(request.Range))
         return Results.BadRequest();
     return await maps.SavePlacementAsync(id, cameraId, request, ct) ? Results.NoContent() : Results.NotFound();
-}).RequireAuthorization("Cameras.Edit");
+}).RequireAuthorization("Cameras.Edit").RequireCameraConfigure();
 
 mapsApi.MapDelete("/{id:guid}/placements/{cameraId:guid}", async (Guid id, Guid cameraId, IMapService maps, CancellationToken ct) =>
     await maps.RemovePlacementAsync(id, cameraId, ct) ? Results.NoContent() : Results.NotFound()
-).RequireAuthorization("Cameras.Edit");
+).RequireAuthorization("Cameras.Edit").RequireCameraConfigure();
 
 mapsApi.MapPut("/tile-settings", async (HttpContext ctx, MapTileSettingsDto request, IMapService maps, CancellationToken ct) =>
 {
@@ -1852,8 +2304,11 @@ encryptionApi.MapPost("/restore", async (HttpContext ctx, EncryptionRestoreReque
 // keys — what the Verify export page checks a manifest's signature against. The keys are public by
 // nature; they're behind Exports.View only because nothing outside the app needs to fetch them here
 // (Help explains how to verify with openssl from the key inside the manifest).
-app.MapGet("/api/exports/items/{id:guid}/manifest", async (Guid id, IExportService exports, CancellationToken ct) =>
+app.MapGet("/api/exports/items/{id:guid}/manifest", async (HttpContext ctx, Guid id, IExportService exports,
+    ICameraAccessService cameraAccess, IPermissionService permissions, ApplicationDbContext db, CancellationToken ct) =>
 {
+    var access = await LarisVMS.Web.Services.ExportAccess.ForAsync(ctx.User, cameraAccess, permissions, ct);
+    if (await access.DownloadForbiddenAsync(db, id, ct) is { } forbidden) return forbidden;
     var json = await exports.GetManifestAsync(id, ct);
     if (json is null) return Results.NotFound();
     return Results.File(System.Text.Encoding.UTF8.GetBytes(json), "application/json", $"export-{id:N}.manifest.json");
@@ -1892,7 +2347,8 @@ playbackApi.MapGet("/latest-segment-end", async (HttpContext ctx, Guid cameraId,
 // route narrowing while those don't would just be an inconsistent partial filter, not a real
 // boundary. Revisit only if that shared-visibility model itself changes.
 playbackApi.MapGet("/bookmarks", async (Guid cameraId, DateTime from, DateTime to, IBookmarkService bookmarks, CancellationToken ct) =>
-    Results.Json(await bookmarks.ListForCameraAsync(cameraId, from, to, ct)));
+    Results.Json(await bookmarks.ListForCameraAsync(cameraId, from, to, ct)))
+    .RequireCameraAccess(CameraAccessActions.Playback);
 
 // Merged across the given cameraIds (repeated query param) — the "was anything recording in this
 // view" overview timeline on Pages/Playback, separate from the per-camera one above. cameraIds
@@ -2042,18 +2498,17 @@ app.MapPost("/api/media/stream-event", (MediaStreamEventBeacon beacon, ILoggerFa
 {
     loggerFactory.CreateLogger("MediaStreamHealth").LogInformation(
         "stream event camera={CameraId} role={Role} mode={StreamMode} type={EventType} magnitude={Magnitude} detail={Detail}",
-        beacon.CameraId, beacon.Role, beacon.StreamMode, beacon.EventType, beacon.Magnitude, beacon.Detail);
+        beacon.CameraId, LogSafe(beacon.Role), LogSafe(beacon.StreamMode), LogSafe(beacon.EventType), beacon.Magnitude, LogSafe(beacon.Detail));
     return Results.NoContent();
 }).RequireAuthorization("Cameras.View");
 
 // M11: Pages/Index's own 60s AJAX refresh (dashboard.js) — same IDashboardService.GetHealthAsync
 // Pages/Index.cshtml.cs's OnGetAsync itself calls, so the polled data and the server-rendered
-// initial page can never independently drift out of sync. Plain [Authorize] (no specific resource
-// policy), matching IndexModel's own gate — see that page's doc comment for why Dashboard.View isn't
-// wired up here yet despite existing in PermissionCatalog since pass 3.
+// initial page can never independently drift out of sync. Needs Dashboard.View, like the page's
+// widgets (the page itself only shows a welcome note without it).
 app.MapGet("/api/dashboard", async (HttpContext ctx, IDashboardService dashboardService, CancellationToken ct) =>
     Results.Json(await dashboardService.GetHealthAsync(ctx.User, ct))
-).RequireAuthorization();
+).RequireAuthorization("Dashboard.View");
 
 // Configurable dashboard widgets. Each `w` is "key" or "key|option|option", where an option is a
 // look-back window (1h/24h/7d/30d), "asc" for lowest-first, or "k=a,b" for latest-detections' types
@@ -2069,7 +2524,7 @@ app.MapGet("/api/dashboard/widgets", async (HttpContext ctx, IDashboardWidgetSer
         .Select(w => DashboardWidgetCatalog.ParseSpec(w!))
         .ToList();
     return Results.Json(new { results = await widgets.GetTopAsync(viewer, requested, ct) });
-}).RequireAuthorization();
+}).RequireAuthorization("Dashboard.View");
 
 // The full report behind a widget's title: every row, filterable, 100 per page.
 app.MapGet("/api/dashboard/widgets/{key}/report", async (string key, HttpContext ctx, IDashboardWidgetService widgets,
@@ -2082,7 +2537,7 @@ app.MapGet("/api/dashboard/widgets/{key}/report", async (string key, HttpContext
     var report = await widgets.GetReportAsync(viewer, key, options,
         page ?? 1, pageSize ?? DashboardWidgetService.MaxReportPageSize, q, nodeId, sort, dir == "desc", ct);
     return report is null ? Results.NotFound() : Results.Json(report);
-}).RequireAuthorization();
+}).RequireAuthorization("Dashboard.View");
 
 static async Task<DashboardViewer> DashboardViewerFor(System.Security.Claims.ClaimsPrincipal user, IAuthorizationService authz) =>
     new(user,
@@ -2122,9 +2577,47 @@ app.MapPut("/api/preferences/{key}", async (string key, HttpContext ctx, SetPref
 {
     var userId = ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
     if (userId is null) return Results.Unauthorized();
-    await preferences.SetAsync(userId, key, request.Value, ct);
+    // Generous for real use (dashboard layouts, column choices), bounded for anything else.
+    if (key.Length > 250 || (request.Value?.Length ?? 0) > 256 * 1024) return Results.BadRequest("That preference is too large.");
+    var existing = await preferences.GetAllAsync(userId, ct);
+    if (!existing.ContainsKey(key) && existing.Count >= 500) return Results.BadRequest("Too many saved preferences.");
+    await preferences.SetAsync(userId, key, request.Value ?? "", ct);
     return Results.NoContent();
 }).RequireAuthorization();
+
+// ── Content-Security-Policy reports ──────────────────────────────────────────
+// Browsers post here when the strict script policy blocks (or, while report-only, would block)
+// something. Both report formats: "application/csp-report" ({"csp-report": {...}}) and the
+// Reporting API's "application/reports+json" ([{ "body": {...} }]). Anonymous (a report can arrive
+// from the sign-in page), small, rate-limited, and only summarized into memory and the log.
+app.MapPost("/api/csp-report", async (HttpContext ctx, LarisVMS.Web.Security.CspReports reports, ILoggerFactory loggerFactory) =>
+{
+    using var reader = new StreamReader(ctx.Request.Body);
+    var buffer = new char[16 * 1024];
+    var read = await reader.ReadBlockAsync(buffer, ctx.RequestAborted);
+    try
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(new string(buffer, 0, read));
+        IEnumerable<System.Text.Json.JsonElement> bodies;
+        if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+            bodies = doc.RootElement.EnumerateArray().Select(r => r.TryGetProperty("body", out var b) ? b : r).ToList();
+        else
+            bodies = [doc.RootElement.TryGetProperty("csp-report", out var legacy) ? legacy : doc.RootElement];
+        foreach (var body in bodies.Take(10))
+        {
+            string Field(params string[] names) => names.Select(n => body.TryGetProperty(n, out var v) ? v.ToString() : null)
+                .FirstOrDefault(v => !string.IsNullOrEmpty(v)) ?? "";
+            var entry = new LarisVMS.Web.Security.CspReports.Entry(DateTime.UtcNow,
+                LogSafe(Field("effectiveDirective", "effective-directive", "violated-directive")) ?? "",
+                LogSafe(Field("blockedURL", "blocked-uri")) ?? "",
+                LogSafe($"{Field("documentURL", "document-uri")} {Field("sourceFile", "source-file")}:{Field("lineNumber", "line-number")}") ?? "");
+            reports.Add(entry);
+            loggerFactory.CreateLogger("Csp").LogWarning("CSP violation: {Directive} blocked {Blocked} at {Source}", entry.Directive, entry.Blocked, entry.Source);
+        }
+    }
+    catch (System.Text.Json.JsonException) { /* not a report */ }
+    return Results.NoContent();
+}).AllowAnonymous().RequireRateLimiting("register").WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(64 * 1024));
 
 // ── Session heartbeat ────────────────────────────────────────────────────────
 // Live view polls this so a disabled user's direct-to-node streams stop: those sockets go straight to
@@ -2266,7 +2759,7 @@ app.MapGet("/playback-segment/{cameraId:guid}/{segmentId:long}", async (
     }
     catch (Exception ex) when (ex is not OperationCanceledException)
     {
-        return Results.Problem($"Could not reach recorder node: {ex.Message}", statusCode: StatusCodes.Status502BadGateway);
+        return Results.Problem(NodeUnreachable(ctx, ex), statusCode: StatusCodes.Status502BadGateway);
     }
 
     if (!nodeResponse.IsSuccessStatusCode)
@@ -2404,7 +2897,7 @@ async Task<IResult> ProxyThumbnailAsync(Guid cameraId, ThumbnailInfo? thumb, IHt
     }
     catch (Exception ex) when (ex is not OperationCanceledException)
     {
-        return Results.Problem($"Could not reach recorder node: {ex.Message}", statusCode: StatusCodes.Status502BadGateway);
+        return Results.Problem(NodeUnreachable(httpContext, ex), statusCode: StatusCodes.Status502BadGateway);
     }
 
     if (!nodeResponse.IsSuccessStatusCode)
@@ -2572,7 +3065,7 @@ async Task<IResult> ProxySnapshotImageAsync(Guid cameraId, SnapshotImageInfo? in
     }
     catch (Exception ex) when (ex is not OperationCanceledException)
     {
-        return Results.Problem($"Could not reach recorder node: {ex.Message}", statusCode: StatusCodes.Status502BadGateway);
+        return Results.Problem(NodeUnreachable(httpContext, ex), statusCode: StatusCodes.Status502BadGateway);
     }
 
     if (!nodeResponse.IsSuccessStatusCode)
@@ -2649,7 +3142,7 @@ app.MapPost("/api/exports", async (HttpContext ctx, CreateExportRequest request,
         $"{request.CameraIds.Count} camera(s), {request.FromUtc:u} - {request.ToUtc:u}" +
         (redactions.Count > 0 ? $", with redacted areas on {redactions.Count} camera(s)" : ""), ct);
     return Results.Json(new { jobId = job.Id });
-}).RequireAuthorization("Exports.View");
+}).RequireAuthorization("Exports.View").RequireRateLimiting("per-user");
 
 // Download proxy — same "browser only ever talks to this host, IIS relays every byte" shape as
 // /playback-segment above, but with Content-Disposition: attachment (via Results.Stream's
@@ -2657,8 +3150,11 @@ app.MapPost("/api/exports", async (HttpContext ctx, CreateExportRequest request,
 // inline through MSE.
 app.MapGet("/export-download/{exportItemId:guid}", async (
     HttpContext ctx, Guid exportItemId, IExportService exportService, IAuditService auditService,
-    IHttpClientFactory httpFactory, CancellationToken ct) =>
+    IHttpClientFactory httpFactory, ICameraAccessService cameraAccess, IPermissionService permissions,
+    ApplicationDbContext db, CancellationToken ct) =>
 {
+    var access = await LarisVMS.Web.Services.ExportAccess.ForAsync(ctx.User, cameraAccess, permissions, ct);
+    if (await access.DownloadForbiddenAsync(db, exportItemId, ct) is { } forbidden) return forbidden;
     var info = await exportService.GetDownloadInfoAsync(exportItemId, ct);
     if (info is null) return Results.NotFound();
     if (info.NodeIp is null || info.NodeLivePort is null || info.NodeMediaSigningKey is null)
@@ -2699,7 +3195,7 @@ app.MapGet("/export-download/{exportItemId:guid}", async (
     }
     catch (Exception ex) when (ex is not OperationCanceledException)
     {
-        return Results.Problem($"Could not reach recorder node: {ex.Message}", statusCode: StatusCodes.Status502BadGateway);
+        return Results.Problem(NodeUnreachable(ctx, ex), statusCode: StatusCodes.Status502BadGateway);
     }
 
     if (!nodeResponse.IsSuccessStatusCode)
@@ -2716,9 +3212,11 @@ app.MapGet("/export-download/{exportItemId:guid}", async (
 // reload. Deliberately returns every job on every poll rather than a since/delta query: the list is
 // small (exports are an occasional, manually-triggered action, not a high-volume feed) and a full
 // snapshot means the client-side renderer never has to reconcile a partial update.
-app.MapGet("/api/exports", async (IExportService exportService, ICameraService cameraService, INodeService nodeService, CancellationToken ct) =>
+app.MapGet("/api/exports", async (HttpContext ctx, IExportService exportService, ICameraService cameraService, INodeService nodeService,
+    ICameraAccessService cameraAccess, IPermissionService permissions, CancellationToken ct) =>
 {
-    var jobs = await exportService.ListJobsAsync(ct);
+    var access = await LarisVMS.Web.Services.ExportAccess.ForAsync(ctx.User, cameraAccess, permissions, ct);
+    var jobs = (await exportService.ListJobsAsync(ct)).Where(access.CanSee).ToList();
     var cameraNames = (await cameraService.ListAsync(ct)).ToDictionary(c => c.Id, c => c.Name);
     var nodeNames = (await nodeService.ListAsync(ct)).ToDictionary(n => n.Id, n => n.Name);
 
@@ -2750,8 +3248,14 @@ app.MapGet("/api/exports", async (IExportService exportService, ICameraService c
 // succeeded. Refuses (400) while any item is still Queued/Running — see
 // ExportJobDeletionInfo's own doc comment for why.
 app.MapDelete("/api/exports/{jobId:guid}", async (
-    Guid jobId, IExportService exportService, IHttpClientFactory httpFactory, CancellationToken ct) =>
+    HttpContext ctx, Guid jobId, IExportService exportService, IHttpClientFactory httpFactory,
+    ICameraAccessService cameraAccess, IPermissionService permissions, ApplicationDbContext db, CancellationToken ct) =>
 {
+    var job = await LarisVMS.Web.Services.ExportAccess.JobAsync(db, jobId, ct);
+    if (job is null) return Results.NotFound();
+    var access = await LarisVMS.Web.Services.ExportAccess.ForAsync(ctx.User, cameraAccess, permissions, ct);
+    if (!access.CanManage(job))
+        return Results.Problem("Only the person who made this export, or a Super Admin, can delete it.", statusCode: StatusCodes.Status403Forbidden);
     var info = await exportService.GetDeletionInfoAsync(jobId, ct);
     if (info is null) return Results.NotFound();
     if (!info.CanDelete) return Results.BadRequest(info.Reason);
@@ -2785,8 +3289,14 @@ app.MapDelete("/api/exports/{jobId:guid}", async (
 // Retry button: re-queues one Failed item for ExportJobDispatcher's next poll cycle. Gated the same
 // Exports.View permission as everything else on this page — see the /api/exports POST route's own
 // comment for why there's no separate Exports.Edit.
-app.MapPost("/api/exports/{itemId:guid}/retry", async (Guid itemId, IExportService exportService, CancellationToken ct) =>
+app.MapPost("/api/exports/{itemId:guid}/retry", async (HttpContext ctx, Guid itemId, IExportService exportService,
+    ICameraAccessService cameraAccess, IPermissionService permissions, ApplicationDbContext db, CancellationToken ct) =>
 {
+    var job = await LarisVMS.Web.Services.ExportAccess.JobOfItemAsync(db, itemId, ct);
+    if (job is null) return Results.NotFound();
+    var access = await LarisVMS.Web.Services.ExportAccess.ForAsync(ctx.User, cameraAccess, permissions, ct);
+    if (!access.CanManage(job) || !access.CanExportCamera(job.Items.First(i => i.Id == itemId).CameraId))
+        return Results.Problem("Only the person who made this export, or a Super Admin, can retry it.", statusCode: StatusCodes.Status403Forbidden);
     var ok = await exportService.RetryItemAsync(itemId, ct);
     return ok ? Results.Ok() : Results.BadRequest("Only a failed item can be retried.");
 }).RequireAuthorization("Exports.View");
@@ -2814,6 +3324,189 @@ app.MapPost("/api/bookmarks", async (HttpContext ctx, CreateBookmarkRequest requ
         userId, ctx.User.Identity?.Name, ct);
     return Results.Json(new { id = bookmark.Id });
 }).RequireAuthorization("Playback.View", "Bookmarks.Edit");
+
+// ── Evidence locks ───────────────────────────────────────────────────────────
+// Footage retention must not delete. Placing a lock needs EvidenceLocks.Create plus playback access to
+// each camera; listing needs Playback.View (filtered to the cameras the user can play back). Removing
+// or restoring is checked by the service itself: only the lock's creator or a Super Admin. Every change
+// is audited by the service.
+static async Task<EvidenceLockActor> EvidenceLockActorAsync(HttpContext ctx, IPermissionService permissions, CancellationToken ct)
+{
+    var granted = await permissions.GetGrantedAsync(ctx.User, ct);
+    return new EvidenceLockActor(
+        ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? string.Empty,
+        ctx.User.Identity?.Name, granted.IsAdministrator, ctx.Connection.RemoteIpAddress?.ToString());
+}
+
+static async Task<IResult> EvidenceLockCall(Func<Task<IResult>> action)
+{
+    try { return await action(); }
+    catch (EvidenceLockValidationException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status400BadRequest); }
+    catch (EvidenceLockForbiddenException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden); }
+    catch (KeyNotFoundException ex) { return Results.Problem(ex.Message, statusCode: StatusCodes.Status404NotFound); }
+}
+
+app.MapGet("/api/evidence-locks", async (HttpContext ctx, Guid[]? cameraId, DateTime? fromUtc, DateTime? toUtc, bool? includeInactive,
+    IEvidenceLockService locks, ICameraAccessService cameraAccess, IPermissionService permissions, CancellationToken ct) =>
+{
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Playback, ct);
+    IReadOnlyCollection<Guid>? cameras = cameraId is { Length: > 0 }
+        ? cameraId.Where(id => accessible is null || accessible.Contains(id)).ToList()
+        : accessible?.ToList();
+    var result = await locks.ListAsync(cameras, fromUtc, toUtc, includeInactive ?? false,
+        await EvidenceLockActorAsync(ctx, permissions, ct), ct);
+    return Results.Json(result);
+}).RequireAuthorization("Playback.View");
+
+app.MapPost("/api/evidence-locks", async (HttpContext ctx, CreateEvidenceLockRequest request,
+    IEvidenceLockService locks, ICameraAccessService cameraAccess, IPermissionService permissions, CancellationToken ct) =>
+{
+    var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(ctx.User, CameraAccessActions.Playback, ct);
+    if (accessible is not null && request.CameraIds.Any(id => !accessible.Contains(id)))
+        return Results.Problem("You don't have playback access to one or more of these cameras.", statusCode: StatusCodes.Status403Forbidden);
+
+    var actor = await EvidenceLockActorAsync(ctx, permissions, ct);
+    return await EvidenceLockCall(async () => Results.Json(await locks.CreateAsync(request, actor, ct)));
+}).RequireAuthorization("Playback.View", "EvidenceLocks.Create");
+
+app.MapPost("/api/evidence-locks/{id:guid}/remove", async (HttpContext ctx, Guid id, RemoveEvidenceLockRequest request,
+    IEvidenceLockService locks, IPermissionService permissions, ICameraAccessService cameraAccess, ApplicationDbContext db, CancellationToken ct) =>
+{
+    if (await LarisVMS.Web.Services.EvidenceLockAccess.ManageForbiddenAsync(ctx.User, id, db, permissions, cameraAccess, ct) is { } denied)
+        return Results.Problem(denied, statusCode: StatusCodes.Status403Forbidden);
+    var actor = await EvidenceLockActorAsync(ctx, permissions, ct);
+    return await EvidenceLockCall(async () => Results.Json(await locks.RemoveAsync(id, request.Reason, actor, ct)));
+}).RequireAuthorization("Playback.View");
+
+app.MapPost("/api/evidence-locks/{id:guid}/restore", async (HttpContext ctx, Guid id,
+    IEvidenceLockService locks, IPermissionService permissions, ICameraAccessService cameraAccess, ApplicationDbContext db, CancellationToken ct) =>
+{
+    if (await LarisVMS.Web.Services.EvidenceLockAccess.ManageForbiddenAsync(ctx.User, id, db, permissions, cameraAccess, ct) is { } denied)
+        return Results.Problem(denied, statusCode: StatusCodes.Status403Forbidden);
+    var actor = await EvidenceLockActorAsync(ctx, permissions, ct);
+    return await EvidenceLockCall(async () => Results.Json(await locks.RestoreAsync(id, actor, ct)));
+}).RequireAuthorization("Playback.View");
+
+// ── Notifications (per user) ────────────────────────────────────────────────
+// Every endpoint here acts only on the signed-in user's own notifications and devices.
+static string CurrentUserId(HttpContext ctx) => ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
+
+// The on-premises transport: one Server-Sent Events stream per open tab (notifications.js). A comment
+// line every 25 s keeps proxies from closing an idle stream.
+app.MapGet("/api/notifications/stream", async (HttpContext ctx, NotificationHub hub, ISettingsResolver settings, CancellationToken ct) =>
+{
+    var userId = CurrentUserId(ctx);
+    if (userId.Length == 0) return Results.Unauthorized();
+    if (!await settings.GetAsync(NotificationSettings.OnPremEnabled, true, ct: ct)) return Results.NoContent();
+
+    ctx.Response.Headers.ContentType = "text/event-stream";
+    ctx.Response.Headers.CacheControl = "no-cache";
+    ctx.Response.Headers["X-Accel-Buffering"] = "no";
+    using var subscription = hub.Subscribe(userId);
+    await ctx.Response.WriteAsync(": connected\n\n", ct);
+    await ctx.Response.Body.FlushAsync(ct);
+    try
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            using var heartbeat = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            heartbeat.CancelAfter(TimeSpan.FromSeconds(25));
+            try
+            {
+                if (!await subscription.Reader.WaitToReadAsync(heartbeat.Token))
+                {
+                    // Closed because this person opened too many newer streams (NotificationHub): a
+                    // long retry, so a tab left open behind many others doesn't keep reconnecting.
+                    await ctx.Response.WriteAsync("retry: 300000\n\n", ct);
+                    break;
+                }
+                while (subscription.Reader.TryRead(out var json))
+                    await ctx.Response.WriteAsync($"event: notification\ndata: {json}\n\n", ct);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                await ctx.Response.WriteAsync(": ping\n\n", ct);
+            }
+            await ctx.Response.Body.FlushAsync(ct);
+        }
+    }
+    catch (OperationCanceledException) { /* tab closed */ }
+    return Results.Empty;
+}).RequireAuthorization();
+
+// What this browser should do: which transports are on, and the public keys/config it needs to subscribe.
+app.MapGet("/api/notifications/config", async (ISettingsResolver settings, IEmailService email, CancellationToken ct) =>
+{
+    var config = await NotificationSettings.LoadAsync(settings, ct);
+    return Results.Json(new
+    {
+        onPrem = config.OnPrem,
+        webPush = config.WebPush ? new { publicKey = config.Vapid!.PublicKey } : null,
+        fcm = config.Fcm ? new { webConfig = System.Text.Json.JsonDocument.Parse(config.FcmWebConfigJson!).RootElement, vapidKey = config.FcmPublicVapidKey } : null,
+        email = config.Email && await email.IsConfiguredAsync(ct),
+    });
+}).RequireAuthorization();
+
+app.MapGet("/api/notifications/devices", async (HttpContext ctx, ApplicationDbContext db, CancellationToken ct) =>
+{
+    var userId = CurrentUserId(ctx);
+    var devices = await db.PushSubscriptions.AsNoTracking().Where(p => p.UserId == userId)
+        .OrderByDescending(p => p.CreatedAt)
+        .Select(p => new { p.Id, kind = p.Kind.ToString(), p.DeviceLabel, p.CreatedAt, p.LastSuccessAt, p.Endpoint })
+        .ToListAsync(ct);
+    return Results.Json(devices);
+}).RequireAuthorization();
+
+app.MapPost("/api/notifications/devices", async (HttpContext ctx, RegisterPushDeviceRequest request, ApplicationDbContext db, CancellationToken ct) =>
+{
+    var userId = CurrentUserId(ctx);
+    if (userId.Length == 0) return Results.Unauthorized();
+    if (!Enum.TryParse<PushSubscriptionKind>(request.Kind, true, out var kind) || string.IsNullOrWhiteSpace(request.Endpoint) || request.Endpoint.Length > 800)
+        return Results.Problem("This browser's push registration wasn't valid.", statusCode: StatusCodes.Status400BadRequest);
+    if (kind == PushSubscriptionKind.WebPush && (string.IsNullOrWhiteSpace(request.P256dh) || string.IsNullOrWhiteSpace(request.Auth)
+            || !Uri.TryCreate(request.Endpoint, UriKind.Absolute, out var endpointUri) || endpointUri.Scheme != Uri.UriSchemeHttps))
+        return Results.Problem("This browser's push registration wasn't valid.", statusCode: StatusCodes.Status400BadRequest);
+    // The server posts to this address, so it has to be a browser maker's push service — not
+    // something on the server's own network.
+    if (kind == PushSubscriptionKind.WebPush && !LarisVMS.Infrastructure.Security.OutboundGuard.IsKnownPushService(new Uri(request.Endpoint)))
+        return Results.Problem("This browser uses a push service LarisVMS doesn't know.", statusCode: StatusCodes.Status400BadRequest);
+
+    // One row per endpoint: re-registering (or another user signing in on the same browser) moves it.
+    var existing = await db.PushSubscriptions.FirstOrDefaultAsync(p => p.Endpoint == request.Endpoint, ct);
+    if (existing is null)
+    {
+        existing = new LarisVMS.Core.Entities.PushSubscription { Id = Guid.NewGuid(), Endpoint = request.Endpoint };
+        db.PushSubscriptions.Add(existing);
+    }
+    existing.UserId = userId;
+    existing.Kind = kind;
+    existing.P256dh = request.P256dh;
+    existing.Auth = request.Auth;
+    existing.DeviceLabel = request.DeviceLabel?.Length > 200 ? request.DeviceLabel[..200] : request.DeviceLabel;
+    existing.CreatedAt = DateTime.UtcNow;
+    await db.SaveChangesAsync(ct);
+
+    // A handful of browsers per person; beyond that, the oldest registrations go.
+    const int MaxDevicesPerUser = 10;
+    var stale = await db.PushSubscriptions.Where(p => p.UserId == userId).OrderByDescending(p => p.CreatedAt)
+        .Skip(MaxDevicesPerUser).ToListAsync(ct);
+    if (stale.Count > 0)
+    {
+        db.PushSubscriptions.RemoveRange(stale);
+        await db.SaveChangesAsync(ct);
+    }
+    return Results.Json(new { existing.Id });
+}).RequireAuthorization();
+
+app.MapDelete("/api/notifications/devices/{id:guid}", async (HttpContext ctx, Guid id, ApplicationDbContext db, CancellationToken ct) =>
+{
+    var userId = CurrentUserId(ctx);
+    await db.PushSubscriptions.Where(p => p.Id == id && p.UserId == userId).ExecuteDeleteAsync(ct);
+    return Results.NoContent();
+}).RequireAuthorization();
+
+app.MapPost("/api/notifications/test", async (HttpContext ctx, INotificationService notifications, CancellationToken ct) =>
+    Results.Json(await notifications.SendTestAsync(CurrentUserId(ctx), ct))).RequireAuthorization().RequireRateLimiting("per-user");
 
 await app.RunAsync();
 
@@ -2958,9 +3651,13 @@ void EnsureWritableDirectory(string path)
     }
     catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or System.Security.SecurityException)
     {
+        var identity = OperatingSystem.IsWindows() ? System.Security.Principal.WindowsIdentity.GetCurrent().Name : Environment.UserName;
+        var fix = OperatingSystem.IsWindows()
+            ? $"icacls \"{Path.GetDirectoryName(path)}\" /grant \"{identity}:(OI)(CI)F\""
+            : $"chown -R {identity} \"{Path.GetDirectoryName(path)}\"";
         throw new InvalidOperationException(
             $"Unable to initialize data protection key folder at '{path}'. " +
-            "Ensure the application identity has write permission to this directory.", ex);
+            $"Ensure the application identity ({identity}) has write permission to this directory, for example: {fix}", ex);
     }
 }
 

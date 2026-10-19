@@ -14,6 +14,7 @@
 @inject IViewService ViewService
 @inject IServiceScopeFactory ScopeFactory
 @inject ISettingsResolver Settings
+@inject ICameraAccessService CameraAccess
 
 <PageTitle>Snapshots - @AppName</PageTitle>
 
@@ -106,8 +107,8 @@
                         <summary class="d-flex align-items-center gap-1">
                             <span class="snapshot-tree-caret" aria-hidden="true">▸</span>
                             <input type="checkbox" class="form-check-input snapshot-tree-parent" id="kind-@node.Name" name="kinds" value="@node.Name"
-                                   checked="@IsKindChecked(node.Name)" form="snapshotFilterForm" data-children-of="@node.Name" onclick="event.stopPropagation();" />
-                            <label class="form-check-label small" for="kind-@node.Name" onclick="event.stopPropagation();">
+                                   checked="@IsKindChecked(node.Name)" form="snapshotFilterForm" data-children-of="@node.Name" data-stop-propagation />
+                            <label class="form-check-label small" for="kind-@node.Name" data-stop-propagation>
                                 @if (node.ColorHex is { } color2) { <span class="badge" style="background-color: @color2;">&nbsp;</span> }
                                 @node.Name
                             </label>
@@ -196,7 +197,7 @@
                         <img src="@imgSrc"
                              loading="lazy" class="card-img-top" data-snapshot-thumb style="aspect-ratio: 16/9; object-fit: contain; background: var(--bs-secondary-bg);"
                              alt="Snapshot thumbnail"
-                             onerror="this.style.display='none'; this.nextElementSibling.classList.remove('d-none');" />
+                             data-on-error="hide-show-next" />
                         <div class="d-none text-muted small text-center d-flex align-items-center justify-content-center"
                              style="aspect-ratio: 16/9; background: var(--bs-secondary-bg);">
                             No thumbnail available
@@ -223,7 +224,7 @@
                         <span class="badge bg-secondary" title="How long this event lasted">@FormatDuration(s.Duration)</span>
                         <div class="d-flex align-items-center gap-2 mt-1">
                             <div class="small text-muted text-truncate" title="@s.CameraName · @s.AtUtc.ToString("u")">
-                                @s.CameraName · @s.AtUtc.ToLocalTime().ToString("G")
+                                @s.CameraName · <time datetime="@s.AtUtc.ToUtcIso()" data-local="G">@s.AtUtc.ToLocalTime().ToString("G")</time>
                             </div>
                             <a class="btn btn-sm btn-outline-primary py-0 ms-auto flex-shrink-0" aria-label="Play"
                                href="/Playback?cameraId=@s.CameraId&atUtc=@Uri.EscapeDataString(playFromUtcIso)">▶</a>
@@ -240,11 +241,11 @@
 </div>
 
 <SectionContent SectionName="PageScripts">
-    <script src="/js/snapshot-load-status.js"></script>
+    <PageScript Src="/js/snapshot-load-status.js" />
     @* Filter-tree parent/child sync, the excludedLabels submit build, and per-user memory of the
        tree's expand/collapse + checkbox state — see snapshot-filter-tree.js. *@
-    <script src="/js/snapshot-filter-tree.js"></script>
-    <script>
+    <PageScript Src="/js/snapshot-filter-tree.js" />
+    <script nonce="@Csp.Value">
         (function () {
             var modeSelect = document.getElementById('snapshotMode');
             var targets = document.querySelectorAll('.snapshot-mode-target');
@@ -382,7 +383,9 @@
 
         await Task.WhenAll(camerasTask, groupsTask, categoriesTask, labelsTask, viewsTask);
 
-        Cameras = (await camerasTask).OrderBy(c => c.Name).ToList();
+        // Only cameras this person may play back: the list, and every snapshot shown below.
+        var playable = await CameraAccess.GetAccessibleCameraIdsAsync(user, LarisVMS.Core.Enums.CameraAccessActions.Playback);
+        Cameras = (await camerasTask).Where(c => playable is null || playable.Contains(c.Id)).OrderBy(c => c.Name).ToList();
         Groups = await groupsTask;
         DetectedObjectCategories = await categoriesTask;
         DetectedObjectLabels = await labelsTask;
@@ -403,6 +406,8 @@
             "view" when ViewId is { } vid => await ResolveViewCameraIdsAsync(currentUserId, vid),
             _ => CameraId is { } cid ? [cid] : null,
         };
+        if (playable is not null)
+            cameraIds = (cameraIds ?? [.. playable]).Where(playable.Contains).ToList();
 
         var fromUtc = LocalDateFilter.StartOfDayUtc(From);
         var toUtc = LocalDateFilter.EndOfDayUtc(To);

@@ -97,7 +97,10 @@ public class UpdateService(NodeConfig config, bool insecureTls, ILogger log, IHo
         try
         {
             log.LogInformation("Node update available: {Version}. Downloading...", update.Version);
-            Directory.CreateDirectory(UpdateDir);
+            // Fresh, locked-down folder for each download: a file or folder a local user planted here
+            // beforehand (and its owner, who could rewrite its permissions) doesn't survive into the
+            // binary that's about to be installed and run as a service.
+            LarisVMS.Core.Security.LocalDataAcl.RecreateProtectedDirectory(UpdateDir);
 
             // httpHandler is a test-only seam (a fake HttpMessageHandler returning canned bytes, so
             // checksum-mismatch rejection can be verified without a real HTTP server) — production
@@ -292,6 +295,8 @@ public class UpdateService(NodeConfig config, bool insecureTls, ILogger log, IHo
 
     private HttpClientHandler CreateDefaultHandler()
     {
+        // The same certificate check as the node's other calls to the server.
+        if (NodeConfigStore.Trust is { } trust) return trust.CreateHandler();
         var handler = new HttpClientHandler();
         if (insecureTls)
         {

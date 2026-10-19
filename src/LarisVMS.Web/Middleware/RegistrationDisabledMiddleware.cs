@@ -16,14 +16,27 @@ namespace LarisVMS.Web.Middleware;
 /// bare 404 — a user who reaches this via whatever link the packaged Login page renders should land
 /// somewhere sensible, not a dead end. Real account creation is what the upcoming user-management
 /// admin page is for.
+///
+/// The same goes for every other packaged Identity page this app doesn't use: forgot/reset password,
+/// RegisterConfirmation (which tells anyone whether an email has an account), and Manage/* (where a
+/// user could set up two-factor sign-in the login page doesn't support, or delete their own account).
+/// Only the pages LarisVMS uses are reachable under /Identity.
 /// </summary>
 public class RegistrationDisabledMiddleware(RequestDelegate next)
 {
     internal const string RegisterPath = "/Identity/Account/Register";
 
+    private static readonly string[] AllowedIdentityPaths =
+    [
+        "/Identity/Account/Login", "/Identity/Account/Logout", "/Identity/Account/AccessDenied",
+        "/Identity/Account/ExternalLogin",
+        // The Identity UI's static files.
+        "/Identity/lib", "/Identity/css", "/Identity/js",
+    ];
+
     public async Task InvokeAsync(HttpContext context)
     {
-        if (IsRegisterPath(context.Request.Path))
+        if (IsBlockedIdentityPath(context.Request.Path))
         {
             context.Response.Redirect("/Identity/Account/Login");
             return;
@@ -35,6 +48,11 @@ public class RegistrationDisabledMiddleware(RequestDelegate next)
     /// <summary>Pure so the match itself is unit-testable without a real HttpContext.</summary>
     internal static bool IsRegisterPath(PathString path) =>
         path.StartsWithSegments(RegisterPath, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>An /Identity path other than the pages LarisVMS uses.</summary>
+    internal static bool IsBlockedIdentityPath(PathString path) =>
+        path.StartsWithSegments("/Identity", StringComparison.OrdinalIgnoreCase)
+        && !AllowedIdentityPaths.Any(p => path.StartsWithSegments(p, StringComparison.OrdinalIgnoreCase));
 }
 
 public static class RegistrationDisabledMiddlewareExtensions

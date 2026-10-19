@@ -58,6 +58,8 @@ public class SigningKeyService(ApplicationDbContext db) : ISigningKeyService
             .ToListAsync(ct);
     }
 
+    public async Task<string> GetActivePublicKeyPemAsync(CancellationToken ct = default) => (await GetOrCreateActiveAsync(ct)).PublicKeyPem;
+
     private async Task<SigningKey> GetOrCreateActiveAsync(CancellationToken ct)
     {
         var active = await ActiveAsync(ct);

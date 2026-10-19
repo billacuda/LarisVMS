@@ -87,6 +87,10 @@ public sealed class MotionSession(MotionSessionOptions options, IReadOnlyList<Mo
     private volatile IReadOnlyList<double>? _lastCellScores;
     public IReadOnlyList<double>? GetCurrentCellScores() => _lastCellScores;
 
+    /// <summary>Grid mode only: where each analysed frame's per-cell motion is counted for the scene
+    /// heatmap. Set by the node before the session starts; null leaves it off.</summary>
+    public MotionHeat? Heat { get; set; }
+
     // UTC ticks of the frame the current scores were computed from (when it was read off ffmpeg), 0
     // before the first score. Lets the Zones editor's overlay hold scores back to line up with the
     // live video, which plays a couple of seconds behind real time, instead of washing zones while the
@@ -323,7 +327,9 @@ public sealed class MotionSession(MotionSessionOptions options, IReadOnlyList<Mo
 
                 if (gridSize is { } gs)
                 {
-                    _lastCellScores = MotionGrid.ScoreCells(previousY, currentY, gs, options.Width, options.Height, options.PixelDeltaThreshold);
+                    var cellScores = MotionGrid.ScoreCells(previousY, currentY, gs, options.Width, options.Height, options.PixelDeltaThreshold);
+                    _lastCellScores = cellScores;
+                    Heat?.Add(capturedAt, cellScores);
                 }
                 Interlocked.Exchange(ref _lastScoresCapturedTicks, capturedAt.Ticks);
             }

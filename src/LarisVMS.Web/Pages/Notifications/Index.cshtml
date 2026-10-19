@@ -1,0 +1,426 @@
+@page
+@model LarisVMS.Web.Pages.Notifications.IndexModel
+@using LarisVMS.Core
+@using LarisVMS.Core.Enums
+@using LarisVMS.Web.Services
+@{
+    ViewData["Title"] = "My notifications";
+    var tab = Model.Tab is "mine" or "devices" ? Model.Tab : "available";
+}
+<div class="lv-page-narrow">
+<h1>My notifications</h1>
+<p class="text-muted small">
+    Get told about events in your browser or by email. You only get notifications for cameras you can view.
+    <a href="/Help/alerts#notifications">Learn more</a>
+</p>
+
+<ul class="nav nav-tabs mb-3">
+    <li class="nav-item"><a class="nav-link @(tab == "available" ? "active" : "")" href="/Notifications?tab=available">Available</a></li>
+    @if (Model.CanCreateOwn)
+    {
+        <li class="nav-item"><a class="nav-link @(tab == "mine" ? "active" : "")" href="/Notifications?tab=mine">Mine</a></li>
+    }
+    <li class="nav-item"><a class="nav-link @(tab == "devices" ? "active" : "")" href="/Notifications?tab=devices">This browser and devices</a></li>
+</ul>
+
+@if (!string.IsNullOrEmpty(Model.Message))
+{
+    <div class="alert @(Model.MessageIsError ? "alert-danger" : "alert-success") py-2">@Model.Message</div>
+}
+
+@if (tab == "available")
+{
+    @if (!Model.CanSubscribe)
+    {
+        <p class="text-muted">Your role can't subscribe to notifications. Ask an administrator.</p>
+    }
+    else if (Model.Available.Count == 0)
+    {
+        <p class="text-muted">There are no shared notifications to subscribe to yet. @(Model.CanCreateOwn ? "You can make your own under Mine." : "")</p>
+    }
+    else
+    {
+        <section class="lv-section">
+            <div class="lv-section-head">
+                <h2 class="lv-section-title">Shared notifications</h2>
+                <div class="lv-section-sub">Set up by an administrator. Turn on the ones you want.</div>
+            </div>
+            <div class="list-group list-group-flush">
+                @foreach (var row in Model.Available)
+                {
+                    var sub = row.Subscription;
+                    <div class="list-group-item">
+                        <div class="d-flex flex-wrap align-items-center gap-2">
+                            <div class="flex-grow-1">
+                                <div class="fw-semibold">@row.Name</div>
+                                <div class="small text-muted">@row.Description</div>
+                            </div>
+                            <form method="post" asp-page-handler="Subscribe" class="d-flex flex-wrap align-items-center gap-2">
+                                <input type="hidden" name="ruleId" value="@row.RuleId" />
+                                <div class="form-check form-check-inline me-0">
+                                    <input class="form-check-input" type="checkbox" name="browser" value="true" id="b-@row.RuleId" checked="@(sub?.Browser ?? true)" />
+                                    <label class="form-check-label small" for="b-@row.RuleId">Browser</label>
+                                </div>
+                                @if (Model.EmailAvailable)
+                                {
+                                    <div class="form-check form-check-inline me-0">
+                                        <input class="form-check-input" type="checkbox" name="email" value="true" id="e-@row.RuleId" checked="@(sub?.Email ?? false)" />
+                                        <label class="form-check-label small" for="e-@row.RuleId">Email</label>
+                                    </div>
+                                }
+                                <button type="submit" class="btn btn-sm @(sub is null ? "btn-primary" : "btn-outline-secondary")">@(sub is null ? "Subscribe" : "Save")</button>
+                            </form>
+                            @if (sub is not null)
+                            {
+                                @await Html.PartialAsync("_MuteControl", (row.RuleId, Model.MutedUntil.GetValueOrDefault(row.RuleId), "available"))
+                                <form method="post" asp-page-handler="Unsubscribe">
+                                    <input type="hidden" name="ruleId" value="@row.RuleId" />
+                                    <button type="submit" class="btn btn-sm btn-link text-danger">Unsubscribe</button>
+                                </form>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        </section>
+    }
+}
+else if (tab == "mine" && Model.CanCreateOwn)
+{
+    @if (Model.Edit is null)
+    {
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <span class="small text-muted">Only you see these.</span>
+            <a class="btn btn-primary btn-sm" href="/Notifications?tab=mine&edit=new">New notification</a>
+        </div>
+        @if (Model.Mine.Count == 0)
+        {
+            <p class="text-muted">You haven't made any yet. For example: animals on the back yard camera between 10 pm and 6 am.</p>
+        }
+        else
+        {
+            <section class="lv-section">
+                <div class="list-group list-group-flush">
+                    @foreach (var row in Model.Mine)
+                    {
+                        <div class="list-group-item">
+                            <div class="d-flex flex-wrap align-items-center gap-2">
+                                <div class="flex-grow-1">
+                                    <div class="fw-semibold">
+                                        @row.Name
+                                        @if (!row.IsEnabled) { <span class="badge text-bg-secondary ms-1">Off</span> }
+                                        @if (row.TypeTurnedOff) { <span class="badge text-bg-warning ms-1" title="An administrator turned this kind of notification off.">Paused</span> }
+                                    </div>
+                                    <div class="small text-muted">@row.Description · @(string.Join(" and ", new[] { row.Browser ? "browser" : null, row.Email ? "email" : null }.Where(x => x is not null)))</div>
+                                </div>
+                                <a class="btn btn-sm btn-outline-secondary" href="/Notifications?tab=mine&edit=@row.RuleId">Edit</a>
+                                @await Html.PartialAsync("_MuteControl", (row.RuleId, Model.MutedUntil.GetValueOrDefault(row.RuleId), "mine"))
+                                <form method="post" asp-page-handler="ToggleRule">
+                                    <input type="hidden" name="ruleId" value="@row.RuleId" />
+                                    <button type="submit" class="btn btn-sm btn-outline-secondary">@(row.IsEnabled ? "Turn off" : "Turn on")</button>
+                                </form>
+                                <form method="post" asp-page-handler="DeleteRule" data-confirm="Delete this notification?">
+                                    <input type="hidden" name="ruleId" value="@row.RuleId" />
+                                    <button type="submit" class="btn btn-sm btn-link text-danger">Delete</button>
+                                </form>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </section>
+        }
+    }
+    else
+    {
+        <form method="post" asp-page-handler="SaveRule" data-dirty-guard>
+            <input type="hidden" asp-for="RuleId" />
+            <input type="hidden" asp-for="TimeZoneId" id="ownTimeZone" />
+            <section class="lv-section">
+                <div class="lv-section-head"><h2 class="lv-section-title">@(Model.RuleId is null ? "New notification" : "Edit notification")</h2></div>
+                <div class="lv-section-body">
+                    <div class="lv-field">
+                        <label class="form-label" asp-for="Name">Name</label>
+                        <input asp-for="Name" class="form-control" placeholder="e.g. Animals in the back yard at night" />
+                    </div>
+                    <div class="lv-field">
+                        <label class="form-label" asp-for="ConditionType">Notify me about</label>
+                        <select asp-for="ConditionType" id="ownType" class="form-select">
+                            @foreach (var (type, label) in Model.EnabledTypes)
+                            {
+                                <option value="@type">@label</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="lv-field" id="ownCameraField">
+                        <label class="form-label" asp-for="CameraId">Camera</label>
+                        <select asp-for="CameraId" id="ownCamera" class="form-select">
+                            <option value="" id="ownCameraEmpty">(any camera)</option>
+                            @foreach (var c in Model.Cameras) { <option value="@c.Id">@c.Name</option> }
+                        </select>
+                    </div>
+                    <div class="lv-field" id="ownNodeField">
+                        <label class="form-label" asp-for="NodeId" id="ownNodeLabel">Only cameras on node</label>
+                        <select asp-for="NodeId" id="ownNode" class="form-select">
+                            <option value="" id="ownNodeEmpty">(any node)</option>
+                            @foreach (var n in Model.Nodes) { <option value="@n.Id">@n.Name</option> }
+                        </select>
+                    </div>
+                    <div class="lv-field" id="ownThresholdField">
+                        <label class="form-label" asp-for="ThresholdPercent">Free space below (%)</label>
+                        <input asp-for="ThresholdPercent" class="form-control" type="number" min="1" max="99" />
+                    </div>
+
+                    <div class="lv-wide ds-group-title" data-own-detection>What to look for</div>
+                    <div class="lv-field" data-own-detection>
+                        <label class="form-label" asp-for="CategoryFilter">Category</label>
+                        <select asp-for="CategoryFilter" class="form-select">
+                            <option value="">(anything)</option>
+                            @foreach (var name in Model.Categories.Select(c => c.Name)) { <option value="@name">@name</option> }
+                        </select>
+                    </div>
+                    <div class="lv-field" data-own-detection>
+                        <label class="form-label" asp-for="LabelFilter">Label</label>
+                        <input asp-for="LabelFilter" class="form-control" list="ownLabelList" placeholder="e.g. dog" />
+                        <datalist id="ownLabelList">
+                            @foreach (var l in Model.Labels.Select(l => l.Label).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(l => l)) { <option value="@l"></option> }
+                        </datalist>
+                    </div>
+                    <div class="lv-field" data-own-detection>
+                        <label class="form-label" asp-for="ColorFilter">Color</label>
+                        <select asp-for="ColorFilter" class="form-select">
+                            <option value="">(any)</option>
+                            @foreach (var name in ObjectColors.All.Select(c => c.Name)) { <option value="@name">@ObjectColors.Display(name)</option> }
+                        </select>
+                    </div>
+                    <div class="lv-field" data-own-event>
+                        <label class="form-label" asp-for="ZoneId">Zone</label>
+                        <select asp-for="ZoneId" id="ownZone" class="form-select">
+                            <option value="" id="ownZoneAny">(anywhere in view)</option>
+                            @foreach (var z in Model.Zones) { <option value="@z.Id" data-camera="@z.CameraId" data-kind="@z.Kind">@z.Name</option> }
+                        </select>
+                        <div class="lv-hint" id="ownZoneHint">Pick a camera first.</div>
+                    </div>
+                    <div class="lv-field" id="ownSpeedField">
+                        <label class="form-label" asp-for="SpeedThreshold">Speed at least (@SpeedUnits.Label(Model.SpeedUnit))</label>
+                        <input asp-for="SpeedThreshold" class="form-control" type="number" min="1" step="any" />
+                    </div>
+
+                    <div class="lv-wide ds-group-title" data-own-event>When</div>
+                    <div class="lv-field lv-field-wide" data-own-event>
+                        <div class="d-flex flex-wrap gap-2 align-items-center">
+                            @foreach (var d in new[] { DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday, DayOfWeek.Friday, DayOfWeek.Saturday, DayOfWeek.Sunday })
+                            {
+                                <div class="form-check form-check-inline me-0">
+                                    <input class="form-check-input" type="checkbox" name="ScheduleDays" value="@d" id="own-day-@d" checked="@Model.ScheduleDays.Contains(d)" />
+                                    <label class="form-check-label small" for="own-day-@d">@d.ToString()[..3]</label>
+                                </div>
+                            }
+                            <input type="time" asp-for="ScheduleStart" class="form-control form-control-sm" style="width: 8rem;" aria-label="From" />
+                            <span class="small">to</span>
+                            <input type="time" asp-for="ScheduleEnd" class="form-control form-control-sm" style="width: 8rem;" aria-label="Until" />
+                        </div>
+                        <div class="lv-hint">No days ticked = every day; no times = all day. 22:00 to 06:00 runs overnight. In your time zone.</div>
+                    </div>
+
+                    <div class="lv-wide ds-group-title">How</div>
+                    <div class="lv-field">
+                        <label class="form-label">Send to</label>
+                        <div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="checkbox" asp-for="DeliverBrowser" id="ownBrowser" />
+                                <label class="form-check-label" for="ownBrowser">Browser</label>
+                            </div>
+                            @if (Model.EmailAvailable)
+                            {
+                                <div class="form-check form-check-inline">
+                                    <input class="form-check-input" type="checkbox" asp-for="DeliverEmail" id="ownEmail" />
+                                    <label class="form-check-label" for="ownEmail">Email</label>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                    <div class="lv-field">
+                        <label class="form-label" asp-for="CooldownMinutes">At most once every (minutes)</label>
+                        <input asp-for="CooldownMinutes" class="form-control" type="number" min="1" />
+                        <div class="lv-hint">Per camera, so a busy camera doesn't hide another one.</div>
+                    </div>
+                    <div class="lv-field">
+                        <div class="form-check form-switch mt-4">
+                            <input class="form-check-input" type="checkbox" asp-for="IsEnabled" id="ownEnabled" />
+                            <label class="form-check-label" for="ownEnabled">On</label>
+                        </div>
+                    </div>
+                </div>
+            </section>
+            <div class="lv-savebar">
+                <button type="submit" class="btn btn-primary">Save</button>
+                <a class="btn btn-link" href="/Notifications?tab=mine">Cancel</a>
+            </div>
+        </form>
+    }
+}
+else
+{
+    <section class="lv-section">
+        <div class="lv-section-head">
+            <h2 class="lv-section-title">This browser</h2>
+            <div class="lv-section-sub" id="notifBrowserState">Checking…</div>
+        </div>
+        <div class="lv-section-body">
+            <div class="lv-wide d-flex flex-wrap gap-2 align-items-center">
+                <button type="button" class="btn btn-primary btn-sm" id="notifEnable">Turn on notifications in this browser</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="notifTest">Send a test</button>
+                <span id="notifStatus" class="small" role="status" aria-live="polite"></span>
+            </div>
+            <div id="notifDesktopHint" class="lv-wide alert alert-info small py-2 mb-0" hidden></div>
+        </div>
+    </section>
+    <section class="lv-section">
+        <div class="lv-section-head">
+            <h2 class="lv-section-title">Your devices</h2>
+            <div class="lv-section-sub">Browsers and installed apps that get notifications while closed.</div>
+        </div>
+        <div id="notifDevices" class="p-3 small text-muted">Loading…</div>
+    </section>
+}
+</div>
+
+@section Scripts {
+    <script nonce="@Csp.Value">
+        (function () {
+            // Personal rule editor: show only the fields the chosen kind of notification uses.
+            var type = document.getElementById('ownType');
+            if (type) {
+                var camera = document.getElementById('ownCamera');
+                var zone = document.getElementById('ownZone');
+                var tz = document.getElementById('ownTimeZone');
+                try { var z = Intl.DateTimeFormat().resolvedOptions().timeZone; if (tz && z) tz.value = z; } catch (e) { }
+                function update() {
+                    var t = type.value;
+                    var detection = t === '@nameof(AlertConditionType.ObjectDetected)' || t === '@nameof(AlertConditionType.SpeedOver)';
+                    var motion = t === '@nameof(AlertConditionType.MotionDetected)';
+                    var lock = t === '@nameof(AlertConditionType.EvidenceLockExpiringSoon)' || t === '@nameof(AlertConditionType.EvidenceLockRemoved)';
+                    var cameraOnly = t === '@nameof(AlertConditionType.CameraNotReporting)';
+                    var nodeCondition = !detection && !motion && !lock && !cameraOnly;
+                    var scoped = detection || motion || lock;
+                    document.getElementById('ownCameraField').hidden = !(scoped || cameraOnly);
+                    document.getElementById('ownCameraEmpty').textContent = scoped ? '(any camera)' : '(choose a camera)';
+                    document.getElementById('ownNodeField').hidden = !(nodeCondition || (scoped && !camera.value));
+                    document.getElementById('ownNodeLabel').textContent = nodeCondition ? 'Node' : 'Only cameras on node';
+                    document.getElementById('ownNodeEmpty').textContent = nodeCondition ? '(choose a node)' : '(any node)';
+                    document.getElementById('ownThresholdField').hidden = t !== '@nameof(AlertConditionType.NodeStorageLow)';
+                    document.getElementById('ownSpeedField').hidden = t !== '@nameof(AlertConditionType.SpeedOver)';
+                    Array.prototype.forEach.call(document.querySelectorAll('[data-own-detection]'), function (el) { el.hidden = !detection; });
+                    Array.prototype.forEach.call(document.querySelectorAll('[data-own-event]'), function (el) { el.hidden = !(detection || motion); });
+                    document.getElementById('ownZoneAny').textContent = motion ? '(whole camera)' : '(anywhere in view)';
+                    document.getElementById('ownZoneHint').textContent = motion ? 'Server motion zones only. Pick a camera first.' : 'Pick a camera first.';
+                    Array.prototype.forEach.call(zone.options, function (opt) {
+                        if (!opt.value) return;
+                        var show = camera.value && opt.getAttribute('data-camera') === camera.value
+                            && (!motion || opt.getAttribute('data-kind') === '@nameof(ZoneKind.ServerMotion)');
+                        opt.hidden = !show;
+                        if (!show && opt.selected) zone.value = '';
+                    });
+                    zone.disabled = !camera.value;
+                }
+                type.addEventListener('change', update);
+                camera.addEventListener('change', update);
+                update();
+            }
+
+            // This browser and devices.
+            var enableBtn = document.getElementById('notifEnable');
+            if (!enableBtn || !window.larisvmsNotifications) return;
+            var n = window.larisvmsNotifications;
+            var status = document.getElementById('notifStatus');
+            var state = document.getElementById('notifBrowserState');
+            var devicesEl = document.getElementById('notifDevices');
+
+            function setStatus(text, kind) { status.className = 'small ' + (kind || 'text-muted'); status.textContent = text; }
+
+            function describeState() {
+                var p = n.permission();
+                n.getConfig().then(function (cfg) {
+                    var how = !cfg ? '' : cfg.webPush ? 'Web Push' : cfg.fcm ? 'Firebase' : cfg.onPrem ? 'while LarisVMS is open' : '';
+                    state.textContent = p === 'unsupported' ? 'This browser doesn’t support notifications.'
+                        : p === 'granted' ? 'Notifications are allowed' + (how ? ' (' + how + ').' : '.')
+                        : p === 'denied' ? 'Notifications are blocked for this site in the browser’s settings.'
+                        : 'Not turned on yet. Without it, notifications show inside open LarisVMS pages only.';
+                    showDesktopHint(p === 'granted' && cfg && (cfg.webPush || cfg.fcm));
+                });
+            }
+
+            // Phones get push with the browser closed; desktop browsers only while they're running, and
+            // closing the last window usually quits them.
+            function showDesktopHint(pushOn) {
+                var hint = document.getElementById('notifDesktopHint');
+                var ua = navigator.userAgent;
+                var mobile = /Android|iPhone|iPad|Mobile/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+                var mac = /Macintosh/.test(ua);
+                var text = '';
+                if (pushOn && !mobile) {
+                    if (/Edg\//.test(ua)) {
+                        text = mac
+                            ? 'Edge only gets notifications while it’s running. Closing its windows keeps it running; quitting it (⌘Q) stops notifications until it’s opened again.'
+                            : 'To keep getting notifications after closing Edge, turn on “Continue running background extensions and apps when Microsoft Edge is closed” in Edge’s Settings → System and performance.';
+                    } else if (/Firefox\//.test(ua)) {
+                        text = 'Firefox only gets notifications while it’s running. Keep it open, or turn on email for notifications you can’t miss.';
+                    } else if (/Chrome\//.test(ua)) {
+                        text = mac
+                            ? 'Chrome only gets notifications while it’s running. Closing its windows keeps it running; quitting it (⌘Q) stops notifications until it’s opened again.'
+                            : 'To keep getting notifications after closing Chrome, turn on “Continue running background apps when Google Chrome is closed” in Chrome’s Settings → System.';
+                    }
+                }
+                hint.textContent = text;
+                hint.hidden = !text;
+            }
+
+            function loadDevices() {
+                fetch('/api/notifications/devices', { credentials: 'same-origin' }).then(function (r) { return r.ok ? r.json() : []; }).then(function (list) {
+                    devicesEl.innerHTML = '';
+                    if (!list.length) { devicesEl.textContent = 'None yet. Turn notifications on in each browser you use.'; return; }
+                    var ul = document.createElement('ul');
+                    ul.className = 'list-unstyled mb-0';
+                    list.forEach(function (d) {
+                        var li = document.createElement('li');
+                        li.className = 'd-flex align-items-center gap-2 py-1 text-body';
+                        var label = document.createElement('span');
+                        label.className = 'flex-grow-1';
+                        label.textContent = (d.deviceLabel || d.kind) + ' · added ' + window.larisvmsTime.format(d.createdAt)
+                            + (d.lastSuccessAt ? ' · last notified ' + window.larisvmsTime.format(d.lastSuccessAt) : '');
+                        var remove = document.createElement('button');
+                        remove.type = 'button';
+                        remove.className = 'btn btn-sm btn-link text-danger p-0';
+                        remove.textContent = 'Remove';
+                        remove.addEventListener('click', function () {
+                            fetch('/api/notifications/devices/' + d.id, { method: 'DELETE', credentials: 'same-origin' }).then(loadDevices);
+                        });
+                        li.appendChild(label);
+                        li.appendChild(remove);
+                        ul.appendChild(li);
+                    });
+                    devicesEl.appendChild(ul);
+                });
+            }
+
+            enableBtn.addEventListener('click', function () {
+                setStatus('Turning on…');
+                n.enableThisBrowser().then(function (msg) { setStatus(msg, 'text-success'); describeState(); loadDevices(); })
+                    .catch(function (e) { setStatus(e.message, 'text-danger'); describeState(); });
+            });
+            document.getElementById('notifTest').addEventListener('click', function () {
+                setStatus('Sending…');
+                n.sendTest().then(function (r) {
+                    var parts = [];
+                    if (r.openTabs) parts.push(r.openTabs + ' open tab' + (r.openTabs === 1 ? '' : 's'));
+                    if (r.pushDevices) parts.push(r.pushDevices + ' device' + (r.pushDevices === 1 ? '' : 's'));
+                    if (r.emailSent) parts.push('your email');
+                    setStatus((parts.length ? 'Sent to ' + parts.join(', ') + '.' : 'Nothing to send to yet.')
+                        + (r.problems && r.problems.length ? ' ' + r.problems.join(' ') : ''), parts.length ? 'text-success' : 'text-warning-emphasis');
+                }).catch(function (e) { setStatus(e.message, 'text-danger'); });
+            });
+            describeState();
+            loadDevices();
+        })();
+    </script>
+}

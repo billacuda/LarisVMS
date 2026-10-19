@@ -19,7 +19,7 @@ public class SlackAlertChannelSender : IAlertChannelSender
                 ?? throw new InvalidOperationException("Slack delivery configuration is malformed.");
 
         using var http = new HttpClient();
-        var payload = JsonSerializer.Serialize(new { text = $"*LarisVMS alert: {ruleName}*\n{message}" });
+        var payload = JsonSerializer.Serialize(new { text = $"*LarisVMS alert: {ChatText.Slack(ruleName)}*\n{ChatText.Slack(message)}" });
         using var content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
         var response = await http.PostAsync(config.WebhookUrl, content, ct);
         response.EnsureSuccessStatusCode();

@@ -22,6 +22,7 @@ namespace LarisVMS.Web.Areas.Identity.Pages.Account;
 /// has neither.
 /// </summary>
 [AllowAnonymous]
+[Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("sign-in")]
 public class LoginModel(
     SignInManager<ApplicationUser> signInManager,
     UserManager<ApplicationUser> userManager,
@@ -105,7 +106,7 @@ public class LoginModel(
         catch (AdInvalidCredentialsException)
         {
             if (linked is not null) await userManager.AccessFailedAsync(linked);
-            return "Invalid username or password.";
+            return "Invalid username or password, or this account doesn't have access to this system.";
         }
         catch (ActiveDirectoryException ex)
         {
@@ -115,9 +116,13 @@ public class LoginModel(
 
         var user = await adSync.SyncSignInAsync(entry, HttpContext.RequestAborted);
         if (user is null)
-            return entry.IsActive
-                ? "Your Active Directory account isn't in any group that has access to this system."
-                : "Invalid username or password.";
+        {
+            // The same answer as a wrong password, so this page doesn't reveal that an AD password is
+            // right; the reason is in the log.
+            logger.LogInformation("Active Directory sign-in for {Username} refused: {Reason}.", username,
+                entry.IsActive ? "not in any linked group" : "account disabled or expired in AD");
+            return "Invalid username or password, or this account doesn't have access to this system.";
+        }
 
         await userManager.ResetAccessFailedCountAsync(user);
         await signInManager.SignInAsync(user, Input.RememberMe);

@@ -5,6 +5,228 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.218.0] - 2026-10-19
+
+### ➕ Added
+
+- **Scene heatmaps.** Activity → Scene lays a heat layer over a camera's picture showing where
+  objects moved, or where grid motion happened, from red for the busiest spots to blue for the
+  quietest. Narrow it by object type, range, and time of day, show one camera or every camera in a
+  view, and use a sharp frame from the camera or upload your own picture. Paths are kept with their
+  events, and the heat as long as the activity history.
+- **Speed and color switches.** The Live toolbar can hide each box's speed and color, like
+  Confidence.
+- **AI backend warning.** The Nodes page shows when a node's AI detection is running on a slower
+  backend than the one asked for (DirectML instead of CUDA, say), with the reason, and Super Admins
+  get a notification.
+- **Moving objects.** Settings → AI detection chooses which kinds of object can count as moving:
+  people, vehicles, and animals by default, plus any other objects you opt in to, such as packages.
+  Anything else is only ever idle, so it never starts a snapshot or alert.
+- **Travel paths.** A Path switch on the Live toolbar draws the line each moving object has taken,
+  from the centre of its box, in the box's color and line width. The line stays while the
+  object moves, lingers once it stops or leaves (Settings → Live view sets how long), then dissolves
+  from its start to its last position.
+- **Camera device settings.** A camera's Device settings page changes its stream settings (codec,
+  resolution, frame rate, bitrate, CBR/VBR, quality, and keyframe interval), image settings (brightness,
+  contrast, day/night, WDR, white balance, and more), and audio settings over ONVIF, without signing in
+  to the camera. Only the settings the camera supports are shown, and recording picks up a new stream
+  format within seconds.
+- **Bulk device settings.** The same change can be applied to several cameras of the same make and
+  model at once, from the camera list or from one camera's Device settings page. Only the changed
+  settings are sent, and each camera reports whether it was applied, skipped, or failed.
+- **Camera list filters.** Every column on the Cameras page can be filtered, and Make and Model are
+  now separate columns. Filters are saved per user, like the column choices, and Select all only
+  selects the cameras that match.
+- **Evidence locks.** Lock footage from Playback for 1, 3, 7, 14, or 30 days, until a date, or
+  indefinitely, with a reason. Retention, quotas, archive expiry, and even a full disk never delete
+  locked footage; locks over 30 days warn about storage and offer to export instead. The person who
+  placed a lock, or a Super Admin, can remove it, and the footage stays protected for 24 more hours
+  in case that was a mistake. Every step is in the audit log.
+- **Notifications you subscribe to.** Under My notifications, people subscribe to shared alert rules
+  an admin opens up, or make their own (for example, animals on one camera between 10 pm and 6 am),
+  scoped to a camera, a node, or every camera, and can mute them. Each kind of notification can be
+  turned off for users in Settings.
+- **Motion alerts.** Alert rules and personal notifications can fire on motion, on the whole camera
+  or only in one of its server motion zones, with the same cameras, nodes, and schedule choices as
+  detection alerts.
+- **Browser notifications.** Notifications reach the browser while LarisVMS is open (fully
+  on-premises), or with no LarisVMS page open, through standard Web Push or your own Firebase
+  project; on a computer the browser itself has to be running. Email works too.
+
+### 🛠️ Fixed
+
+- **Duplicate segment errors in the log.** Footage being moved to the archive was reported again
+  as new footage, which could also drop other new footage reported with it until the next hourly
+  check.
+- **Objects counted twice after passing behind something.** An object that disappears behind a tree
+  or post and comes out further along the same line, with the same color, is now the same object.
+- **Pages kept old scripts after an update.** Activity, the dashboard, Snapshots, Map, Exports, and
+  some settings pages needed a hard refresh to pick up a new version; their scripts are now
+  version-stamped.
+- **Node installer removed the CUDA libraries.** Installing over a script-installed node, or
+  upgrading, deleted the CUDA and cuDNN files copied next to the AI backend, and the installer then
+  looked for them in the wrong Program Files folder. AI detection silently fell back to DirectML,
+  several times slower. The installer now keeps them and finds the machine's own copies, and the
+  node puts them back on its own when they go missing.
+- **Parked vehicles showed a speed.** A parked car's box that jumped, cut at a slice seam or matched
+  to the car beside it, could cross both speed-trap lines, and a speed reading alone made it count as
+  moving. A reading now only counts for an object that is actually moving.
+- **Fast objects weren't tracked.** A person or car that moved further than its own width between
+  analysed frames never got a track, so no box showed at all. The tracker now follows it from its
+  second frame.
+- **Camera Access couldn't grant a single camera or a site.** Choosing "A single camera" saved no
+  camera, so it was refused with "Choose a camera.", and Group-tier roles (such as Guest/Viewer) were
+  refused every top-level camera group. Any role can now be granted any camera group or single
+  cameras; only "every camera" still needs an Org-tier role.
+- **More times showed in the server's time zone.** Times on the camera list, nodes, node builds,
+  exports, bookmarks, snapshots, audit log, backups, alerts, API keys, encryption, and Active
+  Directory pages were formatted on the server. They're now shown in your local time.
+- **Alert schedules used the server's time zone.** A rule's active hours are now read in the time
+  zone of whoever saved it.
+- **An "any camera" detection alert went quiet after one camera fired.** The cooldown now counts
+  separately for each camera.
+- **Motion detection kept watching an old Sub stream.** Server motion detection now restarts on the
+  new stream when a re-probe changes a camera's Sub stream address.
+- **Pages were slow to open.** With several LarisVMS tabs open, clicking around could stall before
+  a page started loading.
+
+### 🔒 Security
+
+- **Setup wizard closed after the admin is created.** The remaining setup steps now need a signed-in
+  Super Admin, and the database can no longer be changed from setup once an admin exists.
+- **Live-view tokens only open live view.** Two-way audio, snapshots, and the motion zone overlay on a
+  node each need their own token, so a live-view token can't be reused for them. Export tokens are
+  single-use.
+- **Camera list changes need edit rights.** Enabling, disabling, re-probing, and moving cameras to a
+  node need Cameras.Edit and configuration access to each camera.
+- **Admins can't take over higher-level accounts.** Resetting a password, disabling an account, and
+  changing roles are refused for a Super Admin (unless you are one) or an account with wider access
+  than yours, and nobody changes their own roles or disables themselves. A role you can't assign,
+  you can't remove.
+- **Exports are limited to cameras you can export.** The Exports list shows your own exports and
+  exports of cameras you can export; downloads and manifests need export access to the camera; only
+  the person who made an export, or a Super Admin, can delete or retry it.
+- **Camera groups can't widen access.** Moving a camera into or out of a group needs configuration
+  access to that camera.
+- **Camera access fails closed.** A role or user with no camera access grants now has no cameras
+  (Super Admin always has every camera). Upgrading adds grants that keep everyone's current access
+  the same; new installs give Guest/Viewer view-only access, and Guest/Viewer no longer sees the
+  audit log. Role changes apply to camera access straight away.
+- **New nodes and proxies need approval.** A newly registered node waits on the Nodes page until an
+  admin approves it, and a new proxy starts turned off; until then they only check in. Nodes can only
+  report recordings, motion, and events for their own cameras, a node that has used the check-in
+  nonce can no longer leave it out, and a node's address only changes on a verified check-in (each
+  change is audited). Node and proxy names must be hostnames, and node names in prompts can no longer
+  inject script.
+- **Local data locked down.** The web server, nodes, and proxies limit `%ProgramData%\LarisVMS`
+  (keys, node settings, certificates, update downloads) to SYSTEM, Administrators, and the accounts
+  the LarisVMS services on that machine run as, and the setup and settings files next to the web server to the same. Each update
+  downloads into a fresh folder, so nothing placed there beforehand gets installed.
+- **Signed updates.** The server signs node and proxy updates and the CUDA library it hands out
+  with its signing key. Nodes and proxies keep that key from registration (or their first signed
+  update) and refuse anything unsigned or signed with another key.
+- **Web Push can't reach the server's own network.** A browser's push address must belong to a
+  browser maker's push service, the server only connects to public addresses for it, error replies
+  aren't passed back, and each person keeps at most 10 registered browsers.
+- **Camera settings need access to that camera.** Zones, privacy, speed traps, the motion region,
+  event tags, schedules, map placements, and the camera's edit and device settings pages need
+  configuration access to the camera, not just Cameras.Edit. Moving a camera to a different host
+  needs its saved password typed again, so the address can't be pointed somewhere else to collect it.
+- **Lists only show cameras you can use.** Snapshots, bookmarks (and the Playback timeline's
+  bookmark marks), the view editor's camera list, and floor plan images follow camera access. Only the
+  person who made a bookmark, or a Super Admin, can delete it. The dashboard's data needs Dashboard.View;
+  without it the home page shows a short welcome instead.
+- **Microsoft sign-in only for linked accounts.** Entra ID sign-in no longer links accounts by email
+  address. An admin links each account to the person's Entra object ID under **Microsoft sign-in** on
+  the Users page, and their first sign-in completes it; accounts already linked keep working. The
+  tenant must be your own directory, not a multi-tenant value.
+- **Admin tools can't be used to climb.** Unless you're a Super Admin, you can't change a role you
+  hold (its permissions, reach, or camera access), give a role wider reach than your own or a
+  permission you don't have, or bind the Super Admin role, or a role you couldn't assign, to an API
+  key or an AD group.
+- **Unused sign-in pages closed.** The built-in pages LarisVMS doesn't use (forgot and reset password,
+  registration confirmation, which told anyone whether an email had an account, and the account
+  management pages) now go to the sign-in page.
+- **Limits against abuse.** Sign-in and node or proxy registration attempts are limited per address,
+  and test notifications and new exports per person. Requests are capped at 10 MB (more only where
+  needed: floor plans and node reports), each person keeps at most 10 open notification streams
+  (opening another closes the oldest) and 500 saved preferences, and the Active Directory sign-in no longer tells a wrong password apart from
+  an account without access.
+- **Only valid hosts in the page's security policy.** Proxy and node client endpoint hosts must be
+  hostnames or IP addresses, and only enabled proxies are allowed in the Content-Security-Policy, so a
+  bad entry can't widen it or break every page.
+- **Cross-site requests refused.** Live video, talk, and overlay connections, and every change made
+  through the web API, must come from this site's own pages (or the configured public origin), so
+  another site can't use a signed-in browser to act on LarisVMS.
+- **Direct streaming follows the live view rules.** Getting a direct-to-node live ticket is held to the
+  Live View IP allow list, and a browser's direct connection to a node lasts at most 20 minutes before
+  the player reconnects with a new ticket, so a disabled account can't keep watching.
+- **Dependencies brought up to date.** ASP.NET Core, Entity Framework Core, and the other .NET packages
+  are on the latest servicing release, builds use the newest .NET SDK installed (10.0.400 at least), and building the installers stops if
+  any package has a known High or Critical vulnerability. The Firebase scripts are served by
+  LarisVMS instead of being loaded from Google at run time.
+- **Encrypted connections stay encrypted.** Email sign-in now requires TLS (port 465, or STARTTLS
+  required instead of only used when offered). A new install checks a remote SQL Server's certificate
+  unless you tick **Trust this server's certificate** (a SQL Server on the same machine is always
+  trusted), and the install scripts keep the connection's encryption. Only a Super Admin can change
+  the backup folder; `Backups:AllowedRoots` in appsettings can limit it to chosen folders or shares;
+  and backups can be encrypted with a SQL Server certificate.
+- **Nodes check the server's certificate.** Nodes and proxies no longer accept any certificate.
+  Under **Nodes → Server certificate check** an admin chooses Trust on first use (the default:
+  trusted CA certificates always work, and a self-signed one is remembered and keeps working even
+  past its expiry), Trusted certificate only, or Don't check. The server's self-signed certificate is
+  no longer replaced on its own; replacing it is an explicit admin action, the Nodes page warns that
+  nodes then need re-registering and lists the ones that haven't checked in since, and
+  `--reset-server-pin` re-trusts on the node itself.
+- **Smaller hardening.** Every page and endpoint without its own permission now needs a signed-in user.
+  Static files get the security headers too, the `Server` header is gone, and pages only load
+  images from this site and the map tile server. Errors reaching a recorder node no longer show its
+  internal address. XML from cameras can't use entity tricks, rule and camera names can't inject
+  mentions or links into Slack and Teams messages, and browser reports can't forge log lines.
+  Passwords need at least 12 characters (for new and changed passwords). A role's session limit now
+  counts from sign-in instead of resetting as the session is used. Removing or restoring an evidence
+  lock also needs permission to lock footage and playback access to the camera.
+- **More checks.** Each person can hold at most 200 live video, talk, and overlay connections through
+  the server. Active Directory sign-in confirms the account it actually signed in as is the one typed,
+  so an enabled domain Guest account can't stand in for it. Installers no longer put the
+  registration key on the node or proxy service's command line (readable by every local user): it goes
+  in a locked-down file that the service deletes once it has registered. Super Admins get a
+  notification when the backup folder or its encryption changes, and when a new node or proxy
+  registers and waits for approval.
+- **Strict script policy.** Pages no longer use inline event handlers, and each page's own scripts
+  carry a per-request nonce. Settings → Security → Strict script policy makes browsers run only those
+  scripts, so script injected into a page can't run. Until it's turned on, browsers report what it
+  would block, and the latest reports are listed under the switch.
+- **Last loose ends.** A self-signed certificate's file now has its own random password, protected
+  so a copy taken off the machine doesn't give away its key; existing files keep the same
+  certificate. A node only serves a recording outside its storage folders from a local drive, never
+  from a network path. Notifications about a node are only listed, subscribed to, and delivered for
+  people who can still see that node. The node installer can limit its live port to the server and
+  proxies (`LIVEALLOWFROM`, or `-LiveAllowFrom`).
+
+### ⚙️ Changed
+
+- **Faster database.** New indexes for the busiest node and Live queries, nightly index and
+  statistics upkeep, and old raw camera events are cleared after 30 days (adjustable under
+  Settings → Logging).
+- **Movement detection.** Whether a tracked object is moving is now judged from the shape of its
+  recent path rather than how far its centre went in 2 seconds. Anything that moves steadily counts
+  within a few frames, from a car crossing the view to a truck pulling out, because each object's
+  steps are compared with its own box wobble rather than with its size. Objects entering at
+  the edge of the picture or from behind something are judged by the side in view. Box wobble, and a
+  box that only changes shape (a potted plant, or a parked car as something passes in front of it),
+  doesn't count. Movement sensitivity (Low,
+  Normal, or High) tunes it per camera, and Movement detection → Legacy keeps the previous rule.
+- **HTTP/2 and HTTP/3.** The web server uses HTTP/2, so a browser's requests share one connection,
+  and adds HTTP/3 on Windows 11, Windows Server 2022, and later. HTTP/3 can be turned off under
+  Settings → Security. The installer also opens the HTTPS port for UDP.
+- **Export camera picker.** Cameras to export are chosen from a dropdown list instead of a row of
+  checkboxes, the same as for evidence locks.
+- **Help and on-screen wording.** Lists in the Help pages and on-screen text consistently use the
+  serial comma.
+
 ## [0.217.0] - 2026-10-15
 
 ### ➕ Added

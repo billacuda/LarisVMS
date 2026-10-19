@@ -125,6 +125,26 @@ public class CameraServiceDeviceUriTests
     }
 
     [Fact]
+    public async Task MovingACameraWithASavedPasswordToAnotherHostNeedsThePasswordAgain()
+    {
+        var (db, service) = NewService();
+        var camera = await SeedCameraAsync(db);
+        camera.Password = "saved-secret";
+        await db.SaveChangesAsync();
+
+        await Assert.ThrowsAsync<ArgumentException>(() => service.UpdateAsync(camera.Id, "Front Door", null, null, null, true, null,
+            deviceServiceUri: "http://203.0.113.7/onvif/device_service"));
+        Assert.Equal("10.0.0.5", (await db.Cameras.AsNoTracking().FirstAsync(c => c.Id == camera.Id)).Host);
+
+        // Same host (scheme change) keeps working without it; a new host works once it's re-entered.
+        await service.UpdateAsync(camera.Id, "Front Door", null, null, null, true, null,
+            deviceServiceUri: "https://10.0.0.5/onvif/device_service");
+        await service.UpdateAsync(camera.Id, "Front Door", null, null, "saved-secret", true, null,
+            deviceServiceUri: "http://10.0.0.9/onvif/device_service");
+        Assert.Equal("10.0.0.9", (await db.Cameras.AsNoTracking().FirstAsync(c => c.Id == camera.Id)).Host);
+    }
+
+    [Fact]
     public async Task ChangingTheAddressRecomputesHostAndPort()
     {
         var (db, service) = NewService();

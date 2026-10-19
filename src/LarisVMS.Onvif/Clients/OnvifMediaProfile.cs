@@ -10,8 +10,12 @@ namespace LarisVMS.Onvif.Clients;
 // stream of lens 3" from "the main stream of lens 1". Nullable: not every firmware includes a
 // VideoSourceConfiguration on every profile, and a missing token must degrade to today's
 // single-channel behavior rather than dropping the profile.
+//
+// Video/AudioEncoderConfigurationToken are the token attributes of the profile's encoder configurations
+// — what the Get/Set*EncoderConfiguration calls address. Several profiles can share one configuration.
 public record OnvifMediaProfile(
     string Token, string? Name,
     string? VideoEncoding, int? Width, int? Height, int? FrameRateLimit, int? BitrateLimitKbps,
     string? AudioEncoding, bool HasAudio, bool HasAudioOutputConfig,
-    string? VideoSourceToken = null);
+    string? VideoSourceToken = null,
+    string? VideoEncoderConfigurationToken = null, string? AudioEncoderConfigurationToken = null);

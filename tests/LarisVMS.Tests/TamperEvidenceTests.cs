@@ -234,4 +234,18 @@ public class TamperEvidenceTests
         Assert.Empty(doc.RootElement.GetProperty("chainToCheckpoint").EnumerateArray());
         Assert.Equal(2, doc.RootElement.GetProperty("segments").GetArrayLength());
     }
+
+    // A segment the server already has is skipped before inserting, so it can't fail the batch and
+    // take the new ones with it (SQL Server's unique FilePath index would; InMemory doesn't enforce it).
+    [Fact]
+    public async Task AReSentSegmentIsSkippedAndTheRestOfTheBatchIsSaved()
+    {
+        var (db, service, cameraId, nodeId) = await SeedAsync();
+        await service.RecordSegmentsAsync(nodeId, [Seg(cameraId, 0)]);
+        await service.RecordSegmentsAsync(nodeId, [Seg(cameraId, 0), Seg(cameraId, 1), Seg(cameraId, 1)]);
+
+        var segments = await db.Segments.OrderBy(s => s.StartUtc).ToListAsync();
+        Assert.Equal(2, segments.Count);
+        Assert.Equal(segments[0].ChainHash, segments[1].PrevChainHash);
+    }
 }

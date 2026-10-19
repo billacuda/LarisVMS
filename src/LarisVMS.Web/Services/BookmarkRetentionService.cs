@@ -44,15 +44,15 @@ public class BookmarkRetentionService(IServiceScopeFactory scopeFactory, ILogger
         var bookmarkCameraIds = await db.Bookmarks.Select(b => b.CameraId).Distinct().ToListAsync(ct);
         if (bookmarkCameraIds.Count == 0) return;
 
-        var earliestSegmentByCamera = await db.Segments
-            .Where(s => bookmarkCameraIds.Contains(s.CameraId))
-            .GroupBy(s => s.CameraId)
-            .Select(g => new { CameraId = g.Key, EarliestStartUtc = g.Min(s => s.StartUtc) })
-            .ToDictionaryAsync(x => x.CameraId, x => x.EarliestStartUtc, ct);
+        // Evidence locks: the cut-off is the earliest footage NOT under a lock, and a bookmark inside
+        // locked footage stays with it.
+        var (earliestSegmentByCamera, locked) = await LarisVMS.Infrastructure.Services.EvidenceLockQueries
+            .LoadRetentionCutoffsAsync(db, bookmarkCameraIds, DateTime.UtcNow, ct);
 
         var bookmarks = await db.Bookmarks.ToListAsync(ct);
         var stale = bookmarks.Where(b =>
-            !earliestSegmentByCamera.TryGetValue(b.CameraId, out var earliest) || b.TimestampUtc < earliest
+            !locked.Covers(b.CameraId, b.TimestampUtc, b.TimestampUtc)
+            && (!earliestSegmentByCamera.TryGetValue(b.CameraId, out var earliest) || b.TimestampUtc < earliest)
         ).ToList();
 
         if (stale.Count == 0) return;

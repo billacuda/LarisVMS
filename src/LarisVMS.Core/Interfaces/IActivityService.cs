@@ -21,4 +21,12 @@ public interface IActivityService
     /// doesn't exist or isn't accessible.</summary>
     Task<SpeedHeatmapDto?> GetSpeedHeatmapAsync(Guid? cameraId, IReadOnlySet<Guid>? accessible, string? range, string? view,
         string? metric, IReadOnlyList<string>? trapIds, CancellationToken ct = default);
+
+    /// <summary>The scene heatmap: where in the picture objects moved (source "objects"; categories
+    /// narrows to Human/Vehicle/Animal/Object, empty = all) or where grid motion happened (source
+    /// "motion") over the range, optionally only between <paramref name="fromHour"/> and
+    /// <paramref name="toHour"/> in the camera's local time (wrapping past midnight). Null when the
+    /// camera doesn't exist or isn't accessible.</summary>
+    Task<SceneHeatDto?> GetSceneHeatAsync(Guid cameraId, IReadOnlySet<Guid>? accessible, string? range, string? source,
+        IReadOnlyList<string>? categories, int? fromHour, int? toHour, CancellationToken ct = default);
 }

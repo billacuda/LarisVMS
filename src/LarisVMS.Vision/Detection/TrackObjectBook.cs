@@ -1,3 +1,4 @@
+using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
 
 namespace LarisVMS.Vision.Detection;
@@ -37,10 +38,12 @@ public sealed class TrackObjectBook
         public double? SpeedKph;
         public Guid? SpeedTrapId;
         public DateTime? SpeedAt;
+        public readonly List<(float X, float Y)> Path = [];
 
         public VisionDetectedObjectItem ToItem() => new(TrackId, Label, FirstSeen, LastSeen, BestAt,
             BestAt is null ? null : X, BestAt is null ? null : Y, BestAt is null ? null : W, BestAt is null ? null : H,
-            BestAt is null ? null : Confidence, Primary, Upper, Lower, SpeedKph, SpeedTrapId, SpeedAt);
+            BestAt is null ? null : Confidence, Primary, Upper, Lower, SpeedKph, SpeedTrapId, SpeedAt,
+            Path.Count > 1 ? SceneHeat.FormatPath(Path) : null);
     }
 
     private readonly Dictionary<int, Entry> _live = [];
@@ -50,11 +53,18 @@ public sealed class TrackObjectBook
     private readonly Dictionary<int, SpeedMeasurement> _pendingSpeeds = [];
     private readonly Lock _gate = new();
 
-    /// <summary>Records one contributing sighting of a track (box normalized 0-1). Returns true when
-    /// this frame is clearly the best view of the object so far and its colors should be
-    /// (re)classified from it.</summary>
+    /// <summary>A path point is added once the box centre has moved this far (a share of the
+    /// picture's width/height) since the last one.</summary>
+    public const float PathStep = 0.005f;
+
+    /// <summary>Most points one object's path keeps; when full, every other point is dropped.</summary>
+    public const int MaxPathPoints = 120;
+
+    /// <summary>Records one contributing sighting of a track (box normalized 0-1). While it is
+    /// <paramref name="moving"/>, its box centre extends its path. Returns true when this frame is
+    /// clearly the best view of the object so far and its colors should be (re)classified from it.</summary>
     public bool Observe(int trackId, string label, DateTime atUtc,
-        double x, double y, double w, double h, double confidence)
+        double x, double y, double w, double h, double confidence, bool moving = true)
     {
         lock (_gate)
         {
@@ -66,6 +76,7 @@ public sealed class TrackObjectBook
             }
             e.Label = label;
             if (atUtc > e.LastSeen) e.LastSeen = atUtc;
+            if (moving) AddPathPoint(e.Path, (float)(x + w / 2), (float)(y + h / 2));
 
             var score = MovementClassifier.Score(confidence, Math.Clamp(w * h, 0, 1));
             if (score > e.BestScore)
@@ -78,6 +89,25 @@ public sealed class TrackObjectBook
             return e.ColorAt is null
                 || (score >= e.ColorScore * RecolorImprovement && atUtc - e.ColorAt.Value >= RecolorMinGap);
         }
+    }
+
+    internal static void AddPathPoint(List<(float X, float Y)> path, float x, float y)
+    {
+        if (path.Count > 0)
+        {
+            var (lx, ly) = path[^1];
+            if (MathF.Sqrt((x - lx) * (x - lx) + (y - ly) * (y - ly)) < PathStep) return;
+        }
+        if (path.Count >= MaxPathPoints)
+        {
+            // Every other point, keeping the most recent so the path still ends where the object is.
+            var kept = new List<(float X, float Y)>(MaxPathPoints / 2 + 1);
+            for (var i = path.Count - 1; i >= 0; i -= 2) kept.Add(path[i]);
+            kept.Reverse();
+            path.Clear();
+            path.AddRange(kept);
+        }
+        path.Add((x, y));
     }
 
     /// <summary>Stores colors classified from the frame Observe just flagged. A null result (IR,
@@ -120,6 +150,42 @@ public sealed class TrackObjectBook
     public string? ColorOf(int trackId)
     {
         lock (_gate) return _live.TryGetValue(trackId, out var e) ? e.Primary : null;
+    }
+
+    /// <summary>Folds track <paramref name="fromId"/> into <paramref name="intoId"/>: the tracker
+    /// found <paramref name="fromId"/> was <paramref name="intoId"/> coming back into view, so the two
+    /// are one object — the earlier first sighting, both paths, the better best frame, and any colors
+    /// or speed either has.</summary>
+    public void Merge(int fromId, int intoId)
+    {
+        lock (_gate)
+        {
+            if (_pendingSpeeds.Remove(fromId, out var pendingSpeed) && !_pendingSpeeds.ContainsKey(intoId))
+                _pendingSpeeds[intoId] = pendingSpeed;
+            if (!_live.Remove(fromId, out var from)) return;
+            if (!_live.TryGetValue(intoId, out var into))
+            {
+                // The hidden track never contributed (it wasn't counted yet): the young one simply takes its id.
+                from.TrackId = intoId;
+                _live[intoId] = from;
+                if (_pendingSpeeds.Remove(intoId, out var pending)) ApplySpeed(from, pending);
+                return;
+            }
+
+            if (from.FirstSeen < into.FirstSeen) into.FirstSeen = from.FirstSeen;
+            if (from.LastSeen > into.LastSeen) into.LastSeen = from.LastSeen;
+            foreach (var (x, y) in from.Path) AddPathPoint(into.Path, x, y);
+            if (from.BestScore > into.BestScore)
+            {
+                (into.BestScore, into.BestAt) = (from.BestScore, from.BestAt);
+                (into.X, into.Y, into.W, into.H, into.Confidence) = (from.X, from.Y, from.W, from.H, from.Confidence);
+            }
+            into.Primary ??= from.Primary;
+            into.Upper ??= from.Upper;
+            into.Lower ??= from.Lower;
+            if (into.SpeedKph is null && from.SpeedKph is not null)
+                (into.SpeedKph, into.SpeedTrapId, into.SpeedAt) = (from.SpeedKph, from.SpeedTrapId, from.SpeedAt);
+        }
     }
 
     /// <summary>Moves tracks the tracker has dropped to the ended list, and forgets ended ones

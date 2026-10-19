@@ -84,7 +84,7 @@ window.larisvmsRedactionEditor = (function () {
         });
         els.hint.textContent = tool === 'rect'
             ? 'Drag over the area to hide.'
-            : 'Click each corner; click the first point, double-click or press Enter to finish. Right-click undoes a point.';
+            : 'Click each corner; click the first point, double-click, or press Enter to finish. Right-click undoes a point.';
         redraw();
     }
 

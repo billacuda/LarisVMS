@@ -11,6 +11,7 @@ namespace LarisVMS.Web.Pages.Cameras;
 /// start/end time pair, not a shape or a topic match, so the whole editor is a list + form panel
 /// against /api/cameras/{id}/schedule-windows and /api/schedule-windows/{id}.</summary>
 [Authorize("Cameras.Edit")]
+[LarisVMS.Web.Auth.RequireCameraConfigure]
 public class ScheduleModel(ICameraService cameraService) : PageModel
 {
     public Guid CameraId { get; set; }

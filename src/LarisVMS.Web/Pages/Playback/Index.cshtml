@@ -64,6 +64,10 @@ else
             </select>
             <button type="button" class="btn btn-sm btn-outline-secondary" id="pbExportBtn"><span aria-hidden="true">🎬</span> Export&hellip;</button>
             <button type="button" class="btn btn-sm btn-outline-secondary" id="pbBookmarkBtn"><span aria-hidden="true">🔖</span> Bookmark&hellip;</button>
+            @if (Model.CanLock)
+            {
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="pbLockBtn" title="Keep this footage from being deleted by retention"><span aria-hidden="true">🔒</span> Lock&hellip;</button>
+            }
             @* Populated only for a Bookmark's "▶ Play" deep link whose camera isn't in any view this
                user can see (Pages/Bookmarks/Index.cshtml.cs's own doc comment describes this case) —
                empty and invisible on an ordinary visit. *@
@@ -92,8 +96,11 @@ else
         <div id="pbExportPanel" class="d-none border rounded p-2 mb-2 bg-body-tertiary" style="flex:0 0 auto;">
             <div class="d-flex flex-wrap align-items-end gap-3">
                 <div>
-                    <label class="form-label small mb-1 d-block">Cameras</label>
-                    <div id="pbExportCameras" class="d-flex flex-wrap gap-2"></div>
+                    <span class="form-label small mb-1 d-block" id="pbExportCamerasLabel">Cameras</span>
+                    <details class="position-relative column-picker" id="pbExportCamerasPicker">
+                        <summary class="form-select form-select-sm text-start text-truncate" id="pbExportCamerasSummary" aria-labelledby="pbExportCamerasLabel pbExportCamerasSummary" style="min-width: 12rem; max-width: 18rem;">Choose cameras</summary>
+                        <div class="column-picker-menu" id="pbExportCameras" style="left: 0; right: auto; min-width: 16rem;"></div>
+                    </details>
                 </div>
                 <div>
                     <label class="form-label small mb-0" for="pbExportFrom">Start</label>
@@ -124,6 +131,60 @@ else
             </div>
         </div>
 
+        @* Evidence lock: same inline-panel shape as Export. More than 30 days shows the storage warning
+           with a shortcut to export the same range instead. *@
+        @if (Model.CanLock)
+        {
+            <div id="pbLockPanel" class="d-none border rounded p-2 mb-2 bg-body-tertiary" style="flex:0 0 auto;">
+                <div class="d-flex flex-wrap align-items-end gap-3">
+                    <div>
+                        <span class="form-label small mb-1 d-block" id="pbLockCamerasLabel">Cameras</span>
+                        <details class="position-relative column-picker" id="pbLockCamerasPicker">
+                            <summary class="form-select form-select-sm text-start text-truncate" id="pbLockCamerasSummary" aria-labelledby="pbLockCamerasLabel pbLockCamerasSummary" style="min-width: 12rem; max-width: 18rem;">Choose cameras</summary>
+                            <div class="column-picker-menu" id="pbLockCameras" style="left: 0; right: auto; min-width: 16rem;"></div>
+                        </details>
+                    </div>
+                    <div>
+                        <label class="form-label small mb-0" for="pbLockFrom">Start</label>
+                        <input type="datetime-local" id="pbLockFrom" class="form-control form-control-sm" step="1" />
+                    </div>
+                    <div>
+                        <label class="form-label small mb-0" for="pbLockTo">End</label>
+                        <input type="datetime-local" id="pbLockTo" class="form-control form-control-sm" step="1" />
+                    </div>
+                    <div>
+                        <label class="form-label small mb-0" for="pbLockDuration">Keep for</label>
+                        <select id="pbLockDuration" class="form-select form-select-sm">
+                            <option value="1d">1 day</option>
+                            <option value="3d">3 days</option>
+                            <option value="7d" selected>7 days</option>
+                            <option value="14d">14 days</option>
+                            <option value="30d">30 days</option>
+                            <option value="custom">Until a date…</option>
+                            <option value="indefinite">Indefinitely</option>
+                        </select>
+                    </div>
+                    <div id="pbLockUntilWrap" class="d-none">
+                        <label class="form-label small mb-0" for="pbLockUntil">Until</label>
+                        <input type="date" id="pbLockUntil" class="form-control form-control-sm" />
+                    </div>
+                    <div class="flex-grow-1" style="min-width:12rem;">
+                        <label class="form-label small mb-0" for="pbLockReason">Reason</label>
+                        <input type="text" id="pbLockReason" class="form-control form-control-sm" maxlength="500" placeholder="Case number, incident, or request" />
+                    </div>
+                    <button type="button" class="btn btn-sm btn-primary" id="pbLockSubmit">Lock footage</button>
+                    <span id="pbLockStatus" class="small" role="status" aria-live="polite"></span>
+                </div>
+                <div id="pbLockWarning" class="d-none">
+                    <div class="alert alert-warning small py-1 px-2 mt-2 mb-0 d-flex flex-wrap align-items-center gap-2" role="alert">
+                        <span class="flex-grow-1">Locks longer than 30 days can use a lot of storage when space is tight. It’s better to export this video and save it somewhere else as soon as you can.</span>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="pbLockExportInstead">Export this range instead</button>
+                    </div>
+                </div>
+                <div class="small text-muted mt-1">Locked footage is never deleted, even when the disk is full. <a href="/Help/live-and-playback#evidence-locks">Learn more</a></div>
+            </div>
+        }
+
         <div id="playbackTiles" style="flex:1 1 auto; min-height:0;"></div>
 
         <div id="pbTimelineArea" style="flex:0 0 auto;" class="pt-1">
@@ -153,7 +214,7 @@ else
     <script src="~/js/speed-playback.js" asp-append-version="true"></script>
     <script src="~/js/redaction-editor.js" asp-append-version="true"></script>
     <script src="~/js/playback-player.js" asp-append-version="true"></script>
-    <script>
+    <script nonce="@Csp.Value">
         (function () {
             var layoutEl = document.getElementById('pbLayout');
             if (!layoutEl) return; // no cameras/views — nothing to size
@@ -198,6 +259,19 @@ else
                 bookmarkNoteId: 'pbBookmarkNote',
                 bookmarkSubmitId: 'pbBookmarkSubmit',
                 bookmarkStatusId: 'pbBookmarkStatus',
+                lockBtnId: 'pbLockBtn',
+                lockPanelId: 'pbLockPanel',
+                lockCamerasId: 'pbLockCameras',
+                lockFromId: 'pbLockFrom',
+                lockToId: 'pbLockTo',
+                lockDurationId: 'pbLockDuration',
+                lockUntilWrapId: 'pbLockUntilWrap',
+                lockUntilId: 'pbLockUntil',
+                lockReasonId: 'pbLockReason',
+                lockWarningId: 'pbLockWarning',
+                lockExportInsteadId: 'pbLockExportInstead',
+                lockSubmitId: 'pbLockSubmit',
+                lockStatusId: 'pbLockStatus',
                 // M18: a Bookmark's "▶ Play" link (Pages/Bookmarks/Index) — both null for an
                 // ordinary visit. deepLinkAtUtc is an ISO string (Html.Raw's JSON-encoded form of a
                 // DateTime); the client parses it once cameras/views are loaded.

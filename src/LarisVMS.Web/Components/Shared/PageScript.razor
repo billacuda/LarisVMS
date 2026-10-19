@@ -1,0 +1,9 @@
+@inject Microsoft.AspNetCore.Mvc.ViewFeatures.IFileVersionProvider FileVersion
+@* A page's own script, version-stamped like the layout's (App.razor V()): the address changes with
+   the file, so a browser never keeps running an old copy after an update. *@
+<script src="@FileVersion.AddFileVersionToPath(HttpContext?.Request.PathBase ?? default, Src)"></script>
+
+@code {
+    [Parameter, EditorRequired] public string Src { get; set; } = "";
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+}

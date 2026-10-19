@@ -88,7 +88,7 @@
     <script src="~/js/media-endpoint.js" asp-append-version="true"></script>
     <script src="~/js/live-view.js" asp-append-version="true"></script>
     <script src="~/js/speed-trap-editor.js" asp-append-version="true"></script>
-    <script>
+    <script nonce="@Csp.Value">
         window.larisvmsSpeedTrapEditor.init({
             cameraId: '@Model.CameraId',
             snapshotUrl: '/api/cameras/@Model.CameraId/snapshot',

@@ -34,7 +34,7 @@ namespace LarisVMS.Installer
                         ExeName = "LarisVMS.Web.exe",
                         Remembered = new[] { "HTTPSPORT", "SERVICEACCOUNT" },
                         Defaults = new Dictionary<string, string> { ["HTTPSPORT"] = "8444" },
-                        LegacyFirewallRules = new[] { "LarisVMS Web" },
+                        LegacyFirewallRules = new[] { "LarisVMS Web", "LarisVMS Web (HTTP/3)" },
                     };
                 case "Node":
                     return new Product
@@ -46,6 +46,7 @@ namespace LarisVMS.Installer
                         {
                             "SERVERURL", "STORAGEROOT", "ARCHIVEROOT", "FFMPEGPATH", "LIVEPORT", "INSECURETLS",
                             "CLIENTPORT", "CLIENTENDPOINTHOST", "CLIENTPFXPATH", "CLIENTALLOWINSECURE", "SERVICEACCOUNT",
+                            "LIVEALLOWFROM",
                         },
                         Defaults = new Dictionary<string, string> { ["LIVEPORT"] = "8554" },
                         LegacyFirewallRules = new[] { "LarisVMS Node Live View", "LarisVMS Node Client Endpoint" },

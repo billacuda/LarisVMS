@@ -55,6 +55,9 @@ public sealed class ProxyWorker(ProxyApiClient api, ProxyConfig registration, Pr
                     certHolder is not null ? certHolder.IsSelfSigned : null,
                     certHolder?.LastError, nodeHealthReports), stoppingToken);
 
+                // Received over a connection that passed the current check (see NodeWorker).
+                if (heartbeat.ServerCertificateCheck is { } certificateCheck)
+                    ProxyConfigStore.Trust?.ApplyMode(LarisVMS.Core.Security.ServerCertificateTrust.Parse(certificateCheck));
                 if (heartbeat.NextNonce is not null && heartbeat.NextNonce != _registration.CheckInNonce)
                 {
                     _registration = _registration with { CheckInNonce = heartbeat.NextNonce };
@@ -70,11 +73,10 @@ public sealed class ProxyWorker(ProxyApiClient api, ProxyConfig registration, Pr
                 // double-triggering while one is already in flight. A successful apply calls
                 // IHostApplicationLifetime.StopApplication() itself, which unwinds this loop via the
                 // stopping token. Mirrors NodeWorker.ReconcileLoopAsync.
-                if (heartbeat.UpdateAvailable is not null && !updateService.IsApplying)
+                if (heartbeat.UpdateAvailable is { } update && !updateService.IsApplying && TrustUpdate(update))
                 {
-                    logger.LogInformation("Proxy update available: {Version} — downloading and applying.",
-                        heartbeat.UpdateAvailable.Version);
-                    await updateService.TryApplyAsync(heartbeat.UpdateAvailable, stoppingToken);
+                    logger.LogInformation("Proxy update available: {Version} — downloading and applying.", update.Version);
+                    await updateService.TryApplyAsync(update, stoppingToken);
                 }
             }
             catch (Exception ex) when (IsRetryable(ex, stoppingToken))
@@ -131,6 +133,24 @@ public sealed class ProxyWorker(ProxyApiClient api, ProxyConfig registration, Pr
             foreach (var camId in n.CameraIds)
                 map[camId] = new NodeTarget(n.NodeId, n.NodeHost, n.NodeLivePort);
         return map;
+    }
+
+    /// <summary>Only an update signed with the server's key is installed — see NodeWorker.TrustUpdate.</summary>
+    private bool TrustUpdate(ProxyUpdateInfoDto update)
+    {
+        var payload = LarisVMS.Core.Security.UpdateSignature.UpdatePayload("proxy-win-x64", update.Version, update.Sha256, null);
+        if (!LarisVMS.Core.Security.UpdateSignature.Check(_registration.UpdateSigningKeyPem, update.SigningKeyPem, update.Signature,
+                payload, out var keyToPin, out var error))
+        {
+            logger.LogError("Not installing update {Version}: {Reason}.", update.Version, error);
+            return false;
+        }
+        if (keyToPin is not null)
+        {
+            _registration = _registration with { UpdateSigningKeyPem = keyToPin };
+            TrySave();
+        }
+        return true;
     }
 
     private void TrySave()

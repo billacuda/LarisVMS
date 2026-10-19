@@ -24,6 +24,7 @@
     var VIEW_PREF = 'activityView';
     var KIND_PREF = 'activityKind';
     var METRIC_PREF = 'activityMetric';
+    var SCENE_SOURCE_PREF = 'activitySceneSource';
 
     var configEl = document.getElementById('activityConfig');
     var chartEl = document.getElementById('activityChart');
@@ -45,6 +46,11 @@
     var speedCard = document.getElementById('activitySpeedCard');
     var metricSelect = document.getElementById('activityMetric');
     var trapsEl = document.getElementById('activitySpeedTraps');
+    var sceneCard = document.getElementById('activitySceneCard');
+    var sceneCatsEl = document.getElementById('activitySceneCategories');
+    var sceneFrom = document.getElementById('activitySceneFrom');
+    var sceneTo = document.getElementById('activitySceneTo');
+    var tableSwitch = document.getElementById('activityTableSwitch');
 
     var params = new URLSearchParams(location.search);
     var state = {
@@ -54,9 +60,17 @@
         selection: params.getAll('sel'),     // the user's choice; empty = remembered/default
         kind: config.kind || null,           // 'events' | 'speeds'; null until preferences load
         metric: config.metric || null,
-        traps: params.getAll('trap')         // speed traps to include; empty = all
+        traps: params.getAll('trap'),        // speed traps to include; empty = all
+        source: params.get('source') === 'motion' ? 'motion' : null, // scene: 'objects' | 'motion'
+        cats: params.getAll('cat'),          // scene object categories; empty = all
+        fromHour: params.get('from') !== null ? +params.get('from') : 0,
+        toHour: params.get('to') !== null ? +params.get('to') : 0
     };
     function speeds() { return state.kind === 'speeds'; }
+    function scene() { return state.kind === 'scene'; }
+    // Scene only: a whole view at once ("view:<id>" in the camera list), one heatmap per camera.
+    function sceneView() { return typeof state.cameraId === 'string' && state.cameraId.indexOf('view:') === 0; }
+    function viewOf(id) { return (config.views || []).filter(function (v) { return 'view:' + v.id === id; })[0]; }
     var last = null;
     var requestSeq = 0;
 
@@ -72,6 +86,14 @@
         var p = new URLSearchParams();
         p.set('cameraId', state.cameraId);
         p.set('range', state.range);
+        if (scene()) {
+            p.set('kind', 'scene');
+            p.set('source', state.source);
+            state.cats.forEach(function (c) { p.append('cat', c); });
+            if (state.fromHour !== state.toHour) { p.set('from', state.fromHour); p.set('to', state.toHour); }
+            try { history.replaceState(null, '', '/Activity?' + p.toString()); } catch (e) { /* bookmarking is a nicety */ }
+            return;
+        }
         if (longRange()) p.set('view', state.view);
         if (speeds()) {
             p.set('kind', 'speeds');
@@ -83,9 +105,25 @@
         try { history.replaceState(null, '', '/Activity?' + p.toString()); } catch (e) { /* bookmarking is a nicety */ }
     }
 
+    function sceneUrl(cameraId) {
+        var p = new URLSearchParams();
+        p.set('range', state.range);
+        p.set('source', state.source);
+        if (state.source === 'objects') state.cats.forEach(function (c) { p.append('cat', c); });
+        if (state.fromHour !== state.toHour) { p.set('fromHour', state.fromHour); p.set('toHour', state.toHour); }
+        return '/api/cameras/' + cameraId + '/scene-heat?' + p.toString();
+    }
+
+    // The picture under a camera's heat: its uploaded one, or a sharp frame from its recording. The
+    // upload's version is in the address, so a new upload isn't hidden by the browser's cache.
+    function backgroundUrl(data) {
+        return '/api/cameras/' + encodeURIComponent(data.cameraId) + '/scene-background?v=' + (data.backgroundVersion || 0);
+    }
+
     function apiUrl() {
         var p = new URLSearchParams();
         p.set('range', state.range);
+        if (scene()) return sceneUrl(state.cameraId);
         if (longRange()) p.set('view', state.view);
         if (speeds()) {
             p.set('metric', state.metric);
@@ -98,6 +136,23 @@
 
     function load() {
         var seq = ++requestSeq;
+        // Views are a Scene choice; Events and Speeds go back to a camera.
+        if (!scene() && sceneView()) {
+            state.cameraId = config.firstCameraId || 'all';
+            cameraSelect.value = state.cameraId;
+        }
+        if (scene() && sceneView()) { loadSceneView(seq); return; }
+        if (scene() && state.cameraId === 'all') {
+            // A scene is one camera's picture; there's nothing to lay "all cameras" over.
+            last = null;
+            renderControls();
+            peakEl.textContent = '';
+            summaryEl.textContent = '';
+            legendEl.innerHTML = '';
+            chartEl.innerHTML = '<p class="text-muted mb-0">Choose a camera to see where things move in its picture.</p>';
+            syncUrl();
+            return;
+        }
         chartEl.classList.add('opacity-50');
         fetch(apiUrl())
             .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)); })
@@ -112,6 +167,58 @@
             })
             .then(function () { if (seq === requestSeq) chartEl.classList.remove('opacity-50'); });
         syncUrl();
+    }
+
+    // Scene for a view: each of its cameras' heat, side by side, each on its own scale.
+    function loadSceneView(seq) {
+        var view = viewOf(state.cameraId);
+        last = null;
+        renderControls();
+        legendEl.innerHTML = '';
+        if (!view || view.cameraIds.length === 0) {
+            peakEl.textContent = '';
+            summaryEl.textContent = '';
+            chartEl.innerHTML = '<p class="text-muted mb-0">This view has no cameras you can review.</p>';
+            syncUrl();
+            return;
+        }
+        chartEl.classList.add('opacity-50');
+        Promise.all(view.cameraIds.map(function (id) {
+            return fetch(sceneUrl(id)).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
+        })).then(function (results) {
+            if (seq !== requestSeq) return;
+            chartEl.classList.remove('opacity-50');
+            renderSceneView(view, results.filter(Boolean));
+        });
+        syncUrl();
+    }
+
+    function renderSceneView(view, heats) {
+        var motion = state.source === 'motion';
+        peakEl.textContent = (motion ? 'Where motion happened' : 'Where objects moved') + ' · ' + view.name;
+        var hours = state.fromHour !== state.toHour
+            ? ', ' + sceneFrom.options[state.fromHour].text + ' to ' + sceneTo.options[state.toHour].text : '';
+        summaryEl.textContent = 'Over ' + sceneRangeNames[state.range] + hours + '. Each camera is on its own scale.';
+        window.larisvmsSceneHeatmap.reset();
+        chartEl.innerHTML = '<div class="scene-heatmap-grid">' + heats.map(function (h, i) {
+            var busiest = h.maxCount === 0 ? 'nothing recorded'
+                : motion ? 'busiest spot ' + h.maxCount.toLocaleString() + ' frames'
+                : 'busiest spot ' + h.maxCount.toLocaleString() + (h.maxCount === 1 ? ' object' : ' objects');
+            return '<div class="scene-heatmap-panel"><div class="small mb-1"><span class="fw-semibold">' + escapeHtml(h.cameraName) +
+                '</span> <span class="text-muted">· ' + busiest + '</span></div><div data-scene-panel="' + i + '"></div></div>';
+        }).join('') + '</div>';
+        window.larisvmsSceneHeatmap.layoutGrid(chartEl.querySelector('.scene-heatmap-grid'));
+        heats.forEach(function (h, i) {
+            var panel = chartEl.querySelector('[data-scene-panel="' + i + '"]');
+            if (h.maxCount === 0) {
+                panel.innerHTML = '<p class="text-muted small mb-0">' + (motion && !h.motionAvailable
+                    ? 'No grid motion detection on this camera.' : 'Nothing in this range.') + '</p>';
+            } else {
+                window.larisvmsSceneHeatmap.render(panel, h, backgroundUrl(h), { framed: true });
+            }
+        });
+        legendEl.innerHTML = window.larisvmsSceneHeatmap.legend('');
+        renderBackgroundControls(null);
     }
 
     // ── Shared helpers ──────────────────────────────────────────────────────
@@ -289,8 +396,127 @@
 
     var rangeNames = { '24h': 'the last 24 hours', '7d': 'the last 7 days', '30d': 'the last 30 days', '90d': 'the last 90 days', '1y': 'the last year' };
 
+    var sceneRangeNames = { '24h': 'the last 24 hours', '7d': 'the last 7 days', '30d': 'the last 30 days', '90d': 'the last 90 days', '1y': 'the last year' };
+
+    function renderScene(data) {
+        var motion = data.source === 'motion';
+        peakEl.textContent = motion ? 'Where motion happened' : 'Where objects moved';
+        var hours = state.fromHour !== state.toHour
+            ? ', ' + sceneFrom.options[state.fromHour].text + ' to ' + sceneTo.options[state.toHour].text : '';
+        summaryEl.textContent = 'Over ' + sceneRangeNames[data.range] + hours + '. ' + (data.maxCount === 0 ? '' : motion
+            ? 'The busiest spot had motion in ' + data.maxCount.toLocaleString() + ' analysed frames.'
+            : 'Up to ' + data.maxCount.toLocaleString() + (data.maxCount === 1 ? ' object' : ' objects') + ' passed through the busiest spot.');
+        if (data.maxCount === 0) {
+            chartEl.innerHTML = '<p class="text-muted mb-0">' + (motion
+                ? 'No grid motion recorded in this range. Motion heat needs server-side motion detection in Grid mode on this camera.'
+                : 'No moving objects recorded in this range. Paths are recorded from now on, as objects move through the picture.') + '</p>';
+            legendEl.innerHTML = '';
+        } else {
+            window.larisvmsSceneHeatmap.reset();
+            window.larisvmsSceneHeatmap.render(chartEl, data, backgroundUrl(data));
+            legendEl.innerHTML = window.larisvmsSceneHeatmap.legend(motion
+                ? data.maxCount.toLocaleString() + ' frames'
+                : data.maxCount.toLocaleString() + (data.maxCount === 1 ? ' object' : ' objects'));
+        }
+        var motionInput = document.getElementById('activitySceneMotion');
+        motionInput.disabled = !data.motionAvailable;
+        motionInput.parentElement.title = data.motionAvailable ? '' : 'Needs server-side motion detection in Grid mode on this camera.';
+        renderBackgroundControls(data);
+    }
+
+    // ── Scene background: the camera's picture, or one uploaded for it ──────
+    var backgroundEl = document.getElementById('activitySceneBackground');
+    var backgroundFile = document.getElementById('activitySceneBackgroundFile');
+
+    function renderBackgroundControls(data) {
+        if (!backgroundEl) return;
+        if (!data || !data.canChangeBackground) { backgroundEl.classList.add('d-none'); return; }
+        backgroundEl.classList.remove('d-none');
+        backgroundEl.querySelector('[data-bg-status]').textContent = data.hasCustomBackground ? 'Your picture' : 'Camera picture';
+        backgroundEl.querySelector('[data-bg-upload]').textContent = data.hasCustomBackground ? 'Replace…' : 'Use my own picture…';
+        backgroundEl.querySelector('[data-bg-remove]').classList.toggle('d-none', !data.hasCustomBackground);
+        backgroundEl.querySelector('[data-bg-error]').textContent = '';
+    }
+
+    function backgroundError(text) {
+        backgroundEl.querySelector('[data-bg-error]').textContent = text;
+    }
+
+    function problemText(r) {
+        return r.json().then(function (p) { return (p && (p.detail || p.title)) || 'Couldn\'t save the picture.'; },
+            function () { return 'Couldn\'t save the picture.'; });
+    }
+
+    if (backgroundEl) {
+        backgroundEl.addEventListener('click', function (e) {
+            if (e.target.closest('[data-bg-upload]')) { backgroundFile.value = ''; backgroundFile.click(); }
+            else if (e.target.closest('[data-bg-remove]') && last) {
+                fetch('/api/cameras/' + encodeURIComponent(last.cameraId) + '/scene-background', { method: 'DELETE' })
+                    .then(function (r) { if (r.ok) load(); else problemText(r).then(backgroundError); });
+            }
+        });
+        backgroundFile.addEventListener('change', function () {
+            var file = backgroundFile.files && backgroundFile.files[0];
+            if (!file || !last) return;
+            if (file.size > 10 * 1024 * 1024) { backgroundError('The picture must be under 10 MB.'); return; }
+            var cameraId = last.cameraId;
+            var reader = new FileReader();
+            reader.onload = function () {
+                var dataUrl = String(reader.result || '');
+                var img = new Image();
+                img.onload = function () {
+                    fetch('/api/cameras/' + encodeURIComponent(cameraId) + '/scene-background', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ imageBase64: dataUrl.substring(dataUrl.indexOf(',') + 1), width: img.naturalWidth, height: img.naturalHeight })
+                    }).then(function (r) { if (r.ok) load(); else problemText(r).then(backgroundError); });
+                };
+                img.onerror = function () { backgroundError('That file isn\'t a picture this browser can read.'); };
+                img.src = dataUrl;
+            };
+            reader.readAsDataURL(file);
+        });
+    }
+
+    // The parts of the page that follow the chosen kind, range and options.
+    function renderControls() {
+        eventCard.classList.toggle('d-none', speeds() || scene());
+        speedCard.classList.toggle('d-none', !speeds());
+        sceneCard.classList.toggle('d-none', !scene());
+        tableSwitch.classList.toggle('d-none', scene());
+        Array.prototype.forEach.call(kindGroup.querySelectorAll('[data-kind]'), function (b) {
+            var on = b.getAttribute('data-kind') === state.kind;
+            b.classList.toggle('active', on);
+            b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
+        Array.prototype.forEach.call(rangeGroup.querySelectorAll('[data-range]'), function (b) {
+            var on = b.getAttribute('data-range') === state.range;
+            b.classList.toggle('active', on);
+            b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
+        viewGroup.classList.toggle('d-none', !longRange() || scene());
+        // Views in the camera list only make sense for Scene.
+        Array.prototype.forEach.call(cameraSelect.querySelectorAll('[data-view-option]'), function (o) { o.hidden = !scene(); });
+        if (!scene() || sceneView()) renderBackgroundControls(null);
+        if (scene()) {
+            document.getElementById('activitySceneObjects').checked = state.source === 'objects';
+            document.getElementById('activitySceneMotion').checked = state.source === 'motion';
+            sceneCatsEl.classList.toggle('d-none', state.source !== 'objects');
+            Array.prototype.forEach.call(sceneCatsEl.querySelectorAll('[data-scene-cat]'), function (cb) {
+                cb.checked = state.cats.length === 0 || state.cats.indexOf(cb.getAttribute('data-scene-cat')) >= 0;
+            });
+            sceneFrom.value = state.fromHour;
+            sceneTo.value = state.toHour;
+        }
+    }
+
     function render() {
         var data = last;
+        renderControls();
+        if (scene()) {
+            renderScene(data);
+            return;
+        }
         peakEl.textContent = [data.busiestDay, data.peak].filter(Boolean).join(' ');
         var where = state.cameraId === 'all'
             ? 'Times in the server\'s time zone (' + data.timeZoneName + ').'
@@ -431,6 +657,23 @@
         load();
     });
 
+    sceneCard.addEventListener('change', function (e) {
+        var t = e.target;
+        if (t.name === 'activitySceneSource') {
+            state.source = t.value;
+            window.larisvmsPreferences.set(SCENE_SOURCE_PREF, state.source);
+        } else if (t.hasAttribute('data-scene-cat')) {
+            var boxes = Array.prototype.slice.call(sceneCatsEl.querySelectorAll('[data-scene-cat]'));
+            var ticked = boxes.filter(function (b) { return b.checked; }).map(function (b) { return b.getAttribute('data-scene-cat'); });
+            // All ticked means every kind, including any added later; none ticked shows nothing.
+            state.cats = ticked.length === boxes.length ? [] : ticked.length === 0 ? ['__none__'] : ticked;
+        } else if (t === sceneFrom || t === sceneTo) {
+            state.fromHour = +sceneFrom.value;
+            state.toHour = +sceneTo.value;
+        } else return;
+        load();
+    });
+
     kindGroup.addEventListener('click', function (e) {
         var b = e.target.closest('[data-kind]');
         if (!b || b.getAttribute('data-kind') === state.kind) return;
@@ -488,7 +731,11 @@
             catch (e) { state.selection = []; }
         }
         if (!state.view) state.view = window.larisvmsPreferences.get(VIEW_PREF, 'pattern') === 'calendar' ? 'calendar' : 'pattern';
-        if (!state.kind) state.kind = window.larisvmsPreferences.get(KIND_PREF, 'events') === 'speeds' ? 'speeds' : 'events';
+        if (!state.kind) {
+            var k = window.larisvmsPreferences.get(KIND_PREF, 'events');
+            state.kind = k === 'speeds' || k === 'scene' ? k : 'events';
+        }
+        if (!state.source) state.source = window.larisvmsPreferences.get(SCENE_SOURCE_PREF, 'objects') === 'motion' ? 'motion' : 'objects';
         if (!state.metric) {
             var m = window.larisvmsPreferences.get(METRIC_PREF, 'avg');
             state.metric = ['avg', 'max', 'over', 'count'].indexOf(m) >= 0 ? m : 'avg';

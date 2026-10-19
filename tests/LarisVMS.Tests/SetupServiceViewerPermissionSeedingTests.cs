@@ -71,7 +71,7 @@ public class SetupServiceViewerPermissionSeedingTests
 
         var granted = await permissionService.GetGrantedAsync(user);
 
-        Assert.True(granted.Has("Logs", "View"));
+        Assert.False(granted.Has("Logs", "View")); // the audit log isn't for guests
         Assert.True(granted.Has("Playback", "View"));
         Assert.False(granted.Has("Nodes", "Edit"));
     }

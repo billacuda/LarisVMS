@@ -5,7 +5,7 @@
 <html lang="en" data-bs-theme="light">
 <head>
     <meta charset="utf-8" />
-    <script>
+    <script nonce="@Csp.Value">
         // Back/forward must never land on ERR_CACHE_MISS / "Confirm form resubmission". A page
         // rendered as the response to a form POST (a settings page after Save, a form redisplayed
         // with an error) is a POST entry in the browser's history; replacing the entry with its own
@@ -24,7 +24,7 @@
     <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/theme.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
-    <script>
+    <script nonce="@Csp.Value">
         // Anti-flash: same mechanism as Pages/Shared/_Layout.cshtml — applies the stored theme (or
         // the system preference, when unset) before first paint, so Setup follows a preference set
         // once the rest of the app is reachable instead of always rendering light.
@@ -37,10 +37,11 @@
             }
         })();
     </script>
+    <script src="~/js/inline-actions.js" asp-append-version="true"></script>
 </head>
 <body class="bg-body-tertiary">
     <button class="lv-darktoggle position-absolute top-0 end-0 m-3" id="themeToggle" type="button"
-            onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme"><span id="themeIcon" aria-hidden="true">🌙</span></button>
+            data-action="toggle-theme" title="Toggle theme" aria-label="Toggle theme"><span id="themeIcon" aria-hidden="true">🌙</span></button>
     <div class="container" style="max-width: 640px; margin-top: 4rem;">
         <h1 class="mb-4 text-center">LarisVMS Setup</h1>
         <div class="card shadow-sm">

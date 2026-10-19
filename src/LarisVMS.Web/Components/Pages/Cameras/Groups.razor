@@ -2,8 +2,10 @@
 @attribute [Authorize("CameraGroups.Edit")]
 @using LarisVMS.Core.Entities
 @using LarisVMS.Core.Interfaces
+@using LarisVMS.Core.Enums
 @inject ICameraGroupService GroupService
 @inject ICameraService CameraService
+@inject ICameraAccessService CameraAccess
 @inject IAuditService AuditService
 @inject NavigationManager NavigationManager
 
@@ -11,7 +13,7 @@
 
 <h1>Camera groups</h1>
 <p class="text-muted small">
-    Organize cameras into sites, buildings and floors. A top-level group is a site; a camera's groups must share one site.
+    Organize cameras into sites, buildings, and floors. A top-level group is a site; a camera's groups must share one site.
     <a href="/Help/cameras#groups">Learn more</a>
 </p>
 
@@ -75,7 +77,7 @@
                 <EditForm Model="this" FormName="@($"delete-group-{g.Id}")" OnValidSubmit="HandleDeleteAsync" class="d-inline">
                     <input type="hidden" name="Id" value="@g.Id" />
                     <button type="submit" class="btn btn-sm btn-outline-danger"
-                            onclick="return confirm('Delete this group?');"><span aria-hidden="true">🗑️</span> Delete</button>
+                            data-confirm="Delete this group?"><span aria-hidden="true">🗑️</span> Delete</button>
                 </EditForm>
             }
         </div>
@@ -175,7 +177,7 @@
 </style>
 
 <SectionContent SectionName="PageScripts">
-    <script>
+    <script nonce="@Csp.Value">
         // The one shared modal above is reused for every group's "Manage cameras" button rather than
         // rendering N modals (one per group) with N full copies of the camera checkbox list — its
         // show.bs.modal listener reads which group was clicked from the triggering button's own data
@@ -312,11 +314,20 @@
 
         var errors = new List<string>();
         var changedCount = 0;
+        // Group membership decides group-scoped camera access, so moving a camera in or out of a
+        // group needs configuration access to that camera — otherwise an admin could pull someone
+        // else's camera into a group they can see.
+        var configurable = await CameraAccess.GetAccessibleCameraIdsAsync(user, CameraAccessActions.Configure);
 
         foreach (var cameraId in changedCameraIds)
         {
             var camera = Cameras.FirstOrDefault(c => c.Id == cameraId);
             if (camera is null) continue;
+            if (configurable is not null && !configurable.Contains(cameraId))
+            {
+                errors.Add($"{camera.Name}: you don't have configuration access to this camera.");
+                continue;
+            }
 
             var newGroupIds = camera.Groups.Select(g => g.Id).ToHashSet();
             var adding = targetMemberIds.Contains(cameraId);
@@ -357,6 +368,13 @@
         var currentUserId = user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
         var currentUserName = user.Identity?.Name;
         var remoteIp = HttpContext?.Connection.RemoteIpAddress?.ToString();
+
+        var configurable = await CameraAccess.GetAccessibleCameraIdsAsync(user, CameraAccessActions.Configure);
+        if (configurable is not null && !configurable.Contains(camera.Id))
+        {
+            NavigateBare($"You don't have configuration access to \"{camera.Name}\".", isError: true);
+            return;
+        }
 
         var newGroupIds = camera.Groups.Select(g => g.Id).Where(id => id != RemoveGroupId).ToList();
         await CameraService.SetCameraGroupsAsync(RemoveCameraId, newGroupIds);

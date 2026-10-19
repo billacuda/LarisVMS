@@ -36,6 +36,17 @@ public class ActivityRollupBackgroundService(IServiceScopeFactory scopeFactory, 
             {
                 logger.LogError(ex, "Speed rollup failed — will retry next hour.");
             }
+            try
+            {
+                using var scope = scopeFactory.CreateScope();
+                var started = System.Diagnostics.Stopwatch.StartNew();
+                await scope.ServiceProvider.GetRequiredService<SceneHeatRollupService>().RollupAsync(DateTime.UtcNow, stoppingToken);
+                logger.LogInformation("Scene heatmap rollup took {Seconds:0.0} s.", started.Elapsed.TotalSeconds);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogError(ex, "Scene heatmap rollup failed — will retry next hour.");
+            }
 
             var now = DateTime.UtcNow;
             var next = ActivityRollupService.FloorHour(now).AddHours(1) + PastTheHour;

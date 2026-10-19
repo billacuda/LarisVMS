@@ -16,4 +16,7 @@ public interface ISigningKeyService
     Task<bool> VerifyAsync(Guid keyId, string payload, string signature, CancellationToken ct = default);
 
     Task<List<PublicSigningKey>> ListPublicKeysAsync(CancellationToken ct = default);
+
+    /// <summary>The key that signs now (created on first use), PEM.</summary>
+    Task<string> GetActivePublicKeyPemAsync(CancellationToken ct = default);
 }

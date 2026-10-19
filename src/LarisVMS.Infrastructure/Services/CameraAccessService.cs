@@ -20,10 +20,21 @@ public class CameraAccessService(ApplicationDbContext db) : ICameraAccessService
         if (user.Identity?.IsAuthenticated != true) return []; // not authenticated — sees nothing, not everything
         var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
 
-        var roleNames = user.FindAll(ClaimTypes.Role).Select(c => c.Value).ToList();
-        var roleIds = roleNames.Count == 0
-            ? []
-            : await db.Roles.Where(r => roleNames.Contains(r.Name!)).Select(r => r.Id).ToListAsync(ct);
+        // A signed-in user's roles are read from the database, not the sign-in cookie's role claims,
+        // so a role change applies on the next request instead of whenever the cookie refreshes. An
+        // API-key principal has no user id; its role claim is the key's bound role.
+        List<string> roleIds;
+        if (userId is not null)
+        {
+            roleIds = await db.UserRoles.Where(ur => ur.UserId == userId).Select(ur => ur.RoleId).ToListAsync(ct);
+        }
+        else
+        {
+            var roleNames = user.FindAll(ClaimTypes.Role).Select(c => c.Value).ToList();
+            roleIds = roleNames.Count == 0
+                ? []
+                : await db.Roles.Where(r => roleNames.Contains(r.Name!)).Select(r => r.Id).ToListAsync(ct);
+        }
 
         // Super Admin is unrestricted, matching global RBAC's own short-circuit. Resolved by
         // RoleProfile.Tag rather than the role's (renamable) Name — see RoleSeedService.
@@ -37,7 +48,9 @@ public class CameraAccessService(ApplicationDbContext db) : ICameraAccessService
                 (a.PrincipalType == CameraAccessPrincipalType.Role && roleIds.Contains(a.PrincipalId)))
             .ToListAsync(ct);
 
-        if (rows.Count == 0) return null; // nothing configured for this principal — see GetAccessibleCameraIdsAsync's own doc comment
+        // Nothing granted means no cameras. (This used to mean every camera; existing installs got
+        // explicit grants preserving that, once — RoleSeedService.FailClosedUpgradeAsync.)
+        if (rows.Count == 0) return [];
 
         // Every Group-scoped row's own group Id -> that group's MaterializedPath, needed so Resolve
         // can cascade a group grant to its descendant groups (site/building/floor) — the whole reason

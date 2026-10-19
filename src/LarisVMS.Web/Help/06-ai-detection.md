@@ -18,6 +18,12 @@ One node package covers every machine. At startup, the vision service picks a ba
 
 The node's edit page shows the detected accelerators, and its **Accelerator** setting can force one. Models are never bundled. A node fetches the built-in YOLOX models from the server, and other models go in `C:\ProgramData\LarisVMS\models` on the node.
 
+## Slow backend
+
+If an NVIDIA node can't use CUDA, AI detection falls back to DirectML, which runs several times slower. Fewer frames get analysed, the GPU runs hot, and fast objects such as passing cars can go undetected. The **Nodes** page then shows **⚠️ AI on DirectML** next to the node, with the reason, and Super Admins get a notification.
+
+The usual cause is a missing cuDNN. Install the CUDA Toolkit 12.x and cuDNN 9.x for CUDA 12 on the node, from NVIDIA's cuDNN download or with `pip install nvidia-cudnn-cu12`. The node finds them within 10 minutes, copies them next to its AI backend, and restarts detection on CUDA.
+
 ## Model families
 
 The model runs once per node and serves all of that node's cameras, so the model settings are per node, not per camera.
@@ -67,9 +73,9 @@ Several objects of the same type in one snapshot show as a count (×2). Each one
 
 ## Object colors
 
-Each tracked object's color is read from its clearest frame: one color for vehicles, animals and other objects, and shirt and pants colors for people. Snapshots show a badge for each, painted in that color, and the **Color**, **Shirt** and **Pants** sections of the Snapshots filter narrow results to the colors you tick. Detection alerts can filter by color too.
+Each tracked object's color is read from its clearest frame: one color for vehicles, animals, and other objects, and shirt and pants colors for people. Snapshots show a badge for each, painted in that color, and the **Color**, **Shirt**, and **Pants** sections of the Snapshots filter narrow results to the colors you tick. Detection alerts can filter by color too.
 
-Colors come from the picture, not the model, so they work with any detector. The colors just outside the box are sampled as well and set aside, so the lawn around a dog or the road around a car doesn't win. They're still best-effort guesses: busy scenes, overlapping objects and lighting can all give the wrong color. Lighting matters most: shade, headlights and white balance shift colors, and a light gray car may read as silver or white. While a camera is in black-and-white night (IR) mode no colors are recorded. Turn it off with **Object colors** under **Settings → AI detection**.
+Colors come from the picture, not the model, so they work with any detector. The colors just outside the box are sampled as well and set aside, so the lawn around a dog or the road around a car doesn't win. They're still best-effort guesses: busy scenes, overlapping objects, and lighting can all give the wrong color. Lighting matters most: shade, headlights, and white balance shift colors, and a light gray car may read as silver or white. While a camera is in black-and-white night (IR) mode no colors are recorded. Turn it off with **Object colors** under **Settings → AI detection**.
 
 ## Speed traps
 
@@ -90,13 +96,40 @@ Measured speeds show up in several places:
 - **Live view**: on each object's box while it's in view.
 - **Snapshots**: a ⏱ badge on the card, and a **Speed** filter ("at or over") in the filter list.
 - **Playback**: a tick on the timeline at each measurement (red when over the limit; hover for details), and a badge over the video while the object is on screen.
-- **Dashboard**: the **Speed log** widget shows the latest measurements. Click its title for the full log, with sorting, filtering and CSV download.
-- **Activity**: switch to **Speeds** for a heatmap of average speed, top speed, number over the limit or number measured, by day and hour. History is kept as long as the activity history, long after the footage is gone.
+- **Dashboard**: the **Speed log** widget shows the latest measurements. Click its title for the full log, with sorting, filtering, and CSV download.
+- **Activity**: switch to **Speeds** for a heatmap of average speed, top speed, number over the limit, or number measured, by day and hour. History is kept as long as the activity history, long after the footage is gone.
 - **Alerts**: a "Speed over a limit" rule.
+
+## Movement
+
+Snapshots, alerts, and the live **Moving** boxes only count objects that are going somewhere. A detector's box wobbles a little from frame to frame even around a parked car, so a few pixels of change isn't enough. **Movement detection** under **Settings → AI detection**, or per camera on **Cameras → Edit**, decides how this is judged.
+
+**Standard** (the default) looks at the shape of each object's recent path:
+
+- Anything that moves steadily in one direction counts within a few frames (half a second or so at 7 fps), whether it's a car crossing the view in under a second or a truck pulling out of a driveway. Each object's steps are compared with how much its own box wobbles, so a large object doesn't have to travel further than a small one.
+- Something creeping more slowly than its box wobbles, a fraction of a walking pace, counts once its path has kept to a steady line for a couple of seconds. Wobble goes back and forth, so it never builds a line.
+- How far an object has to go grows with its size, but more slowly than the size itself. A large truck doesn't have to cross half its own length first.
+- An object coming in at the edge of the picture, or out from behind a pole or a tree, is judged by the side of its box that is in view.
+- An object driving straight toward or away from the camera counts as it grows or shrinks.
+- A parked car's box changing as someone walks in front of it doesn't count.
+
+**Movement sensitivity** (Standard only) is **Normal** by default. **High** picks up movement sooner and **Low** ignores more wobble. Lower it on a camera where a parked car or a swaying bush is reported as moving, and raise it where slow objects are missed.
+
+A box that just changes shape, like a potted plant's when the detector includes the leaves one moment and not the next, or a parked car's as something passes in front of it, doesn't count. Movement has to build up across the frames, not happen in one jump.
+
+**Legacy** is the earlier rule: an object counts once its centre has moved half its box's size within 2 seconds. Use it if Standard misbehaves on a camera.
+
+An object that was moving and goes out of sight behind a tree, a post, or a parked car stays the same object when it comes out further along the same line within about 30 analysed frames (around 5 seconds at 6 fps), so it's counted once and keeps one path. It also has to be the same kind of object and a similar size, and its color has to match when both can be told. Something that comes back out going a different way, or after longer, is a new object.
+
+## Moving objects
+
+Each moving object's path through the picture is kept with its event, for the **Scene** heatmap on the Activity page.
+
+**Moving objects** under **Settings → AI detection** chooses which kinds of object can count as moving. By default that's **People**, **Vehicles**, and **Animals**. Anything else is still detected, and shows as an idle box with **Idle** on, but never counts as moving, so it can't start a snapshot or an alert. Opt in to other objects one by one in the **Other objects** list: a delivered package usually shows up as a suitcase, backpack, or handbag. For a custom model, type its own object names, separated by commas.
 
 ## Jitter
 
-A distant parked vehicle's box can wobble from frame to frame and look like movement. **Stationary-object jitter rejection** smooths this out, and the **jitter threshold** is the minimum movement in pixels that counts. It can also hold a genuinely slow-moving object as idle, so it's off by default. Turn it on for the specific cameras that have a parked vehicle in view.
+The **jitter threshold** is the smallest movement in pixels that ever counts, whatever the object's size. In Legacy mode, **Stationary-object jitter rejection** smooths out a distant parked vehicle's wobble; it can also hold a genuinely slow-moving object as idle, so it's off by default. It doesn't apply to Standard, which handles wobble itself.
 
 ## External backend
 

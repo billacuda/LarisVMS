@@ -70,13 +70,13 @@ public class SetupService(
     }
 
     public async Task<bool> SetupDatabaseAsync(string serverName, string databaseName, string? username, string? password,
-        CancellationToken ct = default)
+        CancellationToken ct = default, bool trustServerCertificate = false)
     {
         if (string.IsNullOrWhiteSpace(serverName) || string.IsNullOrWhiteSpace(databaseName))
             throw new ArgumentException("Server name and database name are required.");
         ValidateSqlIdentifier(databaseName, nameof(databaseName));
 
-        var masterCs = BuildConnectionString(serverName, "master", username, password);
+        var masterCs = BuildConnectionString(serverName, "master", username, password, trustServerCertificate);
         bool existed;
 
         using (var connection = new SqlConnection(masterCs))
@@ -94,7 +94,7 @@ public class SetupService(
             }
         }
 
-        var appCs = BuildConnectionString(serverName, databaseName, username, password);
+        var appCs = BuildConnectionString(serverName, databaseName, username, password, trustServerCertificate);
         var migrateOptions = new DbContextOptionsBuilder<ApplicationDbContext>().UseSqlServer(appCs).Options;
         using var migrateCtx = new ApplicationDbContext(migrateOptions);
 
@@ -108,7 +108,7 @@ public class SetupService(
 
         await migrateCtx.Database.MigrateAsync(ct);
 
-        await GrantServiceAccountAsync(serverName, databaseName, username, password, ct);
+        await GrantServiceAccountAsync(serverName, databaseName, username, password, trustServerCertificate, ct);
         if (!adopted) return false;
 
         // Same test as IsSetupCompleteAsync, but against the database just connected — this request's
@@ -239,9 +239,9 @@ public class SetupService(
         var role = await roleManager.FindByNameAsync("Guest/Viewer");
         if (role is null) return;
 
-        // "Logs", not "AuditLog": Pages/Logs/AuditLogs is gated by [Authorize("Logs.View")].
+        // No Logs.View: the audit log isn't for guests.
         (string Resource, string Action)[] viewerPermissions =
-            [("Logs", "View"), ("Settings", "View"), ("Views", "View"), ("Views", "Edit"), ("Playback", "View")];
+            [("Settings", "View"), ("Views", "View"), ("Views", "Edit"), ("Playback", "View")];
 
         foreach (var (resource, action) in viewerPermissions)
         {
@@ -304,7 +304,7 @@ public class SetupService(
     }
 
     private async Task GrantServiceAccountAsync(string serverName, string databaseName, string? username, string? password,
-        CancellationToken ct)
+        bool trustServerCertificate, CancellationToken ct)
     {
         if (!OperatingSystem.IsWindows()) return;
 
@@ -317,7 +317,7 @@ public class SetupService(
 #pragma warning restore CA1416
             if (account is null || !SqlIdentifierPattern.IsMatch(account)) return;
 
-            var masterCs = BuildConnectionString(serverName, "master", username, password);
+            var masterCs = BuildConnectionString(serverName, "master", username, password, trustServerCertificate);
             using var conn = new SqlConnection(masterCs);
             await conn.OpenAsync(ct);
 
@@ -350,14 +350,17 @@ public class SetupService(
         }
     }
 
-    private static string BuildConnectionString(string server, string database, string? username, string? password)
+    private static string BuildConnectionString(string server, string database, string? username, string? password,
+        bool trustServerCertificate)
     {
         var b = new SqlConnectionStringBuilder
         {
             DataSource = server,
             InitialCatalog = database,
             Encrypt = true,
-            TrustServerCertificate = true
+            // The certificate is checked unless the admin said not to, or SQL Server is on this
+            // machine (nothing in between to intercept; SQL Express's own certificate is self-signed).
+            TrustServerCertificate = trustServerCertificate || IsThisMachine(server)
         };
 
         if (!string.IsNullOrWhiteSpace(username) && !string.IsNullOrWhiteSpace(password))
@@ -373,6 +376,15 @@ public class SetupService(
         return b.ConnectionString;
     }
 
+    internal static bool IsThisMachine(string server)
+    {
+        var host = server.Split('\\', ',')[0].Trim();
+        if (host.StartsWith("tcp:", StringComparison.OrdinalIgnoreCase)) host = host[4..];
+        return host is "." or "(local)" or "(localdb)" or "127.0.0.1" or "::1"
+            || host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+            || host.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase);
+    }
+
     private void MergeSetupJson(Action<JsonObject> update)
     {
         var path = Path.Combine(environment.ContentRootPath, "setup-generated.json");
@@ -383,6 +395,8 @@ public class SetupService(
 
         update(root);
         File.WriteAllText(path, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        // It can hold the SQL password; the program folder is readable by every local user.
+        LarisVMS.Core.Security.LocalDataAcl.ProtectFile(path);
     }
 
     // Database/login names are meant to be plain SQL identifiers, validated up front against an

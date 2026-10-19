@@ -10,6 +10,7 @@ using LarisVMS.Core.Interfaces;
 namespace LarisVMS.Web.Pages.Cameras;
 
 [Authorize("Cameras.Edit")]
+[LarisVMS.Web.Auth.RequireCameraConfigure]
 public class EditModel(ICameraService cameraService, INodeService nodeService,
     ISettingsResolver settings, IZoneService zoneService, IEventTagRuleService eventTagRuleService,
     IScheduleWindowService scheduleWindowService, IAuditService auditService, IFootageKeyService footageKeys) : PageModel
@@ -66,6 +67,10 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
     /// <summary>Detection.MotionJitterPixels for this camera (1-15), or null to inherit — same
     /// nullable-override shape as ConfidenceOverride.</summary>
     [BindProperty] public int? MotionJitterPixelsOverride { get; set; }
+    /// <summary>Detection.MovementMode / MovementSensitivity for this camera: "" = inherit, otherwise
+    /// "Standard"/"Legacy" and "Low"/"Normal"/"High".</summary>
+    [BindProperty] public string MovementModeOverride { get; set; } = "";
+    [BindProperty] public string MovementSensitivityOverride { get; set; } = "";
     /// <summary>Detection.MaxFps for this camera, or null to inherit the node/global ceiling — same
     /// nullable-override shape as ConfidenceOverride/MotionJitterPixelsOverride. A camera that only
     /// needs to catch a parked-vehicle alert has no use for the same frame rate a busy street camera
@@ -100,6 +105,8 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
     public string EffectiveAiDetectionOrientation { get; set; } = "Auto";
     public bool EffectiveRejectMotionJitter { get; set; }
     public int EffectiveMotionJitterPixels { get; set; } = 3;
+    public string EffectiveMovementMode { get; set; } = "Standard";
+    public string EffectiveMovementSensitivity { get; set; } = "Normal";
     public int EffectiveMaxFps { get; set; } = 7;
     /// <summary>Whether this camera has at least one enabled ServerMotion zone — Motion mode does
     /// nothing without one (NodeWorker falls back to recording everything, logging a warning) so
@@ -221,6 +228,13 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
         var ownJitterPixels = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "Detection.MotionJitterPixels");
         MotionJitterPixelsOverride = int.TryParse(ownJitterPixels, out var jitterPixels) ? jitterPixels : null;
         EffectiveMotionJitterPixels = await settings.GetAsync("Detection.MotionJitterPixels", 3, cameraId: cameraId, nodeId: nodeId);
+        var ownMode = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "Detection.MovementMode");
+        MovementModeOverride = ownMode is "Standard" or "Legacy" ? ownMode : "";
+        EffectiveMovementMode = await settings.GetAsync("Detection.MovementMode", "Standard", cameraId: cameraId, nodeId: nodeId) == "Legacy" ? "Legacy" : "Standard";
+        var ownSensitivity = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "Detection.MovementSensitivity");
+        MovementSensitivityOverride = ownSensitivity is "Low" or "Normal" or "High" ? ownSensitivity : "";
+        var sensitivity = await settings.GetAsync("Detection.MovementSensitivity", "Normal", cameraId: cameraId, nodeId: nodeId);
+        EffectiveMovementSensitivity = sensitivity is "Low" or "High" ? sensitivity : "Normal";
 
         var ownMaxFps = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "Detection.MaxFps");
         MaxFpsOverride = int.TryParse(ownMaxFps, out var maxFps) ? maxFps : null;
@@ -328,6 +342,10 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
             var clampedJitterPixelsOverride = MotionJitterPixelsOverride is { } jp ? Math.Clamp(jp, 1, 15) : (int?)null;
             await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Detection.MotionJitterPixels",
                 clampedJitterPixelsOverride?.ToString(), User.Identity?.Name);
+            await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Detection.MovementMode",
+                MovementModeOverride is "Standard" or "Legacy" ? MovementModeOverride : null, User.Identity?.Name);
+            await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Detection.MovementSensitivity",
+                MovementSensitivityOverride is "Low" or "Normal" or "High" ? MovementSensitivityOverride : null, User.Identity?.Name);
             // Same 0-60 clamp Admin/Settings/Detection applies to the global default; 0 = no cap.
             var clampedMaxFpsOverride = MaxFpsOverride is { } mf ? Math.Clamp(mf, 0, 60) : (int?)null;
             await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Detection.MaxFps",
@@ -414,7 +432,17 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
         if (Id is not null)
         {
             var camera = await cameraService.GetAsync(Id.Value);
-            await cameraService.DeleteAsync(Id.Value);
+            try
+            {
+                await cameraService.DeleteAsync(Id.Value);
+            }
+            catch (InvalidOperationException ex)
+            {
+                // Refused — e.g. footage under an evidence lock. Re-render the page with the reason.
+                await OnGetAsync(Id, null, null);
+                ErrorMessage = ex.Message;
+                return Page();
+            }
             await LogAsync("Camera.Delete", $"{camera?.Name ?? "?"} ({Id})");
         }
         return Redirect("/Cameras");

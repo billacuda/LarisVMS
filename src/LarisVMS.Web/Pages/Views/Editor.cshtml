@@ -115,7 +115,7 @@
     <script src="~/js/media-endpoint.js" asp-append-version="true"></script>
     <script src="~/js/live-view.js" asp-append-version="true"></script>
     <script src="~/js/view-editor.js" asp-append-version="true"></script>
-    <script>
+    <script nonce="@Csp.Value">
         window.larisvmsViewEditor.init({
             layoutJson: document.getElementById('layoutJsonInput').value,
             cameras: @Html.Raw(camerasJson),

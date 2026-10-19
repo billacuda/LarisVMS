@@ -27,7 +27,7 @@ public class OnvifSoapClient(HttpClient httpClient)
         var responseBody = await response.Content.ReadAsStringAsync(ct);
 
         XDocument doc;
-        try { doc = XDocument.Parse(responseBody); }
+        try { doc = SafeXml.Parse(responseBody); }
         catch (Exception ex)
         {
             response.EnsureSuccessStatusCode();

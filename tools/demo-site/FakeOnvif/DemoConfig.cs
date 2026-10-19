@@ -51,5 +51,7 @@ public sealed class CameraConfig
     public string DeviceServiceUrl => $"http://{Ip}/onvif/device_service";
     public string MediaServiceUrl => $"http://{Ip}/onvif/media_service";
     public string EventServiceUrl => $"http://{Ip}/onvif/event_service";
+    public string Media2ServiceUrl => $"http://{Ip}/onvif/media2_service";
+    public string ImagingServiceUrl => $"http://{Ip}/onvif/imaging_service";
     public string SnapshotUrl => $"http://{Ip}/snapshot.jpg";
 }

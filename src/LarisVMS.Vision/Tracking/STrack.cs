@@ -55,6 +55,18 @@ internal sealed class STrack
     public float[]? Mean { get; private set; }
     public float[,]? Covariance { get; private set; }
 
+    /// <summary>The last box a detection gave it. <see cref="Tlwh"/> follows the prediction while the
+    /// track is lost; this stays where the object was last seen.</summary>
+    public float[] LastSeenTlwh { get; } = new float[4];
+
+    /// <summary>Whether it was moving, with a direction to follow, when it was lost — only such a
+    /// track may rejoin an object that comes back into view further along (ByteTracker step 4c).</summary>
+    public bool MovingWhenLost { get; private set; }
+
+    /// <summary>Its speed (pixels per frame) when it was lost.</summary>
+    public float LostVx { get; private set; }
+    public float LostVy { get; private set; }
+
     /// <summary>Converts top-left/width/height to the filter's [cx, cy, aspect, height].</summary>
     public static void TlwhToXyah(ReadOnlySpan<float> tlwh, Span<float> xyah)
     {
@@ -121,6 +133,7 @@ internal sealed class STrack
 
         FrameId = frameId;
         StartFrame = frameId;
+        Array.Copy(_initialTlwh, LastSeenTlwh, 4);
 
         RefreshTlwh();
     }
@@ -138,6 +151,8 @@ internal sealed class STrack
         FrameId = frameId;
         Score = detection.Score;
         ClassId = detection.ClassId;
+        Array.Copy(detection.Tlwh, LastSeenTlwh, 4);
+        MovingWhenLost = false;
 
         if (newTrackId is { } id)
         {
@@ -161,11 +176,18 @@ internal sealed class STrack
         IsActivated = true;
         Score = detection.Score;
         ClassId = detection.ClassId;
+        Array.Copy(detection.Tlwh, LastSeenTlwh, 4);
 
         RefreshTlwh();
     }
 
-    public void MarkLost() => State = TrackState.Lost;
+    public void MarkLost(bool moving = false)
+    {
+        State = TrackState.Lost;
+        MovingWhenLost = moving && Mean is not null;
+        LostVx = Mean?[4] ?? 0f;
+        LostVy = Mean?[5] ?? 0f;
+    }
 
     public void MarkRemoved() => State = TrackState.Removed;
 

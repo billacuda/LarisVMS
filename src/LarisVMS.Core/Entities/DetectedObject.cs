@@ -59,4 +59,9 @@ public class DetectedObject
     public DateTime? SpeedMeasuredAtUtc { get; set; }
 
     public MotionSpan MotionSpan { get; set; } = null!;
+
+    /// <summary>Where the object went while it was moving: its box centre as compact text
+    /// (SceneHeat.FormatPath), at most a little over a hundred points. Feeds the scene heatmap's
+    /// hourly rollup; goes away with the rest of the event. Null from an older vision service.</summary>
+    public string? Path { get; set; }
 }

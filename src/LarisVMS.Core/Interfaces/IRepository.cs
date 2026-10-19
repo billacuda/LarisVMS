@@ -97,8 +97,10 @@ public interface ISetupService
     /// existing, already set-up LarisVMS database (upgraded in place, nothing seeded, setup marked
     /// complete) so the wizard can skip its remaining steps; throws for an existing database that
     /// isn't a LarisVMS one.</summary>
+    /// <param name="trustServerCertificate">Accept the SQL Server's certificate without checking it
+    /// (needed for a self-signed one). Always the case for a server on this machine.</param>
     Task<bool> SetupDatabaseAsync(string serverName, string databaseName, string? username, string? password,
-        CancellationToken ct = default);
+        CancellationToken ct = default, bool trustServerCertificate = false);
 
     Task CompleteSetupAsync(string adminEmail, string adminPassword, CancellationToken ct = default);
 
@@ -172,13 +174,9 @@ public interface IUserPreferenceService
 public interface ICameraAccessService
 {
     /// <summary>Every camera id this principal can exercise <paramref name="action"/> on, or
-    /// <c>null</c> meaning unrestricted (every camera). Null covers three cases deliberately treated
-    /// the same way: an Administrator (matches global RBAC's own implicit-everything rule), a
-    /// principal holding at least one <c>ScopeType.All</c> grant for this action, and — the case
-    /// that matters most for not silently breaking every existing deployment — a principal with
-    /// <i>zero</i> CameraAccess rows of their own. This table narrows access; it was never meant to
-    /// default-deny the moment it exists unpopulated, and until this pass nothing ever wrote a row
-    /// into it, so every current user of every current deployment has exactly zero rows today.</summary>
+    /// <c>null</c> meaning unrestricted (every camera): a Super Admin, or a principal holding a
+    /// <c>ScopeType.All</c> grant for this action. A principal with no CameraAccess rows gets an
+    /// empty set — no cameras.</summary>
     Task<HashSet<Guid>?> GetAccessibleCameraIdsAsync(ClaimsPrincipal user,
         CameraAccessActions action, CancellationToken ct = default);
 }

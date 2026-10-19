@@ -23,6 +23,37 @@ public sealed class ClientEndpointCspCache(IServiceScopeFactory scopeFactory)
     /// <summary>Current value — safe to read at any time; may be up to <see cref="Ttl"/> stale.</summary>
     public string Sources => _sources;
 
+    private volatile string _imageSources = TileSource(LarisVMS.Infrastructure.Services.MapService.DefaultTileUrl);
+
+    /// <summary>The map tile server, the only outside place pages load images from (img-src).</summary>
+    public string ImageSources => _imageSources;
+
+    private volatile bool _strictScripts;
+
+    /// <summary>Settings → Security: enforce the nonce-only script policy (otherwise report-only).</summary>
+    public bool StrictScripts => _strictScripts;
+
+    /// <summary>"https://{s}.tile.example.org/{z}/{x}/{y}.png" → "https://*.tile.example.org"; empty
+    /// when the URL isn't a plain http(s) one.</summary>
+    private static readonly System.Text.RegularExpressions.Regex Placeholder = new(@"\{[^}]*\}",
+        System.Text.RegularExpressions.RegexOptions.None, TimeSpan.FromMilliseconds(100));
+    private static readonly System.Text.RegularExpressions.Regex TileHost = new(@"^(\*\.)?[A-Za-z0-9.-]+$",
+        System.Text.RegularExpressions.RegexOptions.None, TimeSpan.FromMilliseconds(100));
+
+    internal static string TileSource(string? tileUrl)
+    {
+        if (string.IsNullOrWhiteSpace(tileUrl)) return "";
+        var withoutPlaceholders = Placeholder.Replace(tileUrl, "x");
+        if (!Uri.TryCreate(withoutPlaceholders, UriKind.Absolute, out var uri) || (uri.Scheme != "https" && uri.Scheme != "http")) return "";
+        var hostPart = tileUrl[(tileUrl.IndexOf("://", StringComparison.Ordinal) + 3)..].Split('/')[0];
+        var host = Placeholder.Replace(hostPart.Split(':')[0], "*");
+        if (!TileHost.IsMatch(host)) return "";
+        return uri.IsDefaultPort ? $"{uri.Scheme}://{host}" : $"{uri.Scheme}://{host}:{uri.Port}";
+    }
+
+    /// <summary>Re-read on the next request instead of waiting out <see cref="Ttl"/> (a settings save).</summary>
+    public void Invalidate() => _refreshedUtc = DateTime.MinValue;
+
     public async Task EnsureFreshAsync(CancellationToken ct = default)
     {
         if (DateTime.UtcNow - _refreshedUtc < Ttl) return;
@@ -42,13 +73,30 @@ public sealed class ClientEndpointCspCache(IServiceScopeFactory scopeFactory)
 
             // Failover plan phase 2: a browser routed through a proxy connects to the proxy's origin.
             var proxyEndpoints = await db.MediaProxies.AsNoTracking()
-                .Where(p => p.Host != "" && (p.ReportedPort != null || p.Port > 0))
+                .Where(p => p.Enabled && p.Host != "" && (p.ReportedPort != null || p.Port > 0))
                 .Select(p => new { p.Host, Port = p.ReportedPort ?? p.Port })
                 .ToListAsync(ct);
 
-            _sources = string.Join(' ', nodeEndpoints.Concat(proxyEndpoints)
-                .Where(e => e.Port > 0)
-                .SelectMany(e => new[] { $"wss://{e.Host}:{e.Port}", $"https://{e.Host}:{e.Port}" })
+            // Only well-formed hostnames or addresses go into the header: a stored value with spaces
+            // or control characters could widen the policy or break every response.
+            // Firebase Cloud Messaging registers a browser with these, only while it's turned on.
+            var tileUrl = await db.Settings.AsNoTracking().Where(s => s.Key == LarisVMS.Infrastructure.Services.MapService.TileUrlKey)
+                .Select(s => s.Value).FirstOrDefaultAsync(ct);
+            _imageSources = TileSource(string.IsNullOrWhiteSpace(tileUrl) ? LarisVMS.Infrastructure.Services.MapService.DefaultTileUrl : tileUrl);
+
+            _strictScripts = await db.Settings.AsNoTracking()
+                .AnyAsync(s => s.Key == LarisVMS.Web.Security.CspNonce.StrictSettingKey && (s.Value == "True" || s.Value == "true"), ct);
+
+            var firebaseOn = await db.Settings.AsNoTracking()
+                .AnyAsync(s => s.Key == "Notifications.Fcm.Enabled" && (s.Value == "True" || s.Value == "true"), ct);
+            string[] firebaseSources = firebaseOn
+                ? ["https://fcmregistrations.googleapis.com", "https://firebaseinstallations.googleapis.com"]
+                : [];
+
+            _sources = string.Join(' ', firebaseSources.Concat(nodeEndpoints.Concat(proxyEndpoints)
+                .Where(e => e.Port is > 0 and <= 65535 && LarisVMS.Core.Security.HostNames.IsValid(e.Host))
+                .Select(e => new { Host = System.Net.IPAddress.TryParse(e.Host, out var ip) && ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6 ? $"[{e.Host}]" : e.Host, e.Port })
+                .SelectMany(e => new[] { $"wss://{e.Host}:{e.Port}", $"https://{e.Host}:{e.Port}" }))
                 .Distinct(StringComparer.OrdinalIgnoreCase));
             _refreshedUtc = DateTime.UtcNow;
         }

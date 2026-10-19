@@ -3,6 +3,8 @@
 @using LarisVMS.Core.Interfaces
 @inject IBookmarkService BookmarkService
 @inject IAuthorizationService AuthorizationService
+@inject ICameraAccessService CameraAccess
+@inject IPermissionService Permissions
 
 <PageTitle>Bookmarks - @AppName</PageTitle>
 
@@ -48,7 +50,7 @@ else
                     <tr>
                         <td data-sort-value="@b.CameraName">@b.CameraName</td>
                         <td data-sort-value="@b.TimestampUtc.Ticks">
-                            <span title="@b.TimestampUtc.ToString("u")">@b.TimestampUtc.ToLocalTime().ToString("g")</span>
+                            <time datetime="@b.TimestampUtc.ToUtcIso()" data-local="g">@b.TimestampUtc.ToLocalTime().ToString("g")</time>
                         </td>
                         <td>@b.Note</td>
                         <td class="text-muted small">@(b.CreatedByUserName ?? "—")</td>
@@ -62,7 +64,7 @@ else
                             <EditForm Model="this" FormName="@($"delete-bookmark-{b.Id}")" OnValidSubmit="HandleDeleteAsync" class="d-inline">
                                 <input type="hidden" name="Id" value="@b.Id" />
                                 <button type="submit" class="btn btn-sm btn-outline-danger"
-                                        onclick="return confirm('Delete this bookmark?');">🗑️ Delete</button>
+                                        data-confirm="Delete this bookmark?">🗑️ Delete</button>
                             </EditForm>
                         </td>
                     </tr>
@@ -84,10 +86,17 @@ else
     // constant FormName, which a per-row unique name (see above) can't provide.
     private Guid Id { get; set; }
 
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    // Only bookmarks on cameras this person may play back.
+    private async Task LoadAsync()
     {
-        Bookmarks = await BookmarkService.ListAsync();
+        var playable = await CameraAccess.GetAccessibleCameraIdsAsync(CurrentUser(), LarisVMS.Core.Enums.CameraAccessActions.Playback);
+        Bookmarks = (await BookmarkService.ListAsync()).Where(b => playable is null || playable.Contains(b.CameraId)).ToList();
     }
+
+    private System.Security.Claims.ClaimsPrincipal CurrentUser() =>
+        HttpContext?.User ?? new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity());
 
     private async Task HandleDeleteAsync()
     {
@@ -97,7 +106,15 @@ else
             : new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity());
         if (!(await AuthorizationService.AuthorizeAsync(user, "Bookmarks.Edit")).Succeeded) return;
 
-        await BookmarkService.DeleteAsync(Id);
-        Bookmarks = await BookmarkService.ListAsync();
+        // Your own bookmarks (or anyone's, for a Super Admin), on a camera you may play back.
+        if (await BookmarkService.GetOwnerAsync(Id) is { } owner)
+        {
+            var playable = await CameraAccess.GetAccessibleCameraIdsAsync(user, LarisVMS.Core.Enums.CameraAccessActions.Playback);
+            var isOwner = owner.CreatedByUserId == user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            var isAdmin = (await Permissions.GetGrantedAsync(user)).IsAdministrator;
+            if ((isOwner || isAdmin) && (playable is null || playable.Contains(owner.CameraId)))
+                await BookmarkService.DeleteAsync(Id);
+        }
+        await LoadAsync();
     }
 }

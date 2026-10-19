@@ -1,4 +1,5 @@
 @page "/Admin/Settings"
+@attribute [Authorize]
 @using System.Security.Claims
 @using LarisVMS.Core.Interfaces
 @inject IPermissionService PermissionService
@@ -63,6 +64,7 @@ else
             ("/Admin/Settings/Email", "✉️", "Email", "SMTP relay and notification templates.", showSettings),
             ("/Admin/Settings/Events", "🏷️", "Events", "Event-tag colors and rule defaults.", showSettings),
             ("/Admin/Settings/LiveView", "🖥️", "Live view", "Default grid layout, overlays, and stream quality.", showSettings),
+            ("/Admin/Settings/Notifications", "🔔", "Notifications", "Which notification types users get, and browser and email delivery.", showSettings),
             ("/Admin/Settings/Logs", "📝", "Logging", "Retention, verbosity, and remote log forwarding.", showSettings),
             ("/Admin/Settings/Recording", "🎥", "Recording defaults", "Codec, bitrate, and continuous vs. motion recording.", showSettings),
             ("/Admin/Settings/ActiveDirectory", "🏢", "Active Directory", "Domain sign-in and AD group to role sync.", showSettings),

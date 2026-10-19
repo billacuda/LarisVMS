@@ -12,7 +12,7 @@ A role is a named set of permissions, managed under **Settings → Roles**. Each
 
 - a **scope tier**;
 - an **expiry** for time-limited access (for example, 480 minutes for an 8-hour shift);
-- a **session lifetime** (0 never expires);
+- a **session lifetime**: hours after signing in before the user has to sign in again, however active they are (0 never expires);
 - a **PTZ priority**, which decides who wins when two users move the same camera.
 
 ## Permissions
@@ -21,11 +21,11 @@ A role is a named set of permissions, managed under **Settings → Roles**. Each
 
 ## Camera access
 
-By default a role can use every camera its permissions allow. **Settings → Camera access** narrows a role down to specific cameras or groups, separately for View, Playback, Export, PTZ, and Talk (two-way audio). A role with **no grants is unrestricted**, so adding the first grant is what limits it. Configure can be granted but isn't enforced yet.
+**Settings → Camera access** decides which cameras each role can use: every camera, a group, or single cameras, separately for View, Playback, Export, PTZ, Talk (two-way audio), and Configure. A role with **no grants has no cameras**; Super Admin always has every camera. Export never reaches further than Playback. Upgrading from a version where roles without grants could use every camera adds an "all cameras" grant to keep each role and user's access the same.
 
 ## Entra
 
-**Settings → Security → Entra ID sign-in** adds a “Sign in with Microsoft” button for existing accounts whose email matches. It never creates accounts. Register an app in Entra with the redirect URI shown on that page, then enter its tenant ID, client ID, and secret. Changes take effect immediately.
+**Settings → Security → Entra ID sign-in** adds a “Sign in with Microsoft” button. It never creates accounts, and it doesn't match accounts by email: on **Settings → Users**, use **Microsoft sign-in** on a person's row to enter their Entra **object ID** (from their user page in the Microsoft Entra admin center). Their first Microsoft sign-in completes the link; blank removes it. Register an app in Entra with the redirect URI shown on the Security page, then enter its tenant ID (your directory's GUID or domain, not `common`), client ID, and secret. Changes take effect immediately. Accounts already linked keep working.
 
 ## Active Directory
 

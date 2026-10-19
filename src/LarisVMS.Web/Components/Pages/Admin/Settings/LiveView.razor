@@ -30,6 +30,12 @@
                 <label class="form-check-label" for="adaptiveStreamingEnabled">Enabled</label>
             </div>
         </SettingField>
+        <SettingField Label="Path linger (seconds)" For="pathLingerRange" Hint="How long an object's travel path stays after it stops or leaves, before it fades." HelpLink="/Help/live-and-playback#live-tiles">
+            <div class="d-flex align-items-center gap-2">
+                <input type="range" name="PathLingerSeconds" value="@PathLingerSeconds" min="0" max="@LarisVMS.Web.Pages.Views.PathLinger.Max" step="1" class="form-range" id="pathLingerRange" />
+                <output class="text-muted small" style="min-width: 2.5em;" id="pathLingerReadout">@PathLingerSeconds</output>
+            </div>
+        </SettingField>
     </SettingSection>
     <SettingSection Title="Direct-to-node streaming" Subtitle="Nodes can override the mode on their own page.">
         <SettingField Label="Mode" Hint="Direct sends video from the node straight to the browser." HelpLink="/Help/nodes#direct-streaming">
@@ -59,6 +65,20 @@
 </EditForm>
 </div>
 
+<SectionContent SectionName="PageScripts">
+    <script nonce="@Csp.Value">
+        // Path linger slider readout.
+        (function () {
+            var range = document.getElementById('pathLingerRange');
+            var readout = document.getElementById('pathLingerReadout');
+            if (!range || !readout) return;
+            function sync() { readout.textContent = range.value; }
+            range.addEventListener('input', sync);
+            sync();
+        })();
+    </script>
+</SectionContent>
+
 @code {
     [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
     [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
@@ -69,6 +89,7 @@
     [SupplyParameterFromForm(FormName = "liveview-settings")] private bool AllowInsecureClientEndpoint { get; set; }
     [SupplyParameterFromForm(FormName = "liveview-settings")] private string? PublicOrigin { get; set; }
     [SupplyParameterFromForm(FormName = "liveview-settings")] private int? CustomPort { get; set; }
+    [SupplyParameterFromForm(FormName = "liveview-settings")] private int PathLingerSeconds { get; set; }
 
     private string? SavedMessage;
     private string? ErrorMessage;
@@ -83,6 +104,8 @@
         DirectStreaming = await Settings.GetAsync("LiveView.DirectStreaming", "Proxy");
         AllowInsecureClientEndpoint = await Settings.GetAsync("LiveView.AllowInsecureClientEndpoint", false);
         PublicOrigin = await Settings.GetAsync<string?>("LiveView.PublicOrigin", null);
+        PathLingerSeconds = LarisVMS.Web.Pages.Views.PathLinger.Clamp(
+            await Settings.GetAsync(LarisVMS.Web.Pages.Views.PathLinger.SettingKey, LarisVMS.Web.Pages.Views.PathLinger.Default));
     }
 
     private async Task HandleSaveAsync()
@@ -109,19 +132,23 @@
         var oldDirect = await Settings.GetAsync("LiveView.DirectStreaming", "Proxy");
         var oldInsecure = await Settings.GetAsync("LiveView.AllowInsecureClientEndpoint", false);
         var oldOrigin = await Settings.GetAsync<string?>("LiveView.PublicOrigin", null);
+        var oldLinger = await Settings.GetAsync(LarisVMS.Web.Pages.Views.PathLinger.SettingKey, LarisVMS.Web.Pages.Views.PathLinger.Default);
+        PathLingerSeconds = LarisVMS.Web.Pages.Views.PathLinger.Clamp(PathLingerSeconds);
 
         await Settings.SetGlobalAsync("LiveView.AdaptiveStreamingEnabled", AdaptiveStreamingEnabled.ToString(), by);
         await Settings.SetGlobalAsync(PortSegmentationMiddleware.SettingKey, CustomPort?.ToString() ?? "", by);
         await Settings.SetGlobalAsync("LiveView.DirectStreaming", DirectStreaming, by);
         await Settings.SetGlobalAsync("LiveView.AllowInsecureClientEndpoint", AllowInsecureClientEndpoint.ToString(), by);
         await Settings.SetGlobalAsync("LiveView.PublicOrigin", PublicOrigin ?? "", by);
+        await Settings.SetGlobalAsync(LarisVMS.Web.Pages.Views.PathLinger.SettingKey, PathLingerSeconds.ToString(), by);
 
         var details = AuditDiff.Build(
             AuditDiff.Of("LiveView.AdaptiveStreamingEnabled", oldValue.ToString(), AdaptiveStreamingEnabled.ToString()),
             AuditDiff.Of("Live/playback custom port", oldPort?.ToString() ?? "(none)", CustomPort?.ToString() ?? "(none)"),
             AuditDiff.Of("Direct streaming", oldDirect, DirectStreaming),
             AuditDiff.Of("Allow insecure client endpoint", oldInsecure.ToString(), AllowInsecureClientEndpoint.ToString()),
-            AuditDiff.Of("Public origin", oldOrigin ?? "(none)", PublicOrigin ?? "(none)"));
+            AuditDiff.Of("Public origin", oldOrigin ?? "(none)", PublicOrigin ?? "(none)"),
+            AuditDiff.Of("Path linger (seconds)", oldLinger.ToString(), PathLingerSeconds.ToString()));
 
         await AuditService.LogAsync("Settings.Update",
             user.FindFirst(ClaimTypes.NameIdentifier)?.Value, by,

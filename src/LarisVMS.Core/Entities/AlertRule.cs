@@ -21,8 +21,9 @@ public class AlertRule
     /// SpeedOver — null watches every camera (one cooldown for the whole rule). Otherwise null.</summary>
     public Guid? CameraId { get; set; }
 
-    /// <summary>Required when ConditionType is NodeOffline, NodeStorageLow or NodeFailoverActivated,
-    /// otherwise null.</summary>
+    /// <summary>Required when ConditionType is NodeOffline, NodeStorageLow, or NodeFailoverActivated.
+    /// For detection, speed, and evidence-lock rules it is an optional scope: with no CameraId, a
+    /// NodeId limits the rule to that node's cameras (neither set = every camera).</summary>
     public Guid? NodeId { get; set; }
 
     /// <summary>Required when ConditionType is NodeStorageLow — fires when free space drops below
@@ -52,7 +53,7 @@ public class AlertRule
     /// <summary>Days the rule is active. None/null = every day.</summary>
     public DayOfWeekFlags? ScheduleDays { get; set; }
 
-    /// <summary>Active time-of-day window, in the web server's local time. Both null = all day.
+    /// <summary>Active time-of-day window, in <see cref="TimeZoneId"/> (the server's local time when that's null). Both null = all day.
     /// End before start crosses midnight (22:00-06:00), the same as ScheduleWindow.</summary>
     public TimeOnly? ScheduleStart { get; set; }
     public TimeOnly? ScheduleEnd { get; set; }
@@ -71,5 +72,22 @@ public class AlertRule
     public DateTime? LastModifiedAt { get; set; }
     public string? LastModifiedBy { get; set; }
 
+    // ── Notifications ──
+
+    /// <summary>Null for a shared rule an admin manages (Admin/Alerts). Set for a personal rule a user
+    /// made for themselves on My notifications — visible only to them (and to a Super Admin for
+    /// oversight), never listed for anyone else to subscribe to.</summary>
+    public string? OwnerUserId { get; set; }
+
+    /// <summary>Shared rules only: whether users may subscribe to it themselves on My notifications.
+    /// Admins can still add subscribers to a rule that doesn't allow it.</summary>
+    public bool AllowSubscribe { get; set; }
+
+    /// <summary>IANA or Windows time zone id the schedule (ScheduleDays/Start/End) is evaluated in —
+    /// the rule creator's own zone, sent by the browser when the rule is saved. Null keeps the old
+    /// behavior: the web server's local time.</summary>
+    public string? TimeZoneId { get; set; }
+
     public List<AlertDelivery> Deliveries { get; set; } = [];
+    public List<AlertSubscription> Subscriptions { get; set; } = [];
 }

@@ -35,6 +35,12 @@ public class BookmarkService(ApplicationDbContext db) : IBookmarkService
                 b.TimestampUtc, b.Note, b.CreatedByUserName, b.CreatedAt)
         ).ToListAsync(ct);
 
+    public async Task<(Guid CameraId, string CreatedByUserId)?> GetOwnerAsync(Guid id, CancellationToken ct = default) =>
+        await db.Bookmarks.AsNoTracking().Where(b => b.Id == id)
+            .Select(b => new { b.CameraId, b.CreatedByUserId }).FirstOrDefaultAsync(ct) is { } row
+            ? (row.CameraId, row.CreatedByUserId)
+            : null;
+
     public async Task DeleteAsync(Guid id, CancellationToken ct = default)
     {
         await db.Bookmarks.Where(b => b.Id == id).ExecuteDeleteAsync(ct);

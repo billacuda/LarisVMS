@@ -616,7 +616,7 @@ window.larisvmsZonesEditor = (function () {
             var shown = visibleZones();
             if (!shown.length) {
                 panel.innerHTML = view === 'Privacy'
-                    ? '<p class="text-muted small">No privacy masks yet — draw one to black out an area in recordings, live view, snapshots and exports.</p>'
+                    ? '<p class="text-muted small">No privacy masks yet — draw one to black out an area in recordings, live view, snapshots, and exports.</p>'
                     : '<p class="text-muted small">No zones yet — draw one to get started.</p>';
                 return;
             }

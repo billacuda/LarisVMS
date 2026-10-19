@@ -11,13 +11,34 @@ using LarisVMS.Relay;
 // ── First-run registration ──────────────────────────────────────────────────
 // If proxy.config doesn't exist yet, this run must be given --server-url and --registration-key
 // (what install-proxy.ps1 passes) to register once; the assigned ProxyId/secret are then persisted.
+
+// proxy.config, certificates, logs, and update staging live under %ProgramData%\LarisVMS: SYSTEM,
+// Administrators, and this service only.
+_ = Task.Run(() =>
+{
+    if (LarisVMS.Core.Security.LocalDataAcl.SecureRoot() is { } aclError)
+        Console.Error.WriteLine($"Could not restrict access to {LarisVMS.Core.Security.LocalDataAcl.Root}: {aclError}");
+});
+
+// How this proxy checks the server's certificate: trust on first use by default, then whatever the
+// server's Settings → Nodes says (--insecure-tls no longer turns checking off); --reset-server-pin
+// forgets the pinned certificate so the next one is trusted.
+var trust = ProxyConfigStore.CreateTrust(ProxyConfigStore.Load());
+if (HasFlag(args, "--reset-server-pin"))
+{
+    trust.ResetPin();
+    Console.WriteLine("The pinned server certificate was cleared; the next one this proxy sees is trusted.");
+    return;
+}
+
 var config = ProxyConfigStore.Load();
 var insecureTls = HasFlag(args, "--insecure-tls") || Environment.GetEnvironmentVariable("LARISVMS_INSECURE_TLS") == "1";
 
 if (config is null)
 {
     var serverUrl = GetArg(args, "--server-url") ?? Environment.GetEnvironmentVariable("LARISVMS_SERVER_URL");
-    var registrationKey = GetArg(args, "--registration-key") ?? Environment.GetEnvironmentVariable("LARISVMS_REGISTRATION_KEY");
+    var registrationKey = GetArg(args, "--registration-key") ?? Environment.GetEnvironmentVariable("LARISVMS_REGISTRATION_KEY")
+        ?? LarisVMS.Core.Security.RegistrationKeyFile.Read(); // left by the installer
     if (serverUrl is null || registrationKey is null)
     {
         Console.Error.WriteLine("Not yet registered. Run with --server-url <url> --registration-key <key> " +
@@ -26,16 +47,18 @@ if (config is null)
         return;
     }
 
-    var registerClient = new ProxyApiClient(serverUrl, insecureTls);
+    var registerClient = new ProxyApiClient(serverUrl, trust);
     var response = await registerClient.RegisterAsync(
         new ProxyRegisterRequest(registrationKey, Environment.MachineName, ProxyVersion.Current, "win-x64"),
         CancellationToken.None);
-    config = new ProxyConfig(serverUrl, response.ProxyId, response.Secret);
+    config = new ProxyConfig(serverUrl, response.ProxyId, response.Secret, UpdateSigningKeyPem: response.UpdateSigningKeyPem);
     ProxyConfigStore.Save(config);
     Console.WriteLine($"Registered as proxy {response.ProxyId}.");
 }
+// Registered: the one-time key isn't needed any more.
+LarisVMS.Core.Security.RegistrationKeyFile.Delete();
 
-var apiClient = new ProxyApiClient(config.ServerUrl, insecureTls);
+var apiClient = new ProxyApiClient(config.ServerUrl, trust);
 apiClient.SetCredentials(config.ProxyId, config.Secret);
 
 var builder = WebApplication.CreateBuilder(args);

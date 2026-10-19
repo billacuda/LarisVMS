@@ -45,6 +45,8 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<ActiveDirectorySettings> ActiveDirectorySettings => Set<ActiveDirectorySettings>();
     public DbSet<AdGroupRoleLink> AdGroupRoleLinks => Set<AdGroupRoleLink>();
     public DbSet<AlertRule> AlertRules => Set<AlertRule>();
+    public DbSet<AlertSubscription> AlertSubscriptions => Set<AlertSubscription>();
+    public DbSet<PushSubscription> PushSubscriptions => Set<PushSubscription>();
     public DbSet<AlertDelivery> AlertDeliveries => Set<AlertDelivery>();
     public DbSet<ApiKey> ApiKeys => Set<ApiKey>();
 
@@ -77,6 +79,8 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<DetectedObject> DetectedObjects => Set<DetectedObject>();
     public DbSet<SpeedTrap> SpeedTraps => Set<SpeedTrap>();
     public DbSet<SpeedHourlyStat> SpeedHourlyStats => Set<SpeedHourlyStat>();
+    public DbSet<SceneHeatHourly> SceneHeatHourlies => Set<SceneHeatHourly>();
+    public DbSet<CameraSceneImage> CameraSceneImages => Set<CameraSceneImage>();
 
     // ── Tamper evidence ──────────────────────────────────────────────────────
     public DbSet<SigningKey> SigningKeys => Set<SigningKey>();
@@ -100,6 +104,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
 
     // ── Bookmarks (M18) ──────────────────────────────────────────────────────
     public DbSet<Bookmark> Bookmarks => Set<Bookmark>();
+    public DbSet<EvidenceLock> EvidenceLocks => Set<EvidenceLock>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -253,6 +258,28 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.CategoryFilter).HasMaxLength(100);
             e.Property(x => x.LabelFilter).HasMaxLength(100);
             e.Property(x => x.ColorFilter).HasMaxLength(20);
+            e.Property(x => x.OwnerUserId).HasMaxLength(450);
+            e.Property(x => x.TimeZoneId).HasMaxLength(100);
+            e.HasIndex(x => x.OwnerUserId);
+        });
+        builder.Entity<AlertSubscription>(e =>
+        {
+            e.Property(x => x.UserId).HasMaxLength(450).IsRequired();
+            e.Property(x => x.CreatedBy).HasMaxLength(256);
+            e.HasOne(x => x.AlertRule).WithMany(r => r.Subscriptions)
+                .HasForeignKey(x => x.AlertRuleId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => new { x.AlertRuleId, x.UserId }).IsUnique();
+            e.HasIndex(x => x.UserId);
+        });
+        builder.Entity<PushSubscription>(e =>
+        {
+            e.Property(x => x.UserId).HasMaxLength(450).IsRequired();
+            e.Property(x => x.Endpoint).HasMaxLength(800).IsRequired(); // indexed: stays under SQL Server's 1700-byte key limit
+            e.Property(x => x.P256dh).HasMaxLength(200);
+            e.Property(x => x.Auth).HasMaxLength(100);
+            e.Property(x => x.DeviceLabel).HasMaxLength(200);
+            e.HasIndex(x => x.Endpoint).IsUnique();
+            e.HasIndex(x => x.UserId);
         });
         builder.Entity<AlertDelivery>(e =>
         {
@@ -268,6 +295,21 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.CreatedByUserId).HasMaxLength(450).IsRequired();
             e.Property(x => x.CreatedByUserName).HasMaxLength(256);
             e.HasIndex(x => new { x.CameraId, x.TimestampUtc });
+        });
+
+        // ── EvidenceLock ─────────────────────────────────────────────────────
+        // Restrict, not cascade: a camera with locked footage can't be deleted (CameraService.DeleteAsync
+        // refuses while any lock still protects), and released locks stay as history.
+        builder.Entity<EvidenceLock>(e =>
+        {
+            e.Property(x => x.Reason).HasMaxLength(500).IsRequired();
+            e.Property(x => x.CreatedByUserId).HasMaxLength(450).IsRequired();
+            e.Property(x => x.CreatedByUserName).HasMaxLength(256);
+            e.Property(x => x.RemovedByUserId).HasMaxLength(450);
+            e.Property(x => x.RemovedByUserName).HasMaxLength(256);
+            e.Property(x => x.RemovalReason).HasMaxLength(500);
+            e.HasOne(x => x.Camera).WithMany().HasForeignKey(x => x.CameraId).OnDelete(DeleteBehavior.Restrict);
+            e.HasIndex(x => new { x.CameraId, x.FromUtc, x.ToUtc });
         });
 
         // ── CameraGroup ──────────────────────────────────────────────────────
@@ -439,7 +481,15 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             // Archive-storage: the archive-expiry sweep and the per-node tier tallies both ask
             // "which of this camera's segments are on the archive tier" — this keeps that off the
             // clustered (CameraId, StartUtc) index without disturbing it.
-            e.HasIndex(x => new { x.CameraId, x.StorageTier });
+            // SizeBytes included so per-camera storage totals read only this index.
+            e.HasIndex(x => new { x.CameraId, x.StorageTier }).IncludeProperties(x => x.SizeBytes);
+            // "Which cameras does this node hold footage for" — asked by every node's config fetch
+            // (orphaned cameras) and expired-footage poll, which scanned the whole table without it.
+            e.HasIndex(x => new { x.NodeId, x.CameraId });
+            // Bytes written (primary) and archived per node over the last day — the storage
+            // days-remaining estimates.
+            e.HasIndex(x => new { x.StorageTier, x.StartUtc }).IncludeProperties(x => new { x.NodeId, x.SizeBytes });
+            e.HasIndex(x => new { x.StorageTier, x.ArchivedAt }).IncludeProperties(x => new { x.NodeId, x.SizeBytes });
             // Pass 2c: TimelineService.GetSnapshotsAsync's footage-overlap guard needs "does a
             // segment for this camera end after some threshold" — the clustered (CameraId, StartUtc)
             // index alone forces a large scan of a camera's whole segment history per row to answer
@@ -554,9 +604,15 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             // already exist" lookup can otherwise both insert, producing duplicate Snapshots cards.
             // Filtered to AI-detection rows only (DetectedObjectLabel is the discriminator) — every
             // other span source keys its identity differently and this triple isn't unique for them.
+            // The columns RecordMotionSpansAsync's coalescing lookup filters on are included, so it's
+            // answered inside this index; without them its plan flipped to seeking every span of the
+            // camera.
             e.HasIndex(x => new { x.CameraId, x.DetectedObjectLabel, x.StartUtc })
                 .IsUnique()
-                .HasFilter("[DetectedObjectLabel] IS NOT NULL");
+                .HasFilter("[DetectedObjectLabel] IS NOT NULL")
+                .IncludeProperties(x => new { x.EndUtc, x.ZoneId, x.EventTagRuleId, x.DetectionKind });
+            // Live's "which cameras have motion right now" polls: spans that ended in the last few seconds.
+            e.HasIndex(x => x.EndUtc).IncludeProperties(x => new { x.CameraId, x.DetectionKind });
         });
 
         // ── DetectedObject (per-object records inside an AI-detection span) ─────
@@ -622,6 +678,26 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.Label).HasMaxLength(100);
             e.HasIndex(x => new { x.CameraId, x.HourUtc }).IsClustered();
             e.HasIndex(x => x.HourUtc);
+        });
+
+        // ── SceneHeatHourly (scene heatmap history) ─────────────────────────────
+        // Read as "this camera, this source, this hour range"; one row per hour, source, label and
+        // (motion) node run.
+        builder.Entity<SceneHeatHourly>(e =>
+        {
+            e.HasKey(x => x.Id).IsClustered(false);
+            e.Property(x => x.Label).HasMaxLength(50).IsRequired();
+            e.HasIndex(x => new { x.CameraId, x.Source, x.HourUtc, x.Label, x.RunId }).IsUnique().IsClustered();
+            e.HasIndex(x => x.HourUtc);
+        });
+
+        // ── CameraSceneImage (uploaded scene heatmap background) ────────────────
+        builder.Entity<CameraSceneImage>(e =>
+        {
+            e.HasKey(x => x.CameraId);
+            e.Property(x => x.ContentType).HasMaxLength(100).IsRequired();
+            e.Property(x => x.UploadedBy).HasMaxLength(256);
+            e.HasOne<Camera>().WithOne().HasForeignKey<CameraSceneImage>(x => x.CameraId).OnDelete(DeleteBehavior.Cascade);
         });
 
         // ── SpeedTrap ───────────────────────────────────────────────────────────

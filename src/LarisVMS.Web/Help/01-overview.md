@@ -38,7 +38,7 @@ The dashboard is made of widgets. Each user picks their own, and the layout is s
 
 - **Customize** (top right; hidden when the window is too narrow for the full grid) unlocks the layout. Drag a widget by its title bar, resize it from the corner, or remove it with ×. **Add widget** lists everything you can add, and **Reset layout** goes back to the default. Click **Done** when you're finished.
 - Most widgets are top-10 lists of cameras or nodes, such as storage used, frame rate, bandwidth, oldest footage, offline cameras, time since last recording, and detections. Some have a time window (1h, 24h, 7d, 30d), and some can switch between highest and lowest first.
-- Click a widget's title to open its full report: every camera or node, 100 per page, with a filter box, a node filter, sortable columns and a CSV download.
+- Click a widget's title to open its full report: every camera or node, 100 per page, with a filter box, a node filter, sortable columns, and a CSV download.
 - **Camera activity** shows one camera's last 7 days as a heatmap by time of day; pick the camera in its title bar, and click the title for the full [Activity](/Help/live-and-playback#activity) page.
 - **Latest detections** shows the newest snapshots. Its ⚙ button chooses which detection types to include; plain motion (nothing identified) is off unless you tick it.
 - **Time since last recording** flags a camera set to Continuous recording that hasn't recorded for more than 5 minutes.

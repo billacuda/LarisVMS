@@ -22,6 +22,9 @@
     <Property Id="FFMPEGPATH" Secure="yes" />
     <Property Id="FFMPEGRESOLVED" Secure="yes" />
     <Property Id="LIVEPORT" Secure="yes" />
+    <!-- Optional: who may reach the live port (the LarisVMS server and any proxies), as IPs or CIDR
+         blocks separated by commas. Blank allows any address. -->
+    <Property Id="LIVEALLOWFROM" Secure="yes" />
     <Property Id="INSECURETLS" Secure="yes" />
     <Property Id="CLIENTPORT" Secure="yes" />
     <Property Id="CLIENTPFXPATH" Secure="yes" />
@@ -45,6 +48,7 @@
       <ComponentGroupRef Id="NodeFiles" />
       <ComponentRef Id="NodeService" />
       <ComponentRef Id="NodeFirewallLive" />
+      <ComponentRef Id="NodeFirewallLiveScoped" />
       <ComponentRef Id="NodeFirewallClient" />
       <ComponentRef Id="ModelsFolder" />
     </Feature>
@@ -73,9 +77,15 @@
       <ServiceControl Id="NodeServiceControl" Name="LarisVMSNode" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
     </Component>
 
-    <Component Id="NodeFirewallLive" Directory="INSTALLFOLDER" Guid="5E0B1C77-6E7B-4C3A-9B57-0D7D3F0D9A11">
+    <Component Id="NodeFirewallLive" Directory="INSTALLFOLDER" Guid="5E0B1C77-6E7B-4C3A-9B57-0D7D3F0D9A11" Condition="NOT LIVEALLOWFROM">
       <CreateFolder />
       <fw:FirewallException Id="FwNodeLive" Name="LarisVMS Node Live View" Port="[LIVEPORT]" Protocol="tcp" Scope="any" />
+    </Component>
+    <Component Id="NodeFirewallLiveScoped" Directory="INSTALLFOLDER" Guid="C4A7E2D9-5B13-4F86-9E0A-7D2B6C8F1A35" Condition="LIVEALLOWFROM">
+      <CreateFolder />
+      <fw:FirewallException Id="FwNodeLiveScoped" Name="LarisVMS Node Live View" Port="[LIVEPORT]" Protocol="tcp">
+        <fw:RemoteAddress Value="[LIVEALLOWFROM]" />
+      </fw:FirewallException>
     </Component>
     <Component Id="NodeFirewallClient" Directory="INSTALLFOLDER" Guid="9B7C3B14-2D54-4F7E-8B1E-6A1E5C3F7D22" Condition="CLIENTPORT">
       <CreateFolder />
@@ -100,9 +110,11 @@
       <Custom Action="RemoveLegacyInstall" Before="StopServices" Condition="LEGACYINSTALL AND NOT REMOVE~=&quot;ALL&quot;" />
       <Custom Action="StopNodeChildren" After="StopServices" />
       <Custom Action="SetFailureFlag" After="InstallServices" Condition="NOT REMOVE~=&quot;ALL&quot;" />
-      <Custom Action="RemoveCudaDeps" Before="RemoveFiles" Condition="REMOVE~=&quot;ALL&quot;" />
+      <!-- Real uninstalls only: an upgrade keeps the CUDA/cuDNN libraries copied next to the backend. -->
+      <Custom Action="RemoveCudaDeps" Before="RemoveFiles" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="CopyCudaDeps" After="InstallFiles" Condition="NOT REMOVE~=&quot;ALL&quot;" />
       <Custom Action="WriteEndpointConfig" After="CopyCudaDeps" Condition="CLIENTPORT AND NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="WriteRegistrationKey" After="InstallFiles" Condition="REGISTRATIONKEY AND NOT REMOVE~=&quot;ALL&quot;" />
       <Custom Action="SaveSettings" Before="InstallFinalize" Condition="NOT REMOVE~=&quot;ALL&quot;" />
       <Custom Action="ForgetSettings" Before="InstallFinalize" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
     </InstallExecuteSequence>

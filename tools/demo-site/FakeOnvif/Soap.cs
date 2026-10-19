@@ -16,6 +16,8 @@ public static class Soap
                     xmlns:tt="http://www.onvif.org/ver10/schema"
                     xmlns:tds="http://www.onvif.org/ver10/device/wsdl"
                     xmlns:trt="http://www.onvif.org/ver10/media/wsdl"
+                    xmlns:tr2="http://www.onvif.org/ver20/media/wsdl"
+                    xmlns:timg="http://www.onvif.org/ver20/imaging/wsdl"
                     xmlns:tev="http://www.onvif.org/ver10/events/wsdl"
                     xmlns:wsnt="http://docs.oasis-open.org/wsn/b-2"
                     xmlns:wsa="http://www.w3.org/2005/08/addressing"
@@ -68,6 +70,7 @@ public static class Soap
                 <tt:RTP_RTSP_TCP>true</tt:RTP_RTSP_TCP>
               </tt:StreamingCapabilities>
             </tt:Media>
+            <tt:Imaging><tt:XAddr>{c.ImagingServiceUrl}</tt:XAddr></tt:Imaging>
           </tds:Capabilities>
         </tds:GetCapabilitiesResponse>
         """;
@@ -76,6 +79,8 @@ public static class Soap
         <tds:GetServicesResponse>
         {Service("http://www.onvif.org/ver10/device/wsdl", c.DeviceServiceUrl)}
         {Service("http://www.onvif.org/ver10/media/wsdl", c.MediaServiceUrl)}
+        {(c.Codec == "H265" ? Service("http://www.onvif.org/ver20/media/wsdl", c.Media2ServiceUrl) : "")}
+        {Service("http://www.onvif.org/ver20/imaging/wsdl", c.ImagingServiceUrl)}
         {Service("http://www.onvif.org/ver10/events/wsdl", c.EventServiceUrl)}
         </tds:GetServicesResponse>
         """;
@@ -120,49 +125,32 @@ public static class Soap
     public const string MainToken = "Profile_1";
     public const string SubToken = "Profile_2";
 
-    public static string Profiles(CameraConfig c) => $"""
+    /// <summary>Encoder and audio values come from DeviceSettingsStore, so a change made through
+    /// Device settings shows up in the next probe.</summary>
+    public static string Profiles(CameraConfig c, CameraSettings s) => $"""
         <trt:GetProfilesResponse>
-        {Profile(MainToken, "MainStream", c.Codec, 1920, 1080, 25, c.Codec == "H265" ? 3072 : 4096, c.Audio)}
-        {Profile(SubToken, "SubStream", "H264", 640, 360, 15, 512, false)}
+        {Profile(MainToken, s.Encoders[MainToken], c.Audio ? s : null)}
+        {Profile(SubToken, s.Encoders[SubToken], null)}
         </trt:GetProfilesResponse>
         """;
 
-    private static string Profile(string token, string name, string codec, int width, int height, int fps, int kbps, bool audio) => $"""
+    private static string Profile(string token, EncoderSettings e, CameraSettings? audio) => $"""
           <trt:Profiles token="{token}" fixed="true">
-            <tt:Name>{name}</tt:Name>
+            <tt:Name>{e.Name}</tt:Name>
             <tt:VideoSourceConfiguration token="VideoSourceConfig_1">
               <tt:Name>VideoSourceConfig</tt:Name>
               <tt:UseCount>2</tt:UseCount>
               <tt:SourceToken>VideoSource_1</tt:SourceToken>
               <tt:Bounds x="0" y="0" width="1920" height="1080"/>
             </tt:VideoSourceConfiguration>
-            <tt:VideoEncoderConfiguration token="VideoEncoder_{token}">
-              <tt:Name>{name}</tt:Name>
-              <tt:UseCount>1</tt:UseCount>
-              <tt:Encoding>{codec}</tt:Encoding>
-              <tt:Resolution><tt:Width>{width}</tt:Width><tt:Height>{height}</tt:Height></tt:Resolution>
-              <tt:Quality>4</tt:Quality>
-              <tt:RateControl>
-                <tt:FrameRateLimit>{fps}</tt:FrameRateLimit>
-                <tt:EncodingInterval>1</tt:EncodingInterval>
-                <tt:BitrateLimit>{kbps}</tt:BitrateLimit>
-              </tt:RateControl>
-              <tt:SessionTimeout>PT60S</tt:SessionTimeout>
-            </tt:VideoEncoderConfiguration>
-        {(audio ? """
+        {DeviceSettingsSoap.Media1Config(e, "tt:VideoEncoderConfiguration")}
+        {(audio is not null ? $"""
             <tt:AudioSourceConfiguration token="AudioSourceConfig_1">
               <tt:Name>AudioSourceConfig</tt:Name>
               <tt:UseCount>1</tt:UseCount>
               <tt:SourceToken>AudioSource_1</tt:SourceToken>
             </tt:AudioSourceConfiguration>
-            <tt:AudioEncoderConfiguration token="AudioEncoder_1">
-              <tt:Name>AudioEncoder</tt:Name>
-              <tt:UseCount>1</tt:UseCount>
-              <tt:Encoding>AAC</tt:Encoding>
-              <tt:Bitrate>48</tt:Bitrate>
-              <tt:SampleRate>16</tt:SampleRate>
-              <tt:SessionTimeout>PT60S</tt:SessionTimeout>
-            </tt:AudioEncoderConfiguration>
+        {DeviceSettingsSoap.AudioConfig(audio, "tt:AudioEncoderConfiguration")}
         """ : "")}
           </trt:Profiles>
         """;

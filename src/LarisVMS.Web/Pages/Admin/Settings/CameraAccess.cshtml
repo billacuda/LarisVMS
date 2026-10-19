@@ -8,7 +8,7 @@
 <partial name="_SettingsTabs" model="@("CameraAccess")" />
 
 <p class="text-muted small">
-    Limit which cameras a role can use. A role with no grants sees every camera. <a href="/Help/users#camera-access">Learn more</a>
+    Choose which cameras each role can use. A role with no grants has no cameras; Super Admin always has every camera. <a href="/Help/users#camera-access">Learn more</a>
 </p>
 
 @if (!string.IsNullOrEmpty(Model.SavedMessage))
@@ -45,7 +45,7 @@
                                 Edit
                             </button>
                             <form method="post" asp-page-handler="Remove" asp-route-id="@g.Id" class="d-inline"
-                                  onclick="return confirm('Remove this grant?');">
+                                  data-confirm="Remove this grant?">
                                 <button type="submit" class="btn btn-sm btn-outline-danger">Remove</button>
                             </form>
                         </td>
@@ -98,7 +98,7 @@
                 }
                 @if (Model.Grants.Count == 0)
                 {
-                    <tr><td colspan="4" class="text-center text-muted py-3">No grants yet — every role sees every camera.</td></tr>
+                    <tr><td colspan="4" class="text-center text-muted py-3">No grants yet. Only Super Admins can use cameras until you add one.</td></tr>
                 }
             </tbody>
         </table>
@@ -165,7 +165,7 @@
 </div>
 
 @section Scripts {
-    <script>
+    <script nonce="@Csp.Value">
         // Wires every .camera-access-form on the page (the "Add a grant" form and each grant row's
         // own "Edit" form) identically, scoped by querySelector within each form rather than by id —
         // ids would collide across N edit rows, classes don't.
@@ -177,40 +177,30 @@
                 var scopeIdCamera = form.querySelector('.scope-id-camera');
                 if (!scopeType) return;
 
-                // Two separate <select> elements sharing one visible slot rather than one dynamically
-                // repopulated <select> — whichever one is visible is also the one actually named
-                // "ScopeId"/"scopeId" for model binding (scopeIdCamera has no name of its own; its
-                // value is copied onto the real scope-id field on submit), so there's never a stale
-                // option value from the other list left bound.
+                // Two separate <select> elements share one visible slot; whichever is showing carries
+                // the form's scope-id name ("ScopeId" on Add, "scopeId" on Edit) and the other is
+                // disabled, so exactly one value posts. (Copying a camera id into the group <select>
+                // didn't work: it has no such option, so the scope arrived empty.)
+                var idName = scopeIdGroup.getAttribute('name');
                 function update() {
-                    // Compared against the option values as Razor actually renders them — @@EnumValue
-                    // (no cast) prints the enum's *name* ("Group"), not its underlying int — a mismatch
-                    // here previously meant isGroup/isCamera were never true, so the group/camera picker
-                    // never appeared and its disabled <select> never submitted a value even if forced
-                    // visible, always failing server-side validation with "Choose a camera group."
+                    // Option values are the enum names as Razor renders them ("Group"), not ints.
                     var isGroup = scopeType.value === '@CameraAccessScopeType.Group';
                     var isCamera = scopeType.value === '@CameraAccessScopeType.Camera';
                     scopeIdField.style.display = (isGroup || isCamera) ? '' : 'none';
                     scopeIdGroup.style.display = isGroup ? '' : 'none';
                     scopeIdCamera.style.display = isCamera ? '' : 'none';
                     scopeIdGroup.disabled = !isGroup;
-                    // An edit form can load with Camera already selected (a grant being edited) —
-                    // the camera <select> has the right option pre-selected server-side, but it isn't
-                    // the one actually named for model binding, so its value needs copying across
-                    // here too, not just on its own later 'change' event.
-                    if (isCamera) scopeIdGroup.value = scopeIdCamera.value;
+                    scopeIdCamera.disabled = !isCamera;
+                    if (isCamera) {
+                        scopeIdGroup.removeAttribute('name');
+                        scopeIdCamera.setAttribute('name', idName);
+                    } else {
+                        scopeIdCamera.removeAttribute('name');
+                        scopeIdGroup.setAttribute('name', idName);
+                    }
                 }
                 scopeType.addEventListener('change', update);
                 update();
-
-                scopeIdCamera.addEventListener('change', function () {
-                    scopeIdGroup.value = scopeIdCamera.value;
-                });
-                // Camera selection posts through the same scope-id field as the group one — enabling
-                // the hidden group <select> and mirroring the chosen value into it (above) is simpler
-                // than a second server-side parameter, since Razor Pages model-binds the scope id from
-                // whichever <select name="ScopeId"/"scopeId"> value made it into the form regardless
-                // of which one was visible.
             });
         })();
     </script>

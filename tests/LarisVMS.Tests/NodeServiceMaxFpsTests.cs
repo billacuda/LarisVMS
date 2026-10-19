@@ -51,17 +51,17 @@ public class NodeServiceMaxFpsTests
     }
 
     [Fact]
-    public async Task DefaultsToTenWhenNothingIsConfigured()
+    public async Task DefaultsToSevenWhenNothingIsConfigured()
     {
         var (service, _, _, nodeId) = await SeedAsync();
 
         var config = await service.GetConfigAsync(nodeId);
 
-        Assert.Equal(10, Assert.Single(config.Cameras).MaxFps);
+        Assert.Equal(7, Assert.Single(config.Cameras).MaxFps);
         // The node-scoped field this replaced as the per-camera source of truth must still carry the
         // same resolved value, since NodeWorker's decodeFpsCap now reads camera.MaxFps but an older
         // node build still reads config.MaxDetectionFps.
-        Assert.Equal(10, config.MaxDetectionFps);
+        Assert.Equal(7, config.MaxDetectionFps);
     }
 
     [Fact]
@@ -81,7 +81,7 @@ public class NodeServiceMaxFpsTests
         // The node-scoped field is unaffected by a camera-only override — a node with several
         // cameras, only one of which is capped, must not have the cap leak onto its siblings via the
         // shared node-level field.
-        Assert.Equal(10, config.MaxDetectionFps);
+        Assert.Equal(7, config.MaxDetectionFps);
     }
 
     [Fact]

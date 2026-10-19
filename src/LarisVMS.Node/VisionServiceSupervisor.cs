@@ -1,3 +1,4 @@
+using LarisVMS.Core.Dtos;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
@@ -194,6 +195,40 @@ public sealed class VisionServiceSupervisor(string nodeInstallDirectory, string 
     /// <summary>Sets the log level a future child starts with, and — if one is running now — pushes
     /// it to that child's own <c>/log-level</c> endpoint (best effort; a failed push just means the
     /// child keeps its old level until the next restart).</summary>
+    private string? _lastBackendWarning;
+
+    /// <summary>What the running Vision Service says AI detection is actually on (its /backend
+    /// report), for the heartbeat. Null while it isn't running or hasn't answered. A backend that fell
+    /// back from the one asked for (e.g. DirectML because cuDNN is missing) is logged as a warning
+    /// once per distinct reason.</summary>
+    public async Task<NodeVisionBackendDto?> TryGetBackendAsync(CancellationToken ct)
+    {
+        if (!IsRunning) return null;
+        try
+        {
+            using var response = await _http.GetAsync("backend", ct);
+            if (!response.IsSuccessStatusCode) return null;
+            using var doc = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+            var root = doc.RootElement;
+            string Text(string name) => root.TryGetProperty(name, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() ?? "" : "";
+            var notes = root.TryGetProperty("notes", out var n) && n.ValueKind == System.Text.Json.JsonValueKind.Array
+                ? n.EnumerateArray().Select(x => x.GetString() ?? "").Where(x => x.Length > 0).ToList()
+                : [];
+            var needsAttention = root.TryGetProperty("needsAttention", out var a) && a.ValueKind == System.Text.Json.JsonValueKind.True;
+            var backend = new NodeVisionBackendDto(Text("requestedAccelerator"), Text("effectiveExecutionProvider"), needsAttention, notes);
+
+            var warning = needsAttention ? $"{backend.Provider}: {string.Join(" ", notes)}" : null;
+            if (warning is not null && warning != _lastBackendWarning)
+                logger.LogWarning("AI detection is running on {Provider} instead of {Requested}. {Notes}", backend.Provider, backend.Requested, string.Join(" ", notes));
+            _lastBackendWarning = warning;
+            return backend;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
+        {
+            return null;
+        }
+    }
+
     public void SetLogLevel(string level)
     {
         _logLevel = level;

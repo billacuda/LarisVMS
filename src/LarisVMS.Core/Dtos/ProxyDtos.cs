@@ -6,7 +6,7 @@ namespace LarisVMS.Core.Dtos;
 
 public record ProxyRegisterRequest(string RegistrationKey, string Hostname, string? Version, string? Platform);
 
-public record ProxyRegisterResponse(Guid ProxyId, string Secret);
+public record ProxyRegisterResponse(Guid ProxyId, string Secret, string? UpdateSigningKeyPem = null);
 
 /// <summary>SentAtUtc is the proxy's own <c>DateTime.UtcNow</c> when it built the request (clock-skew
 /// diagnostic, same as a node's). Nonce is the phase-5a rolling value echoed from the previous
@@ -29,7 +29,7 @@ public record ProxyHeartbeatRequest(string? Version, DateTime? SentAtUtc = null,
 /// path uses, just keyed to the proxy platform. Defaulted so an older proxy build deserializes
 /// cleanly and simply never self-updates.</summary>
 public record ProxyHeartbeatResponse(int IntervalSeconds, string? NextNonce = null,
-    ProxyUpdateInfoDto? UpdateAvailable = null);
+    ProxyUpdateInfoDto? UpdateAvailable = null, string? ServerCertificateCheck = null);
 
 /// <summary>Proxy auto-update: a genuinely newer <c>NodeBuildVersion</c> (Platform
 /// <c>proxy-win-x64</c>) exists for this proxy. <see cref="DownloadUrl"/> is an absolute URL back to
@@ -39,7 +39,8 @@ public record ProxyHeartbeatResponse(int IntervalSeconds, string? NextNonce = nu
 /// against before applying it; a mismatch aborts without touching the running binary. There is no
 /// Vision component here (that is recorder-node-only) — this is the plain shape of
 /// <c>NodeUpdateInfoDto</c> minus those fields.</summary>
-public record ProxyUpdateInfoDto(string Version, string DownloadUrl, string Sha256, long SizeBytes);
+public record ProxyUpdateInfoDto(string Version, string DownloadUrl, string Sha256, long SizeBytes,
+    string? Signature = null, string? SigningKeyPem = null);
 
 /// <summary>One recorder node this proxy may forward to — its plain-HTTP LAN address, plus every
 /// camera currently recording on that node (so the proxy maps an incoming <c>/live/{cameraId}</c> to

@@ -293,7 +293,32 @@ public class ObjectIntelligenceTests
     private sealed class CapturingSink : IDetectionEventSink
     {
         public List<DetectionEvent> Events { get; } = [];
+        public List<MotionEvent> Motions { get; } = [];
         public void Publish(DetectionEvent detection) => Events.Add(detection);
+        public void PublishMotion(MotionEvent motion) => Motions.Add(motion);
+    }
+
+    [Fact]
+    public async Task OnlyPlainMotionSpansArePublishedAsMotion()
+    {
+        var (db, cameraId, nodeId) = await SeedAsync();
+        var sink = new CapturingSink();
+        var service = new NodeService(db, new SettingsResolver(db), detectionEvents: sink);
+        var zoneId = Guid.NewGuid();
+
+        await service.RecordMotionSpansAsync(nodeId, [
+            new MotionSpanReportItem(cameraId, zoneId, Start, Start.AddSeconds(2), 0.5),                 // server motion
+            new MotionSpanReportItem(cameraId, null, Start, Start.AddSeconds(2), 0.5),                   // camera-pushed motion
+            new MotionSpanReportItem(cameraId, null, Start, Start.AddSeconds(2), 0.5, DetectionKind: DetectionKind.Human),
+            new MotionSpanReportItem(cameraId, null, Start, Start.AddSeconds(2), 0.9,
+                DetectedObjectCategory: "Vehicle", DetectedObjectLabel: "car"),
+        ]);
+
+        Assert.Equal(2, sink.Motions.Count);
+        Assert.Contains(sink.Motions, m => m.ZoneId == zoneId);
+        Assert.Contains(sink.Motions, m => m.ZoneId is null);
+        Assert.All(sink.Motions, m => Assert.Equal(cameraId, m.CameraId));
+        Assert.Single(sink.Events);
     }
 
     private static ApplicationDbContext NewDb() => new(new DbContextOptionsBuilder<ApplicationDbContext>()

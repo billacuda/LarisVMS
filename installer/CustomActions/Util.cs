@@ -165,5 +165,53 @@ namespace LarisVMS.Installer
 
         public static bool IsPort(string? value) =>
             int.TryParse(value, out var port) && port >= 1 && port <= 65535;
+
+        /// <summary>A Windows Firewall remote-address list: comma-separated IPs, CIDR blocks
+        /// (10.0.0.0/24), or LocalSubnet.</summary>
+        public static bool IsAddressList(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return false;
+            foreach (var raw in value!.Split(','))
+            {
+                var item = raw.Trim();
+                if (string.Equals(item, "LocalSubnet", StringComparison.OrdinalIgnoreCase)) continue;
+                var slash = item.IndexOf('/');
+                var address = slash < 0 ? item : item.Substring(0, slash);
+                if (!System.Net.IPAddress.TryParse(address, out var ip)) return false;
+                if (slash < 0) continue;
+                var max = ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6 ? 128 : 32;
+                if (!int.TryParse(item.Substring(slash + 1), out var prefix) || prefix < 0 || prefix > max) return false;
+            }
+            return true;
+        }
+
+        /// <summary>The 64-bit Program Files folder. Custom actions run in a 32-bit host, where
+        /// SpecialFolder.ProgramFiles is "Program Files (x86)" — so a search for the CUDA Toolkit or a
+        /// pip-installed cuDNN under it finds nothing.</summary>
+        public static string ProgramFiles64()
+        {
+            var native = Environment.GetEnvironmentVariable("ProgramW6432");
+            return string.IsNullOrEmpty(native) ? Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles) : native!;
+        }
+
+        /// <summary>The 64-bit System32, reached as Sysnative from a 32-bit process (which would
+        /// otherwise be redirected to SysWOW64).</summary>
+        public static string System64() =>
+            Environment.Is64BitOperatingSystem && !Environment.Is64BitProcess
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "Sysnative")
+                : Environment.SystemDirectory;
+
+        /// <summary>Files in the node's onnxruntime-backends\cuda folder that the MSI doesn't ship:
+        /// the CUDA/cuDNN runtime copied in from the machine's own install, and the CUDA provider the
+        /// node downloads from the server (~320 MB). Taking over or upgrading an install keeps these —
+        /// deleting them silently drops AI detection to DirectML.</summary>
+        public static bool IsMachineCudaFile(string fileName)
+        {
+            var name = Path.GetFileName(fileName);
+            if (string.Equals(name, "onnxruntime_providers_cuda.dll", StringComparison.OrdinalIgnoreCase)) return true;
+            if (!name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) return false;
+            return new[] { "cudnn", "cudart", "cublas", "cufft" }
+                .Any(prefix => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+        }
     }
 }

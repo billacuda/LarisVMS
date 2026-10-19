@@ -53,6 +53,24 @@ public sealed record ObjectColorResult(string? Primary, string? Upper, string? L
 /// </summary>
 public static class ObjectColorClassifier
 {
+    // Names one object can plausibly get in two different frames (light, shade, a partial view).
+    private static readonly HashSet<(string, string)> NearColors =
+    [
+        ("white", "silver"), ("white", "gray"), ("silver", "gray"), ("gray", "black"),
+        ("red", "orange"), ("red", "pink"), ("orange", "yellow"), ("orange", "brown"), ("blue", "purple"),
+    ];
+
+    /// <summary>Whether two color names could be the same object: either unknown, the same, or
+    /// close neighbours (white and silver, say).</summary>
+    public static bool CouldBeSameColor(string? a, string? b)
+    {
+        if (a is null || b is null) return true;
+        if (string.Equals(a, b, StringComparison.OrdinalIgnoreCase)) return true;
+        a = a.ToLowerInvariant();
+        b = b.ToLowerInvariant();
+        return NearColors.Contains((a, b)) || NearColors.Contains((b, a));
+    }
+
     /// <summary>Below this many pixels on either side the crop is too small to say anything.</summary>
     public const int MinRegionPixels = 6;
 

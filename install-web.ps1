@@ -107,11 +107,25 @@ function Get-SqlClientConnectionString([string]$ConnectionString) {
     # script has no extra assembly to load) rejects keywords Microsoft.Data.SqlClient writes into
     # setup-generated.json — comparing the whitespace-stripped key is what actually catches
     # "Trust Server Certificate" with the spaces SqlConnectionStringBuilder itself emits.
-    $forbiddenKeys = @('encrypt', 'trustservercertificate', 'multipleactiveresultsets', 'applicationintent')
-    return ($ConnectionString -split ';' | Where-Object {
-        $key = ($_ -split '=', 2)[0] -replace '\s', ''
-        $forbiddenKeys -notcontains $key.ToLowerInvariant()
-    }) -join ';'
+    # Encrypt and TrustServerCertificate are kept, written the way the old provider accepts them
+    # (Encrypt=Mandatory/Strict -> True), so this script's connection is encrypted the same as the
+    # app's; only the keywords it can't parse at all are dropped.
+    $dropped = @('multipleactiveresultsets', 'applicationintent')
+    $parts = foreach ($part in ($ConnectionString -split ';')) {
+        if ([string]::IsNullOrWhiteSpace($part)) { continue }
+        $kv = $part -split '=', 2
+        $key = ($kv[0] -replace '\s', '').ToLowerInvariant()
+        $value = if ($kv.Count -gt 1) { $kv[1].Trim() } else { '' }
+        if ($dropped -contains $key) { continue }
+        if ($key -eq 'encrypt') {
+            if ($value -match '^(true|yes|mandatory|strict)$') { 'Encrypt=True' } else { 'Encrypt=False' }
+        } elseif ($key -eq 'trustservercertificate') {
+            if ($value -match '^(true|yes)$') { 'TrustServerCertificate=True' } else { 'TrustServerCertificate=False' }
+        } else {
+            $part
+        }
+    }
+    return $parts -join ';'
 }
 
 #endregion
@@ -431,11 +445,15 @@ Write-Ok "Recovery configured (restart on 1st/2nd/3rd failure; reset after 1 day
 
 # ── firewall ──────────────────────────────────────────────────────────────────
 
-Write-Step "Configuring firewall for HTTPS (TCP $HttpsPort)"
+Write-Step "Configuring firewall for HTTPS (TCP and UDP $HttpsPort)"
 $firewallRuleName = "LarisVMS Web"
 Get-NetFirewallRule -DisplayName $firewallRuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
 New-NetFirewallRule -DisplayName $firewallRuleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort $HttpsPort | Out-Null
-Write-Ok "Allowed inbound TCP $HttpsPort"
+# HTTP/3 (QUIC) uses UDP on the same port number.
+$http3FirewallRuleName = "LarisVMS Web (HTTP/3)"
+Get-NetFirewallRule -DisplayName $http3FirewallRuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+New-NetFirewallRule -DisplayName $http3FirewallRuleName -Direction Inbound -Action Allow -Protocol UDP -LocalPort $HttpsPort | Out-Null
+Write-Ok "Allowed inbound TCP and UDP $HttpsPort"
 
 # Best-effort: if LiveView.CustomPort is already configured in an existing database (an upgrade),
 # also allow that port. A truly fresh box has no Settings table yet to read this from — the admin can
@@ -456,7 +474,10 @@ if (-not [string]::IsNullOrWhiteSpace($ConnectionString)) {
                     $mediaFirewallRuleName = "LarisVMS Web Media Port"
                     Get-NetFirewallRule -DisplayName $mediaFirewallRuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
                     New-NetFirewallRule -DisplayName $mediaFirewallRuleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort $mediaPort | Out-Null
-                    Write-Ok "Allowed inbound TCP $mediaPort (LiveView.CustomPort)"
+                    $mediaHttp3FirewallRuleName = "LarisVMS Web Media Port (HTTP/3)"
+                    Get-NetFirewallRule -DisplayName $mediaHttp3FirewallRuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+                    New-NetFirewallRule -DisplayName $mediaHttp3FirewallRuleName -Direction Inbound -Action Allow -Protocol UDP -LocalPort $mediaPort | Out-Null
+                    Write-Ok "Allowed inbound TCP and UDP $mediaPort (LiveView.CustomPort)"
                 }
             }
         } finally {

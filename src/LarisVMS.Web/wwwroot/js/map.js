@@ -129,7 +129,7 @@
         var st = STATUS[p.status] || STATUS.offline;
         return '<div class="lv-map-popup">' +
             '<div class="fw-semibold mb-1">' + escapeHtml(p.cameraName) + ' <span class="badge" style="background:' + st.color + '">' + st.label + '</span></div>' +
-            '<img src="/playback-thumbnail/' + p.cameraId + '/latest?t=' + Date.now() + '" alt="" class="rounded mb-2" onerror="this.style.display=\'none\'">' +
+            '<img src="/playback-thumbnail/' + p.cameraId + '/latest?t=' + Date.now() + '" alt="" class="rounded mb-2" data-on-error="hide">' +
             '<div class="d-flex gap-2"><a class="btn btn-sm btn-primary" href="/Views/Play?cameraId=' + p.cameraId + '">Live</a>' +
             '<a class="btn btn-sm btn-outline-secondary" href="/Playback?cameraId=' + p.cameraId + '">Playback</a></div></div>';
     }

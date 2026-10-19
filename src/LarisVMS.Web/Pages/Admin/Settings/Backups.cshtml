@@ -52,6 +52,11 @@
                     <input asp-for="BackupDirectory" class="form-control" placeholder="D:\Backups\LarisVMS" />
                     <div class="lv-hint">A folder the SQL Server service can write to, outside the install folder.</div>
                 </div>
+                <div class="col-sm-4">
+                    <label class="form-label" asp-for="EncryptionCertificate">Encryption certificate</label>
+                    <input asp-for="EncryptionCertificate" class="form-control" placeholder="(not encrypted)" />
+                    <div class="lv-hint">Optional. The name of a certificate created in SQL Server's master database; backups are then encrypted with it. Keep a backup of the certificate itself, or the backups can't be restored.</div>
+                </div>
                 <div class="col-sm-2">
                     <label class="form-label" asp-for="RetentionCount">Keep last</label>
                     <input asp-for="RetentionCount" type="number" min="1" class="form-control" />
@@ -91,7 +96,7 @@
                         _ => "text-bg-secondary"
                     };
                     <tr>
-                        <td class="small" title="@b.StartedAt.ToString("u")">@b.StartedAt.ToLocalTime().ToString("g")</td>
+                        <td class="small" ><time datetime="@b.StartedAt.ToUtcIso()" data-local="g">@b.StartedAt.ToLocalTime().ToString("g")</time></td>
                         <td><span class="badge @badgeClass">@b.Status</span></td>
                         <td class="small">@b.TriggeredBy</td>
                         <td class="small font-monospace">@b.FilePath</td>

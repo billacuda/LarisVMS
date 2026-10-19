@@ -53,6 +53,9 @@ public sealed class TrackLabelArbiter
         return state.WinningLabel;
     }
 
+    /// <summary>The track's current winning label, or null for a track it hasn't seen.</summary>
+    public string? LabelOf(int trackId) => _tracks.TryGetValue(trackId, out var state) ? state.WinningLabel : null;
+
     /// <summary>Drops state for every track not in <paramref name="activeTrackIds"/> — call once per
     /// frame with ByteTracker's own currently-active set, mirroring MovementClassifier.Prune.</summary>
     public void Prune(IReadOnlySet<int> activeTrackIds)

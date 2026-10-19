@@ -18,13 +18,10 @@ namespace LarisVMS.Web.Pages.Admin.Settings;
 /// CameraAccessPrincipalType.User, is schema-ready and enforced identically by
 /// CameraAccessService — it just has no admin surface here until that page exists).
 ///
-/// A role with zero rows here is unrestricted (sees every camera) — see
-/// ICameraAccessService.GetAccessibleCameraIdsAsync's own doc comment for why that default matters:
-/// every existing deployment's every existing role has zero rows today, so adding this page changes
-/// nothing until an admin deliberately adds a grant.
+/// A role with no rows here has no cameras (Super Admin always has every camera).
 /// </summary>
 [Authorize("Settings.Edit")]
-public class CameraAccessModel(ApplicationDbContext db, IAuditService auditService) : PageModel
+public class CameraAccessModel(ApplicationDbContext db, IAuditService auditService, IPermissionService permissions) : PageModel
 {
     public record GrantRow(Guid Id, string RoleId, string RoleName, CameraAccessScopeType ScopeType, Guid? ScopeId,
         string ScopeDescription, CameraAccessActions Actions, string ActionsDescription);
@@ -72,6 +69,11 @@ public class CameraAccessModel(ApplicationDbContext db, IAuditService auditServi
 
         var role = Roles.FirstOrDefault(r => r.Id == RoleId);
         if (role is null) { ErrorMessage = "Choose a role."; return Page(); }
+        if (!(await LarisVMS.Web.Services.AdminScope.ForAsync(db, permissions, User, ct)).CanEditRole(role.Id))
+        {
+            ErrorMessage = LarisVMS.Web.Services.AdminScope.OwnRoleMessage;
+            return Page();
+        }
 
         if (ScopeType != CameraAccessScopeType.All && ScopeId is null)
         {
@@ -127,6 +129,11 @@ public class CameraAccessModel(ApplicationDbContext db, IAuditService auditServi
 
         var row = await db.CameraAccesses.FirstOrDefaultAsync(a => a.Id == id, ct);
         if (row is null) { ErrorMessage = "That grant no longer exists."; return Page(); }
+        if (!(await LarisVMS.Web.Services.AdminScope.ForAsync(db, permissions, User, ct)).CanEditRole(row.PrincipalId))
+        {
+            ErrorMessage = LarisVMS.Web.Services.AdminScope.OwnRoleMessage;
+            return Page();
+        }
 
         var role = Roles.FirstOrDefault(r => r.Id == row.PrincipalId);
         var roleName = role?.Name ?? row.PrincipalId;
@@ -176,6 +183,12 @@ public class CameraAccessModel(ApplicationDbContext db, IAuditService auditServi
     public async Task<IActionResult> OnPostRemoveAsync(Guid id, CancellationToken ct)
     {
         var row = await db.CameraAccesses.FirstOrDefaultAsync(a => a.Id == id, ct);
+        if (row is not null && !(await LarisVMS.Web.Services.AdminScope.ForAsync(db, permissions, User, ct)).CanEditRole(row.PrincipalId))
+        {
+            await LoadAsync(ct);
+            ErrorMessage = LarisVMS.Web.Services.AdminScope.OwnRoleMessage;
+            return Page();
+        }
         if (row is not null)
         {
             var roleName = (await db.Roles.FirstOrDefaultAsync(r => r.Id == row.PrincipalId, ct))?.Name ?? row.PrincipalId;

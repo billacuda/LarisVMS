@@ -37,7 +37,7 @@
 <script src="~/js/speed-playback.js" asp-append-version="true"></script>
 <script src="~/js/playback-player.js" asp-append-version="true"></script>
 <script src="~/js/view-play.js" asp-append-version="true"></script>
-<script>
+<script nonce="@Csp.Value">
     window.larisvmsViewPlay.init({
         layoutJson: @Html.Raw(JsonSerializer.Serialize(Model.LayoutJson)),
         cameras: @Html.Raw(camerasJson),
@@ -49,9 +49,13 @@
         detectionShowMovingId: 'detectionShowMoving',
         detectionShowIdleId: 'detectionShowIdle',
         detectionShowConfidenceId: 'detectionShowConfidence',
+        detectionShowPathId: 'detectionShowPath',
+        detectionShowSpeedId: 'detectionShowSpeed',
+        detectionShowColorId: 'detectionShowColor',
         gridElId: 'viewPlayGrid',
         badgeCorner: @Html.Raw(JsonSerializer.Serialize(Model.EventBadgeCornerValue)),
         adaptiveStreamingEnabled: @Html.Raw(Model.AdaptiveStreamingEnabled ? "true" : "false"),
+        pathLingerSeconds: @Model.PathLingerSeconds,
         kioskBtnId: 'kioskBtn',
         navElId: 'lvSidebar',
         shellTopbarElId: 'lvTopbar',

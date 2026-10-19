@@ -32,10 +32,13 @@ internal static class MediaPathResolver
         // token already binds this exact path to this camera and a real Segment row, and the caller
         // still checks File.Exists, so serving it from wherever it actually is keeps that footage
         // reachable across a storage-root change rather than 404-ing every thumbnail and clip.
+        // Only a recording on a local drive, though: never a network share or device path (a share
+        // only counts when it's a configured root above), where merely checking the file exists would
+        // make this machine sign in to whatever server the path names.
         var sep = Path.DirectorySeparatorChar;
         var marker = $"{sep}cam-{cameraId}{sep}main{sep}";
         var idx = fullPath.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-        if (idx >= 0)
+        if (idx >= 0 && IsLocalRecording(fullPath))
         {
             mainDir = fullPath[..(idx + marker.Length)];              // …\cam-{id}\main\
             var cameraDir = Path.GetDirectoryName(mainDir.TrimEnd(sep))!;  // …\cam-{id}
@@ -52,6 +55,16 @@ internal static class MediaPathResolver
     /// and /export, which only need "is this path allowed".</summary>
     internal static bool IsAllowed(string fullPath, Guid cameraId, string storageRoot, string? archiveRoot)
         => TryResolve(fullPath, cameraId, storageRoot, archiveRoot, out _, out _, out _);
+
+    /// <summary>A segment file (.mp4) on a local drive: "X:\…" on Windows (not "\\server\share" or
+    /// "\\?\…"), "/…" elsewhere.</summary>
+    private static bool IsLocalRecording(string fullPath)
+    {
+        if (!fullPath.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!OperatingSystem.IsWindows()) return fullPath.StartsWith('/') && !fullPath.StartsWith("//", StringComparison.Ordinal);
+        return fullPath.Length >= 3 && char.IsAsciiLetter(fullPath[0]) && fullPath[1] == ':'
+            && (fullPath[2] == '\\' || fullPath[2] == '/');
+    }
 
     private static bool TryMatchRoot(string fullPath, Guid cameraId, string root,
         out string mainDir, out string thumbsDir, out string snapshotsDir)

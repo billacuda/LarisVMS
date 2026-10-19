@@ -219,13 +219,53 @@
                 <output class="text-muted small" style="min-width: 2.5em;" id="departureGraceReadout">@DepartureGraceSeconds</output>
             </div>
         </SettingField>
-        <SettingField Label="Stationary-object jitter" Hint="Stops parked cars' box wobble counting as motion. Experimental." HelpLink="/Help/ai-detection#jitter">
+        <SettingField Label="Movement detection" Hint="How an object is judged to be moving. Standard picks up fast, slow, and partly hidden objects sooner." HelpLink="/Help/ai-detection#movement">
+            <select name="MovementMode" class="form-select">
+                <option value="Standard" selected="@(MovementMode == "Standard")">Standard</option>
+                <option value="Legacy" selected="@(MovementMode == "Legacy")">Legacy</option>
+            </select>
+        </SettingField>
+        <SettingField Label="Movement sensitivity" ShowWhen="MovementMode=Standard" Hint="Higher picks up movement sooner; lower ignores more box wobble.">
+            <select name="MovementSensitivity" class="form-select">
+                <option value="Low" selected="@(MovementSensitivity == "Low")">Low</option>
+                <option value="Normal" selected="@(MovementSensitivity == "Normal")">Normal</option>
+                <option value="High" selected="@(MovementSensitivity == "High")">High</option>
+            </select>
+        </SettingField>
+        <SettingField Label="Moving objects" Wide Hint="Only these can count as moving. Anything else is only ever idle, so it never triggers snapshots or alerts." HelpLink="/Help/ai-detection#moving-objects">
+            <div class="d-flex flex-wrap gap-3 mt-1">
+                @foreach (var (category, text) in MovingCategoryChoices)
+                {
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" name="MovingCategory" value="@category" id="moving-@category"
+                               checked="@MovingObjectsSet.Contains(category)" />
+                        <label class="form-check-label" for="moving-@category">@text</label>
+                    </div>
+                }
+            </div>
+            <details class="position-relative column-picker mt-2" style="max-width: 22rem;">
+                <summary class="form-select form-select-sm text-start text-truncate">@OtherObjectsSummary</summary>
+                <div class="column-picker-menu" style="left: 0; right: auto; min-width: 16rem;">
+                    @foreach (var label in LarisVMS.Core.CocoCategoryMap.OtherObjectLabels)
+                    {
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="MovingObjectLabel" value="@label" id="moving-label-@label.Replace(' ', '-')"
+                                   checked="@MovingObjectsSet.Contains(label)" />
+                            <label class="form-check-label small" for="moving-label-@label.Replace(' ', '-')">@label</label>
+                        </div>
+                    }
+                </div>
+            </details>
+            <input type="text" name="MovingObjectExtra" class="form-control form-control-sm mt-2" style="max-width: 22rem;" maxlength="300"
+                   value="@MovingObjectExtras" placeholder="More object names, comma-separated (e.g. package)" aria-label="More object names" />
+        </SettingField>
+        <SettingField Label="Stationary-object jitter" ShowWhen="MovementMode=Legacy" Hint="Stops parked cars' box wobble counting as motion. Experimental." HelpLink="/Help/ai-detection#jitter">
             <div class="form-check mt-1">
                 <InputCheckbox @bind-Value="RejectMotionJitter" class="form-check-input" id="rejectMotionJitter" />
                 <label class="form-check-label" for="rejectMotionJitter">Reject jitter</label>
             </div>
         </SettingField>
-        <SettingField Label="Jitter threshold (pixels)" For="motionJitterPixelsRange" ShowWhen="RejectMotionJitter=true" Hint="Minimum box movement that counts as moving.">
+        <SettingField Label="Jitter threshold (pixels)" For="motionJitterPixelsRange" Hint="The smallest box movement that ever counts as moving. Legacy uses it only with Reject jitter on.">
             <div class="d-flex align-items-center gap-2">
                 <input type="range" name="MotionJitterPixels" value="@MotionJitterPixels" min="1" max="15" step="1" class="form-range" id="motionJitterPixelsRange" />
                 <output class="text-muted small" style="min-width: 2.5em;" id="motionJitterPixelsReadout">@MotionJitterPixels</output>
@@ -234,7 +274,7 @@
     </SettingSection>
 
     <SettingSection Title="Object details">
-        <SettingField Label="Object colors" Hint="Names each object's color (and a person's shirt and pants) for snapshots, filters and alerts." HelpLink="/Help/ai-detection#object-colors">
+        <SettingField Label="Object colors" Hint="Names each object's color (and a person's shirt and pants) for snapshots, filters, and alerts." HelpLink="/Help/ai-detection#object-colors">
             <div class="form-check mt-1">
                 <InputCheckbox @bind-Value="ColorClassification" class="form-check-input" id="colorClassification" />
                 <label class="form-check-label" for="colorClassification">Classify colors</label>
@@ -255,7 +295,7 @@
 </div>
 
 <SectionContent SectionName="PageScripts">
-    <script>
+    <script nonce="@Csp.Value">
         // Confidence/IoU slider readouts, wired explicitly by id — see slider inputs above.
         (function () {
             function wireSlider(rangeId, readoutId, transform) {
@@ -344,6 +384,50 @@
     [SupplyParameterFromForm(FormName = "detection-settings")] private bool SnapshotMotionAccuracy { get; set; }
     [SupplyParameterFromForm(FormName = "detection-settings")] private bool RejectMotionJitter { get; set; }
     [SupplyParameterFromForm(FormName = "detection-settings")] private int MotionJitterPixels { get; set; }
+    [SupplyParameterFromForm(FormName = "detection-settings")] private string? MovementMode { get; set; }
+    [SupplyParameterFromForm(FormName = "detection-settings")] private string? MovementSensitivity { get; set; }
+    // Detection.MovingObjects, read from and written to the raw form (several checkboxes share a name).
+    private HashSet<string> MovingObjectsSet = LarisVMS.Core.CocoCategoryMap.ParseMovingObjects(null);
+
+    private static readonly (string Category, string Text)[] MovingCategoryChoices =
+    [
+        (LarisVMS.Core.CocoCategoryMap.Human, "People"),
+        (LarisVMS.Core.CocoCategoryMap.Vehicle, "Vehicles"),
+        (LarisVMS.Core.CocoCategoryMap.Animal, "Animals"),
+    ];
+
+    private string OtherObjectsSummary
+    {
+        get
+        {
+            var chosen = LarisVMS.Core.CocoCategoryMap.OtherObjectLabels.Where(MovingObjectsSet.Contains).ToList();
+            return chosen.Count switch
+            {
+                0 => "Other objects: none",
+                1 => $"Other objects: {chosen[0]}",
+                _ => $"Other objects: {chosen[0]} + {chosen.Count - 1} more",
+            };
+        }
+    }
+
+    /// <summary>Names in the setting that are neither a category nor in the offered list — a custom
+    /// model's own object names.</summary>
+    private string MovingObjectExtras => string.Join(", ", MovingObjectsSet
+        .Where(v => MovingCategoryChoices.All(c => !string.Equals(c.Category, v, StringComparison.OrdinalIgnoreCase))
+            && !LarisVMS.Core.CocoCategoryMap.OtherObjectLabels.Contains(v, StringComparer.OrdinalIgnoreCase)));
+
+    /// <summary>The submitted choices as the stored Detection.MovingObjects value: the ticked
+    /// categories and offered objects, then the typed names (trimmed, at most 30, no commas inside).</summary>
+    private static string MovingObjectsFromForm(Microsoft.AspNetCore.Http.IFormCollection form)
+    {
+        var categories = form["MovingCategory"].Where(v => MovingCategoryChoices.Any(c => c.Category == v));
+        var offered = form["MovingObjectLabel"].Where(v => v is not null && LarisVMS.Core.CocoCategoryMap.OtherObjectLabels.Contains(v));
+        var typed = form["MovingObjectExtra"].ToString()
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(v => v.Length <= 40);
+        return string.Join(",", categories.Concat(offered).Concat(typed)
+            .Distinct(StringComparer.OrdinalIgnoreCase).Take(60));
+    }
     [SupplyParameterFromForm(FormName = "detection-settings")] private int DepartureGraceSeconds { get; set; }
     [SupplyParameterFromForm(FormName = "detection-settings")] private int SnapshotMarginPercent { get; set; }
     [SupplyParameterFromForm(FormName = "detection-settings")] private int MaxFps { get; set; }
@@ -403,6 +487,9 @@
         SnapshotMotionAccuracy = await Settings.GetAsync("Detection.SnapshotMotionAccuracy", true);
         RejectMotionJitter = await Settings.GetAsync("Detection.RejectMotionJitter", false);
         MotionJitterPixels = await Settings.GetAsync("Detection.MotionJitterPixels", 3);
+        MovementMode = NormalizeMovementMode(await Settings.GetAsync("Detection.MovementMode", "Standard"));
+        MovementSensitivity = NormalizeMovementSensitivity(await Settings.GetAsync("Detection.MovementSensitivity", "Normal"));
+        MovingObjectsSet = LarisVMS.Core.CocoCategoryMap.ParseMovingObjects(await Settings.GetRawAsync("Detection.MovingObjects"));
         DepartureGraceSeconds = await Settings.GetAsync("Detection.DepartureGraceSeconds", 5);
         SnapshotMarginPercent = await Settings.GetAsync("Detection.SnapshotMarginPercent", 12);
         ColorClassification = await Settings.GetAsync("Detection.ColorClassification", true);
@@ -446,6 +533,16 @@
         var oldSnapshotMotionAccuracy = await Settings.GetAsync("Detection.SnapshotMotionAccuracy", true);
         var oldRejectMotionJitter = await Settings.GetAsync("Detection.RejectMotionJitter", false);
         var oldMotionJitterPixels = await Settings.GetAsync("Detection.MotionJitterPixels", 3);
+        var oldMovementMode = NormalizeMovementMode(await Settings.GetAsync("Detection.MovementMode", "Standard"));
+        var oldMovementSensitivity = NormalizeMovementSensitivity(await Settings.GetAsync("Detection.MovementSensitivity", "Normal"));
+        var oldMovingObjects = await Settings.GetRawAsync("Detection.MovingObjects") ?? LarisVMS.Core.CocoCategoryMap.DefaultMovingObjects;
+        var movingObjects = HttpContext?.Request.HasFormContentType == true
+            ? MovingObjectsFromForm(HttpContext.Request.Form)
+            : oldMovingObjects;
+        MovingObjectsSet = LarisVMS.Core.CocoCategoryMap.ParseMovingObjects(movingObjects);
+        // A field hidden by data-show-when still posts, so both always arrive; anything else is the default.
+        MovementMode = NormalizeMovementMode(MovementMode);
+        MovementSensitivity = NormalizeMovementSensitivity(MovementSensitivity);
         var oldDepartureGraceSeconds = await Settings.GetAsync("Detection.DepartureGraceSeconds", 5);
         var oldSnapshotMarginPercent = await Settings.GetAsync("Detection.SnapshotMarginPercent", 12);
         var oldMaxFps = await Settings.GetAsync("Detection.MaxFps", 7);
@@ -539,6 +636,9 @@
         await Settings.SetGlobalAsync("Detection.SnapshotMotionAccuracy", SnapshotMotionAccuracy.ToString(), by);
         await Settings.SetGlobalAsync("Detection.RejectMotionJitter", RejectMotionJitter.ToString(), by);
         await Settings.SetGlobalAsync("Detection.MotionJitterPixels", MotionJitterPixels.ToString(), by);
+        await Settings.SetGlobalAsync("Detection.MovementMode", MovementMode, by);
+        await Settings.SetGlobalAsync("Detection.MovementSensitivity", MovementSensitivity, by);
+        await Settings.SetGlobalAsync("Detection.MovingObjects", movingObjects, by);
         await Settings.SetGlobalAsync("Detection.DepartureGraceSeconds", DepartureGraceSeconds.ToString(), by);
         await Settings.SetGlobalAsync("Detection.SnapshotMarginPercent", SnapshotMarginPercent.ToString(), by);
         await Settings.SetGlobalAsync("Detection.MaxFps", MaxFps.ToString(), by);
@@ -574,6 +674,9 @@
             AuditDiff.Of("Detection.SnapshotMotionAccuracy", oldSnapshotMotionAccuracy.ToString(), SnapshotMotionAccuracy.ToString()),
             AuditDiff.Of("Detection.RejectMotionJitter", oldRejectMotionJitter.ToString(), RejectMotionJitter.ToString()),
             AuditDiff.Of("Detection.MotionJitterPixels", oldMotionJitterPixels.ToString(), MotionJitterPixels.ToString()),
+            AuditDiff.Of("Detection.MovementMode", oldMovementMode, MovementMode),
+            AuditDiff.Of("Detection.MovementSensitivity", oldMovementSensitivity, MovementSensitivity),
+            AuditDiff.Of("Detection.MovingObjects", oldMovingObjects, movingObjects),
             AuditDiff.Of("Detection.DepartureGraceSeconds", oldDepartureGraceSeconds.ToString(), DepartureGraceSeconds.ToString()),
             AuditDiff.Of("Detection.SnapshotMarginPercent", oldSnapshotMarginPercent.ToString(), SnapshotMarginPercent.ToString()),
             AuditDiff.Of("Detection.MaxFps", oldMaxFps.ToString(), MaxFps.ToString()),
@@ -710,4 +813,8 @@
         if (string.IsNullOrEmpty(trimmed)) return "";
         return Uri.TryCreate(trimmed, UriKind.Absolute, out var u) && u.Scheme is "http" or "https" ? trimmed : "";
     }
+
+    private static string NormalizeMovementMode(string? value) => value == "Legacy" ? "Legacy" : "Standard";
+
+    private static string NormalizeMovementSensitivity(string? value) => value is "Low" or "High" ? value : "Normal";
 }

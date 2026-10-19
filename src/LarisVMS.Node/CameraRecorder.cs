@@ -12,6 +12,9 @@ namespace LarisVMS.Node;
 /// pick up the change — same shape as CameraMotionRecorder.ZoneConfigSignature. SegmentSeconds is the
 /// same idea for Recording.SegmentSeconds (M18 follow-up): it's baked into ffmpeg's own `-f segment`
 /// invocation at start, so an admin lowering it to shrink worst-case playback seek latency needs the
-/// already-running session restarted to actually take effect, not just the next new camera.</summary>
+/// already-running session restarted to actually take effect, not just the next new camera.
+/// StreamFormat (codec and resolution, as probed) is the same idea for a change made on the camera
+/// itself through Device settings: the RTSP URL usually stays the same, so without it a codec or
+/// resolution change would never restart the session.</summary>
 public sealed record CameraRecorder(CancellationTokenSource Cts, Task RunTask, RecordingSession Session, string RtspUri, string PrivacyMaskSignature, int SegmentSeconds,
-    bool TranscodeAudioToAac = false);
+    bool TranscodeAudioToAac = false, string? StreamFormat = null);

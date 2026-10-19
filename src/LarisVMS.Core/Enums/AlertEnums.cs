@@ -33,12 +33,25 @@ public enum AlertConditionType
     /// <summary>An object measured by a speed trap at or above the rule's SpeedThresholdKph, with
     /// the same optional category/label/color/schedule filters as ObjectDetected. Event-driven the
     /// same way.</summary>
-    SpeedOver = 5
+    SpeedOver = 5,
+
+    /// <summary>An evidence lock on the rule's camera (or any camera, or a node's cameras) ends
+    /// within the next 24 hours. Once per lock: EvidenceLock.ExpiryWarnedAtUtc records it.</summary>
+    EvidenceLockExpiringSoon = 6,
+
+    /// <summary>An evidence lock was removed (its footage stays protected for the 24-hour grace
+    /// period). Once per removal: EvidenceLock.RemovalNotifiedAtUtc records it.</summary>
+    EvidenceLockRemoved = 7,
+
+    /// <summary>Plain motion (server motion or the camera's own motion events, not AI detections or
+    /// custom tags) on the rule's camera, a node's cameras, or any camera. With ZoneId, only motion
+    /// from that server motion zone. Event-driven like ObjectDetected; once per motion span.</summary>
+    MotionDetected = 8
 }
 
-/// <summary>Where an AlertDelivery sends a firing. BrowserPush is deliberately not in this list yet —
-/// it needs VAPID key generation, a service worker, and per-browser PushSubscription storage, real
-/// scope of its own rather than a config-blob variant of the other five.</summary>
+/// <summary>Where an AlertDelivery sends a firing — the team channels an admin sets up on a rule.
+/// Notifications to individual users (browser and email) go through AlertSubscription instead,
+/// see INotificationService.</summary>
 public enum AlertChannel
 {
     Email = 0,

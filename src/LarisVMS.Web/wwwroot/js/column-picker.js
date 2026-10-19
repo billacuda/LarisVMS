@@ -55,6 +55,8 @@
                            '#' + tableId + ' > tbody > tr > :nth-child(' + c.index + ') { display: none; }';
                 })
                 .join('\n');
+            // list-filter.js ignores column filters on hidden columns, so it re-applies on this.
+            document.dispatchEvent(new CustomEvent('larisvms:columns-changed', { detail: { tableId: tableId } }));
         }
 
         menu.innerHTML = '';

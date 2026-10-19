@@ -19,6 +19,9 @@ public interface IBookmarkService
     /// just bookmark" the first thing visible without paging.</summary>
     Task<List<BookmarkDto>> ListAsync(CancellationToken ct = default);
 
+    /// <summary>The bookmark's camera and who made it, or null when there's no such bookmark.</summary>
+    Task<(Guid CameraId, string CreatedByUserId)?> GetOwnerAsync(Guid id, CancellationToken ct = default);
+
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 
     /// <summary>M18: the per-camera timeline's own marker overlay — every bookmark on one camera

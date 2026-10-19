@@ -8,7 +8,7 @@ using LarisVMS.Core.Interfaces;
 namespace LarisVMS.Web.Pages.Views;
 
 [Authorize("Views.Edit")]
-public class EditorModel(IViewService viewService, ICameraService cameraService) : PageModel
+public class EditorModel(IViewService viewService, ICameraService cameraService, ICameraAccessService cameraAccess) : PageModel
 {
     public Guid Id { get; set; }
     public string Name { get; set; } = string.Empty;
@@ -61,6 +61,9 @@ public class EditorModel(IViewService viewService, ICameraService cameraService)
     private async Task LoadCamerasAsync()
     {
         var all = await cameraService.ListAsync();
-        Cameras = all.Where(c => c.IsEnabled && c.NodeId is not null).OrderBy(c => c.Name).ToList();
+        // Only cameras this person may watch.
+        var viewable = await cameraAccess.GetAccessibleCameraIdsAsync(User, LarisVMS.Core.Enums.CameraAccessActions.View);
+        Cameras = all.Where(c => c.IsEnabled && c.NodeId is not null && (viewable is null || viewable.Contains(c.Id)))
+            .OrderBy(c => c.Name).ToList();
     }
 }

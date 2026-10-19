@@ -10,6 +10,7 @@
 @using Microsoft.EntityFrameworkCore
 @inject ApplicationDbContext Db
 @inject IAuditService AuditService
+@inject IPermissionService PermissionService
 
 <PageTitle>Permissions Matrix - @AppName</PageTitle>
 
@@ -186,6 +187,20 @@ else
             .ToList();
 
         var (toAdd, toRemove) = RoleManagementPolicy.DiffPermissions(existingPairs, submittedPairs);
+
+        var scope = await AdminScope.ForAsync(Db, PermissionService, User);
+        if (!scope.CanEditRole(roleId))
+        {
+            ErrorMessage = AdminScope.OwnRoleMessage;
+            await LoadAsync();
+            return;
+        }
+        if (toAdd.FirstOrDefault(p => !scope.CanGrant(p.Resource, p.Action)) is { Resource: not null } beyond)
+        {
+            ErrorMessage = $"You can't grant {beyond.Resource}.{beyond.Action}: you don't have it yourself.";
+            await LoadAsync();
+            return;
+        }
         foreach (var (resource, action) in toRemove)
             Db.Permissions.Remove(existingRows.First(p => p.Resource == resource && p.Action == action));
         foreach (var (resource, action) in toAdd)

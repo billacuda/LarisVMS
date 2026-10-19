@@ -41,6 +41,7 @@ public class AlertEvaluatorService(IServiceScopeFactory scopeFactory, ILogger<Al
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
         var senderFactory = scope.ServiceProvider.GetRequiredService<AlertChannelSenderFactory>();
         var auditService = scope.ServiceProvider.GetRequiredService<IAuditService>();
+        var notifications = scope.ServiceProvider.GetRequiredService<INotificationService>();
 
         var rules = await db.AlertRules.Include(r => r.Deliveries).Where(r => r.IsEnabled).ToListAsync(ct);
         if (rules.Count == 0) return;
@@ -50,6 +51,7 @@ public class AlertEvaluatorService(IServiceScopeFactory scopeFactory, ILogger<Al
         foreach (var rule in rules)
         {
             if (ct.IsCancellationRequested) break;
+            if (rule.ConditionType is AlertConditionType.EvidenceLockExpiringSoon or AlertConditionType.EvidenceLockRemoved) continue;
 
             var message = await EvaluateAsync(db, rule, now, ct);
             if (message is null) continue;
@@ -60,18 +62,88 @@ public class AlertEvaluatorService(IServiceScopeFactory scopeFactory, ILogger<Al
             rule.LastFiredAt = now;
             await db.SaveChangesAsync(ct);
 
-            await DispatchAsync(rule, message, senderFactory, auditService, logger, ct);
+            Guid? cameraId = rule.CameraId;
+            string? url = null;
+            if (rule.CameraId is { } cam) url = $"/Playback?cameraId={cam}&atUtc={now:o}";
+            else if (rule.NodeId is not null) url = "/Admin/Nodes";
+            await DispatchAsync(rule, message, senderFactory, auditService, logger, ct, notifications, cameraId, url);
         }
+
+        await EvaluateEvidenceLockRulesAsync(db, rules, now, senderFactory, auditService, notifications, logger, ct);
     }
+
+    /// <summary>Evidence-lock notifications fire once per lock event rather than on a cooldown: each
+    /// lock ending soon, and each removal, goes to every matching rule once, then the lock row is
+    /// stamped so it isn't announced again. "Ending soon" means within 24 hours — or within half the
+    /// lock's length for a short lock, so a 1-day lock doesn't announce its end as it's placed.</summary>
+    internal static async Task EvaluateEvidenceLockRulesAsync(ApplicationDbContext db, List<Core.Entities.AlertRule> rules, DateTime now,
+        AlertChannelSenderFactory senderFactory, IAuditService auditService, INotificationService? notifications, ILogger logger, CancellationToken ct)
+    {
+        var expiringRules = rules.Where(r => r.ConditionType == AlertConditionType.EvidenceLockExpiringSoon).ToList();
+        var removedRules = rules.Where(r => r.ConditionType == AlertConditionType.EvidenceLockRemoved).ToList();
+
+        var horizon = now.AddHours(24);
+        var expiring = (await db.EvidenceLocks.Include(l => l.Camera)
+                .Where(l => l.RemovedAtUtc == null && l.ExpiryWarnedAtUtc == null && l.ExpiresAtUtc != null
+                    && l.ExpiresAtUtc > now && l.ExpiresAtUtc <= horizon)
+                .ToListAsync(ct))
+            .Where(l => l.ExpiresAtUtc!.Value - now <= (l.ExpiresAtUtc.Value - l.CreatedAtUtc) / 2)
+            .ToList();
+
+        var removed = await db.EvidenceLocks.Include(l => l.Camera)
+            .Where(l => l.RemovedAtUtc != null && l.RemovalNotifiedAtUtc == null)
+            .ToListAsync(ct);
+
+        foreach (var l in expiring)
+        {
+            var hours = Math.Max(1, (int)Math.Round((l.ExpiresAtUtc!.Value - now).TotalHours));
+            var message = $"The evidence lock on \"{l.Camera.Name}\" ends in about {hours} hour{(hours == 1 ? "" : "s")}. " +
+                          $"Reason: {l.Reason}. Export the footage if it needs to be kept longer.";
+            foreach (var rule in expiringRules.Where(r => CoversCamera(r, l.Camera)))
+                await DispatchAsync(rule, message, senderFactory, auditService, logger, ct, notifications, l.CameraId, "/EvidenceLocks");
+            l.ExpiryWarnedAtUtc = now;
+        }
+
+        foreach (var l in removed)
+        {
+            var message = $"{l.RemovedByUserName ?? "Someone"} removed the evidence lock on \"{l.Camera.Name}\" " +
+                          $"(placed by {l.CreatedByUserName ?? "unknown"}). Reason: {l.RemovalReason}. " +
+                          "The footage stays protected for 24 hours, and the lock can be restored until then.";
+            foreach (var rule in removedRules.Where(r => CoversCamera(r, l.Camera)))
+                await DispatchAsync(rule, message, senderFactory, auditService, logger, ct, notifications, l.CameraId, "/EvidenceLocks");
+            l.RemovalNotifiedAtUtc = now;
+        }
+
+        if (expiring.Count > 0 || removed.Count > 0) await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>A rule's scope: its camera, or every camera on its node, or every camera.</summary>
+    internal static bool CoversCamera(Core.Entities.AlertRule rule, Core.Entities.Camera camera)
+        => rule.CameraId is { } cameraId ? cameraId == camera.Id
+         : rule.NodeId is not { } nodeId || camera.NodeId == nodeId;
 
     /// <summary>Logs, audits and sends one firing through every enabled delivery of the rule.
     /// Shared with DetectionAlertService. A delivery that throws is logged and skipped so the
     /// others still go out.</summary>
     internal static async Task DispatchAsync(Core.Entities.AlertRule rule, string message,
-        AlertChannelSenderFactory senderFactory, IAuditService auditService, ILogger logger, CancellationToken ct)
+        AlertChannelSenderFactory senderFactory, IAuditService auditService, ILogger logger, CancellationToken ct,
+        INotificationService? notifications = null, Guid? cameraId = null, string? url = null)
     {
         logger.LogInformation("Alert rule {RuleId} ({Name}) fired: {Message}", rule.Id, rule.Name, message);
-        await auditService.LogAsync("Alert.Fired", null, "System", null, $"{rule.Name}: {message}", ct);
+
+        // Personal notifications to the rule's subscribers (browser and email), then the team channels.
+        var notified = 0;
+        if (notifications is not null)
+        {
+            try { notified = await notifications.NotifySubscribersAsync(rule, cameraId, message, DateTime.UtcNow, url, ct); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogWarning(ex, "Notifying subscribers of rule {RuleId} ({Name}) failed.", rule.Id, rule.Name);
+            }
+        }
+        var notifiedNote = "";
+        if (notified > 0) notifiedNote = $" Notified {notified} subscriber{(notified == 1 ? "" : "s")}.";
+        await auditService.LogAsync("Alert.Fired", null, "System", null, $"{rule.Name}: {message}{notifiedNote}", ct);
 
         foreach (var delivery in rule.Deliveries.Where(d => d.IsEnabled))
         {

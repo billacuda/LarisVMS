@@ -10,7 +10,8 @@ namespace LarisVMS.Proxy;
 /// server is unreachable can still serve from its last known node map. <see cref="CheckInNonce"/> is
 /// the phase-5a rolling value, re-saved every heartbeat so a restart doesn't lose it.</summary>
 public record ProxyConfig(string ServerUrl, Guid ProxyId, string Secret, string? CheckInNonce = null,
-    ProxyConfigResponse? CachedConfig = null);
+    ProxyConfigResponse? CachedConfig = null, string? UpdateSigningKeyPem = null,
+    string? ServerCertThumbprint = null, string? ServerCertificateCheck = null);
 
 /// <summary>
 /// %ProgramData%\LarisVMS\proxy.config — DPAPI-protected (LocalMachine), the same store shape as the
@@ -32,7 +33,34 @@ public static class ProxyConfigStore
         return JsonSerializer.Deserialize<ProxyConfig>(json);
     }
 
+    private static readonly object SaveGate = new();
+
+    /// <summary>This process's live check of the server's certificate — see NodeConfigStore.Trust.</summary>
+    public static LarisVMS.Core.Security.ServerCertificateTrust? Trust { get; private set; }
+
+    public static LarisVMS.Core.Security.ServerCertificateTrust CreateTrust(ProxyConfig? config) =>
+        Trust = new LarisVMS.Core.Security.ServerCertificateTrust(
+            LarisVMS.Core.Security.ServerCertificateTrust.Parse(config?.ServerCertificateCheck), config?.ServerCertThumbprint, SaveTrust);
+
+    private static void SaveTrust()
+    {
+        lock (SaveGate)
+        {
+            if (Load() is { } current) Save(current);
+        }
+    }
+
     public static void Save(ProxyConfig config)
+    {
+        lock (SaveGate)
+        {
+            if (Trust is { } trust)
+                config = config with { ServerCertThumbprint = trust.PinnedThumbprint, ServerCertificateCheck = trust.Mode.ToString() };
+            SaveCore(config);
+        }
+    }
+
+    private static void SaveCore(ProxyConfig config)
     {
         Directory.CreateDirectory(ConfigDir);
         var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(config));

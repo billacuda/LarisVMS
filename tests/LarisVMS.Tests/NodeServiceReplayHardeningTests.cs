@@ -152,4 +152,78 @@ public class NodeServiceReplayHardeningTests
 
         Assert.False(string.IsNullOrEmpty(result.NewSecret));
     }
+
+    // ── Hardening: skipped nonces, address moves, approval, report scope ──────
+
+    [Fact]
+    public async Task ANodeThatHasEchoedANonceCannotSkipItLater()
+    {
+        var (service, db, nodeId) = Seed();
+        var first = await service.ApplyCheckInSecurityAsync(nodeId, null);
+        var second = await service.ApplyCheckInSecurityAsync(nodeId, first.NextNonce);
+        Assert.False(second.ReplayRejected);
+
+        var skipped = await service.ApplyCheckInSecurityAsync(nodeId, presentedNonce: null);
+
+        Assert.True(skipped.ReplayRejected);
+        // Reset auth is the way back.
+        await service.ResetAuthAsync(nodeId, rotateSecretNow: false);
+        Assert.False((await service.ApplyCheckInSecurityAsync(nodeId, null)).ReplayRejected);
+    }
+
+    [Fact]
+    public async Task TheNodesAddressOnlyMovesOnAVerifiedCheckIn()
+    {
+        var (service, db, nodeId) = Seed(n => n.LastIpAddress = "10.0.0.5");
+
+        Assert.NotNull(await service.AuthenticateAsync(nodeId.ToString(), "orig-secret", "10.6.6.6"));
+        Assert.Equal("10.0.0.5", (await db.Nodes.FindAsync(nodeId))!.LastIpAddress);
+
+        var checkIn = await service.ApplyCheckInSecurityAsync(nodeId, null, default, "10.0.0.9");
+        Assert.Equal("10.0.0.5", checkIn.IpChangedFrom);
+        Assert.Equal("10.0.0.9", (await db.Nodes.FindAsync(nodeId))!.LastIpAddress);
+    }
+
+    [Fact]
+    public async Task ANewNodeWaitsForApprovalAndStaysPendingWhenItAuthenticates()
+    {
+        var (service, db, _) = Seed();
+        db.Settings.Add(new LarisVMS.Core.Entities.Setting { Id = Guid.NewGuid(), Key = "Node.RegistrationKey", Value = "reg-key" });
+        await db.SaveChangesAsync();
+
+        var registered = await service.RegisterAsync(new LarisVMS.Core.Dtos.NodeRegisterRequest("reg-key", "recorder-2", "1.0", "win-x64"));
+        Assert.Equal(LarisVMS.Core.Enums.NodeStatus.Pending, (await db.Nodes.FindAsync(registered.NodeId))!.Status);
+
+        await service.AuthenticateAsync(registered.NodeId.ToString(), registered.Secret, "10.0.0.7");
+        Assert.Equal(LarisVMS.Core.Enums.NodeStatus.Pending, (await db.Nodes.FindAsync(registered.NodeId))!.Status);
+
+        Assert.True(await service.ApproveAsync(registered.NodeId));
+        Assert.Equal(LarisVMS.Core.Enums.NodeStatus.Active, (await db.Nodes.FindAsync(registered.NodeId))!.Status);
+        Assert.False(await service.ApproveAsync(registered.NodeId));
+
+        await Assert.ThrowsAsync<ArgumentException>(() => service.RegisterAsync(
+            new LarisVMS.Core.Dtos.NodeRegisterRequest("reg-key", "x');alert(1);//", "1.0", "win-x64")));
+    }
+
+    [Fact]
+    public async Task ANodeCanOnlyReportItsOwnCameras()
+    {
+        var (service, db, nodeId) = Seed();
+        var own = new LarisVMS.Core.Entities.Camera { Id = Guid.NewGuid(), Name = "Own", Host = "h", DeviceServiceUri = "u", NodeId = nodeId };
+        var other = new LarisVMS.Core.Entities.Camera { Id = Guid.NewGuid(), Name = "Other", Host = "h", DeviceServiceUri = "u", NodeId = Guid.NewGuid() };
+        db.AddRange(own, other);
+        await db.SaveChangesAsync();
+        var start = DateTime.UtcNow.AddMinutes(-1);
+
+        await service.RecordMotionSpansAsync(nodeId, [
+            new LarisVMS.Core.Dtos.MotionSpanReportItem(own.Id, null, start, start.AddSeconds(5), 0.5),
+            new LarisVMS.Core.Dtos.MotionSpanReportItem(other.Id, null, start, start.AddSeconds(5), 0.5),
+        ]);
+        await service.RecordCameraEventsAsync(nodeId, [
+            new LarisVMS.Core.Dtos.CameraEventReportItem(other.Id, "tns1:VideoSource/MotionAlarm", start, "{}", true),
+        ]);
+
+        Assert.Equal([own.Id], await db.MotionSpans.Select(m => m.CameraId).ToListAsync());
+        Assert.Empty(await db.CameraEvents.ToListAsync());
+    }
 }

@@ -109,11 +109,25 @@ function Get-SqlClientConnectionString([string]$ConnectionString) {
     # into setup-generated.json — including "Trust Server Certificate" *with the spaces
     # SqlConnectionStringBuilder itself emits*, which a whitespace-sensitive regex match misses.
     # Comparing the whitespace-stripped key is what actually catches it.
-    $forbiddenKeys = @('encrypt', 'trustservercertificate', 'multipleactiveresultsets', 'applicationintent')
-    return ($ConnectionString -split ';' | Where-Object {
-        $key = ($_ -split '=', 2)[0] -replace '\s', ''
-        $forbiddenKeys -notcontains $key.ToLowerInvariant()
-    }) -join ';'
+    # Encrypt and TrustServerCertificate are kept, written the way the old provider accepts them
+    # (Encrypt=Mandatory/Strict -> True), so this script's connection is encrypted the same as the
+    # app's; only the keywords it can't parse at all are dropped.
+    $dropped = @('multipleactiveresultsets', 'applicationintent')
+    $parts = foreach ($part in ($ConnectionString -split ';')) {
+        if ([string]::IsNullOrWhiteSpace($part)) { continue }
+        $kv = $part -split '=', 2
+        $key = ($kv[0] -replace '\s', '').ToLowerInvariant()
+        $value = if ($kv.Count -gt 1) { $kv[1].Trim() } else { '' }
+        if ($dropped -contains $key) { continue }
+        if ($key -eq 'encrypt') {
+            if ($value -match '^(true|yes|mandatory|strict)$') { 'Encrypt=True' } else { 'Encrypt=False' }
+        } elseif ($key -eq 'trustservercertificate') {
+            if ($value -match '^(true|yes)$') { 'TrustServerCertificate=True' } else { 'TrustServerCertificate=False' }
+        } else {
+            $part
+        }
+    }
+    return $parts -join ';'
 }
 
 function Get-IISSiteByUrl([string]$SiteUrl) {

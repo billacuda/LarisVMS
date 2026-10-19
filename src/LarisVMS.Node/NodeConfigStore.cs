@@ -1,3 +1,4 @@
+using LarisVMS.Core.Security;
 using System.Security.Cryptography;
 using System.Text.Json;
 using LarisVMS.Core.Dtos;
@@ -15,8 +16,12 @@ namespace LarisVMS.Node;
 /// one here so a restart doesn't lose it and lock the node out. Null until the first heartbeat lands
 /// (or after the server clears it). Secret is rotated in place (phase 5b) — the record is re-saved
 /// with the new value the moment NewSecret arrives.</summary>
+/// <param name="UpdateSigningKeyPem">The server's public signing key: only updates and native
+/// libraries signed with it are installed (UpdateSignature).</param>
+/// <param name="ServerCertThumbprint">The server certificate this node pinned (SHA-256), see ServerCertificateTrust.</param>
 public record NodeConfig(string ServerUrl, Guid NodeId, string Secret, string MediaSigningKey,
-    NodeConfigResponse? CachedConfig = null, string? CheckInNonce = null);
+    NodeConfigResponse? CachedConfig = null, string? CheckInNonce = null, string? UpdateSigningKeyPem = null,
+    string? ServerCertThumbprint = null, string? ServerCertificateCheck = null);
 
 /// <summary>
 /// Persists the node's registration (server URL, assigned NodeId, and secret) to
@@ -42,7 +47,35 @@ public static class NodeConfigStore
         return JsonSerializer.Deserialize<NodeConfig>(json);
     }
 
+    private static readonly object SaveGate = new();
+
+    /// <summary>This process's live check of the server's certificate. Every save writes its current
+    /// pin and mode, so a caller holding an older copy of the config can't undo them.</summary>
+    public static ServerCertificateTrust? Trust { get; private set; }
+
+    public static ServerCertificateTrust CreateTrust(NodeConfig? config) =>
+        Trust = new ServerCertificateTrust(ServerCertificateTrust.Parse(config?.ServerCertificateCheck), config?.ServerCertThumbprint, SaveTrust);
+
+    /// <summary>Writes a changed pin or mode into node.config (once the node is registered).</summary>
+    private static void SaveTrust()
+    {
+        lock (SaveGate)
+        {
+            if (Load() is { } current) Save(current);
+        }
+    }
+
     public static void Save(NodeConfig config)
+    {
+        lock (SaveGate)
+        {
+            if (Trust is { } trust)
+                config = config with { ServerCertThumbprint = trust.PinnedThumbprint, ServerCertificateCheck = trust.Mode.ToString() };
+            SaveCore(config);
+        }
+    }
+
+    private static void SaveCore(NodeConfig config)
     {
         Directory.CreateDirectory(ConfigDir);
         var json = JsonSerializer.Serialize(config);

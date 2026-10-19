@@ -24,11 +24,11 @@ public class NtfyAlertChannelSender : IAlertChannelSender
         var serverUrl = string.IsNullOrWhiteSpace(config.ServerUrl) ? DefaultServerUrl : config.ServerUrl.TrimEnd('/');
 
         using var http = new HttpClient();
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{serverUrl}/{config.Topic}")
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{serverUrl}/{Uri.EscapeDataString(config.Topic ?? "")}")
         {
             Content = new StringContent(message, System.Text.Encoding.UTF8)
         };
-        request.Headers.Add("Title", $"LarisVMS alert: {ruleName}");
+        request.Headers.Add("Title", ChatText.HeaderLine($"LarisVMS alert: {ruleName}"));
         var response = await http.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
     }

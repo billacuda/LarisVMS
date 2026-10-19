@@ -51,5 +51,11 @@ public static class PermissionCatalog
         // M20 pass 1 — gates Admin/ApiKeys, not the REST API itself: what an issued key can actually
         // do is entirely governed by whichever Role it's bound to, resolved through this same catalog.
         new("ApiKeys", "Edit", "Issue and revoke REST API keys"),
+
+        // Evidence locks and notifications. Granted once to existing roles by
+        // RoleSeedService.ApplyOneTimeGrantsAsync (seeding alone never touches a role twice).
+        new("EvidenceLocks", "Create", "Lock footage so retention can't delete it"),
+        new("Notifications", "Subscribe", "Subscribe to shared notifications"),
+        new("Notifications", "CreateOwn", "Create personal notifications"),
     ];
 }

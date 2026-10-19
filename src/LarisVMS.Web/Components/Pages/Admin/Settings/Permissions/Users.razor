@@ -10,6 +10,7 @@
 @using LarisVMS.Infrastructure.Data
 @using LarisVMS.Infrastructure.Services
 @using LarisVMS.Web.Services
+@using LarisVMS.Web.Auth
 @using Microsoft.AspNetCore.Identity
 @using Microsoft.EntityFrameworkCore
 @inject ApplicationDbContext Db
@@ -56,6 +57,14 @@
                     <tr>
                         <td>
                             @u.Email
+                            @if (u.EntraLink == "linked")
+                            {
+                                <span class="badge text-bg-primary ms-1" title="Can sign in with Microsoft">Microsoft</span>
+                            }
+                            else if (u.EntraLink == "pending")
+                            {
+                                <span class="badge text-bg-light text-dark border ms-1" title="Linked to a Microsoft account that hasn't signed in yet">Microsoft (pending)</span>
+                            }
                             @if (u.IsDirectoryManaged)
                             {
                                 <span class="badge text-bg-info ms-1" title="Signs in with Active Directory">AD</span>
@@ -95,7 +104,7 @@
                                     @foreach (var expiry in u.ActiveExpiries)
                                     {
                                         <div class="small text-muted">
-                                            @expiry.RoleName expires @expiry.ExpiresAtUtc.ToLocalTime().ToString("g")
+                                            @expiry.RoleName expires <time datetime="@expiry.ExpiresAtUtc.ToUtcIso()" data-local="g">@expiry.ExpiresAtUtc.ToLocalTime().ToString("g")</time>
                                             <EditForm Model="this" FormName="@($"extend-expiry-{expiry.Id}")" OnValidSubmit="HandleExtendExpiryAsync" class="d-inline">
                                                 <input type="hidden" name="ExpiryId" value="@expiry.Id" />
                                                 <button type="submit" class="btn btn-sm btn-link p-0 align-baseline">Extend</button>
@@ -119,7 +128,7 @@
                             <EditForm Model="this" FormName="@($"toggle-user-enabled-{u.Id}")" OnValidSubmit="HandleToggleEnabledAsync" class="d-inline">
                                 <input type="hidden" name="ToggleEnabledUserId" value="@u.Id" />
                                 <button type="submit" class="btn btn-sm btn-outline-secondary"
-                                        onclick="@($"return confirm('{(u.IsEnabled ? "Disable" : "Enable")} \"{u.Email}\"?');")">
+                                        data-confirm="@($"{(u.IsEnabled ? "Disable" : "Enable")} \"{u.Email}\"?")">
                                     @(u.IsEnabled ? "Disable" : "Enable")
                                 </button>
                             </EditForm>
@@ -129,8 +138,33 @@
                                     Reset password
                                 </button>
                             }
+                            @if (EntraEnabled && !u.IsDirectoryManaged)
+                            {
+                                <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#entra-@u.Id">
+                                    Microsoft sign-in
+                                </button>
+                            }
                         </td>
                     </tr>
+                    @if (EntraEnabled && !u.IsDirectoryManaged)
+                    {
+                        <tr class="collapse" id="entra-@u.Id">
+                            <td colspan="5" class="bg-body-secondary">
+                                <EditForm Model="this" FormName="@($"entra-link-{u.Id}")" OnValidSubmit="HandleSetEntraLinkAsync" class="row g-2 align-items-end py-2">
+                                    <input type="hidden" name="EntraLinkUserId" value="@u.Id" />
+                                    <div class="col-sm-5">
+                                        <label class="form-label small mb-1">Entra object ID for @u.Email</label>
+                                        <input type="text" name="EntraObjectId" class="form-control form-control-sm font-monospace"
+                                               placeholder="00000000-0000-0000-0000-000000000000" />
+                                        <div class="form-text">From the user's page in Microsoft Entra admin center. Blank removes the link.</div>
+                                    </div>
+                                    <div class="col-auto">
+                                        <button type="submit" class="btn btn-sm btn-primary">Save</button>
+                                    </div>
+                                </EditForm>
+                            </td>
+                        </tr>
+                    }
                     @if (!u.IsDirectoryManaged)
                     {
                         <tr class="collapse" id="reset-@u.Id">
@@ -139,7 +173,7 @@
                                     <input type="hidden" name="ResetPasswordUserId" value="@u.Id" />
                                     <div class="col-sm-4">
                                         <label class="form-label small mb-1">New password for @u.Email</label>
-                                        <input type="password" name="NewPasswordForReset" class="form-control form-control-sm" required minlength="8" />
+                                        <input type="password" name="NewPasswordForReset" class="form-control form-control-sm" required minlength="12" />
                                     </div>
                                     <div class="col-auto">
                                         <button type="submit" class="btn btn-sm btn-primary">Set password</button>
@@ -172,7 +206,7 @@
             </div>
             <div class="col-sm-3">
                 <label class="form-label">Password</label>
-                <InputText type="password" @bind-Value="NewPassword" class="form-control" required minlength="8" />
+                <InputText type="password" @bind-Value="NewPassword" class="form-control" required minlength="12" />
             </div>
             <div class="col-12">
                 <label class="form-label d-block">Roles</label>
@@ -194,8 +228,9 @@
 @code {
     /// <summary>Email is the sign-in name: the email address for a local account, the AD username
     /// for an AD account (whose own email, if AD has one, is AdEmail).</summary>
+    /// <param name="EntraLink">"linked", "pending" (an object ID entered, no sign-in yet), or null.</param>
     private sealed record UserRow(string Id, string Email, string? DisplayName, bool IsEnabled, IReadOnlyList<string> RoleNames,
-        IReadOnlyList<ExpiryRow> ActiveExpiries, bool IsDirectoryManaged, string? AdEmail);
+        IReadOnlyList<ExpiryRow> ActiveExpiries, bool IsDirectoryManaged, string? AdEmail, string? EntraLink = null);
 
     private sealed record ExpiryRow(Guid Id, string RoleName, DateTime ExpiresAtUtc);
 
@@ -241,6 +276,11 @@
         var roleNamesById = RoleRows.ToDictionary(r => r.Id, r => r.Name ?? r.Id);
         var adUserIds = (await Db.UserLogins.Where(l => l.LoginProvider == ActiveDirectoryUserSync.LoginProvider)
             .Select(l => l.UserId).ToListAsync()).ToHashSet();
+        EntraEnabled = await Db.EntraSsoSettings.AnyAsync(s => s.IsEnabled);
+        var entraLinks = (await Db.UserLogins.Where(l => l.LoginProvider == EntraOidcOptionsConfigurator.SchemeName)
+                .Select(l => new { l.UserId, l.ProviderKey }).ToListAsync())
+            .GroupBy(l => l.UserId)
+            .ToDictionary(g => g.Key, g => g.Any(l => !EntraLinks.IsPending(l.ProviderKey)) ? "linked" : "pending");
 
         UserRows = users.Select(u => new UserRow(
             u.Id,
@@ -252,7 +292,8 @@
                 .Select(e => new ExpiryRow(e.Id, roleNamesById.GetValueOrDefault(e.RoleId, "?"), e.ExpiresAtUtc))
                 .OrderBy(e => e.ExpiresAtUtc).ToList(),
             adUserIds.Contains(u.Id),
-            adUserIds.Contains(u.Id) ? u.Email : null
+            adUserIds.Contains(u.Id) ? u.Email : null,
+            entraLinks.GetValueOrDefault(u.Id)
         )).OrderBy(r => r.Email, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
@@ -322,10 +363,21 @@
             await LoadAsync();
             return;
         }
+        if (await CannotActOnAsync(user, allowSelf: false) is { } denied)
+        {
+            ErrorMessage = denied;
+            await LoadAsync();
+            return;
+        }
 
         var currentRoles = await UserManagerService.GetRolesAsync(user);
         var assignableRoleIds = await FilterAssignableRoleIdsAsync(roleIds);
         var targetRoleNames = await Db.Roles.Where(r => assignableRoleIds.Contains(r.Id)).Select(r => r.Name!).ToListAsync();
+        // A role the actor couldn't assign, they can't take away either: it stays.
+        var currentRoleIds = await Db.UserRoles.Where(ur => ur.UserId == user.Id).Select(ur => ur.RoleId).ToListAsync();
+        var removableRoleIds = await FilterAssignableRoleIdsAsync(currentRoleIds);
+        var keptRoleNames = await Db.Roles.Where(r => currentRoleIds.Contains(r.Id) && !removableRoleIds.Contains(r.Id)).Select(r => r.Name!).ToListAsync();
+        targetRoleNames = targetRoleNames.Union(keptRoleNames).ToList();
 
         var wasAdmin = await IncludesSuperAdminAsync(currentRoles);
         var staysAdmin = await IncludesSuperAdminAsync(targetRoleNames);
@@ -457,7 +509,7 @@
         await Db.SaveChangesAsync();
 
         await AuditService.LogAsync("Role.ExpiryExtended", CurrentUserId, CurrentUserName, RemoteIp,
-            $"Extended to {expiry.ExpiresAtUtc.ToLocalTime():g}");
+            $"Extended to {expiry.ExpiresAtUtc:yyyy-MM-dd HH:mm} UTC");
         SavedMessage = "Expiry extended.";
         await LoadAsync();
     }
@@ -469,6 +521,12 @@
         var user = await UserManagerService.FindByIdAsync(userId);
         if (user is null)
         {
+            await LoadAsync();
+            return;
+        }
+        if (await CannotActOnAsync(user, allowSelf: false) is { } denied)
+        {
+            ErrorMessage = denied;
             await LoadAsync();
             return;
         }
@@ -516,6 +574,12 @@
             await LoadAsync();
             return;
         }
+        if (await CannotActOnAsync(user, allowSelf: true) is { } denied)
+        {
+            ErrorMessage = denied;
+            await LoadAsync();
+            return;
+        }
 
         var token = await UserManagerService.GeneratePasswordResetTokenAsync(user);
         var result = await UserManagerService.ResetPasswordAsync(user, token, NewPasswordForReset ?? "");
@@ -535,6 +599,70 @@
 
     private Task<bool> IsDirectoryManagedAsync(string userId) =>
         Db.UserLogins.AnyAsync(l => l.UserId == userId && l.LoginProvider == ActiveDirectoryUserSync.LoginProvider);
+
+    private bool EntraEnabled;
+
+    /// <summary>Links an account to one Entra user by object ID (completed on that user's first
+    /// Microsoft sign-in), or removes the link when blank. Replaces any earlier link.</summary>
+    private async Task HandleSetEntraLinkAsync()
+    {
+        var form = HttpContext?.Request.Form;
+        var user = await UserManagerService.FindByIdAsync(form?["EntraLinkUserId"].ToString() ?? "");
+        if (user is null) { await LoadAsync(); return; }
+        if (await CannotActOnAsync(user, allowSelf: false) is { } denied)
+        {
+            ErrorMessage = denied;
+            await LoadAsync();
+            return;
+        }
+        var raw = form?["EntraObjectId"].ToString().Trim() ?? "";
+        Guid? objectId = null;
+        if (raw.Length > 0)
+        {
+            if (!Guid.TryParse(raw, out var parsed))
+            {
+                ErrorMessage = "The Entra object ID is a GUID, like 00000000-0000-0000-0000-000000000000.";
+                await LoadAsync();
+                return;
+            }
+            objectId = parsed;
+            var pendingKey = EntraLinks.PendingKey(parsed);
+            if (await Db.UserLogins.AnyAsync(l => l.LoginProvider == EntraOidcOptionsConfigurator.SchemeName && l.ProviderKey == pendingKey && l.UserId != user.Id))
+            {
+                ErrorMessage = "That Entra object ID is already linked to another account.";
+                await LoadAsync();
+                return;
+            }
+        }
+
+        foreach (var login in (await UserManagerService.GetLoginsAsync(user)).Where(l => l.LoginProvider == EntraOidcOptionsConfigurator.SchemeName))
+            await UserManagerService.RemoveLoginAsync(user, login.LoginProvider, login.ProviderKey);
+        if (objectId is { } oid)
+            await UserManagerService.AddLoginAsync(user, new UserLoginInfo(EntraOidcOptionsConfigurator.SchemeName, EntraLinks.PendingKey(oid), "Microsoft"));
+
+        await AuditService.LogAsync("User.EntraLink", CurrentUserId, CurrentUserName, RemoteIp,
+            objectId is { } linked ? $"{user.Email}: linked to Entra object {linked}" : $"{user.Email}: Microsoft sign-in removed");
+        SavedMessage = objectId is null
+            ? $"Microsoft sign-in removed for \"{user.Email}\"."
+            : $"\"{user.Email}\" can now sign in with that Microsoft account.";
+        await LoadAsync();
+    }
+
+    /// <summary>Null when the signed-in admin may reset, disable, or change the roles of
+    /// <paramref name="target"/>; otherwise why not. A Super Admin may act on anyone. Anyone else may
+    /// not act on a Super Admin, or on an account whose roles reach wider than their own (a Site-tier
+    /// admin can't take over an Org-tier one). Nobody changes their own roles or disables themselves.</summary>
+    private async Task<string?> CannotActOnAsync(ApplicationUser target, bool allowSelf)
+    {
+        if (!allowSelf && target.Id == CurrentUserId) return "You can't change your own roles or disable your own account.";
+        if (CurrentUserId is not { } actorId) return "You don't have permission to do that.";
+        var actor = await UserManagerService.FindByIdAsync(actorId);
+        if (actor is null) return "You don't have permission to do that.";
+        if (await IncludesSuperAdminAsync(await UserManagerService.GetRolesAsync(actor))) return null;
+        if (await IncludesSuperAdminAsync(await UserManagerService.GetRolesAsync(target))) return "Only a Super Admin can change a Super Admin's account.";
+        if (await HighestScopeTierAsync(target.Id) < await HighestScopeTierAsync(actorId)) return "This account has wider access than yours.";
+        return null;
+    }
 
     private async Task<bool> IncludesSuperAdminAsync(IEnumerable<string> roleNames)
     {

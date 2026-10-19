@@ -15,6 +15,13 @@
 
 <PageTitle>Dashboard - @AppName</PageTitle>
 
+@if (!_canViewDashboard)
+{
+    <h1>Welcome</h1>
+    <p class="text-muted">Your role doesn't include the dashboard. Use the menu to open the pages you have access to.</p>
+}
+else
+{
 <HeadContent>
     <link rel="stylesheet" href="/lib/gridstack/dist/gridstack.min.css" />
 </HeadContent>
@@ -237,7 +244,7 @@
                     <td class="small text-muted" data-sort-value="@(r.HealthReportedAt.HasValue ? new DateTimeOffset(r.HealthReportedAt.Value).ToUnixTimeMilliseconds() : 0)">
                         @if (r.HealthReportedAt is { } reported)
                         {
-                            <span title="@reported.ToString("u")">@reported.ToLocalTime().ToString("g")</span>
+                            <time datetime="@reported.ToUtcIso()" data-local="g">@reported.ToLocalTime().ToString("g")</time>
                         }
                         else
                         {
@@ -295,7 +302,7 @@
             <div class="modal-body">
                 <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
                     <input type="search" class="form-control form-control-sm" id="dashboardReportFilter"
-                           placeholder="Filter by name, node or details" style="max-width: 280px;" aria-label="Filter" />
+                           placeholder="Filter by name, node, or details" style="max-width: 280px;" aria-label="Filter" />
                     <select class="form-select form-select-sm w-auto" id="dashboardReportNode" aria-label="Node">
                         <option value="">All nodes</option>
                     </select>
@@ -335,11 +342,12 @@
    widget scripts load before dashboard.js so the original sections are already in place in the grid
    when its first refresh runs. *@
 <SectionContent SectionName="PageScripts">
-    <script src="/lib/gridstack/dist/gridstack-all.js"></script>
-    <script src="/js/dashboard-report.js"></script>
-    <script src="/js/dashboard-widgets.js"></script>
-    <script src="/js/dashboard.js"></script>
+    <PageScript Src="/lib/gridstack/dist/gridstack-all.js" />
+    <PageScript Src="/js/dashboard-report.js" />
+    <PageScript Src="/js/dashboard-widgets.js" />
+    <PageScript Src="/js/dashboard.js" />
 </SectionContent>
+}
 
 @code {
     [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
@@ -353,11 +361,17 @@
 
     [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
 
+    private bool _canViewDashboard;
+
     protected override async Task OnInitializedAsync()
     {
         var user = AuthenticationStateTask is not null
             ? (await AuthenticationStateTask).User
             : new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity());
+
+        // Everyone signed in lands here; only Dashboard.View shows camera health and detections.
+        _canViewDashboard = (await AuthorizationService.AuthorizeAsync(user, "Dashboard.View")).Succeeded;
+        if (!_canViewDashboard) return;
 
         var health = await DashboardService.GetHealthAsync(user);
         Rows = health.Rows;

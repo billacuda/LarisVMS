@@ -5,6 +5,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
+using LarisVMS.Core.Security;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Logging;
 using LarisVMS.Media;
@@ -558,6 +559,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 // backs up (it probes their /health on its own cadence; the results ride the next
                 // heartbeat below).
                 partnerHealthTracker.SetPartners(config.PartnersToProbe);
+                _protectedFootage = new ProtectedFootage(config.ProtectedRanges);
                 var storageRoot = Reconcile(config, ct);
                 PersistConfigCache(config);
                 var usage = DiskSpace.TryGetUsage(storageRoot);
@@ -567,6 +569,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 // as a warning next to the node on Admin/Nodes.
                 var storagePressure = usage is { TotalBytes: > 0 } u
                     && 100.0 * (u.TotalBytes - u.FreeBytes) / u.TotalBytes > config.WatermarkPercent;
+                var visionBackend = await _visionSupervisor.TryGetBackendAsync(ct);
                 var heartbeat = await api.HeartbeatAsync(new NodeHeartbeatRequest(NodeVersion.Current, usage?.FreeBytes, usage?.TotalBytes, livePort,
                     DateTime.UtcNow, _detectedEncoders?.ToList(), _detectedAccelerators.Select(a => a.ToString()).ToList(),
                     archiveUsage?.FreeBytes, archiveUsage?.TotalBytes, storagePressure,
@@ -580,22 +583,29 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                     // Failover plan phase 3: this node's /health verdicts on the partners it backs up.
                     partnerHealthTracker.CurrentReports(),
                     // Dashboard: this machine's CPU, memory and network load.
-                    HostStats: _hostStats.Sample()), ct);
+                    HostStats: _hostStats.Sample(),
+                    StorageBlockedByEvidenceLocks: EvidenceLockStorageState.BlockedByEvidenceLocks,
+                    // What AI detection is actually running on, so a slow fallback shows on the Nodes page.
+                    VisionBackend: visionBackend), ct);
 
                 // Failover plan phase 5a/5b: fold in the next nonce, and a rotated secret if central
                 // sent one, persisting node.config before switching so a mid-rotation restart can't
                 // strand us on a secret that was never written.
                 ApplyCheckInSecurity(heartbeat);
+                // Received over a connection that passed the current check, so it can't be a downgrade
+                // slipped in by someone in between.
+                if (heartbeat.ServerCertificateCheck is { } certificateCheck)
+                    NodeConfigStore.Trust?.ApplyMode(ServerCertificateTrust.Parse(certificateCheck));
 
                 // Auto-update: server only ever hands this back when a genuinely newer build exists
                 // for this node's platform and NodeAutoUpdate.Enabled is on (see Program.cs's
                 // heartbeat handler) — nothing left to decide here except not double-triggering while
                 // one is already in flight (UpdateService.IsApplying). A successful apply calls
                 // IHostApplicationLifetime.StopApplication() itself, which unwinds this loop via ct.
-                if (heartbeat.UpdateAvailable is not null && !updateService.IsApplying)
+                if (heartbeat.UpdateAvailable is { } update && !updateService.IsApplying && TrustUpdate(update))
                 {
-                    _logger.LogInformation("Recorder node update available: {Version} — downloading and applying.", heartbeat.UpdateAvailable.Version);
-                    await updateService.TryApplyAsync(heartbeat.UpdateAvailable, ct);
+                    _logger.LogInformation("Recorder node update available: {Version} — downloading and applying.", update.Version);
+                    await updateService.TryApplyAsync(update, ct);
                 }
             }
             catch (Exception ex) when (IsRetryable(ex, ct))
@@ -607,6 +617,27 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             try { await Task.WhenAny(Task.Delay(TimeSpan.FromSeconds(30), ct), _reconcileNowSignal.WaitAsync(ct)); }
             catch (OperationCanceledException) { break; }
         }
+    }
+
+    /// <summary>Only an update signed with the server's key (kept since registration, or since the
+    /// first signed offer for a node registered before signing) is installed. The signature covers the
+    /// SHA-256 that UpdateService checks the download against.</summary>
+    private bool TrustUpdate(NodeUpdateInfoDto update)
+    {
+        var payload = UpdateSignature.UpdatePayload("win-x64", update.Version, update.Sha256, update.VisionSha256);
+        if (!UpdateSignature.Check(_registration.UpdateSigningKeyPem, update.SigningKeyPem, update.Signature, payload,
+                out var keyToPin, out var error))
+        {
+            _logger.LogError("Not installing update {Version}: {Reason}.", update.Version, error);
+            return false;
+        }
+        if (keyToPin is not null)
+        {
+            _registration = _registration with { UpdateSigningKeyPem = keyToPin };
+            try { NodeConfigStore.Save(_registration); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Could not save the server's signing key to node.config."); }
+        }
+        return true;
     }
 
     /// <summary>Called only when a GetConfigAsync attempt has just failed. If nothing is recording
@@ -727,6 +758,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 EnqueueMotionCheckpoints();
                 await FlushMotionSpansAsync(ct);
                 await FlushCameraEventsAsync(ct);
+                await FlushMotionHeatAsync(ct);
             }
             catch (Exception ex) when (IsRetryable(ex, ct))
             {
@@ -973,6 +1005,45 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         }
     }
 
+    // Scene heatmap motion counts per camera (grid mode only), and this node run's id: each report is
+    // the hour's running total so far, which replaces this run's earlier report on the server.
+    private readonly ConcurrentDictionary<Guid, MotionHeat> _motionHeat = new();
+    private static readonly Guid MotionHeatRunId = Guid.NewGuid();
+    private static readonly TimeSpan MotionHeatInterval = TimeSpan.FromMinutes(10);
+    private DateTime _nextMotionHeatUtc = DateTime.UtcNow + MotionHeatInterval;
+
+    /// <summary>Every 10 minutes, and as soon as an hour finishes: each grid-mode camera's motion heat
+    /// so far. Light — a few small posts an hour per camera.</summary>
+    private async Task FlushMotionHeatAsync(CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        var hourJustEnded = now.Minute == 0 && now.Second < 30;
+        if (now < _nextMotionHeatUtc && !hourJustEnded) return;
+        _nextMotionHeatUtc = now + MotionHeatInterval;
+
+        var taken = new List<(MotionHeat Heat, List<(DateTime HourUtc, int[] Counts)> Hours)>();
+        var reports = new List<NodeMotionHeatReport>();
+        foreach (var (cameraId, heat) in _motionHeat)
+        {
+            if (!_activeMotion.ContainsKey(cameraId)) { _motionHeat.TryRemove(cameraId, out _); continue; }
+            var hours = heat.Take();
+            if (hours.Count == 0) continue;
+            taken.Add((heat, hours));
+            reports.AddRange(hours.Select(h => new NodeMotionHeatReport(cameraId, h.HourUtc, heat.GridSize, MotionHeatRunId,
+                Convert.ToBase64String(SceneHeat.EncodeCells(h.Counts)))));
+        }
+        if (reports.Count == 0) return;
+        try
+        {
+            await api.ReportMotionHeatAsync(reports, ct);
+        }
+        catch (Exception ex) when (IsRetryable(ex, ct))
+        {
+            foreach (var (heat, hours) in taken) heat.Return(hours);
+            _logger.LogWarning(ex, "Could not report motion heat — will retry.");
+        }
+    }
+
     private async Task FlushCameraEventsAsync(CancellationToken ct)
     {
         var batch = new List<CameraEventReportItem>();
@@ -1148,6 +1219,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             var mainStream = camera.Streams.FirstOrDefault(s => s.Role == "Main");
             var rtspUri = mainStream is null ? null : InjectCredentials(mainStream.RtspUri, camera.Username, camera.Password);
             var transcodeAudio = mainStream is { HasAudio: true } && AudioTranscode.NeedsAac(mainStream.AudioCodec);
+            var streamFormat = StreamFormatSignature(mainStream);
 
             if (_active.TryGetValue(camera.CameraId, out var activeRecorder) && activeRecorder.PrivacyMaskSignature != privacySignature)
             {
@@ -1174,6 +1246,14 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             else if (activeRecorder is not null && rtspUri is not null && activeRecorder.RtspUri != rtspUri)
             {
                 _logger.LogInformation("Main stream URL changed for camera {CameraId} ({Name}) — restarting recording session.", camera.CameraId, camera.Name);
+                activeRecorder.Cts.Cancel();
+                _active.TryRemove(camera.CameraId, out _);
+            }
+            else if (activeRecorder is not null && activeRecorder.StreamFormat != streamFormat)
+            {
+                // A codec or resolution change made on the camera (Device settings) keeps the same URL.
+                _logger.LogInformation("Main stream format changed for camera {CameraId} ({Name}) ({Old} -> {New}) — restarting recording session.",
+                    camera.CameraId, camera.Name, activeRecorder.StreamFormat, streamFormat);
                 activeRecorder.Cts.Cancel();
                 _active.TryRemove(camera.CameraId, out _);
             }
@@ -1244,7 +1324,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                         .Union(onDiskNow, StringComparer.OrdinalIgnoreCase);
 
                     var runTask = session.RunAsync(cts.Token, knownPathsForCamera);
-                    _active[camera.CameraId] = new CameraRecorder(cts, runTask, session, rtspUri!, privacySignature, camera.SegmentSeconds, transcodeAudio);
+                    _active[camera.CameraId] = new CameraRecorder(cts, runTask, session, rtspUri!, privacySignature, camera.SegmentSeconds, transcodeAudio, streamFormat);
                     _logger.LogInformation("Started recording camera {CameraId} ({Name}) -> {OutputDir}", camera.CameraId, camera.Name, outputDir);
                 }
             }
@@ -1460,13 +1540,15 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         var regionSignature = isGridMode
             ? $"Grid:{camera.MotionGridSize}:{camera.MotionGridMask}:{camera.MotionGridSensitivity}"
             : $"Polygon:{BuildZoneConfigSignature(camera.Zones)}";
-        var signature = regionSignature + "|" + motionHwaccel;
+        // The Sub stream's URL and format too: a re-probe that changes the URL, or a codec/resolution
+        // change made on the camera, must restart a session decoding the old stream.
+        var signature = regionSignature + "|" + motionHwaccel + "|" + subStream!.RtspUri + "|" + StreamFormatSignature(subStream);
         if (_activeMotion.TryGetValue(camera.CameraId, out var existing))
         {
             if (existing.ZoneConfigSignature == signature) return; // unchanged — leave it running
             existing.Cts.Cancel();
             _activeMotion.TryRemove(camera.CameraId, out _);
-            _logger.LogInformation("Motion region configuration changed for camera {CameraId} ({Name}) — restarting motion session.", camera.CameraId, camera.Name);
+            _logger.LogInformation("Motion region or Sub stream changed for camera {CameraId} ({Name}) — restarting motion session.", camera.CameraId, camera.Name);
         }
 
         // ShouldRunServerMotion's hasSubStream argument is subStream is not null, and it already
@@ -1513,6 +1595,16 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         var motionCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         var motionLogger = loggerFactory.CreateLogger($"Motion[{camera.Name}]");
         var motionSession = new MotionSession(motionOptions, zoneMasks, motionLogger, gridSizeForSession);
+        if (isGridMode)
+        {
+            // Scene heatmap: where in the grid motion happens, hour by hour, reported every few minutes.
+            var ignored = Enumerable.Range(0, camera.MotionGridSize * camera.MotionGridSize)
+                .Where(i => MotionGrid.IsCellMasked(camera.MotionGridMask, camera.MotionGridSize, i)).ToHashSet();
+            var heat = new MotionHeat(camera.MotionGridSize, camera.MotionGridSensitivity, ignored);
+            motionSession.Heat = heat;
+            _motionHeat[camera.CameraId] = heat;
+        }
+        else _motionHeat.TryRemove(camera.CameraId, out _);
         // Object detection plan decision 9: this is ServerMotion, one of the three generic
         // "something moved" sources restricted to whichever one is the camera's chosen primary in
         // Motion mode — see ShouldReportGenericMotion's own doc comment. Grid mode's own span always
@@ -1635,11 +1727,12 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             ? camera.MaxFps
             : 0;
 
-        var signature = string.Join('|', watchRtspUri, sourceWidth, sourceHeight, config.AspectMode,
+        var signature = string.Join('|', watchRtspUri, sourceWidth, sourceHeight, watchStream.Codec, config.AspectMode,
             camera.AiConfidence, camera.AiIou, config.ReportIdleDetections, config.AiIdleTimeoutSeconds,
             watchRole, _resolvedAccelerator, _resolvedDetectionModelFamily, config.DFineWeights, config.YoloXSize,
             decodeFpsCap, config.GpuPreprocessing, config.DFineTensorRtMode, config.SnapshotMotionAccuracy,
             camera.RejectMotionJitter, camera.MotionJitterPixels, config.DepartureGraceSeconds,
+            camera.MovementMode, camera.MovementSensitivity,
             // Detection.Backend + the external service address/model/input-size/API key: each changes
             // which engine the pipeline builds (or how it talks to the service), so a change tears
             // down and rebuilds the pipeline the same way an AspectMode or model-family change does.
@@ -1660,7 +1753,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             config.LocalModelName,
             // Speed traps (per camera) and Detection.ColorClassification (global): both change what
             // the pipeline measures, so a change restarts it. Redrawing a trap only resets tracking.
-            SpeedTrapSignature(camera.SpeedTraps), config.ColorClassification);
+            SpeedTrapSignature(camera.SpeedTraps), config.ColorClassification, config.MovingObjects);
 
         if (_activeVision.TryGetValue(camera.CameraId, out var existing) && existing.ConfigSignature == signature) return; // already watching, unchanged
 
@@ -1700,7 +1793,10 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             // Detection.LocalModelName — only acted on by CameraPipelineManager when ModelFamily is
             // "Custom"; see NodeConfigResponse.LocalModelName's own doc comment.
             config.LocalModelName,
-            camera.SpeedTraps ?? [], config.ColorClassification);
+            camera.SpeedTraps ?? [], config.ColorClassification,
+            // Detection.MovementMode / MovementSensitivity — per-camera; Detection.MovingObjects —
+            // global. All in `signature` above.
+            camera.MovementMode, camera.MovementSensitivity, config.MovingObjects);
 
         // Never stack two starts for the same camera — see _visionStartsInFlight's own comment.
         if (!_visionStartsInFlight.TryAdd(camera.CameraId, 0)) return;
@@ -1953,7 +2049,8 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         var subPrivacyFilters = BuildPrivacyMaskFilters(camera.Zones);
         var subPrivacyEncoder = ChoosePrivacyEncoder(camera.Zones, subStream);
         var subPrivacyBitrate = PrivacyBitrateKbps(camera.Zones, subPrivacyEncoder, subStream);
-        var subSignature = subRtspUri + (subTranscodeAudio ? "|aac" : "") + "|" + BuildPrivacyMaskSignature(camera.Zones, subPrivacyEncoder) + "@" + subPrivacyBitrate;
+        var subSignature = subRtspUri + (subTranscodeAudio ? "|aac" : "") + "|" + BuildPrivacyMaskSignature(camera.Zones, subPrivacyEncoder) + "@" + subPrivacyBitrate
+            + "|" + StreamFormatSignature(subStream);
         if (_activeLiveSub.TryGetValue(camera.CameraId, out var existing))
         {
             if (existing.StreamSignature == subSignature) return; // already running, unchanged
@@ -2176,7 +2273,8 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                     "treated as a discard-everything condition.", cameraId, camera.Name);
             }
 
-            if (IsWithinSchedule(camera.ScheduleWindows, segment.StartUtc)) ReportSegment(cameraId, mainStream, segment);
+            if (IsWithinSchedule(camera.ScheduleWindows, segment.StartUtc)
+                || KeepForEvidenceLock(cameraId, segment)) ReportSegment(cameraId, mainStream, segment);
             else DiscardSegment(segment, cameraId, camera.Name, "started outside every configured schedule window");
             return;
         }
@@ -2303,7 +2401,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 (hasVision && (visionRecorder!.AnyDetectionSince(windowStart) || visionRecorder.AnyDetectionActive));
         }
 
-        if (ShouldDiscardSegment(hasSignalSession, hadSignalInWindow))
+        if (ShouldDiscardSegment(hasSignalSession, hadSignalInWindow) && !KeepForEvidenceLock(pending.CameraId, pending.Segment))
         {
             DiscardSegment(pending.Segment, pending.CameraId, pending.CameraName, "no activity within the pre/post-roll window");
             return;
@@ -2316,6 +2414,18 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// HandleSegmentCompleted, Motion/Event's deferred one in DecideGatedSegment) — deletes the
     /// already-recorded file, logs at Debug (routine, not a problem), and best-effort-only on a
     /// delete failure (see DecideGatedSegment's own doc comment for why that's the safe choice).</summary>
+    // Evidence locks from the latest config: a gated-mode discard never removes footage under a lock
+    // (a user can lock the last few minutes while they are still being recorded).
+    private ProtectedFootage _protectedFootage = ProtectedFootage.None;
+
+    private bool KeepForEvidenceLock(Guid cameraId, RecordingSegment segment)
+    {
+        if (!_protectedFootage.Covers(cameraId, segment.StartUtc, segment.EndUtc)) return false;
+        _logger.LogInformation("Kept segment {FilePath} for camera {CameraId} instead of discarding it — it holds footage under an evidence lock.",
+            segment.FilePath, cameraId);
+        return true;
+    }
+
     private void DiscardSegment(RecordingSegment segment, Guid cameraId, string cameraName, string reason)
     {
         try
@@ -2340,6 +2450,11 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         _pendingSegments.Enqueue(new SegmentReportItem(
             cameraId, "Main", segment.StartUtc, segment.EndUtc, segment.FilePath, segment.SizeBytes,
             mainStream?.Codec, mainStream?.Width, mainStream?.Height, mainStream?.HasAudio ?? false));
+
+    /// <summary>Codec and resolution as probed — only CameraService's probe writes these, so they
+    /// change only when the camera's own configuration changed (e.g. through Device settings).</summary>
+    private static string? StreamFormatSignature(NodeConfigStreamDto? stream) =>
+        stream is null ? null : $"{stream.Codec}:{stream.Width}x{stream.Height}";
 
     private static string InjectCredentials(string rtspUri, string? username, string? password)
     {

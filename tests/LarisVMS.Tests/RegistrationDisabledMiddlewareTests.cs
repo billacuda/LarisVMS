@@ -23,4 +23,22 @@ public class RegistrationDisabledMiddlewareTests
     {
         Assert.False(RegistrationDisabledMiddleware.IsRegisterPath(new PathString(path)));
     }
+
+    [Theory]
+    [InlineData("/Identity/Account/Register", true)]
+    [InlineData("/Identity/Account/RegisterConfirmation", true)]
+    [InlineData("/Identity/Account/ForgotPassword", true)]
+    [InlineData("/Identity/Account/ResetPassword", true)]
+    [InlineData("/Identity/Account/Manage", true)]
+    [InlineData("/Identity/Account/Manage/DeletePersonalData", true)]
+    [InlineData("/Identity/Account/Login", false)]
+    [InlineData("/identity/account/logout", false)]
+    [InlineData("/Identity/Account/AccessDenied", false)]
+    [InlineData("/Identity/Account/ExternalLogin", false)]
+    [InlineData("/Identity/lib/bootstrap/dist/css/bootstrap.min.css", false)]
+    [InlineData("/Cameras", false)]
+    public void OnlyThePagesLarisVmsUsesAreReachableUnderIdentity(string path, bool blocked)
+    {
+        Assert.Equal(blocked, RegistrationDisabledMiddleware.IsBlockedIdentityPath(new PathString(path)));
+    }
 }

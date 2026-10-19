@@ -1,0 +1,277 @@
+@page "/Admin/Settings/Notifications"
+@attribute [Authorize("Settings.Edit")]
+@using System.Security.Claims
+@using LarisVMS.Core
+@using LarisVMS.Core.Enums
+@using LarisVMS.Core.Interfaces
+@using LarisVMS.Infrastructure.Notifications
+@using LarisVMS.Infrastructure.Security
+@using LarisVMS.Web.Services
+@inject ISettingsResolver Settings
+@inject IAuditService AuditService
+@inject IEmailService Email
+
+<PageTitle>Notification settings - @AppName</PageTitle>
+
+<h1>Settings</h1>
+<SettingsTabs ActiveKey="Notifications" />
+
+@if (!string.IsNullOrEmpty(SavedMessage))
+{
+    <div class="alert alert-success">@SavedMessage</div>
+}
+@if (!string.IsNullOrEmpty(ErrorMessage))
+{
+    <div class="alert alert-danger">@ErrorMessage</div>
+}
+
+<div class="lv-page-narrow">
+<p class="text-muted small">
+    Users subscribe to shared notifications, or make their own, under <a href="/Notifications">My notifications</a>.
+    Shared notifications are set up under <a href="/Admin/Alerts">Alerts</a>. <a href="/Help/alerts#notifications">Learn more</a>
+</p>
+
+<EditForm Model="this" FormName="notification-settings" OnSubmit="HandleSaveAsync" data-dirty-guard>
+    <SettingSection Title="Notification types" Subtitle="Turn a type off to stop it reaching users. Team channels on alert rules (email lists, Slack, webhooks, and so on) aren't affected.">
+        @foreach (var (type, label) in NotificationSettings.Types)
+        {
+            <SettingField Label="@label">
+                <div class="form-check form-switch mt-1">
+                    <input type="checkbox" class="form-check-input" id="@($"type-{type}")" name="@($"type-{type}")" value="true"
+                           checked="@(TypeEnabled.GetValueOrDefault(type, true))" />
+                    <label class="form-check-label" for="@($"type-{type}")">Users can receive it</label>
+                </div>
+            </SettingField>
+        }
+    </SettingSection>
+
+    <SettingSection Title="Browser delivery" Subtitle="How notifications reach a user's browser. Each user turns them on per browser under My notifications.">
+        <SettingField Label="While LarisVMS is open" Wide Hint="Fully on-premises: notifications go straight from this server to open LarisVMS tabs and the installed app. No internet needed.">
+            <div class="form-check form-switch mt-1">
+                <input type="checkbox" class="form-check-input" id="onPrem" name="onPrem" value="true" checked="@OnPrem" />
+                <label class="form-check-label" for="onPrem">On</label>
+            </div>
+        </SettingField>
+
+        <SettingField Label="Web Push" Wide Hint="Standard browser push in Chrome, Edge, Firefox, and Safari, even when the browser is closed. No account needed, but this server needs outbound internet access to the browser makers' push services.">
+            <div class="form-check form-switch mt-1">
+                <input type="checkbox" class="form-check-input" id="webPush" name="webPush" value="true" checked="@WebPush" />
+                <label class="form-check-label" for="webPush">On</label>
+            </div>
+            <div class="small mt-1">
+                @if (HasVapidKeys)
+                {
+                    <span class="text-success">Keys generated.</span> <span class="text-muted">Generating new keys signs every browser out of push until it turns notifications on again.</span>
+                }
+                else
+                {
+                    <span class="text-warning-emphasis">No keys yet — generate them before turning Web Push on.</span>
+                }
+            </div>
+        </SettingField>
+        <SettingField Label="Contact for push services" Hint="An email address the push services can reach you at about this server.">
+            <input type="email" class="form-control" name="subject" value="@Subject" placeholder="admin@example.com" />
+        </SettingField>
+
+        <SettingField Label="Firebase Cloud Messaging" Wide Hint="Send through your own Firebase project instead. Used only when Web Push is off, since a browser can only hold one push registration.">
+            <div class="form-check form-switch mt-1">
+                <input type="checkbox" class="form-check-input" id="fcm" name="fcm" value="true" checked="@Fcm" />
+                <label class="form-check-label" for="fcm">On</label>
+            </div>
+        </SettingField>
+        <SettingField Label="Firebase web app config" Wide Hint="From Firebase console → Project settings → Your apps → Web app → Config (the JSON object with apiKey, projectId, messagingSenderId, and appId).">
+            <textarea class="form-control font-monospace small" name="fcmWebConfig" rows="5" placeholder='{ "apiKey": "…", "projectId": "…", "messagingSenderId": "…", "appId": "…" }'>@FcmWebConfig</textarea>
+        </SettingField>
+        <SettingField Label="Firebase web push certificate" Hint="Project settings → Cloud Messaging → Web Push certificates → Key pair.">
+            <input type="text" class="form-control font-monospace small" name="fcmVapidKey" value="@FcmVapidKey" />
+        </SettingField>
+        <SettingField Label="Firebase service account" Wide Hint="Project settings → Service accounts → Generate new private key. Paste the whole JSON file. It's stored encrypted.">
+            <textarea class="form-control font-monospace small" name="fcmServiceAccount" rows="4"
+                      placeholder="@(HasFcmServiceAccount ? "(unchanged — paste a new key to replace it)" : "{ \"type\": \"service_account\", … }")"></textarea>
+            @if (FcmAccountProblem is not null)
+            {
+                <div class="small text-danger mt-1">@FcmAccountProblem</div>
+            }
+        </SettingField>
+    </SettingSection>
+
+    <SettingSection Title="Email delivery">
+        <SettingField Label="Email notifications" Wide Hint="@(EmailConfigured ? "Sent to each user's own address through the email set up under Settings → Email." : "Set up email under Settings → Email first.")">
+            <div class="form-check form-switch mt-1">
+                <input type="checkbox" class="form-check-input" id="emailOn" name="emailOn" value="true" checked="@EmailOn" />
+                <label class="form-check-label" for="emailOn">Users can choose email</label>
+            </div>
+        </SettingField>
+    </SettingSection>
+
+    <div class="lv-savebar">
+        <button type="submit" class="btn btn-primary">Save</button>
+        <button type="button" class="btn btn-outline-secondary" id="notifTestBtn">Send a test to me</button>
+        <span id="notifTestStatus" class="small" role="status" aria-live="polite"></span>
+    </div>
+</EditForm>
+
+<EditForm Model="this" FormName="notification-vapid" OnSubmit="HandleGenerateKeysAsync" class="mt-2">
+    <button type="submit" class="btn btn-sm btn-outline-secondary"
+            data-confirm="@(HasVapidKeys ? "Generate new Web Push keys? Every browser has to turn notifications on again." : null)">
+        @(HasVapidKeys ? "Generate new Web Push keys" : "Generate Web Push keys")
+    </button>
+</EditForm>
+</div>
+
+<SectionContent SectionName="PageScripts">
+    <script nonce="@Csp.Value">
+        (function () {
+            var btn = document.getElementById('notifTestBtn');
+            var status = document.getElementById('notifTestStatus');
+            if (!btn || !window.larisvmsNotifications) return;
+            btn.addEventListener('click', function () {
+                status.className = 'small text-muted';
+                status.textContent = 'Sending…';
+                window.larisvmsNotifications.sendTest().then(function (r) {
+                    var parts = [];
+                    if (r.openTabs) parts.push(r.openTabs + ' open tab' + (r.openTabs === 1 ? '' : 's'));
+                    if (r.pushDevices) parts.push(r.pushDevices + ' device' + (r.pushDevices === 1 ? '' : 's'));
+                    if (r.emailSent) parts.push('email');
+                    status.className = 'small ' + (parts.length ? 'text-success' : 'text-warning-emphasis');
+                    status.textContent = (parts.length ? 'Sent to ' + parts.join(', ') + '.' : 'Nothing to send to — turn notifications on under My notifications.')
+                        + (r.problems && r.problems.length ? ' ' + r.problems.join(' ') : '');
+                }).catch(function (e) { status.className = 'small text-danger'; status.textContent = e.message; });
+            });
+        })();
+    </script>
+</SectionContent>
+
+@code {
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    private Dictionary<AlertConditionType, bool> TypeEnabled { get; set; } = [];
+    private bool OnPrem { get; set; }
+    private bool WebPush { get; set; }
+    private bool HasVapidKeys { get; set; }
+    private string? Subject { get; set; }
+    private bool Fcm { get; set; }
+    private string? FcmWebConfig { get; set; }
+    private string? FcmVapidKey { get; set; }
+    private bool HasFcmServiceAccount { get; set; }
+    private string? FcmAccountProblem { get; set; }
+    private bool EmailOn { get; set; }
+    private bool EmailConfigured { get; set; }
+
+    private string? SavedMessage;
+    private string? ErrorMessage;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        foreach (var (type, _) in NotificationSettings.Types)
+            TypeEnabled[type] = await NotificationSettings.IsTypeEnabledAsync(Settings, type);
+        OnPrem = await Settings.GetAsync(NotificationSettings.OnPremEnabled, true);
+        WebPush = await Settings.GetAsync(NotificationSettings.WebPushEnabled, false);
+        HasVapidKeys = !string.IsNullOrEmpty(await Settings.GetRawAsync(NotificationSettings.WebPushPublicKey));
+        Subject = (await Settings.GetAsync(NotificationSettings.WebPushSubject, "")).Replace("mailto:", "");
+        Fcm = await Settings.GetAsync(NotificationSettings.FcmEnabled, false);
+        FcmWebConfig = await Settings.GetRawAsync(NotificationSettings.FcmWebConfig);
+        FcmVapidKey = await Settings.GetRawAsync(NotificationSettings.FcmVapidKey);
+        var account = SecretProtection.Unprotect(await Settings.GetRawAsync(NotificationSettings.FcmServiceAccount));
+        HasFcmServiceAccount = !string.IsNullOrWhiteSpace(account);
+        FcmAccountProblem = null;
+        if (HasFcmServiceAccount)
+        {
+            try { FcmClient.ParseServiceAccount(account!); }
+            catch (ArgumentException ex) { FcmAccountProblem = ex.Message; }
+        }
+        EmailOn = await Settings.GetAsync(NotificationSettings.EmailEnabled, true);
+        EmailConfigured = await Email.IsConfiguredAsync();
+    }
+
+    private async Task<(ClaimsPrincipal User, string? By)> UserAsync()
+    {
+        var user = AuthenticationStateTask is not null ? (await AuthenticationStateTask).User : new ClaimsPrincipal(new ClaimsIdentity());
+        return (user, user.Identity?.Name);
+    }
+
+    private async Task HandleSaveAsync()
+    {
+        var form = HttpContext!.Request.Form;
+        bool On(string name) => form[name].ToString() == "true";
+        var (user, by) = await UserAsync();
+        var changes = new List<AuditDiff.Field>();
+
+        // Validate the Firebase pieces before saving anything.
+        var webConfig = form["fcmWebConfig"].ToString().Trim();
+        if (webConfig.Length > 0)
+        {
+            try { using var _ = System.Text.Json.JsonDocument.Parse(webConfig); }
+            catch (System.Text.Json.JsonException) { await LoadAsync(); ErrorMessage = "The Firebase web app config isn't valid JSON."; return; }
+        }
+        var newAccount = form["fcmServiceAccount"].ToString().Trim();
+        if (newAccount.Length > 0)
+        {
+            try { FcmClient.ParseServiceAccount(newAccount); }
+            catch (ArgumentException ex) { await LoadAsync(); ErrorMessage = ex.Message; return; }
+        }
+        var webPushOn = On("webPush");
+        if (webPushOn && string.IsNullOrEmpty(await Settings.GetRawAsync(NotificationSettings.WebPushPublicKey)))
+        {
+            await LoadAsync();
+            ErrorMessage = "Generate Web Push keys before turning Web Push on.";
+            return;
+        }
+
+        foreach (var (type, label) in NotificationSettings.Types)
+            changes.Add(await SetBoolAsync(NotificationSettings.TypeEnabledKey(type), $"Notification type: {label}", On($"type-{type}"), true, by));
+        changes.Add(await SetBoolAsync(NotificationSettings.OnPremEnabled, "Notifications while open", On("onPrem"), true, by));
+        changes.Add(await SetBoolAsync(NotificationSettings.WebPushEnabled, "Web Push", webPushOn, false, by));
+        changes.Add(await SetBoolAsync(NotificationSettings.FcmEnabled, "Firebase Cloud Messaging", On("fcm"), false, by));
+        changes.Add(await SetBoolAsync(NotificationSettings.EmailEnabled, "Email notifications", On("emailOn"), true, by));
+
+        var subject = form["subject"].ToString().Trim();
+        changes.Add(await SetTextAsync(NotificationSettings.WebPushSubject, "Push contact", subject.Length == 0 ? "" : "mailto:" + subject, by));
+        changes.Add(await SetTextAsync(NotificationSettings.FcmWebConfig, "Firebase web app config", webConfig, by));
+        changes.Add(await SetTextAsync(NotificationSettings.FcmVapidKey, "Firebase web push certificate", form["fcmVapidKey"].ToString().Trim(), by));
+        if (newAccount.Length > 0)
+        {
+            await Settings.SetGlobalAsync(NotificationSettings.FcmServiceAccount, SecretProtection.Protect(newAccount)!, by);
+            changes.Add(AuditDiff.SecretChanged("Firebase service account", true));
+        }
+
+        var details = AuditDiff.Build(changes.ToArray());
+        if (!string.IsNullOrEmpty(details))
+            await AuditService.LogAsync("Settings.Update", user.FindFirst(ClaimTypes.NameIdentifier)?.Value, by,
+                HttpContext?.Connection.RemoteIpAddress?.ToString(), details);
+
+        await LoadAsync();
+        SavedMessage = "Saved.";
+    }
+
+    private async Task HandleGenerateKeysAsync()
+    {
+        var (user, by) = await UserAsync();
+        var keys = WebPushProtocol.GenerateVapidKeys();
+        await Settings.SetGlobalAsync(NotificationSettings.WebPushPublicKey, keys.PublicKey, by);
+        await Settings.SetGlobalAsync(NotificationSettings.WebPushPrivateKey, SecretProtection.Protect(keys.PrivateKey)!, by);
+        await AuditService.LogAsync("Settings.Update", user.FindFirst(ClaimTypes.NameIdentifier)?.Value, by,
+            HttpContext?.Connection.RemoteIpAddress?.ToString(), "Generated new Web Push (VAPID) keys.");
+        await LoadAsync();
+        SavedMessage = "New Web Push keys generated. Turn Web Push on and save, then turn notifications on in each browser.";
+    }
+
+    // Each returns the audit field; AuditDiff.Build leaves out the ones that didn't change.
+    private async Task<AuditDiff.Field> SetBoolAsync(string key, string label, bool value, bool defaultValue, string? by)
+    {
+        var old = await Settings.GetAsync(key, defaultValue);
+        if (old != value) await Settings.SetGlobalAsync(key, value.ToString(), by);
+        return AuditDiff.Of(label, old.ToString(), value.ToString());
+    }
+
+    private async Task<AuditDiff.Field> SetTextAsync(string key, string label, string value, string? by)
+    {
+        var old = await Settings.GetRawAsync(key) ?? "";
+        if (old != value) await Settings.SetGlobalAsync(key, value, by);
+        return AuditDiff.Of(label, old, value);
+    }
+}

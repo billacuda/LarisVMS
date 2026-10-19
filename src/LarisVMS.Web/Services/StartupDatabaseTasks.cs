@@ -83,6 +83,14 @@ public sealed class StartupDatabaseTasks(
         // Admin/Guest-Viewer in place along the way) — idempotent, see RoleSeedService.
         await Timed("role seed", async () => { await services.GetRequiredService<IRoleSeedService>().SeedAsync(cancellationToken); return true; });
         await Timed("camera group seed", async () => { await services.GetRequiredService<ICameraGroupSeedService>().SeedAsync(cancellationToken); return true; });
+        // Notes the server certificate in use, so a changed self-signed one (which pinned nodes refuse)
+        // is audited and shown on the Nodes page.
+        await Timed("server certificate", async () =>
+        {
+            await ServerCertificateSettings.TrackAsync(services.GetRequiredService<LarisVMS.Relay.CertHolder>(),
+                services.GetRequiredService<ISettingsResolver>(), services.GetRequiredService<IAuditService>(), cancellationToken);
+            return true;
+        });
 
         // A site that already has users is set up, even if it predates the Setup.IsComplete flag or
         // was interrupted before the wizard's last step. Mark it, so the wizard pages are closed

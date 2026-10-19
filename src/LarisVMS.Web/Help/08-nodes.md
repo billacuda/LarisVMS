@@ -31,4 +31,14 @@ The node page warns when the backup has different AI hardware, or is recording-o
 
 Nodes and proxies update themselves from approved builds (see [Installation](/Help/installation#updates)). **Nodes → Updates and registration → Auto-update** turns this on or off for every node.
 
-The **Builds** section of the Nodes page shows the build each kind of node is running toward and any build waiting for approval, with **Approve** and **Reject**. **Build history** lists every build, including approved, superseded and rejected ones.
+The **Builds** section of the Nodes page shows the build each kind of node is running toward and any build waiting for approval, with **Approve** and **Reject**. **Build history** lists every build, including approved, superseded, and rejected ones.
+
+## Server certificate
+
+**Nodes → Updates and registration → Server certificate check** decides how nodes and proxies check this server's HTTPS certificate:
+
+- **Trust on first use** (the default): a certificate from a trusted CA always works, including renewed and replaced ones. A self-signed certificate is remembered the first time a node connects and keeps working for as long as it stays the same, even past its expiry date. If it changes, nodes and proxies refuse it until they're re-registered.
+- **Trusted certificate only**: only a certificate from a trusted CA that matches the server's name. Install one before choosing this.
+- **Don't check**: any certificate. Not safe: anyone on the network path could pose as the server.
+
+The self-signed certificate the server makes for itself lasts 10 years and isn't replaced on its own. **Regenerate self-signed certificate** replaces it; every node and proxy then has to be re-registered, and the Nodes page lists the ones that haven't checked in since. To re-register a node, run the node installer again, or run `LarisVMS.Node.exe --reset-server-pin` on it and restart its service (proxies have the same option).

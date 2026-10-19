@@ -1,34 +1,30 @@
-using LarisVMS.Web.Areas.Identity.Pages.Account;
+using System.Security.Claims;
+using LarisVMS.Web.Auth;
 
 namespace LarisVMS.Tests;
 
-/// <summary>
-/// Only DescribeRejection is unit-testable in isolation — everything else in
-/// ExternalLoginModel.OnGetCallbackAsync is a direct SignInManager/UserManager call chain (external
-/// login info, sign-in, AddLogin), which needs a real Identity store to meaningfully exercise; this
-/// app has no precedent for faking those out for a PageModel test elsewhere either. This locks down the
-/// one piece of that flow that's pure: what an admin/end user actually sees when Entra reports no
-/// matching local account.
-/// </summary>
+/// <summary>Entra sign-in links only by an admin-entered object ID, never by email.</summary>
 public class ExternalLoginTests
 {
     [Fact]
-    public void ARecognizedEmailWithNoLocalAccountNamesTheEmailAndPointsAtAnAdmin()
+    public void TheObjectIdComesFromEitherClaimForm()
     {
-        var message = ExternalLoginModel.DescribeRejection("someone@example.com");
+        var oid = Guid.NewGuid();
+        var longForm = new ClaimsPrincipal(new ClaimsIdentity([new Claim(EntraLinks.ObjectIdClaim, oid.ToString())]));
+        var shortForm = new ClaimsPrincipal(new ClaimsIdentity([new Claim("oid", oid.ToString())]));
+        var emailOnly = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.Email, "boss@example.com")]));
 
-        Assert.Contains("someone@example.com", message);
-        Assert.Contains("administrator", message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(oid, EntraLinks.ObjectIdOf(longForm));
+        Assert.Equal(oid, EntraLinks.ObjectIdOf(shortForm));
+        Assert.Null(EntraLinks.ObjectIdOf(emailOnly));
     }
 
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    public void NoEmailClaimAtAllGetsItsOwnMessageRatherThanNamingABlankEmail(string? email)
+    [Fact]
+    public void APendingLinkIsKeyedByObjectIdAndTheRejectionNamesNoAccount()
     {
-        var message = ExternalLoginModel.DescribeRejection(email);
-
-        Assert.DoesNotContain("\"\"", message);
-        Assert.Contains("email address", message, StringComparison.OrdinalIgnoreCase);
+        var oid = Guid.NewGuid();
+        Assert.True(EntraLinks.IsPending(EntraLinks.PendingKey(oid)));
+        Assert.False(EntraLinks.IsPending("some-real-subject"));
+        Assert.DoesNotContain("@", EntraLinks.NotLinkedMessage);
     }
 }

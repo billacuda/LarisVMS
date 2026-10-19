@@ -136,7 +136,7 @@ public static class WsDiscoveryClient
 
     private static DiscoveredDevice? ParseProbeMatch(ReadOnlySpan<byte> bytes, string remoteAddress)
     {
-        var doc = XDocument.Parse(Encoding.UTF8.GetString(bytes));
+        var doc = Soap.SafeXml.Parse(Encoding.UTF8.GetString(bytes));
         XNamespace soap = "http://www.w3.org/2003/05/soap-envelope";
         XNamespace wsa = "http://schemas.xmlsoap.org/ws/2004/08/addressing";
         XNamespace d = "http://schemas.xmlsoap.org/ws/2005/04/discovery";

@@ -29,5 +29,10 @@
         <label class="form-label">Password</label>
         <input asp-for="Password" type="password" class="form-control" />
     </div>
+    <div class="form-check mb-3">
+        <input asp-for="TrustServerCertificate" class="form-check-input" />
+        <label class="form-check-label" asp-for="TrustServerCertificate">Trust this server's certificate</label>
+        <div class="form-text">Only for a SQL Server on another machine that uses a self-signed certificate. A SQL Server on this machine is always trusted.</div>
+    </div>
     <button type="submit" class="btn btn-primary">Create database &amp; continue</button>
 </form>

@@ -13,15 +13,27 @@ public sealed record DetectionRule(
     string? Category, string? Label, string? Color,
     bool HasZoneFilter, IReadOnlyList<(double X, double Y)>? ZonePolygon,
     double? SpeedThresholdKph,
-    DayOfWeekFlags? ScheduleDays, TimeOnly? ScheduleStart, TimeOnly? ScheduleEnd);
+    DayOfWeekFlags? ScheduleDays, TimeOnly? ScheduleStart, TimeOnly? ScheduleEnd,
+    // A node-scoped rule (NodeId set, no CameraId): the cameras on that node when rules were loaded.
+    IReadOnlySet<Guid>? ScopeCameraIds = null,
+    // The zone the schedule is read in; null = the web server's local time.
+    TimeZoneInfo? TimeZone = null,
+    // MotionDetected only: the server motion zone the motion has to come from (null = anywhere), and
+    // its name for the message.
+    Guid? MotionZoneId = null, string? MotionZoneName = null);
 
-/// <summary>Pure matching for detection alerts (ObjectDetected / SpeedOver) — which events and
-/// which objects in them a rule's filters accept. No database, no clock of its own.</summary>
+/// <summary>Pure matching for detection and motion alerts (ObjectDetected / SpeedOver /
+/// MotionDetected) — which events and which objects in them a rule's filters accept. No database,
+/// no clock of its own.</summary>
 public static class DetectionAlertMatcher
 {
-    /// <summary>Whether <paramref name="localTime"/> (web server local time) is inside the rule's
-    /// schedule. No days / no times = always. A window whose end is before its start crosses
-    /// midnight and belongs to the day it starts on, the same as ScheduleWindow.</summary>
+    /// <summary>The rule's schedule at <paramref name="nowUtc"/>, read in the rule's own time zone.</summary>
+    public static bool InSchedule(DetectionRule rule, DateTime nowUtc)
+        => InSchedule(rule.ScheduleDays, rule.ScheduleStart, rule.ScheduleEnd, LocalTimeFor(rule.TimeZone, nowUtc));
+
+    /// <summary>Whether <paramref name="localTime"/> is inside the schedule. No days / no times =
+    /// always. A window whose end is before its start crosses midnight and belongs to the day it
+    /// starts on, the same as ScheduleWindow.</summary>
     public static bool InSchedule(DayOfWeekFlags? days, TimeOnly? start, TimeOnly? end, DateTime localTime)
     {
         var anyDay = days is null or DayOfWeekFlags.None;
@@ -36,10 +48,30 @@ public static class DetectionAlertMatcher
             || (time < e && DayOn(localTime.AddDays(-1).DayOfWeek));
     }
 
+    public static DateTime LocalTimeFor(TimeZoneInfo? zone, DateTime nowUtc)
+        => zone is null ? nowUtc.ToLocalTime() : TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(nowUtc, DateTimeKind.Utc), zone);
+
+    /// <summary>Resolves a stored time zone id (IANA or Windows). Null or unknown = server local.</summary>
+    public static TimeZoneInfo? ResolveTimeZone(string? id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return null;
+        try { return TimeZoneInfo.FindSystemTimeZoneById(id); }
+        catch (Exception ex) when (ex is TimeZoneNotFoundException or InvalidTimeZoneException) { return null; }
+    }
+
     /// <summary>Span-level filters: camera and category.</summary>
     public static bool MatchesEvent(DetectionRule rule, DetectionEvent e) =>
-        (rule.CameraId is null || rule.CameraId == e.CameraId)
+        InScope(rule, e.CameraId)
         && (string.IsNullOrWhiteSpace(rule.Category) || string.Equals(rule.Category, e.Category, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>A MotionDetected rule's filters: camera scope, and the zone when it names one.</summary>
+    public static bool MatchesMotion(DetectionRule rule, MotionEvent m) =>
+        rule.Condition == AlertConditionType.MotionDetected
+        && InScope(rule, m.CameraId)
+        && (rule.MotionZoneId is not { } zoneId || m.ZoneId == zoneId);
+
+    private static bool InScope(DetectionRule rule, Guid cameraId) =>
+        rule.CameraId is { } ruleCamera ? ruleCamera == cameraId : rule.ScopeCameraIds is null || rule.ScopeCameraIds.Contains(cameraId);
 
     /// <summary>The event's objects that pass the rule's label, color and zone filters. An event
     /// with no per-object records (an older Vision build) stands in as one object made from the

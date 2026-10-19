@@ -12,7 +12,8 @@ namespace LarisVMS.Web.Pages.Admin.ApiKeys;
 /// <summary>Create-only — an ApiKey has nothing worth re-editing after creation (see ApiKey's own doc
 /// comment); Index's Revoke is the only other lifecycle action.</summary>
 [Authorize("ApiKeys.Edit")]
-public class EditModel(ApplicationDbContext db, IApiKeyService apiKeyService, IAuditService auditService) : PageModel
+public class EditModel(ApplicationDbContext db, IApiKeyService apiKeyService, IAuditService auditService,
+    IPermissionService permissions) : PageModel
 {
     [BindProperty] public string Name { get; set; } = string.Empty;
     [BindProperty] public string RoleId { get; set; } = string.Empty;
@@ -37,6 +38,13 @@ public class EditModel(ApplicationDbContext db, IApiKeyService apiKeyService, IA
             await LoadRolesAsync(ct);
             return Page();
         }
+        // A key acts with its role's access, so it can't reach further than a role you could assign.
+        if (!(await LarisVMS.Web.Services.AdminScope.ForAsync(db, permissions, User, ct)).CanBindRole(RoleId))
+        {
+            ErrorMessage = "You can't create a key with that role.";
+            await LoadRolesAsync(ct);
+            return Page();
+        }
 
         var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         var (key, rawValue) = await apiKeyService.GenerateAsync(Name, RoleId, userId, ct);
@@ -49,5 +57,8 @@ public class EditModel(ApplicationDbContext db, IApiKeyService apiKeyService, IA
     }
 
     private async Task LoadRolesAsync(CancellationToken ct)
-        => Roles = await db.Roles.OrderBy(r => r.Name).ToListAsync(ct);
+    {
+        var scope = await LarisVMS.Web.Services.AdminScope.ForAsync(db, permissions, User, ct);
+        Roles = (await db.Roles.OrderBy(r => r.Name).ToListAsync(ct)).Where(r => scope.CanBindRole(r.Id)).ToList();
+    }
 }

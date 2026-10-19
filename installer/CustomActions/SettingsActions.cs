@@ -184,7 +184,7 @@ namespace LarisVMS.Installer
                 {
                     var roots = new[]
                     {
-                        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"WinGet\Packages"),
+                        Path.Combine(Util.ProgramFiles64(), @"WinGet\Packages"),
                         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Microsoft\WinGet\Packages"),
                     };
                     foreach (var root in roots.Where(Directory.Exists))
@@ -255,6 +255,8 @@ namespace LarisVMS.Installer
             if (All("Server") && product.Key == "Node")
             {
                 if (!Util.IsPort(session["LIVEPORT"])) return "Live port must be a number from 1 to 65535 (property LIVEPORT).";
+                if (!string.IsNullOrWhiteSpace(session["LIVEALLOWFROM"]) && !Util.IsAddressList(session["LIVEALLOWFROM"]))
+                    return "Live port allow list must be IP addresses or CIDR blocks separated by commas, for example 10.0.0.5,10.0.1.0/24 (property LIVEALLOWFROM).";
                 if (string.IsNullOrEmpty(session["FFMPEGRESOLVED"]))
                     return string.IsNullOrEmpty(session["FFMPEGPATH"])
                         ? "FFmpeg was not found. Install it with 'winget install ffmpeg --scope machine', or set its path (property FFMPEGPATH)."
@@ -283,8 +285,9 @@ namespace LarisVMS.Installer
         }
 
         /// <summary>Builds the service command line the same way install-node.ps1 / install-proxy.ps1
-        /// do. The server URL and key are only passed while still unregistered — once node.config /
-        /// proxy.config exists the service ignores them, and the key shouldn't sit in the registry.</summary>
+        /// do. The server URL is only passed while still unregistered. The registration key never goes
+        /// on the command line (the service's registry entry is readable by every local user): it's
+        /// written to a locked-down file instead (WriteRegistrationKey).</summary>
         [CustomAction]
         public static ActionResult BuildServiceArgs(Session session)
         {
@@ -293,7 +296,6 @@ namespace LarisVMS.Installer
             if (!string.IsNullOrEmpty(session["SERVERURL"]) && !string.IsNullOrEmpty(session["REGISTRATIONKEY"]))
             {
                 args.Add("--server-url"); args.Add(session["SERVERURL"]);
-                args.Add("--registration-key"); args.Add(session["REGISTRATIONKEY"]);
             }
             if (product.Key == "Node")
             {
@@ -344,6 +346,12 @@ namespace LarisVMS.Installer
                 ["AllowInsecure"] = session["CLIENTALLOWINSECURE"] == "1" ? "1" : "0",
             };
             session["WriteEndpointConfig"] = endpoint.ToString();
+
+            session["WriteRegistrationKey"] = new CustomActionData
+            {
+                ["Key"] = session["REGISTRATIONKEY"],
+                ["ServiceAccount"] = session["SERVICEACCOUNT"],
+            }.ToString();
 
             var web = new CustomActionData
             {

@@ -176,7 +176,7 @@ window.larisvmsDashboardReport = (function () {
         nodeEl.value = '';
         // Filtering by node only makes sense for lists of cameras or nodes.
         nodeEl.classList.toggle('d-none', def.assetKind !== 'camera' && def.assetKind !== 'node');
-        filterEl.setAttribute('placeholder', def.assetKind === 'speed' ? 'Filter by camera, trap, object or color' : filterPlaceholder);
+        filterEl.setAttribute('placeholder', def.assetKind === 'speed' ? 'Filter by camera, trap, object, or color' : filterPlaceholder);
         bodyEl.innerHTML = '<tr><td colspan="5" class="text-muted">Loading…</td></tr>';
         countEl.textContent = '';
         pageEl.textContent = '';
