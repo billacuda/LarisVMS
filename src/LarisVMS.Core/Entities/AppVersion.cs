@@ -1,10 +1,9 @@
 namespace LarisVMS.Core.Entities;
 
 /// <summary>
-/// One row per shipped version, inserted by a data-only EF migration (see the
-/// "BumpVersionX_Y_Z" convention in the README). The footer reads the highest row here, so what it
-/// shows is the version the database is actually migrated to — a half-applied deploy (new binaries,
-/// unapplied migrations, or vice versa) is visible on every page.
+/// One row per shipped version, written at startup from LarisVMS.Infrastructure.AppRelease (up to
+/// 0.218.0, by a data-only BumpVersionX_Y_Z migration per release). The footer reads the highest row
+/// here, so what it shows is the newest version that has started against this database.
 /// </summary>
 public class AppVersion
 {

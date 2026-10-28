@@ -3,8 +3,8 @@
     Builds the LarisVMS Web, Node and Proxy MSI installers.
 
 .DESCRIPTION
-      1. Checks the release version is in sync (CHANGELOG.md, every csproj <Version>, and the
-         BumpVersionX_Y_Z migration) — see tools\VersionGuard.ps1
+      1. Checks the release version is in sync (CHANGELOG.md, every csproj <Version>, and
+         AppRelease.Version) — see tools\VersionGuard.ps1
       2. Builds the recorder node and media proxy packages (build-node.ps1, build-proxy.ps1)
       3. Publishes LarisVMS.Web self-contained (win-x64) and bundles the node/proxy packages and the
          CUDA provider into its packages\ folder — the web app registers them as Pending on startup
@@ -53,7 +53,7 @@ if ($SkipVersionSyncCheck) {
 } else {
     Write-Step "Checking release version"
     $version = Assert-ReleaseVersionSync -ChangelogPath $changelog `
-        -MigrationsPath (Join-Path $PSScriptRoot 'src\LarisVMS.Infrastructure\Migrations') -Projects @{
+        -AppReleasePath (Join-Path $PSScriptRoot 'src\LarisVMS.Infrastructure\AppRelease.cs') -Projects @{
             'LarisVMS.Web'         = $webProject
             'LarisVMS.Node'        = (Join-Path $PSScriptRoot 'src\LarisVMS.Node\LarisVMS.Node.csproj')
             'LarisVMS.Proxy'       = (Join-Path $PSScriptRoot 'src\LarisVMS.Proxy\LarisVMS.Proxy.csproj')

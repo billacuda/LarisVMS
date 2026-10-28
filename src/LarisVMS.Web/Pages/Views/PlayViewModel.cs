@@ -25,6 +25,9 @@ public sealed class PlayViewModel
     /// leaves, before it dissolves.</summary>
     public int PathLingerSeconds { get; set; } = PathLinger.Default;
 
+    /// <summary>LiveView.PathDissolveSeconds: how long that path then takes to dissolve.</summary>
+    public int PathDissolveSeconds { get; set; } = PathDissolve.Default;
+
     /// <summary>Set only for the single-camera picker — non-null tells the client to render one ad
     /// hoc tile for this camera instead of parsing LayoutJson.</summary>
     public Guid? SingleCameraId { get; set; }

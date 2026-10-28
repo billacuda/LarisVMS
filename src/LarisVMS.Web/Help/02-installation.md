@@ -6,16 +6,45 @@ Each part has its own installer: `LarisVMS-Web`, `LarisVMS-Node`, and `LarisVMS-
 
 ## Web server
 
-1. Have a SQL Server reachable from the server (Integrated Security or SQL Authentication).
+1. Have a SQL Server reachable from the server (Integrated Security or SQL Authentication), or a MariaDB server (experimental; see [MariaDB](#mariadb)).
 2. Run `LarisVMS-Web.msi`. Settings:
    - `HTTPSPORT`: the HTTPS port (default 8444). The installer opens it in the firewall, for TCP and for UDP ([HTTP/3](/Help/security#http3)).
    - `CERTPATH`, `CERTPASSWORD`: the server certificate (`.pfx`). Leave blank to use a self-signed certificate until you have one. The installer checks that the file opens with the password before continuing; a file share must also be readable by the service account.
-   - `SERVICEACCOUNT`, `SERVICEPASSWORD`: run the service as a specific account, for example one with SQL Integrated Security rights. Blank runs it as LocalSystem.
+   - `SERVICEACCOUNT`, `SERVICEPASSWORD`: run the service as a specific account, for example one with SQL Integrated Security rights. Blank runs it as LocalSystem. Not needed for MariaDB.
 3. Browse to `https://<host>:8444/`. The setup wizard walks through the database, the first admin account, storage, and node registration.
+
+A SQL login's password, or a MariaDB password, is stored encrypted on the server (DPAPI, this machine only), so `setup-generated.json` can't be copied to another machine with the password still working. Run the wizard again there instead.
 
 If you point the wizard at an existing LarisVMS database (for example after reinstalling the server), it uses that database as it is: upgraded if needed, nothing seeded or overwritten, and the remaining steps skipped. A database that isn't a LarisVMS one is refused. Once setup is complete, the wizard can't be opened again.
 
 The server needs no .NET runtime; it's included. The certificate can also be changed later in `appsettings.Production.json` in the install folder. A renewed `.pfx` at the same path is picked up within a minute, without a restart.
+
+## MariaDB
+
+**Experimental:** MariaDB 10.11 and later are now supported, but support is new. For an installation that needs to be stable, use SQL Server for now, and please [report any issues](https://github.com/billacuda/LarisVMS/issues).
+
+LarisVMS can use MariaDB 10.11 or later instead of SQL Server. In the setup wizard, choose **MariaDB** and enter the host, port (default 3306), database name, and a MariaDB user and password. MariaDB has no Windows sign-in for LarisVMS to use, so a user and password are always needed.
+
+- **The user** needs permission to create the database. Or create it yourself first, with the `utf8mb4` character set, and grant the user `ALL` on it:
+
+  ```sql
+  CREATE DATABASE larisvms CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_as_ci;
+  CREATE USER 'larisvms'@'%' IDENTIFIED BY 'a-strong-password';
+  GRANT ALL ON larisvms.* TO 'larisvms'@'%';
+  ```
+
+- **Encryption:** the connection uses TLS. The server's certificate is checked unless MariaDB is on this machine, or you tick **Trust this server's certificate** (for a self-signed certificate on another machine).
+- **MariaDB before 11.4 has TLS turned off** until it's given a certificate, and LarisVMS won't send the password to another machine without it. Add the certificate and its key to the `[mysqld]` section of `my.ini`, restart MariaDB, and tick **Trust this server's certificate** if it's self-signed:
+
+  ```ini
+  [mysqld]
+  ssl_cert = C:/MariaDB/certs/server-cert.pem
+  ssl_key = C:/MariaDB/certs/server-key.pem
+  ```
+
+  MariaDB 11.4 and later set up a certificate themselves.
+- **Backups** need the MariaDB client tools on the LarisVMS server (see [Backups](/Help/backups)).
+- An existing SQL Server installation can't be moved to MariaDB; MariaDB is for new installations.
 
 ## Nodes
 

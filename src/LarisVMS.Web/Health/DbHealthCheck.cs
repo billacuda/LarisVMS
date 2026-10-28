@@ -12,7 +12,7 @@ public class DbHealthCheck(ApplicationDbContext db, IConfiguration configuration
         // Pre-setup, there is no connection string yet — that's an expected state, not a failed
         // health check (deploy.ps1's post-deploy probe would otherwise fail on a fresh install
         // before the wizard has run).
-        if (string.IsNullOrWhiteSpace(configuration.GetConnectionString("DefaultConnection")))
+        if (!DatabaseConfig.IsConfigured(configuration))
             return HealthCheckResult.Healthy("Database not yet configured (setup pending).");
 
         try

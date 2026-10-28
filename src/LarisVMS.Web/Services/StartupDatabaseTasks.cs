@@ -3,7 +3,6 @@ using System.Security.Principal;
 using System.ServiceProcess;
 using LarisVMS.Core.Interfaces;
 using LarisVMS.Infrastructure.Data;
-using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 
 namespace LarisVMS.Web.Services;
@@ -43,9 +42,9 @@ public sealed class StartupDatabaseTasks(
         var configured = await Timed("database check", () => services.GetRequiredService<ISetupService>().IsDatabaseConfiguredAsync(cancellationToken));
         if (!configured)
         {
-            if (!string.IsNullOrWhiteSpace(configuration.GetConnectionString("DefaultConnection")))
-                logger.LogWarning("Cannot reach SQL Server '{Server}' as {Identity} - showing the setup wizard until the database is reachable.",
-                    ServerName(), Identity);
+            if (DatabaseConfig.IsConfigured(configuration))
+                logger.LogWarning("Cannot reach {Provider} '{Server}' as {Identity} - showing the setup wizard until the database is reachable.",
+                    ProviderName, ServerName(), Identity);
             return;
         }
 
@@ -55,7 +54,7 @@ public sealed class StartupDatabaseTasks(
         {
             pending = (await Timed("pending migrations", () => db.Database.GetPendingMigrationsAsync(cancellationToken))).ToList();
         }
-        catch (Exception ex) when (ex is SqlException or InvalidOperationException)
+        catch (Exception ex) when (ex is System.Data.Common.DbException or InvalidOperationException)
         {
             LogUnreachable(ex);
             throw;
@@ -74,6 +73,8 @@ public sealed class StartupDatabaseTasks(
             }
         }
 
+        // This release's AppVersions row (the footer version) — see AppRelease.
+        await Timed("release version", async () => { await LarisVMS.Infrastructure.AppRelease.EnsureRecordedAsync(db, cancellationToken); return true; });
         await Timed("bundled builds", async () =>
         {
             await services.GetRequiredService<IBundledBuildRegistrar>().RegisterAsync(Path.Combine(environment.ContentRootPath, "packages"), cancellationToken);
@@ -119,14 +120,16 @@ public sealed class StartupDatabaseTasks(
     }
 
     private void LogUnreachable(Exception ex) =>
-        logger.LogCritical(ex, "Cannot reach SQL Server '{Server}' as {Identity} - the service will not start: {Message}",
-            ServerName(), Identity, ex.Message);
+        logger.LogCritical(ex, "Cannot reach {Provider} '{Server}' as {Identity} - the service will not start: {Message}",
+            ProviderName, ServerName(), Identity, ex.Message);
+
+    private string ProviderName => DatabaseConfig.GetProvider(configuration) == LarisVMS.Core.Enums.DatabaseProvider.MariaDb ? "MariaDB" : "SQL Server";
 
     private static string Identity => Environment.UserDomainName + "\\" + Environment.UserName;
 
     private string ServerName()
     {
-        try { return new SqlConnectionStringBuilder(configuration.GetConnectionString("DefaultConnection")).DataSource; }
+        try { return DatabaseConfig.GetOps(configuration).DescribeServer(configuration[DatabaseConfig.ConnectionStringKey] ?? ""); }
         catch (ArgumentException) { return "?"; } // unparseable connection string
     }
 

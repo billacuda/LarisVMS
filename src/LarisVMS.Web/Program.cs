@@ -6,7 +6,6 @@ using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
-using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Caching.Memory;
@@ -77,6 +76,17 @@ builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", fram
 // Holds only what the app needs before the database can be read: the connection string and
 // branding. Everything else lives in the Settings table via ISettingsResolver. Written by the
 // setup wizard (SetupService.MergeSetupJson), never committed to source control.
+// An install configured before database passwords were protected has its password in plain text in
+// the connection string; move it into Database:ProtectedPassword first (see DatabaseConfig).
+try
+{
+    if (DatabaseConfig.ProtectPlaintextPassword(Path.Combine(builder.Environment.ContentRootPath, "setup-generated.json")))
+        webFileLogger.CreateLogger("Startup").LogInformation("Moved the database password in setup-generated.json into protected storage.");
+}
+catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or System.Security.Cryptography.CryptographicException)
+{
+    webFileLogger.CreateLogger("Startup").LogWarning(ex, "Could not protect the database password in setup-generated.json: {Message}", ex.Message);
+}
 builder.Configuration.AddJsonFile("setup-generated.json", optional: true, reloadOnChange: true);
 
 // ── Database ──────────────────────────────────────────────────────────────────
@@ -84,15 +94,12 @@ builder.Configuration.AddJsonFile("setup-generated.json", optional: true, reload
 // boot so the wizard can run.
 builder.Services.AddDbContext<ApplicationDbContext>((provider, options) =>
 {
-    var cs = provider.GetRequiredService<IConfiguration>().GetConnectionString("DefaultConnection");
+    // SQL Server or MariaDB (Database:Provider) — the provider-specific setup is in DatabaseProviderOps.
+    var configuration = provider.GetRequiredService<IConfiguration>();
+    var cs = DatabaseConfig.GetConnectionString(configuration);
     if (!string.IsNullOrWhiteSpace(cs))
     {
-        // Split-query by default: the one multi-collection projection in the app
-        // (CameraService.ProjectWithoutCredentials — Groups + Streams) is far better served by two
-        // round-trips than a single cartesian join, and it's on hot paths (dashboard, playback,
-        // snapshots, /live). Single-collection Includes elsewhere are unaffected in practice, and EF
-        // adds its own PK ordering to correlate the split results, so nothing needs a manual OrderBy.
-        options.UseSqlServer(cs, sql => sql.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery));
+        DatabaseConfig.GetOps(configuration).Configure(options, cs);
         // Every query that trips FirstWithoutOrderByAndFilterWarning is an unfiltered read of a keyed
         // singleton settings table (EmailSettings, EntraSsoSettings) where the app already assumes
         // 0–1 rows — the nondeterministic-order case the warning guards against can't arise here.
@@ -557,20 +564,24 @@ builder.Services.AddCascadingAuthenticationState();
 // WebServer.Http3Enabled is read here too, for the same reason: Kestrel's protocols are fixed at startup.
 int? webMediaPort = null;
 var http3Enabled = true;
-var earlyConnectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+var earlyConnectionString = DatabaseConfig.GetConnectionString(builder.Configuration);
 if (!string.IsNullOrWhiteSpace(earlyConnectionString))
 {
     try
     {
         // Short timeout: this runs before the service has connected to the SCM, and an unreachable
         // server would otherwise spend the default 15 s of its 30-second start budget here.
-        using var earlyConn = new SqlConnection(new SqlConnectionStringBuilder(earlyConnectionString) { ConnectTimeout = 5 }.ConnectionString);
+        var earlyOps = DatabaseConfig.GetOps(builder.Configuration);
+        await using var earlyConn = earlyOps.CreateConnection(earlyConnectionString, connectTimeoutSeconds: 5);
         await earlyConn.OpenAsync();
-        using var earlyCmd = earlyConn.CreateCommand();
-        earlyCmd.CommandText = "SELECT [Key], Value FROM Settings WHERE [Key] IN (@MediaPortKey, @Http3Key)";
-        earlyCmd.Parameters.AddWithValue("@MediaPortKey", PortSegmentationMiddleware.SettingKey);
-        earlyCmd.Parameters.AddWithValue("@Http3Key", WebServerProtocols.Http3SettingKey);
-        using var earlyReader = await earlyCmd.ExecuteReaderAsync();
+        await using var earlyCmd = earlyConn.CreateCommand();
+        // Key is a reserved word in both, quoted each server's way.
+        earlyCmd.CommandText = earlyOps is MariaDbOps
+            ? "SELECT `Key`, Value FROM Settings WHERE `Key` IN (@MediaPortKey, @Http3Key)"
+            : "SELECT [Key], Value FROM Settings WHERE [Key] IN (@MediaPortKey, @Http3Key)";
+        AddEarlyParameter(earlyCmd, "@MediaPortKey", PortSegmentationMiddleware.SettingKey);
+        AddEarlyParameter(earlyCmd, "@Http3Key", WebServerProtocols.Http3SettingKey);
+        await using var earlyReader = await earlyCmd.ExecuteReaderAsync();
         while (await earlyReader.ReadAsync())
         {
             var key = earlyReader.GetString(0);
@@ -3461,7 +3472,7 @@ app.MapPost("/api/notifications/devices", async (HttpContext ctx, RegisterPushDe
 {
     var userId = CurrentUserId(ctx);
     if (userId.Length == 0) return Results.Unauthorized();
-    if (!Enum.TryParse<PushSubscriptionKind>(request.Kind, true, out var kind) || string.IsNullOrWhiteSpace(request.Endpoint) || request.Endpoint.Length > 800)
+    if (!Enum.TryParse<PushSubscriptionKind>(request.Kind, true, out var kind) || string.IsNullOrWhiteSpace(request.Endpoint) || request.Endpoint.Length > ApplicationDbContext.MaxPushEndpointLength)
         return Results.Problem("This browser's push registration wasn't valid.", statusCode: StatusCodes.Status400BadRequest);
     if (kind == PushSubscriptionKind.WebPush && (string.IsNullOrWhiteSpace(request.P256dh) || string.IsNullOrWhiteSpace(request.Auth)
             || !Uri.TryCreate(request.Endpoint, UriKind.Absolute, out var endpointUri) || endpointUri.Scheme != Uri.UriSchemeHttps))
@@ -3671,4 +3682,12 @@ static async Task CloseRelayAsync(WebSocket node, WebSocket browser)
         try { await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None); }
         catch (Exception) { /* already closed or aborted by the other end; nothing left to do */ }
     }
+}
+
+static void AddEarlyParameter(System.Data.Common.DbCommand command, string name, object value)
+{
+    var parameter = command.CreateParameter();
+    parameter.ParameterName = name;
+    parameter.Value = value;
+    command.Parameters.Add(parameter);
 }

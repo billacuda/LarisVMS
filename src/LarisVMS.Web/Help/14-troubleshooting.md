@@ -6,7 +6,7 @@ Common problems, and where to look.
 
 - **Server**: **Logs → System logs**. Set the level and retention under **Settings → Logging**. Debug and Trace add detail but make large files.
 - **Camera event log**: the raw events cameras send, used only to list a camera's event topics for event tags. They're kept for 30 days by default (**Settings → Logging**, 0 keeps them forever); clearing them doesn't touch events, snapshots, or footage.
-- **Database upkeep**: every night at about 3 AM the server tidies the database's indexes and statistics, and logs one line saying what it did. If its database login isn't allowed to, it logs a warning instead.
+- **Database upkeep**: every night at about 3 AM the server tidies the database's indexes and statistics, and logs one line saying what it did. If its database login isn't allowed to, it logs a warning instead. On MariaDB (experimental) this is skipped; MariaDB keeps its own statistics.
 - **Nodes**: `%ProgramData%\LarisVMS\logs\node-*.log` on each node.
 - **AI detection**: `%ProgramData%\LarisVMS\logs\vision-*.log` on each node.
 - **Auto-update**: `%ProgramData%\LarisVMS\logs\updater-*.log` on each node or proxy.

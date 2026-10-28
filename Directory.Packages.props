@@ -20,6 +20,10 @@
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.13" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Tools" Version="10.0.13" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.13" />
+    <!-- MariaDB provider (experimental). A fork of Pomelo.EntityFrameworkCore.MySql that tracks EF Core 10 —
+         Pomelo itself only ships for EF Core 9. Same API and namespaces, so swapping back to Pomelo
+         once it catches up is a package change only. MIT. -->
+    <PackageVersion Include="Microting.EntityFrameworkCore.MySql" Version="10.0.13" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.13" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.13" />
     <PackageVersion Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.13" />

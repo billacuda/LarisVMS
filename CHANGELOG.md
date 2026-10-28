@@ -5,7 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.219.0] - 2026-10-27
+
+### ➕ Added
+
+- **Path dissolve time.** Settings → Live view sets how long a travel path takes to fade away
+  once its linger time is up. The default is now 3 seconds, up from 1.5.
+- **MariaDB support (experimental).** MariaDB 10.11 and later are now supported: the setup wizard
+  can use MariaDB instead of SQL Server, with a MariaDB user and password. Backups use
+  `mariadb-dump`. This is new, so for an installation that needs to be stable, use SQL Server for
+  now, and please report any issues.
+
+### 🔒 Security
+
+- **Database password encrypted.** A SQL login's password is no longer kept in plain text in
+  `setup-generated.json`. It's encrypted for this machine, and an existing one is moved over at the
+  next start.
+
+### ⚙️ Changed
+
+- **Removing an evidence lock.** The reason now goes in a pop-up box instead of a dropdown squeezed
+  into the lock's row.
 
 ## [0.218.0] - 2026-10-19
 

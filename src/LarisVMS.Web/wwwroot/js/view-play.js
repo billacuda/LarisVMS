@@ -429,6 +429,7 @@ window.larisvmsViewPlay = (function () {
         detectionOverlay.setShowSpeed(showSpeedDetections);
         detectionOverlay.setShowColor(showColorDetections);
         if (typeof opts.pathLingerSeconds === 'number') detectionOverlay.setPathLinger(opts.pathLingerSeconds * 1000);
+        if (typeof opts.pathDissolveSeconds === 'number') detectionOverlay.setPathDissolve(opts.pathDissolveSeconds * 1000);
         detectionOverlays[cell.id] = detectionOverlay;
 
         stopFns[cell.id] = function () {

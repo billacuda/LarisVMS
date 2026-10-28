@@ -86,7 +86,7 @@ read before you install.
 
 | Component | Runs as | Role |
 |---|---|---|
-| **LarisVMS Web** | Windows service (Kestrel, HTTPS) | Web UI, REST API, and node control plane. Stores configuration in SQL Server. |
+| **LarisVMS Web** | Windows service (Kestrel, HTTPS) | Web UI, REST API, and node control plane. Stores configuration in SQL Server (or, experimentally, MariaDB). |
 | **LarisVMS Node** | Windows service, one per recording machine | Ingests RTSP, writes segments, enforces retention, runs motion detection, serves live and playback video. |
 | **LarisVMS Vision Service** | Child process of a node (optional) | GPU/CPU object detection. It's isolated, so a driver fault never stops recording. |
 | **LarisVMS Proxy** | Windows service (optional) | Relays video between browsers and nodes, for remote sites or low-bandwidth links. |
@@ -97,6 +97,10 @@ Settings are inherited **global → node → camera**, and the most specific val
 
 - **Operating system:** any 64-bit Windows version supported by [.NET 10](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md), for both the server and the recorder nodes.
 - **Server:** SQL Server (Express works) using SQL or Integrated authentication. For SQL Server Express, the server name is `.\SQLEXPRESS`. Building from source also needs the [.NET 10 SDK](https://dotnet.microsoft.com/download); the MSIs don't need any .NET runtime.
+- **MariaDB (experimental):** MariaDB 10.11 or later can be used instead of SQL Server, with a MariaDB user and password. Built-in backups need the MariaDB client tools (`mariadb-dump`) on the LarisVMS server.
+
+> [!WARNING]
+> MariaDB 10.11 and later are now supported, but support is new and experimental. For an installation that needs to be stable, use SQL Server for now, and please [report any issues](https://github.com/billacuda/LarisVMS/issues).
 - **.NET version:** developed with the .NET SDK 10.0.402. The 0.218.0 installers were built with it and include the .NET 10.0.13 runtime (ASP.NET Core 10.0.13).
 - **Each recorder node:** [FFmpeg](https://ffmpeg.org/) (`winget install ffmpeg --scope machine`).
 - **LarisVision (optional):** a GPU and its driver, or CPU only. NVIDIA additionally needs CUDA Toolkit 12.x and cuDNN 9.x (see [LarisVision](#larisvision-ai-detection)) if you want to use CUDA or TensorRT acceleration, otherwise DirectML works out of the box.
@@ -157,12 +161,14 @@ msiexec /i LarisVMS-Web-0.218.0-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx
 |---|---|---|
 | `HTTPSPORT` | 8444 | HTTPS port, plus its firewall rule. |
 | `CERTPATH`, `CERTPASSWORD` | blank | Server certificate (`.pfx`). Blank uses a self-signed certificate; a renewed file at the same path is picked up automatically. The installer checks that the file opens with the password before it continues. A file share must be readable by the service account. A certificate your devices trust is also needed to install LarisVMS as a phone app. |
-| `SERVICEACCOUNT`, `SERVICEPASSWORD` | LocalSystem | Service account, for example one with SQL Integrated Security rights. |
+| `SERVICEACCOUNT`, `SERVICEPASSWORD` | LocalSystem | Service account, for example one with SQL Integrated Security rights. Not needed for MariaDB, which always uses a MariaDB user and password. |
 | `INSTALLFOLDER` | `C:\Program Files\LarisVMS\Web` | Install location. |
 
 ### 2. Run the setup wizard
 
 Browse to `https://<server>:8444/`. The wizard sets up the database connection, the first admin account, and the branding, and shows the **node registration key**. You can find the key again later under **Nodes → Updates and registration**.
+
+The wizard asks which database to use: **SQL Server**, or **MariaDB** (experimental — for an installation that needs to be stable, use SQL Server for now, and please report any issues). A SQL login or MariaDB password is stored encrypted on the server (DPAPI, this machine only).
 
 Pointing the wizard at an existing LarisVMS database, for example when reinstalling, uses that database as it is: it's upgraded if needed, nothing is seeded or overwritten, and the wizard's remaining steps are skipped. A database that isn't a LarisVMS one is refused. Once setup is complete, the wizard is closed.
 
@@ -316,14 +322,21 @@ dotnet test
 Add a database migration with:
 
 ```powershell
-dotnet ef migrations add <Name> --project src\LarisVMS.Infrastructure --startup-project src\LarisVMS.Web
+.\tools\add-migration.ps1 <Name>
 ```
+
+It adds the migration twice: once for SQL Server (`src\LarisVMS.Infrastructure\Migrations`) and once for
+MariaDB (`src\LarisVMS.Infrastructure.MariaDb\Migrations`). Neither needs a database server. Raw SQL in
+a migration (`migrationBuilder.Sql`) goes in the right provider's copy; `MariaDbModelTests` fails if
+the MariaDB migrations fall behind the model.
 
 Release installers are built with `.\build-installers.ps1` (WiX v5, restored from NuGet).
 
 A release needs the same version in every project's `<Version>` (Web, Node, NodeUpdater, Proxy,
-Core), a `BumpVersionX_Y_Z` migration that inserts into `AppVersions`, and a matching `CHANGELOG.md`
-heading. `install-web.ps1` and `build-installers.ps1` refuse to run if any of these disagree.
+Core), the same version and one-line release notes in `src\LarisVMS.Infrastructure\AppRelease.cs` (the
+app records it in `AppVersions` at startup), and a matching `CHANGELOG.md` heading. `install-web.ps1`
+and `build-installers.ps1` refuse to run if any of these disagree. Releases up to 0.218.0 used a
+`BumpVersionX_Y_Z` migration instead.
 
 ### Project layout
 
@@ -331,6 +344,7 @@ heading. `install-web.ps1` and `build-installers.ps1` refuse to run if any of th
 src/
   LarisVMS.Core             Domain entities, enums, interfaces
   LarisVMS.Infrastructure   EF Core, identity, settings resolution, node control plane
+  LarisVMS.Infrastructure.MariaDb  EF Core migrations for MariaDB (experimental)
   LarisVMS.Onvif            ONVIF SOAP clients, WS-Discovery
   LarisVMS.Media            FFmpeg supervision, segment handling
   LarisVMS.Web              Web UI (Blazor static SSR + Razor Pages) and API

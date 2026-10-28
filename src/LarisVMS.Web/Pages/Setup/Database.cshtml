@@ -1,8 +1,10 @@
 @page
 @model LarisVMS.Web.Pages.Setup.DatabaseModel
+@using LarisVMS.Core.Enums
 @{
     Layout = "_SetupLayout";
     ViewData["Title"] = "Database";
+    var mariaDb = Model.Provider == DatabaseProvider.MariaDb;
 }
 <h5 class="mb-3">1. Database</h5>
 @if (!string.IsNullOrEmpty(Model.ErrorMessage))
@@ -10,29 +12,95 @@
     <div class="alert alert-danger">@Model.ErrorMessage</div>
 }
 <form method="post">
-    <div class="mb-3">
-        <label class="form-label">SQL Server</label>
-        <input asp-for="ServerName" class="form-control" placeholder="." />
-        <div class="form-text">
-            <code>.</code> is SQL Server on this machine. For SQL Server Express, use <code>.\SQLEXPRESS</code>.
+    <fieldset class="mb-3">
+        <legend class="form-label fs-6">Database type</legend>
+        <div class="form-check">
+            <input class="form-check-input" type="radio" asp-for="Provider" value="@DatabaseProvider.SqlServer" id="providerSqlServer" data-db-provider />
+            <label class="form-check-label" for="providerSqlServer">SQL Server</label>
+        </div>
+        <div class="form-check">
+            <input class="form-check-input" type="radio" asp-for="Provider" value="@DatabaseProvider.MariaDb" id="providerMariaDb" data-db-provider />
+            <label class="form-check-label" for="providerMariaDb">MariaDB <span class="badge text-bg-warning">Experimental</span></label>
+        </div>
+    </fieldset>
+
+    <div id="sqlServerFields" @(mariaDb ? "hidden" : null)>
+        <div class="mb-3">
+            <label class="form-label" asp-for="ServerName">SQL Server</label>
+            <input asp-for="ServerName" class="form-control" placeholder="." />
+            <div class="form-text">
+                <code>.</code> is SQL Server on this machine. For SQL Server Express, use <code>.\SQLEXPRESS</code>.
+            </div>
+        </div>
+        <div class="mb-3">
+            <label class="form-label" asp-for="DatabaseName">Database name</label>
+            <input asp-for="DatabaseName" class="form-control" />
+        </div>
+        <div class="mb-3">
+            <label class="form-label" asp-for="Username">SQL login (optional — blank uses Windows/Integrated Security)</label>
+            <input asp-for="Username" class="form-control" />
+        </div>
+        <div class="mb-3">
+            <label class="form-label" asp-for="Password">Password</label>
+            <input asp-for="Password" type="password" class="form-control" />
+        </div>
+        <div class="form-check mb-3">
+            <input asp-for="TrustServerCertificate" class="form-check-input" />
+            <label class="form-check-label" asp-for="TrustServerCertificate">Trust this server's certificate</label>
+            <div class="form-text">Only for a SQL Server on another machine that uses a self-signed certificate. A SQL Server on this machine is always trusted.</div>
         </div>
     </div>
-    <div class="mb-3">
-        <label class="form-label">Database name</label>
-        <input asp-for="DatabaseName" class="form-control" />
+
+    <div id="mariaDbFields" @(mariaDb ? null : "hidden")>
+        <div class="alert alert-warning" role="status">
+            <strong>Experimental:</strong> MariaDB 10.11 and later are now supported, but support is new. For an installation that needs to be stable, use SQL Server for now, and please report any issues.
+        </div>
+        <div class="row g-3 mb-3">
+            <div class="col-8">
+                <label class="form-label" asp-for="MariaDbHost">Host</label>
+                <input asp-for="MariaDbHost" class="form-control" placeholder="localhost" />
+            </div>
+            <div class="col-4">
+                <label class="form-label" asp-for="MariaDbPort">Port</label>
+                <input asp-for="MariaDbPort" type="number" min="1" max="65535" class="form-control" />
+            </div>
+        </div>
+        <div class="mb-3">
+            <label class="form-label" asp-for="MariaDbDatabaseName">Database name</label>
+            <input asp-for="MariaDbDatabaseName" class="form-control" />
+        </div>
+        <div class="mb-3">
+            <label class="form-label" asp-for="MariaDbUsername">User</label>
+            <input asp-for="MariaDbUsername" class="form-control" autocomplete="off" />
+        </div>
+        <div class="mb-3">
+            <label class="form-label" asp-for="MariaDbPassword">Password</label>
+            <input asp-for="MariaDbPassword" type="password" class="form-control" autocomplete="new-password" />
+            <div class="form-text">
+                Stored encrypted on this server. The user needs permission to create the database, or create it
+                first (<code>utf8mb4</code>) and grant the user <code>ALL</code> on it. MariaDB 10.11 or later.
+            </div>
+        </div>
+        <div class="form-check mb-3">
+            <input asp-for="MariaDbTrustServerCertificate" class="form-check-input" />
+            <label class="form-check-label" asp-for="MariaDbTrustServerCertificate">Trust this server's certificate</label>
+            <div class="form-text">Only for a MariaDB server on another machine that uses a self-signed certificate.</div>
+        </div>
     </div>
-    <div class="mb-3">
-        <label class="form-label">SQL login (optional — blank uses Windows/Integrated Security)</label>
-        <input asp-for="Username" class="form-control" />
-    </div>
-    <div class="mb-3">
-        <label class="form-label">Password</label>
-        <input asp-for="Password" type="password" class="form-control" />
-    </div>
-    <div class="form-check mb-3">
-        <input asp-for="TrustServerCertificate" class="form-check-input" />
-        <label class="form-check-label" asp-for="TrustServerCertificate">Trust this server's certificate</label>
-        <div class="form-text">Only for a SQL Server on another machine that uses a self-signed certificate. A SQL Server on this machine is always trusted.</div>
-    </div>
+
     <button type="submit" class="btn btn-primary">Create database &amp; continue</button>
 </form>
+<script nonce="@Csp.Value">
+    (function () {
+        var sql = document.getElementById('sqlServerFields');
+        var maria = document.getElementById('mariaDbFields');
+        document.querySelectorAll('[data-db-provider]').forEach(function (radio) {
+            radio.addEventListener('change', function () {
+                var isMaria = radio.checked && radio.value === '@DatabaseProvider.MariaDb';
+                if (!radio.checked) return;
+                sql.hidden = isMaria;
+                maria.hidden = !isMaria;
+            });
+        });
+    })();
+</script>

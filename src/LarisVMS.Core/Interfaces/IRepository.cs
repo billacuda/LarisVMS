@@ -97,10 +97,7 @@ public interface ISetupService
     /// existing, already set-up LarisVMS database (upgraded in place, nothing seeded, setup marked
     /// complete) so the wizard can skip its remaining steps; throws for an existing database that
     /// isn't a LarisVMS one.</summary>
-    /// <param name="trustServerCertificate">Accept the SQL Server's certificate without checking it
-    /// (needed for a self-signed one). Always the case for a server on this machine.</param>
-    Task<bool> SetupDatabaseAsync(string serverName, string databaseName, string? username, string? password,
-        CancellationToken ct = default, bool trustServerCertificate = false);
+    Task<bool> SetupDatabaseAsync(LarisVMS.Core.Dtos.DatabaseSetupRequest request, CancellationToken ct = default);
 
     Task CompleteSetupAsync(string adminEmail, string adminPassword, CancellationToken ct = default);
 

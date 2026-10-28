@@ -348,7 +348,7 @@ public class SecurityHardeningTests
     [InlineData("tcp:127.0.0.1", true)]
     [InlineData("sql01.corp.example", false)]
     public void OnlyALocalSqlServerSkipsTheCertificateCheckByDefault(string server, bool local) =>
-        Assert.Equal(local, LarisVMS.Infrastructure.Services.SetupService.IsThisMachine(server));
+        Assert.Equal(local, LarisVMS.Infrastructure.Data.SqlServerOps.IsThisMachineServer(server));
 
     // ── Server certificate check ──────────────────────────────────────────
 

@@ -2,11 +2,12 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Identity;
-using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
+using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
+using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
 using LarisVMS.Infrastructure.Data;
 
@@ -51,7 +52,7 @@ public class SetupService(
 
     public async Task<bool> IsDatabaseConfiguredAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(configuration.GetConnectionString("DefaultConnection")))
+        if (!DatabaseConfig.IsConfigured(configuration))
             return false;
         try
         {
@@ -69,46 +70,40 @@ public class SetupService(
         catch { return false; }
     }
 
-    public async Task<bool> SetupDatabaseAsync(string serverName, string databaseName, string? username, string? password,
-        CancellationToken ct = default, bool trustServerCertificate = false)
+    public async Task<bool> SetupDatabaseAsync(DatabaseSetupRequest request, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(serverName) || string.IsNullOrWhiteSpace(databaseName))
+        if (string.IsNullOrWhiteSpace(request.Server) || string.IsNullOrWhiteSpace(request.DatabaseName))
             throw new ArgumentException("Server name and database name are required.");
-        ValidateSqlIdentifier(databaseName, nameof(databaseName));
+        var ops = DatabaseProviderOps.For(request.Provider);
+        ops.ValidateDatabaseName(request.DatabaseName);
+        if (request.Provider == DatabaseProvider.MariaDb && (string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrEmpty(request.Password)))
+            throw new ArgumentException("MariaDB needs a user name and password.");
 
-        var masterCs = BuildConnectionString(serverName, "master", username, password, trustServerCertificate);
         bool existed;
-
-        using (var connection = new SqlConnection(masterCs))
+        await using (var connection = ops.CreateConnection(ops.BuildConnectionString(request, null)))
         {
             await connection.OpenAsync(ct);
-            using var command = connection.CreateCommand();
-            command.CommandText = $"SELECT COUNT(*) FROM sys.databases WHERE name = N'{EscapeSqlLiteral(databaseName)}'";
-            existed = ((int?)await command.ExecuteScalarAsync(ct) ?? 0) > 0;
-
+            existed = await ops.DatabaseExistsAsync(connection, request.DatabaseName, ct);
             if (!existed)
-            {
-                using var createCmd = connection.CreateCommand();
-                createCmd.CommandText = $"CREATE DATABASE [{EscapeSqlIdentifier(databaseName)}] COLLATE Latin1_General_100_CI_AS_SC_UTF8";
-                await createCmd.ExecuteNonQueryAsync(ct);
-            }
+                await ops.CreateDatabaseAsync(connection, request.DatabaseName, ct);
         }
 
-        var appCs = BuildConnectionString(serverName, databaseName, username, password, trustServerCertificate);
-        var migrateOptions = new DbContextOptionsBuilder<ApplicationDbContext>().UseSqlServer(appCs).Options;
-        using var migrateCtx = new ApplicationDbContext(migrateOptions);
+        var appCs = ops.BuildConnectionString(request, request.DatabaseName);
+        var migrateOptions = new DbContextOptionsBuilder<ApplicationDbContext>();
+        ops.Configure(migrateOptions, appCs);
+        using var migrateCtx = new ApplicationDbContext(migrateOptions.Options);
 
         // An existing database is used as-is when it's a LarisVMS one (an earlier install, or a
         // reinstall pointed back at its old database) — migrated forward below, never re-seeded — and
         // refused when it holds anything else, before its connection string is saved anywhere.
-        var adopted = existed && await IsLarisDatabaseAsync(migrateCtx, databaseName, ct);
+        var adopted = existed && await IsLarisDatabaseAsync(ops, migrateCtx, request.DatabaseName, ct);
 
-        configuration["ConnectionStrings:DefaultConnection"] = appCs;
-        MergeSetupJson(cfg => cfg["ConnectionStrings"] = new JsonObject { ["DefaultConnection"] = appCs });
+        MergeSetupJson(root => DatabaseConfig.Save(root, configuration, request.Provider, appCs));
 
         await migrateCtx.Database.MigrateAsync(ct);
+        await AppRelease.EnsureRecordedAsync(migrateCtx, ct);
 
-        await GrantServiceAccountAsync(serverName, databaseName, username, password, trustServerCertificate, ct);
+        await ops.GrantServiceAccountAsync(request, ct);
         if (!adopted) return false;
 
         // Same test as IsSetupCompleteAsync, but against the database just connected — this request's
@@ -123,15 +118,13 @@ public class SetupService(
 
     /// <summary>True when the database already holds LarisVMS migrations; false when it's empty;
     /// throws when it has tables of its own but none of ours — migrating into it would mix schemas.</summary>
-    private static async Task<bool> IsLarisDatabaseAsync(ApplicationDbContext ctx, string databaseName, CancellationToken ct)
+    private static async Task<bool> IsLarisDatabaseAsync(DatabaseProviderOps ops, ApplicationDbContext ctx, string databaseName, CancellationToken ct)
     {
         var connection = ctx.Database.GetDbConnection();
         await connection.OpenAsync(ct);
         try
         {
-            using var tables = connection.CreateCommand();
-            tables.CommandText = "SELECT COUNT(*) FROM sys.tables WHERE is_ms_shipped = 0";
-            if ((int)(await tables.ExecuteScalarAsync(ct) ?? 0) == 0) return false;
+            if (await ops.CountUserTablesAsync(connection, ct) == 0) return false;
 
             var applied = (await ctx.Database.GetAppliedMigrationsAsync(ct)).ToHashSet(StringComparer.Ordinal);
             if (ctx.Database.GetMigrations().Any(applied.Contains)) return true;
@@ -183,16 +176,7 @@ public class SetupService(
             throw new InvalidOperationException($"Unable to make the administrator a Super Admin. {ex.Message}", ex);
         }
 
-        if (!await db.AppVersions.AnyAsync(ct))
-        {
-            db.AppVersions.Add(new AppVersion
-            {
-                Major = 0, Minor = 1, Patch = 0,
-                ReleasedAt = DateTime.UtcNow,
-                Notes = "Initial release"
-            });
-            await db.SaveChangesAsync(ct);
-        }
+        await AppRelease.EnsureRecordedAsync(db, ct);
     }
 
     public Task SaveBrandingAsync(string appName, string primaryColor, CancellationToken ct = default)
@@ -303,88 +287,6 @@ public class SetupService(
         await target.SaveChangesAsync(ct);
     }
 
-    private async Task GrantServiceAccountAsync(string serverName, string databaseName, string? username, string? password,
-        bool trustServerCertificate, CancellationToken ct)
-    {
-        if (!OperatingSystem.IsWindows()) return;
-
-        try
-        {
-#pragma warning disable CA1416
-            var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
-            if (identity is null) return;
-            var account = identity.Name;
-#pragma warning restore CA1416
-            if (account is null || !SqlIdentifierPattern.IsMatch(account)) return;
-
-            var masterCs = BuildConnectionString(serverName, "master", username, password, trustServerCertificate);
-            using var conn = new SqlConnection(masterCs);
-            await conn.OpenAsync(ct);
-
-            using (var cmd = conn.CreateCommand())
-            {
-                cmd.CommandText = $@"
-                    IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name = N'{EscapeSqlLiteral(account)}')
-                        CREATE LOGIN [{EscapeSqlIdentifier(account)}] FROM WINDOWS;";
-                await cmd.ExecuteNonQueryAsync(ct);
-            }
-
-            conn.ChangeDatabase(databaseName);
-
-            using (var cmd = conn.CreateCommand())
-            {
-                cmd.CommandText = $@"
-                    IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = N'{EscapeSqlLiteral(account)}')
-                        CREATE USER [{EscapeSqlIdentifier(account)}] FOR LOGIN [{EscapeSqlIdentifier(account)}];
-                    IF NOT EXISTS (
-                        SELECT 1 FROM sys.database_role_members
-                        WHERE member_principal_id = DATABASE_PRINCIPAL_ID(N'{EscapeSqlLiteral(account)}')
-                          AND role_principal_id   = DATABASE_PRINCIPAL_ID(N'db_owner'))
-                        ALTER ROLE db_owner ADD MEMBER [{EscapeSqlIdentifier(account)}];";
-                await cmd.ExecuteNonQueryAsync(ct);
-            }
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"Warning: could not grant service account permissions: {ex.Message}");
-        }
-    }
-
-    private static string BuildConnectionString(string server, string database, string? username, string? password,
-        bool trustServerCertificate)
-    {
-        var b = new SqlConnectionStringBuilder
-        {
-            DataSource = server,
-            InitialCatalog = database,
-            Encrypt = true,
-            // The certificate is checked unless the admin said not to, or SQL Server is on this
-            // machine (nothing in between to intercept; SQL Express's own certificate is self-signed).
-            TrustServerCertificate = trustServerCertificate || IsThisMachine(server)
-        };
-
-        if (!string.IsNullOrWhiteSpace(username) && !string.IsNullOrWhiteSpace(password))
-        {
-            b.UserID = username;
-            b.Password = password;
-        }
-        else
-        {
-            b.IntegratedSecurity = true;
-        }
-
-        return b.ConnectionString;
-    }
-
-    internal static bool IsThisMachine(string server)
-    {
-        var host = server.Split('\\', ',')[0].Trim();
-        if (host.StartsWith("tcp:", StringComparison.OrdinalIgnoreCase)) host = host[4..];
-        return host is "." or "(local)" or "(localdb)" or "127.0.0.1" or "::1"
-            || host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
-            || host.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase);
-    }
-
     private void MergeSetupJson(Action<JsonObject> update)
     {
         var path = Path.Combine(environment.ContentRootPath, "setup-generated.json");
@@ -395,22 +297,8 @@ public class SetupService(
 
         update(root);
         File.WriteAllText(path, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
-        // It can hold the SQL password; the program folder is readable by every local user.
+        // It can hold the database password (protected on Windows); the program folder is readable by
+        // every local user.
         LarisVMS.Core.Security.LocalDataAcl.ProtectFile(path);
     }
-
-    // Database/login names are meant to be plain SQL identifiers, validated up front against an
-    // allow-list (Windows account names additionally need '\' for DOMAIN\user) so a crafted name
-    // can't break out of the "[...]" identifier or "N'...'" literal contexts below.
-    private static readonly System.Text.RegularExpressions.Regex SqlIdentifierPattern =
-        new(@"^[A-Za-z0-9_][A-Za-z0-9_ \-\.\$\\]*$", System.Text.RegularExpressions.RegexOptions.Compiled);
-
-    private static void ValidateSqlIdentifier(string value, string fieldName)
-    {
-        if (string.IsNullOrWhiteSpace(value) || !SqlIdentifierPattern.IsMatch(value))
-            throw new ArgumentException($"'{fieldName}' contains characters that aren't allowed in a SQL identifier.");
-    }
-
-    private static string EscapeSqlLiteral(string input) => input.Replace("'", "''");
-    private static string EscapeSqlIdentifier(string input) => input.Replace("]", "]]");
 }

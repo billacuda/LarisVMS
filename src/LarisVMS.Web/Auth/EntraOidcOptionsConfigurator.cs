@@ -66,13 +66,12 @@ public class EntraOidcOptionsConfigurator(IServiceScopeFactory scopeFactory) : I
     /// configured", so pre-setup requests get the placeholder options instead of an exception.</summary>
     private static EntraSsoSettings? ReadSettings(IServiceProvider services)
     {
-        var connectionString = services.GetRequiredService<IConfiguration>().GetConnectionString("DefaultConnection");
-        if (string.IsNullOrWhiteSpace(connectionString)) return null;
+        if (!DatabaseConfig.IsConfigured(services.GetRequiredService<IConfiguration>())) return null;
         try
         {
             return services.GetRequiredService<ApplicationDbContext>().EntraSsoSettings.AsNoTracking().FirstOrDefault();
         }
-        catch (Microsoft.Data.SqlClient.SqlException)
+        catch (System.Data.Common.DbException)
         {
             return null;
         }

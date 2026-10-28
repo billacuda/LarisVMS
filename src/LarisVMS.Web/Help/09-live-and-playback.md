@@ -12,7 +12,7 @@ A **view** is a saved camera layout. Build views under **Views** by dragging and
 - Each tile with audio has its own mute and volume control. Tiles always start muted.
 - **Adaptive streaming** (under **Settings → Live view**) shows small tiles the Sub stream and switches to Main when the tile is large or fullscreen. Each tile also has a manual Auto/HD/SD choice.
 - Badges show motion and detected objects. **Settings → Events** sets their colors and corner.
-- The toolbar's AI switches draw a box around each detected object: **Moving**, **Idle**, or both. **Confidence** adds each box's score, and **Speed** and **Color** (on by default) add its speed, once a speed trap has timed it, and its color. **Path** (with Moving on) draws the line each moving object has taken from the centre of its box, in the box's color. The line stays while the object keeps moving. Once it stops or leaves, the line stays for the **Path linger** time (**Settings → Live view**, 5 seconds by default), then dissolves from its start.
+- The toolbar's AI switches draw a box around each detected object: **Moving**, **Idle**, or both. **Confidence** adds each box's score, and **Speed** and **Color** (on by default) add its speed, once a speed trap has timed it, and its color. **Path** (with Moving on) draws the line each moving object has taken from the centre of its box, in the box's color. The line stays while the object keeps moving. Once it stops or leaves, the line stays for the **Path linger** time (**Settings → Live view**, 5 seconds by default), then dissolves from its start over the **Path dissolve** time (same page, 3 seconds by default).
 - PTZ cameras get a direction pad and zoom.
 
 ## Talking through a camera

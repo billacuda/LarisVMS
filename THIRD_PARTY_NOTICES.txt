@@ -75,6 +75,19 @@ Markdig
     Copyright (c) Alexandre Mutel
     Renders the in-app Help pages (LarisVMS.Web/Help/*.md).
 
+Microting.EntityFrameworkCore.MySql (fork of Pomelo.EntityFrameworkCore.MySql)
+    MIT
+    https://github.com/microting/Pomelo.EntityFrameworkCore.MySql
+    Copyright (c) Pomelo Foundation and contributors
+    EF Core provider for MariaDB (experimental). Used in place of Pomelo, which doesn't support
+    EF Core 10 yet.
+
+MySqlConnector
+    MIT
+    https://github.com/mysql-net/MySqlConnector
+    Copyright (c) Bradley Grainger and contributors
+    MariaDB client library, pulled in by the provider above.
+
 
 VENDORED SOURCE
 ---------------
@@ -100,6 +113,11 @@ FFmpeg
     license does not propagate here (a GPL build is fine). Not bundled — installed per recorder
     node; see the README's "Requirements" section.
     https://ffmpeg.org
+
+mariadb-dump
+    GPL-2.0. Run as a separate process for MariaDB backups (experimental); not bundled. Installed
+    with the MariaDB client tools.
+    https://mariadb.org
 
 huggingface-hub (Python)
     Apache-2.0 — https://github.com/huggingface/huggingface_hub

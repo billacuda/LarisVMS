@@ -968,11 +968,10 @@
     // Travel paths (startDetectionOverlay's setShowPath): a new point once the box's centre has
     // moved this many screen pixels; an object whose point hasn't moved for PATH_STILL_MS counts
     // as stopped; a path then stays for the linger time (Settings -> Live view, setPathLinger) and
-    // dissolves from its start over PATH_DISSOLVE_MS, with the erasing end fading over its first
-    // PATH_FADE_SEGMENTS segments.
+    // dissolves from its start over the dissolve time (same page, setPathDissolve), with the erasing
+    // end fading over its first PATH_FADE_SEGMENTS segments.
     var PATH_MIN_STEP_PX = 2;
     var PATH_STILL_MS = 1000;
-    var PATH_DISSOLVE_MS = 1500;
     var PATH_FADE_SEGMENTS = 6;
     var PATH_MAX_POINTS = 300;
 
@@ -1152,6 +1151,7 @@
         var showColor = true;
         var trails = {};
         var pathLingerMs = 5000;
+        var pathDissolveMs = 3000;
         var stopped = false;
         var reconnectTimer = null;
         // Detection ticks on a client-relative *capture* timeline: each tick's captureAtMs is when
@@ -1258,7 +1258,7 @@
         // How far a dissolving path has been erased, as a fractional point index (0 = nothing yet).
         function erasedPoints(trail, nowMs) {
             if (trail.dissolveStartMs === null || nowMs <= trail.dissolveStartMs) return 0;
-            return Math.min(1, (nowMs - trail.dissolveStartMs) / PATH_DISSOLVE_MS) * (trail.points.length - 1);
+            return Math.min(1, (nowMs - trail.dissolveStartMs) / pathDissolveMs) * (trail.points.length - 1);
         }
 
         // Extends each moving track's path from this frame's (interpolated) boxes, and starts
@@ -1293,7 +1293,7 @@
                     // Stays whole for the linger time, then dissolves.
                     trail.dissolveStartMs = nowMs + pathLingerMs;
                 }
-                if (trail.dissolveStartMs !== null && nowMs - trail.dissolveStartMs >= PATH_DISSOLVE_MS) delete trails[id];
+                if (trail.dissolveStartMs !== null && nowMs - trail.dissolveStartMs >= pathDissolveMs) delete trails[id];
             });
         }
 
@@ -1583,6 +1583,8 @@
             setShowColor: function (on) { showColor = !!on; draw(); },
             // How long a path stays after its object stops or leaves, before it dissolves.
             setPathLinger: function (ms) { if (typeof ms === 'number' && isFinite(ms) && ms >= 0) pathLingerMs = ms; },
+            // How long that path then takes to dissolve from its start to its end.
+            setPathDissolve: function (ms) { if (typeof ms === 'number' && isFinite(ms) && ms > 0) pathDissolveMs = ms; },
             stop: function () {
                 stopped = true;
                 if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }

@@ -16,7 +16,8 @@ namespace LarisVMS.Tests;
 /// them up for a range and time of day.</summary>
 public class SceneHeatmapTests
 {
-    private static readonly DateTime T0 = new(2026, 10, 13, 18, 0, 0, DateTimeKind.Utc);
+    // 18:00 UTC two days ago: inside the read's "7d" range whenever the tests run.
+    private static readonly DateTime T0 = DateTime.UtcNow.Date.AddDays(-2).AddHours(18);
 
     private static ApplicationDbContext NewDb() => new(new DbContextOptionsBuilder<ApplicationDbContext>()
         .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);

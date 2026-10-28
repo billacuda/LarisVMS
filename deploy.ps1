@@ -158,8 +158,7 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 # ── version sync guard ────────────────────────────────────────────────────────
 # LarisVMS.Node/LarisVMS.Proxy/LarisVMS.NodeUpdater each hand-maintain their own base <Version> (the
 # "0.199" build-node.ps1/build-proxy.ps1 append a monotonic build number onto), the same way
-# LarisVMS.Web's own release version is hand-maintained as a BumpVersion*.cs EF migration + a new
-# CHANGELOG.md entry — there is no single file MSBuild could just share across all four. Nothing
+# LarisVMS.Web's own release version is hand-maintained in AppRelease.cs + a new CHANGELOG.md entry — there is no single file MSBuild could just share across all four. Nothing
 # enforced them staying in lockstep, so LarisVMS.Node and LarisVMS.Proxy quietly fell two releases
 # behind CHANGELOG.md before anyone noticed (0.197.0 published while the server moved on to 0.199.0)
 # — recorder nodes and proxies kept auto-updating just fine (NodeVersionComparer only ever compares
@@ -271,9 +270,17 @@ if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
     Write-Step "Reading connection string from deployed config"
     if (Test-Path $deployedConfigFile) {
         try {
-            $ConnectionString = (Get-Content $deployedConfigFile -Raw | ConvertFrom-Json).ConnectionStrings.DefaultConnection
+            # MariaDB (experimental): this script only speaks SQL Server, so the steps below that read the database
+            # directly are skipped — the app migrates itself at startup.
+            . (Join-Path $PSScriptRoot 'tools\DatabaseConfig.ps1')
+            $dbConfig = Read-LarisDatabaseConfig $deployedConfigFile
+            if ($dbConfig -and $dbConfig.Provider -eq 'MariaDb') {
+                Write-Warning "The database is MariaDB - migrations, the storage-root guard, and node-build registration are skipped (the app migrates itself at startup)."
+            } elseif ($dbConfig) {
+                $ConnectionString = $dbConfig.ConnectionString
+            }
         } catch {
-            Write-Host "Could not parse '$deployedConfigFile': $_"
+            Write-Host "Could not read the database settings in '$deployedConfigFile': $_"
         }
     }
 

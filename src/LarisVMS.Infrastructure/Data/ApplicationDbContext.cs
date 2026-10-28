@@ -274,7 +274,9 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
         builder.Entity<PushSubscription>(e =>
         {
             e.Property(x => x.UserId).HasMaxLength(450).IsRequired();
-            e.Property(x => x.Endpoint).HasMaxLength(800).IsRequired(); // indexed: stays under SQL Server's 1700-byte key limit
+            // Indexed: stays under SQL Server's 1700-byte key limit (MariaDB's is smaller — see
+            // ConfigureForMariaDb). The API accepts up to 768 characters, which fits both.
+            e.Property(x => x.Endpoint).HasMaxLength(800).IsRequired();
             e.Property(x => x.P256dh).HasMaxLength(200);
             e.Property(x => x.Auth).HasMaxLength(100);
             e.Property(x => x.DeviceLabel).HasMaxLength(200);
@@ -607,10 +609,12 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             // The columns RecordMotionSpansAsync's coalescing lookup filters on are included, so it's
             // answered inside this index; without them its plan flipped to seeking every span of the
             // camera.
-            e.HasIndex(x => new { x.CameraId, x.DetectedObjectLabel, x.StartUtc })
+            // MariaDB has no filtered indexes, and needs none here: its unique indexes already let any
+            // number of rows share a NULL label.
+            var aiSpanIdentity = e.HasIndex(x => new { x.CameraId, x.DetectedObjectLabel, x.StartUtc })
                 .IsUnique()
-                .HasFilter("[DetectedObjectLabel] IS NOT NULL")
                 .IncludeProperties(x => new { x.EndUtc, x.ZoneId, x.EventTagRuleId, x.DetectionKind });
+            if (Database.IsSqlServer()) aiSpanIdentity.HasFilter("[DetectedObjectLabel] IS NOT NULL");
             // Live's "which cameras have motion right now" polls: spans that ended in the last few seconds.
             e.HasIndex(x => x.EndUtc).IncludeProperties(x => new { x.CameraId, x.DetectionKind });
         });
@@ -629,8 +633,14 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
                 .HasForeignKey(x => x.MotionSpanId).OnDelete(DeleteBehavior.Cascade);
             e.HasIndex(x => new { x.MotionSpanId, x.TrackId }).IsUnique();
             // Speed log, playback markers and the speed heatmap only ever read measured objects.
-            e.HasIndex(x => new { x.CameraId, x.SpeedMeasuredAtUtc }).HasFilter("[SpeedKph] IS NOT NULL");
-            e.HasIndex(x => x.SpeedMeasuredAtUtc).HasFilter("[SpeedKph] IS NOT NULL");
+            // Filtered on SQL Server only — MariaDB has no filtered indexes and indexes every row.
+            var bySpeedTime = e.HasIndex(x => new { x.CameraId, x.SpeedMeasuredAtUtc });
+            var bySpeedTimeAllCameras = e.HasIndex(x => x.SpeedMeasuredAtUtc);
+            if (Database.IsSqlServer())
+            {
+                bySpeedTime.HasFilter("[SpeedKph] IS NOT NULL");
+                bySpeedTimeAllCameras.HasFilter("[SpeedKph] IS NOT NULL");
+            }
         });
 
         // ── Tamper evidence ─────────────────────────────────────────────────────
@@ -768,5 +778,31 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             // What ExportJobDispatcher's poll scans every cycle.
             e.HasIndex(x => x.Status);
         });
+
+        if (Database.IsMySql())
+            ConfigureForMariaDb(builder);
     }
+
+    /// <summary>MariaDB (experimental). InnoDB caps an index key at 3072 bytes, and utf8mb4 takes 4
+    /// bytes a character, so SQL Server-sized string keys don't all fit: two 450-character user/role
+    /// id columns in one unique index come to 3600 bytes. Those columns only ever hold Identity's GUID
+    /// strings, so 255 is plenty — the same length the provider gives Identity's own key columns.
+    /// MariaDbModelTests checks every key and index against the limit.</summary>
+    private static void ConfigureForMariaDb(ModelBuilder builder)
+    {
+        builder.HasCharSet("utf8mb4").UseCollation(MariaDbOps.Collation);
+
+        foreach (var property in builder.Model.GetEntityTypes().SelectMany(t => t.GetDeclaredProperties()))
+        {
+            if (property.ClrType == typeof(string) && property.GetMaxLength() == 450
+                && property.Name.EndsWith("Id", StringComparison.Ordinal))
+                property.SetMaxLength(255);
+        }
+
+        builder.Entity<PushSubscription>().Property(x => x.Endpoint).HasMaxLength(MaxPushEndpointLength);
+    }
+
+    /// <summary>The longest push endpoint accepted, on either database (768 × 4 bytes is exactly
+    /// MariaDB's index key limit).</summary>
+    public const int MaxPushEndpointLength = 768;
 }

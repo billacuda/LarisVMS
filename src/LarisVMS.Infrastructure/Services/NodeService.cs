@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
-using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using LarisVMS.Core;
@@ -1228,7 +1227,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             }
             catch (DbUpdateException ex) when (ex.Entries.Count > 0 && ++attempt <= 20)
             {
-                var uniqueViolation = ex.InnerException is SqlException { Number: 2601 or 2627 };
+                var uniqueViolation = DatabaseProviderOps.IsUniqueViolation(ex.InnerException);
                 foreach (var entry in ex.Entries)
                 {
                     if (uniqueViolation && entry.State == EntityState.Added

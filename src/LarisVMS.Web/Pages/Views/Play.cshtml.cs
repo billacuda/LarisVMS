@@ -46,6 +46,7 @@ public class PlayModel(IViewService viewService, ICameraService cameraService, I
                     await settings.GetRawAsync(EventSettingsKeys.EventBadgeCornerKey)),
                 AdaptiveStreamingEnabled = await settings.GetAsync("LiveView.AdaptiveStreamingEnabled", false),
                 PathLingerSeconds = PathLinger.Clamp(await settings.GetAsync(PathLinger.SettingKey, PathLinger.Default)),
+                PathDissolveSeconds = PathDissolve.Clamp(await settings.GetAsync(PathDissolve.SettingKey, PathDissolve.Default)),
                 TalkCameraIds = await cameraAccess.GetAccessibleCameraIdsAsync(User, CameraAccessActions.Talk),
             };
             return Page();

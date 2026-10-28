@@ -105,19 +105,8 @@ else
                             <a class="btn btn-sm btn-outline-primary" href="/Playback?cameraId=@l.CameraId&atUtc=@l.FromUtc.ToUtcIso()">▶ Play</a>
                             @if (l.CanManage && l.Status == "Active")
                             {
-                                <details class="d-inline-block position-relative column-picker">
-                                    <summary class="btn btn-sm btn-outline-danger">Remove&hellip;</summary>
-                                    <div class="column-picker-menu" style="min-width: 18rem;">
-                                        @* FormName unique per row — see Bookmarks/Index.razor. *@
-                                        <EditForm Model="this" FormName="@($"remove-lock-{l.Id}")" OnValidSubmit="HandleRemoveAsync">
-                                            <input type="hidden" name="Id" value="@l.Id" />
-                                            <label class="form-label small mb-1" for="@($"reason-{l.Id}")">Why remove it?</label>
-                                            <input type="text" class="form-control form-control-sm mb-2" id="@($"reason-{l.Id}")" name="Reason" maxlength="500" required />
-                                            <div class="small text-muted mb-2">The footage stays protected for another 24 hours, and the lock can be restored until then.</div>
-                                            <button type="submit" class="btn btn-sm btn-danger">Remove lock</button>
-                                        </EditForm>
-                                    </div>
-                                </details>
+                                <button type="button" class="btn btn-sm btn-outline-danger" data-bs-toggle="modal" data-bs-target="#removeLockModal"
+                                        data-lock-id="@l.Id" data-lock-camera="@l.CameraName">Remove&hellip;</button>
                             }
                             @if (l.CanManage && l.Status == "RemovedInGrace")
                             {
@@ -133,7 +122,51 @@ else
         </table>
     </div>
     <div data-paginate-controls-for="locksTable" class="mt-2"></div>
+
+    @* One shared modal for every row's Remove button — the show.bs.modal listener below copies the
+       clicked lock's id and camera name in from the button's data attributes. *@
+    <div class="modal fade" id="removeLockModal" tabindex="-1" aria-labelledby="removeLockTitle" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <EditForm Model="this" FormName="remove-lock" OnValidSubmit="HandleRemoveAsync">
+                    <input type="hidden" name="Id" id="removeLockId" />
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="removeLockTitle">Remove lock on <span id="removeLockCamera"></span></h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <label class="form-label" for="removeLockReason">Why remove it?</label>
+                        <input type="text" class="form-control mb-2" id="removeLockReason" name="Reason" maxlength="500" required />
+                        <div class="small text-muted">The footage stays protected for another 24 hours, and the lock can be restored until then.</div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-danger">Remove lock</button>
+                    </div>
+                </EditForm>
+            </div>
+        </div>
+    </div>
 }
+
+<SectionContent SectionName="PageScripts">
+    <script nonce="@Csp.Value">
+        (function () {
+            var modal = document.getElementById('removeLockModal');
+            if (!modal) return;
+            var reason = document.getElementById('removeLockReason');
+
+            modal.addEventListener('show.bs.modal', function (event) {
+                var btn = event.relatedTarget;
+                if (!btn) return;
+                document.getElementById('removeLockId').value = btn.getAttribute('data-lock-id');
+                document.getElementById('removeLockCamera').textContent = btn.getAttribute('data-lock-camera');
+                reason.value = '';
+            });
+            modal.addEventListener('shown.bs.modal', function () { reason.focus(); });
+        })();
+    </script>
+</SectionContent>
 
 @code {
     [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }

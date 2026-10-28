@@ -8,9 +8,23 @@
 <partial name="_SettingsTabs" model="@("Backups")" />
 
 <p class="text-muted small">
-    Full backups of the LarisVMS database. Restore a <code>.bak</code> with SSMS or <code>sqlcmd</code>.
+    @if (Model.IsMariaDb)
+    {
+        <text>Full backups of the LarisVMS database, made with <code>mariadb-dump</code>. Restore a <code>.sql.gz</code> with the <code>mariadb</code> client.</text>
+    }
+    else
+    {
+        <text>Full backups of the LarisVMS database. Restore a <code>.bak</code> with SSMS or <code>sqlcmd</code>.</text>
+    }
     <a href="/Help/backups">Learn more</a>
 </p>
+
+@if (Model.IsMariaDb)
+{
+    <div class="alert alert-warning" role="status">
+        <strong>Experimental:</strong> MariaDB 10.11 and later are now supported, but support is new. For an installation that needs to be stable, use SQL Server for now, and please report any issues.
+    </div>
+}
 
 @if (!string.IsNullOrEmpty(Model.Message))
 {
@@ -50,17 +64,35 @@
                         Backup directory
                     </label>
                     <input asp-for="BackupDirectory" class="form-control" placeholder="D:\Backups\LarisVMS" />
-                    <div class="lv-hint">A folder the SQL Server service can write to, outside the install folder.</div>
+                    @if (Model.IsMariaDb)
+                    {
+                        <div class="lv-hint">A folder on this server (or a share) that the LarisVMS service can write to, outside the install folder.</div>
+                    }
+                    else
+                    {
+                        <div class="lv-hint">A folder the SQL Server service can write to, outside the install folder.</div>
+                    }
                 </div>
-                <div class="col-sm-4">
-                    <label class="form-label" asp-for="EncryptionCertificate">Encryption certificate</label>
-                    <input asp-for="EncryptionCertificate" class="form-control" placeholder="(not encrypted)" />
-                    <div class="lv-hint">Optional. The name of a certificate created in SQL Server's master database; backups are then encrypted with it. Keep a backup of the certificate itself, or the backups can't be restored.</div>
-                </div>
+                @if (Model.IsMariaDb)
+                {
+                    <div class="col-sm-4">
+                        <label class="form-label" asp-for="MariaDbDumpPath">mariadb-dump</label>
+                        <input asp-for="MariaDbDumpPath" class="form-control" placeholder="@(Model.DetectedDumpPath ?? "(not found)")" />
+                        <div class="lv-hint">Optional. Blank uses the MariaDB install found on this server. The client tools must be installed here even when MariaDB runs elsewhere.</div>
+                    </div>
+                }
+                else
+                {
+                    <div class="col-sm-4">
+                        <label class="form-label" asp-for="EncryptionCertificate">Encryption certificate</label>
+                        <input asp-for="EncryptionCertificate" class="form-control" placeholder="(not encrypted)" />
+                        <div class="lv-hint">Optional. The name of a certificate created in SQL Server's master database; backups are then encrypted with it. Keep a backup of the certificate itself, or the backups can't be restored.</div>
+                    </div>
+                }
                 <div class="col-sm-2">
                     <label class="form-label" asp-for="RetentionCount">Keep last</label>
                     <input asp-for="RetentionCount" type="number" min="1" class="form-control" />
-                    <div class="form-text">backups (local SQL only)</div>
+                    <div class="form-text">@(Model.IsMariaDb ? "backups" : "backups (local SQL only)")</div>
                 </div>
             </div>
             <button type="submit" class="btn btn-primary btn-sm mt-3"><span aria-hidden="true">💾</span> Save</button>

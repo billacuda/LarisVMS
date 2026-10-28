@@ -2,7 +2,6 @@ using System.Globalization;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
-using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core;
 using LarisVMS.Core.Entities;
@@ -33,12 +32,16 @@ public class BackupsModel(ApplicationDbContext db, IBackupService backupService,
     public List<BackupHistoryEntry> History { get; set; } = [];
     public bool IsRemoteSql { get; set; }
     public string? DataSource { get; set; }
+    public bool IsMariaDb { get; set; }
+    /// <summary>Where mariadb-dump will be run from, when it was found; MariaDB only.</summary>
+    public string? DetectedDumpPath { get; set; }
 
     [BindProperty] public bool BackupEnabled { get; set; }
     [BindProperty] public string BackupTime { get; set; } = "03:00";
     [BindProperty] public string? BackupDirectory { get; set; }
     [BindProperty] public string? EncryptionCertificate { get; set; }
     [BindProperty] public int RetentionCount { get; set; } = 14;
+    [BindProperty] public string? MariaDbDumpPath { get; set; }
 
     public async Task OnGetAsync()
     {
@@ -49,11 +52,18 @@ public class BackupsModel(ApplicationDbContext db, IBackupService backupService,
         RetentionCount = await settings.GetAsync("Backup.RetentionCount", 14);
         if (RetentionCount <= 0) RetentionCount = 14;
 
+        MariaDbDumpPath = await settings.GetRawAsync(BackupService.MariaDbDumpPathKey);
+
         var cs = db.Database.GetConnectionString();
         if (!string.IsNullOrEmpty(cs))
         {
-            DataSource = new SqlConnectionStringBuilder(cs).DataSource;
-            IsRemoteSql = !BackupService.IsLocalServer(DataSource);
+            var ops = DatabaseConfig.GetOps(configuration);
+            IsMariaDb = ops is MariaDbOps;
+            DataSource = ops.DescribeServer(cs);
+            // mariadb-dump runs on this machine, so where the server is doesn't matter.
+            IsRemoteSql = !IsMariaDb && !ops.IsLocalServer(cs);
+            if (IsMariaDb && string.IsNullOrWhiteSpace(MariaDbDumpPath))
+                DetectedDumpPath = BackupService.FindMariaDbDump(null) is { } found && System.IO.File.Exists(found) ? found : null;
         }
 
         History = await db.BackupHistoryEntries
@@ -86,14 +96,17 @@ public class BackupsModel(ApplicationDbContext db, IBackupService backupService,
         var oldDirectory = await settings.GetRawAsync("Backup.Directory");
         var oldRetention = await settings.GetAsync("Backup.RetentionCount", 14);
         var oldCertificate = await settings.GetRawAsync(LarisVMS.Infrastructure.Services.BackupService.EncryptionCertificateKey);
+        var oldDumpPath = await settings.GetRawAsync(BackupService.MariaDbDumpPathKey);
 
         // Where the whole database goes, and whether it's encrypted, is a Super Admin's call: a
         // folder or share someone else controls would hand them a copy of everything.
         var directoryChanged = !string.Equals(oldDirectory?.Trim() ?? "", BackupDirectory?.Trim() ?? "", StringComparison.OrdinalIgnoreCase);
         var certificateChanged = !string.Equals(oldCertificate?.Trim() ?? "", EncryptionCertificate?.Trim() ?? "", StringComparison.Ordinal);
-        if ((directoryChanged || certificateChanged) && !(await permissions.GetGrantedAsync(User)).IsAdministrator)
+        // The dump tool is a program this service runs under its own account.
+        var dumpPathChanged = !string.Equals(oldDumpPath?.Trim() ?? "", MariaDbDumpPath?.Trim() ?? "", StringComparison.OrdinalIgnoreCase);
+        if ((directoryChanged || certificateChanged || dumpPathChanged) && !(await permissions.GetGrantedAsync(User)).IsAdministrator)
         {
-            ErrorMessage = "Only a Super Admin can change the backup folder or its encryption.";
+            ErrorMessage = "Only a Super Admin can change the backup folder, its encryption, or the dump tool.";
             return RedirectToPage();
         }
         if (directoryChanged && !string.IsNullOrWhiteSpace(BackupDirectory)
@@ -109,29 +122,44 @@ public class BackupsModel(ApplicationDbContext db, IBackupService backupService,
             return RedirectToPage();
         }
 
+        if (dumpPathChanged && BackupService.ValidateMariaDbDumpPath(MariaDbDumpPath) is { } dumpPathError)
+        {
+            ErrorMessage = dumpPathError;
+            return RedirectToPage();
+        }
+
         var newRetention = Math.Max(1, RetentionCount);
         await settings.SetGlobalAsync("Backup.Enabled", BackupEnabled.ToString(), by);
         await settings.SetGlobalAsync("Backup.Time", BackupTime.Trim(), by);
         await settings.SetGlobalAsync("Backup.Directory", BackupDirectory?.Trim() ?? string.Empty, by);
         await settings.SetGlobalAsync("Backup.RetentionCount", newRetention.ToString(), by);
         await settings.SetGlobalAsync(LarisVMS.Infrastructure.Services.BackupService.EncryptionCertificateKey, EncryptionCertificate?.Trim() ?? string.Empty, by);
+        if (dumpPathChanged)
+            await settings.SetGlobalAsync(BackupService.MariaDbDumpPathKey, MariaDbDumpPath?.Trim() ?? string.Empty, by);
 
         var details = AuditDiff.Build(
             AuditDiff.Of("Enabled", oldEnabled.ToString(), BackupEnabled.ToString()),
             AuditDiff.Of("Time", oldTime, BackupTime.Trim()),
             AuditDiff.Of("Directory", oldDirectory, BackupDirectory?.Trim()),
             AuditDiff.Of("Retention", oldRetention.ToString(), newRetention.ToString()),
-            AuditDiff.Of("Encryption certificate", oldCertificate, EncryptionCertificate?.Trim()));
+            AuditDiff.Of("Encryption certificate", oldCertificate, EncryptionCertificate?.Trim()),
+            AuditDiff.Of("Dump tool", oldDumpPath, dumpPathChanged ? MariaDbDumpPath?.Trim() : oldDumpPath));
 
         await auditService.LogAsync("Backup.SettingsUpdate",
             User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, by,
             HttpContext.Connection.RemoteIpAddress?.ToString(), details);
 
         // Where the whole database goes is worth every Super Admin knowing about.
-        if (directoryChanged || certificateChanged)
-            await notifications.NotifySuperAdminsAsync("Backup settings changed",
-                $"{by ?? "Someone"} changed {(directoryChanged ? $"the backup folder to {BackupDirectory?.Trim()}" : "backup encryption")}.",
+        if (directoryChanged || certificateChanged || dumpPathChanged)
+        {
+            var dumpTool = string.IsNullOrWhiteSpace(MariaDbDumpPath) ? "the one found automatically" : MariaDbDumpPath.Trim();
+            string what;
+            if (directoryChanged) what = $"the backup folder to {BackupDirectory?.Trim()}";
+            else if (certificateChanged) what = "backup encryption";
+            else what = $"the backup dump tool to {dumpTool}";
+            await notifications.NotifySuperAdminsAsync("Backup settings changed", $"{by ?? "Someone"} changed {what}.",
                 "/Admin/Settings/Backups");
+        }
 
         Message = "Backup settings saved.";
         return RedirectToPage();

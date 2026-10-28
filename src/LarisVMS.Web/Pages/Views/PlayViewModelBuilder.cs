@@ -57,6 +57,7 @@ public sealed class PlayViewModelBuilder(IViewService viewService, ICameraServic
             EventBadgeCornerValue = badgeCorner,
             AdaptiveStreamingEnabled = adaptiveStreaming,
             PathLingerSeconds = PathLinger.Clamp(await settings.GetAsync(PathLinger.SettingKey, PathLinger.Default, ct: ct)),
+            PathDissolveSeconds = PathDissolve.Clamp(await settings.GetAsync(PathDissolve.SettingKey, PathDissolve.Default, ct: ct)),
             TalkCameraIds = await cameraAccess.GetAccessibleCameraIdsAsync(user, CameraAccessActions.Talk, ct),
             // Always computed, even off the tour path — a tour stop reached via a direct link
             // rather than GetTourViewsAsync still needs to advance eventually rather than sitting

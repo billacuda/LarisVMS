@@ -36,6 +36,12 @@
                 <output class="text-muted small" style="min-width: 2.5em;" id="pathLingerReadout">@PathLingerSeconds</output>
             </div>
         </SettingField>
+        <SettingField Label="Path dissolve (seconds)" For="pathDissolveRange" Hint="How long the path then takes to fade away, from its start to its end." HelpLink="/Help/live-and-playback#live-tiles">
+            <div class="d-flex align-items-center gap-2">
+                <input type="range" name="PathDissolveSeconds" value="@PathDissolveSeconds" min="@LarisVMS.Web.Pages.Views.PathDissolve.Min" max="@LarisVMS.Web.Pages.Views.PathDissolve.Max" step="1" class="form-range" id="pathDissolveRange" />
+                <output class="text-muted small" style="min-width: 2.5em;" id="pathDissolveReadout">@PathDissolveSeconds</output>
+            </div>
+        </SettingField>
     </SettingSection>
     <SettingSection Title="Direct-to-node streaming" Subtitle="Nodes can override the mode on their own page.">
         <SettingField Label="Mode" Hint="Direct sends video from the node straight to the browser." HelpLink="/Help/nodes#direct-streaming">
@@ -67,15 +73,15 @@
 
 <SectionContent SectionName="PageScripts">
     <script nonce="@Csp.Value">
-        // Path linger slider readout.
-        (function () {
-            var range = document.getElementById('pathLingerRange');
-            var readout = document.getElementById('pathLingerReadout');
+        // Path linger and dissolve slider readouts.
+        [['pathLingerRange', 'pathLingerReadout'], ['pathDissolveRange', 'pathDissolveReadout']].forEach(function (ids) {
+            var range = document.getElementById(ids[0]);
+            var readout = document.getElementById(ids[1]);
             if (!range || !readout) return;
             function sync() { readout.textContent = range.value; }
             range.addEventListener('input', sync);
             sync();
-        })();
+        });
     </script>
 </SectionContent>
 
@@ -90,6 +96,7 @@
     [SupplyParameterFromForm(FormName = "liveview-settings")] private string? PublicOrigin { get; set; }
     [SupplyParameterFromForm(FormName = "liveview-settings")] private int? CustomPort { get; set; }
     [SupplyParameterFromForm(FormName = "liveview-settings")] private int PathLingerSeconds { get; set; }
+    [SupplyParameterFromForm(FormName = "liveview-settings")] private int PathDissolveSeconds { get; set; }
 
     private string? SavedMessage;
     private string? ErrorMessage;
@@ -106,6 +113,8 @@
         PublicOrigin = await Settings.GetAsync<string?>("LiveView.PublicOrigin", null);
         PathLingerSeconds = LarisVMS.Web.Pages.Views.PathLinger.Clamp(
             await Settings.GetAsync(LarisVMS.Web.Pages.Views.PathLinger.SettingKey, LarisVMS.Web.Pages.Views.PathLinger.Default));
+        PathDissolveSeconds = LarisVMS.Web.Pages.Views.PathDissolve.Clamp(
+            await Settings.GetAsync(LarisVMS.Web.Pages.Views.PathDissolve.SettingKey, LarisVMS.Web.Pages.Views.PathDissolve.Default));
     }
 
     private async Task HandleSaveAsync()
@@ -134,6 +143,8 @@
         var oldOrigin = await Settings.GetAsync<string?>("LiveView.PublicOrigin", null);
         var oldLinger = await Settings.GetAsync(LarisVMS.Web.Pages.Views.PathLinger.SettingKey, LarisVMS.Web.Pages.Views.PathLinger.Default);
         PathLingerSeconds = LarisVMS.Web.Pages.Views.PathLinger.Clamp(PathLingerSeconds);
+        var oldDissolve = await Settings.GetAsync(LarisVMS.Web.Pages.Views.PathDissolve.SettingKey, LarisVMS.Web.Pages.Views.PathDissolve.Default);
+        PathDissolveSeconds = LarisVMS.Web.Pages.Views.PathDissolve.Clamp(PathDissolveSeconds);
 
         await Settings.SetGlobalAsync("LiveView.AdaptiveStreamingEnabled", AdaptiveStreamingEnabled.ToString(), by);
         await Settings.SetGlobalAsync(PortSegmentationMiddleware.SettingKey, CustomPort?.ToString() ?? "", by);
@@ -141,6 +152,7 @@
         await Settings.SetGlobalAsync("LiveView.AllowInsecureClientEndpoint", AllowInsecureClientEndpoint.ToString(), by);
         await Settings.SetGlobalAsync("LiveView.PublicOrigin", PublicOrigin ?? "", by);
         await Settings.SetGlobalAsync(LarisVMS.Web.Pages.Views.PathLinger.SettingKey, PathLingerSeconds.ToString(), by);
+        await Settings.SetGlobalAsync(LarisVMS.Web.Pages.Views.PathDissolve.SettingKey, PathDissolveSeconds.ToString(), by);
 
         var details = AuditDiff.Build(
             AuditDiff.Of("LiveView.AdaptiveStreamingEnabled", oldValue.ToString(), AdaptiveStreamingEnabled.ToString()),
@@ -148,7 +160,8 @@
             AuditDiff.Of("Direct streaming", oldDirect, DirectStreaming),
             AuditDiff.Of("Allow insecure client endpoint", oldInsecure.ToString(), AllowInsecureClientEndpoint.ToString()),
             AuditDiff.Of("Public origin", oldOrigin ?? "(none)", PublicOrigin ?? "(none)"),
-            AuditDiff.Of("Path linger (seconds)", oldLinger.ToString(), PathLingerSeconds.ToString()));
+            AuditDiff.Of("Path linger (seconds)", oldLinger.ToString(), PathLingerSeconds.ToString()),
+            AuditDiff.Of("Path dissolve (seconds)", oldDissolve.ToString(), PathDissolveSeconds.ToString()));
 
         await AuditService.LogAsync("Settings.Update",
             user.FindFirst(ClaimTypes.NameIdentifier)?.Value, by,

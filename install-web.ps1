@@ -68,7 +68,7 @@ param(
     [string]$ProxyCsprojPath       = (Join-Path $PSScriptRoot 'src\LarisVMS.Proxy\LarisVMS.Proxy.csproj'),
     [string]$NodeUpdaterCsprojPath = (Join-Path $PSScriptRoot 'src\LarisVMS.NodeUpdater\LarisVMS.NodeUpdater.csproj'),
     [string]$ChangelogPath         = (Join-Path $PSScriptRoot 'CHANGELOG.md'),
-    [string]$MigrationsPath        = (Join-Path $PSScriptRoot 'src\LarisVMS.Infrastructure\Migrations'),
+    [string]$AppReleasePath        = (Join-Path $PSScriptRoot 'src\LarisVMS.Infrastructure\AppRelease.cs'),
     [switch]$SkipNodeVision,
     [switch]$SkipBuild,
     [switch]$SkipNodeBuild,
@@ -140,12 +140,13 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 # ── version sync guard ────────────────────────────────────────────────────────
 # See tools\VersionGuard.ps1 — shared with build-installers.ps1.
 . (Join-Path $PSScriptRoot 'tools\VersionGuard.ps1')
+. (Join-Path $PSScriptRoot 'tools\DatabaseConfig.ps1')
 if (-not $SkipVersionSyncCheck) {
     Write-Step "Checking web/node/proxy version is in sync with this release"
     if (-not (Test-Path $ChangelogPath)) {
         Write-Host "CHANGELOG.md not found at '$ChangelogPath' - skipping version sync guard."
     } else {
-        $releaseVersion = Assert-ReleaseVersionSync -ChangelogPath $ChangelogPath -MigrationsPath $MigrationsPath -Projects @{
+        $releaseVersion = Assert-ReleaseVersionSync -ChangelogPath $ChangelogPath -AppReleasePath $AppReleasePath -Projects @{
             'LarisVMS.Web' = $WebProject; 'LarisVMS.Node' = $NodeCsprojPath
             'LarisVMS.Proxy' = $ProxyCsprojPath; 'LarisVMS.NodeUpdater' = $NodeUpdaterCsprojPath
         }
@@ -191,18 +192,26 @@ if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
         Write-Host "    Not found at '$installedConfigFile' - falling back to legacy IIS path '$LegacyIisConfigPath'."
         $configFileRead = $LegacyIisConfigPath
     }
+    $dbConfig = $null
     if (Test-Path $configFileRead) {
         try {
-            $ConnectionString = (Get-Content $configFileRead -Raw | ConvertFrom-Json).ConnectionStrings.DefaultConnection
+            # MariaDB (experimental): this script only speaks SQL Server, so the steps below that read the database
+            # directly are skipped — the app migrates itself at startup.
+            $dbConfig = Read-LarisDatabaseConfig $configFileRead
+            if ($dbConfig -and $dbConfig.Provider -eq 'MariaDb') {
+                Write-Warning "The database is MariaDB - the storage-root guard is skipped. Make sure no node's storage or archive path is under '$InstallDir'."
+            } elseif ($dbConfig) {
+                $ConnectionString = $dbConfig.ConnectionString
+            }
         } catch {
-            Write-Host "Could not parse '$configFileRead': $_"
+            Write-Host "Could not read the database settings in '$configFileRead': $_"
         }
     }
 
-    if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
+    if ([string]::IsNullOrWhiteSpace($ConnectionString) -and -not ($dbConfig -and $dbConfig.Provider -eq 'MariaDb')) {
         Write-Warning "No connection string found at '$installedConfigFile' or '$LegacyIisConfigPath'."
         Write-Warning "The storage-root guard is skipped this run. Fine on a fresh install (the Setup wizard creates the database); otherwise pass -ConnectionString or copy setup-generated.json from the old deployment into '$InstallDir'."
-    } else {
+    } elseif (-not [string]::IsNullOrWhiteSpace($ConnectionString)) {
         Write-Ok "Connection string loaded from '$configFileRead'."
     }
 }

@@ -1,10 +1,10 @@
 # Shared release-version guard, dot-sourced by install-web.ps1 and build-installers.ps1.
 #
 # The release version is the first '## [X.Y.Z]' heading in CHANGELOG.md. Every shipped project's
-# <Version> must match it, and a matching BumpVersionX_Y_Z migration must exist — the in-app footer
-# version is read from the AppVersions table that migration seeds, not from any assembly, so a
-# release that bumps the changelog and csprojs but forgets the migration never reports its version
-# in the UI.
+# <Version> must match it, and so must AppRelease.Version (src\LarisVMS.Infrastructure\AppRelease.cs)
+# — the in-app footer version is read from the AppVersions row the app writes from it at startup, not
+# from any assembly, so a release that bumps the changelog and csprojs but forgets AppRelease never
+# reports its version in the UI. (Up to 0.218.0 that row came from a BumpVersionX_Y_Z migration.)
 
 function Get-CsprojVersion([string]$Path) {
     $m = Select-String -Path $Path -Pattern '<Version>([^<]+)</Version>' | Select-Object -First 1
@@ -20,7 +20,7 @@ function Get-ReleaseVersion([string]$ChangelogPath) {
 
 <#
 .SYNOPSIS
-    Throws unless every project's <Version> and the AppVersions migration match CHANGELOG.md.
+    Throws unless every project's <Version> and AppRelease.Version match CHANGELOG.md.
     Returns the release version.
 .PARAMETER Projects
     Hashtable of display name -> csproj path.
@@ -28,7 +28,7 @@ function Get-ReleaseVersion([string]$ChangelogPath) {
 function Assert-ReleaseVersionSync {
     param(
         [Parameter(Mandatory)][string]$ChangelogPath,
-        [Parameter(Mandatory)][string]$MigrationsPath,
+        [Parameter(Mandatory)][string]$AppReleasePath,
         [Parameter(Mandatory)][hashtable]$Projects
     )
 
@@ -41,13 +41,12 @@ function Assert-ReleaseVersionSync {
         }
     }
 
-    $migrationName = "BumpVersion$($releaseVersion -replace '\.', '_')"
-    $migrationExists = (Test-Path $MigrationsPath) -and
-        (Get-ChildItem $MigrationsPath -Filter "*_$migrationName.cs" -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -notlike '*.Designer.cs' } | Select-Object -First 1)
-    if (-not $migrationExists) {
-        $mismatches += "  - AppVersions migration: no '$migrationName' migration found under '$MigrationsPath' " +
-            "(the in-app footer version would stay on the previous release)"
+    $appRelease = Select-String -Path $AppReleasePath -Pattern 'const string Version = "([^"]+)"' -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    $appReleaseVersion = if ($appRelease) { $appRelease.Matches[0].Groups[1].Value } else { $null }
+    if ($appReleaseVersion -ne $releaseVersion) {
+        $mismatches += "  - AppRelease.Version: '$appReleaseVersion' in '$AppReleasePath' (expected $releaseVersion; " +
+            "update its Notes too, or the in-app footer version stays on the previous release)"
     }
 
     if ($mismatches.Count -gt 0) {
