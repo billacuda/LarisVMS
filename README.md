@@ -19,7 +19,7 @@ read before you install.
 
 ---
 
-## Features
+## ✨ Features
 
 **Cameras**
 - ONVIF discovery (WS-Discovery) and capability probing (Profiles S/T/G/M), with optional daily re-probing.
@@ -65,7 +65,7 @@ read before you install.
 - Basic PTZ controls, and two-way audio: hold 🎙️ on a live tile to talk through the camera's speaker, with both directions recorded.
 - A camera map on a street map or uploaded floorplans, showing where each camera points and what it sees.
 - Video relayed through the server, through media proxies, or sent directly from node to browser.
-- Phone-friendly layout, installable as an app from Chrome on Android or Safari on iOS, with pinch-to-zoom on timelines and in fullscreen. See [Using it on a phone](#6-use-it-on-your-phone-optional).
+- Phone-friendly layout, installable as an app from Chrome on Android or Safari on iOS, with pinch-to-zoom on timelines and in fullscreen. See [Using it on a phone](#-6-use-it-on-your-phone-optional).
 - Dark mode.
 
 **Administration**
@@ -82,7 +82,7 @@ read before you install.
 - Branding: app name, colors, font, and logo.
 - Built-in **Help** with documentation for every feature.
 
-## Architecture
+## 🏗️ Architecture
 
 | Component | Runs as | Role |
 |---|---|---|
@@ -93,7 +93,7 @@ read before you install.
 
 Settings are inherited **global → node → camera**, and the most specific value wins.
 
-## Requirements
+## 📋 Requirements
 
 - **Operating system:** any 64-bit Windows version supported by [.NET 10](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md), for both the server and the recorder nodes.
 - **Server:** SQL Server (Express works) using SQL or Integrated authentication. For SQL Server Express, the server name is `.\SQLEXPRESS`. Building from source also needs the [.NET 10 SDK](https://dotnet.microsoft.com/download); the MSIs don't need any .NET runtime.
@@ -103,11 +103,11 @@ Settings are inherited **global → node → camera**, and the most specific val
 > MariaDB 10.11 and later are now supported, but support is new and experimental. For an installation that needs to be stable, use SQL Server for now, and please [report any issues](https://github.com/billacuda/LarisVMS/issues).
 - **.NET version:** developed with the .NET SDK 10.0.402. The 0.218.0 installers were built with it and include the .NET 10.0.13 runtime (ASP.NET Core 10.0.13).
 - **Each recorder node:** [FFmpeg](https://ffmpeg.org/) (`winget install ffmpeg --scope machine`).
-- **LarisVision (optional):** a GPU and its driver, or CPU only. NVIDIA additionally needs CUDA Toolkit 12.x and cuDNN 9.x (see [LarisVision](#larisvision-ai-detection)) if you want to use CUDA or TensorRT acceleration, otherwise DirectML works out of the box.
+- **LarisVision (optional):** a GPU and its driver, or CPU only. NVIDIA additionally needs CUDA Toolkit 12.x and cuDNN 9.x (see [LarisVision](#-larisvision-ai-detection)) if you want to use CUDA or TensorRT acceleration, otherwise DirectML works out of the box.
 - **Cameras:** ONVIF Profile S or T.
 - **Browser:** a current Chrome, Edge, Firefox, or Safari. HEVC playback depends on browser support. On phones, Chrome (Android) or Safari (iOS).
 
-### Hardware
+### 🖥️ Hardware
 
 Windows 10 or later, or Windows Server 2019 or later.
 
@@ -137,7 +137,7 @@ Without object detection, a node can easily handle 20 or more cameras.
 
 Performance depends entirely on your hardware: how many cameras and LarisVision streams a node can handle comes down to its CPU, GPU, disks, and network.
 
-## Installing
+## 🚀 Installing
 
 Download the installers from the [Releases](https://github.com/billacuda/LarisVMS/releases) page:
 
@@ -149,7 +149,7 @@ Download the installers from the [Releases](https://github.com/billacuda/LarisVM
 
 Double-click an installer to be prompted for its settings, or pass them on the command line. Anything not given on the command line is asked for. In a silent install (`/qn`), a missing required value stops the install with a message naming the property.
 
-### 1. Install the web server
+### 🌐 1. Install the web server
 
 ```powershell
 msiexec /i LarisVMS-Web-0.218.0-x64.msi
@@ -164,7 +164,7 @@ msiexec /i LarisVMS-Web-0.218.0-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx
 | `SERVICEACCOUNT`, `SERVICEPASSWORD` | LocalSystem | Service account, for example one with SQL Integrated Security rights. Not needed for MariaDB, which always uses a MariaDB user and password. |
 | `INSTALLFOLDER` | `C:\Program Files\LarisVMS\Web` | Install location. |
 
-### 2. Run the setup wizard
+### 🧙 2. Run the setup wizard
 
 Browse to `https://<server>:8444/`. The wizard sets up the database connection, the first admin account, and the branding, and shows the **node registration key**. You can find the key again later under **Nodes → Updates and registration**.
 
@@ -172,7 +172,7 @@ The wizard asks which database to use: **SQL Server**, or **MariaDB** (experimen
 
 Pointing the wizard at an existing LarisVMS database, for example when reinstalling, uses that database as it is: it's upgraded if needed, nothing is seeded or overwritten, and the wizard's remaining steps are skipped. A database that isn't a LarisVMS one is refused. Once setup is complete, the wizard is closed.
 
-### 3. Install recorder nodes
+### 📹 3. Install recorder nodes
 
 Install [FFmpeg](https://ffmpeg.org/) on each recording machine first (`winget install ffmpeg --scope machine`), then:
 
@@ -194,7 +194,7 @@ msiexec /i LarisVMS-Node-0.218.0-x64.msi SERVERURL=https://<server>:8444 REGISTR
 
 The node registers itself and appears under **Nodes**.
 
-### 4. Install media proxies (optional)
+### 🔀 4. Install media proxies (optional)
 
 ```powershell
 msiexec /i LarisVMS-Proxy-0.218.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> CLIENTPORT=4443 /qn
@@ -202,15 +202,15 @@ msiexec /i LarisVMS-Proxy-0.218.0-x64.msi SERVERURL=https://<server>:8444 REGIST
 
 Properties: `SERVERURL`, `REGISTRATIONKEY`, `CLIENTPORT` (default 4443), `CLIENTENDPOINTHOST`, `CLIENTPFXPATH`, `CLIENTPFXPASSWORD`, `CLIENTALLOWINSECURE`, `INSECURETLS`, `SERVICEACCOUNT`, `SERVICEPASSWORD`, `INSTALLFOLDER`, with the same meanings as for the node.
 
-### 5. Add cameras
+### 📷 5. Add cameras
 
 Use **Cameras → Discover**, or add a camera by its ONVIF device service URL. Then assign each camera to a recorder node. For everything else, open **Help** in the sidebar.
 
-### 6. Use it on your phone (optional)
+### 📱 6. Use it on your phone (optional)
 
 Open the same address in your phone's browser. To install it as an app, choose **Install app** from the ⋮ menu in Chrome on Android, or **Share → Add to Home Screen** in Safari on iOS. Phones won't install a site that uses the self-signed certificate a fresh install starts with, so set `CERTPATH` to a certificate your devices trust first.
 
-## Upgrading
+## ⬆️ Upgrading
 
 Run the new version's MSI. It finds the existing install and offers the upgrade straight away, without the settings pages: its settings are remembered, so no properties are needed. Secrets aren't stored, so a service running as a domain account asks for that password again. The web app applies database migrations itself when it starts. Upgrades never touch recordings, `appsettings.Production.json`, `setup-generated.json`, node registration, or the data-protection keys. If an install fails, it's rolled back, including any change it made to `appsettings.Production.json`.
 
@@ -220,7 +220,7 @@ Recorder nodes and media proxies also **update themselves**. A new web install r
 
 Uninstalling removes the program, its service, and its firewall rules. Recordings, configuration, and everything under `%ProgramData%\LarisVMS` are kept.
 
-## Installing from source
+## 🧩 Installing from source
 
 The PowerShell scripts build from the repository and install on the same machine; they take the same settings as the MSIs (`-HttpsPort`, `-ServiceCredential`, `-ServerUrl`, `-RegistrationKey`, `-StorageRoot`, …).
 
@@ -232,7 +232,7 @@ The PowerShell scripts build from the repository and install on the same machine
 
 `deploy.ps1` (the old IIS-based deploy) is deprecated.
 
-## LarisVision AI detection
+## 🧠 LarisVision AI detection
 
 LarisVision is optional and per camera. A node without it still records, and still uses server
 motion, camera events, and vendor integrations. The node package includes the CPU, DirectML, and CUDA
@@ -267,7 +267,7 @@ sending every frame; higher rates add GPU load without improving results.
 - NVIDIA GeForce RTX 2070: the main testing GPU and a dedicated recording node (DirectML, CUDA, and TensorRT FP32)
 - NVIDIA GeForce RTX 4080 Super (DirectML, CUDA, and TensorRT FP16)
 
-## Security
+## 🔒 Security
 
 - **Encrypted secrets.** Camera, SMB, node, and email credentials are encrypted at rest with the
   ASP.NET Core data-protection keys in `%ProgramData%\LarisVMS\keys`. **Back this folder up.** Without
@@ -285,7 +285,7 @@ sending every frame; higher rates add GPU load without improving results.
 - **Tamper evidence.** Recordings are fingerprinted and chained, and exports come with a signed
   manifest, so edited or missing footage can be detected.
 
-## Privacy
+## 🕶️ Privacy
 
 LarisVMS is self-hosted and private by design. Your video, recordings, and settings stay on your own
 machines, and you own them: nobody else can see them.
@@ -303,13 +303,13 @@ machines, and you own them: nobody else can see them.
   with its nodes and proxies, and services you set up yourself, such as email, alert channels, and Entra ID
   sign-in.
 
-## Documentation
+## 📚 Documentation
 
 - **In-app Help:** the **Help** item in the sidebar documents every feature and setting, including
   troubleshooting.
 - **[CHANGELOG.md](CHANGELOG.md):** release notes. Older releases are in [`changelog-archive/`](changelog-archive/).
 
-## Building from source
+## 🔨 Building from source
 
 Developed and built with the .NET SDK 10.0.402 (`dotnet --version`). Any later 10.0 SDK should work; there's no `global.json` pinning one.
 
@@ -338,7 +338,7 @@ app records it in `AppVersions` at startup), and a matching `CHANGELOG.md` headi
 and `build-installers.ps1` refuse to run if any of these disagree. Releases up to 0.218.0 used a
 `BumpVersionX_Y_Z` migration instead.
 
-### Project layout
+### 🗂️ Project layout
 
 ```
 src/
@@ -357,7 +357,7 @@ tests/LarisVMS.Tests        xUnit tests
 tools/export-models         Python: exports detection models to ONNX
 ```
 
-## Known limitations
+## ⚠️ Known limitations
 
 - Camera-side motion zones can be configured, but aren't active yet.
 - Cameras with a privacy mask are re-encoded, which uses CPU or GPU time on their node.
@@ -375,7 +375,7 @@ tools/export-models         Python: exports detection models to ONNX
 - Some features listed may have placeholders (webhooks, Teams/Slack integration)
 - Basic email functionality should work with SMTP. Graph API email has not been tested yet.
 
-## License
+## 📄 License
 
 LarisVMS is licensed under the [Apache License 2.0](LICENSE). Third-party components and their
 licenses are listed in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt). FFmpeg is not bundled;
