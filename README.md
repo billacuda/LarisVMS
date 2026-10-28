@@ -8,7 +8,7 @@ and administration all run in the browser, on desktop, tablet, and phone.
   <a href="https://www.buymeacoffee.com/billacuda"><img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=%E2%98%95&slug=billacuda&button_colour=5F7FFF&font_colour=ffffff&font_family=Cookie&outline_colour=000000&coffee_colour=FFDD00" alt="Buy me a coffee" height="50" /></a>
 </p>
 
-**Current version: [0.218.0](CHANGELOG.md)**
+**Current version: [0.219.0](CHANGELOG.md)**
 
 📖 **[Documentation](https://www.larisvms.com/docs/)**: how to install, set up, and use LarisVMS. Worth a
 read before you install.
@@ -101,7 +101,7 @@ Settings are inherited **global → node → camera**, and the most specific val
 
 > [!WARNING]
 > MariaDB 10.11 and later are now supported, but support is new and experimental. For an installation that needs to be stable, use SQL Server for now, and please [report any issues](https://github.com/billacuda/LarisVMS/issues).
-- **.NET version:** developed with the .NET SDK 10.0.402. The 0.218.0 installers were built with it and include the .NET 10.0.13 runtime (ASP.NET Core 10.0.13).
+- **.NET version:** developed with the .NET SDK 10.0.402. The 0.219.0 installers were built with it and include the .NET 10.0.13 runtime (ASP.NET Core 10.0.13).
 - **Each recorder node:** [FFmpeg](https://ffmpeg.org/) (`winget install ffmpeg --scope machine`).
 - **LarisVision (optional):** a GPU and its driver, or CPU only. NVIDIA additionally needs CUDA Toolkit 12.x and cuDNN 9.x (see [LarisVision](#-larisvision-ai-detection)) if you want to use CUDA or TensorRT acceleration, otherwise DirectML works out of the box.
 - **Cameras:** ONVIF Profile S or T.
@@ -152,9 +152,9 @@ Double-click an installer to be prompted for its settings, or pass them on the c
 ### 🌐 1. Install the web server
 
 ```powershell
-msiexec /i LarisVMS-Web-0.218.0-x64.msi
+msiexec /i LarisVMS-Web-0.219.0-x64.msi
 # silent, with a certificate:
-msiexec /i LarisVMS-Web-0.218.0-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx CERTPASSWORD=secret /qn
+msiexec /i LarisVMS-Web-0.219.0-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx CERTPASSWORD=secret /qn
 ```
 
 | Property | Default | Purpose |
@@ -177,7 +177,7 @@ Pointing the wizard at an existing LarisVMS database, for example when reinstall
 Install [FFmpeg](https://ffmpeg.org/) on each recording machine first (`winget install ffmpeg --scope machine`), then:
 
 ```powershell
-msiexec /i LarisVMS-Node-0.218.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> STORAGEROOT=D:\Recordings /qn
+msiexec /i LarisVMS-Node-0.219.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> STORAGEROOT=D:\Recordings /qn
 ```
 
 | Property | Default | Purpose |
@@ -197,7 +197,7 @@ The node registers itself and appears under **Nodes**.
 ### 🔀 4. Install media proxies (optional)
 
 ```powershell
-msiexec /i LarisVMS-Proxy-0.218.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> CLIENTPORT=4443 /qn
+msiexec /i LarisVMS-Proxy-0.219.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> CLIENTPORT=4443 /qn
 ```
 
 Properties: `SERVERURL`, `REGISTRATIONKEY`, `CLIENTPORT` (default 4443), `CLIENTENDPOINTHOST`, `CLIENTPFXPATH`, `CLIENTPFXPASSWORD`, `CLIENTALLOWINSECURE`, `INSECURETLS`, `SERVICEACCOUNT`, `SERVICEPASSWORD`, `INSTALLFOLDER`, with the same meanings as for the node.
