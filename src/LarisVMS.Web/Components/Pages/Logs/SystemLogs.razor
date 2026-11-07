@@ -3,12 +3,12 @@
 @using LarisVMS.Web.Helpers
 @inject IConfiguration Configuration
 
-<PageTitle>System Logs - @AppName</PageTitle>
+<PageTitle>@L["logs.systemLogs.systemLogs"] - @AppName</PageTitle>
 
-<h1>Logs</h1>
+<h1>@L["logs.systemLogs.logs"]</h1>
 <LogsTabs ActiveKey="SystemLogs" />
 
-<p class="text-muted small">This server's application log. Node logs stay on each node under <code>%ProgramData%\LarisVMS\logs</code>. <a href="/Help/troubleshooting">Troubleshooting</a></p>
+<p class="text-muted small">@L.Markup("logs.systemLogs.intro")</p>
 
 @if (!string.IsNullOrEmpty(ErrorMessage))
 {
@@ -18,7 +18,7 @@ else
 {
     <form method="get" class="row g-2 mb-3">
         <div class="col-auto">
-            <select name="date" class="form-select form-select-sm" data-submit-on-change>
+            <select name="date" class="form-select form-select-sm" aria-label="@L["logs.systemLogs.logDate"]" title="@L["common.appliesImmediately"]" data-submit-on-change>
                 @foreach (var d in AvailableDates)
                 {
                     <option value="@d" selected="@(d == SelectedDate)">@d</option>
@@ -26,26 +26,26 @@ else
             </select>
         </div>
         <div class="col-auto">
-            <input type="text" name="q" value="@Query" class="form-control form-control-sm" placeholder="Filter lines..." style="width: 20rem; max-width: 100%;" />
+            <input type="text" name="q" value="@Query" class="form-control form-control-sm" placeholder="@L["logs.systemLogs.filterLines"]" style="width: 20rem; max-width: 100%;" />
         </div>
         <div class="col-auto">
-            <button type="submit" class="btn btn-sm btn-primary">Filter</button>
+            <button type="submit" class="btn btn-sm btn-primary">@L["common.filter"]</button>
         </div>
         <div class="col-auto">
-            <a href="/Logs/SystemLogs?date=@SelectedDate" class="btn btn-sm btn-outline-secondary">Clear filter</a>
+            <a href="/Logs/SystemLogs?date=@SelectedDate" class="btn btn-sm btn-outline-secondary">@L["logs.systemLogs.clearFilter"]</a>
         </div>
     </form>
 
     @if (Truncated)
     {
-        <p class="text-muted small">Showing the last 1000 matching lines only.</p>
+        <p class="text-muted small">@L["logs.systemLogs.showingTheLast1000Matching"]</p>
     }
 
     <pre class="bg-body-tertiary p-2 small" style="max-height: 70vh; overflow-y: auto; white-space: pre-wrap;">@string.Join("\n", Lines)</pre>
 
     @if (Lines.Count == 0)
     {
-        <p class="text-muted">No lines match.</p>
+        <p class="text-muted">@L["logs.systemLogs.noLinesMatch"]</p>
     }
 }
 
@@ -69,7 +69,7 @@ else
     {
         if (!Directory.Exists(LogsDir))
         {
-            ErrorMessage = "No log files yet.";
+            ErrorMessage = Loc.T("logs.systemLogs.noLogFilesYet");
             return;
         }
 
@@ -80,7 +80,7 @@ else
 
         if (AvailableDates.Count == 0)
         {
-            ErrorMessage = "No log files yet.";
+            ErrorMessage = Loc.T("logs.systemLogs.noLogFilesYet");
             return;
         }
 
@@ -99,7 +99,7 @@ else
         }
         catch (IOException ex)
         {
-            ErrorMessage = $"Could not read {path}: {ex.Message}";
+            ErrorMessage = Loc.T("logs.systemLogs.couldNotRead", new { path, message = ex.Message });
             return;
         }
 

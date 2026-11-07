@@ -1,6 +1,7 @@
 using System.Text.Json;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 
 namespace LarisVMS.Infrastructure.Alerts.Channels;
 
@@ -14,11 +15,11 @@ public class WebhookAlertChannelSender : IAlertChannelSender
     public async Task SendAsync(string? configJson, string ruleName, string message, CancellationToken ct = default)
     {
         var config = string.IsNullOrWhiteSpace(configJson)
-            ? throw new InvalidOperationException("Webhook delivery configuration is missing.")
+            ? throw new InvalidOperationException(Loc.T("server.webhookAlertChannel.webhookDeliveryConfigurationIsMissing"))
             : JsonSerializer.Deserialize<WebhookDeliveryConfig>(configJson)
-                ?? throw new InvalidOperationException("Webhook delivery configuration is malformed.");
+                ?? throw new InvalidOperationException(Loc.T("server.webhookAlertChannel.webhookDeliveryConfigurationIsMalformed"));
 
-        using var http = new HttpClient();
+        using var http = new HttpClient(LarisVMS.Infrastructure.Security.OutboundGuard.NoLocalHandler());
         var payload = JsonSerializer.Serialize(new { rule = ruleName, message, firedAtUtc = DateTime.UtcNow });
         using var content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
         var response = await http.PostAsync(config.Url, content, ct);

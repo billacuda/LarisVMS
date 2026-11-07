@@ -2,17 +2,17 @@
 @model LarisVMS.Web.Pages.Setup.BrandingModel
 @{
     Layout = "_SetupLayout";
-    ViewData["Title"] = "Branding";
+    ViewData["Title"] = L["setup.branding.branding"].Value;
 }
-<h5 class="mb-3">5. Branding</h5>
+<h2 class="h5 mb-3">@L["setup.branding.5Branding"]</h2>
 <form method="post">
     <div class="mb-3">
-        <label class="form-label">Application name</label>
+        <label for="AppName" class="form-label">@L["setup.branding.applicationName"]</label>
         <input asp-for="AppName" class="form-control" />
     </div>
     <div class="mb-3">
-        <label class="form-label">Primary color</label>
+        <label for="PrimaryColor" class="form-label">@L["setup.branding.primaryColor"]</label>
         <input asp-for="PrimaryColor" type="color" class="form-control form-control-color" />
     </div>
-    <button type="submit" class="btn btn-primary">Continue</button>
+    <button type="submit" class="btn btn-primary">@L["setup.branding.continue"]</button>
 </form>

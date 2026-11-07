@@ -91,7 +91,8 @@ public class OnvifMediaClient(OnvifSoapClient soap)
         var response = await soap.PostAsync(mediaServiceUri, $"{MediaNs}/GetStreamUri", body, credentials, ct);
         var uriText = response.Elements().FirstOrDefault(e => e.Name.LocalName == "MediaUri")?
             .Elements().FirstOrDefault(e => e.Name.LocalName == "Uri")?.Value;
-        return uriText is not null && Uri.TryCreate(uriText, UriKind.Absolute, out var u) ? u : null;
+        return uriText is not null && Uri.TryCreate(uriText, UriKind.Absolute, out var u)
+               && LarisVMS.Core.Security.StreamUris.IsAllowed(u) ? u : null;
     }
 
     public async Task<Uri?> GetSnapshotUriAsync(
@@ -107,7 +108,8 @@ public class OnvifMediaClient(OnvifSoapClient soap)
             var response = await soap.PostAsync(mediaServiceUri, $"{MediaNs}/GetSnapshotUri", body, credentials, ct);
             var uriText = response.Elements().FirstOrDefault(e => e.Name.LocalName == "MediaUri")?
                 .Elements().FirstOrDefault(e => e.Name.LocalName == "Uri")?.Value;
-            return uriText is not null && Uri.TryCreate(uriText, UriKind.Absolute, out var u) ? u : null;
+            return uriText is not null && Uri.TryCreate(uriText, UriKind.Absolute, out var u)
+                   && (u.Scheme == Uri.UriSchemeHttp || u.Scheme == Uri.UriSchemeHttps) ? u : null;
         }
         catch (OnvifFaultException)
         {

@@ -1,3 +1,4 @@
+using LarisVMS.Core.Localization;
 using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core;
 using LarisVMS.Core.Entities;
@@ -35,27 +36,27 @@ public static class AlertRuleEditing
     /// <summary>Null when the input is valid, otherwise a message for the form.</summary>
     public static async Task<string?> ValidateAsync(ApplicationDbContext db, AlertRuleInput i, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(i.Name)) return "Enter a name.";
-        if (i.CooldownMinutes < 1) return "Cooldown must be at least 1 minute.";
+        if (string.IsNullOrWhiteSpace(i.Name)) return Loc.T("server.alertRuleEditing.enterAName");
+        if (i.CooldownMinutes < 1) return Loc.T("server.alertRuleEditing.cooldownMustBeAtLeast");
 
         var error = i.ConditionType switch
         {
-            AlertConditionType.CameraNotReporting when i.CameraId is null => "Choose a camera.",
-            _ when IsNodeCondition(i.ConditionType) && i.NodeId is null => "Choose a node.",
-            AlertConditionType.NodeStorageLow when i.ThresholdPercent is < 1 or > 99 => "Threshold must be between 1 and 99.",
-            AlertConditionType.SpeedOver when i.SpeedThreshold is <= 0 or > 400 => "Enter a speed above 0.",
-            _ when IsEventDriven(i.ConditionType) && i.ZoneId is not null && i.CameraId is null => "A zone filter needs a camera.",
-            _ when IsEventDriven(i.ConditionType) && (i.ScheduleStart is null) != (i.ScheduleEnd is null) => "Enter both a start and an end time, or neither.",
-            _ when IsDetection(i.ConditionType) && !string.IsNullOrWhiteSpace(i.ColorFilter) && !ObjectColors.IsKnown(i.ColorFilter) => "Choose a color from the list.",
+            AlertConditionType.CameraNotReporting when i.CameraId is null => Loc.T("server.alertRuleEditing.chooseCamera"),
+            _ when IsNodeCondition(i.ConditionType) && i.NodeId is null => Loc.T("server.alertRuleEditing.chooseNode"),
+            AlertConditionType.NodeStorageLow when i.ThresholdPercent is < 1 or > 99 => Loc.T("server.alertRuleEditing.thresholdRange"),
+            AlertConditionType.SpeedOver when i.SpeedThreshold is <= 0 or > 400 => Loc.T("server.alertRuleEditing.speedAboveZero"),
+            _ when IsEventDriven(i.ConditionType) && i.ZoneId is not null && i.CameraId is null => Loc.T("server.alertRuleEditing.zoneNeedsCamera"),
+            _ when IsEventDriven(i.ConditionType) && (i.ScheduleStart is null) != (i.ScheduleEnd is null) => Loc.T("server.alertRuleEditing.startAndEnd"),
+            _ when IsDetection(i.ConditionType) && !string.IsNullOrWhiteSpace(i.ColorFilter) && !ObjectColors.IsKnown(i.ColorFilter) => Loc.T("server.alertRuleEditing.chooseColor"),
             _ => null,
         };
         if (error is null && IsEventDriven(i.ConditionType) && i.ZoneId is { } zoneId
             && !await db.Zones.AnyAsync(z => z.Id == zoneId && z.CameraId == i.CameraId, ct))
-            error = "That zone isn't on the chosen camera.";
+            error = Loc.T("server.alertRuleEditing.zoneNotOnCamera");
         // Motion carries the zone that saw it, and only server motion zones see motion.
         if (error is null && i.ConditionType == AlertConditionType.MotionDetected && i.ZoneId is { } motionZoneId
             && !await db.Zones.AnyAsync(z => z.Id == motionZoneId && z.Kind == ZoneKind.ServerMotion, ct))
-            error = "Choose a server motion zone.";
+            error = Loc.T("server.alertRuleEditing.chooseMotionZone");
         return error;
     }
 
@@ -105,7 +106,7 @@ public static class AlertRuleEditing
         else if (HasCameraScope(r.ConditionType)) parts.Add("all cameras");
         if (r.ScheduleStart is { } s && r.ScheduleEnd is { } e) parts.Add($"{s:HH\\:mm}–{e:HH\\:mm}");
         if (r.ScheduleDays is { } days and not DayOfWeekFlags.None)
-            parts.Add(string.Join(", ", DaysOf(days).Select(d => d.ToString()[..3])));
+            parts.Add(string.Join(", ", DaysOf(days).Select(d => System.Globalization.CultureInfo.CurrentUICulture.DateTimeFormat.GetAbbreviatedDayName(d))));
         return string.Join(" · ", parts);
     }
 

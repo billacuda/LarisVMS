@@ -1,3 +1,4 @@
+using LarisVMS.Core.Localization;
 using LarisVMS.Core.Interfaces;
 
 namespace LarisVMS.Web.Middleware;
@@ -17,12 +18,13 @@ public class OriginCheckMiddleware(RequestDelegate next)
     {
         if (NeedsCheck(context.Request, context.WebSockets.IsWebSocketRequest)
             && context.Request.Headers.Origin.ToString() is { Length: > 0 } origin
-            && !IsAllowed(origin, context.Request.Host.Host,
-                await settings.GetAsync<string?>("LiveView.PublicOrigin", null, ct: context.RequestAborted))
-            && !ForwardedHosts(context.Request).Any(h => IsAllowed(origin, h, null)))
+            && (IsSchemeDowngrade(origin, context.Request.IsHttps)
+                || (!IsAllowed(origin, context.Request.Host.Host,
+                        await settings.GetAsync<string?>("LiveView.PublicOrigin", null, ct: context.RequestAborted))
+                    && !ForwardedHosts(context.Request).Any(h => IsAllowed(origin, h, null)))))
         {
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
-            await context.Response.WriteAsync("Cross-site request refused.", context.RequestAborted);
+            await context.Response.WriteAsync(Loc.T("server.originCheckMiddleware.crossSiteRequestRefused"), context.RequestAborted);
             return;
         }
         await next(context);
@@ -44,6 +46,12 @@ public class OriginCheckMiddleware(RequestDelegate next)
     private static IEnumerable<string> ForwardedHosts(HttpRequest request) =>
         request.Headers["X-Forwarded-Host"].SelectMany(v => (v ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
             .Select(h => HostString.FromUriComponent(h).Host);
+
+    /// <summary>A plain-http page (another service on the same host, or a page a network attacker
+    /// injected) using the cookie on an HTTPS request. Ports aren't compared: live view may use its own.
+    /// Behind a TLS-terminating proxy the request itself isn't HTTPS, so nothing is refused there.</summary>
+    internal static bool IsSchemeDowngrade(string origin, bool requestIsHttps) =>
+        requestIsHttps && Uri.TryCreate(origin, UriKind.Absolute, out var originUri) && originUri.Scheme == Uri.UriSchemeHttp;
 
     internal static bool IsAllowed(string origin, string requestHost, string? publicOrigin)
     {

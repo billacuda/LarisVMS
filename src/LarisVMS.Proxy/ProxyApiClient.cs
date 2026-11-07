@@ -15,18 +15,6 @@ public class ProxyApiClient
     {
     }
 
-    public ProxyApiClient(string serverUrl, bool acceptAnyCertificate)
-        : this(serverUrl, AcceptAnyHandler(acceptAnyCertificate))
-    {
-    }
-
-    private static HttpClientHandler AcceptAnyHandler(bool acceptAnyCertificate)
-    {
-        var handler = new HttpClientHandler();
-        if (acceptAnyCertificate) handler.ServerCertificateCustomValidationCallback = (_, _, _, _) => true;
-        return handler;
-    }
-
     private ProxyApiClient(string serverUrl, HttpClientHandler handler)
     {
         _http = new HttpClient(handler)

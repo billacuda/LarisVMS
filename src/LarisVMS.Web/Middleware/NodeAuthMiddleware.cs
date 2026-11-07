@@ -16,7 +16,7 @@ public class NodeAuthMiddleware(RequestDelegate next)
 {
     public const string HttpContextItemKey = "Node";
 
-    public async Task InvokeAsync(HttpContext context, INodeService nodeService)
+    public async Task InvokeAsync(HttpContext context, INodeService nodeService, ILogger<NodeAuthMiddleware> logger)
     {
         var path = context.Request.Path.Value ?? string.Empty;
         if (!path.StartsWith("/api/nodes/", StringComparison.OrdinalIgnoreCase)
@@ -29,6 +29,7 @@ public class NodeAuthMiddleware(RequestDelegate next)
         var header = context.Request.Headers.Authorization.ToString();
         if (!header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
         {
+            AuthFailureLog.Record(logger, "Node authentication", context.Connection.RemoteIpAddress);
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             return;
         }
@@ -37,6 +38,7 @@ public class NodeAuthMiddleware(RequestDelegate next)
         var separator = token.IndexOf(':');
         if (separator < 0)
         {
+            AuthFailureLog.Record(logger, "Node authentication", context.Connection.RemoteIpAddress);
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             return;
         }
@@ -51,6 +53,7 @@ public class NodeAuthMiddleware(RequestDelegate next)
         var node = await nodeService.AuthenticateAsync(nodeId, secret, remoteIp, context.RequestAborted);
         if (node is null)
         {
+            AuthFailureLog.Record(logger, "Node authentication", context.Connection.RemoteIpAddress);
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             return;
         }

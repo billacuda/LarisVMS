@@ -5,68 +5,68 @@
 @inject ICameraAccessService CameraAccess
 @inject NavigationManager Nav
 
-<PageTitle>Event tags: @CameraName - @AppName</PageTitle>
+<PageTitle>@L["cameras.eventTags.heading", new { camera = CameraName }] - @AppName</PageTitle>
 
 <div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-3">
-    <h1 class="mb-0">Event tags: @CameraName</h1>
-    <a class="btn btn-outline-secondary" href="/Cameras/Edit/@CameraId">Back to camera</a>
+    <h1 class="mb-0">@L["cameras.eventTags.heading", new { camera = CameraName }]</h1>
+    <a class="btn btn-outline-secondary" href="/Cameras/Edit/@CameraId">@L["cameras.eventTags.backToCamera"]</a>
 </div>
 
 <p class="text-muted small">
-    Tag the timeline when this camera sends a matching ONVIF event. <a href="/Help/recording#event-tags">Learn more</a>
+    @L["cameras.eventTags.tagTheTimelineWhenThis"] <a href="/Help/recording#event-tags">@L["common.learnMore"]</a>
 </p>
 
 <div class="row g-3">
     <div class="col-lg-7">
         <div id="eventTagListPanel">
-            <p class="text-muted small">Loading rules…</p>
+            <p class="text-muted small">@L["cameras.eventTags.loadingRules"]</p>
         </div>
 
         <div id="eventTagFormPanel" class="border rounded p-3 mt-3" style="display: none;">
-            <h6 id="eventTagFormTitle">New rule</h6>
+            <h6 id="eventTagFormTitle">@L["cameras.eventTags.newRule"]</h6>
             <input type="hidden" id="eventTagFormId" />
             <div class="mb-2">
-                <label class="form-label small">Name</label>
-                <input type="text" id="eventTagFormName" class="form-control form-control-sm" placeholder="e.g. Person detected" required />
+                <label for="eventTagFormName" class="form-label small">@L["common.name"]</label>
+                <input type="text" id="eventTagFormName" class="form-control form-control-sm" placeholder="@L["cameras.eventTags.eGPersonDetected"]" required />
             </div>
             <div class="mb-2">
-                <label class="form-label small">Start topic</label>
+                <label for="eventTagFormStartTopic" class="form-label small">@L["cameras.eventTags.startTopic"]</label>
                 <input type="text" id="eventTagFormStartTopic" class="form-control form-control-sm" list="observedTopicsList" required />
             </div>
             <div class="mb-2">
-                <label class="form-label small">Stop topic <span class="text-muted">(optional)</span></label>
+                <label class="form-label small" for="eventTagFormStopTopic">@L["cameras.eventTags.stopTopic"] <span class="text-muted">@L["cameras.eventTags.optional"]</span></label>
                 <input type="text" id="eventTagFormStopTopic" class="form-control form-control-sm" list="observedTopicsList" />
-                <div class="lv-hint">Blank uses the start topic's own true/false state.</div>
+                <div class="lv-hint">@L["cameras.eventTags.blankUsesTheStartTopic"]</div>
             </div>
             <datalist id="observedTopicsList"></datalist>
             <div class="mb-2">
-                <label class="form-label small">Timeline color</label>
+                <label for="eventTagFormColor" class="form-label small">@L["cameras.eventTags.timelineColor"]</label>
                 <input type="color" id="eventTagFormColor" class="form-control form-control-sm form-control-color" value="#ff9800" />
             </div>
             <div class="form-check mb-2">
                 <input type="checkbox" id="eventTagFormDrivesRecording" class="form-check-input" />
-                <label class="form-check-label small" for="eventTagFormDrivesRecording">Drives recording</label>
-                <div class="lv-hint">Event and Motion modes keep footage around this rule's events.</div>
+                <label class="form-check-label small" for="eventTagFormDrivesRecording">@L["cameras.eventTags.drivesRecording"]</label>
+                <div class="lv-hint">@L["cameras.eventTags.eventAndMotionModesKeep"]</div>
             </div>
             <div class="form-check mb-2">
                 <input type="checkbox" id="eventTagFormEnabled" class="form-check-input" checked />
-                <label class="form-check-label small" for="eventTagFormEnabled">Enabled</label>
+                <label class="form-check-label small" for="eventTagFormEnabled">@L["common.enabled"]</label>
             </div>
             <div class="d-flex gap-2">
-                <button type="button" id="eventTagFormSaveBtn" class="btn btn-primary btn-sm">Save</button>
-                <button type="button" id="eventTagFormCancelBtn" class="btn btn-outline-secondary btn-sm">Cancel</button>
-                <button type="button" id="eventTagFormDeleteBtn" class="btn btn-outline-danger btn-sm ms-auto" style="display: none;">Delete</button>
+                <button type="button" id="eventTagFormSaveBtn" class="btn btn-primary btn-sm">@L["common.save"]</button>
+                <button type="button" id="eventTagFormCancelBtn" class="btn btn-outline-secondary btn-sm">@L["common.cancel"]</button>
+                <button type="button" id="eventTagFormDeleteBtn" class="btn btn-outline-danger btn-sm ms-auto" style="display: none;">@L["common.delete"]</button>
             </div>
         </div>
 
-        <button type="button" id="eventTagNewBtn" class="btn btn-primary btn-sm mt-3">New rule</button>
+        <button type="button" id="eventTagNewBtn" class="btn btn-primary btn-sm mt-3">@L["cameras.eventTags.newRule"]</button>
     </div>
 
     <div class="col-lg-5">
-        <h6>Observed topics</h6>
-        <p class="text-muted small">Topics this camera has sent, newest first. Click one to use it.</p>
+        <h6>@L["cameras.eventTags.observedTopics"]</h6>
+        <p class="text-muted small">@L["cameras.eventTags.topicsThisCameraHasSent"]</p>
         <div id="observedTopicsPanel">
-            <p class="text-muted small">Loading…</p>
+            <p class="text-muted small">@L["common.loading"]</p>
         </div>
     </div>
 </div>

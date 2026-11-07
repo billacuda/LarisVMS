@@ -14,8 +14,16 @@ namespace LarisVMS.Web.Pages.Views;
 /// ended up on a `/Views/Play/...` URL). Callers still own the single-camera path and the
 /// tour-redirect path themselves; this only covers "show me View X".</summary>
 public sealed class PlayViewModelBuilder(IViewService viewService, ICameraService cameraService,
-    IAuditService auditService, ISettingsResolver settings, ICameraAccessService cameraAccess)
+    IAuditService auditService, ISettingsResolver settings, ICameraAccessService cameraAccess, IPermissionService permissions)
 {
+    /// <summary>Cameras this user may record manually: needs both the permission and per-camera access.
+    /// Null means all of them. The API checks this again, this only decides who sees the button.</summary>
+    public static async Task<HashSet<Guid>?> RecordableCamerasAsync(ClaimsPrincipal user, ICameraAccessService cameraAccess,
+        IPermissionService permissions, CancellationToken ct = default) =>
+        (await permissions.GetGrantedAsync(user, ct)).Has("Recording", "Manual")
+            ? await cameraAccess.GetAccessibleCameraIdsAsync(user, CameraAccessActions.Record, ct)
+            : [];
+
     /// <summary>Null means the view doesn't exist or isn't visible to this user — caller should
     /// redirect to the views list, same as `PlayModel.OnGetAsync` always has.</summary>
     public async Task<PlayViewModel?> BuildAsync(Guid viewId, ClaimsPrincipal user, string? remoteIp,
@@ -59,6 +67,7 @@ public sealed class PlayViewModelBuilder(IViewService viewService, ICameraServic
             PathLingerSeconds = PathLinger.Clamp(await settings.GetAsync(PathLinger.SettingKey, PathLinger.Default, ct: ct)),
             PathDissolveSeconds = PathDissolve.Clamp(await settings.GetAsync(PathDissolve.SettingKey, PathDissolve.Default, ct: ct)),
             TalkCameraIds = await cameraAccess.GetAccessibleCameraIdsAsync(user, CameraAccessActions.Talk, ct),
+            RecordCameraIds = await RecordableCamerasAsync(user, cameraAccess, permissions, ct),
             // Always computed, even off the tour path — a tour stop reached via a direct link
             // rather than GetTourViewsAsync still needs to advance eventually rather than sitting
             // on this view forever, same fallback PlayModel's own tour branch always used.

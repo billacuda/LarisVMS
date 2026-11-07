@@ -2,15 +2,12 @@
 @model LarisVMS.Web.Pages.Setup.StorageModel
 @{
     Layout = "_SetupLayout";
-    ViewData["Title"] = "Storage";
+    ViewData["Title"] = L["setup.storage.storage"].Value;
 }
-<h5 class="mb-3">3. Storage</h5>
+<h2 class="h5 mb-3">@L["setup.storage.3Storage"]</h2>
 <p class="text-muted small">
-    Each recorder node writes to its own storage volume — you set that path when you install the node
-    in the next step (<code>install-node.ps1 -StorageRoot &lt;path&gt;</code>), and you can change it
-    or add an optional archive volume later on <strong>Admin &rarr; Nodes</strong>. There's nothing to
-    configure here.
+    @L.Html("setup.storage.intro")
 </p>
 <form method="post">
-    <button type="submit" class="btn btn-primary">Continue</button>
+    <button type="submit" class="btn btn-primary">@L["setup.storage.continue"]</button>
 </form>

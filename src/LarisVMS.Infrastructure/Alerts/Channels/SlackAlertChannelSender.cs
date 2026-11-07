@@ -1,6 +1,7 @@
 using System.Text.Json;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 
 namespace LarisVMS.Infrastructure.Alerts.Channels;
 
@@ -14,11 +15,11 @@ public class SlackAlertChannelSender : IAlertChannelSender
     public async Task SendAsync(string? configJson, string ruleName, string message, CancellationToken ct = default)
     {
         var config = string.IsNullOrWhiteSpace(configJson)
-            ? throw new InvalidOperationException("Slack delivery configuration is missing.")
+            ? throw new InvalidOperationException(Loc.T("server.slackAlertChannel.slackDeliveryConfigurationIsMissing"))
             : JsonSerializer.Deserialize<SlackDeliveryConfig>(configJson)
-                ?? throw new InvalidOperationException("Slack delivery configuration is malformed.");
+                ?? throw new InvalidOperationException(Loc.T("server.slackAlertChannel.slackDeliveryConfigurationIsMalformed"));
 
-        using var http = new HttpClient();
+        using var http = new HttpClient(LarisVMS.Infrastructure.Security.OutboundGuard.NoLocalHandler());
         var payload = JsonSerializer.Serialize(new { text = $"*LarisVMS alert: {ChatText.Slack(ruleName)}*\n{ChatText.Slack(message)}" });
         using var content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
         var response = await http.PostAsync(config.WebhookUrl, content, ct);

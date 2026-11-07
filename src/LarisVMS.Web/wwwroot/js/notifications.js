@@ -64,7 +64,7 @@ window.larisvmsNotifications = (function () {
         var close = document.createElement('button');
         close.type = 'button';
         close.className = 'btn-close btn-close-sm float-end';
-        close.setAttribute('aria-label', 'Dismiss');
+        close.setAttribute('aria-label', larisvmsI18n.t('js.notifications.dismiss'));
         close.addEventListener('click', function (e) { e.stopPropagation(); el.remove(); });
         el.appendChild(close);
         el.appendChild(title);
@@ -108,7 +108,7 @@ window.larisvmsNotifications = (function () {
     function register(body) {
         return fetch('/api/notifications/devices', {
             method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-        }).then(function (r) { if (!r.ok) throw new Error('The server didn’t accept this browser (' + r.status + ').'); });
+        }).then(function (r) { if (!r.ok) throw new Error(larisvmsI18n.t('js.notifications.serverRejected', { status: r.status })); });
     }
 
     function loadScript(src) {
@@ -116,7 +116,7 @@ window.larisvmsNotifications = (function () {
             var s = document.createElement('script');
             s.src = src;
             s.onload = resolve;
-            s.onerror = function () { reject(new Error('Couldn’t load ' + src)); };
+            s.onerror = function () { reject(new Error(larisvmsI18n.t('js.notifications.couldntLoad', { src: src }))); };
             document.head.appendChild(s);
         });
     }
@@ -140,7 +140,7 @@ window.larisvmsNotifications = (function () {
                 return window.firebase.messaging(app).getToken({ vapidKey: config.fcm.vapidKey || undefined, serviceWorkerRegistration: reg });
             })
             .then(function (token) {
-                if (!token) throw new Error('Firebase didn’t return a token for this browser.');
+                if (!token) throw new Error(larisvmsI18n.t('js.notifications.firebaseDidntReturnAToken'));
                 return register({ kind: 'Fcm', endpoint: token, deviceLabel: deviceLabel() + ' (Firebase)' });
             });
     }
@@ -148,24 +148,24 @@ window.larisvmsNotifications = (function () {
     /// Asks for permission and registers this browser with whichever push transport is on.
     /// Resolves to a short message for the page to show.
     function enableThisBrowser() {
-        if (!supported()) return Promise.reject(new Error('This browser doesn’t support notifications.'));
+        if (!supported()) return Promise.reject(new Error(larisvmsI18n.t('js.notifications.thisBrowserDoesntSupportNotifications')));
         return Notification.requestPermission().then(function (result) {
-            if (result !== 'granted') throw new Error('Notifications are blocked for this site. Allow them in the browser’s site settings, then try again.');
+            if (result !== 'granted') throw new Error(larisvmsI18n.t('js.notifications.notificationsAreBlockedForThis'));
             return Promise.all([getConfig(), navigator.serviceWorker.register('/sw.js').then(function () { return navigator.serviceWorker.ready; })]);
         }).then(function (both) {
             var config = both[0], reg = both[1];
-            if (!config) throw new Error('Couldn’t read the notification settings.');
-            if (config.webPush) return subscribeWebPush(reg, config).then(function () { return 'This browser will get notifications, even when LarisVMS isn’t open.'; });
-            if (config.fcm) return subscribeFcm(reg, config).then(function () { return 'This browser will get notifications through Firebase, even when LarisVMS isn’t open.'; });
+            if (!config) throw new Error(larisvmsI18n.t('js.notifications.couldntReadTheNotificationSettings'));
+            if (config.webPush) return subscribeWebPush(reg, config).then(function () { return larisvmsI18n.t('js.notifications.thisBrowserWillGetNotifications'); });
+            if (config.fcm) return subscribeFcm(reg, config).then(function () { return larisvmsI18n.t('js.notifications.thisBrowserWillGetNotifications2'); });
             return config.onPrem
-                ? 'Notifications will show while a LarisVMS tab is open. (Push to a closed browser isn’t turned on.)'
-                : 'Browser notifications are turned off in Settings.';
+                ? larisvmsI18n.t('js.notifications.notificationsWillShowWhileA')
+                : larisvmsI18n.t('js.notifications.turnedOff');
         });
     }
 
     function sendTest() {
         return fetch('/api/notifications/test', { method: 'POST', credentials: 'same-origin' }).then(function (r) {
-            if (!r.ok) throw new Error('The test couldn’t be sent (' + r.status + ').');
+            if (!r.ok) throw new Error(larisvmsI18n.t('js.notifications.testFailed', { status: r.status }));
             return r.json();
         });
     }

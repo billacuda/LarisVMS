@@ -156,4 +156,34 @@ public class CocoCategoryMapTests
         // should read "Vehicle", not "Vehicle — Vehicle".
         Assert.Equal("Vehicle", CocoCategoryMap.DisplayLabel(CocoCategoryMap.Vehicle, "vehicle"));
     }
+
+    [Theory]
+    [InlineData("airplane", "airplane", true)]
+    [InlineData("airplane", "aeroplane", true)]   // D-FINE's legacy spelling
+    [InlineData("aeroplane", "airplane", true)]   // a typed legacy name matches YOLOX's
+    [InlineData("AIRPLANE", "Airplane", true)]
+    [InlineData("couch", "sofa", true)]
+    [InlineData("tv", "tvmonitor", true)]
+    [InlineData("airplane", "car", false)]
+    [InlineData("Vehicle", "truck", true)]        // a whole category
+    [InlineData("Animal", "person", false)]
+    [InlineData("Object", "bench", true)]
+    [InlineData("", "airplane", false)]
+    [InlineData("-", "airplane", false)]          // a camera's "ignore nothing"
+    public void IgnoredObjectsMatchCategoriesAndEitherSpelling(string setting, string rawLabel, bool ignored)
+    {
+        Assert.Equal(ignored, CocoCategoryMap.IsIgnored(CocoCategoryMap.ParseIgnoredObjects(setting), rawLabel));
+    }
+
+    [Fact]
+    public void IgnoredObjectsNeverMatchAMissingLabel()
+    {
+        Assert.False(CocoCategoryMap.IsIgnored(CocoCategoryMap.ParseIgnoredObjects("Object"), null));
+    }
+
+    [Fact]
+    public void AllCocoLabelsCoverEveryYoloXClass()
+    {
+        Assert.Equal(LarisVMS.Vision.Inference.DFineLabels.YoloXCoco.Order(), CocoCategoryMap.AllCocoLabels);
+    }
 }

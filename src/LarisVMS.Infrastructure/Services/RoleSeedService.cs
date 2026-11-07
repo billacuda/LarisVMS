@@ -86,7 +86,7 @@ public class RoleSeedService(
              ("Dashboard", "View"), ("CameraGroups", "Edit"), ("Users", "Edit"), ("Roles", "Assign"),
              ("Logs", "View"), ("Logs", "Export"), ("Retention", "Edit"), ("SystemLogs", "View")],
             CameraAccessActions.View | CameraAccessActions.Playback | CameraAccessActions.Export |
-            CameraAccessActions.Ptz | CameraAccessActions.Talk | CameraAccessActions.Configure),
+            CameraAccessActions.Ptz | CameraAccessActions.Talk | CameraAccessActions.Configure | CameraAccessActions.Record),
 
         [RoleTags.SecurityManager] = new(
             [("Cameras", "View"), ("Views", "View"), ("Views", "Edit"), ("Playback", "View"),
@@ -94,13 +94,13 @@ public class RoleSeedService(
              ("Dashboard", "View"), ("CameraGroups", "Edit"), ("Users", "Edit"),
              ("Logs", "View"), ("Logs", "Export")],
             CameraAccessActions.View | CameraAccessActions.Playback | CameraAccessActions.Export |
-            CameraAccessActions.Ptz | CameraAccessActions.Talk | CameraAccessActions.Configure),
+            CameraAccessActions.Ptz | CameraAccessActions.Talk | CameraAccessActions.Configure | CameraAccessActions.Record),
 
         [RoleTags.Operator] = new(
             [("Cameras", "View"), ("Views", "View"), ("Views", "Edit"), ("Bookmarks", "Edit"),
              ("Dashboard", "View")],
             CameraAccessActions.View | CameraAccessActions.Playback |
-            CameraAccessActions.Ptz | CameraAccessActions.Talk),
+            CameraAccessActions.Ptz | CameraAccessActions.Talk | CameraAccessActions.Record),
 
         [RoleTags.Auditor] = new(
             [("Playback", "View"), ("Exports", "View"), ("Bookmarks", "Edit"),
@@ -176,7 +176,8 @@ public class RoleSeedService(
     }
 
     private const CameraAccessActions AllCameraActions = CameraAccessActions.View | CameraAccessActions.Playback |
-        CameraAccessActions.Export | CameraAccessActions.Ptz | CameraAccessActions.Talk | CameraAccessActions.Configure;
+        CameraAccessActions.Export | CameraAccessActions.Ptz | CameraAccessActions.Talk | CameraAccessActions.Configure |
+        CameraAccessActions.Record;
 
     /// <summary>Camera access used to fail open: a user whose roles had no Camera Access rows could
     /// reach every camera. It now fails closed. Once, this keeps existing installs exactly as they
@@ -254,6 +255,31 @@ public class RoleSeedService(
         // Notifications: every role may subscribe to shared notifications and create its own.
         await GrantOnceAsync("Grants.Notifications.Subscribe.v1", ("Notifications", "Subscribe"), Task.FromResult, ct);
         await GrantOnceAsync("Grants.Notifications.CreateOwn.v1", ("Notifications", "CreateOwn"), Task.FromResult, ct);
+
+        // Manual recording: whoever can steer a camera can also record it. The API/Integration role has
+        // no such access, so an admin opts it in.
+        await AddRecordToPtzAccessOnceAsync(ct);
+        await GrantOnceAsync("Grants.Recording.Manual.v1", ("Recording", "Manual"),
+            _ => db.CameraAccesses.Where(a => a.PrincipalType == CameraAccessPrincipalType.Role && (a.Actions & CameraAccessActions.Record) != 0)
+                .Select(a => a.PrincipalId).Distinct().ToListAsync(ct), ct);
+    }
+
+    /// <summary>The Record camera action is new, so existing access rows don't have it. Without this,
+    /// current operators would be granted the permission and still see no button.</summary>
+    private async Task AddRecordToPtzAccessOnceAsync(CancellationToken ct)
+    {
+        const string markerKey = "Grants.CameraAccess.Record.v1";
+        if (await db.Settings.AnyAsync(s => s.Key == markerKey, ct)) return;
+
+        foreach (var row in await db.CameraAccesses.Where(a => (a.Actions & CameraAccessActions.Ptz) != 0).ToListAsync(ct))
+            row.Actions |= CameraAccessActions.Record;
+
+        db.Settings.Add(new Setting
+        {
+            Id = Guid.NewGuid(), Key = markerKey, Value = "done", IsSystemSetting = true,
+            Description = "One-time camera access grant applied at startup.", CreatedAt = DateTime.UtcNow
+        });
+        await db.SaveChangesAsync(ct);
     }
 
     private async Task GrantOnceAsync(string markerKey, (string Resource, string Action) permission,

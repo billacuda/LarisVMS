@@ -13,10 +13,11 @@ namespace LarisVMS.Node;
 /// event un-claimed. See MotionSession.HasMotionSince's doc comment for how the eventual comparison
 /// (evaluated at DecideAtUtc) covers both pre-roll and post-roll from one check.
 ///
-/// Schedule mode does NOT go through this deferred path — see NodeWorker.HandleSegmentCompleted's
-/// doc comment for why a schedule window's membership is fully decidable the instant a segment
-/// completes, with nothing to retroactively claim.
+/// Schedule and Manual modes have nothing to claim retroactively, so they arrive with
+/// <see cref="DiscardReason"/> already set. They still wait, because every discard waits out
+/// NodeWorker.ManualStartGrace in case a manual recording covering the segment hasn't reached this
+/// node yet. Motion and Event segments pick up a reason the same way once their own check says discard.
 /// </summary>
 public sealed record PendingGatedSegmentDecision(
     Guid CameraId, string CameraName, RecordingSegment Segment, NodeConfigStreamDto? MainStream,
-    RecordingMode Mode, int PostRollSeconds, DateTime DecideAtUtc);
+    RecordingMode Mode, int PostRollSeconds, DateTime DecideAtUtc, string? DiscardReason = null);

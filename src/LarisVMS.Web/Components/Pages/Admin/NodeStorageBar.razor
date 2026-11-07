@@ -6,33 +6,33 @@
 {
     var usedPercent = total > 0 ? 100.0 * (total - free) / total : 0;
     var barClass = usedPercent switch { > 90 => "bg-danger", > 75 => "bg-warning", _ => "" };
-    <div class="progress" style="height: 0.5rem;" title="@ByteFormat.Format(total - free) used of @ByteFormat.Format(total)">
+    <div class="progress" style="height: 0.5rem;" title="@L["admin.nodeStorageBar.usedOf", new { used = ByteFormat.Format(total - free), total = ByteFormat.Format(total) }]">
         <div class="progress-bar @barClass"
              style="width: @usedPercent.ToString("0.#")%"></div>
     </div>
     <span class="small text-muted">
-        @ByteFormat.Format(free) free
+        @L["admin.nodeStorageBar.free", new { size = ByteFormat.Format(free) }]
         @if (DaysRemaining is { } days)
         {
-            <text>&middot; ~@days.ToString("0") day(s) left</text>
+            <text>&middot; @L.Plural("admin.nodeStorageBar.daysLeft", (long)Math.Round(days))</text>
         }
     </span>
 }
 else
 {
-    <span class="small text-muted">no report yet</span>
+    <span class="small text-muted">@L["admin.nodeStorageBar.noReportYet"]</span>
 }
 @if (Node.ArchiveTotalBytes is { } aTotal && Node.ArchiveFreeBytes is { } aFree)
 {
     var aUsedPercent = aTotal > 0 ? 100.0 * (aTotal - aFree) / aTotal : 0;
-    <div class="progress mt-1" style="height: 0.5rem;" title="Archive volume: @ByteFormat.Format(aTotal - aFree) used of @ByteFormat.Format(aTotal)">
+    <div class="progress mt-1" style="height: 0.5rem;" title="@L["admin.nodeStorageBar.archiveUsedOf", new { used = ByteFormat.Format(aTotal - aFree), total = ByteFormat.Format(aTotal) }]">
         <div class="progress-bar bg-secondary" style="width: @aUsedPercent.ToString("0.#")%"></div>
     </div>
     <span class="small text-muted">
-        archive: @ByteFormat.Format(aFree) free
+        @L["admin.nodeStorageBar.archiveFree", new { size = ByteFormat.Format(aFree) }]
         @if (ArchiveDaysRemaining is { } aDays)
         {
-            <text>&middot; ~@aDays.ToString("0") day(s) left</text>
+            <text>&middot; @L.Plural("admin.nodeStorageBar.daysLeft", (long)Math.Round(aDays))</text>
         }
     </span>
 }

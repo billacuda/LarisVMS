@@ -32,7 +32,6 @@ if (HasFlag(args, "--reset-server-pin"))
 }
 
 var config = ProxyConfigStore.Load();
-var insecureTls = HasFlag(args, "--insecure-tls") || Environment.GetEnvironmentVariable("LARISVMS_INSECURE_TLS") == "1";
 
 if (config is null)
 {
@@ -99,7 +98,7 @@ builder.Services.AddSingleton(config);
 builder.Services.AddSingleton(endpoint);
 builder.Services.AddSingleton(certHolder);
 builder.Services.AddSingleton(sp => new ProxyUpdateService(
-    config, insecureTls, sp.GetRequiredService<ILoggerFactory>().CreateLogger<ProxyUpdateService>(),
+    config, sp.GetRequiredService<ILoggerFactory>().CreateLogger<ProxyUpdateService>(),
     sp.GetRequiredService<IHostApplicationLifetime>()));
 builder.Services.AddSingleton<ProxyWorker>();
 builder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<ProxyWorker>());
@@ -152,7 +151,9 @@ app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, Proxy
     catch (Exception ex) when (ex is not OperationCanceledException)
     {
         ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
-        await ctx.Response.WriteAsync($"Could not reach recorder node: {ex.Message}");
+        // The node's address stays in the log, not the response.
+        relayLogger.LogWarning(ex, "Could not reach recorder node {NodeHost}.", target.Host);
+        await ctx.Response.WriteAsync("Could not reach the recorder node.");
         return;
     }
 
@@ -213,7 +214,9 @@ app.MapGet("/playback-segment/{cameraId:guid}", async (HttpContext ctx, Guid cam
     catch (Exception ex) when (ex is not OperationCanceledException)
     {
         ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
-        await ctx.Response.WriteAsync($"Could not reach recorder node: {ex.Message}");
+        // The node's address stays in the log, not the response.
+        relayLogger.LogWarning(ex, "Could not reach recorder node {NodeHost}.", target.Host);
+        await ctx.Response.WriteAsync("Could not reach the recorder node.");
         return;
     }
 

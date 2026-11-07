@@ -16,11 +16,20 @@ public class ApiKeyAuthMiddlewareTests
     private sealed class FakeApiKeyService : IApiKeyService
     {
         public Task<List<Core.Entities.ApiKey>> ListAsync(CancellationToken ct = default) => throw new NotImplementedException();
-        public Task<(Core.Entities.ApiKey Key, string RawValue)> GenerateAsync(string name, string roleId, string? createdByUserId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<(Core.Entities.ApiKey Key, string RawValue)> GenerateAsync(string name, string roleId, string? createdByUserId, CancellationToken ct = default,
+            DateTime? expiresAtUtc = null, IReadOnlyCollection<(string Resource, string Action)>? limits = null) => throw new NotImplementedException();
+        public Task<(Core.Entities.ApiKey Key, IReadOnlySet<(string Resource, string Action)>? Limits)?> GetAsync(Guid id, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateAsync(Guid id, string name, IReadOnlyCollection<(string Resource, string Action)>? limits, CancellationToken ct = default) => throw new NotImplementedException();
         public Task RevokeAsync(Guid id, CancellationToken ct = default) => throw new NotImplementedException();
 
-        public Task<(Guid ApiKeyId, string RoleName)?> AuthenticateAsync(string rawValue, CancellationToken ct = default)
-            => Task.FromResult(rawValue == "good-key" ? (ValidKeyId, "API/Integration") : ((Guid, string)?)null);
+        public Task<ApiKeyAuthentication?> AuthenticateAsync(string rawValue, CancellationToken ct = default)
+            => Task.FromResult(rawValue switch
+            {
+                "good-key" => new ApiKeyAuthentication(ValidKeyId, "API/Integration", "Monitoring", null),
+                "limited-key" => new ApiKeyAuthentication(ValidKeyId, "API/Integration", "Monitoring",
+                    new HashSet<(string, string)> { ("Cameras", "View") }),
+                _ => (ApiKeyAuthentication?)null
+            });
     }
 
     // InvokeAsync's IApiKeyService parameter is called directly here rather than resolved through DI —
@@ -33,8 +42,18 @@ public class ApiKeyAuthMiddlewareTests
         if (headerValue is not null) context.Request.Headers["X-Api-Key"] = headerValue;
 
         var middleware = new ApiKeyAuthMiddleware(_ => Task.CompletedTask);
-        await middleware.InvokeAsync(context, new FakeApiKeyService());
+        await middleware.InvokeAsync(context, new FakeApiKeyService(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<ApiKeyAuthMiddleware>.Instance);
         return context;
+    }
+
+    [Fact]
+    public async Task ALimitedKeyCarriesItsLimits()
+    {
+        var context = await Run("/api/v1/status", "limited-key");
+
+        Assert.True(LarisVMS.Core.Auth.ApiKeyScope.Allows(context.User, "Cameras", "View"));
+        Assert.False(LarisVMS.Core.Auth.ApiKeyScope.Allows(context.User, "Exports", "View"));
     }
 
     [Fact]
@@ -46,6 +65,8 @@ public class ApiKeyAuthMiddlewareTests
         Assert.Equal("API/Integration", context.User.FindFirstValue(ClaimTypes.Role));
         Assert.Null(context.User.FindFirstValue(ClaimTypes.NameIdentifier));
         Assert.Equal(ValidKeyId.ToString(), context.User.FindFirstValue("ApiKeyId"));
+        Assert.Equal("API key: Monitoring", context.User.Identity?.Name);
+        Assert.False(LarisVMS.Core.Auth.ApiKeyScope.IsLimited(context.User));
     }
 
     [Fact]

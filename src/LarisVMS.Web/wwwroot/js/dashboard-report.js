@@ -107,7 +107,7 @@ window.larisvmsDashboardReport = (function () {
                 : '<span class="small fw-semibold">' + escapeHtml(c.header) + '</span>') + '</th>';
         }).join('') + '</tr>';
         bodyEl.innerHTML = data.rows.length === 0
-            ? '<tr><td colspan="' + cols.length + '" class="text-muted">Nothing matches.</td></tr>'
+            ? '<tr><td colspan="' + cols.length + '" class="text-muted">' + larisvmsI18n.html('js.dashboardReport.nothingMatches') + '</td></tr>'
             : data.rows.map(function (r) {
                 var cells = r.cells || {};
                 return '<tr>' + cols.map(function (c, i) {
@@ -125,8 +125,8 @@ window.larisvmsDashboardReport = (function () {
         lastPage = data;
         if (data.columns && headEl) {
             renderColumns(data);
-            countEl.textContent = data.total >= 0 ? data.total.toLocaleString() + ' total' : '';
-            pageEl.textContent = 'Page ' + data.page + ' of ' + data.totalPages;
+            countEl.textContent = data.total >= 0 ? data.total.toLocaleString(larisvmsI18n.locale) + ' total' : '';
+            pageEl.textContent = larisvmsI18n.t('js.dashboardReport.pageOf', { page: data.page, pages: data.totalPages });
             prevEl.disabled = data.page <= 1;
             nextEl.disabled = data.page >= data.totalPages;
             return;
@@ -137,10 +137,10 @@ window.larisvmsDashboardReport = (function () {
         var offset = (data.page - 1) * data.pageSize;
         var showNode = state.def.assetKind === 'camera';
         if (nodeColEl) nodeColEl.classList.toggle('d-none', !showNode);
-        if (valueHeaderEl) valueHeaderEl.textContent = data.valueHeader || 'Value';
+        if (valueHeaderEl) valueHeaderEl.textContent = data.valueHeader || larisvmsI18n.t('js.dashboardReport.value');
 
         bodyEl.innerHTML = data.rows.length === 0
-            ? '<tr><td colspan="5" class="text-muted">Nothing matches.</td></tr>'
+            ? '<tr><td colspan="5" class="text-muted">' + larisvmsI18n.html('js.dashboardReport.nothingMatches') + '</td></tr>'
             : data.rows.map(function (r, i) {
                 var name = r.link ? '<a href="' + escapeHtml(r.link) + '">' + escapeHtml(r.assetName) + '</a>' : escapeHtml(r.assetName);
                 return '<tr>' +
@@ -152,8 +152,8 @@ window.larisvmsDashboardReport = (function () {
                     '</tr>';
             }).join('');
 
-        countEl.textContent = data.total >= 0 ? data.total.toLocaleString() + ' total' : '';
-        pageEl.textContent = 'Page ' + data.page + ' of ' + data.totalPages;
+        countEl.textContent = data.total >= 0 ? data.total.toLocaleString(larisvmsI18n.locale) + ' total' : '';
+        pageEl.textContent = larisvmsI18n.t('js.dashboardReport.pageOf', { page: data.page, pages: data.totalPages });
         prevEl.disabled = data.page <= 1;
         nextEl.disabled = data.page >= data.totalPages;
     }
@@ -164,7 +164,7 @@ window.larisvmsDashboardReport = (function () {
             .then(function (data) { if (seq === requestSeq) render(data); })
             .catch(function () {
                 if (seq !== requestSeq) return;
-                bodyEl.innerHTML = '<tr><td colspan="5" class="text-danger">Couldn\'t load this report. Try again.</td></tr>';
+                bodyEl.innerHTML = '<tr><td colspan="5" class="text-danger">' + larisvmsI18n.html('js.dashboardReport.couldntLoadThisReportTry') + '</td></tr>';
             });
     }
 
@@ -176,8 +176,8 @@ window.larisvmsDashboardReport = (function () {
         nodeEl.value = '';
         // Filtering by node only makes sense for lists of cameras or nodes.
         nodeEl.classList.toggle('d-none', def.assetKind !== 'camera' && def.assetKind !== 'node');
-        filterEl.setAttribute('placeholder', def.assetKind === 'speed' ? 'Filter by camera, trap, object, or color' : filterPlaceholder);
-        bodyEl.innerHTML = '<tr><td colspan="5" class="text-muted">Loading…</td></tr>';
+        filterEl.setAttribute('placeholder', def.assetKind === 'speed' ? larisvmsI18n.t('js.dashboardReport.filterByCameraTrapObject') : filterPlaceholder);
+        bodyEl.innerHTML = '<tr><td colspan="5" class="text-muted">' + larisvmsI18n.html('js.dashboardReport.loading') + '</td></tr>';
         countEl.textContent = '';
         pageEl.textContent = '';
         bootstrap.Modal.getOrCreateInstance(modalEl).show();
@@ -262,7 +262,7 @@ window.larisvmsDashboardReport = (function () {
             a.remove();
             setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
         }).catch(function () {
-            alert('Couldn\'t download the report. Try again.');
+            alert(larisvmsI18n.t('js.dashboardReport.couldntDownloadTheReportTry'));
         }).then(function () { csvEl.disabled = false; });
     });
 

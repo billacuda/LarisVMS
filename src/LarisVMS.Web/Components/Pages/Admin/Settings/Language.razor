@@ -1,0 +1,211 @@
+@page "/Admin/Settings/Language"
+@attribute [Authorize("Settings.Edit")]
+@using System.Security.Claims
+@using LarisVMS.Core
+@using LarisVMS.Core.Interfaces
+@using LarisVMS.Web.Helpers
+@inject ISettingsResolver Settings
+@inject IAuditService AuditService
+@inject LocaleCatalog Catalog
+
+<PageTitle>@L["settings.language.pageTitle"] - @AppName</PageTitle>
+
+<h1>@L["nav.settings"]</h1>
+<SettingsTabs ActiveKey="Language" />
+
+@if (!string.IsNullOrEmpty(SavedMessage))
+{
+    <div class="alert alert-success" role="status">@SavedMessage</div>
+}
+@if (ResultMessage is { } result)
+{
+    <div class="alert @(ResultIsError ? "alert-danger" : "alert-success")" role="@(ResultIsError ? "alert" : "status")">@result</div>
+}
+
+<div class="lv-page-narrow">
+<EditForm Model="this" FormName="language-settings" OnSubmit="HandleSaveAsync" data-dirty-guard>
+    <SettingSection Title="@L["settings.language.defaultSection"]">
+        <SettingField Label="@L["settings.language.default"]" For="DefaultLanguage" Hint="@L["settings.language.defaultHint"]">
+            <select id="DefaultLanguage" name="DefaultLanguage" class="form-select">
+                <option value="" selected="@string.IsNullOrEmpty(DefaultLanguage)">@L["settings.language.browserDefault"]</option>
+                @foreach (var locale in Catalog.Locales.Where(l => l.Source != LocaleSource.Pseudo))
+                {
+                    <option value="@locale.Culture" lang="@locale.Culture" selected="@(locale.Culture == DefaultLanguage)">@locale.Name</option>
+                }
+            </select>
+        </SettingField>
+        <SettingField Hint="@L["settings.language.showPseudoHint"]">
+            <div class="form-check">
+                <InputCheckbox @bind-Value="ShowPseudo" class="form-check-input" id="ShowPseudo" />
+                <label class="form-check-label" for="ShowPseudo">@L["settings.language.showPseudo"]</label>
+            </div>
+        </SettingField>
+    </SettingSection>
+    <div class="lv-savebar">
+        <button type="submit" class="btn btn-primary">@L["common.save"]</button>
+    </div>
+</EditForm>
+
+<SettingSection Title="@L["settings.language.installedSection"]" Subtitle="@L["settings.language.installedSubtitle"]">
+    <div class="lv-field lv-field-wide">
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th scope="col">@L["settings.language.colLanguage"]</th>
+                        <th scope="col">@L["settings.language.colCode"]</th>
+                        <th scope="col">@L["settings.language.colSource"]</th>
+                        <th scope="col">@L["settings.language.colCoverage"]</th>
+                        <th scope="col"><span class="visually-hidden">@L["common.actions"]</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var locale in Catalog.Locales)
+                    {
+                        <tr>
+                            <td lang="@locale.Culture">
+                                @locale.Name
+                                @if (!string.IsNullOrEmpty(locale.Author))
+                                {
+                                    <div class="small text-muted">@L["settings.language.by", new { author = locale.Author }]</div>
+                                }
+                            </td>
+                            <td><code>@locale.Culture</code></td>
+                            <td>@SourceLabel(locale.Source)</td>
+                            <td>@L["settings.language.percent", new { percent = locale.Coverage }]</td>
+                            <td class="text-end text-nowrap">
+                                @if (locale.Source is LocaleSource.Shipped or LocaleSource.DropIn)
+                                {
+                                    <a class="btn btn-sm btn-outline-secondary" href="/admin/locales/@(locale.Culture).json" download
+                                       aria-label="@L["settings.language.downloadOne", new { name = locale.Name }]">@L["settings.language.download"]</a>
+                                }
+                                @if (locale.Source == LocaleSource.DropIn)
+                                {
+                                    <form method="post" action="/admin/locales/delete" class="d-inline"
+                                          data-confirm="@L["settings.language.deleteConfirm", new { name = locale.Name }]">
+                                        <AntiforgeryToken />
+                                        <input type="hidden" name="culture" value="@locale.Culture" />
+                                        <button type="submit" class="btn btn-sm btn-outline-danger"
+                                                aria-label="@L["settings.language.removeOne", new { name = locale.Name }]">@L["settings.language.remove"]</button>
+                                    </form>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        @if (Catalog.Problems.Count > 0)
+        {
+            <div class="alert alert-warning mt-3 mb-0" role="status">
+                <div class="fw-semibold">@L.Plural("settings.language.problems", Catalog.Problems.Count)</div>
+                <ul class="mb-0">
+                    @foreach (var problem in Catalog.Problems)
+                    {
+                        <li><code>@problem.File</code>: @problem.Error</li>
+                    }
+                </ul>
+            </div>
+        }
+    </div>
+</SettingSection>
+
+<SettingSection Title="@L["settings.language.addSection"]" Subtitle="@L["settings.language.addSubtitle"]">
+    <div class="lv-field lv-field-wide">
+        <ol class="mb-3">
+            <li>@L["settings.language.step1"] <a href="/admin/locales/template.json" download>en.json</a></li>
+            <li>@L["settings.language.step2"]</li>
+            <li>@L["settings.language.step3", new { folder = Catalog.DropInFolder ?? "" }]</li>
+        </ol>
+        <form method="post" action="/admin/locales/upload" enctype="multipart/form-data" class="row g-2 align-items-end">
+            <AntiforgeryToken />
+            <div class="col-sm-7">
+                <label class="form-label" for="LocaleFile">@L["settings.language.file"]</label>
+                <input type="file" id="LocaleFile" name="file" class="form-control" accept=".json,application/json" required />
+            </div>
+            <div class="col-sm-3">
+                <label class="form-label" for="LocaleCulture">@L["settings.language.code"]</label>
+                <input type="text" id="LocaleCulture" name="culture" class="form-control" placeholder="@L["settings.language.fr"]" maxlength="20"
+                       aria-describedby="LocaleCultureHint" autocomplete="off" />
+            </div>
+            <div class="col-sm-2">
+                <button type="submit" class="btn btn-primary w-100">@L["settings.language.upload"]</button>
+            </div>
+            <div class="col-12 lv-hint" id="LocaleCultureHint">@L["settings.language.codeHint"]</div>
+        </form>
+    </div>
+</SettingSection>
+</div>
+
+@code {
+    [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
+    [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    [SupplyParameterFromForm(FormName = "language-settings")] private string? DefaultLanguage { get; set; }
+    [SupplyParameterFromForm(FormName = "language-settings")] private bool ShowPseudo { get; set; }
+
+    // Set by the upload and delete endpoints (LocaleEndpoints) when they redirect back here.
+    [SupplyParameterFromQuery(Name = "result")] private string? Result { get; set; }
+    [SupplyParameterFromQuery(Name = "culture")] private string? ResultCulture { get; set; }
+    [SupplyParameterFromQuery(Name = "error")] private string? ResultError { get; set; }
+
+    private string? SavedMessage;
+    private string? ResultMessage;
+    private bool ResultIsError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        ResultMessage = Result switch
+        {
+            "uploaded" => L["settings.language.uploaded", new { culture = ResultCulture ?? "" }],
+            "deleted" => L["settings.language.deleted", new { culture = ResultCulture ?? "" }],
+            "upload-empty" => L["settings.language.uploadEmpty"],
+            "upload-too-large" => L["settings.language.uploadTooLarge", new { size = LocaleFile.MaxBytes / (1024 * 1024) }],
+            "upload-invalid" => L["settings.language.uploadInvalid", new { error = ResultError ?? "" }],
+            "upload-failed" => L["settings.language.uploadFailed", new { error = ResultError ?? "" }],
+            "delete-failed" => L["settings.language.deleteFailed"],
+            _ => null
+        };
+        ResultIsError = Result is not null && Result.Contains("-");
+
+        // Skip the form fields on a POST: the submitted values are already bound.
+        if (HttpContext?.Request.HasFormContentType == true) return;
+        DefaultLanguage = await Settings.GetRawAsync(LocaleMiddleware.DefaultSettingKey) ?? "";
+        ShowPseudo = await Settings.GetAsync(LocaleMiddleware.ShowPseudoSettingKey, false);
+    }
+
+    private async Task HandleSaveAsync()
+    {
+        var user = AuthenticationStateTask is not null
+            ? (await AuthenticationStateTask).User
+            : new ClaimsPrincipal(new ClaimsIdentity());
+        var by = user.Identity?.Name;
+
+        var oldDefault = await Settings.GetRawAsync(LocaleMiddleware.DefaultSettingKey) ?? "";
+        var oldShowPseudo = await Settings.GetAsync(LocaleMiddleware.ShowPseudoSettingKey, false);
+
+        var newDefault = Catalog.Match(DefaultLanguage) is { } matched && matched != LocaleCatalog.Pseudo ? matched : "";
+        await Settings.SetGlobalAsync(LocaleMiddleware.DefaultSettingKey, newDefault, by);
+        Loc.DefaultLanguage = newDefault;
+        await Settings.SetGlobalAsync(LocaleMiddleware.ShowPseudoSettingKey, ShowPseudo.ToString(), by);
+        DefaultLanguage = newDefault;
+
+        var details = AuditDiff.Build(
+            AuditDiff.Of(LocaleMiddleware.DefaultSettingKey, oldDefault, newDefault),
+            AuditDiff.Of(LocaleMiddleware.ShowPseudoSettingKey, oldShowPseudo.ToString(), ShowPseudo.ToString()));
+        await AuditService.LogAsync("Settings.Update",
+            user.FindFirst(ClaimTypes.NameIdentifier)?.Value, by,
+            HttpContext?.Connection.RemoteIpAddress?.ToString(), details);
+
+        SavedMessage = L["common.saved"];
+    }
+
+    private string SourceLabel(LocaleSource source) => source switch
+    {
+        LocaleSource.BuiltIn => L["settings.language.sourceBuiltIn"],
+        LocaleSource.Shipped => L["settings.language.sourceShipped"],
+        LocaleSource.DropIn => L["settings.language.sourceDropIn"],
+        _ => L["settings.language.sourcePseudo"]
+    };
+}

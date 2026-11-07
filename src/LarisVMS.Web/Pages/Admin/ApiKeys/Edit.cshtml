@@ -1,41 +1,86 @@
-@page
+@page "{id:guid?}"
+@using System.Text.Json
 @model LarisVMS.Web.Pages.Admin.ApiKeys.EditModel
 @{
-    ViewData["Title"] = "Add API key";
+    var editing = Model.Existing is not null;
+    ViewData["Title"] = (editing ? L["admin.apiKeys.edit.editApiKey"] : L["admin.apiKeys.edit.addApiKey"]).Value;
 }
-<h1>Add API key</h1>
+<h1>@(editing ? L["admin.apiKeys.edit.editApiKey"] : L["admin.apiKeys.edit.addApiKey"])</h1>
 
 @if (!string.IsNullOrEmpty(Model.ErrorMessage))
 {
-    <div class="alert alert-danger">@Model.ErrorMessage</div>
+    <div class="alert alert-danger" role="alert">@Model.ErrorMessage</div>
 }
 
-<form method="post" asp-page-handler="Save">
+<form method="post" asp-page-handler="Save" id="apiKeyForm"
+      data-role-id="@Model.Existing?.RoleId"
+      data-permissions-by-role="@JsonSerializer.Serialize(Model.PermissionsByRole)">
     <div class="card mb-3">
         <div class="card-body">
             <div class="row g-3">
                 <div class="col-sm-6">
-                    <label class="form-label">Name</label>
-                    <input type="text" asp-for="Name" class="form-control" placeholder="e.g. Checkmk monitoring" />
+                    <label for="Name" class="form-label">@L["common.name"]</label>
+                    <input type="text" asp-for="Name" class="form-control" placeholder="@L["admin.apiKeys.edit.eGCheckmkMonitoring"]" />
                 </div>
                 <div class="col-sm-6">
-                    <label class="form-label">Role</label>
-                    <select asp-for="RoleId" class="form-select">
-                        <option value="">(choose a role)</option>
-                        @foreach (var r in Model.Roles)
+                    <label class="form-label" for="@(editing ? "apiKeyRoleName" : "apiKeyRole")">@L["common.role"]</label>
+                    @if (editing)
+                    {
+                        <input id="apiKeyRoleName" type="text" class="form-control" value="@Model.ExistingRoleName" disabled />
+                        <div class="form-text">@L["admin.apiKeys.edit.roleCantChange"]</div>
+                    }
+                    else
+                    {
+                        <select asp-for="RoleId" class="form-select" id="apiKeyRole">
+                            <option value="">@L["admin.apiKeys.edit.chooseARole"]</option>
+                            @foreach (var r in Model.Roles)
+                            {
+                                <option value="@r.Id">@r.Name</option>
+                            }
+                        </select>
+                        <div class="form-text">@L["admin.apiKeys.edit.roleHint"]</div>
+                    }
+                </div>
+                @if (!editing)
+                {
+                    <div class="col-sm-6">
+                        <label class="form-label" asp-for="ExpiresInDays">@L["admin.apiKeys.edit.expires"]</label>
+                        <select asp-for="ExpiresInDays" class="form-select">
+                            @foreach (var days in LarisVMS.Web.Pages.Admin.ApiKeys.EditModel.ExpiryChoices)
+                            {
+                                <option value="@days">@(days == 0 ? L["admin.apiKeys.edit.expiresNever"] : L["admin.apiKeys.edit.expiresInDays", new { days }])</option>
+                            }
+                        </select>
+                        <div class="form-text">@L["admin.apiKeys.edit.expiresHint"]</div>
+                    </div>
+                }
+                <div class="col-12">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" asp-for="LimitPermissions" id="apiKeyLimit" />
+                        <label class="form-check-label" for="apiKeyLimit">@L["admin.apiKeys.edit.limitThisKey"]</label>
+                    </div>
+                    <div class="form-text">@L["admin.apiKeys.edit.limitHint"]</div>
+                    <div class="mt-2 d-none" id="apiKeyLimits">
+                        @foreach (var (value, label) in Model.ApiPermissions)
                         {
-                            <option value="@r.Id">@r.Name</option>
+                            <div class="form-check" data-permission="@value">
+                                <input class="form-check-input" type="checkbox" name="SelectedPermissions" value="@value" id="perm-@value"
+                                       checked="@Model.SelectedPermissions.Contains(value)" />
+                                <label class="form-check-label" for="perm-@value">@label</label>
+                            </div>
                         }
-                    </select>
-                    <div class="form-text">
-                        The key acts with exactly this role's permissions — nothing more, nothing less.
-                        "API/Integration" is the built-in role shaped for this.
+                        <div class="form-text d-none" id="apiKeyNoPermissions">@L["admin.apiKeys.edit.roleHasNoApiPermissions"]</div>
                     </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <button type="submit" class="btn btn-primary">Create key</button>
-    <a asp-page="Index" class="btn btn-outline-secondary">Cancel</a>
+    <button type="submit" class="btn btn-primary">@(editing ? L["common.save"] : L["admin.apiKeys.edit.createKey"])</button>
+    <a asp-page="Index" class="btn btn-outline-secondary">@L["common.cancel"]</a>
+    <a href="/Help/api" class="btn btn-link">@L["admin.apiKeys.apiDocumentation"]</a>
 </form>
+
+@section Scripts {
+    <script src="~/js/api-key-limits.js" asp-append-version="true"></script>
+}

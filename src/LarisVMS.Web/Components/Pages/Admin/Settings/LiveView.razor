@@ -7,9 +7,9 @@
 @inject ISettingsResolver Settings
 @inject IAuditService AuditService
 
-<PageTitle>Live View settings - @AppName</PageTitle>
+<PageTitle>@L["settings.liveView.liveViewSettings"] - @AppName</PageTitle>
 
-<h1>Settings</h1>
+<h1>@L["nav.settings"]</h1>
 <SettingsTabs ActiveKey="LiveView" />
 
 @if (!string.IsNullOrEmpty(SavedMessage))
@@ -18,55 +18,55 @@
 }
 @if (!string.IsNullOrEmpty(ErrorMessage))
 {
-    <div class="alert alert-danger">@ErrorMessage</div>
+    <div class="alert alert-danger" role="alert">@ErrorMessage</div>
 }
 
 <div class="lv-page-narrow">
 <EditForm Model="this" FormName="liveview-settings" OnSubmit="HandleSaveAsync" data-dirty-guard>
-    <SettingSection Title="Live view">
-        <SettingField Label="Adaptive streaming" Wide Hint="Small tiles use the Sub stream to save bandwidth. Off always uses Main.">
+    <SettingSection Title="@L["settings.liveView.liveView"]">
+        <SettingField Label="@L["settings.liveView.adaptiveStreaming"]" Wide Hint="@L["settings.liveView.smallTilesUseTheSub"]">
             <div class="form-check form-switch mt-1">
                 <InputCheckbox @bind-Value="AdaptiveStreamingEnabled" class="form-check-input" id="adaptiveStreamingEnabled" />
-                <label class="form-check-label" for="adaptiveStreamingEnabled">Enabled</label>
+                <label class="form-check-label" for="adaptiveStreamingEnabled">@L["common.enabled"]</label>
             </div>
         </SettingField>
-        <SettingField Label="Path linger (seconds)" For="pathLingerRange" Hint="How long an object's travel path stays after it stops or leaves, before it fades." HelpLink="/Help/live-and-playback#live-tiles">
+        <SettingField Label="@L["settings.liveView.pathLingerSeconds"]" For="pathLingerRange" Hint="@L["settings.liveView.howLongAnObjectTravel"]" HelpLink="/Help/live-and-playback#live-tiles">
             <div class="d-flex align-items-center gap-2">
                 <input type="range" name="PathLingerSeconds" value="@PathLingerSeconds" min="0" max="@LarisVMS.Web.Pages.Views.PathLinger.Max" step="1" class="form-range" id="pathLingerRange" />
                 <output class="text-muted small" style="min-width: 2.5em;" id="pathLingerReadout">@PathLingerSeconds</output>
             </div>
         </SettingField>
-        <SettingField Label="Path dissolve (seconds)" For="pathDissolveRange" Hint="How long the path then takes to fade away, from its start to its end." HelpLink="/Help/live-and-playback#live-tiles">
+        <SettingField Label="@L["settings.liveView.pathDissolveSeconds"]" For="pathDissolveRange" Hint="@L["settings.liveView.howLongThePathThen"]" HelpLink="/Help/live-and-playback#live-tiles">
             <div class="d-flex align-items-center gap-2">
                 <input type="range" name="PathDissolveSeconds" value="@PathDissolveSeconds" min="@LarisVMS.Web.Pages.Views.PathDissolve.Min" max="@LarisVMS.Web.Pages.Views.PathDissolve.Max" step="1" class="form-range" id="pathDissolveRange" />
                 <output class="text-muted small" style="min-width: 2.5em;" id="pathDissolveReadout">@PathDissolveSeconds</output>
             </div>
         </SettingField>
     </SettingSection>
-    <SettingSection Title="Direct-to-node streaming" Subtitle="Nodes can override the mode on their own page.">
-        <SettingField Label="Mode" Hint="Direct sends video from the node straight to the browser." HelpLink="/Help/nodes#direct-streaming">
-            <select name="DirectStreaming" class="form-select">
-                <option value="Proxy" selected="@(DirectStreaming == "Proxy")">Proxy (through this server)</option>
-                <option value="Direct" selected="@(DirectStreaming == "Direct")">Direct (browser → node)</option>
+    <SettingSection Title="@L["settings.liveView.directToNodeStreaming"]" Subtitle="@L["settings.liveView.nodesCanOverrideTheMode"]">
+        <SettingField For="field-directStreaming" Label="@L["settings.liveView.mode"]" Hint="@L["settings.liveView.directSendsVideoFromThe"]" HelpLink="/Help/nodes#direct-streaming">
+            <select id="field-directStreaming" name="DirectStreaming" class="form-select">
+                <option value="Proxy" selected="@(DirectStreaming == "Proxy")">@L["settings.liveView.proxyThroughThisServer"]</option>
+                <option value="Direct" selected="@(DirectStreaming == "Direct")">@L["settings.liveView.directBrowserNode"]</option>
             </select>
         </SettingField>
-        <SettingField Label="Public origin" ShowWhen="DirectStreaming=Direct" Hint="Optional. The only origin nodes allow. Blank reflects the request.">
-            <InputText @bind-Value="PublicOrigin" class="form-control" placeholder="https://vms.example.com" />
+        <SettingField For="field-publicOrigin" Label="@L["settings.liveView.publicOrigin"]" ShowWhen="DirectStreaming=Direct" Hint="@L["settings.liveView.optionalTheOnlyOriginNodes"]">
+            <InputText id="field-publicOrigin" @bind-Value="PublicOrigin" class="form-control" placeholder="https://vms.example.com" />
         </SettingField>
-        <SettingField Label="Self-signed certificates" ShowWhen="DirectStreaming=Direct" Wide Hint="Testing only. Viewers see a browser warning. Use a real certificate in production.">
+        <SettingField Label="@L["settings.liveView.selfSignedCertificates"]" ShowWhen="DirectStreaming=Direct" Wide Hint="@L["settings.liveView.testingOnlyViewersSeeA"]">
             <div class="form-check form-switch mt-1">
                 <InputCheckbox @bind-Value="AllowInsecureClientEndpoint" class="form-check-input" id="allowInsecureClientEndpoint" />
-                <label class="form-check-label text-danger" for="allowInsecureClientEndpoint">Allow insecure client endpoint</label>
+                <label class="form-check-label text-danger" for="allowInsecureClientEndpoint">@L["settings.liveView.allowInsecureClientEndpoint"]</label>
             </div>
         </SettingField>
     </SettingSection>
-    <SettingSection Title="Live/playback port">
-        <SettingField Label="Custom port" Hint="Moves live and playback to their own port. Needs a service restart." HelpLink="/Help/security#separate-port">
-            <InputNumber @bind-Value="CustomPort" min="1" max="65535" class="form-control" placeholder="same as main site" />
+    <SettingSection Title="@L["settings.liveView.livePlaybackPort"]">
+        <SettingField For="field-customPort" Label="@L["settings.liveView.customPort"]" Hint="@L["settings.liveView.movesLiveAndPlaybackTo"]" HelpLink="/Help/security#separate-port">
+            <InputNumber id="field-customPort" @bind-Value="CustomPort" min="1" max="65535" class="form-control" placeholder="@L["settings.liveView.sameAsMainSite"]" />
         </SettingField>
     </SettingSection>
     <div class="lv-savebar">
-        <button type="submit" class="btn btn-primary">Save</button>
+        <button type="submit" class="btn btn-primary">@L["common.save"]</button>
     </div>
 </EditForm>
 </div>
@@ -121,14 +121,14 @@
     {
         if (CustomPort is { } p && (p is < 1 or > 65535))
         {
-            ErrorMessage = "The custom port must be between 1 and 65535, or blank to disable it.";
+            ErrorMessage = Loc.T("settings.liveView.theCustomPortMustBe");
             return;
         }
         DirectStreaming = string.Equals(DirectStreaming, "Direct", StringComparison.OrdinalIgnoreCase) ? "Direct" : "Proxy";
         PublicOrigin = string.IsNullOrWhiteSpace(PublicOrigin) ? null : PublicOrigin.Trim().TrimEnd('/');
         if (PublicOrigin is not null && !Uri.TryCreate(PublicOrigin, UriKind.Absolute, out _))
         {
-            ErrorMessage = "Public origin must be a full URL like https://vms.example.com, or blank.";
+            ErrorMessage = Loc.T("settings.liveView.publicOriginMustBeA");
             return;
         }
 
@@ -167,6 +167,6 @@
             user.FindFirst(ClaimTypes.NameIdentifier)?.Value, by,
             HttpContext?.Connection.RemoteIpAddress?.ToString(), details);
 
-        SavedMessage = "Saved.";
+        SavedMessage = Loc.T("common.saved");
     }
 }

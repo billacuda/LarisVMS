@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using LarisVMS.Core.Localization;
 
 namespace LarisVMS.Core;
 
@@ -62,75 +63,73 @@ public static class DashboardWidgetCatalog
 
     private const int ListW = 4, ListH = 6;
 
-    public static readonly IReadOnlyList<DashboardWidgetDefinition> All =
+    /// <summary>A property, not a field: titles and messages are built per call, in the viewer's language.</summary>
+    public static IReadOnlyList<DashboardWidgetDefinition> All =>
     [
-        new(Summary, "Status summary", "Overview", DashboardWidgetKind.Summary, "none", "", 12, 3),
-        new(CameraTable, "Camera health", "Overview", DashboardWidgetKind.CameraTable, "camera", "", 12, 9),
-        new(NodeCards, "Node overview", "Overview", DashboardWidgetKind.NodeCards, "node", "", 12, 6),
-        new(LatestDetections, "Latest detections", "Overview", DashboardWidgetKind.Snapshots, "detection", "When", 12, 4,
-            EmptyMessage: "No recent detections", HasKindFilter: true),
+        new(Summary, Loc.T("widget.summary.title"), Loc.T("widget.group.overview"), DashboardWidgetKind.Summary, "none", "", 12, 3),
+        new(CameraTable, Loc.T("widget.cameraTable.title"), Loc.T("widget.group.overview"), DashboardWidgetKind.CameraTable, "camera", "", 12, 9),
+        new(NodeCards, Loc.T("widget.nodeCards.title"), Loc.T("widget.group.overview"), DashboardWidgetKind.NodeCards, "node", "", 12, 6),
+        new(LatestDetections, Loc.T("widget.latestDetections.title"), Loc.T("widget.group.overview"), DashboardWidgetKind.Snapshots, "detection", Loc.T("widget.latestDetections.value"), 12, 4,
+            EmptyMessage: Loc.T("widget.latestDetections.empty"), HasKindFilter: true),
         // One camera's 7-day activity heatmap; the camera is picked in the widget's own title bar.
-        new(CameraActivity, "Camera activity", "Overview", DashboardWidgetKind.Heatmap, "camera", "", 6, 5,
-            EmptyMessage: "No events on this camera in the last 7 days"),
-        new(RecentAlerts, "Recent alerts", "Overview", DashboardWidgetKind.TopList, "alert", "When", ListW, ListH,
-            RequiredPolicy: "Alerts.Edit", EmptyMessage: "No recent alerts"),
+        new(CameraActivity, Loc.T("widget.cameraActivity.title"), Loc.T("widget.group.overview"), DashboardWidgetKind.Heatmap, "camera", "", 6, 5,
+            EmptyMessage: Loc.T("widget.cameraActivity.empty")),
+        new(RecentAlerts, Loc.T("widget.recentAlerts.title"), Loc.T("widget.group.overview"), DashboardWidgetKind.TopList, "alert", Loc.T("widget.recentAlerts.value"), ListW, ListH,
+            RequiredPolicy: "Alerts.Edit", EmptyMessage: Loc.T("widget.recentAlerts.empty")),
         // Latest speed-trap measurements; the report is the full log with its own columns.
-        new(SpeedLog, "Speed log", "Overview", DashboardWidgetKind.TopList, "speed", "Speed", ListW, ListH,
-            EmptyMessage: "No speeds measured yet. Set up a speed trap on a camera's Speed traps page."),
+        new(SpeedLog, Loc.T("widget.speedLog.title"), Loc.T("widget.group.overview"), DashboardWidgetKind.TopList, "speed", Loc.T("widget.speedLog.value"), ListW, ListH,
+            EmptyMessage: Loc.T("widget.speedLog.empty")),
 
-        new(CameraOffline, "Cameras offline", "Cameras", DashboardWidgetKind.TopList, "camera", "Offline for", ListW, ListH,
-            EmptyMessage: "All cameras online"),
-        new(CameraLastRecording, "Time since last recording", "Cameras", DashboardWidgetKind.TopList, "camera", "Last recorded", ListW, ListH,
-            EmptyMessage: "No cameras have recorded yet"),
-        new(CameraStorage, "Storage used", "Cameras", DashboardWidgetKind.TopList, "camera", "Used", ListW, ListH,
-            EmptyMessage: "No footage stored"),
-        new(CameraRetention, "Oldest footage", "Cameras", DashboardWidgetKind.TopList, "camera", "Oldest", ListW, ListH,
-            EmptyMessage: "No footage stored"),
-        new(CameraFps, "Frame rate", "Cameras", DashboardWidgetKind.TopList, "camera", "FPS", ListW, ListH,
-            HasDirectionToggle: true, EmptyMessage: "No cameras reporting"),
-        new(CameraBitrate, "Bandwidth", "Cameras", DashboardWidgetKind.TopList, "camera", "Bitrate", ListW, ListH,
-            HasDirectionToggle: true, EmptyMessage: "No cameras reporting"),
-        new(CameraResolution, "Resolution", "Cameras", DashboardWidgetKind.TopList, "camera", "Resolution", ListW, ListH,
-            HasDirectionToggle: true, EmptyMessage: "No resolutions known yet"),
-        new(CameraMotion, "Motion events", "Cameras", DashboardWidgetKind.TopList, "camera", "Events", ListW, ListH,
-            HasWindow: true, EmptyMessage: "No motion events"),
-        new(CameraHuman, "Human detections", "Cameras", DashboardWidgetKind.TopList, "camera", "Humans", ListW, ListH,
-            HasWindow: true, EmptyMessage: "No humans detected"),
-        new(CameraVehicle, "Vehicle detections", "Cameras", DashboardWidgetKind.TopList, "camera", "Vehicles", ListW, ListH,
-            HasWindow: true, EmptyMessage: "No vehicles detected"),
-        new(CameraAnimal, "Animal detections", "Cameras", DashboardWidgetKind.TopList, "camera", "Animals", ListW, ListH,
-            HasWindow: true, EmptyMessage: "No animals detected"),
-        new(CameraObject, "Object detections", "Cameras", DashboardWidgetKind.TopList, "camera", "Objects", ListW, ListH,
-            HasWindow: true, EmptyMessage: "No objects detected"),
-        new(CameraReconnects, "Most reconnects", "Cameras", DashboardWidgetKind.TopList, "camera", "Reconnects", ListW, ListH,
-            EmptyMessage: "No reconnects"),
-        new(CameraQuota, "Near storage quota", "Cameras", DashboardWidgetKind.TopList, "camera", "Of quota", ListW, ListH,
-            EmptyMessage: "No cameras have a storage quota"),
-        new(CameraAiEngine, "AI detection problems", "Cameras", DashboardWidgetKind.TopList, "camera", "State", ListW, ListH,
-            EmptyMessage: "All detection engines ready"),
+        new(CameraOffline, Loc.T("widget.cameraOffline.title"), Loc.T("widget.group.cameras"), DashboardWidgetKind.TopList, "camera", Loc.T("widget.cameraOffline.value"), ListW, ListH,
+            EmptyMessage: Loc.T("widget.cameraOffline.empty")),
+        new(CameraLastRecording, Loc.T("widget.cameraLastRecording.title"), Loc.T("widget.group.cameras"), DashboardWidgetKind.TopList, "camera", Loc.T("widget.cameraLastRecording.value"), ListW, ListH,
+            EmptyMessage: Loc.T("widget.cameraLastRecording.empty")),
+        new(CameraStorage, Loc.T("widget.cameraStorage.title"), Loc.T("widget.group.cameras"), DashboardWidgetKind.TopList, "camera", Loc.T("widget.cameraStorage.value"), ListW, ListH,
+            EmptyMessage: Loc.T("widget.cameraStorage.empty")),
+        new(CameraRetention, Loc.T("widget.cameraRetention.title"), Loc.T("widget.group.cameras"), DashboardWidgetKind.TopList, "camera", Loc.T("widget.cameraRetention.value"), ListW, ListH,
+            EmptyMessage: Loc.T("widget.cameraRetention.empty")),
+        new(CameraFps, Loc.T("widget.cameraFps.title"), Loc.T("widget.group.cameras"), DashboardWidgetKind.TopList, "camera", Loc.T("widget.cameraFps.value"), ListW, ListH,
+            HasDirectionToggle: true, EmptyMessage: Loc.T("widget.cameraFps.empty")),
+        new(CameraBitrate, Loc.T("widget.cameraBitrate.title"), Loc.T("widget.group.cameras"), DashboardWidgetKind.TopList, "camera", Loc.T("widget.cameraBitrate.value"), ListW, ListH,
+            HasDirectionToggle: true, EmptyMessage: Loc.T("widget.cameraBitrate.empty")),
+        new(CameraResolution, Loc.T("widget.cameraResolution.title"), Loc.T("widget.group.cameras"), DashboardWidgetKind.TopList, "camera", Loc.T("widget.cameraResolution.value"), ListW, ListH,
+            HasDirectionToggle: true, EmptyMessage: Loc.T("widget.cameraResolution.empty")),
+        new(CameraMotion, Loc.T("widget.cameraMotion.title"), Loc.T("widget.group.cameras"), DashboardWidgetKind.TopList, "camera", Loc.T("widget.cameraMotion.value"), ListW, ListH,
+            HasWindow: true, EmptyMessage: Loc.T("widget.cameraMotion.empty")),
+        new(CameraHuman, Loc.T("widget.cameraHuman.title"), Loc.T("widget.group.cameras"), DashboardWidgetKind.TopList, "camera", Loc.T("widget.cameraHuman.value"), ListW, ListH,
+            HasWindow: true, EmptyMessage: Loc.T("widget.cameraHuman.empty")),
+        new(CameraVehicle, Loc.T("widget.cameraVehicle.title"), Loc.T("widget.group.cameras"), DashboardWidgetKind.TopList, "camera", Loc.T("widget.cameraVehicle.value"), ListW, ListH,
+            HasWindow: true, EmptyMessage: Loc.T("widget.cameraVehicle.empty")),
+        new(CameraAnimal, Loc.T("widget.cameraAnimal.title"), Loc.T("widget.group.cameras"), DashboardWidgetKind.TopList, "camera", Loc.T("widget.cameraAnimal.value"), ListW, ListH,
+            HasWindow: true, EmptyMessage: Loc.T("widget.cameraAnimal.empty")),
+        new(CameraObject, Loc.T("widget.cameraObject.title"), Loc.T("widget.group.cameras"), DashboardWidgetKind.TopList, "camera", Loc.T("widget.cameraObject.value"), ListW, ListH,
+            HasWindow: true, EmptyMessage: Loc.T("widget.cameraObject.empty")),
+        new(CameraReconnects, Loc.T("widget.cameraReconnects.title"), Loc.T("widget.group.cameras"), DashboardWidgetKind.TopList, "camera", Loc.T("widget.cameraReconnects.value"), ListW, ListH,
+            EmptyMessage: Loc.T("widget.cameraReconnects.empty")),
+        new(CameraQuota, Loc.T("widget.cameraQuota.title"), Loc.T("widget.group.cameras"), DashboardWidgetKind.TopList, "camera", Loc.T("widget.cameraQuota.value"), ListW, ListH,
+            EmptyMessage: Loc.T("widget.cameraQuota.empty")),
+        new(CameraAiEngine, Loc.T("widget.cameraAiEngine.title"), Loc.T("widget.group.cameras"), DashboardWidgetKind.TopList, "camera", Loc.T("widget.cameraAiEngine.value"), ListW, ListH,
+            EmptyMessage: Loc.T("widget.cameraAiEngine.empty")),
 
-        new(NodeHealth, "Node health issues", "Nodes", DashboardWidgetKind.TopList, "node", "Since", ListW, ListH,
-            EmptyMessage: "All nodes healthy"),
-        new(NodeDaysRemaining, "Least storage time left", "Nodes", DashboardWidgetKind.TopList, "node", "Time left", ListW, ListH,
-            EmptyMessage: "No estimate yet — needs a day of recording"),
-        new(NodeCameras, "Cameras per node", "Nodes", DashboardWidgetKind.TopList, "node", "Cameras", ListW, ListH,
-            EmptyMessage: "No nodes have cameras"),
-        new(NodeOfflineCameras, "Offline cameras per node", "Nodes", DashboardWidgetKind.TopList, "node", "Offline", ListW, ListH,
-            EmptyMessage: "All cameras online"),
-        new(NodeStorage, "Node storage used", "Nodes", DashboardWidgetKind.TopList, "node", "Used", ListW, ListH,
-            EmptyMessage: "No storage figures yet"),
-        new(NodeFps, "Node frame rate", "Nodes", DashboardWidgetKind.TopList, "node", "FPS", ListW, ListH,
-            EmptyMessage: "No cameras reporting"),
-        new(NodeBandwidth, "Node bandwidth", "Nodes", DashboardWidgetKind.TopList, "node", "Mbit/s", ListW, ListH,
-            EmptyMessage: "No load figures yet"),
-        new(NodeCpu, "Node CPU", "Nodes", DashboardWidgetKind.TopList, "node", "CPU", ListW, ListH,
-            EmptyMessage: "No load figures yet"),
+        new(NodeHealth, Loc.T("widget.nodeHealth.title"), Loc.T("widget.group.nodes"), DashboardWidgetKind.TopList, "node", Loc.T("widget.nodeHealth.value"), ListW, ListH,
+            EmptyMessage: Loc.T("widget.nodeHealth.empty")),
+        new(NodeDaysRemaining, Loc.T("widget.nodeDaysRemaining.title"), Loc.T("widget.group.nodes"), DashboardWidgetKind.TopList, "node", Loc.T("widget.nodeDaysRemaining.value"), ListW, ListH,
+            EmptyMessage: Loc.T("widget.nodeDaysRemaining.empty")),
+        new(NodeCameras, Loc.T("widget.nodeCameras.title"), Loc.T("widget.group.nodes"), DashboardWidgetKind.TopList, "node", Loc.T("widget.nodeCameras.value"), ListW, ListH,
+            EmptyMessage: Loc.T("widget.nodeCameras.empty")),
+        new(NodeOfflineCameras, Loc.T("widget.nodeOfflineCameras.title"), Loc.T("widget.group.nodes"), DashboardWidgetKind.TopList, "node", Loc.T("widget.nodeOfflineCameras.value"), ListW, ListH,
+            EmptyMessage: Loc.T("widget.nodeOfflineCameras.empty")),
+        new(NodeStorage, Loc.T("widget.nodeStorage.title"), Loc.T("widget.group.nodes"), DashboardWidgetKind.TopList, "node", Loc.T("widget.nodeStorage.value"), ListW, ListH,
+            EmptyMessage: Loc.T("widget.nodeStorage.empty")),
+        new(NodeFps, Loc.T("widget.nodeFps.title"), Loc.T("widget.group.nodes"), DashboardWidgetKind.TopList, "node", Loc.T("widget.nodeFps.value"), ListW, ListH,
+            EmptyMessage: Loc.T("widget.nodeFps.empty")),
+        new(NodeBandwidth, Loc.T("widget.nodeBandwidth.title"), Loc.T("widget.group.nodes"), DashboardWidgetKind.TopList, "node", Loc.T("widget.nodeBandwidth.value"), ListW, ListH,
+            EmptyMessage: Loc.T("widget.nodeBandwidth.empty")),
+        new(NodeCpu, Loc.T("widget.nodeCpu.title"), Loc.T("widget.group.nodes"), DashboardWidgetKind.TopList, "node", Loc.T("widget.nodeCpu.value"), ListW, ListH,
+            EmptyMessage: Loc.T("widget.nodeCpu.empty")),
     ];
 
-    private static readonly Dictionary<string, DashboardWidgetDefinition> ByKey =
-        All.ToDictionary(w => w.Key, StringComparer.Ordinal);
-
-    public static DashboardWidgetDefinition? Find(string key) => ByKey.GetValueOrDefault(key);
+    public static DashboardWidgetDefinition? Find(string key) => All.FirstOrDefault(w => string.Equals(w.Key, key, StringComparison.Ordinal));
 
     /// <summary>The latest-detections widget's type token for plain motion (no object, tag or camera
     /// classification). Off unless the user ticks it.</summary>

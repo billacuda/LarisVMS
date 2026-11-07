@@ -18,15 +18,16 @@
 @inject IAuthorizationService AuthorizationService
 @inject IAuditService AuditService
 @inject UserDisableService UserDisabler
+@inject LarisVMS.Core.Interfaces.IPermissionService PermissionService
 
-<PageTitle>Permissions — Users - @AppName</PageTitle>
+<PageTitle>@L["settings.permissions.users.permissionsUsers"] - @AppName</PageTitle>
 
-<h1>Settings</h1>
+<h1>@L["nav.settings"]</h1>
 <SettingsTabs ActiveKey="Permissions" />
 <PermissionsTabs ActiveKey="Users" />
 
 <p class="text-muted small">
-    Accounts can only be created here. A user's roles decide what they can do. <a href="/Help/users">Learn more</a>
+    @L["settings.permissions.users.accountsCanOnlyBeCreated"] <a href="/Help/users">@L["common.learnMore"]</a>
 </p>
 
 @if (!string.IsNullOrEmpty(SavedMessage))
@@ -35,19 +36,19 @@
 }
 @if (!string.IsNullOrEmpty(ErrorMessage))
 {
-    <div class="alert alert-danger">@ErrorMessage</div>
+    <div class="alert alert-danger" role="alert">@ErrorMessage</div>
 }
 
 <div class="card mb-3">
-    <div class="card-header fw-semibold">Users</div>
+    <div class="card-header fw-semibold">@L["common.users"]</div>
     <div class="table-responsive">
         <table class="table table-sm mb-0 align-middle">
             <thead class="table-light">
                 <tr>
-                    <th>User</th>
-                    <th>Display name</th>
-                    <th>Roles</th>
-                    <th>Status</th>
+                    <th>@L["common.user"]</th>
+                    <th>@L["settings.permissions.users.displayName"]</th>
+                    <th>@L["common.roles"]</th>
+                    <th>@L["common.status"]</th>
                     <th></th>
                 </tr>
             </thead>
@@ -59,15 +60,15 @@
                             @u.Email
                             @if (u.EntraLink == "linked")
                             {
-                                <span class="badge text-bg-primary ms-1" title="Can sign in with Microsoft">Microsoft</span>
+                                <span class="badge text-bg-primary ms-1" title="@L["settings.permissions.users.canSignInWithMicrosoft"]">@L["settings.permissions.users.microsoft"]</span>
                             }
                             else if (u.EntraLink == "pending")
                             {
-                                <span class="badge text-bg-light text-dark border ms-1" title="Linked to a Microsoft account that hasn't signed in yet">Microsoft (pending)</span>
+                                <span class="badge text-bg-light text-dark border ms-1" title="@L["settings.permissions.users.linkedToAMicrosoftAccount"]">@L["settings.permissions.users.microsoftPending"]</span>
                             }
                             @if (u.IsDirectoryManaged)
                             {
-                                <span class="badge text-bg-info ms-1" title="Signs in with Active Directory">AD</span>
+                                <span class="badge text-bg-info ms-1" title="@L["settings.permissions.users.signsInWithActiveDirectory"]">@L["settings.permissions.users.ad"]</span>
                                 @if (!string.IsNullOrEmpty(u.AdEmail))
                                 {
                                     <div class="small text-muted">@u.AdEmail</div>
@@ -79,7 +80,7 @@
                             @if (u.IsDirectoryManaged)
                             {
                                 <span>@(u.RoleNames.Count > 0 ? string.Join(", ", u.RoleNames) : "(none)")</span>
-                                <div class="small text-muted">Managed by AD group sync. <a href="/Admin/Settings/ActiveDirectory">Group links</a></div>
+                                <div class="small text-muted">@L["settings.permissions.users.managedByAdGroupSync"] <a href="/Admin/Settings/ActiveDirectory">@L["settings.permissions.users.groupLinks"]</a></div>
                             }
                             else
                             {
@@ -95,7 +96,7 @@
                                         <label class="form-check-label small" for="role-@u.Id-@role.Id">@role.Name</label>
                                     </div>
                                 }
-                                <button type="submit" class="btn btn-sm btn-outline-primary">Save</button>
+                                <button type="submit" class="btn btn-sm btn-outline-primary">@L["common.save"]</button>
                             </EditForm>
                             }
                             @if (u.ActiveExpiries.Count > 0)
@@ -104,10 +105,10 @@
                                     @foreach (var expiry in u.ActiveExpiries)
                                     {
                                         <div class="small text-muted">
-                                            @expiry.RoleName expires <time datetime="@expiry.ExpiresAtUtc.ToUtcIso()" data-local="g">@expiry.ExpiresAtUtc.ToLocalTime().ToString("g")</time>
+                                            @L.Markup("settings.permissions.users.roleExpires", new { role = expiry.RoleName, time = expiry.ExpiresAtUtc.ToTimeTag() })
                                             <EditForm Model="this" FormName="@($"extend-expiry-{expiry.Id}")" OnValidSubmit="HandleExtendExpiryAsync" class="d-inline">
                                                 <input type="hidden" name="ExpiryId" value="@expiry.Id" />
-                                                <button type="submit" class="btn btn-sm btn-link p-0 align-baseline">Extend</button>
+                                                <button type="submit" class="btn btn-sm btn-link p-0 align-baseline">@L["settings.permissions.users.extend"]</button>
                                             </EditForm>
                                         </div>
                                     }
@@ -117,11 +118,11 @@
                         <td>
                             @if (u.IsEnabled)
                             {
-                                <span class="badge text-bg-success">Enabled</span>
+                                <span class="badge text-bg-success">@L["common.enabled"]</span>
                             }
                             else
                             {
-                                <span class="badge text-bg-secondary">Disabled</span>
+                                <span class="badge text-bg-secondary">@L["common.disabled"]</span>
                             }
                         </td>
                         <td class="text-end text-nowrap">
@@ -129,19 +130,19 @@
                                 <input type="hidden" name="ToggleEnabledUserId" value="@u.Id" />
                                 <button type="submit" class="btn btn-sm btn-outline-secondary"
                                         data-confirm="@($"{(u.IsEnabled ? "Disable" : "Enable")} \"{u.Email}\"?")">
-                                    @(u.IsEnabled ? "Disable" : "Enable")
+                                    @(u.IsEnabled ? L["common.disable"].Value : L["common.enable"].Value)
                                 </button>
                             </EditForm>
                             @if (!u.IsDirectoryManaged)
                             {
                                 <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#reset-@u.Id">
-                                    Reset password
+                                    @L["settings.permissions.users.resetPassword"]
                                 </button>
                             }
                             @if (EntraEnabled && !u.IsDirectoryManaged)
                             {
                                 <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#entra-@u.Id">
-                                    Microsoft sign-in
+                                    @L["settings.permissions.users.microsoftSignIn"]
                                 </button>
                             }
                         </td>
@@ -153,13 +154,13 @@
                                 <EditForm Model="this" FormName="@($"entra-link-{u.Id}")" OnValidSubmit="HandleSetEntraLinkAsync" class="row g-2 align-items-end py-2">
                                     <input type="hidden" name="EntraLinkUserId" value="@u.Id" />
                                     <div class="col-sm-5">
-                                        <label class="form-label small mb-1">Entra object ID for @u.Email</label>
-                                        <input type="text" name="EntraObjectId" class="form-control form-control-sm font-monospace"
+                                        <label class="form-label small mb-1" for="entra-@u.Id">@L["settings.permissions.users.entraObjectIdFor", new { email = u.Email }]</label>
+                                        <input type="text" name="EntraObjectId" id="entra-@u.Id" class="form-control form-control-sm font-monospace"
                                                placeholder="00000000-0000-0000-0000-000000000000" />
-                                        <div class="form-text">From the user's page in Microsoft Entra admin center. Blank removes the link.</div>
+                                        <div class="form-text">@L["settings.permissions.users.fromTheUserPageIn"]</div>
                                     </div>
                                     <div class="col-auto">
-                                        <button type="submit" class="btn btn-sm btn-primary">Save</button>
+                                        <button type="submit" class="btn btn-sm btn-primary">@L["common.save"]</button>
                                     </div>
                                 </EditForm>
                             </td>
@@ -172,11 +173,11 @@
                                 <EditForm Model="this" FormName="@($"reset-user-password-{u.Id}")" OnValidSubmit="HandleResetPasswordAsync" class="row g-2 align-items-end py-2">
                                     <input type="hidden" name="ResetPasswordUserId" value="@u.Id" />
                                     <div class="col-sm-4">
-                                        <label class="form-label small mb-1">New password for @u.Email</label>
-                                        <input type="password" name="NewPasswordForReset" class="form-control form-control-sm" required minlength="12" />
+                                        <label class="form-label small mb-1" for="reset-@u.Id">@L["settings.permissions.users.newPasswordFor", new { email = u.Email }]</label>
+                                        <input type="password" name="NewPasswordForReset" id="reset-@u.Id" class="form-control form-control-sm" required minlength="12" autocomplete="new-password" />
                                     </div>
                                     <div class="col-auto">
-                                        <button type="submit" class="btn btn-sm btn-primary">Set password</button>
+                                        <button type="submit" class="btn btn-sm btn-primary">@L["settings.permissions.users.setPassword"]</button>
                                     </div>
                                 </EditForm>
                             </td>
@@ -185,7 +186,7 @@
                 }
                 @if (UserRows.Count == 0)
                 {
-                    <tr><td colspan="5" class="text-center text-muted py-3">No users yet.</td></tr>
+                    <tr><td colspan="5" class="text-center text-muted py-3">@L["settings.permissions.users.noUsersYet"]</td></tr>
                 }
             </tbody>
         </table>
@@ -193,23 +194,23 @@
 </div>
 
 <div class="card">
-    <div class="card-header fw-semibold">Add a user</div>
+    <div class="card-header fw-semibold">@L["settings.permissions.users.addAUser"]</div>
     <div class="card-body">
         <EditForm Model="this" FormName="create-user" OnValidSubmit="HandleCreateAsync" class="row g-3">
             <div class="col-sm-4">
-                <label class="form-label">Email</label>
-                <InputText type="email" @bind-Value="NewEmail" class="form-control" required />
+                <label for="field-newEmail" class="form-label">@L["common.email"]</label>
+                <InputText id="field-newEmail" type="email" @bind-Value="NewEmail" class="form-control" required />
             </div>
             <div class="col-sm-3">
-                <label class="form-label">Display name</label>
-                <InputText @bind-Value="NewDisplayName" class="form-control" />
+                <label for="field-newDisplayName" class="form-label">@L["settings.permissions.users.displayName"]</label>
+                <InputText id="field-newDisplayName" @bind-Value="NewDisplayName" class="form-control" />
             </div>
             <div class="col-sm-3">
-                <label class="form-label">Password</label>
-                <InputText type="password" @bind-Value="NewPassword" class="form-control" required minlength="12" />
+                <label for="field-newPassword" class="form-label">@L["common.password"]</label>
+                <InputText id="field-newPassword" type="password" @bind-Value="NewPassword" class="form-control" required minlength="12" />
             </div>
             <div class="col-12">
-                <label class="form-label d-block">Roles</label>
+                <div class="form-label d-block">@L["common.roles"]</div>
                 @foreach (var role in RoleRows)
                 {
                     <div class="form-check form-check-inline">
@@ -219,7 +220,7 @@
                 }
             </div>
             <div class="col-12">
-                <button type="submit" class="btn btn-primary">Add user</button>
+                <button type="submit" class="btn btn-primary">@L["settings.permissions.users.addUser"]</button>
             </div>
         </EditForm>
     </div>
@@ -304,7 +305,7 @@
         // Directory, so a local username without one could never sign in.
         if (string.IsNullOrEmpty(email) || !email.Contains('@'))
         {
-            ErrorMessage = "Enter an email address.";
+            ErrorMessage = Loc.T("settings.permissions.users.enterAnEmailAddress");
             await LoadAsync();
             return;
         }
@@ -333,8 +334,8 @@
 
         await AuditService.LogAsync("User.Create", CurrentUserId, CurrentUserName, RemoteIp, email);
         SavedMessage = assignableRoleIds.Count < requestedRoleIds.Count
-            ? $"User \"{email}\" created. Some role selections weren't applied — you don't have permission to assign them."
-            : $"User \"{email}\" created.";
+            ? Loc.T("settings.permissions.users.userCreatedSomeRoleSelections", new { email })
+            : Loc.T("settings.permissions.users.userCreated", new { email });
         NewEmail = string.Empty;
         NewPassword = string.Empty;
         NewDisplayName = null;
@@ -353,13 +354,13 @@
         var user = await UserManagerService.FindByIdAsync(userId);
         if (user is null)
         {
-            ErrorMessage = "That user no longer exists.";
+            ErrorMessage = Loc.T("settings.permissions.users.thatUserNoLongerExists");
             await LoadAsync();
             return;
         }
         if (await IsDirectoryManagedAsync(user.Id))
         {
-            ErrorMessage = "This account's roles come from Active Directory group links.";
+            ErrorMessage = Loc.T("settings.permissions.users.thisAccountRolesComeFrom");
             await LoadAsync();
             return;
         }
@@ -383,7 +384,7 @@
         var staysAdmin = await IncludesSuperAdminAsync(targetRoleNames);
         if (UserManagementPolicy.WouldRemoveLastAdministrator(wasAdmin, staysAdmin, await CountOtherEnabledSuperAdminsAsync(user.Id)))
         {
-            ErrorMessage = "Can't remove the last Super Admin's Super Admin role.";
+            ErrorMessage = Loc.T("settings.permissions.users.cantRemoveTheLastSuper");
             await LoadAsync();
             return;
         }
@@ -412,14 +413,16 @@
         }
 
         SavedMessage = assignableRoleIds.Count < roleIds.Count
-            ? "Saved. Some role selections weren't applied — you don't have permission to assign them."
-            : "Saved.";
+            ? Loc.T("settings.permissions.users.savedSomeRoleSelectionsWerent")
+            : Loc.T("common.saved");
         await LoadAsync();
     }
 
     /// <summary>Drops any requested role id the caller isn't allowed to assign: all of them if the
-    /// caller lacks Roles.Assign entirely, or just the Org-tier ones if they hold Roles.Assign but
-    /// aren't Org-tier themselves (RoleScopePolicy.CanAssignRole).</summary>
+    /// caller lacks Roles.Assign entirely, the Org-tier ones if they hold Roles.Assign but aren't
+    /// Org-tier themselves (RoleScopePolicy.CanAssignRole), and Super Admin unless they are one
+    /// (AdminScope.CanBindRole), so an Org-tier admin can't make anyone, themselves included, a Super
+    /// Admin, or take it away.</summary>
     private async Task<List<string>> FilterAssignableRoleIdsAsync(List<string> requestedRoleIds)
     {
         if (requestedRoleIds.Count == 0) return [];
@@ -430,8 +433,10 @@
             .Where(p => requestedRoleIds.Contains(p.RoleId))
             .ToDictionaryAsync(p => p.RoleId, p => p.MaxScopeTier);
 
+        var scope = await LarisVMS.Web.Services.AdminScope.ForAsync(Db, PermissionService, User);
         return requestedRoleIds
-            .Where(id => RoleScopePolicy.CanAssignRole(actingHighestTier, requestedTiers.GetValueOrDefault(id, RoleScopeTier.Group)))
+            .Where(id => RoleScopePolicy.CanAssignRole(actingHighestTier, requestedTiers.GetValueOrDefault(id, RoleScopeTier.Group))
+                && scope.CanBindRole(id))
             .ToList();
     }
 
@@ -491,7 +496,7 @@
         ExpiryId = Guid.TryParse(HttpContext?.Request.Form["ExpiryId"].ToString(), out var expiryId) ? expiryId : Guid.Empty;
         if (!(await AuthorizationService.AuthorizeAsync(User, "Roles.Assign")).Succeeded)
         {
-            ErrorMessage = "You don't have permission to do that.";
+            ErrorMessage = Loc.T("settings.permissions.users.youDontHavePermissionTo");
             await LoadAsync();
             return;
         }
@@ -510,7 +515,7 @@
 
         await AuditService.LogAsync("Role.ExpiryExtended", CurrentUserId, CurrentUserName, RemoteIp,
             $"Extended to {expiry.ExpiresAtUtc:yyyy-MM-dd HH:mm} UTC");
-        SavedMessage = "Expiry extended.";
+        SavedMessage = Loc.T("settings.permissions.users.expiryExtended");
         await LoadAsync();
     }
 
@@ -538,7 +543,7 @@
             var isAdmin = await IncludesSuperAdminAsync(roles);
             if (UserManagementPolicy.WouldDisableLastAdministrator(isAdmin, await CountOtherEnabledSuperAdminsAsync(user.Id)))
             {
-                ErrorMessage = "Can't disable the last enabled Super Admin.";
+                ErrorMessage = Loc.T("settings.permissions.users.cantDisableTheLastEnabled");
                 await LoadAsync();
                 return;
             }
@@ -570,7 +575,7 @@
         }
         if (await IsDirectoryManagedAsync(user.Id))
         {
-            ErrorMessage = "Active Directory accounts sign in with their AD password.";
+            ErrorMessage = Loc.T("settings.permissions.users.activeDirectoryAccountsSignIn");
             await LoadAsync();
             return;
         }
@@ -591,7 +596,7 @@
         }
 
         await AuditService.LogAsync("User.PasswordReset", CurrentUserId, CurrentUserName, RemoteIp, user.Email);
-        SavedMessage = $"Password reset for \"{user.Email}\".";
+        SavedMessage = Loc.T("settings.permissions.users.passwordResetFor", new { email = user.Email });
         await LoadAsync();
     }
 
@@ -621,7 +626,7 @@
         {
             if (!Guid.TryParse(raw, out var parsed))
             {
-                ErrorMessage = "The Entra object ID is a GUID, like 00000000-0000-0000-0000-000000000000.";
+                ErrorMessage = Loc.T("settings.permissions.users.theEntraObjectIdIs");
                 await LoadAsync();
                 return;
             }
@@ -629,7 +634,7 @@
             var pendingKey = EntraLinks.PendingKey(parsed);
             if (await Db.UserLogins.AnyAsync(l => l.LoginProvider == EntraOidcOptionsConfigurator.SchemeName && l.ProviderKey == pendingKey && l.UserId != user.Id))
             {
-                ErrorMessage = "That Entra object ID is already linked to another account.";
+                ErrorMessage = Loc.T("settings.permissions.users.thatEntraObjectIdIs");
                 await LoadAsync();
                 return;
             }
@@ -643,8 +648,8 @@
         await AuditService.LogAsync("User.EntraLink", CurrentUserId, CurrentUserName, RemoteIp,
             objectId is { } linked ? $"{user.Email}: linked to Entra object {linked}" : $"{user.Email}: Microsoft sign-in removed");
         SavedMessage = objectId is null
-            ? $"Microsoft sign-in removed for \"{user.Email}\"."
-            : $"\"{user.Email}\" can now sign in with that Microsoft account.";
+            ? Loc.T("settings.permissions.users.microsoftSignInRemovedFor", new { email = user.Email })
+            : Loc.T("settings.permissions.users.canNowSignInWith", new { email = user.Email });
         await LoadAsync();
     }
 
@@ -654,13 +659,13 @@
     /// admin can't take over an Org-tier one). Nobody changes their own roles or disables themselves.</summary>
     private async Task<string?> CannotActOnAsync(ApplicationUser target, bool allowSelf)
     {
-        if (!allowSelf && target.Id == CurrentUserId) return "You can't change your own roles or disable your own account.";
-        if (CurrentUserId is not { } actorId) return "You don't have permission to do that.";
+        if (!allowSelf && target.Id == CurrentUserId) return Loc.T("settings.permissions.users.youCantChangeYourOwn");
+        if (CurrentUserId is not { } actorId) return Loc.T("settings.permissions.users.youDontHavePermissionTo");
         var actor = await UserManagerService.FindByIdAsync(actorId);
-        if (actor is null) return "You don't have permission to do that.";
+        if (actor is null) return Loc.T("settings.permissions.users.youDontHavePermissionTo");
         if (await IncludesSuperAdminAsync(await UserManagerService.GetRolesAsync(actor))) return null;
-        if (await IncludesSuperAdminAsync(await UserManagerService.GetRolesAsync(target))) return "Only a Super Admin can change a Super Admin's account.";
-        if (await HighestScopeTierAsync(target.Id) < await HighestScopeTierAsync(actorId)) return "This account has wider access than yours.";
+        if (await IncludesSuperAdminAsync(await UserManagerService.GetRolesAsync(target))) return Loc.T("settings.permissions.users.onlyASuperAdminCan");
+        if (await HighestScopeTierAsync(target.Id) < await HighestScopeTierAsync(actorId)) return Loc.T("settings.permissions.users.thisAccountHasWiderAccess");
         return null;
     }
 

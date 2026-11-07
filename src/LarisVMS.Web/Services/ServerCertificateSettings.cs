@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 using LarisVMS.Core.Security;
 using LarisVMS.Relay;
 
@@ -45,8 +46,8 @@ public static class ServerCertificateSettings
 
     public static string Label(ServerCertificateCheck check) => check switch
     {
-        ServerCertificateCheck.TrustedOnly => "Trusted certificate only",
-        ServerCertificateCheck.Off => "Don't check (not safe)",
-        _ => "Trust on first use",
+        ServerCertificateCheck.TrustedOnly => Loc.T("server.serverCertificate.trustedOnly"),
+        ServerCertificateCheck.Off => Loc.T("server.serverCertificate.off"),
+        _ => Loc.T("server.serverCertificate.tofu"),
     };
 }

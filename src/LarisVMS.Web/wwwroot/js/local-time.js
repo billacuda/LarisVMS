@@ -1,7 +1,7 @@
 // Times from the server are UTC; everything shown on screen is the viewer's local time. parse()
 // reads a server timestamp as UTC even when it arrives without an offset — a browser otherwise reads
 // "2026-10-13T15:00:00" as *local*, which is how UTC clock readings ended up on screen as if they were
-// local. format() renders one the way the rest of the UI does (toLocaleString).
+// local. format() renders one the way the rest of the UI does (toLocaleString, in the page's locale — see i18n.js).
 window.larisvmsTime = (function () {
     'use strict';
 
@@ -18,7 +18,7 @@ window.larisvmsTime = (function () {
 
     function format(value) {
         var d = parse(value);
-        return d ? d.toLocaleString() : '';
+        return d ? d.toLocaleString(larisvmsI18n.locale) : '';
     }
 
     // Server-rendered times (LocalTimeMarkup.cs): <time datetime="…Z" data-local="g|G|d"> holds the
@@ -34,21 +34,21 @@ window.larisvmsTime = (function () {
         Array.prototype.forEach.call((root || document).querySelectorAll('time[data-local]'), function (el) {
             var d = parse(el.getAttribute('datetime'));
             if (!d) return;
-            el.textContent = d.toLocaleString(undefined, STYLES[el.getAttribute('data-local')] || STYLES.g);
-            el.title = d.toLocaleString(undefined, { dateStyle: 'full', timeStyle: 'long' });
+            el.textContent = d.toLocaleString(larisvmsI18n.locale, STYLES[el.getAttribute('data-local')] || STYLES.g);
+            el.title = d.toLocaleString(larisvmsI18n.locale, { dateStyle: 'full', timeStyle: 'long' });
         });
         // A time that only appears in a tooltip: data-local-title="…Z" plus an optional
         // data-local-title-prefix ("Retired ").
         Array.prototype.forEach.call((root || document).querySelectorAll('[data-local-title]'), function (el) {
             var d = parse(el.getAttribute('data-local-title'));
-            if (d) el.title = (el.getAttribute('data-local-title-prefix') || '') + d.toLocaleString(undefined, STYLES.g);
+            if (d) el.title = (el.getAttribute('data-local-title-prefix') || '') + d.toLocaleString(larisvmsI18n.locale, STYLES.g);
         });
         // A tooltip with several times in it: data-local-title-template holds the text with each time
         // as {{…Z}}; the server-formatted title stays as the no-script fallback.
         Array.prototype.forEach.call((root || document).querySelectorAll('[data-local-title-template]'), function (el) {
             el.title = el.getAttribute('data-local-title-template').replace(/\{\{([^}]+)\}\}/g, function (all, iso) {
                 var d = parse(iso);
-                return d ? d.toLocaleString(undefined, STYLES.g) : all;
+                return d ? d.toLocaleString(larisvmsI18n.locale, STYLES.g) : all;
             });
         });
     }

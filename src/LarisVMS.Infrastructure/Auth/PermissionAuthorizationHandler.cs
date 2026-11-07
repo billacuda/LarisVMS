@@ -24,6 +24,7 @@ public class PermissionAuthorizationHandler(IPermissionService permissionService
         // else (see ApiKeyAuthMiddleware). Resolve straight from the role claim instead of a user id.
         var roleName = context.User.FindFirstValue(ClaimTypes.Role);
         if (roleName is not null &&
+            ApiKeyScope.Allows(context.User, requirement.Resource, requirement.Action) &&
             await permissionService.HasPermissionForRoleNameAsync(roleName, requirement.Resource, requirement.Action))
         {
             context.Succeed(requirement);

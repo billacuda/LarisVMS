@@ -202,7 +202,12 @@ public record VisionStartCameraRequest(
     /// <summary>Detection.MovingObjects: which kinds of object can count as moving (see
     /// CocoCategoryMap.ParseMovingObjects). Anything else is only ever reported idle. Part of
     /// NodeWorker's restart signature. Appended last.</summary>
-    string MovingObjects = CocoCategoryMap.DefaultMovingObjects)
+    string MovingObjects = CocoCategoryMap.DefaultMovingObjects,
+    /// <summary>Detection.IgnoredObjects for this camera: kinds of object dropped right after
+    /// inference, so they never get tracked, boxed, snapshotted, or stored (see
+    /// CocoCategoryMap.ParseIgnoredObjects). Empty = ignore nothing. Part of NodeWorker's restart
+    /// signature. Appended last.</summary>
+    string IgnoredObjects = "")
 {
     /// <summary>What this camera should be called in a log line. The operator's own name when there
     /// is one, otherwise the first block of the camera id — short enough to scan a column of, and
@@ -219,7 +224,10 @@ public record VisionStartCameraRequest(
 public record VisionSpeedTrapDto(Guid Id,
     double AX1, double AY1, double AX2, double AY2,
     double BX1, double BY1, double BX2, double BY2,
-    double DistanceMeters);
+    double DistanceMeters,
+    /// <summary>SpeedTrapGates.AToB / BToA to time only one way; AnyDirection (the default, and what
+    /// an older server sends) times both.</summary>
+    string Direction = SpeedTrapGates.AnyDirection);
 
 /// <summary>One tracked object inside a <see cref="VisionDetectionReportItem"/> span — see
 /// LarisVMS.Core.Entities.DetectedObject, which this maps onto one-to-one. Box is the object's own

@@ -1,8 +1,13 @@
 @* One setting: label, control, and a one-line hint. HelpLink adds a "Learn more" link to the
    matching Help page for anything that needs more than a line. ShowWhen maps to
    conditional-fields.js's data-show-when ("FieldName=Value1,Value2"). *@
-<div class="lv-field@(Wide ? " lv-field-wide" : "")" data-show-when="@ShowWhen">
-    @if (!string.IsNullOrEmpty(Label))
+<div class="lv-field@(Wide ? " lv-field-wide" : "")" data-show-when="@ShowWhen"
+     role="@(IsGroup ? "group" : null)" aria-labelledby="@(IsGroup ? _captionId : null)">
+    @if (IsGroup)
+    {
+        <div class="form-label" id="@_captionId">@Label</div>
+    }
+    else if (!string.IsNullOrEmpty(Label))
     {
         <label class="form-label" for="@For">@Label</label>
     }
@@ -13,7 +18,7 @@
             @Hint
             @if (!string.IsNullOrEmpty(HelpLink))
             {
-                <a href="@HelpLink">Learn more</a>
+                <a href="@HelpLink">@L["common.learnMore"]</a>
             }
         </div>
     }
@@ -27,4 +32,8 @@
     [Parameter] public string? ShowWhen { get; set; }
     [Parameter] public bool Wide { get; set; }
     [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    // With no For there's no single control to label: several checkboxes, or a read-only value.
+    private bool IsGroup => !string.IsNullOrEmpty(Label) && string.IsNullOrEmpty(For);
+    private readonly string _captionId = "field-caption-" + Guid.NewGuid().ToString("N");
 }

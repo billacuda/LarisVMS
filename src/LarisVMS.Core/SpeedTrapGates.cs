@@ -3,13 +3,18 @@ using LarisVMS.Core.Dtos;
 
 namespace LarisVMS.Core;
 
-/// <summary>Reads and checks SpeedTrap.GatesJson (<c>{"a":[[x,y],[x,y]],"b":[[x,y],[x,y]]}</c>,
-/// normalized 0-1). One parser for the API's validation and NodeService's config build, so a trap
+/// <summary>Reads and checks SpeedTrap.GatesJson (<c>{"a":[[x,y],[x,y]],"b":[[x,y],[x,y]],"dir":"ab"}</c>,
+/// normalized 0-1; "dir" is optional: "ab" times only objects crossing A then B, "ba" only B then A,
+/// and anything else, or none, both ways). One parser for the API's validation and NodeService's config build, so a trap
 /// the editor saved is always one Vision can use.</summary>
 public static class SpeedTrapGates
 {
     public sealed record Gates(double AX1, double AY1, double AX2, double AY2,
-        double BX1, double BY1, double BX2, double BY2);
+        double BX1, double BY1, double BX2, double BY2, string Direction = AnyDirection);
+
+    public const string AnyDirection = "any";
+    public const string AToB = "ab";
+    public const string BToA = "ba";
 
     /// <summary>Gate lines shorter than this (in normalized units) are a mis-click, not a gate.</summary>
     private const double MinGateLength = 0.02;
@@ -21,7 +26,9 @@ public static class SpeedTrapGates
         {
             using var doc = JsonDocument.Parse(json);
             if (ReadLine(doc.RootElement, "a") is not { } a || ReadLine(doc.RootElement, "b") is not { } b) return null;
-            return new Gates(a.X1, a.Y1, a.X2, a.Y2, b.X1, b.Y1, b.X2, b.Y2);
+            var direction = doc.RootElement.TryGetProperty("dir", out var dir) && dir.ValueKind == JsonValueKind.String
+                && dir.GetString() is AToB or BToA ? dir.GetString()! : AnyDirection;
+            return new Gates(a.X1, a.Y1, a.X2, a.Y2, b.X1, b.Y1, b.X2, b.Y2, direction);
         }
         catch (JsonException)
         {
@@ -40,7 +47,7 @@ public static class SpeedTrapGates
     public static VisionSpeedTrapDto? ToVision(Guid id, string? json, double distanceMeters)
     {
         if (Parse(json) is not { } g || distanceMeters <= 0) return null;
-        return new VisionSpeedTrapDto(id, g.AX1, g.AY1, g.AX2, g.AY2, g.BX1, g.BY1, g.BX2, g.BY2, distanceMeters);
+        return new VisionSpeedTrapDto(id, g.AX1, g.AY1, g.AX2, g.AY2, g.BX1, g.BY1, g.BX2, g.BY2, distanceMeters, g.Direction);
     }
 
     private static (double X1, double Y1, double X2, double Y2)? ReadLine(JsonElement root, string name)

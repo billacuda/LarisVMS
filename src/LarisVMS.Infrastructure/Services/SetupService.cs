@@ -9,6 +9,7 @@ using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 using LarisVMS.Infrastructure.Data;
 
 namespace LarisVMS.Infrastructure.Services;
@@ -41,11 +42,16 @@ public class SetupService(
 
     public async Task<bool> IsSetupFinalizedAsync(CancellationToken ct = default)
     {
+        // The local marker answers without the database, so the wizard stays closed while it's
+        // unreachable (a database outage used to reopen /Setup to anyone).
+        if (string.Equals(configuration[FinalizedKey], "true", StringComparison.OrdinalIgnoreCase)) return true;
         if (!await IsDatabaseConfiguredAsync(ct)) return false;
         try
         {
             var flag = await db.Settings.AsNoTracking().FirstOrDefaultAsync(s => s.Key == "Setup.IsComplete", ct);
-            return flag?.Value == "true";
+            if (flag?.Value != "true") return false;
+            MarkFinalizedLocally();
+            return true;
         }
         catch { return false; }
     }
@@ -73,11 +79,11 @@ public class SetupService(
     public async Task<bool> SetupDatabaseAsync(DatabaseSetupRequest request, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(request.Server) || string.IsNullOrWhiteSpace(request.DatabaseName))
-            throw new ArgumentException("Server name and database name are required.");
+            throw new ArgumentException(Loc.T("server.setup.serverNameAndDatabaseName"));
         var ops = DatabaseProviderOps.For(request.Provider);
         ops.ValidateDatabaseName(request.DatabaseName);
         if (request.Provider == DatabaseProvider.MariaDb && (string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrEmpty(request.Password)))
-            throw new ArgumentException("MariaDB needs a user name and password.");
+            throw new ArgumentException(Loc.T("server.setup.mariadbNeedsAUserName"));
 
         bool existed;
         await using (var connection = ops.CreateConnection(ops.BuildConnectionString(request, null)))
@@ -130,7 +136,7 @@ public class SetupService(
             if (ctx.Database.GetMigrations().Any(applied.Contains)) return true;
 
             throw new InvalidOperationException(
-                $"The database '{databaseName}' already exists and contains tables that aren't from LarisVMS. Choose a different database name.");
+                Loc.T("server.setup.theDatabaseAlreadyExistsAnd", new { databaseName }));
         }
         finally
         {
@@ -159,7 +165,7 @@ public class SetupService(
         if (!result.Succeeded)
         {
             var errors = string.Join(" ", result.Errors.Select(e => e.Description));
-            throw new InvalidOperationException($"Unable to create administrator account. {errors}");
+            throw new InvalidOperationException(Loc.T("server.setup.unableToCreateAdministratorAccount", new { errors }));
         }
 
         // Any user existing counts as "setup complete" (IsSetupCompleteAsync), so a user left behind
@@ -173,7 +179,7 @@ public class SetupService(
         catch (InvalidOperationException ex)
         {
             await userManager.DeleteAsync(admin);
-            throw new InvalidOperationException($"Unable to make the administrator a Super Admin. {ex.Message}", ex);
+            throw new InvalidOperationException(Loc.T("server.setup.unableToMakeTheAdministrator", new { message = ex.Message }), ex);
         }
 
         await AppRelease.EnsureRecordedAsync(db, ct);
@@ -193,17 +199,34 @@ public class SetupService(
 
     public async Task<string> GetOrCreateNodeRegistrationKeyAsync(CancellationToken ct = default)
     {
+        // Stored encrypted (SecretProtection) like the other secrets in Settings; a key saved in plain
+        // text by an older version still reads, and is encrypted the next time it's saved.
         var existing = await db.Settings.FirstOrDefaultAsync(s => s.Key == "Node.RegistrationKey", ct);
-        if (existing is not null) return existing.Value;
+        if (existing is not null) return LarisVMS.Infrastructure.Security.SecretProtection.Unprotect(existing.Value)!;
 
         var key = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
-        await UpsertSettingAsync("Node.RegistrationKey", key,
+        await UpsertSettingAsync("Node.RegistrationKey", LarisVMS.Infrastructure.Security.SecretProtection.Protect(key)!,
             "Bearer key a recorder node presents once at first registration (see install-node.ps1).", ct);
         return key;
     }
 
     public async Task FinalizeSetupAsync(CancellationToken ct = default)
-        => await UpsertSettingAsync("Setup.IsComplete", "true", "Set once the setup wizard completes.", ct);
+    {
+        await UpsertSettingAsync("Setup.IsComplete", "true", "Set once the setup wizard completes.", ct);
+        MarkFinalizedLocally();
+    }
+
+    private const string FinalizedKey = "Setup:Finalized";
+
+    /// <summary>Records in setup-generated.json that the wizard has finished. Best effort: the
+    /// database flag is still the source of truth whenever the database can be reached.</summary>
+    private void MarkFinalizedLocally()
+    {
+        if (string.Equals(configuration[FinalizedKey], "true", StringComparison.OrdinalIgnoreCase)) return;
+        configuration[FinalizedKey] = "true";
+        try { MergeSetupJson(cfg => cfg["Setup"] = new JsonObject { ["Finalized"] = "true" }); }
+        catch { /* Read-only install folder: the in-memory value still closes the wizard until restart. */ }
+    }
 
     public Task<(string? FullPath, string? ContentType)> GetLogoInfoAsync()
     {

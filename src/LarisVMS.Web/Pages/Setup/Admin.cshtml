@@ -2,21 +2,21 @@
 @model LarisVMS.Web.Pages.Setup.AdminModel
 @{
     Layout = "_SetupLayout";
-    ViewData["Title"] = "Super Admin";
+    ViewData["Title"] = L["setup.admin.superAdmin"].Value;
 }
-<h5 class="mb-3">2. Super Admin account</h5>
+<h2 class="h5 mb-3">@L["setup.admin.2SuperAdminAccount"]</h2>
 @if (!string.IsNullOrEmpty(Model.ErrorMessage))
 {
-    <div class="alert alert-danger">@Model.ErrorMessage</div>
+    <div class="alert alert-danger" role="alert">@Model.ErrorMessage</div>
 }
 <form method="post">
     <div class="mb-3">
-        <label class="form-label">Email</label>
-        <input asp-for="Email" type="email" class="form-control" required />
+        <label for="Email" class="form-label">@L["common.email"]</label>
+        <input asp-for="Email" type="email" class="form-control" autocomplete="email" required />
     </div>
     <div class="mb-3">
-        <label class="form-label">Password (at least 12 characters)</label>
+        <label for="Password" class="form-label">@L["setup.admin.passwordAtLeast12Characters"]</label>
         <input asp-for="Password" type="password" class="form-control" required minlength="12" />
     </div>
-    <button type="submit" class="btn btn-primary">Create account &amp; continue</button>
+    <button type="submit" class="btn btn-primary">@L["setup.admin.createAccountContinue"]</button>
 </form>

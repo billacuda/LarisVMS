@@ -67,6 +67,8 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<Zone> Zones => Set<Zone>();
     public DbSet<MotionSpan> MotionSpans => Set<MotionSpan>();
     public DbSet<TalkRecording> TalkRecordings => Set<TalkRecording>();
+    public DbSet<ManualRecording> ManualRecordings => Set<ManualRecording>();
+    public DbSet<ApiKeyPermission> ApiKeyPermissions => Set<ApiKeyPermission>();
     public DbSet<ActivityHourlyCount> ActivityHourlyCounts => Set<ActivityHourlyCount>();
     public DbSet<SiteMap> SiteMaps => Set<SiteMap>();
     public DbSet<CameraPlacement> CameraPlacements => Set<CameraPlacement>();
@@ -572,6 +574,26 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.HasIndex(x => new { x.CameraId, x.StartUtc });
         });
 
+        // ── ApiKeyPermission ─────────────────────────────────────────────────
+        builder.Entity<ApiKeyPermission>(e =>
+        {
+            e.HasKey(x => new { x.ApiKeyId, x.Resource, x.Action });
+            e.Property(x => x.Resource).HasMaxLength(64);
+            e.Property(x => x.Action).HasMaxLength(64);
+            e.HasOne<ApiKey>().WithMany().HasForeignKey(x => x.ApiKeyId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── ManualRecording ──────────────────────────────────────────────────
+        // Read as "who's recording now" (EndUtc null) and "this camera, this time range" (timeline).
+        builder.Entity<ManualRecording>(e =>
+        {
+            e.HasOne(x => x.Camera).WithMany()
+                .HasForeignKey(x => x.CameraId).OnDelete(DeleteBehavior.Cascade);
+            e.Property(x => x.StartedBy).HasMaxLength(256);
+            e.Property(x => x.EndedBy).HasMaxLength(256);
+            e.HasIndex(x => new { x.CameraId, x.EndUtc });
+        });
+
         // ── MotionSpan (M8) ──────────────────────────────────────────────────
         // Same clustering reasoning as Segment above — see MotionSpan's doc comment.
         builder.Entity<MotionSpan>(e =>
@@ -783,7 +805,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             ConfigureForMariaDb(builder);
     }
 
-    /// <summary>MariaDB (experimental). InnoDB caps an index key at 3072 bytes, and utf8mb4 takes 4
+    /// <summary>MariaDB. InnoDB caps an index key at 3072 bytes, and utf8mb4 takes 4
     /// bytes a character, so SQL Server-sized string keys don't all fit: two 450-character user/role
     /// id columns in one unique index come to 3600 bytes. Those columns only ever hold Identity's GUID
     /// strings, so 255 is plenty — the same length the provider gives Identity's own key columns.

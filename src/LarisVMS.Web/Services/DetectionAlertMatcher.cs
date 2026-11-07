@@ -1,6 +1,7 @@
 using System.Text.Json;
 using LarisVMS.Core;
 using LarisVMS.Core.Enums;
+using LarisVMS.Core.Localization;
 using LarisVMS.Core.Interfaces;
 
 namespace LarisVMS.Web.Services;
@@ -110,13 +111,13 @@ public static class DetectionAlertMatcher
     /// <summary>"Vehicle — car (red)", "Human (blue shirt, black pants)", "Animal — dog".</summary>
     public static string Describe(string category, string label, DetectionEventObject? o)
     {
-        var text = CocoCategoryMap.DisplayLabel(category, string.IsNullOrEmpty(o?.Label) ? label : o.Label);
+        var text = CocoCategoryMap.LocalizedDisplayLabel(category, string.IsNullOrEmpty(o?.Label) ? label : o.Label);
         if (o is null) return text;
         if (o.UpperColor is not null || o.LowerColor is not null)
         {
             var parts = new List<string>();
-            if (o.UpperColor is not null) parts.Add($"{o.UpperColor} shirt");
-            if (o.LowerColor is not null) parts.Add($"{o.LowerColor} pants");
+            if (o.UpperColor is not null) parts.Add(Loc.T("alerts.shirt", new { color = o.UpperColor }));
+            if (o.LowerColor is not null) parts.Add(Loc.T("alerts.pants", new { color = o.LowerColor }));
             return $"{text} ({string.Join(", ", parts)})";
         }
         return o.PrimaryColor is not null ? $"{text} ({o.PrimaryColor})" : text;

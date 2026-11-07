@@ -12,7 +12,8 @@ public sealed record SpeedMeasurement(Guid TrapId, double Kph, DateTime AtUtc);
 /// the ground, so the box centre would read late on the near gate and early on the far one). Each
 /// step from the previous point to this one is tested against both gates; a crossing's time is
 /// interpolated along the step, so the sub-stream's frame interval doesn't quantize the result.
-/// Either order counts (A then B, or B then A). One measurement per track per trap.
+/// Either order counts (A then B, or B then A) unless the trap is one-way. One measurement per
+/// track per trap.
 /// </summary>
 public sealed class SpeedTrapMeter(IReadOnlyList<VisionSpeedTrapDto> traps)
 {
@@ -58,7 +59,13 @@ public sealed class SpeedTrapMeter(IReadOnlyList<VisionSpeedTrapDto> traps)
             {
                 c.Done = true;
                 var elapsed = (ta > tb ? ta - tb : tb - ta);
-                if (elapsed >= MinElapsed && trap.DistanceMeters > 0)
+                var rightWay = trap.Direction switch
+                {
+                    LarisVMS.Core.SpeedTrapGates.AToB => ta <= tb,
+                    LarisVMS.Core.SpeedTrapGates.BToA => tb <= ta,
+                    _ => true,
+                };
+                if (rightWay && elapsed >= MinElapsed && trap.DistanceMeters > 0)
                 {
                     var kph = trap.DistanceMeters / elapsed.TotalSeconds * 3.6;
                     if (kph <= MaxKph) result ??= new SpeedMeasurement(trap.Id, Math.Round(kph, 1), ta > tb ? ta : tb);

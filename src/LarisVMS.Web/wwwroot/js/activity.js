@@ -149,7 +149,7 @@
             peakEl.textContent = '';
             summaryEl.textContent = '';
             legendEl.innerHTML = '';
-            chartEl.innerHTML = '<p class="text-muted mb-0">Choose a camera to see where things move in its picture.</p>';
+            chartEl.innerHTML = '<p class="text-muted mb-0">' + larisvmsI18n.html('js.activity.chooseACameraToSee') + '</p>';
             syncUrl();
             return;
         }
@@ -163,7 +163,7 @@
             })
             .catch(function () {
                 if (seq !== requestSeq) return;
-                chartEl.innerHTML = '<p class="text-danger mb-0">Couldn\'t load activity. Try again.</p>';
+                chartEl.innerHTML = '<p class="text-danger mb-0">' + larisvmsI18n.html('js.activity.couldntLoadActivityTryAgain') + '</p>';
             })
             .then(function () { if (seq === requestSeq) chartEl.classList.remove('opacity-50'); });
         syncUrl();
@@ -178,7 +178,7 @@
         if (!view || view.cameraIds.length === 0) {
             peakEl.textContent = '';
             summaryEl.textContent = '';
-            chartEl.innerHTML = '<p class="text-muted mb-0">This view has no cameras you can review.</p>';
+            chartEl.innerHTML = '<p class="text-muted mb-0">' + larisvmsI18n.html('js.activity.thisViewHasNoCameras') + '</p>';
             syncUrl();
             return;
         }
@@ -195,24 +195,24 @@
 
     function renderSceneView(view, heats) {
         var motion = state.source === 'motion';
-        peakEl.textContent = (motion ? 'Where motion happened' : 'Where objects moved') + ' · ' + view.name;
+        peakEl.textContent = (motion ? larisvmsI18n.t('js.activity.whereMotionHappened') : larisvmsI18n.t('js.activity.whereObjectsMoved')) + ' · ' + view.name;
         var hours = state.fromHour !== state.toHour
-            ? ', ' + sceneFrom.options[state.fromHour].text + ' to ' + sceneTo.options[state.toHour].text : '';
-        summaryEl.textContent = 'Over ' + sceneRangeNames[state.range] + hours + '. Each camera is on its own scale.';
+            ? larisvmsI18n.t('js.activity.hoursBetween', { from: sceneFrom.options[state.fromHour].text, to: sceneTo.options[state.toHour].text }) : '';
+        summaryEl.textContent = larisvmsI18n.t('js.activity.sceneSummaryMulti', { range: sceneRangeNames[state.range], hours: hours });
         window.larisvmsSceneHeatmap.reset();
         chartEl.innerHTML = '<div class="scene-heatmap-grid">' + heats.map(function (h, i) {
-            var busiest = h.maxCount === 0 ? 'nothing recorded'
-                : motion ? 'busiest spot ' + h.maxCount.toLocaleString() + ' frames'
-                : 'busiest spot ' + h.maxCount.toLocaleString() + (h.maxCount === 1 ? ' object' : ' objects');
+            var busiest = h.maxCount === 0 ? larisvmsI18n.t('js.activity.nothingRecorded')
+                : motion ? larisvmsI18n.plural('js.activity.busiestSpotFrames', h.maxCount)
+                : larisvmsI18n.plural('js.activity.busiestSpotObjects', h.maxCount);
             return '<div class="scene-heatmap-panel"><div class="small mb-1"><span class="fw-semibold">' + escapeHtml(h.cameraName) +
-                '</span> <span class="text-muted">· ' + busiest + '</span></div><div data-scene-panel="' + i + '"></div></div>';
+                '</span> <span class="text-muted">· ' + escapeHtml(busiest) + '</span></div><div data-scene-panel="' + i + '"></div></div>';
         }).join('') + '</div>';
         window.larisvmsSceneHeatmap.layoutGrid(chartEl.querySelector('.scene-heatmap-grid'));
         heats.forEach(function (h, i) {
             var panel = chartEl.querySelector('[data-scene-panel="' + i + '"]');
             if (h.maxCount === 0) {
                 panel.innerHTML = '<p class="text-muted small mb-0">' + (motion && !h.motionAvailable
-                    ? 'No grid motion detection on this camera.' : 'Nothing in this range.') + '</p>';
+                    ? larisvmsI18n.t('js.activity.noGridMotionDetectionOn') : larisvmsI18n.t('js.activity.nothingInThisRange')) + '</p>';
             } else {
                 window.larisvmsSceneHeatmap.render(panel, h, backgroundUrl(h), { framed: true });
             }
@@ -245,25 +245,30 @@
     }
 
     function speedValue(data, v) {
-        if (v === null || v === undefined) return 'nothing measured';
-        if (data.metric === 'avg') return 'average ' + Math.round(v) + ' ' + data.unit;
-        if (data.metric === 'max') return 'top ' + Math.round(v) + ' ' + data.unit;
-        if (data.metric === 'over') return v.toLocaleString() + ' over the limit';
-        return v.toLocaleString() + ' measured';
+        if (v === null || v === undefined) return larisvmsI18n.t('js.activity.nothingMeasured');
+        if (data.metric === 'avg') return larisvmsI18n.t('js.activity.speedAverage', { speed: Math.round(v), unit: data.unit });
+        if (data.metric === 'max') return larisvmsI18n.t('js.activity.speedTop', { speed: Math.round(v), unit: data.unit });
+        if (data.metric === 'over') return larisvmsI18n.t('js.activity.overTheLimit', { count: v });
+        return larisvmsI18n.t('js.activity.measuredCount', { count: v });
     }
 
-    function speedCellText(v) { return v === null || v === undefined ? '' : (last.metric === 'avg' || last.metric === 'max') ? Math.round(v) : v.toLocaleString(); }
+    function speedCellText(v) { return v === null || v === undefined ? '' : (last.metric === 'avg' || last.metric === 'max') ? Math.round(v) : v.toLocaleString(larisvmsI18n.locale); }
 
-    var dayNames = { Sun: 'Sunday', Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday', Sat: 'Saturday' };
+    var dayNames = { Sun: larisvmsI18n.t('js.activity.sunday'), Mon: larisvmsI18n.t('js.activity.monday'), Tue: larisvmsI18n.t('js.activity.tuesday'),
+        Wed: larisvmsI18n.t('js.activity.wednesday'), Thu: larisvmsI18n.t('js.activity.thursday'), Fri: larisvmsI18n.t('js.activity.friday'), Sat: larisvmsI18n.t('js.activity.saturday') };
     var hourLabels = ['12a','1a','2a','3a','4a','5a','6a','7a','8a','9a','10a','11a','12p','1p','2p','3p','4p','5p','6p','7p','8p','9p','10p','11p'];
 
-    function hourText(label) { return label.replace(/a$/, ' AM').replace(/p$/, ' PM'); } // "3p" -> "3 PM"
+    // "3p" -> "3 PM" (in the page's language); a label in some other form is shown as it is.
+    function hourText(label) {
+        var m = /^(\d+)([ap])$/.exec(label);
+        return m ? larisvmsI18n.t(m[2] === 'a' ? 'js.activity.hourAm' : 'js.activity.hourPm', { hour: m[1] }) : label;
+    }
     function hourRange(i) { return hourText(hourLabels[i]) + '–' + hourText(hourLabels[(i + 1) % 24]); }
-    function events(n) { return n.toLocaleString() + (n === 1 ? ' event' : ' events'); }
+    function events(n) { return larisvmsI18n.plural('js.activity.events', n); }
 
     // ISO date ("2026-10-03") as a local calendar date, without time-zone shifting.
     function dateOf(iso) { var p = iso.split('-'); return new Date(+p[0], +p[1] - 1, +p[2]); }
-    function dayText(iso) { return dateOf(iso).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); }
+    function dayText(iso) { return dateOf(iso).toLocaleDateString(larisvmsI18n.locale, { weekday: 'short', month: 'short', day: 'numeric' }); }
 
     function cellText(data, row, col) {
         var count = data.cells[row][col];
@@ -271,18 +276,18 @@
         if (data.mode === 'calendar') return dayText(data.columnLabels[col]) + ' · ' + hourRange(row) + ': ' + what;
         if (data.mode === 'day') return data.rowLabels[row] + ', ' + hourText(data.columnLabels[col]) + '–' + hourText(data.columnLabels[(col + 1) % 24]) + ': ' + what;
         var day = dayNames[data.rowLabels[row]] || data.rowLabels[row];
-        if (speeds()) return day + 's ' + hourRange(col) + ': ' + what;
-        var text = day + 's ' + hourRange(col) + ': ' + events(count);
+        if (speeds()) return larisvmsI18n.t('js.activity.weekdayHours', { day: day, hours: hourRange(col) }) + ': ' + what;
+        var text = larisvmsI18n.t('js.activity.weekdayHours', { day: day, hours: hourRange(col) }) + ': ' + events(count);
         // Over more than one week, the total is spread across several of that weekday — give the average.
         var n = data.weekdayOccurrences ? data.weekdayOccurrences[row] : 0;
-        if (n > 1) text += ' total · ' + (count / n).toLocaleString(undefined, { maximumFractionDigits: 1 }) + ' per ' + day + ' on average';
+        if (n > 1) text += larisvmsI18n.t('js.activity.averagePerDay', { average: (count / n).toLocaleString(larisvmsI18n.locale, { maximumFractionDigits: 1 }), day: day });
         return text;
     }
 
     // ── Rendering ───────────────────────────────────────────────────────────
 
     function renderGrid(data) {
-        var html = '<div class="activity-grid" role="img" aria-label="' + escapeHtml(data.peak || 'Activity heatmap') + '">';
+        var html = '<div class="activity-grid" role="img" aria-label="' + escapeHtml(data.peak || larisvmsI18n.t('js.activity.activityHeatmap')) + '">';
         html += '<div></div>' + data.columnLabels.map(function (c, i) {
             return '<div class="activity-col-label' + (i % 3 === 0 ? '' : ' activity-col-label--minor') + '">' + escapeHtml(c) + '</div>';
         }).join('');
@@ -304,7 +309,7 @@
         var html = '<div class="activity-calendar" style="' + cols + '" role="img" aria-label="' + escapeHtml((data.busiestDay || '') + ' ' + (data.peak || '')) + '">';
         html += '<div></div>' + data.columnLabels.map(function (iso, i) {
             var d = dateOf(iso);
-            var label = d.getDate() === 1 || i === 0 ? d.toLocaleDateString(undefined, { month: 'short' }) : '';
+            var label = d.getDate() === 1 || i === 0 ? d.toLocaleDateString(larisvmsI18n.locale, { month: 'short' }) : '';
             return '<div class="activity-month-label">' + escapeHtml(label) + '</div>';
         }).join('');
         for (var h = 0; h < 24; h++) {
@@ -318,12 +323,12 @@
             var vals = data.dayValues.filter(function (v) { return v !== null; });
             var dayScale = { metric: data.metric, min: vals.length ? Math.min.apply(null, vals) : 0, max: vals.length ? Math.max.apply(null, vals) : 0 };
             if (data.metric !== 'avg' && data.metric !== 'max') dayScale.min = 0;
-            html += '<div class="activity-row-label">Day</div>' + data.dayValues.map(function (v, c) {
+            html += '<div class="activity-row-label">' + larisvmsI18n.html('js.activity.day') + '</div>' + data.dayValues.map(function (v, c) {
                 return '<div class="activity-day-total activity-step-' + cellStep(dayScale, v) + overClass(data, v) + '" data-day="' + c + '"></div>';
             }).join('');
         } else {
             var maxDay = Math.max.apply(null, data.dayTotals.concat([0]));
-            html += '<div class="activity-row-label">Day</div>' + data.dayTotals.map(function (t, c) {
+            html += '<div class="activity-row-label">' + larisvmsI18n.html('js.activity.day') + '</div>' + data.dayTotals.map(function (t, c) {
                 return '<div class="activity-day-total activity-step-' + step(t, maxDay) + '" data-day="' + c + '"></div>';
             }).join('');
         }
@@ -340,10 +345,10 @@
             cell = function (r, c) { return data.cells[c][r]; };
         }
         var html = '<div class="table-responsive" style="max-height: 70vh;"><table class="table table-sm table-bordered small text-end mb-0"><thead><tr><th></th>' +
-            cols.map(function (c) { return '<th scope="col">' + colHead(c) + '</th>'; }).join('') + '<th scope="col">Total</th></tr></thead><tbody>';
+            cols.map(function (c) { return '<th scope="col">' + colHead(c) + '</th>'; }).join('') + '<th scope="col">' + larisvmsI18n.html('js.activity.total') + '</th></tr></thead><tbody>';
         if (speeds()) {
             // No Total column: an average or a top speed doesn't add up across hours.
-            html = html.replace('<th scope="col">Total</th>', '');
+            html = html.replace('<th scope="col">' + larisvmsI18n.html('js.activity.total') + '</th>', '');
             rows.forEach(function (label, r) {
                 var tds = '';
                 for (var c = 0; c < cols.length; c++) {
@@ -356,20 +361,20 @@
         }
         rows.forEach(function (label, r) {
             var total = 0, tds = '';
-            for (var c = 0; c < cols.length; c++) { var v = cell(r, c); total += v; tds += '<td>' + (v ? v.toLocaleString() : '') + '</td>'; }
+            for (var c = 0; c < cols.length; c++) { var v = cell(r, c); total += v; tds += '<td>' + (v ? v.toLocaleString(larisvmsI18n.locale) : '') + '</td>'; }
             html += '<tr><th scope="row" class="text-start text-nowrap">' + escapeHtml(label) + '</th>' + tds +
-                '<td class="fw-semibold">' + total.toLocaleString() + '</td></tr>';
+                '<td class="fw-semibold">' + total.toLocaleString(larisvmsI18n.locale) + '</td></tr>';
         });
         return html + '</tbody></table></div>';
     }
 
     function renderChart(data) {
         if (speeds() && data.measured === 0) {
-            chartEl.innerHTML = '<p class="text-muted mb-0">No speeds measured in this range. Speeds come from speed traps — set one up on a camera\'s Speed traps page (Cameras → Edit).</p>';
+            chartEl.innerHTML = '<p class="text-muted mb-0">' + larisvmsI18n.html('js.activity.noSpeedsMeasuredInThis') + '</p>';
             return;
         }
         if (!speeds() && data.total === 0) {
-            chartEl.innerHTML = '<p class="text-muted mb-0">Nothing matching these event types in this range.</p>';
+            chartEl.innerHTML = '<p class="text-muted mb-0">' + larisvmsI18n.html('js.activity.nothingMatchingTheseEventTypes') + '</p>';
             return;
         }
         chartEl.innerHTML = tableToggle.checked ? renderTable(data)
@@ -383,44 +388,45 @@
         if (speeds()) {
             var speedScale = data.metric === 'avg' || data.metric === 'max';
             legendEl.innerHTML = speedScale
-                ? '<span class="small text-muted">Slower (' + Math.round(data.min) + ' ' + escapeHtml(data.unit) + ')</span>' + swatches +
-                  '<span class="small text-muted">Faster (' + Math.round(data.max) + ' ' + escapeHtml(data.unit) + ')</span>' +
-                  (data.limit != null ? '<span class="activity-swatch activity-cell--over ms-3"></span><span class="small text-muted">Over the ' + Math.round(data.limit) + ' ' + escapeHtml(data.unit) + ' limit</span>' : '')
-                : '<span class="small text-muted">Fewer</span>' + swatches +
-                  '<span class="small text-muted">More (up to ' + data.max.toLocaleString() + ' per hour cell)</span>';
+                ? '<span class="small text-muted">' + larisvmsI18n.html('js.activity.legendSlower', { speed: Math.round(data.min), unit: data.unit }) + '</span>' + swatches +
+                  '<span class="small text-muted">' + larisvmsI18n.html('js.activity.legendFaster', { speed: Math.round(data.max), unit: data.unit }) + '</span>' +
+                  (data.limit != null ? '<span class="activity-swatch activity-cell--over ms-3"></span><span class="small text-muted">' + larisvmsI18n.html('js.activity.legendOverLimit', { speed: Math.round(data.limit), unit: data.unit }) + '</span>' : '')
+                : '<span class="small text-muted">' + larisvmsI18n.html('js.activity.fewer') + '</span>' + swatches +
+                  '<span class="small text-muted">' + larisvmsI18n.html('js.activity.legendMore', { max: data.max }) + '</span>';
             return;
         }
-        legendEl.innerHTML = '<span class="small text-muted">Fewer</span>' + swatches +
-            '<span class="small text-muted">More (up to ' + data.max.toLocaleString() + ' per hour cell)</span>';
+        legendEl.innerHTML = '<span class="small text-muted">' + larisvmsI18n.html('js.activity.fewer') + '</span>' + swatches +
+            '<span class="small text-muted">' + larisvmsI18n.html('js.activity.legendMore', { max: data.max }) + '</span>';
     }
 
-    var rangeNames = { '24h': 'the last 24 hours', '7d': 'the last 7 days', '30d': 'the last 30 days', '90d': 'the last 90 days', '1y': 'the last year' };
+    var rangeNames = { '24h': larisvmsI18n.t('js.activity.range24h'), '7d': larisvmsI18n.t('js.activity.range7d'), '30d': larisvmsI18n.t('js.activity.range30d'),
+        '90d': larisvmsI18n.t('js.activity.range90d'), '1y': larisvmsI18n.t('js.activity.range1y') };
 
-    var sceneRangeNames = { '24h': 'the last 24 hours', '7d': 'the last 7 days', '30d': 'the last 30 days', '90d': 'the last 90 days', '1y': 'the last year' };
+    var sceneRangeNames = rangeNames;
 
     function renderScene(data) {
         var motion = data.source === 'motion';
-        peakEl.textContent = motion ? 'Where motion happened' : 'Where objects moved';
+        peakEl.textContent = motion ? larisvmsI18n.t('js.activity.whereMotionHappened') : larisvmsI18n.t('js.activity.whereObjectsMoved');
         var hours = state.fromHour !== state.toHour
-            ? ', ' + sceneFrom.options[state.fromHour].text + ' to ' + sceneTo.options[state.toHour].text : '';
-        summaryEl.textContent = 'Over ' + sceneRangeNames[data.range] + hours + '. ' + (data.maxCount === 0 ? '' : motion
-            ? 'The busiest spot had motion in ' + data.maxCount.toLocaleString() + ' analysed frames.'
-            : 'Up to ' + data.maxCount.toLocaleString() + (data.maxCount === 1 ? ' object' : ' objects') + ' passed through the busiest spot.');
+            ? larisvmsI18n.t('js.activity.hoursBetween', { from: sceneFrom.options[state.fromHour].text, to: sceneTo.options[state.toHour].text }) : '';
+        summaryEl.textContent = larisvmsI18n.t('js.activity.sceneSummary', { range: sceneRangeNames[data.range], hours: hours }) + (data.maxCount === 0 ? '' : ' ' + (motion
+            ? larisvmsI18n.plural('js.activity.busiestSpotMotion', data.maxCount)
+            : larisvmsI18n.plural('js.activity.busiestSpotPassed', data.maxCount)));
         if (data.maxCount === 0) {
             chartEl.innerHTML = '<p class="text-muted mb-0">' + (motion
-                ? 'No grid motion recorded in this range. Motion heat needs server-side motion detection in Grid mode on this camera.'
-                : 'No moving objects recorded in this range. Paths are recorded from now on, as objects move through the picture.') + '</p>';
+                ? larisvmsI18n.t('js.activity.noGridMotionRecordedIn')
+                : larisvmsI18n.html('js.activity.noMovingObjects')) + '</p>';
             legendEl.innerHTML = '';
         } else {
             window.larisvmsSceneHeatmap.reset();
             window.larisvmsSceneHeatmap.render(chartEl, data, backgroundUrl(data));
             legendEl.innerHTML = window.larisvmsSceneHeatmap.legend(motion
-                ? data.maxCount.toLocaleString() + ' frames'
-                : data.maxCount.toLocaleString() + (data.maxCount === 1 ? ' object' : ' objects'));
+                ? data.maxCount.toLocaleString(larisvmsI18n.locale) + ' frames'
+                : data.maxCount.toLocaleString(larisvmsI18n.locale) + (data.maxCount === 1 ? ' object' : ' objects'));
         }
         var motionInput = document.getElementById('activitySceneMotion');
         motionInput.disabled = !data.motionAvailable;
-        motionInput.parentElement.title = data.motionAvailable ? '' : 'Needs server-side motion detection in Grid mode on this camera.';
+        motionInput.parentElement.title = data.motionAvailable ? '' : larisvmsI18n.t('js.activity.needsServerSideMotionDetection');
         renderBackgroundControls(data);
     }
 
@@ -432,8 +438,8 @@
         if (!backgroundEl) return;
         if (!data || !data.canChangeBackground) { backgroundEl.classList.add('d-none'); return; }
         backgroundEl.classList.remove('d-none');
-        backgroundEl.querySelector('[data-bg-status]').textContent = data.hasCustomBackground ? 'Your picture' : 'Camera picture';
-        backgroundEl.querySelector('[data-bg-upload]').textContent = data.hasCustomBackground ? 'Replace…' : 'Use my own picture…';
+        backgroundEl.querySelector('[data-bg-status]').textContent = data.hasCustomBackground ? larisvmsI18n.t('js.activity.yourPicture') : larisvmsI18n.t('js.activity.cameraPicture');
+        backgroundEl.querySelector('[data-bg-upload]').textContent = data.hasCustomBackground ? larisvmsI18n.t('js.activity.replace') : larisvmsI18n.t('js.activity.useMyOwnPicture');
         backgroundEl.querySelector('[data-bg-remove]').classList.toggle('d-none', !data.hasCustomBackground);
         backgroundEl.querySelector('[data-bg-error]').textContent = '';
     }
@@ -443,8 +449,8 @@
     }
 
     function problemText(r) {
-        return r.json().then(function (p) { return (p && (p.detail || p.title)) || 'Couldn\'t save the picture.'; },
-            function () { return 'Couldn\'t save the picture.'; });
+        return r.json().then(function (p) { return (p && (p.detail || p.title)) || larisvmsI18n.t('js.activity.couldntSaveThePicture'); },
+            function () { return larisvmsI18n.t('js.activity.couldntSaveThePicture'); });
     }
 
     if (backgroundEl) {
@@ -458,7 +464,7 @@
         backgroundFile.addEventListener('change', function () {
             var file = backgroundFile.files && backgroundFile.files[0];
             if (!file || !last) return;
-            if (file.size > 10 * 1024 * 1024) { backgroundError('The picture must be under 10 MB.'); return; }
+            if (file.size > 10 * 1024 * 1024) { backgroundError(larisvmsI18n.t('js.activity.thePictureMustBeUnder')); return; }
             var cameraId = last.cameraId;
             var reader = new FileReader();
             reader.onload = function () {
@@ -471,7 +477,7 @@
                         body: JSON.stringify({ imageBase64: dataUrl.substring(dataUrl.indexOf(',') + 1), width: img.naturalWidth, height: img.naturalHeight })
                     }).then(function (r) { if (r.ok) load(); else problemText(r).then(backgroundError); });
                 };
-                img.onerror = function () { backgroundError('That file isn\'t a picture this browser can read.'); };
+                img.onerror = function () { backgroundError(larisvmsI18n.t('js.activity.thatFileIsntAPicture')); };
                 img.src = dataUrl;
             };
             reader.readAsDataURL(file);
@@ -519,16 +525,14 @@
         }
         peakEl.textContent = [data.busiestDay, data.peak].filter(Boolean).join(' ');
         var where = state.cameraId === 'all'
-            ? 'Times in the server\'s time zone (' + data.timeZoneName + ').'
-            : 'Times in the camera\'s time zone (' + data.timeZoneName + ').';
+            ? larisvmsI18n.t('js.activity.serverTimeZone', { zone: data.timeZoneName })
+            : larisvmsI18n.t('js.activity.cameraTimeZone', { zone: data.timeZoneName });
         if (speeds()) {
-            summaryEl.textContent = data.measured.toLocaleString() + (data.measured === 1 ? ' speed' : ' speeds') + ' measured in ' + rangeNames[data.range] +
-                (state.cameraId === 'all' ? ' across all cameras' : '') +
-                (data.measured > 0 ? ' · average ' + Math.round(data.average) + ' ' + data.unit + ', top ' + Math.round(data.top) + ' ' + data.unit : '') +
+            summaryEl.textContent = larisvmsI18n.plural(state.cameraId === 'all' ? 'js.activity.speedsMeasuredAll' : 'js.activity.speedsMeasured', data.measured, { range: rangeNames[data.range] }) +
+                (data.measured > 0 ? larisvmsI18n.t('js.activity.speedStats', { average: Math.round(data.average), top: Math.round(data.top), unit: data.unit }) : '') +
                 '. ' + where;
         } else {
-            summaryEl.textContent = events(data.total) + ' in ' + rangeNames[data.range] +
-                (state.cameraId === 'all' ? ' across all cameras' : '') + '. ' + where;
+            summaryEl.textContent = larisvmsI18n.t(state.cameraId === 'all' ? 'js.activity.eventsInRangeAll' : 'js.activity.eventsInRange', { events: events(data.total), range: rangeNames[data.range] }) + ' ' + where;
         }
         renderChart(data);
         renderLegend(data);
@@ -564,7 +568,7 @@
 
     function renderFilter(data) {
         if (data.groups.length === 0) {
-            filterEl.innerHTML = '<span class="text-muted">No events in this range.</span>';
+            filterEl.innerHTML = '<span class="text-muted">' + larisvmsI18n.html('js.activity.noEventsInThisRange') + '</span>';
             return;
         }
         filterEl.innerHTML = data.groups.map(function (grp, gi) {
@@ -577,11 +581,11 @@
                     var lid = id + '_' + li;
                     return '<div class="form-check"><input class="form-check-input" type="checkbox" id="' + lid + '" data-label="' + escapeHtml(l.key) + '" data-group="' + escapeHtml(grp.key) + '"' +
                         (whole || isSelected(l.key) ? ' checked' : '') + '><label class="form-check-label" for="' + lid + '">' + escapeHtml(l.name) +
-                        ' <span class="text-muted">' + l.count.toLocaleString() + '</span></label></div>';
+                        ' <span class="text-muted">' + l.count.toLocaleString(larisvmsI18n.locale) + '</span></label></div>';
                 }).join('') + '</details>';
             return '<div class="mb-1"><div class="form-check"><input class="form-check-input" type="checkbox" id="' + id + '" data-group-key="' + escapeHtml(grp.key) + '"' +
                 (whole ? ' checked' : '') + '><label class="form-check-label" for="' + id + '">' + (grp.emoji ? escapeHtml(grp.emoji) + ' ' : '') + escapeHtml(grp.name) +
-                ' <span class="text-muted">' + grp.count.toLocaleString() + '</span></label></div>' + labels + '</div>';
+                ' <span class="text-muted">' + grp.count.toLocaleString(larisvmsI18n.locale) + '</span></label></div>' + labels + '</div>';
         }).join('');
         Array.prototype.forEach.call(filterEl.querySelectorAll('[data-group-key]'), function (cb) {
             if (!cb.checked && g(cb.getAttribute('data-group-key')).labels.some(function (l) { return isSelected(l.key); })) cb.indeterminate = true;
@@ -631,7 +635,7 @@
 
     function renderTraps(data) {
         if (data.traps.length === 0) {
-            trapsEl.innerHTML = '<span class="text-muted">No speed traps on ' + (state.cameraId === 'all' ? 'any camera' : 'this camera') + ' yet.</span>';
+            trapsEl.innerHTML = '<span class="text-muted">' + larisvmsI18n.html(state.cameraId === 'all' ? 'js.activity.noTrapsAnyCamera' : 'js.activity.noTrapsThisCamera') + '</span>';
             return;
         }
         var all = data.selection.length === 0;
@@ -639,7 +643,7 @@
             var id = 'activityTrap' + i;
             return '<div class="form-check"><input class="form-check-input" type="checkbox" id="' + id + '" data-trap="' + escapeHtml(t.id) + '"' +
                 (all || data.selection.indexOf(t.id) >= 0 ? ' checked' : '') + '><label class="form-check-label" for="' + id + '">' + escapeHtml(t.name) +
-                ' <span class="text-muted">' + t.count.toLocaleString() + '</span></label></div>';
+                ' <span class="text-muted">' + t.count.toLocaleString(larisvmsI18n.locale) + '</span></label></div>';
         }).join('');
     }
 
@@ -692,8 +696,8 @@
         else if (dayTotal) {
             var c = +dayTotal.getAttribute('data-day');
             tooltip.textContent = last.dayValues
-                ? dayText(last.columnLabels[c]) + ': ' + speedValue(last, last.dayValues[c]) + ' that day'
-                : dayText(last.columnLabels[c]) + ': ' + events(last.dayTotals[c]) + ' that day';
+                ? larisvmsI18n.t('js.activity.thatDay', { day: dayText(last.columnLabels[c]), value: speedValue(last, last.dayValues[c]) })
+                : larisvmsI18n.t('js.activity.thatDay', { day: dayText(last.columnLabels[c]), value: events(last.dayTotals[c]) });
         } else { tooltip.classList.add('d-none'); return; }
         tooltip.classList.remove('d-none');
         var x = Math.min(e.clientX + 12, window.innerWidth - tooltip.offsetWidth - 8);
@@ -701,6 +705,9 @@
         tooltip.style.top = (e.clientY + 16) + 'px';
     });
     chartEl.addEventListener('mouseleave', function () { tooltip.classList.add('d-none'); });
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') tooltip.classList.add('d-none');
+    });
 
     // ── Controls ────────────────────────────────────────────────────────────
 

@@ -36,14 +36,14 @@ window.larisvmsTalk = (function () {
     function html(canTalk) {
         if (!canTalk) return '';
         var disabled = supported() ? '' : ' disabled';
-        var title = supported() ? 'Hold to talk' : 'Talking needs this site to be opened over HTTPS';
+        var title = supported() ? larisvmsI18n.t('js.talk.holdToTalk') : larisvmsI18n.t('js.talk.talkingNeedsThisSiteTo');
         return '<span class="talk-controls d-inline-flex align-items-center position-relative">' +
                 '<button type="button" class="btn btn-sm btn-outline-light talk-button" style="padding:.1rem .35rem;" ' +
                     'title="' + title + '" aria-label="' + title + '"' + disabled + '>🎙️</button>' +
                 '<button type="button" class="btn btn-sm btn-outline-light talk-mic" style="padding:.1rem .2rem;" ' +
-                    'title="Choose microphone" aria-label="Choose microphone"' + disabled + '>▾</button>' +
+                    'title="' + larisvmsI18n.html('js.talk.chooseMicrophone') + '" aria-label="' + larisvmsI18n.html('js.talk.chooseMicrophone') + '"' + disabled + '>▾</button>' +
                 '<select class="form-select form-select-sm talk-mic-select d-none position-absolute bottom-100 end-0 mb-1" ' +
-                    'style="width:auto; max-width:16rem;" aria-label="Microphone"></select>' +
+                    'style="width:auto; max-width:16rem;" aria-label="' + larisvmsI18n.html('js.talk.microphone') + '"></select>' +
                 '<span class="talk-status badge text-bg-dark position-absolute bottom-100 end-0 mb-1 d-none"></span>' +
             '</span>';
     }
@@ -118,17 +118,17 @@ window.larisvmsTalk = (function () {
             socket.binaryType = 'arraybuffer';
             var current = socket;
             ready = new Promise(function (resolve, reject) {
-                var timer = setTimeout(function () { reject(new Error('The camera didn\'t answer in time.')); }, READY_TIMEOUT_MS);
+                var timer = setTimeout(function () { reject(new Error(larisvmsI18n.t('js.talk.theCameraDidntAnswerIn'))); }, READY_TIMEOUT_MS);
                 current.onmessage = function (e) {
                     if (typeof e.data !== 'string') return;
                     var msg;
                     try { msg = JSON.parse(e.data); } catch (err) { return; }
                     if (msg.type === 'ready') { clearTimeout(timer); resolve(); }
-                    else if (msg.type === 'error') { clearTimeout(timer); reject(new Error(msg.message || 'Two-way audio failed.')); showStatus(msg.message || 'Two-way audio failed.', true); }
+                    else if (msg.type === 'error') { clearTimeout(timer); reject(new Error(msg.message || larisvmsI18n.t('js.talk.failed'))); showStatus(msg.message || larisvmsI18n.t('js.talk.failed'), true); }
                 };
                 current.onclose = function () {
                     clearTimeout(timer);
-                    reject(new Error('Two-way audio disconnected.'));
+                    reject(new Error(larisvmsI18n.t('js.talk.twoWayAudioDisconnected')));
                     if (socket === current) resetSession();
                 };
             });
@@ -154,19 +154,19 @@ window.larisvmsTalk = (function () {
             pressing = true;
             clearTimeout(idleTimer);
             setTalking(true);
-            showStatus(ready ? '' : 'Connecting…');
+            showStatus(ready ? '' : larisvmsI18n.t('js.talk.connecting'));
             Promise.all([openMic(), openSocket()])
                 .then(function () {
                     showStatus('');
                     // Released before the camera was ready: nothing to send.
                     if (!pressing) return;
                     socket.send(JSON.stringify({ type: 'start' }));
-                    showStatus('Talking');
+                    showStatus(larisvmsI18n.t('js.talk.talking'));
                 })
                 .catch(function (e) {
-                    var message = e && e.name === 'NotAllowedError' ? 'Microphone access was blocked.'
-                        : e && e.name === 'NotFoundError' ? 'No microphone found.'
-                        : (e && e.message) || 'Two-way audio failed.';
+                    var message = e && e.name === 'NotAllowedError' ? larisvmsI18n.t('js.talk.microphoneAccessWasBlocked')
+                        : e && e.name === 'NotFoundError' ? larisvmsI18n.t('js.talk.noMicrophoneFound')
+                        : (e && e.message) || larisvmsI18n.t('js.talk.failed');
                     showStatus(message, true);
                     resetSession();
                 });
@@ -177,7 +177,7 @@ window.larisvmsTalk = (function () {
             pressing = false;
             setTalking(false);
             if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'stop' }));
-            if (statusEl.textContent === 'Talking' || statusEl.textContent === 'Connecting…') showStatus('');
+            if (statusEl.textContent === larisvmsI18n.t('js.talk.talking') || statusEl.textContent === larisvmsI18n.t('js.talk.connecting')) showStatus('');
             scheduleIdleClose();
         }
 
@@ -206,11 +206,11 @@ window.larisvmsTalk = (function () {
             navigator.mediaDevices.enumerateDevices().then(function (devices) {
                 var current = window.larisvmsPreferences.get(MIC_PREF, '');
                 var mics = devices.filter(function (d) { return d.kind === 'audioinput'; });
-                micSelect.innerHTML = '<option value="">Default microphone</option>' + mics
+                micSelect.innerHTML = '<option value="">' + larisvmsI18n.html('js.talk.defaultMicrophone') + '</option>' + mics
                     .filter(function (d) { return d.deviceId && d.deviceId !== 'default'; })
                     .map(function (d, i) {
                         return '<option value="' + escapeHtml(d.deviceId) + '"' + (d.deviceId === current ? ' selected' : '') + '>' +
-                            escapeHtml(d.label || ('Microphone ' + (i + 1) + ' (talk once to see names)')) + '</option>';
+                            escapeHtml(d.label || larisvmsI18n.t('js.talk.microphoneN', { n: i + 1 })) + '</option>';
                     }).join('');
                 micSelect.classList.remove('d-none');
                 micSelect.focus();

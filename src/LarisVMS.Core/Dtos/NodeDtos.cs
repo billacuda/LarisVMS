@@ -169,7 +169,7 @@ public record NodeConfigEventTagRuleDto(Guid Id, string StartTopic, string? Stop
 /// convention NodeConfigZoneDto.Kind already uses.</summary>
 public record NodeConfigScheduleWindowDto(Guid Id, string Days, TimeOnly StartTime, TimeOnly EndTime);
 
-/// <summary>RecordingMode is one of "Continuous"/"Motion"/"Schedule"/"Event" (RecordingMode enum's
+/// <summary>RecordingMode is one of "Continuous"/"Motion"/"Schedule"/"Event"/"Manual" (RecordingMode enum's
 /// ToString() — see ISettingsResolver's Recording.Mode key). Sent as a string here, same convention
 /// as NodeConfigZoneDto.Kind: NodeWorker is the one place that actually branches on it, and parses
 /// it back into the enum there (Enum.TryParse, falling back to Continuous for anything
@@ -306,7 +306,11 @@ public record NodeConfigCameraDto(Guid CameraId, string Name, string? Username, 
     /// Global): which rule decides that a tracked object is moving ("Standard", the default, or
     /// "Legacy", the pre-0.218 rule that RejectMotionJitter tunes), and how readily Standard calls it
     /// ("Low", "Normal", "High"). Appended last; an older server's config means Standard/Normal.</summary>
-    string MovementMode = "Standard", string MovementSensitivity = "Normal");
+    string MovementMode = "Standard", string MovementSensitivity = "Normal",
+    /// <summary>Detection.IgnoredObjects (Camera &rarr; Node &rarr; Global): kinds of object this
+    /// camera drops right after inference (see CocoCategoryMap.ParseIgnoredObjects). Empty = ignore
+    /// nothing. Appended last; an older server's config ignores nothing.</summary>
+    string IgnoredObjects = "");
 
 /// <summary>Node → Web: POST /api/nodes/footage-keys — the camera's data key for a UTC day.</summary>
 public record FootageKeyRequest(Guid CameraId, DateOnly Day);
@@ -523,7 +527,11 @@ public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? Stor
     /// CocoCategoryMap.ParseMovingObjects). Passed to every VisionStartCameraRequest and part of
     /// NodeWorker's restart signature. Appended last; an older server means people, vehicles, and
     /// animals.</summary>
-    string MovingObjects = CocoCategoryMap.DefaultMovingObjects);
+    string MovingObjects = CocoCategoryMap.DefaultMovingObjects,
+    /// <summary>Manual recordings: footage to keep whatever the camera's recording mode says. Every
+    /// running recording plus those stopped in the last hour, system-wide so reassignment and failover
+    /// need nothing extra. A running one has a far-future end. Null from an older server.</summary>
+    List<NodeConfigProtectedRangeDto>? ManualRecordingRanges = null);
 
 /// <summary>One evidence lock's footage range, as the node needs it.</summary>
 public record NodeConfigProtectedRangeDto(Guid CameraId, DateTime FromUtc, DateTime ToUtc);
@@ -626,4 +634,7 @@ public record StreamInfoReportItem(Guid CameraId, string StreamRole, int? Width,
     /// both false read the same to the Dashboard ("nothing to report"); coalesce-preserve like every
     /// other optional field here, so a report that only carries Fps/BitrateKbps doesn't clobber a
     /// previously-reported engine state back to unknown.</summary>
-    bool? IsEngineBuilding = null, bool? EngineBuildFailed = null);
+    bool? IsEngineBuilding = null, bool? EngineBuildFailed = null,
+    /// <summary>Whether this camera's footage is being kept right now, by the same rules that decide
+    /// each segment. Null from an older node.</summary>
+    bool? IsKeepingFootage = null);

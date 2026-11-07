@@ -12,7 +12,8 @@ namespace LarisVMS.Web.Pages.Views;
 
 [Authorize("Views.View")]
 public class PlayModel(IViewService viewService, ICameraService cameraService, IAuditService auditService,
-    ISettingsResolver settings, ICameraAccessService cameraAccess, PlayViewModelBuilder playViewModelBuilder) : PageModel
+    ISettingsResolver settings, ICameraAccessService cameraAccess, PlayViewModelBuilder playViewModelBuilder,
+    IPermissionService permissions) : PageModel
 {
     public PlayViewModel Vm { get; set; } = new();
 
@@ -48,6 +49,7 @@ public class PlayModel(IViewService viewService, ICameraService cameraService, I
                 PathLingerSeconds = PathLinger.Clamp(await settings.GetAsync(PathLinger.SettingKey, PathLinger.Default)),
                 PathDissolveSeconds = PathDissolve.Clamp(await settings.GetAsync(PathDissolve.SettingKey, PathDissolve.Default)),
                 TalkCameraIds = await cameraAccess.GetAccessibleCameraIdsAsync(User, CameraAccessActions.Talk),
+                RecordCameraIds = await PlayViewModelBuilder.RecordableCamerasAsync(User, cameraAccess, permissions),
             };
             return Page();
         }

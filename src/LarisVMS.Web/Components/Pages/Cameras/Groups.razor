@@ -9,17 +9,17 @@
 @inject IAuditService AuditService
 @inject NavigationManager NavigationManager
 
-<PageTitle>Camera groups - @AppName</PageTitle>
+<PageTitle>@L["cameras.groups.cameraGroups"] - @AppName</PageTitle>
 
-<h1>Camera groups</h1>
+<h1>@L["cameras.groups.cameraGroups"]</h1>
 <p class="text-muted small">
-    Organize cameras into sites, buildings, and floors. A top-level group is a site; a camera's groups must share one site.
-    <a href="/Help/cameras#groups">Learn more</a>
+    @L["cameras.groups.organizeCamerasIntoSitesBuildings"]
+    <a href="/Help/cameras#groups">@L["common.learnMore"]</a>
 </p>
 
 @if (!string.IsNullOrEmpty(ErrorMessage))
 {
-    <div class="alert alert-danger">@ErrorMessage</div>
+    <div class="alert alert-danger" role="alert">@ErrorMessage</div>
 }
 @if (!string.IsNullOrEmpty(SavedMessage))
 {
@@ -27,23 +27,23 @@
 }
 
 <div class="card mb-4" style="max-width: 640px;">
-    <div class="card-header fw-semibold">Add group</div>
+    <div class="card-header fw-semibold">@L["cameras.groups.addGroup"]</div>
     <div class="card-body">
         <EditForm Model="this" FormName="create-group" OnValidSubmit="HandleCreateAsync" class="row g-2">
             <div class="col-12">
-                <label class="form-label">New group name</label>
-                <InputText @bind-Value="NewName" class="form-control" required />
+                <label for="field-newName" class="form-label">@L["cameras.groups.newGroupName"]</label>
+                <InputText id="field-newName" @bind-Value="NewName" class="form-control" required />
             </div>
             <div class="col-12">
-                <label class="form-label">Parent</label>
+                <label class="form-label" for="newParentId">@L["cameras.groups.parent"]</label>
                 @* Plain <select>, not InputSelect: Blazor's built-in InputSelect binds Nullable<Guid>
                    through client-side BindConverter machinery with no established precedent in this
                    codebase for that exact type — a plain name="NewParentId" element instead binds via
                    [SupplyParameterFromForm]'s server-side ASP.NET Core model binder, which maps a blank
                    submitted value to null the same well-established way plain form/query binding
                    always has. *@
-                <select name="NewParentId" class="form-select">
-                    <option value="">(top level)</option>
+                <select name="NewParentId" id="newParentId" class="form-select">
+                    <option value="">@L["cameras.groups.topLevel"]</option>
                     @foreach (var g in GroupRows)
                     {
                         <option value="@g.Id">@g.Name</option>
@@ -51,7 +51,7 @@
                 </select>
             </div>
             <div class="col-12">
-                <button type="submit" class="btn btn-primary"><span aria-hidden="true">➕</span> Add group</button>
+                <button type="submit" class="btn btn-primary"><span aria-hidden="true">➕</span> @L["cameras.groups.addGroup"]</button>
             </div>
         </EditForm>
     </div>
@@ -63,7 +63,7 @@
     var isBuiltIn = g.Id == CameraGroup.AllCamerasId;
     var bodyId = $"group-body-{g.Id}";
 
-    <div class="card mb-3" style="max-width: 640px; margin-left: min(@(Depth(g) * 1.75)rem, @(Depth(g) * 4)vw);">
+    <div class="card mb-3" style="max-width: 640px; margin-inline-start: min(@(Depth(g) * 1.75)rem, @(Depth(g) * 4)vw);">
         <div class="card-header d-flex justify-content-between align-items-center">
             <button type="button" class="btn btn-link text-decoration-none p-0 fw-semibold group-collapse-toggle"
                     data-bs-toggle="collapse" data-bs-target="#@bodyId" aria-expanded="true">
@@ -77,7 +77,7 @@
                 <EditForm Model="this" FormName="@($"delete-group-{g.Id}")" OnValidSubmit="HandleDeleteAsync" class="d-inline">
                     <input type="hidden" name="Id" value="@g.Id" />
                     <button type="submit" class="btn btn-sm btn-outline-danger"
-                            data-confirm="Delete this group?"><span aria-hidden="true">🗑️</span> Delete</button>
+                            data-confirm="@L["cameras.groups.deleteThisGroup"]"><span aria-hidden="true">🗑️</span> @L["common.delete"]</button>
                 </EditForm>
             }
         </div>
@@ -85,13 +85,13 @@
             <div class="card-body">
                 @if (isBuiltIn)
                 {
-                    <p class="text-muted small mb-0">Built in. Every camera is a member (@members.Count).</p>
+                    <p class="text-muted small mb-0">@L["cameras.groups.builtInMembers", new { count = members.Count }]</p>
                 }
                 else
                 {
                     @if (members.Count == 0)
                     {
-                        <p class="text-muted small mb-2">No cameras in this group yet.</p>
+                        <p class="text-muted small mb-2">@L["cameras.groups.noCamerasInThisGroup"]</p>
                     }
                     else
                     {
@@ -103,7 +103,7 @@
                                     <EditForm Model="this" FormName="@($"remove-camera-{c.Id}-{g.Id}")" OnValidSubmit="HandleRemoveCameraAsync" class="d-inline">
                                         <input type="hidden" name="RemoveCameraId" value="@c.Id" />
                                         <input type="hidden" name="RemoveGroupId" value="@g.Id" />
-                                        <button type="submit" class="btn btn-sm btn-outline-secondary">Remove</button>
+                                        <button type="submit" class="btn btn-sm btn-outline-secondary">@L["common.remove"]</button>
                                     </EditForm>
                                 </li>
                             }
@@ -113,7 +113,7 @@
                     <button type="button" class="btn btn-sm btn-primary manage-cameras-btn" data-bs-toggle="modal" data-bs-target="#manageCamerasModal"
                             data-group-id="@g.Id" data-group-name="@g.Name"
                             data-member-ids="@string.Join(",", members.Select(m => m.Id))">
-                        Manage cameras
+                        @L["cameras.groups.manageCameras"]
                     </button>
                 }
             </div>
@@ -123,26 +123,26 @@
 
 @if (GroupRows.Count == 0)
 {
-    <p class="text-muted">No groups yet — add one above.</p>
+    <p class="text-muted">@L["cameras.groups.noGroupsYetAddOne"]</p>
 }
 
-<div class="modal fade" id="manageCamerasModal" tabindex="-1" aria-hidden="true">
+<div class="modal fade" id="manageCamerasModal" tabindex="-1" aria-labelledby="manageCamerasTitle" aria-hidden="true">
     <div class="modal-dialog modal-dialog-scrollable">
         <div class="modal-content">
             <EditForm Model="this" FormName="set-group-cameras" OnValidSubmit="HandleSetGroupCamerasAsync">
                 <input type="hidden" name="ManageGroupId" id="manageCamerasGroupId" />
                 <div class="modal-header">
-                    <h5 class="modal-title">Cameras in <span id="manageCamerasGroupName"></span></h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    <h5 class="modal-title" id="manageCamerasTitle">@L.Markup("cameras.groups.camerasIn", new { group = new MarkupString("<span id=\"manageCamerasGroupName\"></span>") })</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="@L["common.close"]"></button>
                 </div>
                 <div class="modal-body">
                     @if (Cameras.Count == 0)
                     {
-                        <p class="text-muted mb-0">No cameras exist yet.</p>
+                        <p class="text-muted mb-0">@L["cameras.groups.noCamerasExistYet"]</p>
                     }
                     else
                     {
-                        <p class="text-muted small">A camera can't join groups in two different sites.</p>
+                        <p class="text-muted small">@L["cameras.groups.aCameraCantJoinGroups"]</p>
                         @foreach (var c in Cameras)
                         {
                             <div class="form-check">
@@ -161,8 +161,8 @@
                     }
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Save</button>
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">@L["common.cancel"]</button>
+                    <button type="submit" class="btn btn-primary">@L["common.save"]</button>
                 </div>
             </EditForm>
         </div>
@@ -301,7 +301,7 @@
         var cameraIds = ManageCameraIds ?? [];
 
         var group = GroupRows.FirstOrDefault(g => g.Id == groupId);
-        if (group is null) { NavigateBare("That group no longer exists.", isError: true); return; }
+        if (group is null) { NavigateBare(Loc.T("cameras.groups.thatGroupNoLongerExists"), isError: true); return; }
 
         var currentMemberIds = Cameras.Where(c => c.Groups.Any(g => g.Id == groupId)).Select(c => c.Id).ToHashSet();
         var targetMemberIds = cameraIds.ToHashSet();
@@ -349,7 +349,7 @@
         string? message = null;
         var isError = false;
         if (errors.Count > 0) { message = string.Join(" ", errors); isError = true; }
-        else if (changedCount > 0) { message = $"Updated \"{group.Name}\" — {changedCount} camera(s) changed."; }
+        else if (changedCount > 0) { message = Loc.Plural("cameras.groups.updatedGroup", changedCount, new { name = group.Name }); }
 
         NavigateBare(message, isError);
     }
@@ -362,7 +362,7 @@
         RemoveCameraId = Guid.TryParse(removeForm?["RemoveCameraId"].ToString(), out var rcid) ? rcid : Guid.Empty;
         RemoveGroupId = Guid.TryParse(removeForm?["RemoveGroupId"].ToString(), out var rgid) ? rgid : Guid.Empty;
         var camera = Cameras.FirstOrDefault(c => c.Id == RemoveCameraId);
-        if (camera is null) { NavigateBare("That camera no longer exists.", isError: true); return; }
+        if (camera is null) { NavigateBare(Loc.T("cameras.groups.thatCameraNoLongerExists"), isError: true); return; }
 
         var user = HttpContextUser;
         var currentUserId = user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
@@ -372,7 +372,7 @@
         var configurable = await CameraAccess.GetAccessibleCameraIdsAsync(user, CameraAccessActions.Configure);
         if (configurable is not null && !configurable.Contains(camera.Id))
         {
-            NavigateBare($"You don't have configuration access to \"{camera.Name}\".", isError: true);
+            NavigateBare(Loc.T("cameras.groups.youDontHaveConfigurationAccess", new { name = camera.Name }), isError: true);
             return;
         }
 
@@ -381,7 +381,7 @@
         await AuditService.LogAsync("Camera.Update", currentUserId, currentUserName, remoteIp,
             $"{camera.Name} ({camera.Id}) — Group: removed");
 
-        NavigateBare($"\"{camera.Name}\" removed from its group.");
+        NavigateBare(Loc.T("cameras.groups.removedFromItsGroup", new { name = camera.Name }));
     }
 
     [CascadingParameter] private HttpContext? HttpContext { get; set; }

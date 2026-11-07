@@ -270,7 +270,7 @@ if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
     Write-Step "Reading connection string from deployed config"
     if (Test-Path $deployedConfigFile) {
         try {
-            # MariaDB (experimental): this script only speaks SQL Server, so the steps below that read the database
+            # MariaDB: this script only speaks SQL Server, so the steps below that read the database
             # directly are skipped — the app migrates itself at startup.
             . (Join-Path $PSScriptRoot 'tools\DatabaseConfig.ps1')
             $dbConfig = Read-LarisDatabaseConfig $deployedConfigFile

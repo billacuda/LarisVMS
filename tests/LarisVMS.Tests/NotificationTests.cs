@@ -354,13 +354,13 @@ public class NotificationTests
     private sealed class RecordingNotifications : INotificationService
     {
         public List<string> Messages { get; } = [];
-        public Task<int> NotifySubscribersAsync(AlertRule rule, Guid? cameraId, string message, DateTime atUtc, string? url, CancellationToken ct = default)
+        public Task<int> NotifySubscribersAsync(AlertRule rule, Guid? cameraId, Func<string> message, DateTime atUtc, string? url, CancellationToken ct = default)
         {
-            Messages.Add(message);
+            Messages.Add(message());
             return Task.FromResult(1);
         }
         public Task<NotificationTestResult> SendTestAsync(string userId, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task<int> NotifySuperAdminsAsync(string title, string message, string? url, CancellationToken ct = default) => Task.FromResult(0);
+        public Task<int> NotifySuperAdminsAsync(Func<string> title, Func<string> message, string? url, CancellationToken ct = default) => Task.FromResult(0);
     }
 
     private sealed class NullAudit : IAuditService

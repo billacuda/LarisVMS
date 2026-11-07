@@ -137,4 +137,29 @@ public class BrandingTests
         Assert.Null(BrandingOptions.Default.LogoDataUri);
         Assert.Null(BrandingOptions.Default.FontStack);
     }
+    [Theory]
+    [InlineData("#000000", "#ffffff", 21)]
+    [InlineData("#fff", "#ffffff", 1)]
+    [InlineData("#2569a0", "#ffffff", 5.82)]
+    public void ContrastRatioMatchesTheWcagFormula(string first, string second, double expected)
+    {
+        Assert.Equal(expected, Branding.ContrastRatio(first, second), 2);
+    }
+
+    [Theory]
+    [InlineData("#2569a0", true)]
+    [InlineData("#2f7ab5", false)]  // white text passes, but it's too light as a link on the page
+    [InlineData("#ffc107", false)]
+    public void APrimaryColorMustWorkAsALinkAndAsAButtonFill(string color, bool expected)
+    {
+        Assert.Equal(expected, Branding.IsReadablePrimary(color));
+    }
+
+    [Theory]
+    [InlineData("#212529", true)]
+    [InlineData("#ffc107", false)]
+    public void AnAccentColorMustCarryWhiteText(string color, bool expected)
+    {
+        Assert.Equal(expected, Branding.IsReadableAccent(color));
+    }
 }

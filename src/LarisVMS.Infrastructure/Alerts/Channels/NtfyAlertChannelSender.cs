@@ -1,6 +1,7 @@
 using System.Text.Json;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 
 namespace LarisVMS.Infrastructure.Alerts.Channels;
 
@@ -17,13 +18,13 @@ public class NtfyAlertChannelSender : IAlertChannelSender
     public async Task SendAsync(string? configJson, string ruleName, string message, CancellationToken ct = default)
     {
         var config = string.IsNullOrWhiteSpace(configJson)
-            ? throw new InvalidOperationException("ntfy delivery configuration is missing.")
+            ? throw new InvalidOperationException(Loc.T("server.ntfyAlertChannel.ntfyDeliveryConfigurationIsMissing"))
             : JsonSerializer.Deserialize<NtfyDeliveryConfig>(configJson)
-                ?? throw new InvalidOperationException("ntfy delivery configuration is malformed.");
+                ?? throw new InvalidOperationException(Loc.T("server.ntfyAlertChannel.ntfyDeliveryConfigurationIsMalformed"));
 
         var serverUrl = string.IsNullOrWhiteSpace(config.ServerUrl) ? DefaultServerUrl : config.ServerUrl.TrimEnd('/');
 
-        using var http = new HttpClient();
+        using var http = new HttpClient(LarisVMS.Infrastructure.Security.OutboundGuard.NoLocalHandler());
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{serverUrl}/{Uri.EscapeDataString(config.Topic ?? "")}")
         {
             Content = new StringContent(message, System.Text.Encoding.UTF8)

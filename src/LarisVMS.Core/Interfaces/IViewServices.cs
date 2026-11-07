@@ -20,8 +20,9 @@ public interface IViewService
     Task UpdateAsync(Guid id, string userId, string name, bool isShared, string layoutJson,
         int sequenceIntervalSeconds, CancellationToken ct = default);
 
-    /// <summary>Same ownership rule as UpdateAsync.</summary>
-    Task DeleteAsync(Guid id, string userId, CancellationToken ct = default);
+    /// <summary>The owner may always delete their view; someone else's shared view only when
+    /// <paramref name="canEditShared"/> (the caller holds Views.Edit). Throws UnauthorizedAccessException otherwise.</summary>
+    Task DeleteAsync(Guid id, string userId, bool canEditShared, CancellationToken ct = default);
 
     /// <summary>Shared views with a tour interval set, ordered by name — what "Start tour" on
     /// Views/Index cycles through.</summary>

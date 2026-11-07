@@ -9,11 +9,15 @@ A **view** is a saved camera layout. Build views under **Views** by dragging and
 ## Live tiles
 
 - Double-click a tile for fullscreen. In fullscreen, scroll or pinch to zoom and drag to pan.
+- A tile's controls appear when you hover over it, or when you Tab to them. See [Accessibility](/Help/accessibility).
 - Each tile with audio has its own mute and volume control. Tiles always start muted.
 - **Adaptive streaming** (under **Settings → Live view**) shows small tiles the Sub stream and switches to Main when the tile is large or fullscreen. Each tile also has a manual Auto/HD/SD choice.
 - Badges show motion and detected objects. **Settings → Events** sets their colors and corner.
 - The toolbar's AI switches draw a box around each detected object: **Moving**, **Idle**, or both. **Confidence** adds each box's score, and **Speed** and **Color** (on by default) add its speed, once a speed trap has timed it, and its color. **Path** (with Moving on) draws the line each moving object has taken from the centre of its box, in the box's color. The line stays while the object keeps moving. Once it stops or leaves, the line stays for the **Path linger** time (**Settings → Live view**, 5 seconds by default), then dissolves from its start over the **Path dissolve** time (same page, 3 seconds by default).
 - PTZ cameras get a direction pad and zoom.
+- 🔴 in the lower left means the camera's footage is being kept right now, for any reason. Continuous cameras show it all the time. It can take up to 20 seconds to change after motion or an event.
+- Ⓜ️ next to it means a [manual recording](/Help/recording#manual-recording) is on. Ⓜ️ on its own means the recording is on, but the camera is offline and nothing is being saved.
+- The ⏺ button starts a manual recording, and ⏹ stops it. In a view with other cameras, it asks whether you mean this camera or all of them. Anyone with permission can stop a recording, whoever started it.
 
 ## Talking through a camera
 
@@ -34,6 +38,8 @@ Playback has two timelines: one for the selected camera and one combined across 
 - Arrow keys step one second while paused; Shift+arrow steps ten.
 - Speeds up to 8× play smoothly. Faster speeds step through the footage like a slideshow.
 - Hover the timeline for a preview thumbnail.
+- Stretches with motion or an event are striped, so they don't rely on color alone.
+- The − and + buttons beside the time zoom too, and the timeline works from the keyboard. See [Accessibility](/Help/accessibility).
 
 Your position and zoom are remembered between visits.
 
@@ -118,8 +124,8 @@ There are two kinds of map, and you can have as many of each as you like:
 People who can edit cameras can set maps up:
 
 1. **New map → Street map** or **Floorplan**. A new street map opens where the current one is showing, or on the whole world; pan and zoom to your site. When you press **Done editing**, the map is saved to open where it's showing for everyone; **Manage → Open this map here for everyone** does the same without editing. This works for floorplans too.
-2. **Edit map**, then drag cameras from **Cameras not on this map** onto the map.
-3. Click a camera to select it. Drag the icon to move it, and drag the white handle at the tip of its cone to aim it (direction and range). The side panel sets the field of view, or exact direction and range, and **Take off this map** removes it. Changes save as you make them.
+2. **Edit map**, then drag cameras from **Cameras not on this map** onto the map. Or click one to place it mid-map.
+3. Click a camera to select it. Drag the icon to move it, and drag the white handle at the tip of its cone to aim it (direction and range). The side panel sets the field of view, or exact direction and range, and **Take off this map** removes it. Changes save as you make them. The arrow buttons in the panel move it without dragging.
 
 A camera can be on several maps, such as a street map and its building's floorplan. People only see the cameras they're allowed to view.
 

@@ -63,14 +63,14 @@
             .then(function (r) {
                 if (r.ok) return r.json();
                 return r.json().catch(function () { return {}; }).then(function (problem) {
-                    throw new Error(problem.detail || 'Group lookup failed.');
+                    throw new Error(problem.detail || larisvmsI18n.t('js.adGroupAutocomplete.lookupFailed'));
                 });
             })
             .then(function (groups) {
                 if (seq !== requestSeq) return; // a newer keystroke's results win
                 items = Array.isArray(groups) ? groups : [];
                 active = items.length ? 0 : -1;
-                setStatus(items.length ? '' : 'No matching groups.');
+                setStatus(items.length ? '' : larisvmsI18n.t('js.adGroupAutocomplete.noMatchingGroups'));
                 render();
             })
             .catch(function (err) {

@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using LarisVMS.Core.Localization;
 
 namespace LarisVMS.Infrastructure.ActiveDirectory;
 
@@ -31,10 +32,10 @@ public static class AdSid
 {
     public static string ToSddl(byte[] sid)
     {
-        if (sid.Length < 8) throw new ArgumentException("Not a valid SID.", nameof(sid));
+        if (sid.Length < 8) throw new ArgumentException(Loc.T("server.adHelpers.notAValidSid"), nameof(sid));
         int revision = sid[0];
         int subAuthorityCount = sid[1];
-        if (sid.Length < 8 + subAuthorityCount * 4) throw new ArgumentException("Not a valid SID.", nameof(sid));
+        if (sid.Length < 8 + subAuthorityCount * 4) throw new ArgumentException(Loc.T("server.adHelpers.notAValidSid"), nameof(sid));
 
         long authority = 0;
         for (var i = 2; i <= 7; i++) authority = (authority << 8) | sid[i];

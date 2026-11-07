@@ -1,24 +1,22 @@
 @page
 @model LarisVMS.Web.Pages.Admin.ApiKeys.IndexModel
 @{
-    ViewData["Title"] = "API Keys";
+    ViewData["Title"] = L["admin.apiKeys.apiKeys"].Value;
 }
-<h1>API Keys</h1>
+<h1>@L["admin.apiKeys.apiKeys"]</h1>
 
 <p class="text-muted">
-    Machine credentials for the REST API (<code>GET /api/v1/status</code> so far). Each key acts with
-    whichever Role it's bound to — send it in the <code>X-Api-Key</code> header. There's no per-key
-    scoping beyond that Role's own permissions.
+    @L.Html("admin.apiKeys.intro")
 </p>
 
 @if (Model.NewRawKey is not null)
 {
     <div class="alert alert-success">
-        <strong>"@Model.NewKeyName" created.</strong> Copy this key now — it won't be shown again.
+        <strong>@L["admin.apiKeys.created", new { name = Model.NewKeyName }]</strong> @L["admin.apiKeys.copyThisKeyNowIt"]
         <div class="input-group mt-2">
             <input type="text" class="form-control font-monospace" value="@Model.NewRawKey" readonly
                    id="newRawKey" data-action="select" />
-            <button type="button" class="btn btn-outline-secondary" data-copy-from="#newRawKey">Copy</button>
+            <button type="button" class="btn btn-outline-secondary" data-copy-from="#newRawKey">@L["common.copy"]</button>
         </div>
     </div>
 }
@@ -28,12 +26,13 @@
         <table class="table table-sm mb-0 align-middle">
             <thead class="table-light">
                 <tr>
-                    <th>Name</th>
-                    <th>Role</th>
-                    <th>Key</th>
-                    <th>Created</th>
-                    <th>Last used</th>
-                    <th>Status</th>
+                    <th>@L["common.name"]</th>
+                    <th>@L["common.role"]</th>
+                    <th>@L["common.key"]</th>
+                    <th>@L["common.created"]</th>
+                    <th>@L["admin.apiKeys.lastUsed"]</th>
+                    <th>@L["admin.apiKeys.expires"]</th>
+                    <th>@L["common.status"]</th>
                     <th></th>
                 </tr>
             </thead>
@@ -42,26 +41,38 @@
                 {
                     <tr>
                         <td>@k.Name</td>
-                        <td>@k.RoleName</td>
+                        <td>
+                            @k.RoleName
+                            @if (k.Limited)
+                            {
+                                <span class="badge text-bg-info" title="@L["admin.apiKeys.limitedHint"]">@L["admin.apiKeys.limited"]</span>
+                            }
+                        </td>
                         <td class="font-monospace small">@k.KeyPrefix&hellip;</td>
                         <td class="small text-muted"><time datetime="@k.CreatedAtUtc.ToUtcIso()" data-local="g">@k.CreatedAtUtc.ToLocalTime().ToString("g")</time></td>
-                        <td class="small text-muted">@if (k.LastUsedAtUtc is { } used) {<time datetime="@used.ToUtcIso()" data-local="g">@used.ToLocalTime().ToString("g")</time>} else {<text>never</text>}</td>
+                        <td class="small text-muted">@if (k.LastUsedAtUtc is { } used) {<time datetime="@used.ToUtcIso()" data-local="g">@used.ToLocalTime().ToString("g")</time>} else {<text>@L["admin.apiKeys.never"]</text>}</td>
+                        <td class="small text-muted">@if (k.ExpiresAtUtc is { } expires) {<time datetime="@expires.ToUtcIso()" data-local="d">@expires.ToLocalTime().ToString("d")</time>} else {<text>@L["admin.apiKeys.never"]</text>}</td>
                         <td>
                             @if (k.Revoked)
                             {
-                                <span class="badge text-bg-secondary">Revoked</span>
+                                <span class="badge text-bg-secondary">@L["admin.apiKeys.revoked"]</span>
+                            }
+                            else if (k.Expired)
+                            {
+                                <span class="badge text-bg-warning">@L["admin.apiKeys.expired"]</span>
                             }
                             else
                             {
-                                <span class="badge text-bg-success">Active</span>
+                                <span class="badge text-bg-success">@L["admin.apiKeys.active"]</span>
                             }
                         </td>
                         <td class="text-end">
                             @if (!k.Revoked)
                             {
+                                <a asp-page="Edit" asp-route-id="@k.Id" class="btn btn-sm btn-outline-secondary">@L["common.edit"]</a>
                                 <form method="post" asp-page-handler="Revoke" asp-route-id="@k.Id" class="d-inline"
-                                      data-confirm="Revoke &quot;@k.Name&quot;? Anything using this key will stop working immediately.">
-                                    <button type="submit" class="btn btn-sm btn-outline-danger">Revoke</button>
+                                      data-confirm="@L["admin.apiKeys.revokeConfirm", new { name = k.Name }]">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger">@L["common.revoke"]</button>
                                 </form>
                             }
                         </td>
@@ -69,11 +80,12 @@
                 }
                 @if (Model.Keys.Count == 0)
                 {
-                    <tr><td colspan="7" class="text-center text-muted py-3">No API keys yet.</td></tr>
+                    <tr><td colspan="8" class="text-center text-muted py-3">@L["admin.apiKeys.noApiKeysYet"]</td></tr>
                 }
             </tbody>
         </table>
     </div>
 </div>
 
-<a asp-page="Edit" class="btn btn-primary">Add key</a>
+<a asp-page="Edit" class="btn btn-primary">@L["admin.apiKeys.addKey"]</a>
+<a href="/Help/api" class="btn btn-link">@L["admin.apiKeys.apiDocumentation"]</a>

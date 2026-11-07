@@ -4,15 +4,15 @@
 @using LarisVMS.Core.Interfaces
 @inject IPermissionService PermissionService
 
-<PageTitle>Settings - @AppName</PageTitle>
+<PageTitle>@L["nav.settings"] - @AppName</PageTitle>
 
 <div class="d-flex align-items-center gap-2 mb-3">
-    <h1 class="mb-0">Settings</h1>
+    <h1 class="mb-0">@L["nav.settings"]</h1>
 </div>
 
 @if (Cards.Count == 0)
 {
-    <p class="text-muted">Nothing here yet — you don't currently hold a permission that unlocks any settings area.</p>
+    <p class="text-muted">@L["settings.hub.empty"]</p>
 }
 else
 {
@@ -50,30 +50,31 @@ else
         var showSettings = nav.Has("Settings", "Edit");
         var all = new (string Href, string Icon, string Title, string Description, bool Visible)[]
         {
-            ("/Admin/Proxies", "🔗", "Media proxies", "Relay endpoints for remote and low-bandwidth streams.", nav.Has("Nodes", "Edit")),
-            ("/Admin/Settings/Cameras", "📹", "Camera settings", "Daily re-probe and other camera-wide defaults.", showSettings),
-            ("/Logs", "📜", "Logs", "System, audit, and diagnostic log streams.", nav.Has("Logs", "View") || nav.Has("SystemLogs", "View")),
-            ("/Admin/Plugins", "🧩", "Plugins", "Installed camera integration providers and their versions.", nav.Has("Plugins", "View")),
-            ("/Admin/Settings/Backups", "💾", "Backups", "Configuration snapshots and restore points.", nav.Has("Backups", "Edit")),
-            ("/Admin/Settings/Branding", "🎨", "Branding", "Logo, colors, and login-screen customization.", showSettings),
-            ("/Admin/Settings/Permissions/Users", "👤", "Users", "Accounts, invitations, and login history.", nav.Has("Users", "Edit")),
-            ("/Admin/Settings/Permissions/Roles", "🛡️", "Roles", "Named role definitions assigned to users.", showSettings),
-            ("/Admin/Settings/Permissions/Matrix", "🗂️", "Permissions matrix", "Cross-reference roles against permitted actions.", showSettings),
-            ("/Admin/Settings/CameraAccess", "🗝️", "Camera access", "Per-role/user camera and group visibility.", showSettings),
-            ("/Admin/Settings/Detection", "🤖", "AI detection", "Detection models, zones, and per-node engine settings.", showSettings),
-            ("/Admin/Settings/Email", "✉️", "Email", "SMTP relay and notification templates.", showSettings),
-            ("/Admin/Settings/Events", "🏷️", "Events", "Event-tag colors and rule defaults.", showSettings),
-            ("/Admin/Settings/LiveView", "🖥️", "Live view", "Default grid layout, overlays, and stream quality.", showSettings),
-            ("/Admin/Settings/Notifications", "🔔", "Notifications", "Which notification types users get, and browser and email delivery.", showSettings),
-            ("/Admin/Settings/Logs", "📝", "Logging", "Retention, verbosity, and remote log forwarding.", showSettings),
-            ("/Admin/Settings/Recording", "🎥", "Recording defaults", "Codec, bitrate, and continuous vs. motion recording.", showSettings),
-            ("/Admin/Settings/ActiveDirectory", "🏢", "Active Directory", "Domain sign-in and AD group to role sync.", showSettings),
-            ("/Admin/Settings/Encryption", "🔐", "Encryption and signing", "Footage encryption, the master key backup, and the signing key.", showSettings),
-            ("/Admin/Settings/Security", "🔒", "Security", "IP allow lists and live/playback port configuration.", showSettings),
-            ("/Admin/Settings/StorageAndRetention", "🗄️", "Storage & retention", "Disk pools, retention windows, and archiving.", nav.Has("Retention", "Edit")),
-            ("/Admin/Alerts", "⚠️", "Alerts", "Alert rules, channels, and thresholds.", nav.Has("Alerts", "Edit")),
-            ("/Admin/ApiKeys", "🔑", "API keys", "Issue and revoke integration credentials.", nav.Has("ApiKeys", "Edit")),
+            ("/Admin/Proxies", "🔗", L["settings.hub.mediaProxies.title"], L["settings.hub.mediaProxies.description"], nav.Has("Nodes", "Edit")),
+            ("/Admin/Settings/Cameras", "📹", L["settings.hub.cameraSettings.title"], L["settings.hub.cameraSettings.description"], showSettings),
+            ("/Logs", "📜", L["settings.hub.logs.title"], L["settings.hub.logs.description"], nav.Has("Logs", "View") || nav.Has("SystemLogs", "View")),
+            ("/Admin/Plugins", "🧩", L["settings.hub.plugins.title"], L["settings.hub.plugins.description"], nav.Has("Plugins", "View")),
+            ("/Admin/Settings/Backups", "💾", L["settings.hub.backups.title"], L["settings.hub.backups.description"], nav.Has("Backups", "Edit")),
+            ("/Admin/Settings/Branding", "🎨", L["settings.hub.branding.title"], L["settings.hub.branding.description"], showSettings),
+            ("/Admin/Settings/Permissions/Users", "👤", L["settings.hub.users.title"], L["settings.hub.users.description"], nav.Has("Users", "Edit")),
+            ("/Admin/Settings/Permissions/Roles", "🛡️", L["settings.hub.roles.title"], L["settings.hub.roles.description"], showSettings),
+            ("/Admin/Settings/Permissions/Matrix", "🗂️", L["settings.hub.permissionsMatrix.title"], L["settings.hub.permissionsMatrix.description"], showSettings),
+            ("/Admin/Settings/CameraAccess", "🗝️", L["settings.hub.cameraAccess.title"], L["settings.hub.cameraAccess.description"], showSettings),
+            ("/Admin/Settings/Detection", "🤖", L["settings.hub.aiDetection.title"], L["settings.hub.aiDetection.description"], showSettings),
+            ("/Admin/Settings/Email", "✉️", L["settings.hub.email.title"], L["settings.hub.email.description"], showSettings),
+            ("/Admin/Settings/Events", "🏷️", L["settings.hub.events.title"], L["settings.hub.events.description"], showSettings),
+            ("/Admin/Settings/Language", "🌐", L["settings.hub.language.title"], L["settings.hub.language.description"], showSettings),
+            ("/Admin/Settings/LiveView", "🖥️", L["settings.hub.liveView.title"], L["settings.hub.liveView.description"], showSettings),
+            ("/Admin/Settings/Notifications", "🔔", L["settings.hub.notifications.title"], L["settings.hub.notifications.description"], showSettings),
+            ("/Admin/Settings/Logs", "📝", L["settings.hub.logging.title"], L["settings.hub.logging.description"], showSettings),
+            ("/Admin/Settings/Recording", "🎥", L["settings.hub.recordingDefaults.title"], L["settings.hub.recordingDefaults.description"], showSettings),
+            ("/Admin/Settings/ActiveDirectory", "🏢", L["settings.hub.activeDirectory.title"], L["settings.hub.activeDirectory.description"], showSettings),
+            ("/Admin/Settings/Encryption", "🔐", L["settings.hub.encryptionAndSigning.title"], L["settings.hub.encryptionAndSigning.description"], showSettings),
+            ("/Admin/Settings/Security", "🔒", L["settings.hub.security.title"], L["settings.hub.security.description"], showSettings),
+            ("/Admin/Settings/StorageAndRetention", "🗄️", L["settings.hub.storageRetention.title"], L["settings.hub.storageRetention.description"], nav.Has("Retention", "Edit")),
+            ("/Admin/Alerts", "⚠️", L["settings.hub.alerts.title"], L["settings.hub.alerts.description"], nav.Has("Alerts", "Edit")),
+            ("/Admin/ApiKeys", "🔑", L["settings.hub.apiKeys.title"], L["settings.hub.apiKeys.description"], nav.Has("ApiKeys", "Edit")),
         };
-        Cards = [.. all.Where(c => c.Visible).OrderBy(c => c.Title, StringComparer.OrdinalIgnoreCase).Select(c => new CardInfo(c.Href, c.Icon, c.Title, c.Description))];
+        Cards = [.. all.Where(c => c.Visible).OrderBy(c => c.Title, StringComparer.Create(System.Globalization.CultureInfo.CurrentUICulture, ignoreCase: true)).Select(c => new CardInfo(c.Href, c.Icon, c.Title, c.Description))];
     }
 }

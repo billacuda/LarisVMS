@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 using LarisVMS.Infrastructure.Data;
 
 namespace LarisVMS.Infrastructure.Services;
@@ -34,7 +35,7 @@ public class SpeedTrapService(ApplicationDbContext db) : ISpeedTrapService
     public async Task UpdateAsync(Guid id, string name, string gatesJson, double distanceMeters, bool isEnabled, double? speedLimitKph = null, CancellationToken ct = default)
     {
         var trap = await db.SpeedTraps.FirstOrDefaultAsync(t => t.Id == id, ct)
-            ?? throw new InvalidOperationException("Speed trap not found.");
+            ?? throw new InvalidOperationException(Loc.T("server.speedTrap.speedTrapNotFound"));
         trap.Name = name;
         trap.GatesJson = gatesJson;
         trap.DistanceMeters = distanceMeters;

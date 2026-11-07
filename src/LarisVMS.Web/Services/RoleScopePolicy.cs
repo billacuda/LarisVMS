@@ -1,4 +1,5 @@
 using LarisVMS.Core.Enums;
+using LarisVMS.Core.Localization;
 
 namespace LarisVMS.Web.Services;
 
@@ -26,8 +27,12 @@ public static class RoleScopePolicy
     /// <summary>User-facing reason a denied grant was denied, for the admin page's error message.
     /// Only meaningful when CanGrant returned false for the same arguments.</summary>
     public static string DenialReason(RoleScopeTier maxScopeTier, CameraAccessScopeType scopeType) =>
-        $"This role is limited to {maxScopeTier} scope and can't be granted every camera — choose a camera group or single cameras, " +
-        "or raise the role's scope tier under Settings → Permissions → Roles.";
+        Loc.T("server.roleScopePolicy.denial", new { tier = maxScopeTier switch
+        {
+            RoleScopeTier.Org => Loc.T("settings.permissions.roles.tierOrg"),
+            RoleScopeTier.Site => Loc.T("settings.permissions.roles.tierSite"),
+            _ => Loc.T("settings.permissions.roles.tierGroup"),
+        } });
 
     /// <summary>Pass 3's Roles.Assign tier cap (permission_matrix.txt row "Assign roles &amp;
     /// permissions"): an Org-tier actor can assign any role; anyone else can assign any role except

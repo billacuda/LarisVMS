@@ -6,9 +6,9 @@
 @inject ISettingsResolver Settings
 @inject IAuditService AuditService
 
-<PageTitle>Recording settings - @AppName</PageTitle>
+<PageTitle>@L["settings.recording.recordingSettings"] - @AppName</PageTitle>
 
-<h1>Settings</h1>
+<h1>@L["nav.settings"]</h1>
 <SettingsTabs ActiveKey="Recording" />
 
 @if (!string.IsNullOrEmpty(SavedMessage))
@@ -17,29 +17,30 @@
 }
 
 <div class="lv-page-narrow">
-<p class="text-muted small">Defaults for every camera. Each camera can override these on its own page. <a href="/Help/recording">How recording works</a></p>
+<p class="text-muted small">@L["settings.recording.defaultsForEveryCameraEach"] <a href="/Help/recording">@L["settings.recording.howRecordingWorks"]</a></p>
 <EditForm Model="this" FormName="recording-settings" OnSubmit="HandleSaveAsync" data-dirty-guard>
-    <SettingSection Title="Recording">
-        <SettingField Label="Recording mode" Hint="Schedule and Event modes keep everything until a camera has windows or rules set up." HelpLink="/Help/recording#modes">
-            <select name="RecordingMode" class="form-select">
-                <option value="Continuous" selected="@(RecordingMode == "Continuous")">Continuous</option>
-                <option value="Motion" selected="@(RecordingMode == "Motion")">Motion only</option>
-                <option value="Schedule" selected="@(RecordingMode == "Schedule")">Schedule</option>
-                <option value="Event" selected="@(RecordingMode == "Event")">Event (tagged trigger)</option>
+    <SettingSection Title="@L["settings.recording.recording"]">
+        <SettingField For="field-recordingMode" Label="@L["settings.recording.recordingMode"]" Hint="@L["settings.recording.scheduleAndEventModesKeep"]" HelpLink="/Help/recording#modes">
+            <select id="field-recordingMode" name="RecordingMode" class="form-select">
+                <option value="Continuous" selected="@(RecordingMode == "Continuous")">@L["settings.recording.continuous"]</option>
+                <option value="Motion" selected="@(RecordingMode == "Motion")">@L["settings.recording.motionOnly"]</option>
+                <option value="Schedule" selected="@(RecordingMode == "Schedule")">@L["settings.recording.schedule"]</option>
+                <option value="Event" selected="@(RecordingMode == "Event")">@L["settings.recording.eventTaggedTrigger"]</option>
+                <option value="Manual" selected="@(RecordingMode == "Manual")">@L["settings.recording.manualOnly"]</option>
             </select>
         </SettingField>
-        <SettingField Label="Segment length (seconds)" Hint="Shorter means faster playback seeking but more files. Changing it briefly restarts recording.">
-            <InputNumber @bind-Value="SegmentSeconds" min="5" max="300" class="form-control" />
+        <SettingField For="field-segmentSeconds" Label="@L["settings.recording.segmentLengthSeconds"]" Hint="@L["settings.recording.shorterMeansFasterPlaybackSeeking"]">
+            <InputNumber id="field-segmentSeconds" @bind-Value="SegmentSeconds" min="5" max="300" class="form-control" />
         </SettingField>
-        <SettingField Label="Pre-roll (seconds)" Hint="Motion and Event modes: footage kept before activity.">
-            <InputNumber @bind-Value="MotionPreRollSeconds" min="0" class="form-control" />
+        <SettingField For="field-motionPreRollSeconds" Label="@L["settings.recording.preRollSeconds"]" Hint="@L["settings.recording.motionAndEventModesFootage"]">
+            <InputNumber id="field-motionPreRollSeconds" @bind-Value="MotionPreRollSeconds" min="0" class="form-control" />
         </SettingField>
-        <SettingField Label="Post-roll (seconds)" Hint="Motion and Event modes: footage kept after activity.">
-            <InputNumber @bind-Value="MotionPostRollSeconds" min="0" class="form-control" />
+        <SettingField For="field-motionPostRollSeconds" Label="@L["settings.recording.postRollSeconds"]" Hint="@L["settings.recording.motionAndEventModesFootage2"]">
+            <InputNumber id="field-motionPostRollSeconds" @bind-Value="MotionPostRollSeconds" min="0" class="form-control" />
         </SettingField>
     </SettingSection>
     <div class="lv-savebar">
-        <button type="submit" class="btn btn-primary">Save</button>
+        <button type="submit" class="btn btn-primary">@L["common.save"]</button>
     </div>
 </EditForm>
 </div>
@@ -99,6 +100,6 @@
             user.FindFirst(ClaimTypes.NameIdentifier)?.Value, by,
             HttpContext?.Connection.RemoteIpAddress?.ToString(), details);
 
-        SavedMessage = "Saved.";
+        SavedMessage = Loc.T("common.saved");
     }
 }

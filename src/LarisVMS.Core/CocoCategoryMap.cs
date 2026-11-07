@@ -1,4 +1,5 @@
 using LarisVMS.Core.Enums;
+using LarisVMS.Core.Localization;
 
 namespace LarisVMS.Core;
 
@@ -93,6 +94,20 @@ public static class CocoCategoryMap
         return $"{categoryName} — {specificLabel}";
     }
 
+    /// <summary><see cref="DisplayLabel"/> in the viewer's language, for display only (DisplayLabel
+    /// itself is compared against category names). A class name the language file doesn't know —
+    /// a custom model's, say — is shown as the model reports it.</summary>
+    public static string LocalizedDisplayLabel(string categoryName, string? specificLabel)
+    {
+        ArgumentNullException.ThrowIfNull(categoryName);
+        var category = Loc.TOr("detection.category." + categoryName.ToLowerInvariant(), categoryName);
+        if (string.IsNullOrEmpty(specificLabel)) return category;
+        if (string.Equals(categoryName, Human, StringComparison.Ordinal)) return category;
+        var label = Loc.TOr("detection.class." + specificLabel.ToLowerInvariant(), specificLabel);
+        if (string.Equals(specificLabel, categoryName, StringComparison.OrdinalIgnoreCase)) return category;
+        return Loc.T("detection.categoryAndClass", new { category, label });
+    }
+
     /// <summary>Emoji marker for one of these four category names, matching this app's
     /// emoji-as-icons convention (see DetectionDisplay.Emoji, the equivalent for the camera-native
     /// DetectionKind side). Object is the genuine catch-all, same fallback DetectionDisplay itself
@@ -156,4 +171,58 @@ public static class CocoCategoryMap
     /// category is switched on, or that one object is.</summary>
     public static bool CountsAsMoving(IReadOnlySet<string> movingObjects, string categoryName, string? specificLabel) =>
         movingObjects.Contains(categoryName) || (specificLabel is not null && movingObjects.Contains(specificLabel));
+
+    // D-FINE's legacy PASCAL-VOC-era COCO spellings mapped to the modern ones YOLOX and the pickers
+    // use, so ignoring "airplane" also ignores a D-FINE "aeroplane".
+    private static readonly Dictionary<string, string> LegacySpellings = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["aeroplane"] = "airplane",
+        ["motorbike"] = "motorcycle",
+        ["sofa"] = "couch",
+        ["pottedplant"] = "potted plant",
+        ["diningtable"] = "dining table",
+        ["tvmonitor"] = "tv",
+    };
+
+    /// <summary>The modern COCO spelling of a class name, or the name itself when it has no older one.</summary>
+    public static string Canonical(string name) => LegacySpellings.TryGetValue(name, out var modern) ? modern : name;
+
+    /// <summary>Every COCO object name, in the modern spelling and alphabetical order, for the
+    /// Detection.IgnoredObjects pickers. A custom model's own names can be typed in.</summary>
+    public static readonly IReadOnlyList<string> AllCocoLabels =
+    [
+        "airplane", "apple", "backpack", "banana", "baseball bat", "baseball glove", "bear", "bed", "bench",
+        "bicycle", "bird", "boat", "book", "bottle", "bowl", "broccoli", "bus", "cake", "car", "carrot", "cat",
+        "cell phone", "chair", "clock", "couch", "cow", "cup", "dining table", "dog", "donut", "elephant",
+        "fire hydrant", "fork", "frisbee", "giraffe", "hair drier", "handbag", "horse", "hot dog", "keyboard",
+        "kite", "knife", "laptop", "microwave", "motorcycle", "mouse", "orange", "oven", "parking meter",
+        "person", "pizza", "potted plant", "refrigerator", "remote", "sandwich", "scissors", "sheep", "sink",
+        "skateboard", "skis", "snowboard", "spoon", "sports ball", "stop sign", "suitcase", "surfboard",
+        "teddy bear", "tennis racket", "tie", "toaster", "toilet", "toothbrush", "traffic light", "train",
+        "truck", "tv", "umbrella", "vase", "wine glass", "zebra",
+    ];
+
+    /// <summary>A camera's Detection.IgnoredObjects override meaning "ignore nothing here", even when
+    /// the global default ignores something. An empty override can't say that: it means inherit.</summary>
+    public const string IgnoreNothing = "-";
+
+    /// <summary>Parses Detection.IgnoredObjects: category names (Human, Vehicle, Animal, Object) and
+    /// specific object names, comma-separated, case-insensitive. Null, empty, or IgnoreNothing ignores
+    /// nothing. Names are stored in their modern spelling so either model's spelling matches.</summary>
+    public static HashSet<string> ParseIgnoredObjects(string? value) =>
+        new((value ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(v => v != IgnoreNothing).Select(Canonical),
+            StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>An object class name in the viewer's language, or as the model reports it when the
+    /// language file doesn't know it.</summary>
+    public static string LocalizedClassName(string label) => Loc.TOr("detection.class." + label.ToLowerInvariant(), label);
+
+    /// <summary>Whether a detection with this raw class name is switched off: its whole category is
+    /// ignored, or that one object is (in either spelling).</summary>
+    public static bool IsIgnored(IReadOnlySet<string> ignoredObjects, string? rawLabel)
+    {
+        if (ignoredObjects.Count == 0 || string.IsNullOrEmpty(rawLabel)) return false;
+        return ignoredObjects.Contains(Canonical(rawLabel)) || ignoredObjects.Contains(Resolve(rawLabel));
+    }
 }

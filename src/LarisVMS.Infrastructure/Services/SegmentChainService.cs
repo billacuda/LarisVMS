@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Microsoft.EntityFrameworkCore;
+using LarisVMS.Core.Localization;
 using LarisVMS.Core;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Interfaces;
@@ -57,7 +58,7 @@ public class SegmentChainService(ApplicationDbContext db, ISigningKeyService? si
     /// chain yet.</summary>
     public async Task<ChainCheckpoint?> CheckpointAsync(Guid cameraId, bool onlyIfMoved, CancellationToken ct = default)
     {
-        if (signing is null) throw new InvalidOperationException("Checkpoints need the signing key service.");
+        if (signing is null) throw new InvalidOperationException(Loc.T("server.segmentChain.checkpointsNeedTheSigningKey"));
         var head = await db.SegmentChainHeads.AsNoTracking().FirstOrDefaultAsync(h => h.CameraId == cameraId, ct);
         if (head is null) return null;
         if (onlyIfMoved)

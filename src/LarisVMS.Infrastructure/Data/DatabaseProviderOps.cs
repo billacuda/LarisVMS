@@ -2,6 +2,7 @@ using System.Data.Common;
 using System.Text.RegularExpressions;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Enums;
+using LarisVMS.Core.Localization;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
@@ -131,7 +132,7 @@ public sealed class SqlServerOps : DatabaseProviderOps
     public override void ValidateDatabaseName(string name)
     {
         if (string.IsNullOrWhiteSpace(name) || !SqlIdentifierPattern.IsMatch(name))
-            throw new ArgumentException("The database name contains characters that aren't allowed in a SQL identifier.");
+            throw new ArgumentException(Loc.T("server.databaseProviderOps.theDatabaseNameContainsCharacters"));
     }
 
     public override async Task<bool> DatabaseExistsAsync(DbConnection server, string database, CancellationToken ct)
@@ -224,7 +225,7 @@ public sealed class SqlServerOps : DatabaseProviderOps
     private static string EscapeLiteral(string input) => input.Replace("'", "''");
 }
 
-/// <summary>MariaDB (experimental). SQL logins only — the server has no notion of the Windows
+/// <summary>MariaDB. SQL logins only — the server has no notion of the Windows
 /// account this service runs as, so the wizard always asks for a user and password.</summary>
 public sealed class MariaDbOps : DatabaseProviderOps
 {
@@ -278,7 +279,7 @@ public sealed class MariaDbOps : DatabaseProviderOps
     public override void ValidateDatabaseName(string name)
     {
         if (string.IsNullOrWhiteSpace(name) || !DatabaseNamePattern.IsMatch(name))
-            throw new ArgumentException("A MariaDB database name can only use letters, digits, '_', '$', and '-' (up to 64 characters).");
+            throw new ArgumentException(Loc.T("server.databaseProviderOps.aMariadbDatabaseNameCan"));
     }
 
     public override async Task<bool> DatabaseExistsAsync(DbConnection server, string database, CancellationToken ct)

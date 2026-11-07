@@ -1,11 +1,29 @@
+/* Percentages, so a larger default font size set in the browser still takes effect. The scroll padding
+   keeps a focused control clear of the sticky top bar and save bar. */
 html {
-    font-size: 14px;
+    font-size: 87.5%;
+    scroll-padding-top: 5rem;
+    scroll-padding-bottom: 4.5rem;
 }
 
 @media (min-width: 768px) {
     html {
-        font-size: 16px;
+        font-size: 100%;
     }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .01ms !important;
+        scroll-behavior: auto !important;
+    }
+}
+
+@media (forced-colors: active) {
+    .lv-navitem.active { outline: 2px solid Highlight; outline-offset: -2px; }
+    canvas, .activity-cell, .activity-day-total, .activity-swatch, .scene-heatmap-legend { forced-color-adjust: none; }
 }
 
 body {
@@ -34,7 +52,7 @@ body {
     width: 232px;
     flex: none;
     background: var(--lv-surface);
-    border-right: 2px solid var(--lv-divider);
+    border-inline-end: 2px solid var(--lv-divider);
     display: flex;
     flex-direction: column;
 }
@@ -86,7 +104,7 @@ body {
     font-size: 10px;
     letter-spacing: .08em;
     text-transform: uppercase;
-    opacity: .5;
+    opacity: .75;
 }
 
 .lv-nav {
@@ -113,7 +131,7 @@ body {
 }
 
 .lv-navitem.active {
-    background: var(--lv-accent);
+    background: var(--lv-accent-fill);
     color: #fff;
 }
 
@@ -122,7 +140,7 @@ body {
     padding: 14px 18px;
     border-top: 2px solid var(--lv-divider);
     font-size: 11px;
-    opacity: .55;
+    opacity: .75;
 }
 
 .lv-main {
@@ -287,7 +305,7 @@ body {
     position: absolute;
     z-index: 1000;
     top: 100%;
-    right: 0;
+    inset-inline-end: 0;
     margin-top: 0.25rem;
     min-width: 12rem;
     max-height: 60vh;
@@ -310,6 +328,35 @@ body {
    recorded footage on a single fullscreened camera works, which is arguably the single most useful
    thing to do in fullscreen. (Contrast the Playback page's own timelines, which are page-level
    elements outside the fullscreened tile and genuinely cannot render while it's active.) */
+/* Manual recording indicators (manual-recording.js). Stay visible in fullscreen, unlike the motion
+   badge below: whether footage is being saved matters most when someone's watching closely. Hidden
+   only while the tile's mini timeline has this corner. */
+.live-record-badges {
+    display: flex;
+    gap: .2rem;
+    font-size: .9rem;
+    line-height: 1;
+    z-index: 5;
+    cursor: default;
+    text-shadow: 0 0 2px rgba(0, 0, 0, .8);
+}
+
+.view-cell-mini-timeline-area:not(.d-none) ~ .live-record-badges {
+    display: none;
+}
+
+.lv-record-dialog {
+    max-width: min(26rem, calc(100vw - 2rem));
+    border: 1px solid var(--bs-border-color);
+    border-radius: .5rem;
+    background: var(--bs-body-bg);
+    color: var(--bs-body-color);
+}
+
+.lv-record-dialog::backdrop {
+    background: rgba(0, 0, 0, .5);
+}
+
 .tile-fullscreen {
     background: #000;
     /* Without this, a two-finger gesture here is claimed by the browser's own native pinch-zoom/
@@ -327,7 +374,35 @@ body {
     display: none !important;
 }
 
-/* Views/Play's mute/fullscreen buttons are otherwise hover-only (.d-none until mouseenter) —
+/* A tile's controls appear on hover (.is-shown) or when the keyboard reaches one of them. They stay in
+   the tab order, so they're faded out rather than display:none. */
+.view-cell-controls,
+.pb-fullscreen-controls {
+    opacity: 0;
+    pointer-events: none;
+}
+
+.view-cell-controls.is-shown,
+.pb-fullscreen-controls.is-shown,
+.view-cell-controls:has(:focus-visible),
+.pb-fullscreen-controls:has(:focus-visible) {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* The smallest target size WCAG allows. */
+.view-cell-controls .btn,
+.pb-fullscreen-controls .btn,
+.view-cell-mini-playpause,
+.view-cell-remove,
+.pb-zoom-in,
+.pb-zoom-out,
+.pb-zoom-reset {
+    min-width: 24px;
+    min-height: 24px;
+}
+
+/* Views/Play's mute/fullscreen buttons are otherwise hover-only —
    always shown while this tile is the fullscreen element, since there's no hover state to rely on
    and the exit-fullscreen button must stay reachable. z-index above .pb-timeline-fullscreen's own
    (see below) is the backstop for that same "always shown, always on top" requirement — the
@@ -337,6 +412,8 @@ body {
 .tile-fullscreen .pb-fullscreen-controls,
 .tile-fullscreen .view-cell-controls {
     display: flex !important;
+    opacity: 1;
+    pointer-events: auto;
     /* Already position:absolute via the .position-absolute utility class in the markup — not
        redeclared here, only the stacking order needs raising above .pb-timeline-fullscreen's z-index. */
     z-index: 20;
@@ -542,7 +619,7 @@ body {
     display: inline-block;
     width: .7em;
     height: .7em;
-    margin-right: .3em;
+    margin-inline-end: .3em;
     border-radius: 50%;
     background: var(--chip-bg);
     border: 1px solid rgba(127, 127, 127, .6);
@@ -567,9 +644,9 @@ body {
    plus a short elbow to each child. var(--bs-border-color) is theme-correct in light and dark
    with no second rule. */
 .snapshot-tree-children {
-    margin-left: 1.05rem;
-    padding-left: .75rem;
-    border-left: 1px solid var(--bs-border-color);
+    margin-inline-start: 1.05rem;
+    padding-inline-start: .75rem;
+    border-inline-start: 1px solid var(--bs-border-color);
 }
 .snapshot-tree-children > .form-check {
     position: relative;
@@ -577,7 +654,7 @@ body {
 .snapshot-tree-children > .form-check::before {
     content: "";
     position: absolute;
-    left: -.75rem;
+    inset-inline-start: -.75rem;
     top: .6em;
     width: .55rem;
     border-top: 1px solid var(--bs-border-color);
@@ -616,7 +693,7 @@ body {
 .snapshot-badge-confidence {
     opacity: .7;
     font-weight: 400;
-    margin-left: .25rem;
+    margin-inline-start: .25rem;
     font-variant-numeric: tabular-nums;
 }
 
@@ -625,7 +702,7 @@ body {
    text color so it holds against every palette color and both themes. */
 .snapshot-badge-count {
     font-weight: 600;
-    margin-left: .25rem;
+    margin-inline-start: .25rem;
     font-variant-numeric: tabular-nums;
 }
 
@@ -788,7 +865,7 @@ body {
     align-items: center;
 }
 .activity-col-label { font-size: .7rem; color: var(--bs-secondary-color); text-align: center; white-space: nowrap; }
-.activity-row-label { font-size: .8rem; color: var(--bs-secondary-color); padding-right: .5rem; max-width: 9rem; }
+.activity-row-label { font-size: .8rem; color: var(--bs-secondary-color); padding-inline-end: .5rem; max-width: 9rem; }
 .activity-cell { aspect-ratio: 1 / 1; min-height: 14px; border-radius: 3px; cursor: default; }
 .activity-cell:hover { outline: 2px solid var(--bs-body-color); outline-offset: -1px; }
 .activity-step-0 { background: var(--activity-0); }
@@ -799,8 +876,8 @@ body {
 .activity-step-5 { background: var(--activity-5); }
 .activity-step-6 { background: var(--activity-6); }
 .activity-legend { display: flex; align-items: center; gap: 3px; flex-wrap: wrap; }
-.activity-legend .small:first-child { margin-right: .35rem; }
-.activity-legend .small:last-child { margin-left: .35rem; }
+.activity-legend .small:first-child { margin-inline-end: .35rem; }
+.activity-legend .small:last-child { margin-inline-start: .35rem; }
 
 /* Scene heatmap (Activity → Scene, scene-heatmap.js): the camera's picture with a blurred heat canvas
    laid exactly over it. */
@@ -860,7 +937,7 @@ body {
    system notifications. Bottom-right, above the sticky save bars. */
 .lv-toasts {
     position: fixed;
-    right: 1rem;
+    inset-inline-end: 1rem;
     bottom: 1rem;
     z-index: 1080;
     display: flex;
@@ -872,7 +949,33 @@ body {
     background: var(--bs-body-bg);
     color: var(--bs-body-color);
     border: 1px solid var(--bs-border-color);
-    border-left: 4px solid var(--bs-primary);
+    border-inline-start: 4px solid var(--bs-primary);
     border-radius: 0.375rem;
     padding: 0.5rem 0.75rem;
 }
+
+/* Keyboard drawing on a canvas (canvas-keyboard.js): the cursor, shown only while the canvas has focus. */
+.lv-canvas-cursor {
+    position: absolute; width: 21px; height: 21px; margin: -10px 0 0 -10px; pointer-events: none; z-index: 5;
+    background:
+        linear-gradient(#fff, #fff) center / 3px 100% no-repeat,
+        linear-gradient(#fff, #fff) center / 100% 3px no-repeat;
+    outline: 1px solid #000;
+}
+.lv-canvas-cursor::after {
+    content: ""; position: absolute; inset: 0;
+    background:
+        linear-gradient(#000, #000) center / 1px 100% no-repeat,
+        linear-gradient(#000, #000) center / 100% 1px no-repeat;
+}
+
+/* Buttons that do what dragging a grid item does (grid-keyboard.js). */
+.lv-grid-toolbar { display: flex; flex-wrap: wrap; gap: 2px; padding: 2px 4px; }
+.lv-grid-toolbar .btn { min-width: 24px; min-height: 24px; padding: 0 .25rem; line-height: 1; }
+.dashboard-widget > .lv-grid-toolbar { display: none; }
+.dashboard-editing .dashboard-widget > .lv-grid-toolbar { display: flex; }
+
+/* The camera name on a Playback tile picks the tile that drives the per-camera timeline. */
+button.pb-select-primary { border: 0; }
+
+.lv-map-palette-item { cursor: pointer; }

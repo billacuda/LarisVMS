@@ -22,7 +22,10 @@
         }
         var title = document.title || '';
         var cut = title.lastIndexOf(' - ');
-        slot.textContent = cut > 0 ? title.substring(0, cut) : title;
+        var generated = document.createElement('h1');
+        generated.className = 'lv-page-heading';
+        generated.textContent = cut > 0 ? title.substring(0, cut) : title;
+        slot.appendChild(generated);
     }
 
     apply();

@@ -23,7 +23,8 @@ public class EventColorService(ISettingsResolver settings) : IEventColorService
             return new EventPalette(
                 EventColors.Normalize(await settings.GetRawAsync(EventColors.MotionKey, ct: ct)),
                 EventColors.Normalize(await settings.GetRawAsync(EventColors.RecordingKey, ct: ct)),
-                detections);
+                detections,
+                EventColors.Normalize(await settings.GetRawAsync(EventColors.ManualRecordingKey, ct: ct)));
         }
         catch
         {
@@ -41,6 +42,7 @@ public class EventColorService(ISettingsResolver settings) : IEventColorService
         // clears a key back to the built-in default.
         await settings.SetGlobalAsync(EventColors.MotionKey, EventColors.Normalize(palette.Motion) ?? "", modifiedBy, ct);
         await settings.SetGlobalAsync(EventColors.RecordingKey, EventColors.Normalize(palette.Recording) ?? "", modifiedBy, ct);
+        await settings.SetGlobalAsync(EventColors.ManualRecordingKey, EventColors.Normalize(palette.ManualRecording) ?? "", modifiedBy, ct);
 
         foreach (var kind in DetectionDisplay.AllKinds)
         {

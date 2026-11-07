@@ -14,9 +14,9 @@
     'use strict';
 
     var STATUS = {
-        recording: { color: '#198754', label: 'Recording' },
-        offline: { color: '#dc3545', label: 'Offline' },
-        disabled: { color: '#6c757d', label: 'Disabled' }
+        recording: { color: '#198754', label: larisvmsI18n.t('js.map.recording') },
+        offline: { color: '#dc3545', label: larisvmsI18n.t('js.map.offline') },
+        disabled: { color: '#6c757d', label: larisvmsI18n.t('js.map.disabled') }
     };
     var POLL_MS = 30000;
     var MAP_PREF = 'mapId';
@@ -130,8 +130,8 @@
         return '<div class="lv-map-popup">' +
             '<div class="fw-semibold mb-1">' + escapeHtml(p.cameraName) + ' <span class="badge" style="background:' + st.color + '">' + st.label + '</span></div>' +
             '<img src="/playback-thumbnail/' + p.cameraId + '/latest?t=' + Date.now() + '" alt="" class="rounded mb-2" data-on-error="hide">' +
-            '<div class="d-flex gap-2"><a class="btn btn-sm btn-primary" href="/Views/Play?cameraId=' + p.cameraId + '">Live</a>' +
-            '<a class="btn btn-sm btn-outline-secondary" href="/Playback?cameraId=' + p.cameraId + '">Playback</a></div></div>';
+            '<div class="d-flex gap-2"><a class="btn btn-sm btn-primary" href="/Views/Play?cameraId=' + p.cameraId + '">' + larisvmsI18n.html('js.map.live') + '</a>' +
+            '<a class="btn btn-sm btn-outline-secondary" href="/Playback?cameraId=' + p.cameraId + '">' + larisvmsI18n.html('js.map.playback') + '</a></div></div>';
     }
 
     function render() {
@@ -160,7 +160,7 @@
             // The aiming handle — only on the selected camera, to keep the map uncluttered.
             var handle = null;
             if (p.cameraId === selectedId && p.fovDeg < 360) {
-                handle = L.marker(destination(p.y, p.x, p.bearingDeg, p.range), { icon: handleIcon, draggable: true, title: 'Drag to aim' }).addTo(layer);
+                handle = L.marker(destination(p.y, p.x, p.bearingDeg, p.range), { icon: handleIcon, draggable: true, title: larisvmsI18n.t('js.map.dragToAim') }).addTo(layer);
                 handle.on('dragstart', function () { dragging = true; });
                 handle.on('drag', function (e) {
                     var a = aim(p.y, p.x, e.latlng);
@@ -184,8 +184,21 @@
     function placementOf(id) { return current && current.placements.filter(function (p) { return p.cameraId === id; })[0]; }
 
     function selectCamera(id) {
+        // Re-rendering removes the focused marker, so the keyboard continues in the panel.
+        var fromMarker = document.activeElement && document.activeElement.classList.contains('leaflet-marker-icon');
         selectedId = id;
         render();
+        var firstField = fromMarker && selectedEl && selectedEl.querySelector('input');
+        if (firstField) firstField.focus();
+    }
+
+    function moveButtonsHtml() {
+        return '<div class="mb-2" role="group" aria-label="' + larisvmsI18n.html('js.map.moveCamera') + '">' +
+            [['-20,0', '←', 'js.gridKeyboard.moveLeft'], ['0,-20', '↑', 'js.gridKeyboard.moveUp'],
+             ['0,20', '↓', 'js.gridKeyboard.moveDown'], ['20,0', '→', 'js.gridKeyboard.moveRight']].map(function (b) {
+                var label = larisvmsI18n.html(b[2]);
+                return '<button type="button" class="btn btn-sm btn-outline-secondary me-1" data-map-move="' + b[0] + '" title="' + label + '" aria-label="' + label + '">' + b[1] + '</button>';
+            }).join('') + '</div>';
     }
 
     function rangeUnit() { return isStreet() ? 'm' : 'px'; }
@@ -193,17 +206,31 @@
     function renderSelected() {
         if (!selectedEl) return;
         var p = selectedId && placementOf(selectedId);
-        if (!p) { selectedEl.innerHTML = '<span class="text-muted">Click a camera on the map.</span>'; return; }
+        if (!p) { selectedEl.innerHTML = '<span class="text-muted">' + larisvmsI18n.html('js.map.clickACameraOnThe') + '</span>'; return; }
         selectedEl.innerHTML =
             '<div class="fw-semibold mb-2">' + escapeHtml(p.cameraName) + '</div>' +
-            '<label class="form-label mb-0" for="mapFov">Field of view: <span id="mapFovValue">' + Math.round(p.fovDeg) + '°</span></label>' +
+            '<label class="form-label mb-0" for="mapFov">' + larisvmsI18n.html('js.map.fieldOfView') + ' <span id="mapFovValue">' + Math.round(p.fovDeg) + '°</span></label>' +
             '<input type="range" class="form-range" id="mapFov" min="5" max="360" step="5" value="' + Math.round(p.fovDeg) + '">' +
-            '<label class="form-label mb-0" for="mapRange">Range (' + rangeUnit() + ')</label>' +
+            '<label class="form-label mb-0" for="mapRange">' + larisvmsI18n.html('js.map.range', { unit: rangeUnit() }) + '</label>' +
             '<input type="number" class="form-control form-control-sm mb-1" id="mapRange" min="1" step="1" value="' + Math.round(p.range) + '">' +
-            '<label class="form-label mb-0" for="mapBearing">Direction (° from north)</label>' +
+            '<label class="form-label mb-0" for="mapBearing">' + larisvmsI18n.html('js.map.directionFromNorth') + '</label>' +
             '<input type="number" class="form-control form-control-sm mb-2" id="mapBearing" min="0" max="359" step="1" value="' + Math.round(p.bearingDeg) + '">' +
-            '<div class="text-muted mb-2">Or drag the white handle at the tip of the cone.</div>' +
-            '<button type="button" class="btn btn-sm btn-outline-danger" id="mapRemove">Take off this map</button>';
+            '<div class="text-muted mb-2">' + larisvmsI18n.html('js.map.orDragTheWhiteHandle') + '</div>' +
+            moveButtonsHtml() +
+            '<button type="button" class="btn btn-sm btn-outline-danger" id="mapRemove">' + larisvmsI18n.html('js.map.takeOffThisMap') + '</button>';
+        selectedEl.querySelectorAll('[data-map-move]').forEach(function (button) {
+            button.addEventListener('click', function () {
+                var move = button.getAttribute('data-map-move');
+                var offset = move.split(',');
+                var at = lmap.containerPointToLatLng(lmap.latLngToContainerPoint([p.y, p.x]).add([+offset[0], +offset[1]]));
+                p.y = at.lat;
+                p.x = at.lng;
+                save(p);
+                render();
+                var again = selectedEl.querySelector('[data-map-move="' + move + '"]');
+                if (again) again.focus();
+            });
+        });
         var fov = document.getElementById('mapFov');
         fov.addEventListener('input', function () {
             p.fovDeg = +fov.value;
@@ -222,8 +249,8 @@
                 current.placements = current.placements.filter(function (x) { return x.cameraId !== p.cameraId; });
                 selectedId = null;
                 render();
-                setStatus('Removed ' + p.cameraName + ' from this map.');
-            }).catch(function () { setStatus('Couldn’t remove that camera. Try again.', true); });
+                setStatus(larisvmsI18n.t('js.map.removedCamera', { camera: p.cameraName }));
+            }).catch(function () { setStatus(larisvmsI18n.t('js.map.couldntRemoveThatCameraTry'), true); });
         });
     }
 
@@ -234,9 +261,11 @@
         var q = (paletteFilter && paletteFilter.value || '').toLowerCase();
         var available = (config.cameras || []).filter(function (c) { return !placed[c.id] && c.name.toLowerCase().indexOf(q) >= 0; });
         paletteEl.innerHTML = available.length === 0
-            ? '<div class="text-muted px-2">' + ((config.cameras || []).length ? 'Every camera is on this map.' : 'No cameras.') + '</div>'
+            ? '<div class="text-muted px-2">' + ((config.cameras || []).length ? larisvmsI18n.t('js.map.everyCameraIsOnThis') : larisvmsI18n.t('js.map.noCameras')) + '</div>'
             : available.map(function (c) {
-                return '<div class="list-group-item list-group-item-action py-1 px-2 lv-map-palette-item" draggable="true" data-camera-id="' + c.id + '">📷 ' + escapeHtml(c.name) + '</div>';
+                // Not a <button>: Firefox won't drag one. Clicking or pressing Enter places it mid-map.
+                return '<div class="list-group-item list-group-item-action py-1 px-2 lv-map-palette-item" draggable="true" role="button" tabindex="0" ' +
+                    'title="' + larisvmsI18n.html('js.map.addToMap') + '" data-camera-id="' + c.id + '">📷 ' + escapeHtml(c.name) + '</div>';
             }).join('');
     }
 
@@ -248,16 +277,30 @@
             e.dataTransfer.effectAllowed = 'copy';
         });
         paletteFilter.addEventListener('input', renderPalette);
+        paletteEl.addEventListener('click', function (e) {
+            var item = e.target.closest('[data-camera-id]');
+            if (item && editing && lmap) placeCamera(item.getAttribute('data-camera-id'), lmap.getCenter());
+        });
+        paletteEl.addEventListener('keydown', function (e) {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            var item = e.target.closest('[data-camera-id]');
+            if (!item) return;
+            e.preventDefault();
+            item.click();
+        });
     }
 
     canvas.addEventListener('dragover', function (e) { if (editing) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
     canvas.addEventListener('drop', function (e) {
         if (!editing || !lmap || !current) return;
         e.preventDefault();
-        var cameraId = e.dataTransfer.getData('text/plain');
+        placeCamera(e.dataTransfer.getData('text/plain'), lmap.containerPointToLatLng(lmap.mouseEventToContainerPoint(e)));
+    });
+
+    function placeCamera(cameraId, at) {
+        if (!current) return;
         var cam = (config.cameras || []).filter(function (c) { return c.id === cameraId; })[0];
         if (!cam) return;
-        var at = lmap.containerPointToLatLng(lmap.mouseEventToContainerPoint(e));
         var p = {
             cameraId: cam.id, cameraName: cam.name, status: 'offline', y: at.lat, x: at.lng,
             bearingDeg: 0, fovDeg: 90,
@@ -268,14 +311,14 @@
         selectedId = p.cameraId;
         save(p).then(function () { refresh(); });
         render();
-    });
+    }
 
     function save(p) {
-        setStatus('Saving…');
+        setStatus(larisvmsI18n.t('js.map.saving'));
         return api('/api/maps/' + current.id + '/placements/' + p.cameraId, 'PUT',
             { y: p.y, x: p.x, bearingDeg: p.bearingDeg, fovDeg: p.fovDeg, range: p.range })
-            .then(function () { setStatus('Saved.'); })
-            .catch(function () { setStatus('Couldn’t save that change. Try again.', true); });
+            .then(function () { setStatus(larisvmsI18n.t('js.map.saved')); })
+            .catch(function () { setStatus(larisvmsI18n.t('js.map.couldntSaveThatChangeTry'), true); });
     }
 
     // ── Maps ────────────────────────────────────────────────────────────────
@@ -335,10 +378,10 @@
         var c = lmap.getCenter(), z = Math.round(lmap.getZoom());
         return api('/api/maps/' + current.id, 'PUT', { centerLat: c.lat, centerLng: c.lng, zoom: z })
             .then(function () {
-                setStatus('Saved. This map now opens here for everyone.');
+                setStatus(larisvmsI18n.t('js.map.savedThisMapNowOpens'));
                 current.centerLat = c.lat; current.centerLng = c.lng; current.zoom = z;
             })
-            .catch(function () { setStatus('Couldn’t save the view.', true); });
+            .catch(function () { setStatus(larisvmsI18n.t('js.map.couldntSaveTheView'), true); });
     }
 
     function openMap(id) {
@@ -349,7 +392,7 @@
             try { history.replaceState(null, '', '/Map?mapId=' + id); } catch (e) { /* bookmarking is a nicety */ }
             buildLeaflet();
             render();
-        }).catch(function () { setStatus('Couldn’t load that map.', true); });
+        }).catch(function () { setStatus(larisvmsI18n.t('js.map.couldntLoadThatMap'), true); });
     }
 
     // Statuses change; positions don't (unless edited here). Refresh without disturbing a drag.
@@ -378,7 +421,7 @@
             var chosen = maps.filter(function (m) { return m.id === want; })[0] || maps[0];
             select.value = chosen.id;
             return openMap(chosen.id);
-        }).catch(function () { setStatus('Couldn’t load maps.', true); });
+        }).catch(function () { setStatus(larisvmsI18n.t('js.map.couldntLoadMaps'), true); });
     }
 
     select.addEventListener('change', function () { openMap(select.value); });
@@ -389,7 +432,7 @@
         editToggle.addEventListener('click', function () {
             editing = !editing;
             editToggle.classList.toggle('active', editing);
-            editToggle.textContent = editing ? 'Done editing' : 'Edit map';
+            editToggle.textContent = editing ? larisvmsI18n.t('js.map.doneEditing') : larisvmsI18n.t('js.map.editMap');
             editPanel.classList.toggle('d-none', !editing);
             if (!editing) { selectedId = null; saveDefaultView(); }
             if (lmap) setTimeout(function () { lmap.invalidateSize(); }, 50);
@@ -402,7 +445,7 @@
     Array.prototype.forEach.call(document.querySelectorAll('[data-new-map]'), function (b) {
         b.addEventListener('click', function () {
             newKind = b.getAttribute('data-new-map');
-            document.getElementById('mapNewTitle').textContent = newKind === 'Floorplan' ? 'New floorplan' : 'New street map';
+            document.getElementById('mapNewTitle').textContent = newKind === 'Floorplan' ? larisvmsI18n.t('js.map.newFloorplan') : larisvmsI18n.t('js.map.newStreetMap');
             document.getElementById('mapNewFloorplan').classList.toggle('d-none', newKind !== 'Floorplan');
             document.getElementById('mapNewStreetHelp').classList.toggle('d-none', newKind === 'Floorplan');
             document.getElementById('mapNewName').value = '';
@@ -415,14 +458,14 @@
     function readImage(file) {
         return new Promise(function (resolve, reject) {
             var reader = new FileReader();
-            reader.onerror = function () { reject(new Error('That file couldn’t be read.')); };
+            reader.onerror = function () { reject(new Error(larisvmsI18n.t('js.map.thatFileCouldntBeRead'))); };
             reader.onload = function () {
                 var img = new Image();
                 img.onload = function () {
                     var dataUrl = String(reader.result);
                     resolve({ base64: dataUrl.slice(dataUrl.indexOf(',') + 1), contentType: file.type, width: img.naturalWidth, height: img.naturalHeight });
                 };
-                img.onerror = function () { reject(new Error('That isn’t an image this browser can show.')); };
+                img.onerror = function () { reject(new Error(larisvmsI18n.t('js.map.thatIsntAnImageThis'))); };
                 img.src = String(reader.result);
             };
             reader.readAsDataURL(file);
@@ -433,13 +476,13 @@
     if (createBtn) createBtn.addEventListener('click', function () {
         var errorEl = document.getElementById('mapNewError');
         var name = document.getElementById('mapNewName').value.trim();
-        if (!name) { errorEl.textContent = 'Give the map a name.'; return; }
+        if (!name) { errorEl.textContent = larisvmsI18n.t('js.map.giveTheMapAName'); return; }
         var body = { name: name, kind: newKind };
         var ready;
         if (newKind === 'Floorplan') {
             var file = document.getElementById('mapNewFile').files[0];
-            if (!file) { errorEl.textContent = 'Choose a floorplan image.'; return; }
-            if (file.size > 10 * 1024 * 1024) { errorEl.textContent = 'Floorplan images can be up to 10 MB.'; return; }
+            if (!file) { errorEl.textContent = larisvmsI18n.t('js.map.chooseAFloorplanImage'); return; }
+            if (file.size > 10 * 1024 * 1024) { errorEl.textContent = larisvmsI18n.t('js.map.floorplanImagesCanBeUp'); return; }
             ready = readImage(file).then(function (img) {
                 body.imageBase64 = img.base64; body.imageContentType = img.contentType;
                 body.imageWidth = img.width; body.imageHeight = img.height;
@@ -456,12 +499,12 @@
         ready.then(function () { return api('/api/maps', 'POST', body); })
             .then(function (res) {
                 bootstrap.Modal.getOrCreateInstance(newModalEl).hide();
-                setStatus('Created ' + name + '.');
+                setStatus(larisvmsI18n.t('js.map.createdMap', { name: name }));
                 return loadMaps(res.id).then(function () {
                     if (!editing && editToggle) editToggle.click(); // straight into placing cameras
                 });
             })
-            .catch(function (e) { errorEl.textContent = (e && e.message) || 'Couldn’t create the map.'; })
+            .catch(function (e) { errorEl.textContent = (e && e.message) || larisvmsI18n.t('js.map.couldntCreateTheMap'); })
             .then(function () { createBtn.disabled = false; });
     });
 
@@ -469,20 +512,20 @@
 
     if (byId('mapRename')) byId('mapRename').addEventListener('click', function () {
         if (!current) return;
-        var name = prompt('New name for this map', current.name);
+        var name = prompt(larisvmsI18n.t('js.map.newNameForThisMap'), current.name);
         if (!name || !name.trim()) return;
         api('/api/maps/' + current.id, 'PUT', { name: name.trim() })
             .then(function () { return loadMaps(current.id); })
-            .catch(function () { setStatus('Couldn’t rename the map.', true); });
+            .catch(function () { setStatus(larisvmsI18n.t('js.map.couldntRenameTheMap'), true); });
     });
 
     if (byId('mapSaveView')) byId('mapSaveView').addEventListener('click', saveDefaultView);
 
     if (byId('mapDelete')) byId('mapDelete').addEventListener('click', function () {
-        if (!current || !confirm('Delete the map "' + current.name + '"? Its camera placements go with it; the cameras themselves aren’t affected.')) return;
+        if (!current || !confirm(larisvmsI18n.t('js.map.deleteMapConfirm', { name: current.name }))) return;
         api('/api/maps/' + current.id, 'DELETE')
             .then(function () { window.larisvmsPreferences.set(MAP_PREF, ''); return loadMaps(); })
-            .catch(function () { setStatus('Couldn’t delete the map.', true); });
+            .catch(function () { setStatus(larisvmsI18n.t('js.map.couldntDeleteTheMap'), true); });
     });
 
     var tilesModalEl = byId('mapTilesModal');
@@ -501,7 +544,7 @@
         api('/api/maps/tile-settings', 'PUT', body).then(function () {
             bootstrap.Modal.getOrCreateInstance(tilesModalEl).hide();
             return loadMaps(current && current.id);
-        }).catch(function (e) { byId('mapTilesError').textContent = (e && e.message) || 'Couldn’t save.'; });
+        }).catch(function (e) { byId('mapTilesError').textContent = (e && e.message) || larisvmsI18n.t('js.map.couldntSave'); });
     });
 
     window.larisvmsPreferences.whenReady().then(function () {

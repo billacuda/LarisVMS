@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text.Json;
 using LarisVMS.Core.Dtos;
+using LarisVMS.Core.Localization;
 
 namespace LarisVMS.Web.Services;
 
@@ -23,7 +24,7 @@ public sealed class ExternalInferenceProbe(IHttpClientFactory httpClientFactory,
     public async Task<ExternalInferenceProbeResult> ProbeAsync(string baseUrl, string? apiKey, CancellationToken ct)
     {
         if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var root) || root.Scheme is not ("http" or "https"))
-            return new ExternalInferenceProbeResult("Enter a full service URL like http://192.168.1.50:8080.");
+            return new ExternalInferenceProbeResult(Loc.T("server.externalInferenceProbe.enterAFullServiceUrl"));
 
         var client = httpClientFactory.CreateClient(HttpClientName);
         var authHeader = string.IsNullOrWhiteSpace(apiKey) ? null : new AuthenticationHeaderValue("Bearer", apiKey.Trim());
@@ -38,7 +39,7 @@ public sealed class ExternalInferenceProbe(IHttpClientFactory httpClientFactory,
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException && !ct.IsCancellationRequested)
         {
             logger.LogInformation(ex, "External inference probe of {BaseUrl} failed.", baseUrl);
-            return new ExternalInferenceProbeResult($"Could not reach the service at {baseUrl}: {ex.Message}");
+            return new ExternalInferenceProbeResult(Loc.T("server.externalInferenceProbe.couldNotReachTheService", new { baseUrl, message = ex.Message }));
         }
 
         return BuildResult(healthJson, modelsJson);
@@ -60,7 +61,7 @@ public sealed class ExternalInferenceProbe(IHttpClientFactory httpClientFactory,
         }
 
         if (string.IsNullOrWhiteSpace(modelsJson))
-            return new ExternalInferenceProbeResult("The service returned no model list.", health);
+            return new ExternalInferenceProbeResult(Loc.T("server.externalInferenceProbe.noModelList"), health);
 
         List<ExternalModelInfo>? models;
         try
@@ -72,11 +73,11 @@ public sealed class ExternalInferenceProbe(IHttpClientFactory httpClientFactory,
         }
         catch (JsonException ex)
         {
-            return new ExternalInferenceProbeResult($"The service's model list did not parse: {ex.Message}", health);
+            return new ExternalInferenceProbeResult(Loc.T("server.externalInferenceProbe.theServiceModelListDid", new { message = ex.Message }), health);
         }
 
         if (models is null || models.Count == 0)
-            return new ExternalInferenceProbeResult("The service reported no models.", health);
+            return new ExternalInferenceProbeResult(Loc.T("server.externalInferenceProbe.theServiceReportedNoModels"), health);
 
         return new ExternalInferenceProbeResult(null, health, models);
     }

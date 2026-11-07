@@ -166,7 +166,7 @@ public class FootageEncryptionTests
         });
         await app.StartAsync();
         var port = new Uri(app.Urls.First()).Port;
-        store = new FootageStore(new NodeApiClient($"http://127.0.0.1:{port}", acceptAnyCertificate: false), port, NullLogger<FootageStore>.Instance);
+        store = new FootageStore(new NodeApiClient($"http://127.0.0.1:{port}", new LarisVMS.Core.Security.ServerCertificateTrust(LarisVMS.Core.Security.ServerCertificateCheck.TrustedOnly, null)), port, NullLogger<FootageStore>.Instance);
         return new Host { App = app, Store = store, CameraId = Guid.NewGuid() };
     }
 

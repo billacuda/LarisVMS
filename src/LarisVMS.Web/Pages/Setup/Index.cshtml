@@ -2,7 +2,7 @@
 @model LarisVMS.Web.Pages.Setup.IndexModel
 @{
     Layout = "_SetupLayout";
-    ViewData["Title"] = "Welcome";
+    ViewData["Title"] = L["setup.welcome"].Value;
 }
-<p>This wizard configures LarisVMS's database, administrator account, storage location, and branding.</p>
-<a class="btn btn-primary" asp-page="Database">Get started</a>
+<p>@L["setup.thisWizardConfiguresLarisvmsDatabase"]</p>
+<a class="btn btn-primary" asp-page="Database">@L["setup.getStarted"]</a>

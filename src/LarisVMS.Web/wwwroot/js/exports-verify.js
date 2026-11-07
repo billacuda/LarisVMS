@@ -130,23 +130,24 @@
         }
         var unhashed = segments.length - hashed.length;
         if (hashed.length === 0) {
-            lines.push(line('warn', 'No recorded hashes for this footage', 'It was recorded before tamper evidence existed, so it can only be checked against the export itself.'));
+            lines.push(line('warn', larisvmsI18n.t('js.exportsVerify.noHashes'), larisvmsI18n.t('js.exportsVerify.noHashesDetail')));
         } else if (bad === 0 && broken === 0) {
-            lines.push(line('ok', 'Recorded footage chain is intact', hashed.length + ' segment' + (hashed.length === 1 ? '' : 's') + ' link up exactly as they were recorded' +
-                (unhashed ? ' (' + unhashed + ' older one' + (unhashed === 1 ? '' : 's') + ' without a hash)' : '') + '.'));
+            lines.push(line('ok', larisvmsI18n.t('js.exportsVerify.chainIntact'), unhashed
+                ? larisvmsI18n.plural('js.exportsVerify.chainIntactDetailOlder', hashed.length, { older: larisvmsI18n.plural('js.exportsVerify.olderWithoutHash', unhashed) })
+                : larisvmsI18n.plural('js.exportsVerify.chainIntactDetail', hashed.length)));
         } else {
-            lines.push(line('bad', 'Recorded footage chain doesn\'t add up', bad + ' link(s) don\'t match their contents and ' + broken + ' don\'t follow the one before.'));
+            lines.push(line('bad', larisvmsI18n.t('js.exportsVerify.chainBroken'), larisvmsI18n.t('js.exportsVerify.chainBrokenDetail', { bad: bad, broken: broken })));
         }
 
         var changed = segments.filter(function (s) { return s.unchangedAtExport === false; }).length;
         var checked = segments.filter(function (s) { return s.unchangedAtExport === true; }).length;
-        if (changed > 0) lines.push(line('bad', 'Some footage had changed on disk', changed + ' segment' + (changed === 1 ? '' : 's') + ' no longer matched the hash recorded when written, at the time of export.'));
-        else if (checked > 0) lines.push(line('ok', 'Footage was unchanged when exported', 'Every source file still matched the hash recorded when it was written.'));
+        if (changed > 0) lines.push(line('bad', larisvmsI18n.t('js.exportsVerify.footageChanged'), larisvmsI18n.plural('js.exportsVerify.footageChangedDetail', changed)));
+        else if (checked > 0) lines.push(line('ok', larisvmsI18n.t('js.exportsVerify.footageUnchanged'), larisvmsI18n.t('js.exportsVerify.footageUnchangedDetail')));
 
         // On to the signed checkpoint.
         var cp = payload.checkpoint;
         if (!cp) {
-            if (hashed.length) lines.push(line('warn', 'No signed checkpoint', 'The manifest doesn\'t include a chain checkpoint.'));
+            if (hashed.length) lines.push(line('warn', larisvmsI18n.t('js.exportsVerify.noCheckpoint'), larisvmsI18n.t('js.exportsVerify.noCheckpointDetail')));
             return lines;
         }
         var at = hashed.length ? hashed[hashed.length - 1].chainHash : null;
@@ -160,10 +161,10 @@
         var reaches = linksOk && at === cp.chainHash;
         var cpText = 'LarisVMS-chain-v1|' + cameraId + '|' + cp.segmentId + '|' + cp.chainHash + '|' + cp.segmentEndUtc + '|' + cp.signedUtc;
         var cpSigned = await verifySignature(cp.publicKeyPem, cpText, cp.signature);
-        var when = new Date(cp.signedUtc).toLocaleString();
-        if (reaches && cpSigned) lines.push(line('ok', 'Chain reaches a signed checkpoint', 'Signed ' + when + (links.length ? ', ' + links.length + ' later segment' + (links.length === 1 ? '' : 's') + ' on.' : '.')));
-        else if (!cpSigned) lines.push(line('bad', 'Checkpoint signature is not valid', 'Signed ' + when + '.'));
-        else lines.push(line('bad', 'Chain doesn\'t reach its checkpoint', 'The links after the export don\'t lead to the signed checkpoint.'));
+        var when = new Date(cp.signedUtc).toLocaleString(larisvmsI18n.locale);
+        if (reaches && cpSigned) lines.push(line('ok', larisvmsI18n.t('js.exportsVerify.checkpointReached'), links.length ? larisvmsI18n.plural('js.exportsVerify.signedLater', links.length, { when: when }) : larisvmsI18n.t('js.exportsVerify.signedAt', { when: when })));
+        else if (!cpSigned) lines.push(line('bad', larisvmsI18n.t('js.exportsVerify.checkpointInvalid'), larisvmsI18n.t('js.exportsVerify.signedAt', { when: when })));
+        else lines.push(line('bad', larisvmsI18n.t('js.exportsVerify.checkpointNotReached'), larisvmsI18n.t('js.exportsVerify.checkpointNotReachedDetail')));
         return lines;
     }
 
@@ -174,26 +175,26 @@
         var verdictOk = true;
         try {
             var manifest = JSON.parse(await manifestInput.files[0].text());
-            if (!manifest.signedPayload || !manifest.signature) throw new Error('This isn\'t a LarisVMS export manifest.');
+            if (!manifest.signedPayload || !manifest.signature) throw new Error(larisvmsI18n.t('js.exportsVerify.thisIsntALarisvmsExport'));
             var payload = JSON.parse(manifest.signedPayload);
 
             // 1. Signature
             var signed = await verifySignature(manifest.publicKeyPem, manifest.signedPayload, manifest.signature);
             var keys = await fetch('/api/signing-keys').then(function (r) { return r.ok ? r.json() : []; }).catch(function () { return []; });
             var ours = keys.some(function (k) { return pemBody(k.publicKeyPem) === pemBody(manifest.publicKeyPem); });
-            if (!signed) { verdictOk = false; lines.push(line('bad', 'Manifest signature is not valid', 'The manifest has been edited, or wasn\'t signed by LarisVMS.')); }
-            else if (ours) lines.push(line('ok', 'Manifest signed by this server', 'Signed with key ' + manifest.keyId + '.'));
-            else { lines.push(line('warn', 'Manifest signature is valid, but the key isn\'t this server\'s', 'It was signed by key ' + manifest.keyId + ' — check that key belongs to the system the export came from.')); }
+            if (!signed) { verdictOk = false; lines.push(line('bad', larisvmsI18n.t('js.exportsVerify.manifestInvalid'), larisvmsI18n.t('js.exportsVerify.manifestInvalidDetail'))); }
+            else if (ours) lines.push(line('ok', larisvmsI18n.t('js.exportsVerify.manifestOurs'), larisvmsI18n.t('js.exportsVerify.signedWithKey', { key: manifest.keyId })));
+            else { lines.push(line('warn', larisvmsI18n.t('js.exportsVerify.manifestOtherKey'), larisvmsI18n.t('js.exportsVerify.manifestOtherKeyDetail', { key: manifest.keyId }))); }
 
             // 2. File
             var file = videoInput.files[0];
             if (payload.file.sizeBytes != null && file.size !== payload.file.sizeBytes) {
                 verdictOk = false;
-                lines.push(line('bad', 'The video is not the exported file', 'Size is ' + file.size.toLocaleString() + ' bytes; the export was ' + payload.file.sizeBytes.toLocaleString() + '.'));
+                lines.push(line('bad', larisvmsI18n.t('js.exportsVerify.notTheFile'), larisvmsI18n.t('js.exportsVerify.sizeMismatch', { size: file.size, expected: payload.file.sizeBytes })));
             } else {
                 var hex = await hashFile(file);
-                if (hex === payload.file.sha256) lines.push(line('ok', 'The video is exactly the exported file', 'SHA-256 ' + hex + '.'));
-                else { verdictOk = false; lines.push(line('bad', 'The video has been changed since it was exported', 'Its SHA-256 doesn\'t match the manifest.')); }
+                if (hex === payload.file.sha256) lines.push(line('ok', larisvmsI18n.t('js.exportsVerify.exactFile'), 'SHA-256 ' + hex + '.'));
+                else { verdictOk = false; lines.push(line('bad', larisvmsI18n.t('js.exportsVerify.videoChanged'), larisvmsI18n.t('js.exportsVerify.videoChangedDetail'))); }
             }
 
             // 3–4. Footage chain
@@ -201,14 +202,14 @@
             if (chainLines.some(function (l) { return l.indexOf('text-danger') >= 0; })) verdictOk = false;
             lines = lines.concat(chainLines);
 
-            var range = new Date(payload.requested.fromUtc).toLocaleString() + ' – ' + new Date(payload.requested.toUtc).toLocaleString();
+            var range = new Date(payload.requested.fromUtc).toLocaleString(larisvmsI18n.locale) + ' – ' + new Date(payload.requested.toUtc).toLocaleString(larisvmsI18n.locale);
             resultEl.innerHTML =
                 '<div class="alert ' + (verdictOk ? 'alert-success' : 'alert-danger') + '"><strong>' +
-                (verdictOk ? 'Verified.' : 'Not verified.') + '</strong> ' + escapeHtml(payload.camera.name) + ', ' + escapeHtml(range) +
-                (payload.redacted ? ' (areas were blacked out in this export)' : '') + '.</div>' +
+                (verdictOk ? larisvmsI18n.t('js.exportsVerify.verified') : larisvmsI18n.t('js.exportsVerify.notVerified')) + '</strong> ' + escapeHtml(payload.camera.name) + ', ' + escapeHtml(range) +
+                (payload.redacted ? ' ' + larisvmsI18n.html('js.exportsVerify.redactedNote') : '') + '.</div>' +
                 '<ul class="list-group">' + lines.join('') + '</ul>';
         } catch (e) {
-            resultEl.innerHTML = '<div class="alert alert-danger">' + escapeHtml(e.message || 'Couldn\'t read those files.') + '</div>';
+            resultEl.innerHTML = '<div class="alert alert-danger">' + escapeHtml(e.message || larisvmsI18n.t('js.exportsVerify.couldntRead')) + '</div>';
         } finally {
             progress.classList.add('d-none');
             update();

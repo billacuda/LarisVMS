@@ -19,13 +19,13 @@
 @inject IDataProtectionProvider Dp
 @inject NavigationManager NavigationManager
 
-<PageTitle>Email - @AppName</PageTitle>
+<PageTitle>@L["common.email"] - @AppName</PageTitle>
 
-<h1>Settings</h1>
+<h1>@L["nav.settings"]</h1>
 <SettingsTabs ActiveKey="Email" />
 
 <div class="lv-page-narrow">
-<p class="text-muted small">How alert emails are sent. <a href="/Help/alerts#email">Provider setup</a></p>
+<p class="text-muted small">@L["settings.email.howAlertEmailsAreSent"] <a href="/Help/alerts#email">@L["settings.email.providerSetup"]</a></p>
 
 @if (!string.IsNullOrEmpty(SavedMessage))
 {
@@ -33,109 +33,109 @@
 }
 @if (!string.IsNullOrEmpty(ErrorMessage))
 {
-    <div class="alert alert-danger">@ErrorMessage</div>
+    <div class="alert alert-danger" role="alert">@ErrorMessage</div>
 }
 
 <EditForm Model="this" FormName="email-settings" OnSubmit="HandleSubmitAsync" data-dirty-guard>
-    <SettingSection Title="Sender">
-        <SettingField Label="Email">
+    <SettingSection Title="@L["settings.email.sender"]">
+        <SettingField Label="@L["common.email"]">
             <div class="form-check form-switch mt-1">
                 <InputCheckbox @bind-Value="IsEnabled" class="form-check-input" id="isEnabled" />
-                <label class="form-check-label" for="isEnabled">Enabled</label>
+                <label class="form-check-label" for="isEnabled">@L["common.enabled"]</label>
             </div>
         </SettingField>
-        <SettingField Label="Provider" For="provider">
+        <SettingField Label="@L["settings.email.provider"]" For="provider">
             <select name="Provider" id="provider" class="form-select">
-                <option value="@EmailProviderType.Smtp" selected="@(Provider == EmailProviderType.Smtp)">SMTP</option>
-                <option value="@EmailProviderType.Graph" selected="@(Provider == EmailProviderType.Graph)">Microsoft Graph</option>
-                <option value="@EmailProviderType.Gmail" selected="@(Provider == EmailProviderType.Gmail)">Gmail</option>
+                <option value="@EmailProviderType.Smtp" selected="@(Provider == EmailProviderType.Smtp)">@L["settings.email.smtp"]</option>
+                <option value="@EmailProviderType.Graph" selected="@(Provider == EmailProviderType.Graph)">@L["settings.email.microsoftGraph"]</option>
+                <option value="@EmailProviderType.Gmail" selected="@(Provider == EmailProviderType.Gmail)">@L["settings.email.gmail"]</option>
             </select>
         </SettingField>
-        <SettingField Label="From address">
-            <InputText type="email" @bind-Value="FromAddress" class="form-control" placeholder="alerts@example.com" />
+        <SettingField For="field-fromAddress" Label="@L["settings.email.fromAddress"]">
+            <InputText id="field-fromAddress" type="email" @bind-Value="FromAddress" class="form-control" placeholder="alerts@example.com" />
         </SettingField>
-        <SettingField Label="From name">
-            <InputText @bind-Value="FromName" class="form-control" placeholder="LarisVMS" />
+        <SettingField For="field-fromName" Label="@L["settings.email.fromName"]">
+            <InputText id="field-fromName" @bind-Value="FromName" class="form-control" placeholder="@L["settings.email.larisvms"]" />
         </SettingField>
     </SettingSection>
 
     <div data-show-when="@($"Provider={EmailProviderType.Smtp}")">
-        <SettingSection Title="SMTP">
-            <SettingField Label="Host">
-                <InputText @bind-Value="SmtpHost" class="form-control" placeholder="smtp.example.com" />
+        <SettingSection Title="@L["settings.email.smtp"]">
+            <SettingField For="field-smtpHost" Label="@L["common.host"]">
+                <InputText id="field-smtpHost" @bind-Value="SmtpHost" class="form-control" placeholder="smtp.example.com" />
             </SettingField>
-            <SettingField Label="Port">
+            <SettingField For="field-smtpPort" Label="@L["common.port"]">
                 <div class="d-flex align-items-center gap-3">
-                    <InputNumber @bind-Value="SmtpPort" class="form-control" style="max-width: 8rem;" min="1" max="65535" />
+                    <InputNumber id="field-smtpPort" @bind-Value="SmtpPort" class="form-control" style="max-width: 8rem;" min="1" max="65535" />
                     <div class="form-check mb-0">
                         <InputCheckbox @bind-Value="SmtpUseSsl" class="form-check-input" id="smtpUseSsl" />
                         <label class="form-check-label" for="smtpUseSsl">SSL/TLS</label>
                     </div>
                 </div>
             </SettingField>
-            <SettingField Label="Username">
-                <InputText @bind-Value="SmtpUsername" class="form-control" autocomplete="off" />
+            <SettingField For="field-smtpUsername" Label="@L["common.username"]">
+                <InputText id="field-smtpUsername" @bind-Value="SmtpUsername" class="form-control" autocomplete="off" />
             </SettingField>
-            <SettingField Label="Password" Hint="Leave blank to keep the current password.">
-                <InputText type="password" @bind-Value="SmtpPassword" class="form-control" autocomplete="new-password"
-                       placeholder="@(HasStoredSmtpPassword ? "(unchanged)" : "")" />
+            <SettingField For="field-smtpPassword" Label="@L["common.password"]" Hint="@L["settings.email.leaveBlankToKeepThe"]">
+                <InputText id="field-smtpPassword" type="password" @bind-Value="SmtpPassword" class="form-control" autocomplete="new-password"
+                       placeholder="@(HasStoredSmtpPassword ? L["cameras.edit.unchanged"].Value : "")" />
             </SettingField>
         </SettingSection>
     </div>
 
     <div data-show-when="@($"Provider={EmailProviderType.Graph}")">
-        <SettingSection Title="Microsoft Graph" Subtitle="An Entra app with the Mail.Send application permission.">
-            <SettingField Label="Tenant ID">
-                <InputText @bind-Value="GraphTenantId" class="form-control" autocomplete="off" />
+        <SettingSection Title="@L["settings.email.microsoftGraph"]" Subtitle="@L["settings.email.anEntraAppWithThe"]">
+            <SettingField For="field-graphTenantId" Label="@L["settings.email.tenantId"]">
+                <InputText id="field-graphTenantId" @bind-Value="GraphTenantId" class="form-control" autocomplete="off" />
             </SettingField>
-            <SettingField Label="Client ID">
-                <InputText @bind-Value="GraphClientId" class="form-control" autocomplete="off" />
+            <SettingField For="field-graphClientId" Label="@L["settings.email.clientId"]">
+                <InputText id="field-graphClientId" @bind-Value="GraphClientId" class="form-control" autocomplete="off" />
             </SettingField>
-            <SettingField Label="Client secret" Hint="Leave blank to keep the current secret.">
-                <InputText type="password" @bind-Value="GraphClientSecret" class="form-control" autocomplete="new-password"
-                       placeholder="@(HasStoredGraphClientSecret ? "(unchanged)" : "")" />
+            <SettingField For="field-graphClientSecret" Label="@L["settings.email.clientSecret"]" Hint="@L["settings.email.leaveBlankToKeepThe2"]">
+                <InputText id="field-graphClientSecret" type="password" @bind-Value="GraphClientSecret" class="form-control" autocomplete="new-password"
+                       placeholder="@(HasStoredGraphClientSecret ? L["cameras.edit.unchanged"].Value : "")" />
             </SettingField>
-            <SettingField Label="Shared mailbox" Hint="Optional. Defaults to the from address.">
-                <InputText type="email" @bind-Value="GraphSharedMailbox" class="form-control" />
+            <SettingField For="field-graphSharedMailbox" Label="@L["settings.email.sharedMailbox"]" Hint="@L["settings.email.optionalDefaultsToTheFrom"]">
+                <InputText id="field-graphSharedMailbox" type="email" @bind-Value="GraphSharedMailbox" class="form-control" />
             </SettingField>
         </SettingSection>
     </div>
 
     <div data-show-when="@($"Provider={EmailProviderType.Gmail}")">
-        <SettingSection Title="Gmail" Subtitle="Enter the OAuth client details, then connect once to grant consent.">
+        <SettingSection Title="@L["settings.email.gmail"]" Subtitle="@L["settings.email.enterTheOauthClientDetails"]">
             @if (IsGmailConnected)
             {
                 <SettingField Wide>
-                    <div class="alert alert-success py-2 mb-0">Connected.</div>
+                    <div class="alert alert-success py-2 mb-0">@L["settings.email.connected"]</div>
                 </SettingField>
             }
-            <SettingField Label="Client ID">
-                <InputText @bind-Value="GmailClientId" class="form-control" autocomplete="off" />
+            <SettingField For="field-gmailClientId" Label="@L["settings.email.clientId"]">
+                <InputText id="field-gmailClientId" @bind-Value="GmailClientId" class="form-control" autocomplete="off" />
             </SettingField>
-            <SettingField Label="Client secret" Hint="Leave blank to keep the current secret.">
-                <InputText type="password" @bind-Value="GmailClientSecret" class="form-control" autocomplete="new-password"
-                       placeholder="@(HasStoredGmailClientSecret ? "(unchanged)" : "")" />
+            <SettingField For="field-gmailClientSecret" Label="@L["settings.email.clientSecret"]" Hint="@L["settings.email.leaveBlankToKeepThe2"]">
+                <InputText id="field-gmailClientSecret" type="password" @bind-Value="GmailClientSecret" class="form-control" autocomplete="new-password"
+                       placeholder="@(HasStoredGmailClientSecret ? L["cameras.edit.unchanged"].Value : "")" />
             </SettingField>
-            <SettingField Label="Gmail address">
-                <InputText type="email" @bind-Value="GmailEmailAddress" class="form-control" placeholder="alerts@gmail.com" />
+            <SettingField For="field-gmailEmailAddress" Label="@L["settings.email.gmailAddress"]">
+                <InputText id="field-gmailEmailAddress" type="email" @bind-Value="GmailEmailAddress" class="form-control" placeholder="alerts@gmail.com" />
             </SettingField>
-            <SettingField Label="Connection" Hint="Saves, then redirects to Google.">
-                <button type="submit" name="Action" value="ConnectGmail" class="btn btn-outline-primary">Save and connect to Google</button>
+            <SettingField Label="@L["settings.email.connection"]" Hint="@L["settings.email.savesThenRedirectsToGoogle"]">
+                <button type="submit" name="Action" value="ConnectGmail" class="btn btn-outline-primary">@L["settings.email.saveAndConnectToGoogle"]</button>
             </SettingField>
         </SettingSection>
     </div>
 
-    <SettingSection Title="Test">
-        <SettingField Label="Send a test email to" Wide Hint="Saves first, then sends using the saved settings.">
+    <SettingSection Title="@L["common.test"]">
+        <SettingField For="field-testRecipient" Label="@L["settings.email.sendATestEmailTo"]" Wide Hint="@L["settings.email.savesFirstThenSendsUsing"]">
             <div class="input-group">
-                <InputText type="email" @bind-Value="TestRecipient" class="form-control" placeholder="you@example.com" />
-                <button type="submit" name="Action" value="TestSend" class="btn btn-outline-primary">Save and send test</button>
+                <InputText id="field-testRecipient" type="email" @bind-Value="TestRecipient" class="form-control" placeholder="you@example.com" />
+                <button type="submit" name="Action" value="TestSend" class="btn btn-outline-primary">@L["settings.email.saveAndSendTest"]</button>
             </div>
         </SettingField>
     </SettingSection>
 
     <div class="lv-savebar">
-        <button type="submit" name="Action" value="Save" class="btn btn-primary">Save</button>
+        <button type="submit" name="Action" value="Save" class="btn btn-primary">@L["common.save"]</button>
     </div>
 </EditForm>
 </div>
@@ -234,7 +234,7 @@
 
         if (string.IsNullOrWhiteSpace(FromAddress) || !new EmailAddressAttribute().IsValid(FromAddress))
         {
-            ErrorMessage = "Enter a valid \"from\" email address.";
+            ErrorMessage = Loc.T("settings.email.enterAValidFromEmail");
             return false;
         }
         if (IsEnabled)
@@ -242,11 +242,11 @@
             var providerError = Provider switch
             {
                 EmailProviderType.Smtp when string.IsNullOrWhiteSpace(SmtpHost) =>
-                    "An SMTP host is required while email is enabled.",
+                    Loc.T("settings.email.smtpHostRequired"),
                 EmailProviderType.Graph when string.IsNullOrWhiteSpace(GraphTenantId) || string.IsNullOrWhiteSpace(GraphClientId) =>
-                    "A Graph tenant ID and client ID are required while email is enabled.",
+                    Loc.T("settings.email.graphIdsRequired"),
                 EmailProviderType.Gmail when string.IsNullOrWhiteSpace(GmailClientId) =>
-                    "A Gmail Client ID is required while email is enabled.",
+                    Loc.T("settings.email.gmailIdRequired"),
                 _ => (string?)null
             };
             if (providerError is not null)
@@ -319,7 +319,7 @@
         if (details is not null)
             await AuditService.LogAsync("Settings.EmailUpdate", currentUserId, currentUserName, remoteIp, details);
 
-        SavedMessage = "Saved.";
+        SavedMessage = Loc.T("common.saved");
         await LoadAsync();
         return true;
     }
@@ -330,7 +330,7 @@
 
         if (string.IsNullOrWhiteSpace(TestRecipient) || !new EmailAddressAttribute().IsValid(TestRecipient))
         {
-            ErrorMessage = "Enter a valid recipient address to send the test to.";
+            ErrorMessage = Loc.T("settings.email.enterAValidRecipientAddress");
             return;
         }
 
@@ -341,16 +341,16 @@
 
         try
         {
-            await EmailService.SendAsync(TestRecipient.Trim(), "LarisVMS test email",
-                "<p>This is a test email from LarisVMS to verify this account's outbound configuration.</p>");
+            await EmailService.SendAsync(TestRecipient.Trim(), Loc.T("settings.email.testSubject"),
+                $"<p>{System.Net.WebUtility.HtmlEncode(Loc.T("settings.email.testBody"))}</p>");
             await AuditService.LogAsync("Settings.EmailTestSendSucceeded", currentUserId, currentUserName, remoteIp, TestRecipient.Trim());
-            SavedMessage = $"Test email sent to {TestRecipient.Trim()}.";
+            SavedMessage = Loc.T("settings.email.testEmailSentTo", new { trim = TestRecipient.Trim() });
         }
         catch (Exception ex)
         {
             await AuditService.LogAsync("Settings.EmailTestSendFailed", currentUserId, currentUserName, remoteIp,
                 $"{TestRecipient.Trim()}: {ex.Message}");
-            ErrorMessage = $"Test email failed: {ex.Message}";
+            ErrorMessage = Loc.T("settings.email.testEmailFailed", new { message = ex.Message });
         }
 
         await LoadAsync();
@@ -366,7 +366,7 @@
         var settings = await Db.EmailSettings.FirstOrDefaultAsync();
         if (settings is null || string.IsNullOrWhiteSpace(settings.GmailClientId) || string.IsNullOrWhiteSpace(settings.GmailClientSecret))
         {
-            ErrorMessage = "Enter a Gmail Client ID and Client Secret and save before connecting.";
+            ErrorMessage = Loc.T("settings.email.enterAGmailClientId");
             await LoadAsync();
             return;
         }

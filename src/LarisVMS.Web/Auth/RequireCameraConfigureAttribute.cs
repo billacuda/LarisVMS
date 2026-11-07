@@ -8,8 +8,9 @@ namespace LarisVMS.Web.Auth;
 /// <summary>
 /// On a camera's configuration pages (edit, zones, schedule, speed traps, device settings): besides
 /// the page's Cameras.Edit policy, the signed-in user needs Configure access to that camera. The
-/// camera comes from the route's <c>{id}</c>, or a posted <c>Id</c>; a page with neither (adding a
-/// new camera) only needs the policy.
+/// camera comes from the route's <c>{id}</c> and a posted <c>Id</c>; both are checked, since a page's
+/// bound <c>Id</c> takes the posted value over the route's. A page with neither (adding a new camera)
+/// only needs the policy.
 /// </summary>
 [AttributeUsage(AttributeTargets.Class)]
 public sealed class RequireCameraConfigureAttribute : Attribute, IAsyncPageFilter
@@ -19,15 +20,28 @@ public sealed class RequireCameraConfigureAttribute : Attribute, IAsyncPageFilte
     public async Task OnPageHandlerExecutionAsync(PageHandlerExecutingContext context, PageHandlerExecutionDelegate next)
     {
         var http = context.HttpContext;
-        Guid? cameraId = null;
-        if (Guid.TryParse(context.RouteData.Values["id"]?.ToString(), out var routeId)) cameraId = routeId;
-        else if (http.Request.HasFormContentType && Guid.TryParse(http.Request.Form["Id"].ToString(), out var formId)) cameraId = formId;
+        var cameraIds = new List<Guid>();
+        // Every value is checked one by one. Joining them ("Id=X&Id=X" reads as "X,X") would fail to
+        // parse and skip the check, while model binding still picks up X. A value that isn't a camera
+        // id at all is refused for the same reason.
+        var values = new List<string?> { context.RouteData.Values["id"]?.ToString() };
+        if (http.Request.HasFormContentType) values.AddRange(http.Request.Form["Id"]);
+        values.AddRange(http.Request.Query["id"]);
+        foreach (var value in values.Where(v => !string.IsNullOrWhiteSpace(v)))
+        {
+            if (!Guid.TryParse(value, out var id))
+            {
+                context.Result = new ForbidResult();
+                return;
+            }
+            cameraIds.Add(id);
+        }
 
-        if (cameraId is { } id)
+        if (cameraIds.Count > 0)
         {
             var access = http.RequestServices.GetRequiredService<ICameraAccessService>();
             var configurable = await access.GetAccessibleCameraIdsAsync(http.User, CameraAccessActions.Configure, http.RequestAborted);
-            if (configurable is not null && !configurable.Contains(id))
+            if (configurable is not null && cameraIds.Any(id => !configurable.Contains(id)))
             {
                 context.Result = new ForbidResult();
                 return;

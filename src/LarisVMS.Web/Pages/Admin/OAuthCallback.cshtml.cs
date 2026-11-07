@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 using LarisVMS.Infrastructure.Data;
 using LarisVMS.Infrastructure.Email;
 using LarisVMS.Web.Services;
@@ -27,9 +28,9 @@ public class OAuthCallbackModel(ApplicationDbContext db, IDataProtectionProvider
     public async Task<IActionResult> OnGetAsync(string? code, string? state, string? error, CancellationToken ct)
     {
         if (!string.IsNullOrEmpty(error))
-            return Fail($"OAuth authorization failed: {error}");
+            return Fail(Loc.T("admin.oAuthCallback.oauthAuthorizationFailed", new { error }));
         if (string.IsNullOrEmpty(code) || string.IsNullOrEmpty(state))
-            return Fail("OAuth authorization failed: missing code or state.");
+            return Fail(Loc.T("admin.oAuthCallback.oauthAuthorizationFailedMissingCode"));
 
         EmailOAuthState? payload;
         try
@@ -38,15 +39,15 @@ public class OAuthCallbackModel(ApplicationDbContext db, IDataProtectionProvider
         }
         catch
         {
-            return Fail("OAuth authorization failed: invalid or expired request.");
+            return Fail(Loc.T("admin.oAuthCallback.oauthAuthorizationFailedInvalidOr"));
         }
 
         if (payload is null || DateTime.UtcNow - payload.IssuedAtUtc > TimeSpan.FromMinutes(10))
-            return Fail("OAuth authorization failed: the request expired — try connecting again.");
+            return Fail(Loc.T("admin.oAuthCallback.oauthAuthorizationFailedTheRequest"));
 
         var settings = await db.EmailSettings.FirstOrDefaultAsync(ct);
         if (settings is null || string.IsNullOrWhiteSpace(settings.GmailClientId) || string.IsNullOrWhiteSpace(settings.GmailClientSecret))
-            return Fail("OAuth authorization failed: the Gmail Client ID/Secret are missing — save them first.");
+            return Fail(Loc.T("admin.oAuthCallback.oauthAuthorizationFailedTheGmail"));
 
         var redirectUri = Url.Page("/Admin/OAuthCallback", pageHandler: null, values: null, protocol: Request.Scheme, host: Request.Host.Value)!;
         var connectProvider = oauthFactory.Get(payload.Provider);
@@ -59,7 +60,7 @@ public class OAuthCallbackModel(ApplicationDbContext db, IDataProtectionProvider
         }
         catch (Exception ex)
         {
-            return Fail($"OAuth authorization failed: {ex.Message}");
+            return Fail(Loc.T("admin.oAuthCallback.oauthAuthorizationFailed2", new { message = ex.Message }));
         }
 
         settings.GmailRefreshToken = refreshToken;
@@ -71,7 +72,7 @@ public class OAuthCallbackModel(ApplicationDbContext db, IDataProtectionProvider
             User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, User.Identity?.Name,
             HttpContext.Connection.RemoteIpAddress?.ToString(), settings.GmailEmailAddress, ct);
 
-        return SucceedRedirect($"Connected to Gmail as {settings.GmailEmailAddress}.");
+        return SucceedRedirect(Loc.T("admin.oAuthCallback.connectedToGmailAs", new { gmailEmailAddress = settings.GmailEmailAddress }));
     }
 
     /// <summary>Admin/Settings/Email is now a Blazor component (Components/Pages/Admin/Settings/

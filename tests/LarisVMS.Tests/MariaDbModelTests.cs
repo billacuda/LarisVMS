@@ -14,7 +14,7 @@ using MySqlConnector;
 
 namespace LarisVMS.Tests;
 
-/// <summary>MariaDB (experimental) support without a MariaDB server: InnoDB's limits checked against
+/// <summary>MariaDB support without a MariaDB server: InnoDB's limits checked against
 /// the model the provider builds, the migrations kept in step with it, and the provider plumbing
 /// (connection strings, the protected password, mariadb-dump's option file).</summary>
 public class MariaDbModelTests

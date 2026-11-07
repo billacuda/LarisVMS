@@ -103,6 +103,18 @@ if (Test-Path $UpdaterBinaryPath) {
 }
 Write-Ok "Files installed"
 
+# A config file that may hold a certificate password: locked to SYSTEM, Administrators, and the
+# service's account before anything is written to it, so other local users never get to read it.
+function Write-ProtectedFile([string]$Path, [string]$Content, [string]$ReaderAccount) {
+    if (-not (Test-Path $Path)) { New-Item -ItemType File -Path $Path | Out-Null }
+    $grants = @('/grant:r', '*S-1-5-18:(F)', '/grant:r', '*S-1-5-32-544:(F)')
+    if ($ReaderAccount -and $ReaderAccount -notin 'LocalSystem', '.\LocalSystem', 'NT AUTHORITY\SYSTEM') {
+        $grants += @('/grant:r', "${ReaderAccount}:(R)")
+    }
+    & icacls $Path /inheritance:r @grants | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Couldn't restrict access to $Path." }
+    Set-Content -Path $Path -Value $Content -Encoding UTF8
+}
 # ── proxy-endpoint.json ──────────────────────────────────────────────────────
 Write-Step "Writing proxy-endpoint.json (TCP $ClientPort)"
 $cfgDir = Join-Path $env:ProgramData 'LarisVMS'
@@ -111,7 +123,10 @@ $cfg = [ordered]@{ port = $ClientPort; allowInsecure = [bool]$ClientAllowInsecur
 if ($ClientPfxPath)      { $cfg.pfxPath = $ClientPfxPath }
 if ($ClientPfxPassword)  { $cfg.pfxPassword = $ClientPfxPassword }
 if ($ClientEndpointHost) { $cfg.host = $ClientEndpointHost }
-$cfg | ConvertTo-Json | Set-Content -Path (Join-Path $cfgDir 'proxy-endpoint.json') -Encoding UTF8
+$proxyRunAs = if ($ServiceCredential) { $ServiceCredential.UserName }
+              elseif ($existingSvc) { (Get-CimInstance -ClassName Win32_Service -Filter "Name='$ServiceName'").StartName }
+              else { 'LocalSystem' }
+Write-ProtectedFile (Join-Path $cfgDir 'proxy-endpoint.json') ($cfg | ConvertTo-Json) $proxyRunAs
 Write-Ok "Wrote $(Join-Path $cfgDir 'proxy-endpoint.json')"
 
 # ── register / update service ────────────────────────────────────────────────

@@ -15,8 +15,8 @@ window.larisvmsDeviceSettings = (function () {
     'use strict';
 
     var CODEC_NAMES = { H264: 'H.264', H265: 'H.265', MPEG4: 'MPEG-4', JPEG: 'MJPEG', G711: 'G.711', G726: 'G.726', AAC: 'AAC' };
-    var MODE_NAMES = { ON: 'On', OFF: 'Off', AUTO: 'Auto', MANUAL: 'Manual' };
-    var IR_CUT_NAMES = { AUTO: 'Auto', ON: 'Day (color)', OFF: 'Night (black and white)' };
+    var MODE_NAMES = { ON: larisvmsI18n.t('js.cameraDeviceSettings.modeOn'), OFF: larisvmsI18n.t('js.cameraDeviceSettings.modeOff'), AUTO: larisvmsI18n.t('js.cameraDeviceSettings.irAuto'), MANUAL: larisvmsI18n.t('js.cameraDeviceSettings.modeManual') };
+    var IR_CUT_NAMES = { AUTO: larisvmsI18n.t('js.cameraDeviceSettings.irAuto'), ON: larisvmsI18n.t('js.cameraDeviceSettings.irDay'), OFF: larisvmsI18n.t('js.cameraDeviceSettings.irNight') };
 
     function codecName(c) { return CODEC_NAMES[(c || '').toUpperCase()] || c || '—'; }
     function modeName(m) { return MODE_NAMES[(m || '').toUpperCase()] || m; }
@@ -62,10 +62,10 @@ window.larisvmsDeviceSettings = (function () {
         function load(keepWork) {
             root.innerHTML = '';
             root.appendChild(el('p', { class: 'text-muted small' }, [
-                el('span', { class: 'spinner-border spinner-border-sm me-1', 'aria-hidden': 'true' }), 'Reading settings from the camera…']));
+                el('span', { class: 'spinner-border spinner-border-sm me-1', 'aria-hidden': 'true' }), larisvmsI18n.t('js.cameraDeviceSettings.readingSettingsFromTheCamera')]));
             return fetch('/api/cameras/' + opts.cameraId + '/device-settings', { credentials: 'same-origin' })
                 .then(function (r) {
-                    if (!r.ok) return problemText(r, 'Couldn\'t read the camera\'s settings.').then(function (t) { throw new Error(t); });
+                    if (!r.ok) return problemText(r, larisvmsI18n.t('js.cameraDeviceSettings.couldntReadTheCameraSettings')).then(function (t) { throw new Error(t); });
                     return r.json();
                 })
                 .then(function (dto) {
@@ -78,7 +78,7 @@ window.larisvmsDeviceSettings = (function () {
                     root.innerHTML = '';
                     root.appendChild(el('div', { class: 'alert alert-warning d-flex flex-wrap align-items-center gap-2' }, [
                         el('span', { class: 'flex-grow-1', text: err.message }),
-                        el('button', { type: 'button', class: 'btn btn-sm btn-outline-secondary', onclick: function () { load(false); } }, ['Retry'])
+                        el('button', { type: 'button', class: 'btn btn-sm btn-outline-secondary', onclick: function () { load(false); } }, [larisvmsI18n.t('js.cameraDeviceSettings.retry')])
                     ]));
                 });
         }
@@ -121,14 +121,13 @@ window.larisvmsDeviceSettings = (function () {
             if (peers.length === 0) { note.classList.add('d-none'); return; }
 
             var count = selectedPeerIds().length;
-            label.textContent = count === 0 ? 'This camera only' : 'This camera + ' + count + (count === 1 ? ' other' : ' others');
+            label.textContent = count === 0 ? larisvmsI18n.t('js.cameraDeviceSettings.thisCameraOnly') : larisvmsI18n.plural('js.cameraDeviceSettings.thisCameraPlus', count);
             note.classList.toggle('d-none', count === 0);
             note.textContent = count === 0 ? '' :
-                'Changes apply to this camera and ' + count + ' other camera' + (count === 1 ? '' : 's') +
-                ' of the same model. Only the settings you change are sent, so each camera keeps the rest of its own settings.';
+                larisvmsI18n.plural('js.cameraDeviceSettings.changesApplyTo', count);
 
             menu.innerHTML = '';
-            menu.appendChild(el('div', { class: 'small text-muted mb-1', text: 'Also apply changes to:' }));
+            menu.appendChild(el('div', { class: 'small text-muted mb-1', text: larisvmsI18n.t('js.cameraDeviceSettings.alsoApplyChangesTo') }));
             var all = el('input', { type: 'checkbox', class: 'form-check-input', id: 'dsPeerAll' });
             all.checked = count === peers.length;
             all.indeterminate = count > 0 && count < peers.length;
@@ -138,7 +137,7 @@ window.larisvmsDeviceSettings = (function () {
                 renderApplyTo();
             });
             menu.appendChild(el('div', { class: 'form-check border-bottom pb-1 mb-1' }, [
-                all, el('label', { class: 'form-check-label small fw-semibold', for: 'dsPeerAll', text: 'All ' + peers.length + ' cameras of this model' })]));
+                all, el('label', { class: 'form-check-label small fw-semibold', for: 'dsPeerAll', text: larisvmsI18n.plural('js.cameraDeviceSettings.allOfModel', peers.length) })]));
             peers.forEach(function (p) {
                 var id = 'dsPeer-' + p.cameraId;
                 var cb = el('input', { type: 'checkbox', class: 'form-check-input', id: id });
@@ -150,7 +149,7 @@ window.larisvmsDeviceSettings = (function () {
                 menu.appendChild(el('div', { class: 'form-check' }, [cb,
                     el('label', { class: 'form-check-label small', for: id }, [
                         p.name,
-                        p.firmwareDiffers ? el('span', { class: 'badge bg-body-secondary text-body border ms-1', title: 'Firmware ' + (p.firmwareVersion || 'unknown') + ', so some options may differ', text: 'firmware differs' }) : null,
+                        p.firmwareDiffers ? el('span', { class: 'badge bg-body-secondary text-body border ms-1', title: larisvmsI18n.t('js.cameraDeviceSettings.firmwareTitle', { version: p.firmwareVersion || larisvmsI18n.t('js.cameraDeviceSettings.unknown') }), text: larisvmsI18n.t('js.cameraDeviceSettings.firmwareDiffers') }) : null,
                         p.isEnabled ? null : el('span', { class: 'text-muted ms-1', text: '(disabled)' })
                     ])]));
             });
@@ -224,8 +223,8 @@ window.larisvmsDeviceSettings = (function () {
 
         function actions(key, isDirty, apply) {
             var btn = el('button', { type: 'button', class: 'btn btn-primary btn-sm', disabled: !isDirty() });
-            btn.textContent = 'Apply';
-            var reset = el('button', { type: 'button', class: 'btn btn-link btn-sm', disabled: !isDirty(), text: 'Reset' });
+            btn.textContent = larisvmsI18n.t('js.cameraDeviceSettings.apply');
+            var reset = el('button', { type: 'button', class: 'btn btn-link btn-sm', disabled: !isDirty(), text: larisvmsI18n.t('js.cameraDeviceSettings.reset') });
             var status = el('span', { class: 'small text-muted', 'data-ds-status': key });
             btn.addEventListener('click', function () { apply(btn, status); });
             reset.addEventListener('click', function () { resetSection(key); });
@@ -295,52 +294,52 @@ window.larisvmsDeviceSettings = (function () {
                         type: 'button', role: 'tab', class: 'nav-link py-1 px-3' + (s.role === stream.role ? ' active' : ''),
                         'aria-selected': s.role === stream.role ? 'true' : 'false',
                         onclick: function () { activeRole = s.role; render(); }
-                    }, [s.label, dirty ? el('span', { class: 'ds-dirty-dot ms-1', title: 'Unsaved changes', 'aria-label': 'unsaved changes' }) : null])]);
+                    }, [s.label, dirty ? el('span', { class: 'ds-dirty-dot ms-1', title: larisvmsI18n.t('js.cameraDeviceSettings.unsavedChanges'), 'aria-label': larisvmsI18n.t('js.cameraDeviceSettings.unsavedChanges2') }) : null])]);
                 }))]) : null;
 
             var info = el('div', { class: 'lv-wide small text-muted' }, [
-                'Currently ' + summary(stream.current) + '.',
-                stream.sharedWith.length ? el('div', { class: 'text-warning-emphasis mt-1', text: 'This stream shares its encoder settings with the ' + joinList(stream.sharedWith) + ' stream' + (stream.sharedWith.length > 1 ? 's' : '') + ' on the camera, so a change here changes ' + (stream.sharedWith.length > 1 ? 'them' : 'it') + ' too.' }) : null
+                larisvmsI18n.t('js.cameraDeviceSettings.currently', { summary: summary(stream.current) }),
+                stream.sharedWith.length ? el('div', { class: 'text-warning-emphasis mt-1', text: larisvmsI18n.plural('js.cameraDeviceSettings.sharedEncoder', stream.sharedWith.length, { streams: joinList(stream.sharedWith) }) }) : null
             ]);
 
             var frameRateField = o.frameRates.length > 1
-                ? selectField('Frame rate', o.frameRates, w.frameRate, function (f) { return num(f) + ' fps'; }, function (v) { update('frameRate', Number(v)); })
-                : (ranged(o.frameRateRange) ? numberField('Frame rate', o.frameRateRange, w.frameRate, 1, 'fps', function (v) { update('frameRate', v); }) : null);
+                ? selectField(larisvmsI18n.t('js.cameraDeviceSettings.frameRate'), o.frameRates, w.frameRate, function (f) { return num(f) + ' fps'; }, function (v) { update('frameRate', Number(v)); })
+                : (ranged(o.frameRateRange) ? numberField(larisvmsI18n.t('js.cameraDeviceSettings.frameRate'), o.frameRateRange, w.frameRate, 1, 'fps', function (v) { update('frameRate', v); }) : null);
 
             var bitrateField = (o.bitrateKbps || w.bitrateKbps !== null)
-                ? numberField('Bitrate', o.bitrateKbps, w.bitrateKbps, 1, 'kbps', function (v) { update('bitrateKbps', v === null ? null : Math.round(v)); },
-                    w.rateControl === 'CBR' ? 'The stream stays at this rate.' : 'The most the stream will use.')
+                ? numberField(larisvmsI18n.t('js.cameraDeviceSettings.bitrate'), o.bitrateKbps, w.bitrateKbps, 1, 'kbps', function (v) { update('bitrateKbps', v === null ? null : Math.round(v)); },
+                    w.rateControl === 'CBR' ? larisvmsI18n.t('js.cameraDeviceSettings.theStreamStaysAtThis') : larisvmsI18n.t('js.cameraDeviceSettings.theMostTheStreamWill'))
                 : null;
 
             var showGov = !same(w.codec, 'JPEG') && (ranged(o.govLength) || stream.current.govLength !== null);
-            var govField = showGov ? numberField('Keyframe interval', o.govLength, w.govLength, 1, 'frames', function (v) { update('govLength', v === null ? null : Math.round(v)); },
-                'Twice the frame rate (one keyframe every 2 seconds) is a good default') : null;
+            var govField = showGov ? numberField(larisvmsI18n.t('js.cameraDeviceSettings.keyframeInterval'), o.govLength, w.govLength, 1, 'frames', function (v) { update('govLength', v === null ? null : Math.round(v)); },
+                larisvmsI18n.t('js.cameraDeviceSettings.twiceTheFrameRateOne')) : null;
 
             var groups = [
-                group('Encoding', [
-                    selectField('Codec', stream.codecs.map(function (c) { return c.codec; }), w.codec, codecName, function (v) { w.codec = v; conformToCodec(stream); rerender(); },
-                        'H.265 needs about half the bitrate of H.264 for the same picture'),
-                    selectField('Encoding profile', o.profiles, w.profile, null, function (v) { update('profile', v); })
+                group(larisvmsI18n.t('js.cameraDeviceSettings.encoding'), [
+                    selectField(larisvmsI18n.t('js.cameraDeviceSettings.codec'), stream.codecs.map(function (c) { return c.codec; }), w.codec, codecName, function (v) { w.codec = v; conformToCodec(stream); rerender(); },
+                        larisvmsI18n.t('js.cameraDeviceSettings.h265Hint')),
+                    selectField(larisvmsI18n.t('js.cameraDeviceSettings.encodingProfile'), o.profiles, w.profile, null, function (v) { update('profile', v); })
                 ]),
-                group('Picture', [
-                    selectField('Resolution', o.resolutions.map(function (r) { return r.width + 'x' + r.height; }),
+                group(larisvmsI18n.t('js.cameraDeviceSettings.picture'), [
+                    selectField(larisvmsI18n.t('js.cameraDeviceSettings.resolution'), o.resolutions.map(function (r) { return r.width + 'x' + r.height; }),
                         w.width && w.height ? w.width + 'x' + w.height : null,
                         function (v) { return v.replace('x', '×'); },
                         function (v) { var p = v.split('x'); w.width = Number(p[0]); w.height = Number(p[1]); refreshDirty(); }),
                     frameRateField
                 ]),
-                group('Bitrate', [
-                    o.rateControlSupported ? selectField('Bitrate mode', ['VBR', 'CBR'], w.rateControl, function (m) { return m === 'CBR' ? 'Constant (CBR)' : 'Variable (VBR)'; },
-                        function (v) { w.rateControl = v; rerender(); }, 'Variable saves storage on quiet scenes') : null,
+                group(larisvmsI18n.t('js.cameraDeviceSettings.bitrate'), [
+                    o.rateControlSupported ? selectField(larisvmsI18n.t('js.cameraDeviceSettings.bitrateMode'), ['VBR', 'CBR'], w.rateControl, function (m) { return m === 'CBR' ? larisvmsI18n.t('js.cameraDeviceSettings.constantCbr') : larisvmsI18n.t('js.cameraDeviceSettings.variableVbr'); },
+                        function (v) { w.rateControl = v; rerender(); }, larisvmsI18n.t('js.cameraDeviceSettings.variableSavesStorageOnQuiet')) : null,
                     bitrateField,
-                    sliderField('Quality', ranged(o.quality) ? o.quality : null, w.quality, function (v) { update('quality', v); }),
+                    sliderField(larisvmsI18n.t('js.cameraDeviceSettings.quality'), ranged(o.quality) ? o.quality : null, w.quality, function (v) { update('quality', v); }),
                     govField
                 ])
             ];
             var parts = [pills ? [pills] : null, [info]].concat(groups);
             if (!groups.some(Boolean)) {
                 // Nothing adjustable on this stream beyond the read-only summary.
-                parts.push([el('div', { class: 'lv-wide small text-muted', text: 'The camera doesn\'t offer any changes for this stream.' })]);
+                parts.push([el('div', { class: 'lv-wide small text-muted', text: larisvmsI18n.t('js.cameraDeviceSettings.theCameraDoesntOfferAny') })]);
             } else {
                 parts.push(actions('video:' + stream.role, function () { return !!videoChange(stream); }, function (btn, status) {
                     var change = videoChange(stream);
@@ -348,12 +347,12 @@ window.larisvmsDeviceSettings = (function () {
                     var payload = { video: {} };
                     payload.video[stream.role] = change;
                     apply('video:' + stream.role, btn, status,
-                        'Apply to the ' + stream.label + ' stream? The stream reconnects, leaving a gap of a few seconds in recording.',
+                        larisvmsI18n.t('js.cameraDeviceSettings.applyStreamConfirm', { stream: stream.label }),
                         'PUT', '/api/cameras/' + opts.cameraId + '/device-settings/video/' + encodeURIComponent(stream.role), change, payload,
                         function () { delete work.video[stream.role]; });
                 }));
             }
-            return section('Video streams', 'Each stream reconnects briefly when you apply a change.', parts, 'video');
+            return section(larisvmsI18n.t('js.cameraDeviceSettings.videoStreams'), larisvmsI18n.t('js.cameraDeviceSettings.eachStreamReconnectsBrieflyWhen'), parts, 'video');
         }
 
         // ── Image ──────────────────────────────────────────────────────────────────────────────
@@ -379,27 +378,27 @@ window.larisvmsDeviceSettings = (function () {
             var levelShown = function (mode) { return same(mode, 'ON'); };
 
             var parts = [
-                group('Adjustments', [
-                    sliderField('Brightness', o.brightness, w.brightness, function (v) { update('brightness', v); }),
-                    sliderField('Contrast', o.contrast, w.contrast, function (v) { update('contrast', v); }),
-                    sliderField('Saturation', o.saturation, w.saturation, function (v) { update('saturation', v); }),
-                    sliderField('Sharpness', o.sharpness, w.sharpness, function (v) { update('sharpness', v); })
+                group(larisvmsI18n.t('js.cameraDeviceSettings.adjustments'), [
+                    sliderField(larisvmsI18n.t('js.cameraDeviceSettings.brightness'), o.brightness, w.brightness, function (v) { update('brightness', v); }),
+                    sliderField(larisvmsI18n.t('js.cameraDeviceSettings.contrast'), o.contrast, w.contrast, function (v) { update('contrast', v); }),
+                    sliderField(larisvmsI18n.t('js.cameraDeviceSettings.saturation'), o.saturation, w.saturation, function (v) { update('saturation', v); }),
+                    sliderField(larisvmsI18n.t('js.cameraDeviceSettings.sharpness'), o.sharpness, w.sharpness, function (v) { update('sharpness', v); })
                 ]),
-                group('Day and night', [
-                    selectField('Day/night mode', o.irCutFilterModes, w.irCutFilter, function (m) { return IR_CUT_NAMES[(m || '').toUpperCase()] || m; },
-                        function (v) { update('irCutFilter', v); }, 'Auto switches to black and white with IR in low light')
+                group(larisvmsI18n.t('js.cameraDeviceSettings.dayAndNight'), [
+                    selectField(larisvmsI18n.t('js.cameraDeviceSettings.dayNightMode'), o.irCutFilterModes, w.irCutFilter, function (m) { return IR_CUT_NAMES[(m || '').toUpperCase()] || m; },
+                        function (v) { update('irCutFilter', v); }, larisvmsI18n.t('js.cameraDeviceSettings.autoSwitchesToBlackAnd'))
                 ]),
-                group('Light and exposure', [
-                    selectField('Wide dynamic range (WDR)', o.wdrModes, w.wdrMode, modeName, function (v) { rerender('wdrMode', v); }, 'Evens out bright windows and dark corners'),
-                    levelShown(w.wdrMode) ? sliderField('WDR level', o.wdrLevel, w.wdrLevel, function (v) { update('wdrLevel', v); }) : null,
-                    selectField('Backlight compensation', o.backlightModes, w.backlightMode, modeName, function (v) { rerender('backlightMode', v); }, 'Brightens subjects in front of a bright background'),
-                    levelShown(w.backlightMode) ? sliderField('Backlight level', o.backlightLevel, w.backlightLevel, function (v) { update('backlightLevel', v); }) : null,
-                    selectField('Exposure', o.exposureModes, w.exposureMode, modeName, function (v) { update('exposureMode', v); })
+                group(larisvmsI18n.t('js.cameraDeviceSettings.lightAndExposure'), [
+                    selectField(larisvmsI18n.t('js.cameraDeviceSettings.wideDynamicRangeWdr'), o.wdrModes, w.wdrMode, modeName, function (v) { rerender('wdrMode', v); }, larisvmsI18n.t('js.cameraDeviceSettings.evensOutBrightWindowsAnd')),
+                    levelShown(w.wdrMode) ? sliderField(larisvmsI18n.t('js.cameraDeviceSettings.wdrLevel'), o.wdrLevel, w.wdrLevel, function (v) { update('wdrLevel', v); }) : null,
+                    selectField(larisvmsI18n.t('js.cameraDeviceSettings.backlightCompensation'), o.backlightModes, w.backlightMode, modeName, function (v) { rerender('backlightMode', v); }, larisvmsI18n.t('js.cameraDeviceSettings.brightensSubjectsInFrontOf')),
+                    levelShown(w.backlightMode) ? sliderField(larisvmsI18n.t('js.cameraDeviceSettings.backlightLevel'), o.backlightLevel, w.backlightLevel, function (v) { update('backlightLevel', v); }) : null,
+                    selectField(larisvmsI18n.t('js.cameraDeviceSettings.exposure'), o.exposureModes, w.exposureMode, modeName, function (v) { update('exposureMode', v); })
                 ]),
-                group('White balance', [
-                    selectField('White balance', o.whiteBalanceModes, w.whiteBalanceMode, modeName, function (v) { rerender('whiteBalanceMode', v); }),
-                    same(w.whiteBalanceMode, 'MANUAL') ? sliderField('Red gain', o.whiteBalanceCrGain, w.whiteBalanceCrGain, function (v) { update('whiteBalanceCrGain', v); }) : null,
-                    same(w.whiteBalanceMode, 'MANUAL') ? sliderField('Blue gain', o.whiteBalanceCbGain, w.whiteBalanceCbGain, function (v) { update('whiteBalanceCbGain', v); }) : null
+                group(larisvmsI18n.t('js.cameraDeviceSettings.whiteBalance'), [
+                    selectField(larisvmsI18n.t('js.cameraDeviceSettings.whiteBalance'), o.whiteBalanceModes, w.whiteBalanceMode, modeName, function (v) { rerender('whiteBalanceMode', v); }),
+                    same(w.whiteBalanceMode, 'MANUAL') ? sliderField(larisvmsI18n.t('js.cameraDeviceSettings.redGain'), o.whiteBalanceCrGain, w.whiteBalanceCrGain, function (v) { update('whiteBalanceCrGain', v); }) : null,
+                    same(w.whiteBalanceMode, 'MANUAL') ? sliderField(larisvmsI18n.t('js.cameraDeviceSettings.blueGain'), o.whiteBalanceCbGain, w.whiteBalanceCbGain, function (v) { update('whiteBalanceCbGain', v); }) : null
                 ])
             ];
             if (!parts.filter(Boolean).length) return null;
@@ -409,7 +408,7 @@ window.larisvmsDeviceSettings = (function () {
                 apply('image', btn, status, null, 'PUT', '/api/cameras/' + opts.cameraId + '/device-settings/image', change, { image: change },
                     function () { work.image = null; });
             }));
-            return section('Image', 'Takes effect right away, without reconnecting the stream.', parts, 'image');
+            return section(larisvmsI18n.t('js.cameraDeviceSettings.image'), larisvmsI18n.t('js.cameraDeviceSettings.takesEffectRightAwayWithout'), parts, 'image');
         }
 
         // ── Audio ──────────────────────────────────────────────────────────────────────────────
@@ -428,30 +427,30 @@ window.larisvmsDeviceSettings = (function () {
                 var w = work.audio[a.configToken];
                 var o = a.codecs.filter(function (c) { return same(c.codec, w.codec); })[0] || { bitratesKbps: [], sampleRatesKhz: [] };
                 var fields = [
-                    selectField('Codec', a.codecs.map(function (c) { return c.codec; }), w.codec, codecName, function (v) {
+                    selectField(larisvmsI18n.t('js.cameraDeviceSettings.codec'), a.codecs.map(function (c) { return c.codec; }), w.codec, codecName, function (v) {
                         w.codec = v;
                         var no = a.codecs.filter(function (c) { return same(c.codec, v); })[0];
                         if (no && no.bitratesKbps.length && no.bitratesKbps.indexOf(w.bitrateKbps) < 0) w.bitrateKbps = no.bitratesKbps[0];
                         if (no && no.sampleRatesKhz.length && no.sampleRatesKhz.indexOf(w.sampleRateKhz) < 0) w.sampleRateKhz = no.sampleRatesKhz[0];
                         render();
                     }),
-                    selectField('Bitrate', o.bitratesKbps, w.bitrateKbps, function (b) { return b + ' kbps'; }, function (v) { w.bitrateKbps = Number(v); refreshDirty(); }),
-                    selectField('Sample rate', o.sampleRatesKhz, w.sampleRateKhz, function (s) { return s + ' kHz'; }, function (v) { w.sampleRateKhz = Number(v); refreshDirty(); })
+                    selectField(larisvmsI18n.t('js.cameraDeviceSettings.bitrate'), o.bitratesKbps, w.bitrateKbps, function (b) { return b + ' kbps'; }, function (v) { w.bitrateKbps = Number(v); refreshDirty(); }),
+                    selectField(larisvmsI18n.t('js.cameraDeviceSettings.sampleRate'), o.sampleRatesKhz, w.sampleRateKhz, function (s) { return s + ' kHz'; }, function (v) { w.sampleRateKhz = Number(v); refreshDirty(); })
                 ];
                 if (!fields.filter(Boolean).length) return;
-                var title = data.audio.length > 1 ? 'Used by ' + joinList(a.roles) : null;
+                var title = data.audio.length > 1 ? larisvmsI18n.t('js.cameraDeviceSettings.usedBy', { streams: joinList(a.roles) }) : null;
                 var g = title ? group(title, fields) : fields.filter(Boolean);
                 parts.push(g);
                 parts.push(actions('audio:' + a.configToken, function () { return !!audioChange(a); }, function (btn, status) {
                     var change = audioChange(a);
                     if (!change) return;
-                    apply('audio:' + a.configToken, btn, status, 'Apply audio settings? Streams that carry this audio reconnect briefly.',
+                    apply('audio:' + a.configToken, btn, status, larisvmsI18n.t('js.cameraDeviceSettings.applyAudioSettingsStreamsThat'),
                         'PUT', '/api/cameras/' + opts.cameraId + '/device-settings/audio/' + encodeURIComponent(a.configToken), change, { audio: change },
                         function () { delete work.audio[a.configToken]; });
                 }));
             });
             if (!parts.length) return null;
-            return section('Audio', 'The microphone audio carried with the video.', parts, 'audio');
+            return section(larisvmsI18n.t('js.cameraDeviceSettings.audio'), larisvmsI18n.t('js.cameraDeviceSettings.theMicrophoneAudioCarriedWith'), parts, 'audio');
         }
 
         // ── Apply ──────────────────────────────────────────────────────────────────────────────
@@ -461,13 +460,13 @@ window.larisvmsDeviceSettings = (function () {
             var bulk = others.length > 0;
             var total = others.length + 1;
             var question = bulk
-                ? 'Apply this change to ' + total + ' cameras?' + (confirmText ? ' ' + confirmText.replace(/^Apply[^?]*\?\s*/, '') : '')
+                ? larisvmsI18n.t('js.cameraDeviceSettings.applyToCameras', { count: total }) + (confirmText ? ' ' + confirmText.replace(/^[^?]*\?\s*/, '') : '')
                 : confirmText;
             if (question && !window.confirm(question)) return;
 
             btn.disabled = true;
             status.className = 'small text-muted';
-            status.textContent = bulk ? 'Applying to ' + total + ' cameras…' : 'Saving…';
+            status.textContent = bulk ? larisvmsI18n.t('js.cameraDeviceSettings.applyingTo', { count: total }) : larisvmsI18n.t('js.cameraDeviceSettings.saving');
 
             var request = bulk
                 ? fetch('/api/device-settings/bulk', {
@@ -477,7 +476,7 @@ window.larisvmsDeviceSettings = (function () {
                 : fetch(url, { method: method, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(change) });
 
             request.then(function (r) {
-                if (!r.ok) return problemText(r, 'Couldn\'t apply the change.').then(function (t) { throw new Error(t); });
+                if (!r.ok) return problemText(r, larisvmsI18n.t('js.cameraDeviceSettings.couldntApplyTheChange')).then(function (t) { throw new Error(t); });
                 return bulk ? r.json() : null;
             }).then(function (results) {
                 if (results) lastResults[key] = { payload: bulkPayload, results: results };
@@ -485,7 +484,7 @@ window.larisvmsDeviceSettings = (function () {
                 onApplied();
                 return load(true).then(function () {
                     var s = root.querySelector('[data-ds-status="' + key + '"]');
-                    if (s && !results) { s.className = 'small text-success'; s.textContent = 'Saved.'; }
+                    if (s && !results) { s.className = 'small text-success'; s.textContent = larisvmsI18n.t('js.cameraDeviceSettings.saved'); }
                 });
             }).catch(function (err) {
                 status.className = 'small text-danger';
@@ -511,23 +510,23 @@ window.larisvmsDeviceSettings = (function () {
             var retry = failed.length ? el('button', {
                 type: 'button', class: 'btn btn-sm btn-outline-secondary mt-1',
                 onclick: function (e) { retryFailed(key, failed, e.target); }
-            }, ['Retry failed (' + failed.length + ')']) : null;
+            }, [larisvmsI18n.t('js.cameraDeviceSettings.retryFailed', { count: failed.length })]) : null;
             return el('div', { class: 'lv-wide border-top pt-2' }, [
-                el('div', { class: 'small fw-semibold mb-1', text: 'Applied to ' + applied + ' of ' + entry.results.length + ' cameras' }),
+                el('div', { class: 'small fw-semibold mb-1', text: larisvmsI18n.plural('js.cameraDeviceSettings.appliedTo', entry.results.length, { applied: applied }) }),
                 list, retry,
-                el('button', { type: 'button', class: 'btn btn-sm btn-link mt-1', text: 'Dismiss', onclick: function () { delete lastResults[key]; render(); } })
+                el('button', { type: 'button', class: 'btn btn-sm btn-link mt-1', text: larisvmsI18n.t('js.cameraDeviceSettings.dismiss'), onclick: function () { delete lastResults[key]; render(); } })
             ]);
         }
 
         function retryFailed(key, failed, btn) {
             var entry = lastResults[key];
             btn.disabled = true;
-            btn.textContent = 'Retrying…';
+            btn.textContent = larisvmsI18n.t('js.cameraDeviceSettings.retrying');
             fetch('/api/device-settings/bulk', {
                 method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(Object.assign({ cameraIds: failed.map(function (r) { return r.cameraId; }) }, entry.payload))
             }).then(function (r) {
-                if (!r.ok) return problemText(r, 'Couldn\'t apply the change.').then(function (t) { throw new Error(t); });
+                if (!r.ok) return problemText(r, larisvmsI18n.t('js.cameraDeviceSettings.couldntApplyTheChange')).then(function (t) { throw new Error(t); });
                 return r.json();
             }).then(function (retried) {
                 var byId = {};
@@ -536,7 +535,7 @@ window.larisvmsDeviceSettings = (function () {
                 render();
             }).catch(function (err) {
                 btn.disabled = false;
-                btn.textContent = err.message + ' Try again';
+                btn.textContent = err.message + ' ' + larisvmsI18n.t('js.cameraDeviceSettings.tryAgain');
             });
         }
 
@@ -568,16 +567,16 @@ window.larisvmsDeviceSettings = (function () {
             }
             var sections = [renderVideo(), renderImage(), renderAudio()].filter(Boolean);
             if (!sections.length) {
-                root.appendChild(el('p', { class: 'text-muted', text: 'This camera doesn\'t report any settings that can be changed over ONVIF. Use the camera\'s own web page for these.' }));
+                root.appendChild(el('p', { class: 'text-muted', text: larisvmsI18n.t('js.cameraDeviceSettings.thisCameraDoesntReportAny') }));
                 return;
             }
             sections.forEach(function (s) { root.appendChild(s); });
         }
 
+        // "A, B, and C" in the page's language.
         function joinList(items) {
-            if (items.length <= 1) return items.join('');
-            if (items.length === 2) return items[0] + ' and ' + items[1];
-            return items.slice(0, -1).join(', ') + ', and ' + items[items.length - 1];
+            try { return new Intl.ListFormat(larisvmsI18n.locale, { type: 'conjunction' }).format(items); }
+            catch (e) { return items.join(', '); }
         }
 
         window.addEventListener('beforeunload', function (e) {
@@ -589,7 +588,7 @@ window.larisvmsDeviceSettings = (function () {
         });
         var refreshBtn = document.getElementById(opts.refreshBtnId);
         if (refreshBtn) refreshBtn.addEventListener('click', function () {
-            if (anyDirty() && !window.confirm('Discard your unsaved changes and read the settings from the camera again?')) return;
+            if (anyDirty() && !window.confirm(larisvmsI18n.t('js.cameraDeviceSettings.discardYourUnsavedChangesAnd'))) return;
             load(false);
         });
 

@@ -3,7 +3,7 @@
 @using LarisVMS.Core.Enums
 @model LarisVMS.Web.Pages.Playback.IndexModel
 @{
-    ViewData["Title"] = "Playback";
+    ViewData["Title"] = L["nav.playback"].Value;
     var camerasJson = JsonSerializer.Serialize(Model.Cameras.Select(c =>
     {
         var main = c.Streams.FirstOrDefault(s => s.Role == CameraStreamRole.Main);
@@ -17,15 +17,14 @@
 
 @if (Model.Cameras.Count == 0)
 {
-    <h1>Playback</h1>
-    <p class="text-muted">No cameras are both enabled and assigned to a node yet.</p>
+    <h1>@L["nav.playback"]</h1>
+    <p class="text-muted">@L["playback.noCamerasAreBothEnabled"]</p>
 }
 else if (Model.Views.Count == 0)
 {
-    <h1>Playback</h1>
+    <h1>@L["nav.playback"]</h1>
     <p class="text-muted">
-        Playback plays back a saved view's layout, the same arrangement you'd watch live.
-        <a asp-page="/Views/Index">Build a view</a> first, then come back here to play it back.
+        @L.Html("playback.noViewsYet")
     </p>
 }
 else
@@ -37,18 +36,18 @@ else
        stays pinned at the bottom of that space rather than wherever document flow would put it. *@
     <div id="pbLayout" style="display:flex; flex-direction:column; min-height:0;">
         <div class="d-flex flex-wrap align-items-center gap-2 py-2" id="pbToolbar">
-            <label class="form-label small mb-0">View</label>
+            <label for="playbackViewPicker" class="form-label small mb-0">@L["playback.view"]</label>
             <select id="playbackViewPicker" class="form-select form-select-sm" style="max-width: 16rem;">
-                <option value="">(choose a view)</option>
+                <option value="">@L["playback.chooseAView"]</option>
                 @* Camera count in the label — same form as the Views/Play picker. *@
                 @foreach (var v in Model.Views)
                 {
-                    <option value="@v.Id">@v.Name (@ViewLayout.CountCells(v.LayoutJson))</option>
+                    <option value="@v.Id">@L["views.nameWithCells", new { name = v.Name, cells = ViewLayout.CountCells(v.LayoutJson) }]</option>
                 }
             </select>
-            <button type="button" class="btn btn-sm btn-outline-secondary" id="pbPlayPause" disabled>▶ Play</button>
-            <button type="button" class="btn btn-sm btn-outline-secondary" id="pbJumpNow" title="Jump every camera to the current time" disabled><span aria-hidden="true">⏭</span> Now</button>
-            <label class="form-label small mb-0" for="pbSpeed">Speed</label>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="pbPlayPause" disabled>@L["playback.play"]</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="pbJumpNow" title="@L["playback.jumpEveryCameraToThe"]" disabled><span aria-hidden="true">⏭</span> @L["playback.now"]</button>
+            <label class="form-label small mb-0" for="pbSpeed">@L["playback.speed"]</label>
             <select id="pbSpeed" class="form-select form-select-sm" style="max-width: 6rem;">
                 <option value="0.03125">1/32×</option>
                 <option value="0.0625">1/16×</option>
@@ -62,11 +61,11 @@ else
                 <option value="16">16×</option>
                 <option value="32">32×</option>
             </select>
-            <button type="button" class="btn btn-sm btn-outline-secondary" id="pbExportBtn"><span aria-hidden="true">🎬</span> Export&hellip;</button>
-            <button type="button" class="btn btn-sm btn-outline-secondary" id="pbBookmarkBtn"><span aria-hidden="true">🔖</span> Bookmark&hellip;</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="pbExportBtn"><span aria-hidden="true">🎬</span> @L["playback.export"]</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="pbBookmarkBtn"><span aria-hidden="true">🔖</span> @L["playback.bookmark"]</button>
             @if (Model.CanLock)
             {
-                <button type="button" class="btn btn-sm btn-outline-secondary" id="pbLockBtn" title="Keep this footage from being deleted by retention"><span aria-hidden="true">🔒</span> Lock&hellip;</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="pbLockBtn" title="@L["playback.keepThisFootageFromBeing"]"><span aria-hidden="true">🔒</span> @L["playback.lock"]</button>
             }
             @* Populated only for a Bookmark's "▶ Play" deep link whose camera isn't in any view this
                user can see (Pages/Bookmarks/Index.cshtml.cs's own doc comment describes this case) —
@@ -74,18 +73,18 @@ else
             <span id="pbDeepLinkStatus" class="small" role="status" aria-live="polite"></span>
             <div class="form-check form-switch mb-0 ms-auto">
                 <input type="checkbox" class="form-check-input" id="pbEventTags" />
-                <label class="form-check-label small" for="pbEventTags">Event tags</label>
+                <label class="form-check-label small" for="pbEventTags">@L["playback.eventTags"]</label>
             </div>
             <div class="form-check form-switch mb-0">
                 <input type="checkbox" class="form-check-input" id="pbHour24" />
-                <label class="form-check-label small" for="pbHour24">24-hour clock</label>
+                <label class="form-check-label small" for="pbHour24">@L["playback.24HourClock"]</label>
             </div>
             @* Only meaningful on a phone-width viewport, where the timeline overlays the video and
                can auto-hide (see wireMobileTimelineOverlay) — hidden on desktop rather than shown as
                an always-inert control. *@
             <div class="form-check form-switch mb-0 d-md-none">
                 <input type="checkbox" class="form-check-input" id="pbAutoHideTimeline" />
-                <label class="form-check-label small" for="pbAutoHideTimeline">Auto-hide timeline</label>
+                <label class="form-check-label small" for="pbAutoHideTimeline">@L["playback.autoHideTimeline"]</label>
             </div>
         </div>
 
@@ -96,21 +95,21 @@ else
         <div id="pbExportPanel" class="d-none border rounded p-2 mb-2 bg-body-tertiary" style="flex:0 0 auto;">
             <div class="d-flex flex-wrap align-items-end gap-3">
                 <div>
-                    <span class="form-label small mb-1 d-block" id="pbExportCamerasLabel">Cameras</span>
+                    <span class="form-label small mb-1 d-block" id="pbExportCamerasLabel">@L["nav.cameras"]</span>
                     <details class="position-relative column-picker" id="pbExportCamerasPicker">
-                        <summary class="form-select form-select-sm text-start text-truncate" id="pbExportCamerasSummary" aria-labelledby="pbExportCamerasLabel pbExportCamerasSummary" style="min-width: 12rem; max-width: 18rem;">Choose cameras</summary>
-                        <div class="column-picker-menu" id="pbExportCameras" style="left: 0; right: auto; min-width: 16rem;"></div>
+                        <summary class="form-select form-select-sm text-start text-truncate" id="pbExportCamerasSummary" aria-labelledby="pbExportCamerasLabel pbExportCamerasSummary" style="min-width: 12rem; max-width: 18rem;">@L["playback.chooseCameras"]</summary>
+                        <div class="column-picker-menu" id="pbExportCameras" style="inset-inline-start: 0; inset-inline-end: auto; min-width: 16rem;"></div>
                     </details>
                 </div>
                 <div>
-                    <label class="form-label small mb-0" for="pbExportFrom">Start</label>
+                    <label class="form-label small mb-0" for="pbExportFrom">@L["common.start"]</label>
                     <input type="datetime-local" id="pbExportFrom" class="form-control form-control-sm" step="1" />
                 </div>
                 <div>
-                    <label class="form-label small mb-0" for="pbExportTo">End</label>
+                    <label class="form-label small mb-0" for="pbExportTo">@L["playback.end"]</label>
                     <input type="datetime-local" id="pbExportTo" class="form-control form-control-sm" step="1" />
                 </div>
-                <button type="button" class="btn btn-sm btn-primary" id="pbExportSubmit">Start export</button>
+                <button type="button" class="btn btn-sm btn-primary" id="pbExportSubmit">@L["playback.startExport"]</button>
                 <span id="pbExportStatus" class="small" role="status" aria-live="polite"></span>
             </div>
         </div>
@@ -123,10 +122,10 @@ else
             <div class="d-flex flex-wrap align-items-end gap-3">
                 <span id="pbBookmarkTarget" class="small text-muted"></span>
                 <div class="flex-grow-1" style="min-width:12rem;">
-                    <label class="form-label small mb-0" for="pbBookmarkNote">Note</label>
-                    <input type="text" id="pbBookmarkNote" class="form-control form-control-sm" maxlength="1000" placeholder="What's happening here?" />
+                    <label class="form-label small mb-0" for="pbBookmarkNote">@L["playback.note"]</label>
+                    <input type="text" id="pbBookmarkNote" class="form-control form-control-sm" maxlength="1000" placeholder="@L["playback.whatHappeningHere"]" />
                 </div>
-                <button type="button" class="btn btn-sm btn-primary" id="pbBookmarkSubmit">Save bookmark</button>
+                <button type="button" class="btn btn-sm btn-primary" id="pbBookmarkSubmit">@L["playback.saveBookmark"]</button>
                 <span id="pbBookmarkStatus" class="small" role="status" aria-live="polite"></span>
             </div>
         </div>
@@ -138,50 +137,50 @@ else
             <div id="pbLockPanel" class="d-none border rounded p-2 mb-2 bg-body-tertiary" style="flex:0 0 auto;">
                 <div class="d-flex flex-wrap align-items-end gap-3">
                     <div>
-                        <span class="form-label small mb-1 d-block" id="pbLockCamerasLabel">Cameras</span>
+                        <span class="form-label small mb-1 d-block" id="pbLockCamerasLabel">@L["nav.cameras"]</span>
                         <details class="position-relative column-picker" id="pbLockCamerasPicker">
-                            <summary class="form-select form-select-sm text-start text-truncate" id="pbLockCamerasSummary" aria-labelledby="pbLockCamerasLabel pbLockCamerasSummary" style="min-width: 12rem; max-width: 18rem;">Choose cameras</summary>
-                            <div class="column-picker-menu" id="pbLockCameras" style="left: 0; right: auto; min-width: 16rem;"></div>
+                            <summary class="form-select form-select-sm text-start text-truncate" id="pbLockCamerasSummary" aria-labelledby="pbLockCamerasLabel pbLockCamerasSummary" style="min-width: 12rem; max-width: 18rem;">@L["playback.chooseCameras"]</summary>
+                            <div class="column-picker-menu" id="pbLockCameras" style="inset-inline-start: 0; inset-inline-end: auto; min-width: 16rem;"></div>
                         </details>
                     </div>
                     <div>
-                        <label class="form-label small mb-0" for="pbLockFrom">Start</label>
+                        <label class="form-label small mb-0" for="pbLockFrom">@L["common.start"]</label>
                         <input type="datetime-local" id="pbLockFrom" class="form-control form-control-sm" step="1" />
                     </div>
                     <div>
-                        <label class="form-label small mb-0" for="pbLockTo">End</label>
+                        <label class="form-label small mb-0" for="pbLockTo">@L["playback.end"]</label>
                         <input type="datetime-local" id="pbLockTo" class="form-control form-control-sm" step="1" />
                     </div>
                     <div>
-                        <label class="form-label small mb-0" for="pbLockDuration">Keep for</label>
+                        <label class="form-label small mb-0" for="pbLockDuration">@L["playback.keepFor"]</label>
                         <select id="pbLockDuration" class="form-select form-select-sm">
-                            <option value="1d">1 day</option>
-                            <option value="3d">3 days</option>
-                            <option value="7d" selected>7 days</option>
-                            <option value="14d">14 days</option>
-                            <option value="30d">30 days</option>
-                            <option value="custom">Until a date…</option>
-                            <option value="indefinite">Indefinitely</option>
+                            <option value="1d">@L["playback.1Day"]</option>
+                            <option value="3d">@L["playback.3Days"]</option>
+                            <option value="7d" selected>@L["playback.7Days"]</option>
+                            <option value="14d">@L["playback.14Days"]</option>
+                            <option value="30d">@L["playback.30Days"]</option>
+                            <option value="custom">@L["playback.untilADate"]</option>
+                            <option value="indefinite">@L["playback.indefinitely"]</option>
                         </select>
                     </div>
                     <div id="pbLockUntilWrap" class="d-none">
-                        <label class="form-label small mb-0" for="pbLockUntil">Until</label>
+                        <label class="form-label small mb-0" for="pbLockUntil">@L["playback.until"]</label>
                         <input type="date" id="pbLockUntil" class="form-control form-control-sm" />
                     </div>
                     <div class="flex-grow-1" style="min-width:12rem;">
-                        <label class="form-label small mb-0" for="pbLockReason">Reason</label>
-                        <input type="text" id="pbLockReason" class="form-control form-control-sm" maxlength="500" placeholder="Case number, incident, or request" />
+                        <label class="form-label small mb-0" for="pbLockReason">@L["playback.reason"]</label>
+                        <input type="text" id="pbLockReason" class="form-control form-control-sm" maxlength="500" placeholder="@L["playback.caseNumberIncidentOrRequest"]" />
                     </div>
-                    <button type="button" class="btn btn-sm btn-primary" id="pbLockSubmit">Lock footage</button>
+                    <button type="button" class="btn btn-sm btn-primary" id="pbLockSubmit">@L["playback.lockFootage"]</button>
                     <span id="pbLockStatus" class="small" role="status" aria-live="polite"></span>
                 </div>
                 <div id="pbLockWarning" class="d-none">
                     <div class="alert alert-warning small py-1 px-2 mt-2 mb-0 d-flex flex-wrap align-items-center gap-2" role="alert">
-                        <span class="flex-grow-1">Locks longer than 30 days can use a lot of storage when space is tight. It’s better to export this video and save it somewhere else as soon as you can.</span>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" id="pbLockExportInstead">Export this range instead</button>
+                        <span class="flex-grow-1">@L["playback.locksLongerThan30Days"]</span>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="pbLockExportInstead">@L["playback.exportThisRangeInstead"]</button>
                     </div>
                 </div>
-                <div class="small text-muted mt-1">Locked footage is never deleted, even when the disk is full. <a href="/Help/live-and-playback#evidence-locks">Learn more</a></div>
+                <div class="small text-muted mt-1">@L["playback.lockedFootageIsNeverDeleted"] <a href="/Help/live-and-playback#evidence-locks">@L["common.learnMore"]</a></div>
             </div>
         }
 
@@ -191,16 +190,20 @@ else
             @* "Selected camera" only needs saying while the "All cameras" strip below is also
                showing. For single-camera playback (one tile) playback-player.js hides both this
                label and #pbGlobalTimelineWrap to give the video grid back that vertical space. *@
-            <label id="pbSelectedCameraLabel" class="form-label small mb-0">Selected camera</label>
-            <canvas id="playbackTimeline" style="width: 100%; height: 30px; cursor: pointer; touch-action: none; display: block;"></canvas>
-            <div id="pbCurrentTime" class="text-muted small mb-1 text-center"></div>
-
-            <div id="pbGlobalTimelineWrap">
-                <label class="form-label small mb-0">All cameras (recording on any camera)</label>
-                <canvas id="playbackGlobalTimeline" style="width: 100%; height: 30px; cursor: pointer; touch-action: none; display: block;"></canvas>
+            <div id="pbSelectedCameraLabel" class="form-label small mb-0">@L["playback.selectedCamera"]</div>
+            <canvas id="playbackTimeline" aria-labelledby="pbSelectedCameraLabel" style="width: 100%; height: 30px; cursor: pointer; touch-action: none; display: block;"></canvas>
+            <div class="d-flex justify-content-center align-items-center gap-2 mb-1">
+                <button type="button" class="btn btn-sm btn-outline-secondary py-0" id="pbTimelineZoomOut" title="@L["playback.timelineZoomOut"]" aria-label="@L["playback.timelineZoomOut"]">−</button>
+                <div id="pbCurrentTime" class="text-muted small text-center"></div>
+                <button type="button" class="btn btn-sm btn-outline-secondary py-0" id="pbTimelineZoomIn" title="@L["playback.timelineZoomIn"]" aria-label="@L["playback.timelineZoomIn"]">+</button>
             </div>
 
-            <p class="text-muted small mt-1 mb-0">Scroll to zoom, drag to pan, click to jump. Arrow keys nudge while paused. <a href="/Help/live-and-playback#timeline">More tips</a></p>
+            <div id="pbGlobalTimelineWrap">
+                <div id="pbGlobalTimelineLabel" class="form-label small mb-0">@L["playback.allCamerasRecordingOnAny"]</div>
+                <canvas id="playbackGlobalTimeline" aria-labelledby="pbGlobalTimelineLabel" style="width: 100%; height: 30px; cursor: pointer; touch-action: none; display: block;"></canvas>
+            </div>
+
+            <p class="text-muted small mt-1 mb-0">@L["playback.scrollToZoomDragTo"] <a href="/Help/live-and-playback#timeline">@L["playback.moreTips"]</a></p>
         </div>
     </div>
 }
@@ -212,6 +215,7 @@ else
     <script src="~/js/catchup-badge.js" asp-append-version="true"></script>
     <script src="~/js/talk-playback.js" asp-append-version="true"></script>
     <script src="~/js/speed-playback.js" asp-append-version="true"></script>
+    <script src="~/js/canvas-keyboard.js" asp-append-version="true"></script>
     <script src="~/js/redaction-editor.js" asp-append-version="true"></script>
     <script src="~/js/playback-player.js" asp-append-version="true"></script>
     <script nonce="@Csp.Value">

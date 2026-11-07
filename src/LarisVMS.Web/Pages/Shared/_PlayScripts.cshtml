@@ -20,6 +20,7 @@
             // Two-way audio: the camera reports an audio output and this user holds Talk on it.
             canTalk = c.Capabilities != null && c.Capabilities.HasAudioOut
                 && (Model.TalkCameraIds is null || Model.TalkCameraIds.Contains(c.Id)),
+            canRecord = Model.RecordCameraIds is null || Model.RecordCameraIds.Contains(c.Id),
             hasSub = sub != null, subCodec = sub?.Codec, subHasAudio = sub?.HasAudio ?? false,
             width = main?.Width, height = main?.Height };
     }));
@@ -28,6 +29,7 @@
 <script src="~/js/audio-controls.js" asp-append-version="true"></script>
 <script src="~/js/ptz-controls.js" asp-append-version="true"></script>
 <script src="~/js/talk.js" asp-append-version="true"></script>
+<script src="~/js/manual-recording.js" asp-append-version="true"></script>
 <script src="~/js/catchup-badge.js" asp-append-version="true"></script>
 <script src="~/js/media-endpoint.js" asp-append-version="true"></script>
 <script src="~/js/live-view.js" asp-append-version="true"></script>

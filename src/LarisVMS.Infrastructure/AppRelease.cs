@@ -13,9 +13,9 @@ namespace LarisVMS.Infrastructure;
 /// </summary>
 public static class AppRelease
 {
-    public const string Version = "0.219.0";
+    public const string Version = "0.220.0";
 
-    public const string Notes = "Added: MariaDB 10.11 and later as an alternative to SQL Server (experimental; please report any issues), and a path dissolve time. Changed: removing an evidence lock asks for the reason in a pop-up. Security: the database password is encrypted on the server.";
+    public const string Notes = "Added: manual recording, a Manual only mode, recording indicators on live tiles, a wider API with per-key limits, languages, and ignored objects. Changed: keyboard and screen reader support across the app, and stronger contrast. Security: many hardening fixes.";
 
     /// <summary>Adds this release's AppVersions row unless it's already there. Idempotent.</summary>
     public static async Task EnsureRecordedAsync(ApplicationDbContext db, CancellationToken ct = default)

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using LarisVMS.Core.Localization;
 using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
@@ -35,15 +36,15 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
 
     public async Task<NodeRegisterResponse> RegisterAsync(NodeRegisterRequest request, CancellationToken ct = default)
     {
-        var expectedKey = await settings.GetRawAsync("Node.RegistrationKey", ct: ct);
+        var expectedKey = LarisVMS.Infrastructure.Security.SecretProtection.Unprotect(await settings.GetRawAsync("Node.RegistrationKey", ct: ct));
         // FixedTimeEquals, not !=, matching this class's own AuthenticateAsync below (see this
         // class's doc comment) — a plain string comparison short-circuits on the first differing
         // byte, which leaks how many leading characters of the registration key a guess got right
         // through the response timing.
         if (string.IsNullOrEmpty(expectedKey) || !SecretHash.FixedTimeEquals(request.RegistrationKey ?? "", expectedKey))
-            throw new UnauthorizedAccessException("Invalid registration key.");
+            throw new UnauthorizedAccessException(Loc.T("server.node.invalidRegistrationKey"));
         if (!HostNames.IsValid(request.Hostname))
-            throw new ArgumentException("The hostname must be letters, digits, dots, hyphens, or underscores.");
+            throw new ArgumentException(Loc.T("server.node.theHostnameMustBeLetters"));
 
         var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         var node = new Node
@@ -437,6 +438,8 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
                 "High" => "High",
                 _ => "Normal",
             };
+            // Kinds of object switched off on this camera (a deck the model keeps calling an airplane).
+            var ignoredObjects = await settings.GetRawAsync("Detection.IgnoredObjects", cameraId: c.Id, nodeId: nodeId, ct: ct) ?? "";
             // Detection.MaxFps, per camera — same Camera -> Node -> Global chain (and the same key)
             // as the node-scoped maxDetectionFps above; a camera-level override here wins, otherwise
             // this resolves to that same node/global value. A driveway camera that never needs 10 fps
@@ -478,7 +481,8 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
                     .OfType<VisionSpeedTrapDto>().ToList(),
                 EncryptFootage: encryptFootage,
                 EncryptExistingRequestedUtc: encryptFootage == "Off" ? null : encryptExisting,
-                MovementMode: movementMode, MovementSensitivity: movementSensitivity));
+                MovementMode: movementMode, MovementSensitivity: movementSensitivity,
+                IgnoredObjects: ignoredObjects));
         }
 
         // Cameras this node has leftover Segments for but doesn't currently record — reassigned to a
@@ -534,12 +538,21 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             .Select(l => new NodeConfigProtectedRangeDto(l.CameraId, l.FromUtc, l.ToUtc))
             .ToListAsync(ct);
 
+        // Manual recordings: system-wide for the same reason as the locks above. Recently stopped ones
+        // stay on the list so segments still waiting on a decision are kept.
+        var endedAfter = DateTime.UtcNow - ManualRecordingService.EndedRangeWindow;
+        var manualRanges = await db.ManualRecordings.AsNoTracking()
+            .Where(r => r.EndUtc == null || r.EndUtc >= endedAfter)
+            .Select(r => new NodeConfigProtectedRangeDto(r.CameraId, r.StartUtc, r.EndUtc ?? ManualRecordingService.OpenEndUtc))
+            .ToListAsync(ct);
+
         return new NodeConfigResponse(cameraDtos, storageRoot, watermarkPercent, mediaSigningKey, orphanedCameraDtos,
             adaptiveStreamingEnabled, (aiAccelerator ?? AiAccelerator.Auto).ToString(),
             reportIdleDetections, aspectMode, detectionModelFamily, dfineWeights, aiIdleTimeoutSeconds,
             gpuPreprocessing, logLevel)
         {
             ProtectedRanges = protectedRanges,
+            ManualRecordingRanges = manualRanges,
             YoloXSize = yoloXSize, MaxDetectionFps = maxDetectionFps, DFineTensorRtMode = dfineTensorRtMode,
             ArchiveRootPath = archiveRoot, SnapshotMotionAccuracy = snapshotMotionAccuracy,
             DepartureGraceSeconds = departureGraceSeconds,
@@ -857,6 +870,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
                     .SetProperty(s => s.AudioSampleRateHz, s => item.AudioSampleRateHz ?? s.AudioSampleRateHz)
                     .SetProperty(s => s.IsEngineBuilding, s => item.IsEngineBuilding ?? s.IsEngineBuilding)
                     .SetProperty(s => s.EngineBuildFailed, s => item.EngineBuildFailed ?? s.EngineBuildFailed)
+                    .SetProperty(s => s.IsKeepingFootage, s => item.IsKeepingFootage ?? s.IsKeepingFootage)
                     .SetProperty(s => s.HealthReportedAt, s => item.Fps != null ? now : s.HealthReportedAt), ct);
         }
     }
@@ -1452,7 +1466,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
     public async Task AssignCameraAsync(Guid cameraId, Guid? nodeId, CancellationToken ct = default)
     {
         var camera = await db.Cameras.FirstOrDefaultAsync(c => c.Id == cameraId, ct)
-            ?? throw new InvalidOperationException("Camera not found.");
+            ?? throw new InvalidOperationException(Loc.T("server.node.cameraNotFound"));
         camera.NodeId = nodeId;
         await db.SaveChangesAsync(ct);
     }
@@ -1468,7 +1482,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         string? archiveRootPath = null, NodeClientEndpointUpdate? clientEndpoint = null, CancellationToken ct = default)
     {
         var node = await db.Nodes.FirstOrDefaultAsync(n => n.Id == nodeId, ct)
-            ?? throw new InvalidOperationException("Node not found.");
+            ?? throw new InvalidOperationException(Loc.T("server.node.nodeNotFound"));
         node.Name = name;
         node.StorageRootPath = string.IsNullOrWhiteSpace(storageRootPath) ? null : storageRootPath;
         node.ArchiveRootPath = string.IsNullOrWhiteSpace(archiveRootPath) ? null : archiveRootPath;
@@ -1481,7 +1495,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             node.DirectStreamingMode = string.IsNullOrWhiteSpace(ce.DirectStreamingMode) ? null : ce.DirectStreamingMode;
             node.AllowInsecureClientEndpoint = ce.AllowInsecureClientEndpoint;
             if (!string.IsNullOrWhiteSpace(ce.ClientEndpointHost) && !HostNames.IsValid(ce.ClientEndpointHost.Trim()))
-                throw new ArgumentException("The client endpoint host must be a hostname or an IP address.");
+                throw new ArgumentException(Loc.T("server.node.theClientEndpointHostMust"));
             node.ClientEndpointHost = string.IsNullOrWhiteSpace(ce.ClientEndpointHost) ? null : ce.ClientEndpointHost.Trim();
             node.ClientCertPfxPath = string.IsNullOrWhiteSpace(ce.ClientCertPfxPath) ? null : ce.ClientCertPfxPath.Trim();
             // Write-only, like every other secret field on the admin forms: null = leave as-is,

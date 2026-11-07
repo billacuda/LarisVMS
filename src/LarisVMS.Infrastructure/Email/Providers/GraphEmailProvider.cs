@@ -2,6 +2,7 @@ using System.Text.Json;
 using Azure.Identity;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
 using Microsoft.Graph.Users.Item.SendMail;
@@ -20,7 +21,7 @@ public class GraphEmailProvider : IEmailProvider
         string htmlBody, string? textBody = null, CancellationToken ct = default)
     {
         var config = JsonSerializer.Deserialize<GraphEmailConfig>(configJson)
-            ?? throw new InvalidOperationException("Graph configuration is missing or malformed.");
+            ?? throw new InvalidOperationException(Loc.T("server.graphEmail.graphConfigurationIsMissingOr"));
 
         var credential = new ClientSecretCredential(config.TenantId, config.ClientId, config.ClientSecret);
         var client = new GraphServiceClient(credential, ["https://graph.microsoft.com/.default"]);

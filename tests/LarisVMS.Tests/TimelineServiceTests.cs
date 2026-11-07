@@ -317,6 +317,35 @@ public class TimelineServiceTests
     }
 
     [Fact]
+    public async Task AManualRecordingDrawsInItsOwnColorAndARunningOneStopsAtNow()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var now = DateTime.UtcNow;
+        db.ManualRecordings.Add(new ManualRecording { CameraId = cameraId, StartUtc = now.AddMinutes(-10) });
+        await db.SaveChangesAsync();
+        var palette = new StubEventColors(EventPalette.Empty with { ManualRecording = "#123456" });
+
+        var buckets = await new TimelineService(db, palette).GetBucketsAsync(cameraId, now.AddMinutes(-20), now.AddMinutes(20), 4);
+
+        Assert.Null(buckets[0].TagColorHex);
+        Assert.Equal("#123456", buckets[1].TagColorHex);
+        Assert.Null(buckets[3].TagColorHex);
+    }
+
+    [Fact]
+    public async Task ManualRecordingsAppearOnTheMergedTimeline()
+    {
+        var (db, cameraId, _) = await SeedCameraAsync();
+        var from = new DateTime(2026, 8, 9, 0, 0, 0, DateTimeKind.Utc);
+        db.ManualRecordings.Add(new ManualRecording { CameraId = cameraId, StartUtc = from.AddMinutes(5), EndUtc = from.AddMinutes(10) });
+        await db.SaveChangesAsync();
+
+        var buckets = await new TimelineService(db, DefaultPalette).GetGlobalBucketsAsync(from, from.AddHours(1), 4, [cameraId]);
+
+        Assert.Equal(EventColors.DefaultManualRecording, buckets[0].TagColorHex);
+    }
+
+    [Fact]
     public async Task BucketsCoveringASegmentAreFlaggedRecorded()
     {
         var (db, cameraId, nodeId) = await SeedCameraAsync();

@@ -7,9 +7,9 @@
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
   <Package Name="LarisVMS Node" Manufacturer="LarisVMS" Version="$(var.ProductVersion)"
            UpgradeCode="7F6B92FC-8EA7-48CF-B79A-B62B1BE787C8" Scope="perMachine" Compressed="yes" InstallerVersion="500">
-    <SummaryInformation Description="LarisVMS recorder node" />
+    <SummaryInformation Description="!(loc.NodeSummary)" />
     <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallInitialize"
-                  DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+                  DowngradeErrorMessage="!(loc.DowngradeError)" />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
     <Icon Id="LarisIcon" SourceFile="$(var.IconPath)" />
     <Property Id="ARPPRODUCTICON" Value="LarisIcon" />
@@ -68,7 +68,7 @@
       <File Id="NodeExe" Source="!(bindpath.Node)\LarisVMS.Node.exe" KeyPath="yes" />
       <!-- The name must stay LarisVMSNode: LarisVMS.NodeUpdater hardcodes it for auto-update. -->
       <ServiceInstall Id="NodeServiceInstall" Name="LarisVMSNode" DisplayName="LarisVMS Node"
-                      Description="LarisVMS recorder node - supervises FFmpeg-based 24/7 camera recording."
+                      Description="!(loc.NodeServiceDescription)"
                       Type="ownProcess" Start="auto" ErrorControl="normal" Vital="yes"
                       Account="[SERVICEACCOUNT]" Password="[SERVICEPASSWORD]" Arguments="[SERVICEARGS]">
         <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart" ThirdFailureActionType="restart"

@@ -195,7 +195,7 @@ if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
     $dbConfig = $null
     if (Test-Path $configFileRead) {
         try {
-            # MariaDB (experimental): this script only speaks SQL Server, so the steps below that read the database
+            # MariaDB: this script only speaks SQL Server, so the steps below that read the database
             # directly are skipped — the app migrates itself at startup.
             $dbConfig = Read-LarisDatabaseConfig $configFileRead
             if ($dbConfig -and $dbConfig.Provider -eq 'MariaDb') {

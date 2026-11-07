@@ -105,7 +105,7 @@
         var spinner = document.createElement('div');
         spinner.className = 'position-absolute top-50 start-50 translate-middle live-freeze-spinner';
         spinner.style.cssText = 'display:none; pointer-events:none;';
-        spinner.innerHTML = '<div class="spinner-border text-light" role="status"><span class="visually-hidden">Reconnecting…</span></div>';
+        spinner.innerHTML = '<div class="spinner-border text-light" role="status"><span class="visually-hidden">' + larisvmsI18n.html('js.liveView.reconnecting') + '</span></div>';
         if (parent) {
             parent.insertBefore(canvas, videoEl.nextSibling);
             parent.insertBefore(spinner, canvas.nextSibling);
@@ -185,7 +185,7 @@
                 // repeatedly, is more likely a real problem (node/camera actually down), where
                 // retrying every 2s forever would just hammer it for no benefit.
                 retryDelayMs = (Date.now() - sessionStartedAt > 15000) ? 2000 : Math.min(retryDelayMs * 2, 30000);
-                statusProxy.textContent = 'Reconnecting…';
+                statusProxy.textContent = larisvmsI18n.t('js.liveView.reconnecting');
                 retryTimer = setTimeout(function () { retryTimer = null; launch(); }, retryDelayMs);
             });
         }
@@ -306,7 +306,7 @@
         // video's parent — same element createFreezeOverlay overlays onto.
         function showCatchupBadge(rate) {
             if (!window.larisvmsCatchupBadge) return;
-            var label = rate ? (Math.round(rate * 100) / 100) + '×' : 'catching up';
+            var label = rate ? (Math.round(rate * 100) / 100) + '×' : larisvmsI18n.t('js.liveView.catchingUp');
             window.larisvmsCatchupBadge.show(videoEl.parentElement, label);
         }
         function hideCatchupBadge() {
@@ -338,13 +338,13 @@
         }
 
         if (!('MediaSource' in window)) {
-            statusEl.textContent = 'This browser does not support MSE playback.';
+            statusEl.textContent = larisvmsI18n.t('js.liveView.thisBrowserDoesNotSupport');
             endSession();
             return function stop() {};
         }
         var mimeType = pickMimeType(codecHint, hasAudio);
         if (!mimeType) {
-            statusEl.textContent = 'No supported video codec found for MSE in this browser.';
+            statusEl.textContent = larisvmsI18n.t('js.liveView.noSupportedVideoCodecFound');
             endSession();
             return function stop() {};
         }
@@ -439,7 +439,7 @@
                 appendingArrivalMs = pendingArrivals.length > 0 ? pendingArrivals.shift() : null;
                 sourceBuffer.appendBuffer(pending.shift());
             } catch (e) {
-                statusEl.textContent = 'Playback error: ' + e.message;
+                statusEl.textContent = larisvmsI18n.t('js.liveView.playbackError', { message: e.message });
                 closed = true;
                 if (socket) { try { socket.close(); } catch (e2) {} }
                 endSession();
@@ -524,7 +524,7 @@
 
         onVideo('error', function () {
             var err = videoEl.error;
-            var msg = 'Video decode error' + (err ? ' (code ' + err.code + ')' : '') + '.';
+            var msg = err ? larisvmsI18n.t('js.liveView.decodeErrorCode', { code: err.code }) : larisvmsI18n.t('js.liveView.decodeError');
             statusEl.textContent = msg;
             console.error('[live-view]', msg, err, 'mimeType=', mimeType, 'fragments received=', fragmentCount);
             closed = true;
@@ -545,7 +545,7 @@
             try {
                 sourceBuffer = mediaSource.addSourceBuffer(mimeType);
             } catch (e) {
-                statusEl.textContent = 'This browser cannot decode this stream (' + mimeType + ').';
+                statusEl.textContent = larisvmsI18n.t('js.liveView.cannotDecode', { type: mimeType });
                 return;
             }
             // Registered before appendNext's own listener, so it sees the arrival of the fragment
@@ -619,7 +619,7 @@
             onVideo('waiting', function () {
                 if (closed || ended || sourceBuffer.buffered.length === 0) return;
                 if (isTimeBuffered(videoEl.currentTime)) return;
-                jumpToLiveEdge('resynced after falling out of the buffered range');
+                jumpToLiveEdge(larisvmsI18n.t('js.liveView.resyncedAfterFallingOutOf'));
             });
 
             // The `waiting` handler above only fires when playback actually stalls, which misses the
@@ -783,13 +783,13 @@
             }, DRIFT_CHECK_INTERVAL_MS);
             sourceBuffer.addEventListener('error', function (e) {
                 console.error('[live-view] sourceBuffer error', e, 'mimeType=', mimeType, 'fragments received=', fragmentCount);
-                statusEl.textContent = 'SourceBuffer error — see browser console.';
+                statusEl.textContent = larisvmsI18n.t('js.liveView.sourcebufferErrorSeeBrowserConsole');
                 closed = true;
                 if (socket) { try { socket.close(); } catch (e2) {} }
                 endSession();
             });
 
-            statusEl.textContent = 'Connecting…';
+            statusEl.textContent = larisvmsI18n.t('js.liveView.connecting');
             var connectStartMs = (window.performance && performance.now) ? performance.now() : Date.now();
             var timingReported = false;
 
@@ -856,7 +856,7 @@
                     appendNext();
                 };
                 socket.onerror = function () {
-                    statusEl.textContent = 'Connection error.';
+                    statusEl.textContent = larisvmsI18n.t('js.liveView.connectionError');
                     if (streamMode === 'direct') {
                         // Very often an untrusted certificate on the recorder. Drop the cached ticket
                         // so a retry re-resolves (the operator may have flipped the toggle), and — if
@@ -864,14 +864,14 @@
                         mediaEndpoint.invalidate(cameraId);
                         if (ticket.insecure && typeof ticket.trustUrl === 'string' &&
                             ticket.trustUrl.indexOf('https://') === 0 && statusEl) {
-                            statusEl.textContent = 'This camera streams directly from its recorder over an untrusted certificate. ';
+                            statusEl.textContent = larisvmsI18n.t('js.liveView.untrustedCertificate') + ' ';
                             var trustLink = document.createElement('a');
                             trustLink.href = ticket.trustUrl;
                             trustLink.target = '_blank';
                             trustLink.rel = 'noopener';
-                            trustLink.textContent = 'Trust the recorder';
+                            trustLink.textContent = larisvmsI18n.t('js.liveView.trustTheRecorder');
                             statusEl.appendChild(trustLink);
-                            statusEl.appendChild(document.createTextNode(', then reload this page.'));
+                            statusEl.appendChild(document.createTextNode(larisvmsI18n.t('js.liveView.thenReload')));
                         }
                     }
                 };
@@ -886,7 +886,7 @@
                         mediaEndpoint.reportStreamEvent(cameraId, role || 'main', streamMode, 'server_disconnect', evt.code, evt.reason || null);
                     }
                     if (!wasAlreadyClosed && statusEl.textContent === '') {
-                        statusEl.textContent = evt.reason || 'Disconnected.';
+                        statusEl.textContent = evt.reason || larisvmsI18n.t('js.liveView.disconnected');
                     }
                     endSession();
                 };
@@ -965,6 +965,9 @@
     var BOX_LABEL_HEIGHT = 16;
     // Box border width — the travel path is drawn at the same width.
     var BOX_LINE_WIDTH = 2;
+    // Idle boxes: dashed and faded so moving ones stand out.
+    var IDLE_ALPHA = 0.55;
+    var IDLE_DASH = [6, 4];
     // Travel paths (startDetectionOverlay's setShowPath): a new point once the box's centre has
     // moved this many screen pixels; an object whose point hasn't moved for PATH_STILL_MS counts
     // as stopped; a path then stays for the linger time (Settings -> Live view, setPathLinger) and
@@ -1076,7 +1079,7 @@
             badge.className = 'badge live-object-badge';
             badge.style.backgroundColor = detection.colorHex;
             badge.style.color = readableTextColor(detection.colorHex);
-            badge.title = detection.label + ' detected by the camera';
+            badge.title = larisvmsI18n.t('js.liveView.detectedByCamera', { label: detection.label });
             badge.textContent = detection.emoji + ' ' + detection.label;
             container.appendChild(badge);
         });
@@ -1090,7 +1093,7 @@
             badge.className = 'badge live-object-badge';
             badge.style.backgroundColor = color;
             badge.style.color = readableTextColor(color);
-            badge.title = label + ' is currently moving';
+            badge.title = larisvmsI18n.t('js.liveView.currentlyMoving', { label: label });
             badge.textContent = aiCategoryEmoji(detection.category) + ' ' + label;
             container.appendChild(badge);
         });
@@ -1218,10 +1221,17 @@
                 var boxW = box.w * dw;
                 var boxH = box.h * dh;
                 var color = box.colorHex || '#22d3ee';
+                // Idle objects keep their category color but are drawn dashed and faded, so the
+                // moving ones stand out when both are shown.
+                var idle = box.movementState === 'Idle';
 
                 ctx.strokeStyle = color;
                 ctx.lineWidth = BOX_LINE_WIDTH;
+                ctx.globalAlpha = idle ? IDLE_ALPHA : 1;
+                ctx.setLineDash(idle ? IDLE_DASH : []);
                 ctx.strokeRect(x, y, boxW, boxH);
+                ctx.setLineDash([]);
+                ctx.globalAlpha = 1;
 
                 // Percentage rather than the raw 0-1 score: this sits on a moving video at 12px, and
                 // "81%" reads at a glance where "0.81" does not. Guarded because confidence is a
@@ -1240,7 +1250,7 @@
                 if (showColor && box.color) label += ' · ' + box.color;
                 if (showSpeed && box.speedText) label += ' · ' + box.speedText;
                 labels.push({
-                    text: label, color: color, w: ctx.measureText(label).width + 8, h: BOX_LABEL_HEIGHT,
+                    text: label, color: color, idle: idle, w: ctx.measureText(label).width + 8, h: BOX_LABEL_HEIGHT,
                     box: { x: x, y: y, w: boxW, h: boxH }
                 });
             });
@@ -1248,10 +1258,12 @@
             var placed = placeBoxLabels(labels, { x: offsetX, y: offsetY, w: dw, h: dh });
             labels.forEach(function (l, i) {
                 var p = placed[i];
+                ctx.globalAlpha = l.idle ? IDLE_ALPHA : 1;
                 ctx.fillStyle = l.color;
                 ctx.fillRect(p.x, p.y, l.w, l.h);
                 ctx.fillStyle = readableTextColor(l.color);
                 ctx.fillText(l.text, p.x + 4, p.y + 12);
+                ctx.globalAlpha = 1;
             });
         }
 
@@ -1608,6 +1620,9 @@
     // are none today, but Views/Play could reuse this later) are picked up correctly.
     function startMotionIndicatorPolling(intervalMs) {
         async function tick() {
+            // On its own request, so a failure here leaves these badges as they are.
+            if (window.larisvmsManualRecording) window.larisvmsManualRecording.refresh();
+
             // Both signals on the same tick, in parallel — they're read together to decide one
             // tile's badges, and a detection is strictly more informative than the plain motion it
             // usually accompanies (see renderDetectionBadges, which suppresses the generic badge

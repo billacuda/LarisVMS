@@ -1,4 +1,5 @@
 using System.Globalization;
+using LarisVMS.Core.Localization;
 using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
 
@@ -84,7 +85,7 @@ public static class ActivityHeatmapBuilder
         if (dayTotals.Count > 0)
         {
             var b = dayTotals.OrderByDescending(d => d.Value).ThenBy(d => d.Key).First();
-            if (b.Value > 0) busiestText = $"Busiest day: {b.Key.ToString("ddd, MMM d", CultureInfo.InvariantCulture)} ({b.Value:N0} events).";
+            if (b.Value > 0) busiestText = Loc.T("server.activityHeatmap.busiestDay", new { day = b.Key.ToString("ddd, MMM d", CultureInfo.CurrentUICulture), count = b.Value.ToString("N0", CultureInfo.CurrentUICulture) });
         }
 
         return IsCalendar(range, view)
@@ -111,7 +112,7 @@ public static class ActivityHeatmapBuilder
         var occurrences = new int[7];
         for (var d = firstDate; d <= lastDate; d = d.AddDays(1)) occurrences[days.IndexOf(d.DayOfWeek)]++;
 
-        var dayNames = CultureInfo.InvariantCulture.DateTimeFormat.DayNames;
+        var dayNames = CultureInfo.CurrentUICulture.DateTimeFormat.DayNames;
         var max = cells.Max(r => r.Max());
         string? peak = null;
         if (max > 0)
@@ -119,8 +120,7 @@ public static class ActivityHeatmapBuilder
             var (row, col) = Enumerable.Range(0, 7).SelectMany(r => Enumerable.Range(0, 24).Select(h => (r, h)))
                 .First(p => cells[p.r][p.h] == max);
             var busiestHour = Enumerable.Range(0, 24).OrderByDescending(h => cells.Sum(r => r[h])).First();
-            peak = $"Busiest: {dayNames[(int)days[row]]}s {HourRange(col)} ({max:N0} events). " +
-                   $"Busiest time of day overall: {HourRange(busiestHour)}.";
+            peak = Loc.T("server.activityHeatmap.busiestWeek", new { day = dayNames[(int)days[row]], hours = HourRange(col), count = max.ToString("N0", CultureInfo.CurrentUICulture), overall = HourRange(busiestHour) });
         }
 
         return new ActivityHeatmapDto(cameraId, cameraName, ZoneName(zone), range, "week",
@@ -155,7 +155,7 @@ public static class ActivityHeatmapBuilder
         {
             var (hour, col) = Enumerable.Range(0, 24).SelectMany(h => Enumerable.Range(0, dates.Count).Select(c => (h, c)))
                 .First(p => cells[p.h][p.c] == max);
-            peak = $"Busiest hour: {dates[col].ToString("ddd, MMM d", CultureInfo.InvariantCulture)}, {HourRange(hour)} ({max:N0} events).";
+            peak = Loc.T("server.activityHeatmap.busiestHourOn", new { day = dates[col].ToString("ddd, MMM d", CultureInfo.CurrentUICulture), hours = HourRange(hour), count = max.ToString("N0", CultureInfo.CurrentUICulture) });
         }
 
         return new ActivityHeatmapDto(cameraId, cameraName, ZoneName(zone), range, "calendar",
@@ -191,7 +191,7 @@ public static class ActivityHeatmapBuilder
             var totals = Enumerable.Range(0, 24).Select(h => cells.Sum(r => r[h])).ToList();
             var busiest = totals.IndexOf(totals.Max());
             var hour = TimeZoneInfo.ConvertTimeFromUtc(startHourUtc.AddHours(busiest), zone).Hour;
-            peak = $"Busiest hour: {HourRange(hour)} ({totals[busiest]:N0} events).";
+            peak = Loc.T("server.activityHeatmap.busiestHour", new { hours = HourRange(hour), count = totals[busiest].ToString("N0", CultureInfo.CurrentUICulture) });
         }
 
         return new ActivityHeatmapDto(cameraId, cameraName, ZoneName(zone), "24h", "day",
@@ -217,23 +217,16 @@ public static class ActivityHeatmapBuilder
         _ => CocoCategoryMap.Emoji(group),
     };
 
-    internal static string HourLabel(int hour) => hour switch
-    {
-        0 => "12a",
-        12 => "12p",
-        < 12 => $"{hour}a",
-        _ => $"{hour - 12}p",
-    };
+    /// <summary>A column label ("12a", "3p" in English). The language file can use {hour24} instead.</summary>
+    internal static string HourLabel(int hour) =>
+        Loc.T(hour < 12 ? "server.activityHeatmap.hourShortAm" : "server.activityHeatmap.hourShortPm",
+            new { hour12 = hour % 12 == 0 ? 12 : hour % 12, hour24 = hour.ToString("00", CultureInfo.InvariantCulture) });
 
     internal static string HourRange(int hour) => $"{Clock(hour)}–{Clock((hour + 1) % 24)}";
 
-    internal static string Clock(int hour) => hour switch
-    {
-        0 => "12 AM",
-        12 => "12 PM",
-        < 12 => $"{hour} AM",
-        _ => $"{hour - 12} PM",
-    };
+    internal static string Clock(int hour) =>
+        Loc.T(hour < 12 ? "server.activityHeatmap.hourAm" : "server.activityHeatmap.hourPm",
+            new { hour12 = hour % 12 == 0 ? 12 : hour % 12, hour24 = hour.ToString("00", CultureInfo.InvariantCulture) });
 
     internal static string ZoneName(TimeZoneInfo zone) => zone.IsDaylightSavingTime(DateTime.UtcNow) ? zone.DaylightName : zone.StandardName;
 }

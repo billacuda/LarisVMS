@@ -14,6 +14,11 @@ namespace LarisVMS.Installer
     /// was running with; then remembered values; then defaults.</summary>
     public static class SettingsActions
     {
+        /// <summary>A message in the installer's language: Common.wxs copies each one from the
+        /// language file (Strings.*.wxl) into a LARIS_TEXT_&lt;id&gt; property.</summary>
+        internal static string Text(Session session, string id, params object?[] args) =>
+            Util.Format(session["LARIS_TEXT_" + id], id, args);
+
         [CustomAction]
         public static ActionResult DetectExisting(Session session)
         {
@@ -248,31 +253,31 @@ namespace LarisVMS.Installer
             if (All("Server") && product.Key != "Web" && !registered)
             {
                 if (!Uri.TryCreate(session["SERVERURL"], UriKind.Absolute, out var uri) || (uri.Scheme != "https" && uri.Scheme != "http"))
-                    return "Enter the LarisVMS server URL, for example https://vms.example.com:8444 (property SERVERURL).";
+                    return Text(session, "ErrServerUrl");
                 if (string.IsNullOrWhiteSpace(session["REGISTRATIONKEY"]))
-                    return "Enter the registration key from Settings → Node defaults on the server (property REGISTRATIONKEY).";
+                    return Text(session, "ErrRegistrationKey");
             }
             if (All("Server") && product.Key == "Node")
             {
-                if (!Util.IsPort(session["LIVEPORT"])) return "Live port must be a number from 1 to 65535 (property LIVEPORT).";
+                if (!Util.IsPort(session["LIVEPORT"])) return Text(session, "ErrLivePort");
                 if (!string.IsNullOrWhiteSpace(session["LIVEALLOWFROM"]) && !Util.IsAddressList(session["LIVEALLOWFROM"]))
-                    return "Live port allow list must be IP addresses or CIDR blocks separated by commas, for example 10.0.0.5,10.0.1.0/24 (property LIVEALLOWFROM).";
+                    return Text(session, "ErrLiveAllowFrom");
                 if (string.IsNullOrEmpty(session["FFMPEGRESOLVED"]))
                     return string.IsNullOrEmpty(session["FFMPEGPATH"])
-                        ? "FFmpeg was not found. Install it with 'winget install ffmpeg --scope machine', or set its path (property FFMPEGPATH)."
-                        : "FFmpeg was not found at " + session["FFMPEGPATH"] + " (property FFMPEGPATH).";
+                        ? Text(session, "ErrFfmpegNotFound")
+                        : Text(session, "ErrFfmpegNotFoundAt", session["FFMPEGPATH"]);
             }
             if (All("Web") && product.Key == "Web")
             {
-                if (!Util.IsPort(session["HTTPSPORT"])) return "HTTPS port must be a number from 1 to 65535 (property HTTPSPORT).";
+                if (!Util.IsPort(session["HTTPSPORT"])) return Text(session, "ErrHttpsPort");
                 var existing = string.IsNullOrEmpty(session["INSTALLFOLDER"]) ? null : Path.Combine(session["INSTALLFOLDER"], "appsettings.Production.json");
                 var certError = CheckCertificate(session, "CERTPATH", "CERTPASSWORD", existing, "Path", "Password");
                 if (certError is not null) return certError;
             }
             if (All("Endpoint") && product.Key == "Proxy" && !Util.IsPort(session["CLIENTPORT"]))
-                return "Client port must be a number from 1 to 65535 (property CLIENTPORT).";
+                return Text(session, "ErrClientPort");
             if (All("Endpoint") && product.Key == "Node" && !string.IsNullOrEmpty(session["CLIENTPORT"]) && !Util.IsPort(session["CLIENTPORT"]))
-                return "Client port must be a number from 1 to 65535 (property CLIENTPORT).";
+                return Text(session, "ErrClientPort");
             if (All("Endpoint") && (product.Key == "Proxy" || (product.Key == "Node" && !string.IsNullOrEmpty(session["CLIENTPORT"]))))
             {
                 var existing = Path.Combine(Util.ProgramDataLaris, product.Key == "Node" ? "client-endpoint.json" : "proxy-endpoint.json");
@@ -280,7 +285,7 @@ namespace LarisVMS.Installer
                 if (certError is not null) return certError;
             }
             if (All("Account") && Util.NeedsPassword(session["SERVICEACCOUNT"]) && string.IsNullOrEmpty(session["SERVICEPASSWORD"]))
-                return "Enter the password for " + session["SERVICEACCOUNT"] + " (property SERVICEPASSWORD), or leave the account blank to run as LocalSystem.";
+                return Text(session, "ErrServicePassword", session["SERVICEACCOUNT"]);
             return null;
         }
 
@@ -324,6 +329,8 @@ namespace LarisVMS.Installer
                 ["InstallDir"] = installDir,
                 ["UserLocalAppData"] = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 ["UserAppData"] = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                // Deferred actions can't read properties, so CopyCudaDeps gets its message here.
+                ["CudaWarning"] = session["LARIS_TEXT_WarnCudaMissing"],
             };
             session["RemoveLegacyInstall"] = common.ToString();
             session["StopNodeChildren"] = common.ToString();
@@ -393,7 +400,8 @@ namespace LarisVMS.Installer
                     password = Util.JsonReadString(scope, existingPasswordKey) ?? "";
                 }
             }
-            return Util.CheckPfx(path, password, pathProp, passwordProp);
+            return Util.CheckPfx(path, password, pathProp, passwordProp,
+                session["LARIS_TEXT_ErrCertNotFound"], session["LARIS_TEXT_ErrCertCantOpen"]);
         }
 
         /// <summary>Fills the CLIENT* properties from an existing endpoint JSON (see LoadSettings). The

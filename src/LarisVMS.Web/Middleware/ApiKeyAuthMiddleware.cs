@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using LarisVMS.Core.Auth;
 using LarisVMS.Core.Interfaces;
 
 namespace LarisVMS.Web.Middleware;
@@ -27,7 +28,10 @@ public class ApiKeyAuthMiddleware(RequestDelegate next)
 {
     public const string HeaderName = "X-Api-Key";
 
-    public async Task InvokeAsync(HttpContext context, IApiKeyService apiKeyService)
+    // Invalid keys from one address within a minute before it gets 429 instead of a lookup.
+    private const int MaxInvalidPerMinute = 20;
+
+    public async Task InvokeAsync(HttpContext context, IApiKeyService apiKeyService, ILogger<ApiKeyAuthMiddleware> logger)
     {
         if (!context.Request.Path.StartsWithSegments("/api/v1"))
         {
@@ -40,12 +44,22 @@ public class ApiKeyAuthMiddleware(RequestDelegate next)
             var result = await apiKeyService.AuthenticateAsync(header.ToString(), context.RequestAborted);
             if (result is { } auth)
             {
+                // The name is what audit entries and "created by" fields show. Still no NameIdentifier:
+                // that's what tells a key from a user. See ApiKeyScope.ActorId for the ID equivalent.
                 var identity = new ClaimsIdentity(
                 [
+                    new Claim(ClaimTypes.Name, "API key: " + auth.KeyName),
                     new Claim(ClaimTypes.Role, auth.RoleName),
-                    new Claim("ApiKeyId", auth.ApiKeyId.ToString())
+                    new Claim(ApiKeyScope.KeyIdClaim, auth.ApiKeyId.ToString()),
+                    .. ApiKeyScope.ClaimsFor(auth.Limits)
                 ], authenticationType: "ApiKey");
                 context.User = new ClaimsPrincipal(identity);
+            }
+            else if (LarisVMS.Web.Services.AuthFailureLog.Record(logger, "API key", context.Connection.RemoteIpAddress) > MaxInvalidPerMinute)
+            {
+                context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+                context.Response.Headers.RetryAfter = "60";
+                return;
             }
         }
 

@@ -1,3 +1,4 @@
+using LarisVMS.Core.Localization;
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core.Enums;
@@ -17,10 +18,10 @@ public static class EvidenceLockAccess
     {
         var granted = await permissions.GetGrantedAsync(user, ct);
         if (granted.IsAdministrator) return null;
-        if (!granted.Has("EvidenceLocks", "Create")) return "You don't have permission to manage evidence locks.";
+        if (!granted.Has("EvidenceLocks", "Create")) return Loc.T("server.evidenceLockAccess.youDontHavePermissionTo");
         var cameraId = await db.EvidenceLocks.AsNoTracking().Where(l => l.Id == lockId).Select(l => (Guid?)l.CameraId).FirstOrDefaultAsync(ct);
         if (cameraId is null) return null;
         var playable = await cameraAccess.GetAccessibleCameraIdsAsync(user, CameraAccessActions.Playback, ct);
-        return playable is null || playable.Contains(cameraId.Value) ? null : "You don't have playback access to this camera.";
+        return playable is null || playable.Contains(cameraId.Value) ? null : Loc.T("server.evidenceLockAccess.noPlaybackAccess");
     }
 }

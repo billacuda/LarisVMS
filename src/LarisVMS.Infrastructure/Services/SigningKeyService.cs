@@ -7,8 +7,9 @@ using LarisVMS.Infrastructure.Data;
 
 namespace LarisVMS.Infrastructure.Services;
 
-/// <summary>The tamper-evidence signing key. ECDSA P-256 over SHA-256; the newest unretired key
-/// signs, and every key ever created is kept so old signatures still verify. The private key column
+/// <summary>The tamper-evidence signing key. ECDSA P-256 over SHA-256; the oldest unretired key
+/// signs (nodes pin it for updates, so a second key created by a race doesn't take over), and every
+/// key ever created is kept so old signatures still verify. The private key column
 /// is encrypted at rest (SecretProtection). Losing it only means new signatures come from a new key —
 /// unlike a footage encryption key, nothing becomes unreadable.</summary>
 public class SigningKeyService(ApplicationDbContext db) : ISigningKeyService

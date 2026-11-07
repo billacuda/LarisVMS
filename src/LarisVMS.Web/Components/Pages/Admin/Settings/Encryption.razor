@@ -8,9 +8,9 @@
 @inject IAuditService AuditService
 @inject ISigningKeyService SigningKeys
 
-<PageTitle>Encryption and signing settings - @AppName</PageTitle>
+<PageTitle>@L["settings.encryption.encryptionAndSigningSettings"] - @AppName</PageTitle>
 
-<h1>Settings</h1>
+<h1>@L["nav.settings"]</h1>
 <SettingsTabs ActiveKey="Encryption" />
 
 @if (!string.IsNullOrEmpty(SavedMessage))
@@ -20,30 +20,28 @@
 
 <div class="lv-page-narrow">
     <div class="alert alert-warning small" role="note">
-        Encrypted footage can only be read with the <strong>master key</strong>. It's kept on this server, but if the server
-        is rebuilt or its keys are lost, the <strong>backup file and its passphrase</strong> are the only way back.
-        Lose both and every encrypted recording is gone for good. Store the backup somewhere other than this server.
-        <a href="/Help/storage#encryption">Learn more</a>
+        @L.Markup("settings.encryption.warning")
+        <a href="/Help/storage#encryption">@L["common.learnMore"]</a>
     </div>
 
-    <SettingSection Title="Master key">
+    <SettingSection Title="@L["settings.encryption.masterKey"]">
         <div id="encryptionKeyPanel" class="small lv-wide">
             @if (!Status.HasMasterKey)
             {
-                <p class="mb-2">No master key yet. Create one to start using encryption.</p>
-                <button type="button" class="btn btn-primary btn-sm" id="encCreateKey">Create master key</button>
+                <p class="mb-2">@L["settings.encryption.noMasterKeyYetCreate"]</p>
+                <button type="button" class="btn btn-primary btn-sm" id="encCreateKey">@L["settings.encryption.createMasterKey"]</button>
             }
             else
             {
-                <p class="mb-1">Master key <code>@Status.MasterKeyId?.ToString()[..8]</code>, created @if (Status.CreatedAt is { } keyCreated) {<time datetime="@keyCreated.ToUtcIso()" data-local="g">@keyCreated.ToLocalTime().ToString("g")</time>}.</p>
+                <p class="mb-1">@L.Markup(Status.CreatedAt is null ? "settings.encryption.masterKeyId" : "settings.encryption.masterKeyCreated", new { id = Status.MasterKeyId?.ToString()[..8], time = Status.CreatedAt?.ToTimeTag() ?? default })</p>
                 <p class="mb-2">
                     @if (Status.BackupDownloadedAt is { } backedUp)
                     {
-                        <span>Backup last downloaded <time datetime="@backedUp.ToUtcIso()" data-local="g">@backedUp.ToLocalTime().ToString("g")</time>.</span>
+                        <span>@L.Markup("settings.encryption.backupLastDownloaded", new { time = backedUp.ToTimeTag() })</span>
                     }
                     else
                     {
-                        <span class="text-danger fw-semibold">No backup downloaded yet — encryption stays off until you download one.</span>
+                        <span class="text-danger fw-semibold">@L["settings.encryption.noBackupDownloadedYetEncryption"]</span>
                     }
                 </p>
             }
@@ -51,108 +49,106 @@
             @if (Status.HasMasterKey)
             {
                 <div class="border rounded p-2 mb-3">
-                    <div class="fw-semibold mb-1">Download a backup</div>
+                    <div class="fw-semibold mb-1">@L["settings.encryption.downloadABackup"]</div>
                     <div class="row g-2 align-items-end">
                         <div class="col-sm-5">
-                            <label class="form-label small mb-0" for="encPass1">Passphrase (at least @FootageKeyService.MinPassphraseLength characters)</label>
+                            <label class="form-label small mb-0" for="encPass1">@L["settings.encryption.passphraseLength", new { min = FootageKeyService.MinPassphraseLength }]</label>
                             <input type="password" class="form-control form-control-sm" id="encPass1" autocomplete="new-password" />
                         </div>
                         <div class="col-sm-5">
-                            <label class="form-label small mb-0" for="encPass2">Passphrase again</label>
+                            <label class="form-label small mb-0" for="encPass2">@L["settings.encryption.passphraseAgain"]</label>
                             <input type="password" class="form-control form-control-sm" id="encPass2" autocomplete="new-password" />
                         </div>
                         <div class="col-sm-2">
-                            <button type="button" class="btn btn-primary btn-sm w-100" id="encBackup">Download</button>
+                            <button type="button" class="btn btn-primary btn-sm w-100" id="encBackup">@L["common.download"]</button>
                         </div>
                     </div>
-                    <div class="lv-hint mt-1">Without this passphrase the backup can't be opened. Write it down and keep it apart from the file.</div>
+                    <div class="lv-hint mt-1">@L["settings.encryption.withoutThisPassphraseTheBackup"]</div>
                 </div>
             }
 
             <div class="border rounded p-2">
-                <div class="fw-semibold mb-1">Restore from a backup</div>
+                <div class="fw-semibold mb-1">@L["settings.encryption.restoreFromABackup"]</div>
                 <div class="row g-2 align-items-end">
                     <div class="col-sm-5">
-                        <label class="form-label small mb-0" for="encRestoreFile">Backup file</label>
+                        <label class="form-label small mb-0" for="encRestoreFile">@L["settings.encryption.backupFile"]</label>
                         <input type="file" class="form-control form-control-sm" id="encRestoreFile" accept=".json,application/json" />
                     </div>
                     <div class="col-sm-5">
-                        <label class="form-label small mb-0" for="encRestorePass">Passphrase</label>
+                        <label class="form-label small mb-0" for="encRestorePass">@L["settings.encryption.passphrase"]</label>
                         <input type="password" class="form-control form-control-sm" id="encRestorePass" autocomplete="off" />
                     </div>
                     <div class="col-sm-2">
-                        <button type="button" class="btn btn-outline-primary btn-sm w-100" id="encRestore">Restore</button>
+                        <button type="button" class="btn btn-outline-primary btn-sm w-100" id="encRestore">@L["common.restore"]</button>
                     </div>
                 </div>
-                <div class="lv-hint mt-1">For a rebuilt server: brings back the key the existing encrypted footage needs.</div>
+                <div class="lv-hint mt-1">@L["settings.encryption.forARebuiltServerBrings"]</div>
             </div>
             <div id="encryptionKeyStatus" class="mt-2" role="status" aria-live="polite"></div>
         </div>
     </SettingSection>
 
     <EditForm Model="this" FormName="encryption-settings" OnSubmit="HandleSaveAsync" data-dirty-guard>
-        <SettingSection Title="Encrypt footage" Subtitle="Default for every camera; nodes and cameras can override it.">
-            <SettingField Label="Encryption" For="encMode" Wide Hint="New footage is encrypted on the recorder a moment after each segment finishes." HelpLink="/Help/storage#encryption">
+        <SettingSection Title="@L["settings.encryption.encryptFootage"]" Subtitle="@L["settings.encryption.defaultForEveryCameraNodes"]">
+            <SettingField Label="@L["settings.encryption.encryption"]" For="encMode" Wide Hint="@L["settings.encryption.newFootageIsEncryptedOn"]" HelpLink="/Help/storage#encryption">
                 <select name="Mode" id="encMode" class="form-select" disabled="@(!Status.Ready)">
-                    <option value="Off" selected="@(Mode == "Off")">Off</option>
-                    <option value="Video" selected="@(Mode == "Video")">Video (recordings and talk audio)</option>
-                    <option value="VideoAndImages" selected="@(Mode == "VideoAndImages")">Video, snapshots, and thumbnails</option>
+                    <option value="Off" selected="@(Mode == "Off")">@L["common.off"]</option>
+                    <option value="Video" selected="@(Mode == "Video")">@L["settings.encryption.videoRecordingsAndTalkAudio"]</option>
+                    <option value="VideoAndImages" selected="@(Mode == "VideoAndImages")">@L["settings.encryption.videoSnapshotsAndThumbnails"]</option>
                 </select>
                 @if (!Status.Ready)
                 {
-                    <div class="lv-hint text-danger">Create the master key and download a backup first.</div>
+                    <div class="lv-hint text-danger">@L["settings.encryption.createTheMasterKeyAnd"]</div>
                 }
             </SettingField>
         </SettingSection>
         <div class="lv-savebar">
-            <button type="submit" class="btn btn-primary" disabled="@(!Status.Ready)">Save</button>
+            <button type="submit" class="btn btn-primary" disabled="@(!Status.Ready)">@L["common.save"]</button>
         </div>
     </EditForm>
 
-    <SettingSection Title="Signing" Subtitle="Always on; nothing to set up.">
+    <SettingSection Title="@L["settings.encryption.signing"]" Subtitle="@L["settings.encryption.alwaysOnNothingToSet"]">
         <div class="small lv-wide">
             <p class="mb-2">
-                Every recording is linked into a per-camera hash chain, signed hourly, and every export comes with a signed
-                manifest, so edited or missing footage can be detected. Check an export on
-                <a href="/Exports/Verify">Verify an export</a>. <a href="/Help/live-and-playback#verify-an-export">Learn more</a>
+                @L.Markup("settings.encryption.signingIntro")
             </p>
             @if (SigningKeysList.Count == 0)
             {
-                <p class="text-muted mb-0">No signing key yet. One is created automatically the first time something is signed.</p>
+                <p class="text-muted mb-0">@L["settings.encryption.noSigningKeyYetOne"]</p>
             }
             else
             {
                 <div class="table-responsive">
                     <table class="table table-sm align-middle mb-0">
-                        <thead><tr><th>Key</th><th>Algorithm</th><th>Created</th><th>Status</th><th data-no-sort></th></tr></thead>
+                        <thead><tr><th>@L["common.key"]</th><th>@L["settings.encryption.algorithm"]</th><th>@L["common.created"]</th><th>@L["common.status"]</th><th data-no-sort></th></tr></thead>
                         <tbody>
                             @foreach (var k in SigningKeysList.OrderByDescending(k => k.CreatedAt))
                             {
                                 <tr>
-                                    <td class="font-monospace" title="SHA-256 fingerprint of the public key">@Fingerprint(k.PublicKeyPem)</td>
+                                    <td class="font-monospace" title="@L["settings.encryption.sha256FingerprintOfThe"]">@Fingerprint(k.PublicKeyPem)</td>
                                     <td>@k.Algorithm</td>
                                     <td class="text-nowrap"><time datetime="@k.CreatedAt.ToUtcIso()" data-local="g">@k.CreatedAt.ToLocalTime().ToString("g")</time></td>
                                     <td>
                                         @if (k.RetiredAt is { } retired)
                                         {
-                                            <span class="badge text-bg-secondary" title="Retired @retired.ToLocalTime().ToString("g")"
-                                                  data-local-title="@retired.ToUtcIso()" data-local-title-prefix="Retired ">Retired</span>
+                                            <span class="badge text-bg-secondary" title="@L["settings.encryption.retiredAt", new { time = retired.ToLocalTime().ToString("g") }]"
+                                                  data-local-title="@retired.ToUtcIso()" data-local-title-prefix="@L["settings.encryption.retiredPrefix"]">@L["settings.encryption.retired"]</span>
                                         }
                                         else
                                         {
-                                            <span class="badge text-bg-success">Active</span>
+                                            <span class="badge text-bg-success">@L["settings.encryption.active"]</span>
                                         }
                                     </td>
                                     <td class="text-end">
                                         <a class="btn btn-sm btn-outline-secondary" download="laris-signing-key-@(k.Id.ToString()[..8]).pem"
-                                           href="data:application/x-pem-file;base64,@Convert.ToBase64String(System.Text.Encoding.ASCII.GetBytes(k.PublicKeyPem))">Public key</a>
+                                           href="data:application/x-pem-file;base64,@Convert.ToBase64String(System.Text.Encoding.ASCII.GetBytes(k.PublicKeyPem))">@L["settings.encryption.publicKey"]</a>
                                     </td>
                                 </tr>
                             }
                         </tbody>
                     </table>
                 </div>
-                <div class="lv-hint mt-1">The public key lets anyone check a manifest with openssl, without access to this server.</div>
+                <div class="lv-hint mt-1">@L["settings.encryption.thePublicKeyLetsAnyone"]</div>
             }
         </div>
     </SettingSection>
@@ -202,6 +198,6 @@
         if (old != Mode)
             await AuditService.LogAsync("Settings.Encryption", user?.FindFirst(ClaimTypes.NameIdentifier)?.Value, by, null,
                 $"Footage encryption default: {old} → {Mode}");
-        SavedMessage = "Saved. Recorders pick it up within about 30 seconds.";
+        SavedMessage = Loc.T("settings.encryption.savedRecordersPickItUp");
     }
 }

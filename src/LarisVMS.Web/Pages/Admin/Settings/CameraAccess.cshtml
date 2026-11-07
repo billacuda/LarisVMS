@@ -2,13 +2,13 @@
 @model LarisVMS.Web.Pages.Admin.Settings.CameraAccessModel
 @using LarisVMS.Core.Enums
 @{
-    ViewData["Title"] = "Camera access";
+    ViewData["Title"] = L["settings.cameraAccess.cameraAccess"].Value;
 }
-<h1>Settings</h1>
+<h1>@L["nav.settings"]</h1>
 <partial name="_SettingsTabs" model="@("CameraAccess")" />
 
 <p class="text-muted small">
-    Choose which cameras each role can use. A role with no grants has no cameras; Super Admin always has every camera. <a href="/Help/users#camera-access">Learn more</a>
+    @L["settings.cameraAccess.chooseWhichCamerasEachRole"] <a href="/Help/users#camera-access">@L["common.learnMore"]</a>
 </p>
 
 @if (!string.IsNullOrEmpty(Model.SavedMessage))
@@ -17,18 +17,18 @@
 }
 @if (!string.IsNullOrEmpty(Model.ErrorMessage))
 {
-    <div class="alert alert-danger">@Model.ErrorMessage</div>
+    <div class="alert alert-danger" role="alert">@Model.ErrorMessage</div>
 }
 
 <div class="card mb-3">
-    <div class="card-header fw-semibold">Grants</div>
+    <div class="card-header fw-semibold">@L["settings.cameraAccess.grants"]</div>
     <div class="table-responsive">
         <table class="table table-sm mb-0">
             <thead class="table-light">
                 <tr>
-                    <th>Role</th>
-                    <th>Scope</th>
-                    <th>Actions granted</th>
+                    <th>@L["common.role"]</th>
+                    <th>@L["settings.cameraAccess.scope"]</th>
+                    <th>@L["settings.cameraAccess.actionsGranted"]</th>
                     <th></th>
                 </tr>
             </thead>
@@ -42,11 +42,11 @@
                         <td class="small font-monospace">@g.ActionsDescription</td>
                         <td class="text-end text-nowrap">
                             <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#@editId">
-                                Edit
+                                @L["common.edit"]
                             </button>
                             <form method="post" asp-page-handler="Remove" asp-route-id="@g.Id" class="d-inline"
-                                  data-confirm="Remove this grant?">
-                                <button type="submit" class="btn btn-sm btn-outline-danger">Remove</button>
+                                  data-confirm="@L["settings.cameraAccess.removeThisGrant"]">
+                                <button type="submit" class="btn btn-sm btn-outline-danger">@L["common.remove"]</button>
                             </form>
                         </td>
                     </tr>
@@ -54,24 +54,24 @@
                         <td colspan="4" class="bg-body-secondary">
                             <form method="post" asp-page-handler="Edit" asp-route-id="@g.Id" class="row g-3 py-2 camera-access-form">
                                 <div class="col-sm-4">
-                                    <label class="form-label">Scope</label>
-                                    <select name="scopeType" class="form-select scope-type-select">
-                                        <option value="@CameraAccessScopeType.All" selected="@(g.ScopeType == CameraAccessScopeType.All)">Every camera</option>
-                                        <option value="@CameraAccessScopeType.Group" selected="@(g.ScopeType == CameraAccessScopeType.Group)">A camera group (and its sub-groups)</option>
-                                        <option value="@CameraAccessScopeType.Camera" selected="@(g.ScopeType == CameraAccessScopeType.Camera)">A single camera</option>
+                                    <div class="form-label">@L["settings.cameraAccess.scope"]</div>
+                                    <select name="scopeType" class="form-select scope-type-select" aria-label="@L["settings.cameraAccess.scope"]">
+                                        <option value="@CameraAccessScopeType.All" selected="@(g.ScopeType == CameraAccessScopeType.All)">@L["settings.cameraAccess.everyCamera"]</option>
+                                        <option value="@CameraAccessScopeType.Group" selected="@(g.ScopeType == CameraAccessScopeType.Group)">@L["settings.cameraAccess.aCameraGroupAndIts"]</option>
+                                        <option value="@CameraAccessScopeType.Camera" selected="@(g.ScopeType == CameraAccessScopeType.Camera)">@L["settings.cameraAccess.aSingleCamera"]</option>
                                     </select>
                                 </div>
                                 <div class="col-sm-4 scope-id-field" style="display:none;">
-                                    <label class="form-label">&nbsp;</label>
-                                    <select name="scopeId" class="form-select scope-id-group" style="display:none;">
-                                        <option value="">(choose a group)</option>
+                                    <div class="form-label" aria-hidden="true">&nbsp;</div>
+                                    <select name="scopeId" class="form-select scope-id-group" style="display:none;" aria-label="@L["settings.cameraAccess.chooseAGroup"]">
+                                        <option value="">@L["settings.cameraAccess.chooseAGroup"]</option>
                                         @foreach (var grp in Model.Groups)
                                         {
                                             <option value="@grp.Id" selected="@(g.ScopeType == CameraAccessScopeType.Group && g.ScopeId == grp.Id)">@Model.GroupPathName(grp)</option>
                                         }
                                     </select>
                                     <select class="form-select scope-id-camera" style="display:none;">
-                                        <option value="">(choose a camera)</option>
+                                        <option value="">@L["settings.cameraAccess.chooseACamera"]</option>
                                         @foreach (var cam in Model.Cameras)
                                         {
                                             <option value="@cam.Id" selected="@(g.ScopeType == CameraAccessScopeType.Camera && g.ScopeId == cam.Id)">@cam.Name</option>
@@ -79,8 +79,8 @@
                                     </select>
                                 </div>
                                 <div class="col-12">
-                                    <label class="form-label d-block">Actions granted</label>
-                                    @foreach (var action in new[] { CameraAccessActions.View, CameraAccessActions.Playback, CameraAccessActions.Export, CameraAccessActions.Ptz, CameraAccessActions.Talk, CameraAccessActions.Configure })
+                                    <div class="form-label d-block">@L["settings.cameraAccess.actionsGranted"]</div>
+                                    @foreach (var action in new[] { CameraAccessActions.View, CameraAccessActions.Playback, CameraAccessActions.Export, CameraAccessActions.Ptz, CameraAccessActions.Talk, CameraAccessActions.Configure, CameraAccessActions.Record })
                                     {
                                         <div class="form-check form-check-inline">
                                             <input class="form-check-input" type="checkbox" name="actions" value="@action"
@@ -90,7 +90,7 @@
                                     }
                                 </div>
                                 <div class="col-12">
-                                    <button type="submit" class="btn btn-sm btn-primary">Save</button>
+                                    <button type="submit" class="btn btn-sm btn-primary">@L["common.save"]</button>
                                 </div>
                             </form>
                         </td>
@@ -98,7 +98,7 @@
                 }
                 @if (Model.Grants.Count == 0)
                 {
-                    <tr><td colspan="4" class="text-center text-muted py-3">No grants yet. Only Super Admins can use cameras until you add one.</td></tr>
+                    <tr><td colspan="4" class="text-center text-muted py-3">@L["settings.cameraAccess.noGrantsYetOnlySuper"]</td></tr>
                 }
             </tbody>
         </table>
@@ -106,13 +106,13 @@
 </div>
 
 <div class="card">
-    <div class="card-header fw-semibold">Add a grant</div>
+    <div class="card-header fw-semibold">@L["settings.cameraAccess.addAGrant"]</div>
     <div class="card-body">
         <form method="post" asp-page-handler="Add" class="row g-3 camera-access-form">
             <div class="col-sm-4">
-                <label class="form-label">Role</label>
+                <label for="RoleId" class="form-label">@L["common.role"]</label>
                 <select asp-for="RoleId" class="form-select">
-                    <option value="">(choose a role)</option>
+                    <option value="">@L["settings.cameraAccess.chooseARole"]</option>
                     @foreach (var r in Model.Roles)
                     {
                         <option value="@r.Id">@r.Name</option>
@@ -120,24 +120,24 @@
                 </select>
             </div>
             <div class="col-sm-4">
-                <label class="form-label">Scope</label>
+                <label for="ScopeType" class="form-label">@L["settings.cameraAccess.scope"]</label>
                 <select asp-for="ScopeType" class="form-select scope-type-select">
-                    <option value="@CameraAccessScopeType.All">Every camera</option>
-                    <option value="@CameraAccessScopeType.Group">A camera group (and its sub-groups)</option>
-                    <option value="@CameraAccessScopeType.Camera">A single camera</option>
+                    <option value="@CameraAccessScopeType.All">@L["settings.cameraAccess.everyCamera"]</option>
+                    <option value="@CameraAccessScopeType.Group">@L["settings.cameraAccess.aCameraGroupAndIts"]</option>
+                    <option value="@CameraAccessScopeType.Camera">@L["settings.cameraAccess.aSingleCamera"]</option>
                 </select>
             </div>
             <div class="col-sm-4 scope-id-field" style="display:none;">
-                <label class="form-label">&nbsp;</label>
+                <label for="ScopeId" class="form-label">&nbsp;</label>
                 <select asp-for="ScopeId" class="form-select scope-id-group" style="display:none;">
-                    <option value="">(choose a group)</option>
+                    <option value="">@L["settings.cameraAccess.chooseAGroup"]</option>
                     @foreach (var grp in Model.Groups)
                     {
                         <option value="@grp.Id">@Model.GroupPathName(grp)</option>
                     }
                 </select>
                 <select class="form-select scope-id-camera" style="display:none;">
-                    <option value="">(choose a camera)</option>
+                    <option value="">@L["settings.cameraAccess.chooseACamera"]</option>
                     @foreach (var cam in Model.Cameras)
                     {
                         <option value="@cam.Id">@cam.Name</option>
@@ -146,19 +146,19 @@
             </div>
 
             <div class="col-12">
-                <label class="form-label d-block">Actions to grant</label>
-                @foreach (var action in new[] { CameraAccessActions.View, CameraAccessActions.Playback, CameraAccessActions.Export, CameraAccessActions.Ptz, CameraAccessActions.Talk, CameraAccessActions.Configure })
+                <div class="form-label d-block">@L["settings.cameraAccess.actionsToGrant"]</div>
+                @foreach (var action in new[] { CameraAccessActions.View, CameraAccessActions.Playback, CameraAccessActions.Export, CameraAccessActions.Ptz, CameraAccessActions.Talk, CameraAccessActions.Configure, CameraAccessActions.Record })
                 {
                     <div class="form-check form-check-inline">
                         <input class="form-check-input" type="checkbox" name="Actions" value="@action" id="action-@action">
                         <label class="form-check-label" for="action-@action">@action</label>
                     </div>
                 }
-                <div class="lv-hint">Talk and Configure aren't enforced yet.</div>
+                <div class="lv-hint">@L["settings.cameraAccess.talkAndConfigureArentEnforced"]</div>
             </div>
 
             <div class="col-12">
-                <button type="submit" class="btn btn-primary">Add grant</button>
+                <button type="submit" class="btn btn-primary">@L["settings.cameraAccess.addGrant"]</button>
             </div>
         </form>
     </div>

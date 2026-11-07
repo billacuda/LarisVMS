@@ -15,6 +15,15 @@ namespace LarisVMS.Installer
         public static string ProgramDataLaris =>
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS");
 
+        /// <summary>Fills a message from the installer's language file ({0}, {1}, …). A missing or
+        /// malformed text shows its id instead of nothing.</summary>
+        public static string Format(string? template, string id, params object?[] args)
+        {
+            if (string.IsNullOrEmpty(template)) return id;
+            try { return string.Format(template, args); }
+            catch (FormatException) { return template!; }
+        }
+
         /// <summary>Same quoting as install-node.ps1's Format-ServiceArg: wrap in quotes when the value
         /// has whitespace or a quote, escaping embedded quotes.</summary>
         public static string QuoteArg(string value)
@@ -86,10 +95,13 @@ namespace LarisVMS.Installer
 
         /// <summary>Opens a .pfx the way the services will, so a wrong password or unreadable file is
         /// caught in the dialog instead of when the service starts.</summary>
-        public static string? CheckPfx(string path, string? password, string pathProperty, string passwordProperty)
+        /// <paramref name="notFoundText"/> takes {0} path and {1} property; <paramref name="cantOpenText"/>
+        /// takes {0} path, {1} the error, and {2} the password property.
+        public static string? CheckPfx(string path, string? password, string pathProperty, string passwordProperty,
+            string notFoundText, string cantOpenText)
         {
             if (!File.Exists(path))
-                return "Certificate file not found or not readable from this account: " + path + " (property " + pathProperty + ").";
+                return Format(notFoundText, "ErrCertNotFound", path, pathProperty);
             try
             {
 #pragma warning disable SYSLIB0057 // X509CertificateLoader doesn't exist on net472; also compiled into the net10 tests
@@ -99,7 +111,7 @@ namespace LarisVMS.Installer
             }
             catch (CryptographicException ex)
             {
-                return "Could not open " + path + " — " + ex.Message.Trim() + " Check the certificate password (property " + passwordProperty + ").";
+                return Format(cantOpenText, "ErrCertCantOpen", path, ex.Message.Trim(), passwordProperty);
             }
         }
 

@@ -24,18 +24,18 @@
         post('/api/encryption/master-key').then(function (r) {
             if (!r.ok) throw new Error();
             location.reload();
-        }).catch(function () { create.disabled = false; say('danger', 'Couldn\'t create the master key. Try again.'); });
+        }).catch(function () { create.disabled = false; say('danger', larisvmsI18n.t('js.encryptionSettings.couldntCreateTheMasterKey')); });
     });
 
     var backup = document.getElementById('encBackup');
     if (backup) backup.addEventListener('click', function () {
         var p1 = document.getElementById('encPass1').value, p2 = document.getElementById('encPass2').value;
-        if (p1.length < 12) { say('warning', 'Use a passphrase of at least 12 characters.'); return; }
-        if (p1 !== p2) { say('warning', 'The two passphrases don\'t match.'); return; }
+        if (p1.length < 12) { say('warning', larisvmsI18n.t('js.encryptionSettings.useAPassphraseOfAt')); return; }
+        if (p1 !== p2) { say('warning', larisvmsI18n.t('js.encryptionSettings.theTwoPassphrasesDontMatch')); return; }
         backup.disabled = true;
-        say('info', 'Preparing the backup…');
+        say('info', larisvmsI18n.t('js.encryptionSettings.preparingTheBackup'));
         post('/api/encryption/backup', { passphrase: p1 }).then(function (r) {
-            if (!r.ok) return r.text().then(function (t) { throw new Error(t || 'Couldn\'t make the backup.'); });
+            if (!r.ok) return r.text().then(function (t) { throw new Error(t || larisvmsI18n.t('js.encryptionSettings.backupFailed')); });
             return r.blob().then(function (blob) {
                 var a = document.createElement('a');
                 a.href = URL.createObjectURL(blob);
@@ -44,7 +44,7 @@
                 a.click();
                 a.remove();
                 setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
-                say('success', 'Backup downloaded. Keep it, and the passphrase, somewhere safe and away from this server.');
+                say('success', larisvmsI18n.t('js.encryptionSettings.backupDownloadedKeepItAnd'));
                 setTimeout(function () { location.reload(); }, 2500);
             });
         }).catch(function (e) { say('danger', e.message); })
@@ -55,7 +55,7 @@
     if (restore) restore.addEventListener('click', function () {
         var file = document.getElementById('encRestoreFile').files[0];
         var pass = document.getElementById('encRestorePass').value;
-        if (!file || !pass) { say('warning', 'Choose the backup file and enter its passphrase.'); return; }
+        if (!file || !pass) { say('warning', larisvmsI18n.t('js.encryptionSettings.chooseTheBackupFileAnd')); return; }
         restore.disabled = true;
         file.text().then(function (text) {
             return post('/api/encryption/restore', { backup: text, passphrase: pass });
@@ -64,7 +64,7 @@
               say(res.ok ? 'success' : 'danger', res.message);
               if (res.ok) setTimeout(function () { location.reload(); }, 2000);
           })
-          .catch(function () { say('danger', 'Couldn\'t read that backup.'); })
+          .catch(function () { say('danger', larisvmsI18n.t('js.encryptionSettings.couldntReadThatBackup')); })
           .then(function () { restore.disabled = false; });
     });
 })();

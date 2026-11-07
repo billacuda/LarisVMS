@@ -85,14 +85,14 @@ window.larisvmsTimeline = (function () {
         function formatTick(ms, intervalMs) {
             var d = new Date(ms);
             if (intervalMs >= 86400000) {
-                return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+                return d.toLocaleDateString(larisvmsI18n.locale, { month: 'short', day: 'numeric' });
             }
             if (intervalMs >= 60000) {
-                return d.toLocaleTimeString(undefined, hour24
+                return d.toLocaleTimeString(larisvmsI18n.locale, hour24
                     ? { hour: '2-digit', minute: '2-digit', hour12: false }
                     : { hour: 'numeric', minute: '2-digit' });
             }
-            return d.toLocaleTimeString(undefined, hour24
+            return d.toLocaleTimeString(larisvmsI18n.locale, hour24
                 ? { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }
                 : { hour: 'numeric', minute: '2-digit', second: '2-digit' });
         }
@@ -142,7 +142,7 @@ window.larisvmsTimeline = (function () {
                     ctx.stroke();
                 }
 
-                var label = new Date(dayStart).toLocaleDateString(undefined,
+                var label = new Date(dayStart).toLocaleDateString(larisvmsI18n.locale,
                     { weekday: 'short', month: 'short', day: 'numeric' });
                 var labelWidth = ctx.measureText(label).width;
                 var badgeX = Math.max(0, startX) + 3;
@@ -271,6 +271,9 @@ window.larisvmsTimeline = (function () {
         }
 
         function draw() {
+            canvas.setAttribute('aria-valuenow', Math.round(centerMs / 1000));
+            canvas.setAttribute('aria-valuemax', Math.round(Date.now() / 1000));
+            canvas.setAttribute('aria-valuetext', new Date(centerMs).toLocaleString(larisvmsI18n.locale));
             var w = canvas.clientWidth, h = canvas.clientHeight;
             if (!w || !h) return;
             ctx.clearRect(0, 0, w, h);
@@ -307,7 +310,9 @@ window.larisvmsTimeline = (function () {
             // the bar into equal horizontal bands so every class is visible rather than one winning
             // and the rest disappearing. Runs merge on the whole color list, not just the first
             // color, or two differently-banded neighbors would merge into whichever came first.
-            var runStartX = null, runColors = null, runKey = null;
+            // Stripes mark a stretch with motion or an event, so it doesn't rely on color alone: plain
+            // for recorded footage, striped for something happening, and empty for no footage.
+            var runStartX = null, runColors = null, runKey = null, runStriped = false;
             function flushRun(endX) {
                 if (runStartX === null) return;
                 var x1 = Math.round(runStartX), x2 = Math.round(endX);
@@ -322,6 +327,13 @@ window.larisvmsTimeline = (function () {
                         : top + Math.round((total * (i + 1)) / runColors.length);
                     ctx.fillStyle = runColors[i];
                     ctx.fillRect(x1, bandTop, width, Math.max(1, bandBottom - bandTop));
+                }
+                if (runStriped) {
+                    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+                    for (var stripeX = x1 - (x1 % 6); stripeX < x1 + width; stripeX += 6) {
+                        var stripeStart = Math.max(stripeX, x1);
+                        ctx.fillRect(stripeStart, top, Math.min(stripeX + 2, x1 + width) - stripeStart, total);
+                    }
                 }
                 runStartX = null;
             }
@@ -339,9 +351,10 @@ window.larisvmsTimeline = (function () {
                     ? b.tagColorHexes
                     : (showEventTags && b.tagColorHex ? [b.tagColorHex]
                         : [b.hasMotion ? palette.motion : (b.hasRecording ? palette.recording : 'rgba(255,255,255,0.08)')]);
-                var key = colors.join('|');
+                var striped = !!(b.hasMotion || (showEventTags && (b.tagColorHex || (b.tagColorHexes && b.tagColorHexes.length))));
+                var key = colors.join('|') + (striped ? '#' : '');
                 if (runKey !== null && key !== runKey) flushRun(x1);
-                if (runStartX === null) { runStartX = x1; runColors = colors; runKey = key; }
+                if (runStartX === null) { runStartX = x1; runColors = colors; runKey = key; runStriped = striped; }
             });
             flushRun(w);
 
@@ -670,6 +683,55 @@ window.larisvmsTimeline = (function () {
         window.addEventListener('pointerup', endDrag);
         window.addEventListener('pointercancel', endDrag);
 
+        // ── Keyboard ────────────────────────────────────────────────────────
+        // A slider whose value is the playhead. Arrow keys nudge it, Page Up and Page Down jump, and
+        // + and - zoom. A held key repeats quickly, so the strip moves at once but the seek waits
+        // for a pause in the key presses, for the same reason drag scrubbing is throttled above.
+        var KEY_SEEK_DELAY_MS = 200;
+        var keySeekTimer = null;
+
+        canvas.tabIndex = 0;
+        canvas.setAttribute('role', 'slider');
+        canvas.setAttribute('aria-valuemin', '0');
+        if (!canvas.hasAttribute('aria-labelledby')) canvas.setAttribute('aria-label', larisvmsI18n.t('js.timeline.timeline'));
+
+        function zoom(factor) {
+            var next = Math.min(MAX_RANGE_MS, Math.max(MIN_RANGE_MS, rangeMs * factor));
+            if (next === rangeMs) return;
+            rangeMs = next;
+            draw();
+            scheduleReload();
+            if (options.onRangeChange) options.onRangeChange(rangeMs);
+        }
+
+        function keySeek(deltaMs) {
+            if (keySeekTimer) clearTimeout(keySeekTimer);
+            else fireScrubStart();
+            centerMs = clampCenter(centerMs + deltaMs);
+            draw();
+            keySeekTimer = setTimeout(function () {
+                keySeekTimer = null;
+                if (options.onScrub) options.onScrub(Math.round(centerMs));
+                scheduleReload();
+                fireScrubEnd();
+            }, KEY_SEEK_DELAY_MS);
+        }
+
+        canvas.addEventListener('keydown', function (e) {
+            var nudge = rangeMs / 60, jump = rangeMs / 6;
+            switch (e.key) {
+                case 'ArrowLeft': case 'ArrowDown': keySeek(-nudge); break;
+                case 'ArrowRight': case 'ArrowUp': keySeek(nudge); break;
+                case 'PageDown': keySeek(-jump); break;
+                case 'PageUp': keySeek(jump); break;
+                case '+': case '=': zoom(0.5); break;
+                case '-': zoom(2); break;
+                default: return;
+            }
+            e.preventDefault();
+            e.stopPropagation(); // Playback's own arrow-key nudge would otherwise seek a second time
+        });
+
         // ── Hover thumbnails (M7 pass 2) ────────────────────────────────────
         // Independent of the drag-scrub pointermove handler above — this one bails while dragging
         // instead of requiring it. options.getThumbnailUrl is only ever supplied for the per-camera
@@ -708,7 +770,7 @@ window.larisvmsTimeline = (function () {
         var imgLoadToken = 0;
         previewImg.addEventListener('error', function () {
             if (imgLoadToken !== hoverToken) return; // this failure belongs to an already-superseded load
-            showError('No preview available');
+            showError(larisvmsI18n.t('js.timeline.noPreviewAvailable'));
         });
         var previewStatus = document.createElement('div');
         previewStatus.style.cssText = 'color:#aaa; font-size:11px; text-align:center; padding:8px 10px;';
@@ -757,7 +819,7 @@ window.larisvmsTimeline = (function () {
             });
             previewSpeed.style.display = list.length ? 'block' : 'none';
         }
-        function showLoading() { previewImg.style.display = 'none'; previewStatus.style.display = 'block'; previewStatus.textContent = 'Loading…'; }
+        function showLoading() { previewImg.style.display = 'none'; previewStatus.style.display = 'block'; previewStatus.textContent = larisvmsI18n.t('js.timeline.loading'); }
         function showError(msg) { previewImg.style.display = 'none'; previewStatus.style.display = 'block'; previewStatus.textContent = msg; }
         // Stamps imgLoadToken with hoverToken's value *at the moment this src is actually set* — the
         // error listener above compares against hoverToken again whenever it fires, so a load that
@@ -801,7 +863,7 @@ window.larisvmsTimeline = (function () {
             if (cached) {
                 cached.then(function (r) {
                     if (myToken !== hoverToken) return;
-                    if (r) showImage(r); else showError('No preview available');
+                    if (r) showImage(r); else showError(larisvmsI18n.t('js.timeline.noPreviewAvailable'));
                 });
                 return;
             }
@@ -819,7 +881,7 @@ window.larisvmsTimeline = (function () {
                 if (currentFetchController === controller) currentFetchController = null;
                 if (result) { thumbCache.set(url, result); evictOldestIfNeeded(); } else { thumbCache.delete(url); }
                 if (myToken !== hoverToken) return;
-                if (result) showImage(result); else showError('No preview available');
+                if (result) showImage(result); else showError(larisvmsI18n.t('js.timeline.noPreviewAvailable'));
             });
         }
 
@@ -890,7 +952,7 @@ window.larisvmsTimeline = (function () {
             // release position is what the caller acts on anyway, so nothing is lost by ignoring
             // programmatic recenters in between.
             setCenter: function (ms) {
-                if (dragging) return;
+                if (dragging || keySeekTimer) return;
                 centerMs = clampCenter(ms);
                 draw();
                 // Without this, ordinary playback going gray was confirmed live: this is the *only*
@@ -929,6 +991,7 @@ window.larisvmsTimeline = (function () {
                 scheduleReload();
             },
             getRange: function () { return rangeMs; },
+            zoom: zoom,
             setHour24: function (on) { hour24 = !!on; draw(); },
             setShowEventTags: function (on) { showEventTags = !!on; draw(); },
             reload: reload

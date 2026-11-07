@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core.Auth;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 using LarisVMS.Infrastructure.Data;
 
 namespace LarisVMS.Web.Services;
@@ -63,5 +64,5 @@ public sealed class AdminScope
 
     public bool CanGrant(string resource, string action) => IsSuperAdmin || _granted.Has(resource, action);
 
-    public const string OwnRoleMessage = "You can't change a role you hold yourself, or the Super Admin role.";
+    public static string OwnRoleMessage => Loc.T("server.adminScope.youCantChangeARole");
 }

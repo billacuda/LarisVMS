@@ -29,10 +29,10 @@
     var NONE = '(none)';
     var DAY_MS = 24 * 60 * 60 * 1000;
     var DATE_PRESETS = [
-        { value: '24h', label: 'Last 24 hours' },
-        { value: '7d', label: 'Last 7 days' },
-        { value: 'older7d', label: 'Older than 7 days' },
-        { value: 'never', label: 'Never' }
+        { value: '24h', label: larisvmsI18n.t('js.listFilter.last24Hours') },
+        { value: '7d', label: larisvmsI18n.t('js.listFilter.last7Days') },
+        { value: 'older7d', label: larisvmsI18n.t('js.listFilter.olderThan7Days') },
+        { value: 'never', label: larisvmsI18n.t('js.listFilter.never') }
     ];
 
     var tables = {}; // tableId -> { table, input, columns: [{ key, index, type, control }], filters: {} }
@@ -115,7 +115,7 @@
         var clear = document.createElement('button');
         clear.type = 'button';
         clear.className = 'btn btn-link btn-sm p-0 align-baseline';
-        clear.textContent = 'Clear filters';
+        clear.textContent = larisvmsI18n.t('js.listFilter.clearFilters');
         clear.addEventListener('click', function () { clearAll(st); });
         status.appendChild(clear);
     }
@@ -171,7 +171,7 @@
                 control = document.createElement('input');
                 control.type = 'search';
                 control.className = 'form-control form-control-sm';
-                control.placeholder = 'Filter';
+                control.placeholder = larisvmsI18n.t('js.listFilter.filter');
                 control.addEventListener('input', function () { st.filters[key] = control.value.trim(); saveColumnFilters(st); applyTable(st.table.id); });
             } else {
                 control = document.createElement('select');
@@ -180,11 +180,11 @@
                     ? DATE_PRESETS
                     : (th.getAttribute('data-filter-options') ? th.getAttribute('data-filter-options').split('|') : distinctValues(st, index))
                         .map(function (v) { return { value: v, label: v }; });
-                control.appendChild(new Option('All', ''));
+                control.appendChild(new Option(larisvmsI18n.t('js.listFilter.all'), ''));
                 options.forEach(function (o) { control.appendChild(new Option(o.label, o.value)); });
                 control.addEventListener('change', function () { st.filters[key] = control.value; saveColumnFilters(st); applyTable(st.table.id); });
             }
-            control.setAttribute('aria-label', 'Filter by ' + label);
+            control.setAttribute('aria-label', larisvmsI18n.t('js.listFilter.filterBy', { column: label }));
             cell.appendChild(control);
             st.columns.push({ key: key, index: index, type: type, control: control });
         });

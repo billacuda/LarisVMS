@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 using LarisVMS.Core.Security;
 using LarisVMS.Infrastructure.Data;
 
@@ -67,14 +68,14 @@ public class ExportJobDispatcher(IServiceScopeFactory scopeFactory, IHttpClientF
     {
         if (candidate.NodeId is not { } nodeId)
         {
-            await exportService.MarkItemFailedAsync(candidate.ExportItemId, "Camera has no assigned node.", ct);
+            await exportService.MarkItemFailedAsync(candidate.ExportItemId, Loc.T("server.exportJob.noNode"), ct);
             return;
         }
 
         var segments = await timeline.GetSegmentFilePathsAsync(candidate.CameraId, candidate.FromUtc, candidate.ToUtc, ct);
         if (segments.Count == 0)
         {
-            await exportService.MarkItemFailedAsync(candidate.ExportItemId, "No recorded segments overlap the requested range.", ct);
+            await exportService.MarkItemFailedAsync(candidate.ExportItemId, Loc.T("server.exportJob.noSegments"), ct);
             return;
         }
 
@@ -96,7 +97,7 @@ public class ExportJobDispatcher(IServiceScopeFactory scopeFactory, IHttpClientF
             if (segments.Count == 0)
             {
                 await exportService.MarkItemFailedAsync(candidate.ExportItemId,
-                    "Internal error: this export's segments no longer match the node it was pinned to.", ct);
+                    Loc.T("server.exportJob.segmentsMoved"), ct);
                 return;
             }
         }
@@ -122,7 +123,7 @@ public class ExportJobDispatcher(IServiceScopeFactory scopeFactory, IHttpClientF
         if (node is not { LastIpAddress: { } ip, LivePort: { } port, MediaSigningKey: { } key })
         {
             await exportService.MarkItemFailedAsync(candidate.ExportItemId,
-                "This camera's node hasn't reported live-view readiness yet (needs at least one heartbeat since being upgraded to a build with live view).", ct);
+                Loc.T("api.nodeNotLiveReadyDetail"), ct);
             return;
         }
 
@@ -165,7 +166,7 @@ public class ExportJobDispatcher(IServiceScopeFactory scopeFactory, IHttpClientF
             if (!response.IsSuccessStatusCode)
             {
                 await exportService.MarkItemFailedAsync(candidate.ExportItemId,
-                    $"Node rejected the export request (HTTP {(int)response.StatusCode}).", ct);
+                    Loc.T("server.exportJob.nodeRejected", new { status = (int)response.StatusCode }), ct);
             }
             // Success (202): the node runs ffmpeg in the background and reports back to
             // /api/nodes/exports/complete on its own — nothing more to do here.
@@ -173,7 +174,7 @@ public class ExportJobDispatcher(IServiceScopeFactory scopeFactory, IHttpClientF
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.LogWarning(ex, "Could not reach node {NodeId} to dispatch export item {ItemId} — marking failed.", nodeId, candidate.ExportItemId);
-            await exportService.MarkItemFailedAsync(candidate.ExportItemId, $"Could not reach recorder node: {ex.Message}", ct);
+            await exportService.MarkItemFailedAsync(candidate.ExportItemId, Loc.T("server.exportJob.nodeUnreachable", new { message = ex.Message }), ct);
         }
     }
 

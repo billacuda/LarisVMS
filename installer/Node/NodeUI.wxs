@@ -12,29 +12,29 @@
       <Publish Dialog="WelcomeDlg" Control="Next" Property="LARIS_ACCOUNT_BACK" Value="WelcomeDlg" Order="4" Condition="NOT Installed AND LARIS_UPGRADE" />
       <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="[LARIS_UPGRADE_DLG]" Order="5" Condition="NOT Installed AND LARIS_UPGRADE" />
 
-      <Dialog Id="NodeServerDlg" Width="370" Height="270" Title="[ProductName] Setup">
+      <Dialog Id="NodeServerDlg" Width="370" Height="270" Title="!(loc.DlgTitle)">
         <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
         <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
         <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
-        <Control Id="Title" Type="Text" X="15" Y="6" Width="300" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Server and storage" />
-        <Control Id="Description" Type="Text" X="25" Y="23" Width="320" Height="15" Transparent="yes" NoPrefix="yes" Text="Where this node registers, and where it records." />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="300" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}!(loc.NodeServerTitle)" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="320" Height="15" Transparent="yes" NoPrefix="yes" Text="!(loc.NodeServerDescription)" />
 
-        <Control Id="ServerUrlLabel" Type="Text" X="20" Y="56" Width="110" Height="15" Text="Server URL:" />
+        <Control Id="ServerUrlLabel" Type="Text" X="20" Y="56" Width="110" Height="15" Text="!(loc.ServerUrlLabel)" />
         <Control Id="ServerUrl" Type="Edit" X="135" Y="54" Width="215" Height="17" Property="SERVERURL" DisableCondition="ALREADYREGISTERED=&quot;1&quot;" />
-        <Control Id="KeyLabel" Type="Text" X="20" Y="78" Width="110" Height="15" Text="Registration key:" />
+        <Control Id="KeyLabel" Type="Text" X="20" Y="78" Width="110" Height="15" Text="!(loc.RegistrationKeyLabel)" />
         <Control Id="Key" Type="Edit" X="135" Y="76" Width="215" Height="17" Property="REGISTRATIONKEY" Password="yes" DisableCondition="ALREADYREGISTERED=&quot;1&quot;" />
-        <Control Id="RegisteredNote" Type="Text" X="135" Y="95" Width="215" Height="10" NoPrefix="yes" Text="Already registered with the server." ShowCondition="ALREADYREGISTERED=&quot;1&quot;" HideCondition="ALREADYREGISTERED&lt;&gt;&quot;1&quot;" />
-        <Control Id="KeyNote" Type="Text" X="135" Y="95" Width="215" Height="10" NoPrefix="yes" Text="From Settings &gt; Node defaults on the server." ShowCondition="ALREADYREGISTERED&lt;&gt;&quot;1&quot;" HideCondition="ALREADYREGISTERED=&quot;1&quot;" />
-        <Control Id="StorageLabel" Type="Text" X="20" Y="110" Width="110" Height="15" Text="Storage path:" />
+        <Control Id="RegisteredNote" Type="Text" X="135" Y="95" Width="215" Height="10" NoPrefix="yes" Text="!(loc.AlreadyRegistered)" ShowCondition="ALREADYREGISTERED=&quot;1&quot;" HideCondition="ALREADYREGISTERED&lt;&gt;&quot;1&quot;" />
+        <Control Id="KeyNote" Type="Text" X="135" Y="95" Width="215" Height="10" NoPrefix="yes" Text="!(loc.KeyFromServer)" ShowCondition="ALREADYREGISTERED&lt;&gt;&quot;1&quot;" HideCondition="ALREADYREGISTERED=&quot;1&quot;" />
+        <Control Id="StorageLabel" Type="Text" X="20" Y="110" Width="110" Height="15" Text="!(loc.StorageLabel)" />
         <Control Id="Storage" Type="Edit" X="135" Y="108" Width="215" Height="17" Property="STORAGEROOT" />
-        <Control Id="ArchiveLabel" Type="Text" X="20" Y="132" Width="110" Height="15" Text="Archive path (optional):" />
+        <Control Id="ArchiveLabel" Type="Text" X="20" Y="132" Width="110" Height="15" Text="!(loc.ArchiveLabel)" />
         <Control Id="Archive" Type="Edit" X="135" Y="130" Width="215" Height="17" Property="ARCHIVEROOT" />
-        <Control Id="FfmpegLabel" Type="Text" X="20" Y="154" Width="110" Height="15" Text="FFmpeg path (optional):" />
+        <Control Id="FfmpegLabel" Type="Text" X="20" Y="154" Width="110" Height="15" Text="!(loc.FfmpegLabel)" />
         <Control Id="Ffmpeg" Type="Edit" X="135" Y="152" Width="215" Height="17" Property="FFMPEGPATH" />
-        <Control Id="LivePortLabel" Type="Text" X="20" Y="176" Width="110" Height="15" Text="Live port:" />
+        <Control Id="LivePortLabel" Type="Text" X="20" Y="176" Width="110" Height="15" Text="!(loc.LivePortLabel)" />
         <Control Id="LivePort" Type="Edit" X="135" Y="174" Width="60" Height="17" Property="LIVEPORT" />
-        <Control Id="Insecure" Type="CheckBox" X="20" Y="198" Width="330" Height="15" Property="INSECURETLS" CheckBoxValue="1" Text="Accept the server's self-signed certificate" />
-        <Control Id="Direct" Type="CheckBox" X="20" Y="214" Width="330" Height="15" Property="DIRECTSTREAMING" CheckBoxValue="1" Text="Stream directly from this node to browsers (configure next)" />
+        <Control Id="Insecure" Type="CheckBox" X="20" Y="198" Width="330" Height="15" Property="INSECURETLS" CheckBoxValue="1" Text="!(loc.AcceptServerSelfSigned)" />
+        <Control Id="Direct" Type="CheckBox" X="20" Y="214" Width="330" Height="15" Property="DIRECTSTREAMING" CheckBoxValue="1" Text="!(loc.DirectStreaming)" />
 
         <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)">
           <Publish Event="NewDialog" Value="WelcomeDlg" />
@@ -55,23 +55,23 @@
         </Control>
       </Dialog>
 
-      <Dialog Id="NodeEndpointDlg" Width="370" Height="270" Title="[ProductName] Setup">
+      <Dialog Id="NodeEndpointDlg" Width="370" Height="270" Title="!(loc.DlgTitle)">
         <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
         <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
         <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
-        <Control Id="Title" Type="Text" X="15" Y="6" Width="300" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Direct streaming" />
-        <Control Id="Description" Type="Text" X="25" Y="23" Width="320" Height="15" Transparent="yes" NoPrefix="yes" Text="The HTTPS endpoint browsers use to stream straight from this node." />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="300" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}!(loc.EndpointTitle)" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="320" Height="15" Transparent="yes" NoPrefix="yes" Text="!(loc.EndpointDescription)" />
 
-        <Control Id="PortLabel" Type="Text" X="20" Y="56" Width="110" Height="15" Text="Client port:" />
+        <Control Id="PortLabel" Type="Text" X="20" Y="56" Width="110" Height="15" Text="!(loc.ClientPortLabel)" />
         <Control Id="Port" Type="Edit" X="135" Y="54" Width="60" Height="17" Property="CLIENTPORT" />
-        <Control Id="HostLabel" Type="Text" X="20" Y="78" Width="110" Height="15" Text="Host name (FQDN):" />
+        <Control Id="HostLabel" Type="Text" X="20" Y="78" Width="110" Height="15" Text="!(loc.HostLabel)" />
         <Control Id="Host" Type="Edit" X="135" Y="76" Width="215" Height="17" Property="CLIENTENDPOINTHOST" />
-        <Control Id="PfxLabel" Type="Text" X="20" Y="100" Width="110" Height="15" Text="Certificate (.pfx) path:" />
+        <Control Id="PfxLabel" Type="Text" X="20" Y="100" Width="110" Height="15" Text="!(loc.CertPathLabel)" />
         <Control Id="Pfx" Type="Edit" X="135" Y="98" Width="215" Height="17" Property="CLIENTPFXPATH" />
-        <Control Id="PfxPwdLabel" Type="Text" X="20" Y="122" Width="110" Height="15" Text="Certificate password:" />
+        <Control Id="PfxPwdLabel" Type="Text" X="20" Y="122" Width="110" Height="15" Text="!(loc.CertPasswordLabel)" />
         <Control Id="PfxPwd" Type="Edit" X="135" Y="120" Width="215" Height="17" Property="CLIENTPFXPASSWORD" Password="yes" />
-        <Control Id="PfxPwdHint" Type="Text" X="135" Y="139" Width="215" Height="10" NoPrefix="yes" Text="Leave blank to keep the current password." />
-        <Control Id="AllowInsecure" Type="CheckBox" X="20" Y="160" Width="330" Height="15" Property="CLIENTALLOWINSECURE" CheckBoxValue="1" Text="Allow a self-signed certificate (testing only)" />
+        <Control Id="PfxPwdHint" Type="Text" X="135" Y="139" Width="215" Height="10" NoPrefix="yes" Text="!(loc.KeepPasswordHint)" />
+        <Control Id="AllowInsecure" Type="CheckBox" X="20" Y="160" Width="330" Height="15" Property="CLIENTALLOWINSECURE" CheckBoxValue="1" Text="!(loc.AllowSelfSigned)" />
 
         <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)">
           <Publish Event="NewDialog" Value="NodeServerDlg" />

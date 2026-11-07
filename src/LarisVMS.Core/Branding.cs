@@ -73,6 +73,37 @@ public static class Branding
         return string.IsNullOrEmpty(trimmed) || !HexColor.IsMatch(trimmed) ? null : trimmed;
     }
 
+    /// <summary>WCAG contrast ratio between two hex colors, from 1 to 21.</summary>
+    public static double ContrastRatio(string first, string second)
+    {
+        var a = RelativeLuminance(first);
+        var b = RelativeLuminance(second);
+        return (Math.Max(a, b) + 0.05) / (Math.Min(a, b) + 0.05);
+    }
+
+    /// <summary>Whether a color reads as text on the light theme's page and carries white text as a
+    /// button fill, the two ways the primary color is used. Text needs 4.5:1.</summary>
+    public static bool IsReadablePrimary(string color) =>
+        ContrastRatio(color, LightPageColor) >= MinimumTextContrast && ContrastRatio(color, "#ffffff") >= MinimumTextContrast;
+
+    /// <summary>Whether white text reads on this color, as it must on the sidebar's brand strip.</summary>
+    public static bool IsReadableAccent(string color) => ContrastRatio(color, "#ffffff") >= MinimumTextContrast;
+
+    private const string LightPageColor = "#f3f2f2";
+    private const double MinimumTextContrast = 4.5;
+
+    private static double RelativeLuminance(string hex)
+    {
+        var digits = hex.TrimStart('#');
+        if (digits.Length == 3) digits = string.Concat(digits.Select(c => $"{c}{c}"));
+        double Channel(int start)
+        {
+            var value = Convert.ToInt32(digits.Substring(start, 2), 16) / 255.0;
+            return value <= 0.03928 ? value / 12.92 : Math.Pow((value + 0.055) / 1.055, 2.4);
+        }
+        return 0.2126 * Channel(0) + 0.7152 * Channel(2) + 0.0722 * Channel(4);
+    }
+
     public static string? NormalizeFontKey(string? value)
     {
         var trimmed = value?.Trim();

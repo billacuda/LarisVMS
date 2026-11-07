@@ -6,7 +6,7 @@ Each part has its own installer: `LarisVMS-Web`, `LarisVMS-Node`, and `LarisVMS-
 
 ## Web server
 
-1. Have a SQL Server reachable from the server (Integrated Security or SQL Authentication), or a MariaDB server (experimental; see [MariaDB](#mariadb)).
+1. Have a SQL Server reachable from the server (Integrated Security or SQL Authentication), or a MariaDB server (see [MariaDB](#mariadb)).
 2. Run `LarisVMS-Web.msi`. Settings:
    - `HTTPSPORT`: the HTTPS port (default 8444). The installer opens it in the firewall, for TCP and for UDP ([HTTP/3](/Help/security#http3)).
    - `CERTPATH`, `CERTPASSWORD`: the server certificate (`.pfx`). Leave blank to use a self-signed certificate until you have one. The installer checks that the file opens with the password before continuing; a file share must also be readable by the service account.
@@ -20,8 +20,6 @@ If you point the wizard at an existing LarisVMS database (for example after rein
 The server needs no .NET runtime; it's included. The certificate can also be changed later in `appsettings.Production.json` in the install folder. A renewed `.pfx` at the same path is picked up within a minute, without a restart.
 
 ## MariaDB
-
-**Experimental:** MariaDB 10.11 and later are now supported, but support is new. For an installation that needs to be stable, use SQL Server for now, and please [report any issues](https://github.com/billacuda/LarisVMS/issues).
 
 LarisVMS can use MariaDB 10.11 or later instead of SQL Server. In the setup wizard, choose **MariaDB** and enter the host, port (default 3306), database name, and a MariaDB user and password. MariaDB has no Windows sign-in for LarisVMS to use, so a user and password are always needed.
 

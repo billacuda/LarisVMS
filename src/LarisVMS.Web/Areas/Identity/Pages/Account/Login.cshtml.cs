@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core.Entities;
+using LarisVMS.Core.Localization;
 using LarisVMS.Infrastructure.ActiveDirectory;
 using LarisVMS.Infrastructure.Data;
 using LarisVMS.Web.Auth;
@@ -29,8 +30,18 @@ public class LoginModel(
     ApplicationDbContext db,
     IActiveDirectoryService directory,
     ActiveDirectoryUserSync adSync,
+    LarisVMS.Core.Interfaces.IAuditService audit,
+    LarisVMS.Web.Services.INotificationService notifications,
     ILogger<LoginModel> logger) : PageModel
 {
+    // Failed sign-ins from one address within a minute before Super Admins hear about it; the
+    // sign-in rate limit (10 a minute) means this is someone hitting it.
+    private const int FailureAlertThreshold = 10;
+
+    // One lockout notice per account for as long as a lockout lasts, however often it's retried.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> LockoutNoticeSent = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly TimeSpan LockoutNoticeInterval = TimeSpan.FromMinutes(15);
+
     [BindProperty] public InputModel Input { get; set; } = new();
 
     public string? ReturnUrl { get; set; }
@@ -43,9 +54,12 @@ public class LoginModel(
 
     public class InputModel
     {
-        [Required, Display(Name = "Email or username")] public string Username { get; set; } = string.Empty;
-        [Required, DataType(DataType.Password)] public string Password { get; set; } = string.Empty;
-        [Display(Name = "Remember me?")] public bool RememberMe { get; set; }
+        // Language keys: AddDataAnnotationsLocalization looks them up.
+        [Required(ErrorMessage = "account.login.usernameRequired"), Display(Name = "account.login.emailOrUsername")]
+        public string Username { get; set; } = string.Empty;
+        [Required(ErrorMessage = "account.login.passwordRequired"), DataType(DataType.Password), Display(Name = "common.password")]
+        public string Password { get; set; } = string.Empty;
+        [Display(Name = "account.login.rememberMe")] public bool RememberMe { get; set; }
     }
 
     public async Task OnGetAsync(string? returnUrl = null)
@@ -77,17 +91,59 @@ public class LoginModel(
     private async Task<string?> SignInLocalAsync(ActiveDirectorySettings? adSettings)
     {
         if (!ActiveDirectorySettings.LocalLoginsAllowed(adSettings))
-            return "Local sign-in is turned off. Sign in with your Active Directory username (no @).";
+            return Loc.T("account.login.localSignInIsTurned");
 
         var result = await signInManager.PasswordSignInAsync(Input.Username.Trim(), Input.Password, Input.RememberMe, lockoutOnFailure: true);
         if (result.Succeeded) return null;
-        return result.IsLockedOut ? "This account is locked out." : "Invalid email or password.";
+        if (result.IsLockedOut)
+        {
+            await AuditFailureAsync("Login.LockedOut", "Local account");
+            return Loc.T("account.login.thisAccountIsLockedOut");
+        }
+        await AuditFailureAsync("Login.Failure", "Local account");
+        return Loc.T("account.login.invalidEmailOrPassword");
+    }
+
+    // The username is typed by an anonymous visitor: one line, bounded, before it reaches the log
+    // or the audit trail.
+    private static string Safe(string value) =>
+        new(value.Trim().Take(100).Select(c => char.IsControl(c) ? ' ' : c).ToArray());
+
+    private async Task AuditFailureAsync(string action, string details)
+    {
+        var username = Safe(Input.Username);
+        var ip = HttpContext.Connection.RemoteIpAddress;
+        await audit.LogAsync(action, null, username, ip?.ToString(), details, HttpContext.RequestAborted);
+
+        // Built per admin, in their language.
+        Func<string>? title = null, message = null;
+        if (action == "Login.LockedOut")
+        {
+            var now = DateTime.UtcNow;
+            if (LockoutNoticeSent.Count > 1000) LockoutNoticeSent.Clear();
+            if (!LockoutNoticeSent.TryGetValue(username, out var sent) || now - sent > LockoutNoticeInterval)
+            {
+                LockoutNoticeSent[username] = now;
+                title = () => Loc.T("account.login.noticeLockedOutTitle");
+                message = () => Loc.T("account.login.noticeLockedOut", new { username, ip = ip?.ToString() });
+            }
+        }
+        else if (LarisVMS.Web.Services.AuthFailureLog.Record(logger, "Sign-in", ip, details) == FailureAlertThreshold)
+        {
+            title = () => Loc.T("account.login.noticeRepeatedTitle");
+            message = () => Loc.T("account.login.noticeRepeated", new { count = FailureAlertThreshold, ip = ip?.ToString(), username });
+        }
+        if (title is null) return;
+
+        // A notice that can't be sent mustn't change what the sign-in page answers.
+        try { await notifications.NotifySuperAdminsAsync(title, message!, "/Logs/AuditLogs", HttpContext.RequestAborted); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { logger.LogWarning(ex, "Could not send the \"{Title}\" notice.", action); }
     }
 
     private async Task<string?> SignInActiveDirectoryAsync(ActiveDirectorySettings? adSettings)
     {
         if (adSettings is not { IsEnabled: true })
-            return "Sign in with your email address.";
+            return Loc.T("account.login.signInWithYourEmail");
 
         var username = AdUsername.Normalize(Input.Username);
 
@@ -95,7 +151,10 @@ public class LoginModel(
         // refused before AD is even asked — also what rate-limits password guessing through this page.
         var linked = await FindLinkedUserByNameAsync(username);
         if (linked is not null && await userManager.IsLockedOutAsync(linked))
-            return "This account is locked out.";
+        {
+            await AuditFailureAsync("Login.LockedOut", "Active Directory");
+            return Loc.T("account.login.thisAccountIsLockedOut");
+        }
 
         AdUserEntry entry;
         try
@@ -106,12 +165,13 @@ public class LoginModel(
         catch (AdInvalidCredentialsException)
         {
             if (linked is not null) await userManager.AccessFailedAsync(linked);
-            return "Invalid username or password, or this account doesn't have access to this system.";
+            await AuditFailureAsync("Login.Failure", "Active Directory: wrong username or password");
+            return Loc.T("account.login.invalidUsernameOrPasswordOr");
         }
         catch (ActiveDirectoryException ex)
         {
-            logger.LogWarning(ex, "Active Directory sign-in for {Username} failed: AD unavailable.", username);
-            return "Can't reach Active Directory right now. Try again shortly, or contact your administrator.";
+            logger.LogWarning(ex, "Active Directory sign-in for {Username} failed: AD unavailable.", Safe(username));
+            return Loc.T("account.login.cantReachActiveDirectoryRight");
         }
 
         var user = await adSync.SyncSignInAsync(entry, HttpContext.RequestAborted);
@@ -119,9 +179,10 @@ public class LoginModel(
         {
             // The same answer as a wrong password, so this page doesn't reveal that an AD password is
             // right; the reason is in the log.
-            logger.LogInformation("Active Directory sign-in for {Username} refused: {Reason}.", username,
-                entry.IsActive ? "not in any linked group" : "account disabled or expired in AD");
-            return "Invalid username or password, or this account doesn't have access to this system.";
+            var reason = entry.IsActive ? "not in any linked group" : "account disabled or expired in AD";
+            logger.LogInformation("Active Directory sign-in for {Username} refused: {Reason}.", Safe(username), reason);
+            await AuditFailureAsync("Login.Failure", $"Active Directory: {reason}");
+            return Loc.T("account.login.invalidUsernameOrPasswordOr");
         }
 
         await userManager.ResetAccessFailedCountAsync(user);

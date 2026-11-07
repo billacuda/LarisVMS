@@ -8,9 +8,9 @@
 @inject ISettingsResolver Settings
 @inject IAuditService AuditService
 
-<PageTitle>Event settings - @AppName</PageTitle>
+<PageTitle>@L["settings.events.eventSettings"] - @AppName</PageTitle>
 
-<h1>Settings</h1>
+<h1>@L["nav.settings"]</h1>
 <SettingsTabs ActiveKey="Events" />
 
 @if (!string.IsNullOrEmpty(SavedMessage))
@@ -19,39 +19,51 @@
 }
 @if (!string.IsNullOrEmpty(ErrorMessage))
 {
-    <div class="alert alert-danger">@ErrorMessage</div>
+    <div class="alert alert-danger" role="alert">@ErrorMessage</div>
 }
 
 <div class="lv-page-narrow">
 <EditForm Model="this" FormName="events-settings" OnSubmit="HandleSaveAsync" data-dirty-guard>
-    <SettingSection Title="Timeline colors" Subtitle="Blank uses the built-in color.">
-        <SettingField Label="@($"{MotionEmoji} Motion")" For="MotionColor" Hint="Movement with no object class.">
+    <SettingSection Title="@L["settings.events.timelineColors"]" Subtitle="@L["settings.events.blankUsesTheBuiltIn"]">
+        <SettingField Label="@($"{MotionEmoji} Motion")" For="MotionColor" Hint="@L["settings.events.movementWithNoObjectClass"]">
             <div class="input-group">
                 <input type="color" class="form-control form-control-color js-color-picker"
                        value="@(MotionColor ?? DefaultMotion)" data-for="MotionColor"
-                       aria-label="Motion color picker" />
+                       aria-label="@L["settings.events.motionColorPicker"]" />
                 <InputText @bind-Value="MotionColor" id="MotionColor" class="form-control js-color-text"
                        placeholder="@DefaultMotion" maxlength="7" />
                 <button type="button" class="btn btn-outline-secondary js-color-reset"
                         data-for="MotionColor" data-default="@DefaultMotion"
-                        title="Reset to the built-in default">Reset</button>
+                        title="@L["settings.events.resetToTheBuiltIn"]">@L["common.reset"]</button>
             </div>
         </SettingField>
-        <SettingField Label="Recorded" For="RecordingColor" Hint="Footage with nothing detected.">
+        <SettingField Label="@L["settings.events.recorded"]" For="RecordingColor" Hint="@L["settings.events.footageWithNothingDetected"]">
             <div class="input-group">
                 <input type="color" class="form-control form-control-color js-color-picker"
                        value="@(RecordingColor ?? DefaultRecording)" data-for="RecordingColor"
-                       aria-label="Recorded color picker" />
+                       aria-label="@L["settings.events.recordedColorPicker"]" />
                 <InputText @bind-Value="RecordingColor" id="RecordingColor" class="form-control js-color-text"
                        placeholder="@DefaultRecording" maxlength="7" />
                 <button type="button" class="btn btn-outline-secondary js-color-reset"
                         data-for="RecordingColor" data-default="@DefaultRecording"
-                        title="Reset to the built-in default">Reset</button>
+                        title="@L["settings.events.resetToTheBuiltIn"]">@L["common.reset"]</button>
+            </div>
+        </SettingField>
+        <SettingField Label="@L["settings.events.manualRecording"]" For="ManualRecordingColor" Hint="@L["settings.events.footageSavedByManualRecording"]">
+            <div class="input-group">
+                <input type="color" class="form-control form-control-color js-color-picker"
+                       value="@(ManualRecordingColor ?? DefaultManualRecording)" data-for="ManualRecordingColor"
+                       aria-label="@L["settings.events.manualRecordingColorPicker"]" />
+                <InputText @bind-Value="ManualRecordingColor" id="ManualRecordingColor" class="form-control js-color-text"
+                       placeholder="@DefaultManualRecording" maxlength="7" />
+                <button type="button" class="btn btn-outline-secondary js-color-reset"
+                        data-for="ManualRecordingColor" data-default="@DefaultManualRecording"
+                        title="@L["settings.events.resetToTheBuiltIn"]">@L["common.reset"]</button>
             </div>
         </SettingField>
     </SettingSection>
 
-    <SettingSection Title="Detected objects" Subtitle="Reported by cameras with onboard analytics, over ONVIF or a vendor integration.">
+    <SettingSection Title="@L["settings.events.detectedObjects"]" Subtitle="@L["settings.events.reportedByCamerasWithOnboard"]">
         @foreach (var kind in Kinds)
         {
             var name = kind.ToString();
@@ -62,22 +74,22 @@
                 <div class="input-group">
                     <input type="color" class="form-control form-control-color js-color-picker"
                            value="@(current ?? fallback)" data-for="@fieldId"
-                           aria-label="@Label(kind) color picker" />
+                           aria-label="@L["settings.events.colorPicker", new { kind = Label(kind) }]" />
                     <input type="text" id="@fieldId" name="@fieldId" value="@current"
                            class="form-control js-color-text" placeholder="@fallback" maxlength="7" />
                     <button type="button" class="btn btn-outline-secondary js-color-reset"
                             data-for="@fieldId" data-default="@fallback"
-                            title="Reset to the built-in default">Reset</button>
+                            title="@L["settings.events.resetToTheBuiltIn"]">@L["common.reset"]</button>
                 </div>
             </SettingField>
         }
         <div class="mb-3">
             <button type="button" class="btn btn-outline-secondary btn-sm js-color-reset-all"
-                    title="Clear every object color above back to its built-in default. Takes effect on Save.">
-                Reset all object colors to defaults
+                    title="@L["settings.events.clearEveryObjectColorAbove"]">
+                @L["settings.events.resetAllObjectColorsTo"]
             </button>
         </div>
-        <SettingField Label="Show in Snapshots" Wide Hint="Untick a class to hide it from the Snapshots page. Custom event tags always show.">
+        <SettingField Label="@L["settings.events.showInSnapshots"]" Wide Hint="@L["settings.events.untickAClassToHide"]">
             <div class="d-flex flex-wrap gap-3">
                 @foreach (var kind in Kinds)
                 {
@@ -95,9 +107,9 @@
         </SettingField>
     </SettingSection>
 
-    <SettingSection Title="Live tile badges">
-        <SettingField Label="Badge corner" Hint="Where motion and object badges appear on live tiles.">
-            <select name="EventBadgeCornerValue" class="form-select">
+    <SettingSection Title="@L["settings.events.liveTileBadges"]">
+        <SettingField For="field-eventBadgeCornerValue" Label="@L["settings.events.badgeCorner"]" Hint="@L["settings.events.whereMotionAndObjectBadges"]">
+            <select id="field-eventBadgeCornerValue" name="EventBadgeCornerValue" class="form-select">
                 @foreach (var corner in EventBadgeCorner.All)
                 {
                     <option value="@corner" selected="@(corner == EventBadgeCornerValue)">@EventBadgeCorner.Label(corner)</option>
@@ -107,7 +119,7 @@
     </SettingSection>
 
     <div class="lv-savebar">
-        <button type="submit" class="btn btn-primary">Save</button>
+        <button type="submit" class="btn btn-primary">@L["common.save"]</button>
     </div>
 </EditForm>
 </div>
@@ -160,6 +172,7 @@
 
     [SupplyParameterFromForm(FormName = "events-settings")] private string? MotionColor { get; set; }
     [SupplyParameterFromForm(FormName = "events-settings")] private string? RecordingColor { get; set; }
+    [SupplyParameterFromForm(FormName = "events-settings")] private string? ManualRecordingColor { get; set; }
     [SupplyParameterFromForm(FormName = "events-settings")] private string? EventBadgeCornerValue { get; set; }
 
     // Dictionary-shaped form data (one flat field per detection kind, e.g. "DetectionColors_PersonDetected")
@@ -175,10 +188,11 @@
 
     private static IReadOnlyList<DetectionKind> Kinds => DetectionDisplay.AllKinds;
     private static string DefaultFor(DetectionKind kind) => DetectionDisplay.ColorHex(kind);
-    private static string Label(DetectionKind kind) => DetectionDisplay.Label(kind);
+    private static string Label(DetectionKind kind) => DetectionDisplay.LocalizedLabel(kind);
     private static string Emoji(DetectionKind kind) => DetectionDisplay.Emoji(kind);
     private static string DefaultMotion => EventColors.DefaultMotion;
     private static string DefaultRecording => EventColors.DefaultRecording;
+    private static string DefaultManualRecording => EventColors.DefaultManualRecording;
     private static string MotionEmoji => EventColors.MotionEmoji;
 
     private const string EventBadgeCornerKey = EventSettingsKeys.EventBadgeCornerKey;
@@ -195,6 +209,7 @@
         var current = await EventColorsService.GetAsync();
         MotionColor = current.Motion;
         RecordingColor = current.Recording;
+        ManualRecordingColor = current.ManualRecording;
         DetectionColors = DetectionDisplay.AllKinds.ToDictionary(
             k => k.ToString(),
             k => current.Detections.TryGetValue(k, out var hex) ? hex : null);
@@ -224,16 +239,17 @@
         var invalid = new List<string>();
         if (!string.IsNullOrWhiteSpace(MotionColor) && EventColors.Normalize(MotionColor) is null) invalid.Add("Motion");
         if (!string.IsNullOrWhiteSpace(RecordingColor) && EventColors.Normalize(RecordingColor) is null) invalid.Add("Recording");
+        if (!string.IsNullOrWhiteSpace(ManualRecordingColor) && EventColors.Normalize(ManualRecordingColor) is null) invalid.Add("Manual recording");
         foreach (var kind in DetectionDisplay.AllKinds)
         {
             DetectionColors.TryGetValue(kind.ToString(), out var hex);
             if (!string.IsNullOrWhiteSpace(hex) && EventColors.Normalize(hex) is null)
-                invalid.Add(DetectionDisplay.Label(kind));
+                invalid.Add(DetectionDisplay.LocalizedLabel(kind));
         }
 
         if (invalid.Count > 0)
         {
-            ErrorMessage = "These must be hex values like #28e070: " + string.Join(", ", invalid) + ".";
+            ErrorMessage = Loc.T("settings.events.invalidHex", new { values = string.Join(", ", invalid) });
             return;
         }
 
@@ -253,7 +269,7 @@
         }
 
         var updated = new EventPalette(
-            EventColors.Normalize(MotionColor), EventColors.Normalize(RecordingColor), detections);
+            EventColors.Normalize(MotionColor), EventColors.Normalize(RecordingColor), detections, EventColors.Normalize(ManualRecordingColor));
         await EventColorsService.SaveAsync(updated, by);
 
         var badgeCorner = EventBadgeCorner.Normalize(EventBadgeCornerValue);
@@ -291,7 +307,7 @@
             by, HttpContext?.Connection.RemoteIpAddress?.ToString(),
             AuditDiff.Build([.. fields]));
 
-        SavedMessage = "Event settings saved.";
+        SavedMessage = Loc.T("settings.events.eventSettingsSaved");
         await LoadAsync();
     }
 }

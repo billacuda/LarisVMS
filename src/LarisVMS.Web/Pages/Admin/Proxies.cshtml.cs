@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using LarisVMS.Core.Localization;
 using LarisVMS.Core;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Interfaces;
@@ -25,7 +26,7 @@ public class ProxiesModel(IProxyService proxyService, INodeService nodeService, 
     public async Task OnGetAsync()
     {
         Proxies = await proxyService.ListAsync();
-        RegistrationKey = await settings.GetRawAsync("Node.RegistrationKey");
+        RegistrationKey = LarisVMS.Infrastructure.Security.SecretProtection.Unprotect(await settings.GetRawAsync("Node.RegistrationKey"));
 
         var nodes = await nodeService.ListAsync();
         foreach (var n in nodes)
@@ -42,13 +43,13 @@ public class ProxiesModel(IProxyService proxyService, INodeService nodeService, 
         {
             if (string.IsNullOrWhiteSpace(host))
             {
-                ErrorMessage = "A routable host is required — this is the FQDN browsers dial and it must match the proxy's certificate.";
+                ErrorMessage = Loc.T("admin.proxies.aRoutableHostIsRequired");
                 await OnGetAsync();
                 return Page();
             }
             if (port is < 1 or > 65535)
             {
-                ErrorMessage = "Port must be between 1 and 65535.";
+                ErrorMessage = Loc.T("admin.proxies.portMustBeBetween1");
                 await OnGetAsync();
                 return Page();
             }
@@ -83,7 +84,7 @@ public class ProxiesModel(IProxyService proxyService, INodeService nodeService, 
         var proxy = (await proxyService.ListAsync()).FirstOrDefault(p => p.Id == id);
         await proxyService.DeleteAsync(id);
         await LogAsync("Proxy.Delete", $"{proxy?.Name ?? "?"} ({id})");
-        StatusMessage = "Proxy removed. Any nodes it was assigned to have been unassigned.";
+        StatusMessage = Loc.T("admin.proxies.proxyRemovedAnyNodesIt");
         return RedirectToPage();
     }
 

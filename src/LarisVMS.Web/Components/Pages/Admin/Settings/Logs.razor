@@ -10,9 +10,9 @@
 @inject IAuditService AuditService
 @inject IConfiguration Configuration
 
-<PageTitle>Log settings - @AppName</PageTitle>
+<PageTitle>@L["settings.logs.logSettings"] - @AppName</PageTitle>
 
-<h1>Settings</h1>
+<h1>@L["nav.settings"]</h1>
 <SettingsTabs ActiveKey="Logs" />
 
 @if (!string.IsNullOrEmpty(SavedMessage))
@@ -22,33 +22,33 @@
 
 <div class="lv-page-narrow">
 <EditForm Model="this" FormName="log-settings" OnSubmit="HandleSaveAsync" data-dirty-guard>
-    <SettingSection Title="Logging">
-        <SettingField Label="Minimum log level" Hint="Applies to this server and every node. Debug and Trace make large files.">
-            <select name="LogLevel" class="form-select">
+    <SettingSection Title="@L["settings.logs.logging"]">
+        <SettingField For="field-logLevel" Label="@L["settings.logs.minimumLogLevel"]" Hint="@L["settings.logs.appliesToThisServerAnd"]">
+            <select id="field-logLevel" name="LogLevel" class="form-select">
                 @foreach (var level in LogLevelOptions)
                 {
                     <option value="@level" selected="@(level == LogLevel)">@level</option>
                 }
             </select>
         </SettingField>
-        <SettingField Label="System log path"
-                      Hint="@(ConfiguredLogPathOverride is null ? "Set Logs:Path in appsettings.json and restart to change it." : "Set via the Logs:Path configuration key.")">
-            <input class="form-control font-monospace" value="@LogPath" disabled />
+        <SettingField For="field-logPath" Label="@L["settings.logs.systemLogPath"]"
+                      Hint="@(ConfiguredLogPathOverride is null ? L["settings.logs.setLogsPathInAppsettings"].Value : L["settings.logs.setViaTheLogsPath"].Value)">
+            <input id="field-logPath" class="form-control font-monospace" value="@LogPath" disabled />
         </SettingField>
     </SettingSection>
-    <SettingSection Title="Retention">
-        <SettingField Label="System log retention (days)" Hint="This server's log files. 0 keeps forever. Nodes clean up their own logs.">
-            <InputNumber @bind-Value="LogRetentionDays" min="0" class="form-control" />
+    <SettingSection Title="@L["settings.logs.retention"]">
+        <SettingField For="field-logRetentionDays" Label="@L["settings.logs.systemLogRetentionDays"]" Hint="@L["settings.logs.thisServerLogFiles0"]">
+            <InputNumber id="field-logRetentionDays" @bind-Value="LogRetentionDays" min="0" class="form-control" />
         </SettingField>
-        <SettingField Label="Audit log retention (days)" Hint="0 keeps forever (the default, for compliance).">
-            <InputNumber @bind-Value="AuditLogRetentionDays" min="0" class="form-control" />
+        <SettingField For="field-auditLogRetentionDays" Label="@L["settings.logs.auditLogRetentionDays"]" Hint="@L["settings.logs.0KeepsForeverTheDefault"]">
+            <InputNumber id="field-auditLogRetentionDays" @bind-Value="AuditLogRetentionDays" min="0" class="form-control" />
         </SettingField>
-        <SettingField Label="Camera event log retention (days)" Hint="The raw events cameras send, used to list a camera's event topics for event tags. Events and their footage aren't affected. 0 keeps forever.">
-            <InputNumber @bind-Value="CameraEventRetentionDays" min="0" class="form-control" />
+        <SettingField For="field-cameraEventRetentionDays" Label="@L["settings.logs.cameraEventLogRetentionDays"]" Hint="@L["settings.logs.theRawEventsCamerasSend"]">
+            <InputNumber id="field-cameraEventRetentionDays" @bind-Value="CameraEventRetentionDays" min="0" class="form-control" />
         </SettingField>
     </SettingSection>
     <div class="lv-savebar">
-        <button type="submit" class="btn btn-primary">Save</button>
+        <button type="submit" class="btn btn-primary">@L["common.save"]</button>
     </div>
 </EditForm>
 </div>
@@ -123,7 +123,7 @@
             user.FindFirst(ClaimTypes.NameIdentifier)?.Value, by,
             HttpContext?.Connection.RemoteIpAddress?.ToString(), details);
 
-        SavedMessage = "Saved.";
+        SavedMessage = Loc.T("common.saved");
         LogPath = LogPaths.AppLogsDirectory(Configuration);
         ConfiguredLogPathOverride = Configuration[LogPaths.ConfigKey];
     }

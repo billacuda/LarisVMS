@@ -57,6 +57,7 @@ public class MotionSpanRetentionService(IServiceScopeFactory scopeFactory, ILogg
                 await scope.ServiceProvider.GetRequiredService<SceneHeatRollupService>().RollupAsync(DateTime.UtcNow, stoppingToken);
                 await SweepAsync(db, settings, stoppingToken);
                 await SweepTalkRecordingsAsync(db, stoppingToken);
+                await SweepManualRecordingsAsync(db, stoppingToken);
                 var eventDays = await settings.GetAsync(CameraEventRetentionDaysKey, DefaultCameraEventRetentionDays, ct: stoppingToken);
                 var removedEvents = await SweepCameraEventsAsync(db, eventDays, stoppingToken);
                 if (removedEvents > 0)
@@ -173,6 +174,30 @@ public class MotionSpanRetentionService(IServiceScopeFactory scopeFactory, ILogg
                 : db.TalkRecordings.Where(t => t.CameraId == cameraId);
             // Evidence locks: a talk recording inside locked footage is kept with it.
             db.TalkRecordings.RemoveRange((await stale.ToListAsync(ct)).Where(t => !locked.Covers(cameraId, t.StartUtc, t.EndUtc)));
+        }
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>Stopped manual recordings expire with their footage, by the same rule as talk
+    /// recordings. Running ones are never touched, and a just-stopped one is left alone while its last
+    /// segments may still be waiting to be reported.</summary>
+    internal static async Task SweepManualRecordingsAsync(ApplicationDbContext db, CancellationToken ct)
+    {
+        var endedBefore = DateTime.UtcNow - LarisVMS.Infrastructure.Services.ManualRecordingService.EndedRangeWindow;
+        var cameras = await db.ManualRecordings.Where(r => r.EndUtc != null && r.EndUtc < endedBefore)
+            .Select(r => r.CameraId).Distinct().ToListAsync(ct);
+        if (cameras.Count == 0) return;
+
+        var (earliestSegmentByCamera, locked) = await LarisVMS.Infrastructure.Services.EvidenceLockQueries
+            .LoadRetentionCutoffsAsync(db, cameras, DateTime.UtcNow, ct);
+
+        foreach (var cameraId in cameras)
+        {
+            var ended = db.ManualRecordings.Where(r => r.CameraId == cameraId && r.EndUtc != null && r.EndUtc < endedBefore);
+            var stale = earliestSegmentByCamera.TryGetValue(cameraId, out var earliest)
+                ? ended.Where(r => r.EndUtc < earliest)
+                : ended;
+            db.ManualRecordings.RemoveRange((await stale.ToListAsync(ct)).Where(r => !locked.Covers(cameraId, r.StartUtc, r.EndUtc!.Value)));
         }
         await db.SaveChangesAsync(ct);
     }

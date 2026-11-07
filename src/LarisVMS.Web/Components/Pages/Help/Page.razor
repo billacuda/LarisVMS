@@ -4,11 +4,11 @@
 @inject HelpContentService Help
 @inject NavigationManager NavigationManager
 
-<PageTitle>@(Topic?.Title ?? "Help") - @AppName</PageTitle>
+<PageTitle>@(Topic?.Title ?? L["nav.help"].Value) - @AppName</PageTitle>
 
 <div class="lv-help-layout">
-    <nav class="lv-help-toc small" aria-label="Help topics">
-        <a href="/Help" class="fw-semibold mb-1">Help home</a>
+    <nav class="lv-help-toc small" aria-label="@L["help.page.helpTopics"]">
+        <a href="/Help" class="fw-semibold mb-1">@L["help.page.helpHome"]</a>
         @foreach (var t in Help.Topics)
         {
             <a href="/Help/@t.Slug" class="@(t == Topic ? "active" : "")" aria-current="@(t == Topic ? "page" : null)">@t.Title</a>
@@ -18,8 +18,8 @@
     <article class="lv-help-content">
         @if (Topic is null)
         {
-            <h1>Page not found</h1>
-            <p>There's no help page called “@Slug”. <a href="/Help">Browse all topics</a>.</p>
+            <h1>@L["help.page.pageNotFound"]</h1>
+            <p>@L.Markup("help.page.noSuchPage", new { slug = Slug })</p>
         }
         else
         {

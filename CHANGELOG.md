@@ -2,8 +2,143 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/2.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.220.0] - 2026-11-06
+
+Record on demand from a live tile or the API, control LarisVMS from your own tools, and use it in your
+language, from the keyboard, or with a screen reader.
+
+### ➕ Added
+
+- **Accessibility help.** A new Help page covers keyboard use, screen readers, display settings, and
+  known limitations.
+- **Manual recording.** A record button on live tiles keeps a camera's footage until someone stops it,
+  through restarts and upgrades, whatever the camera's recording mode is. In a view, it can record just
+  that camera or all of them. It shows as a band on the timeline, and the color can be changed under
+  Settings → Events. A new permission and Record camera access control who can use it, and roles with
+  PTZ access get both automatically. Upgrade nodes along with the server: an older node doesn't know
+  about manual recordings and can discard that footage.
+- **Manual only recording mode.** A camera can be live view only, keeping footage only during a manual
+  recording.
+- **Recording indicators on live tiles.** 🔴 shows when a camera's footage is being kept, for any
+  reason, and Ⓜ️ shows when a manual recording is on.
+- **More of the API.** API keys can now start and stop recording, move PTZ cameras, read timelines and
+  footage lists, add bookmarks, run and download exports, manage evidence locks, and fetch images.
+- **Limits on API keys.** A key can be limited to some of its role's permissions, so several keys can
+  do different things without a role for each. A key's name and limits can be edited after it's created.
+- **API documentation.** A new Help page lists every API command, by category, with examples.
+- **Languages.** LarisVMS can be shown in other languages, picked from the 🌐 menu on any page
+  (the sign-in page too) and remembered per user. Admins set the default under Settings → Language.
+  A translation is one text file: download the English text there, translate it, and upload it or
+  drop it into the server's locales folder. It's available straight away, without a restart, and
+  anything not translated yet shows in English. Help pages can be translated one at a time. Dates
+  and numbers follow the chosen language, and alerts and notifications reach each person in theirs.
+  A pseudo-locale and a checker script help translators spot what's missing. Right-to-left
+  languages get a mirrored layout, and the installers' text can be translated too.
+- **Ignored objects.** Kinds of object can be switched off so they're never detected, boxed, or
+  snapshotted, for example a deck the model keeps calling an airplane. Set it for every camera under
+  Settings → AI detection, or for one camera on its Edit page. A camera can also turn it off to
+  detect everything.
+- **One-way speed traps.** A speed trap can time only traffic crossing A then B, or B then A, for
+  example one lane of a two-way road.
+- **API key expiry.** A new API key can expire after 30, 90, or 365 days, or never. The API keys list
+  shows when each one expires.
+- **Reverse proxy support.** Behind a reverse proxy, list its address under `ReverseProxy` in
+  `appsettings.Production.json` and the server uses the client's real address for allow lists and
+  the audit log.
+
+### ⚙️ Changed
+
+- **Breaking:** An IP allow list with entries but no valid address or range now blocks every address
+  instead of allowing all of them. A blank list doesn't lock anyone out, so only a list with invalid
+  entries is affected. **Double-check your lists for errors or typos before upgrading.**
+- **MariaDB.** MariaDB support is no longer experimental.
+- **Discarded footage.** Footage a camera wouldn't keep is now deleted 45 seconds after its segment
+  ends, so a manual recording started just before can't lose it.
+- **Moving points.** On zones, speed traps, and redaction, clicking a point without dragging picks it
+  up, and the next click puts it down. Clicking twice draws a redaction rectangle.
+- **Idle boxes on live view.** Idle objects are drawn dashed and faded, so moving ones stand out
+  when both are shown.
+- **AI detection settings.** Aspect fitting, Slice, and GPU frame preprocessing have their own
+  "Detection input" section.
+- **Accessibility.** Pages have a "Skip to main content" link for keyboard users. Sortable table
+  headers can be sorted from the keyboard and announce their order to screen readers. Role headers
+  on the Roles page open from the keyboard. Each PTZ button says which way it moves. Primary buttons
+  in dark mode are darker, so their text is easier to read.
+- **Keyboard access.** Live and Playback tile controls, PTZ, the timeline, and exact-time entry work
+  from the keyboard. So do the zone, privacy mask, speed trap, and redaction editors, the Map, and
+  Dashboard and view layouts, which also gain buttons to move and resize items without dragging.
+- **Color and contrast.** Links, buttons, form fields, selected items, and focus rings are easier to
+  see in both themes. The default accent color is slightly darker, and timeline stretches with motion or
+  events are striped, so they don't rely on color. Branding warns about hard-to-read colors.
+- **Display settings.** The browser's default font size, reduced motion, and Windows contrast themes
+  are followed. The Dashboard can pause its updates.
+
+### 🛠️ Fixed
+
+- **Screen readers and forms.** Form labels are tied to their fields, errors are announced, and videos,
+  dialogs, and page headings are named.
+- **Skip link on some pages.** It went to the Dashboard instead of the page's content, as did other
+  in-page links.
+- **Evidence locks after an outage restart.** A node starting from its saved settings while the server
+  is unreachable now honors evidence locks when discarding footage.
+- **Repeated clothing colors on snapshots.** A person who walks through now shows one shirt and one
+  pants color, the most confident ones seen, instead of a badge for every time the tracker lost and
+  re-found them. Two people show two of each.
+
+### 🔒 Security
+
+- **Camera edit access.** A user who can configure one camera can no longer change, delete, or
+  re-probe a different camera, or turn its streams on or off, from that camera's Edit page.
+- **Setup wizard stays closed.** The setup wizard no longer reopens when the database can't be
+  reached at startup. It shows a "database unavailable" message until the database is back.
+- **Camera stream addresses.** Only `rtsp://` and `rtsps://` stream addresses are accepted from a
+  camera, so a camera can't point a recorder at local files or internal hosts. Snapshot addresses
+  must be `http://` or `https://`.
+- **Failed sign-ins audited.** Failed sign-ins and locked-out accounts are now recorded in the
+  audit log, for local and Active Directory accounts. Super Admins get a notice when an account is
+  locked out, or when one address fails to sign in 10 times within a minute.
+- **Refused machine sign-ins logged.** A bad node token, an invalid API key, and a request from
+  outside an IP allow list are now logged. An address that keeps sending invalid API keys is slowed
+  down.
+- **Microsoft sign-in off means off.** Turning off Microsoft (Entra) sign-in now stops linked
+  accounts from signing in that way, not just hides the button.
+- **Shared views.** Deleting someone else's shared view now needs permission to edit views.
+- **Alert and inference addresses.** Webhook, ntfy, Pushover, Slack, and Teams alerts can no longer
+  be sent to this server itself or to link-local addresses (where cloud metadata services answer),
+  and the inference service check can't reach link-local addresses. Addresses on the local network
+  still work.
+- **No update downgrades.** Nodes and proxies refuse an update that isn't newer than what they run.
+- **Detection model downloads.** Built-in detection models are checked against a known SHA-256 when
+  the server downloads them, and a custom download address must use HTTPS.
+- **Sessions for users without a role.** These now expire after the default session lifetime
+  instead of lasting until the cookie runs out.
+- **Plain-HTTP pages.** A plain-HTTP page can no longer use the sign-in cookie for API calls or live
+  video on an HTTPS site.
+- **Notification devices.** A browser's push registration can only move to another user from that
+  same browser.
+- **CUDA library signature.** A node installs the CUDA provider library only after it has the
+  server's signing key, never unsigned.
+- **Camera response limits.** A camera's ONVIF replies and smart-event lines are now capped in size
+  on the recorder, so a faulty camera can't exhaust its memory.
+- **Audit export.** Cells in the audit log CSV export can no longer run as spreadsheet formulas.
+- **Proxy errors.** The proxy no longer includes a recorder node's internal address in error
+  responses.
+- **Demo key removed.** The demo site no longer ships a TLS private key.
+- **Camera edit check, repeated fields.** Sending a camera's id twice in a form can no longer skip
+  the check that the user may configure that camera.
+- **Super Admin.** Only a Super Admin can make someone a Super Admin or take it away.
+- **Redacted exports.** An export whose redaction areas can't be read now fails instead of going out
+  with nothing blacked out.
+- **Camera lookups.** Camera pages can no longer be used to reach cloud metadata services.
+- **Update downloads.** Node and proxy update downloads always check the server's certificate.
+- **More audited.** Refused Microsoft sign-ins, map edits, camera placements, and map tile settings
+  are now recorded in the audit log.
+- **Log lines.** A browser can no longer write arbitrary text into the media timing log.
 
 ## [0.219.0] - 2026-10-27
 
@@ -1510,3 +1645,6 @@ Only the 10 most recent versions are kept in this file. Older entries are archiv
 - [v0.41.0 – v0.60.0](changelog-archive/v0.41.0-to-v0.60.0.md) (2026-08-11 – 2026-08-14)
 - [v0.21.1 – v0.40.0](changelog-archive/v0.21.1-to-v0.40.0.md) (2026-08-09 – 2026-08-11)
 - [v0.1.0 – v0.21.0](changelog-archive/v0.1.0-to-v0.21.0.md) (2026-08-08 – 2026-08-09)
+
+[Unreleased]: https://github.com/billacuda/LarisVMS/compare/v0.220.0-beta...HEAD
+[0.220.0]: https://github.com/billacuda/LarisVMS/compare/v0.219.0-beta...v0.220.0-beta

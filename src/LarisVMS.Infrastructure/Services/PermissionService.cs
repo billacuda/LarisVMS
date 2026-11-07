@@ -65,14 +65,21 @@ public class PermissionService(ApplicationDbContext db, UserManager<ApplicationU
             .Select(r => r.Id)
             .ToListAsync(ct);
 
+        // A limited API key is never an administrator, whatever its role, or the limits would mean
+        // nothing: PermissionSet.Has short-circuits on IsAdministrator.
+        var limited = ApiKeyScope.IsLimited(user);
         if (await db.RoleProfiles.AnyAsync(p => roleIds.Contains(p.RoleId) && p.Tag == RoleTags.SuperAdmin, ct))
-            return new PermissionSet(true, new HashSet<(string, string)>());
+        {
+            if (!limited) return new PermissionSet(true, new HashSet<(string, string)>());
+            return new PermissionSet(false, ApiKeyScope.ApiPermissions.Where(p => ApiKeyScope.Allows(user, p.Resource, p.Action)).ToHashSet());
+        }
 
         var granted = await db.Permissions
             .Where(p => roleIds.Contains(p.RoleId))
             .Select(p => new { p.Resource, p.Action })
             .ToListAsync(ct);
 
-        return new PermissionSet(false, granted.Select(g => (g.Resource, g.Action)).ToHashSet());
+        return new PermissionSet(false, granted.Where(g => ApiKeyScope.Allows(user, g.Resource, g.Action))
+            .Select(g => (g.Resource, g.Action)).ToHashSet());
     }
 }

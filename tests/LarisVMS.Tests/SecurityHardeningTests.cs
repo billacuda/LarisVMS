@@ -271,6 +271,24 @@ public class SecurityHardeningTests
     public void OnlyPublicAddressesAreReachable(string address, bool expected) =>
         Assert.Equal(expected, LarisVMS.Infrastructure.Security.OutboundGuard.IsPublic(System.Net.IPAddress.Parse(address)));
 
+    // Admin-entered service URLs (alert webhooks, inference): the LAN is fine, this machine and
+    // link-local (cloud metadata) aren't.
+    [Theory]
+    [InlineData("192.168.1.50", false, false)]
+    [InlineData("10.0.0.5", false, false)]
+    [InlineData("8.8.8.8", false, false)]
+    [InlineData("127.0.0.1", false, true)]
+    [InlineData("127.0.0.1", true, false)]      // inference on loopback stays allowed
+    [InlineData("::1", false, true)]
+    [InlineData("169.254.169.254", true, true)] // cloud metadata
+    [InlineData("fd00:ec2::254", true, true)]
+    [InlineData("fe80::1", true, true)]
+    [InlineData("0.0.0.0", true, true)]
+    [InlineData("224.0.0.1", true, true)]
+    [InlineData("::ffff:169.254.169.254", true, true)]
+    public void ServiceUrlsMayNotReachThisMachineOrLinkLocal(string address, bool allowLoopback, bool refused) =>
+        Assert.Equal(refused, LarisVMS.Infrastructure.Security.OutboundGuard.IsHostOrLinkLocal(System.Net.IPAddress.Parse(address), allowLoopback));
+
     // ── Admin scope ───────────────────────────────────────────────────────
 
     [Fact]
@@ -315,6 +333,13 @@ public class SecurityHardeningTests
     [InlineData("null", "vms.example.com", null, false)]
     public void OnlyThisSitesOriginMayUseTheCookie(string origin, string host, string? publicOrigin, bool allowed) =>
         Assert.Equal(allowed, LarisVMS.Web.Middleware.OriginCheckMiddleware.IsAllowed(origin, host, publicOrigin));
+
+    [Theory]
+    [InlineData("http://vms.example.com:8080", true, true)]   // plain-http page on an HTTPS request
+    [InlineData("https://vms.example.com", true, false)]
+    [InlineData("http://vms.example.com", false, false)]     // TLS ends at a reverse proxy
+    public void PlainHttpOriginMayNotUseTheCookieOverHttps(string origin, bool requestIsHttps, bool refused) =>
+        Assert.Equal(refused, LarisVMS.Web.Middleware.OriginCheckMiddleware.IsSchemeDowngrade(origin, requestIsHttps));
 
     [Theory]
     [InlineData("POST", "/api/exports", false, true)]

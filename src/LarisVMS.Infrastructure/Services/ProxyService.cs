@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
+using LarisVMS.Core.Localization;
 using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
@@ -24,11 +25,11 @@ public class ProxyService(ApplicationDbContext db, ISettingsResolver settings) :
     public async Task<ProxyRegisterResponse> RegisterAsync(ProxyRegisterRequest request, CancellationToken ct = default)
     {
         // Reuses the node registration key — one shared secret for adding recorders or proxies.
-        var expectedKey = await settings.GetRawAsync("Node.RegistrationKey", ct: ct);
+        var expectedKey = LarisVMS.Infrastructure.Security.SecretProtection.Unprotect(await settings.GetRawAsync("Node.RegistrationKey", ct: ct));
         if (string.IsNullOrEmpty(expectedKey) || !SecretHash.FixedTimeEquals(request.RegistrationKey ?? "", expectedKey))
-            throw new UnauthorizedAccessException("Invalid registration key.");
+            throw new UnauthorizedAccessException(Loc.T("server.proxy.invalidRegistrationKey"));
         if (!HostNames.IsValid(request.Hostname))
-            throw new ArgumentException("The hostname must be letters, digits, dots, hyphens, or underscores.");
+            throw new ArgumentException(Loc.T("server.proxy.theHostnameMustBeLetters"));
 
         var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         var proxy = new MediaProxy
@@ -161,9 +162,9 @@ public class ProxyService(ApplicationDbContext db, ISettingsResolver settings) :
         string? certPfxPassword, bool? allowInsecure, CancellationToken ct = default)
     {
         var proxy = await db.MediaProxies.FirstOrDefaultAsync(p => p.Id == id, ct)
-            ?? throw new InvalidOperationException("Proxy not found.");
+            ?? throw new InvalidOperationException(Loc.T("server.proxy.proxyNotFound"));
         if (!HostNames.IsValid(host.Trim()))
-            throw new ArgumentException("The host must be a hostname or an IP address.");
+            throw new ArgumentException(Loc.T("server.proxy.theHostMustBeA"));
         proxy.Name = name;
         proxy.Host = host.Trim();
         proxy.Port = port;

@@ -1,5 +1,6 @@
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 using LarisVMS.Infrastructure.Notifications;
 using LarisVMS.Infrastructure.Security;
 
@@ -24,17 +25,18 @@ public static class NotificationSettings
     public static string TypeEnabledKey(AlertConditionType type) => $"Notifications.Type.{type}.Enabled";
 
     /// <summary>Notification types users can receive, in the order Settings and the editors show them.</summary>
-    public static readonly IReadOnlyList<(AlertConditionType Type, string Label)> Types =
+    // A property, not a field: the labels are built per call, in the viewer's language.
+    public static IReadOnlyList<(AlertConditionType Type, string Label)> Types =>
     [
-        (AlertConditionType.MotionDetected, "Motion detected"),
-        (AlertConditionType.ObjectDetected, "Object detected"),
-        (AlertConditionType.SpeedOver, "Speed over a limit"),
-        (AlertConditionType.CameraNotReporting, "Camera not reporting"),
-        (AlertConditionType.NodeOffline, "Node offline"),
-        (AlertConditionType.NodeStorageLow, "Node storage low"),
-        (AlertConditionType.NodeFailoverActivated, "Node failover"),
-        (AlertConditionType.EvidenceLockExpiringSoon, "Evidence lock ending soon"),
-        (AlertConditionType.EvidenceLockRemoved, "Evidence lock removed"),
+        (AlertConditionType.MotionDetected, Loc.T("server.notificationTypes.motion")),
+        (AlertConditionType.ObjectDetected, Loc.T("server.notificationTypes.object")),
+        (AlertConditionType.SpeedOver, Loc.T("server.notificationTypes.speed")),
+        (AlertConditionType.CameraNotReporting, Loc.T("server.notificationTypes.cameraNotReporting")),
+        (AlertConditionType.NodeOffline, Loc.T("server.notificationTypes.nodeOffline")),
+        (AlertConditionType.NodeStorageLow, Loc.T("server.notificationTypes.nodeStorageLow")),
+        (AlertConditionType.NodeFailoverActivated, Loc.T("server.notificationTypes.nodeFailover")),
+        (AlertConditionType.EvidenceLockExpiringSoon, Loc.T("server.notificationTypes.lockEnding")),
+        (AlertConditionType.EvidenceLockRemoved, Loc.T("server.notificationTypes.lockRemoved")),
     ];
 
     public static string LabelOf(AlertConditionType type) => Types.FirstOrDefault(t => t.Type == type).Label ?? type.ToString();

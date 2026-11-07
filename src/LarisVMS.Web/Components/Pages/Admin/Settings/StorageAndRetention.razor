@@ -6,15 +6,14 @@
 @inject ISettingsResolver Settings
 @inject IAuditService AuditService
 
-<PageTitle>Storage and retention settings - @AppName</PageTitle>
+<PageTitle>@L["settings.storageAndRetention.storageAndRetentionSettings"] - @AppName</PageTitle>
 
-<h1>Settings</h1>
+<h1>@L["nav.settings"]</h1>
 <SettingsTabs ActiveKey="StorageAndRetention" />
 
 <div class="lv-page-narrow">
 <p class="text-muted small">
-    Defaults for every node and camera. Storage paths are set on each <a href="/Admin/Nodes">node</a>.
-    A camera override beats its node's, which beats these. <a href="/Help/storage">How storage works</a>
+    @L.Markup("settings.storageAndRetention.intro")
 </p>
 
 @if (!string.IsNullOrEmpty(SavedMessage))
@@ -23,27 +22,27 @@
 }
 
 <EditForm Model="this" FormName="storage-retention-settings" OnSubmit="HandleSaveAsync" data-dirty-guard>
-    <SettingSection Title="Retention">
-        <SettingField Label="Retention (days)" Hint="0 keeps forever.">
-            <InputNumber @bind-Value="RetentionDays" min="0" class="form-control" />
+    <SettingSection Title="@L["settings.storageAndRetention.retention"]">
+        <SettingField For="field-retentionDays" Label="@L["settings.storageAndRetention.retentionDays"]" Hint="@L["settings.storageAndRetention.0KeepsForever"]">
+            <InputNumber id="field-retentionDays" @bind-Value="RetentionDays" min="0" class="form-control" />
         </SettingField>
-        <SettingField Label="Watermark (% of volume used)" Hint="Above this, a node's oldest footage is archived or deleted early." HelpLink="/Help/storage#watermark">
-            <InputNumber @bind-Value="WatermarkPercent" min="1" max="99" class="form-control" />
+        <SettingField For="field-watermarkPercent" Label="@L["settings.storageAndRetention.watermarkOfVolumeUsed"]" Hint="@L["settings.storageAndRetention.aboveThisANodeOldest"]" HelpLink="/Help/storage#watermark">
+            <InputNumber id="field-watermarkPercent" @bind-Value="WatermarkPercent" min="1" max="99" class="form-control" />
         </SettingField>
     </SettingSection>
-    <SettingSection Title="Archive" Subtitle="Moves aged-out footage to a node's archive volume instead of deleting it.">
-        <SettingField Label="Archiving">
+    <SettingSection Title="@L["settings.storageAndRetention.archive"]" Subtitle="@L["settings.storageAndRetention.movesAgedOutFootageTo"]">
+        <SettingField Label="@L["settings.storageAndRetention.archiving"]">
             <div class="form-check mt-1">
                 <InputCheckbox @bind-Value="ArchiveEnabled" class="form-check-input" id="archiveEnabled" />
-                <label class="form-check-label" for="archiveEnabled">Enable by default</label>
+                <label class="form-check-label" for="archiveEnabled">@L["settings.storageAndRetention.enableByDefault"]</label>
             </div>
         </SettingField>
-        <SettingField Label="Archive retention (days)" Hint="Counted from the original record date. 0 keeps forever." HelpLink="/Help/storage#archive">
-            <InputNumber @bind-Value="ArchiveRetentionDays" min="0" class="form-control" />
+        <SettingField For="field-archiveRetentionDays" Label="@L["settings.storageAndRetention.archiveRetentionDays"]" Hint="@L["settings.storageAndRetention.countedFromTheOriginalRecord"]" HelpLink="/Help/storage#archive">
+            <InputNumber id="field-archiveRetentionDays" @bind-Value="ArchiveRetentionDays" min="0" class="form-control" />
         </SettingField>
     </SettingSection>
     <div class="lv-savebar">
-        <button type="submit" class="btn btn-primary">Save</button>
+        <button type="submit" class="btn btn-primary">@L["common.save"]</button>
     </div>
 </EditForm>
 </div>
@@ -98,6 +97,6 @@
             user.FindFirst(ClaimTypes.NameIdentifier)?.Value, by,
             HttpContext?.Connection.RemoteIpAddress?.ToString(), details);
 
-        SavedMessage = "Saved.";
+        SavedMessage = Loc.T("common.saved");
     }
 }

@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 using LarisVMS.Infrastructure.Data;
 using LarisVMS.Infrastructure.Notifications;
 
@@ -27,15 +28,24 @@ public sealed record NotificationTestResult(int OpenTabs, int PushDevices, int P
 /// </summary>
 public interface INotificationService
 {
-    /// <summary>Returns the number of users notified.</summary>
-    Task<int> NotifySubscribersAsync(AlertRule rule, Guid? cameraId, string message, DateTime atUtc, string? url, CancellationToken ct = default);
+    /// <summary>Returns the number of users notified. <paramref name="message"/> is called once per
+    /// recipient, in that person's language (see <see cref="Loc.InLanguage"/>), so build it with Loc.T.</summary>
+    Task<int> NotifySubscribersAsync(AlertRule rule, Guid? cameraId, Func<string> message, DateTime atUtc, string? url, CancellationToken ct = default);
+
+    /// <summary>The same message for everyone, as given.</summary>
+    Task<int> NotifySubscribersAsync(AlertRule rule, Guid? cameraId, string message, DateTime atUtc, string? url, CancellationToken ct = default) =>
+        NotifySubscribersAsync(rule, cameraId, () => message, atUtc, url, ct);
 
     Task<NotificationTestResult> SendTestAsync(string userId, CancellationToken ct = default);
 
     /// <summary>A security notice for every active Super Admin (browser, and email when set up) — a
     /// change only they should hear about, like where backups go or a node waiting for approval.
-    /// Returns the number of admins reached.</summary>
-    Task<int> NotifySuperAdminsAsync(string title, string message, string? url, CancellationToken ct = default);
+    /// Returns the number of admins reached. The title and message are built per admin, in their language.</summary>
+    Task<int> NotifySuperAdminsAsync(Func<string> title, Func<string> message, string? url, CancellationToken ct = default);
+
+    /// <summary>The same notice for every admin, as given.</summary>
+    Task<int> NotifySuperAdminsAsync(string title, string message, string? url, CancellationToken ct = default) =>
+        NotifySuperAdminsAsync(() => title, () => message, url, ct);
 }
 
 public sealed class NotificationService(
@@ -44,7 +54,7 @@ public sealed class NotificationService(
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
-    public async Task<int> NotifySubscribersAsync(AlertRule rule, Guid? cameraId, string message, DateTime atUtc, string? url, CancellationToken ct = default)
+    public async Task<int> NotifySubscribersAsync(AlertRule rule, Guid? cameraId, Func<string> message, DateTime atUtc, string? url, CancellationToken ct = default)
     {
         if (!await NotificationSettings.IsTypeEnabledAsync(settings, rule.ConditionType, ct)) return 0;
 
@@ -55,8 +65,9 @@ public sealed class NotificationService(
         if (subscriptions.Count == 0) return 0;
 
         var config = await NotificationSettings.LoadAsync(settings, ct);
-        var payload = new NotificationPayload(Guid.NewGuid().ToString("N"), rule.Name, message, url,
-            $"rule-{rule.Id:N}-{cameraId?.ToString("N") ?? "all"}", atUtc);
+        // One id and tag for the whole firing, whatever language each copy is in.
+        var id = Guid.NewGuid().ToString("N");
+        var tag = $"rule-{rule.Id:N}-{cameraId?.ToString("N") ?? "all"}";
 
         var notified = 0;
         foreach (var sub in subscriptions)
@@ -68,6 +79,8 @@ public sealed class NotificationService(
                 if (cameraId is { } cam && !await CanViewCameraAsync(user.Id, cam, ct)) continue;
                 if (AlertRuleEditing.IsNodeCondition(rule.ConditionType) && !await CanSeeNodeAsync(user.Id, rule.NodeId, ct)) continue;
 
+                using var language = Loc.InLanguage(await LanguageOfAsync(user.Id, ct));
+                var payload = new NotificationPayload(id, rule.Name, message(), url, tag, atUtc);
                 var reached = false;
                 if (sub.Browser) reached |= (await SendToBrowsersAsync(user.Id, payload, config, ct)).Reached;
                 if (sub.Email && config.Email && !string.IsNullOrWhiteSpace(user.Email)) reached |= await SendEmailAsync(user.Email, payload, ct);
@@ -81,11 +94,14 @@ public sealed class NotificationService(
         return notified;
     }
 
+    public Task<int> NotifySubscribersAsync(AlertRule rule, Guid? cameraId, string message, DateTime atUtc, string? url, CancellationToken ct = default) =>
+        NotifySubscribersAsync(rule, cameraId, () => message, atUtc, url, ct);
+
     public async Task<NotificationTestResult> SendTestAsync(string userId, CancellationToken ct = default)
     {
         var config = await NotificationSettings.LoadAsync(settings, ct);
-        var payload = new NotificationPayload(Guid.NewGuid().ToString("N"), "LarisVMS test notification",
-            "Notifications are working in this browser.", "/Notifications", "test-" + Guid.NewGuid().ToString("N"), DateTime.UtcNow);
+        var payload = new NotificationPayload(Guid.NewGuid().ToString("N"), Loc.T("server.notification.testTitle"),
+            Loc.T("server.notification.testBody"), "/Notifications", "test-" + Guid.NewGuid().ToString("N"), DateTime.UtcNow);
         var result = await SendToBrowsersAsync(userId, payload, config, ct);
 
         var emailSent = false;
@@ -93,13 +109,13 @@ public sealed class NotificationService(
         var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == userId, ct);
         if (config.Email && !string.IsNullOrWhiteSpace(user?.Email) && await email.IsConfiguredAsync(ct))
         {
-            emailSent = await SendEmailAsync(user.Email, payload with { Body = "Email notifications are working." }, ct);
-            if (!emailSent) problems.Add("The test email couldn't be sent. Check Settings → Email.");
+            emailSent = await SendEmailAsync(user.Email, payload with { Body = Loc.T("server.notification.testEmailBody") }, ct);
+            if (!emailSent) problems.Add(Loc.T("server.notification.theTestEmailCouldntBe"));
         }
         return new NotificationTestResult(result.OpenTabs, result.PushDevices, result.PushFailures, emailSent, problems);
     }
 
-    public async Task<int> NotifySuperAdminsAsync(string title, string message, string? url, CancellationToken ct = default)
+    public async Task<int> NotifySuperAdminsAsync(Func<string> title, Func<string> message, string? url, CancellationToken ct = default)
     {
         var superRoleIds = await db.RoleProfiles.AsNoTracking().Where(p => p.Tag == LarisVMS.Core.Auth.RoleTags.SuperAdmin)
             .Select(p => p.RoleId).ToListAsync(ct);
@@ -108,7 +124,8 @@ public sealed class NotificationService(
         if (userIds.Count == 0) return 0;
 
         var config = await NotificationSettings.LoadAsync(settings, ct);
-        var payload = new NotificationPayload(Guid.NewGuid().ToString("N"), title, message, url, "security-" + Guid.NewGuid().ToString("N"), DateTime.UtcNow);
+        var id = Guid.NewGuid().ToString("N");
+        var tag = "security-" + Guid.NewGuid().ToString("N");
         var now = DateTime.UtcNow;
         var reachedCount = 0;
         foreach (var userId in userIds)
@@ -117,6 +134,8 @@ public sealed class NotificationService(
             {
                 var user = await db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == userId, ct);
                 if (user is null || !IsActive(user, now)) continue;
+                using var language = Loc.InLanguage(await LanguageOfAsync(user.Id, ct));
+                var payload = new NotificationPayload(id, title(), message(), url, tag, now);
                 var reached = (await SendToBrowsersAsync(user.Id, payload, config, ct)).Reached;
                 if (config.Email && !string.IsNullOrWhiteSpace(user.Email)) reached |= await SendEmailAsync(user.Email, payload, ct);
                 if (reached) reachedCount++;
@@ -128,6 +147,15 @@ public sealed class NotificationService(
         }
         return reachedCount;
     }
+
+    public Task<int> NotifySuperAdminsAsync(string title, string message, string? url, CancellationToken ct = default) =>
+        NotifySuperAdminsAsync(() => title, () => message, url, ct);
+
+    /// <summary>The language a user reads notifications in: their own choice, else the server's default.</summary>
+    private async Task<string?> LanguageOfAsync(string userId, CancellationToken ct) =>
+        await db.UserPreferences.AsNoTracking()
+            .Where(p => p.UserId == userId && p.Key == LarisVMS.Web.Localization.LocaleMiddleware.PreferenceKey)
+            .Select(p => p.Value).FirstOrDefaultAsync(ct);
 
     private sealed record BrowserResult(bool Reached, int OpenTabs, int PushDevices, int PushFailures, List<string> Problems);
 
@@ -176,11 +204,11 @@ public sealed class NotificationService(
             if (response.IsSuccessStatusCode) return (true, false, null);
             if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Gone) return (false, true, null);
             // Status only: the response body isn't shown to the user.
-            return (false, false, $"{endpoint.Host} returned {(int)response.StatusCode}.");
+            return (false, false, Loc.T("server.notification.pushServiceReturned", new { host = endpoint.Host, status = (int)response.StatusCode }));
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or FormatException or ArgumentException or UriFormatException)
         {
-            return (false, false, $"Couldn't reach the browser's push service: {ex.Message}");
+            return (false, false, Loc.T("server.notification.pushServiceUnreachable", new { message = ex.Message }));
         }
     }
 
@@ -199,7 +227,7 @@ public sealed class NotificationService(
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
-            return (false, false, $"Couldn't reach Firebase: {ex.Message}");
+            return (false, false, Loc.T("server.notification.firebaseUnreachable", new { message = ex.Message }));
         }
     }
 
@@ -207,9 +235,9 @@ public sealed class NotificationService(
     {
         try
         {
-            var subject = $"LarisVMS: {payload.Title}";
+            var subject = Loc.T("server.notification.emailSubject", new { title = payload.Title });
             var html = $"<p><strong>{WebUtility.HtmlEncode(payload.Title)}</strong></p><p>{WebUtility.HtmlEncode(payload.Body)}</p>" +
-                       $"<p style=\"color:#666;font-size:12px\">{payload.AtUtc:yyyy-MM-dd HH:mm} UTC · Manage your notifications in LarisVMS under My notifications.</p>";
+                       $"<p style=\"color:#666;font-size:12px\">{payload.AtUtc:yyyy-MM-dd HH:mm} UTC · {WebUtility.HtmlEncode(Loc.T("server.notification.emailFooter"))}</p>";
             await email.SendAsync(to, subject, html, $"{payload.Title}\n\n{payload.Body}\n\n{payload.AtUtc:yyyy-MM-dd HH:mm} UTC", ct);
             return true;
         }

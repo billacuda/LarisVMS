@@ -2,6 +2,7 @@ using System.Threading.Channels;
 using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core;
 using LarisVMS.Core.Enums;
+using LarisVMS.Core.Localization;
 using LarisVMS.Core.Interfaces;
 using LarisVMS.Infrastructure.Alerts;
 using LarisVMS.Infrastructure.Data;
@@ -86,10 +87,15 @@ public sealed class DetectionAlertService(IServiceScopeFactory scopeFactory, ILo
                 var matched = DetectionAlertMatcher.MatchingObjects(rule, e);
                 if (matched.Count == 0) continue;
                 _handled[key] = now;
-                var what = DetectionAlertMatcher.Describe(e.Category, e.Label, matched[0]);
-                var count = matched.Count > 1 ? $" ({matched.Count} at once)" : "";
-                await FireAsync(rule, e.CameraId, null,
-                    (camera, _, _) => $"{what} detected on camera \"{camera}\"{count}.", now, ct);
+                var first = matched[0];
+                var count = matched.Count;
+                await FireAsync(rule, e.CameraId, null, (camera, _, _) =>
+                {
+                    var what = DetectionAlertMatcher.Describe(e.Category, e.Label, first);
+                    return count > 1
+                        ? Loc.T("alerts.detectedSeveral", new { what, camera, count })
+                        : Loc.T("alerts.detected", new { what, camera });
+                }, now, ct);
             }
             else if (rule.Condition == AlertConditionType.SpeedOver && rule.SpeedThresholdKph is { } threshold)
             {
@@ -101,10 +107,14 @@ public sealed class DetectionAlertService(IServiceScopeFactory scopeFactory, ILo
                 if (fast.Count == 0) continue;
                 foreach (var o in fast) _handled[$"{rule.Id}:{e.SpanId}:{o.TrackId}"] = now;
                 var top = fast[0];
-                var what = DetectionAlertMatcher.Describe(e.Category, e.Label, top);
-                await FireAsync(rule, e.CameraId, top.SpeedTrapId, (camera, units, trap) =>
-                    $"{what} at {SpeedUnits.Format(top.SpeedKph!.Value, units)} on camera \"{camera}\"{trap}" +
-                    $" — at or over the {SpeedUnits.Format(threshold, units)} limit.", now, ct);
+                await FireAsync(rule, e.CameraId, top.SpeedTrapId, (camera, units, trap) => Loc.T(trap is null ? "alerts.speeding" : "alerts.speedingAtTrap", new
+                {
+                    what = DetectionAlertMatcher.Describe(e.Category, e.Label, top),
+                    speed = SpeedUnits.Format(top.SpeedKph!.Value, units),
+                    camera,
+                    trap,
+                    limit = SpeedUnits.Format(threshold, units)
+                }), now, ct);
             }
         }
     }
@@ -123,16 +133,18 @@ public sealed class DetectionAlertService(IServiceScopeFactory scopeFactory, ILo
             var key = $"{rule.Id}:{m.SpanId}";
             if (_handled.ContainsKey(key)) continue;
             _handled[key] = now;
-            var where = rule.MotionZoneName is { } zone ? $" in zone \"{zone}\"" : "";
-            await FireAsync(rule, m.CameraId, null, (camera, _, _) => $"Motion detected on camera \"{camera}\"{where}.", now, ct);
+            var zone = rule.MotionZoneName;
+            await FireAsync(rule, m.CameraId, null, (camera, _, _) => zone is null
+                ? Loc.T("alerts.motion", new { camera })
+                : Loc.T("alerts.motionInZone", new { camera, zone }), now, ct);
         }
     }
 
     /// <summary>Re-reads the rule (cooldown, deliveries) and fires it if the cooldown allows.
-    /// <paramref name="message"/> gets the camera name, the speed units setting and a " (trap name)"
-    /// suffix (empty when there's no trap).</summary>
+    /// <paramref name="message"/> gets the camera name, the speed units setting and the speed trap's
+    /// name (null when there's no trap), and builds the text in the current UI language.</summary>
     private async Task FireAsync(DetectionRule rule, Guid cameraId, Guid? speedTrapId,
-        Func<string, string, string, string> message, DateTime now, CancellationToken ct)
+        Func<string, string, string?, string> message, DateTime now, CancellationToken ct)
     {
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
@@ -164,9 +176,7 @@ public sealed class DetectionAlertService(IServiceScopeFactory scopeFactory, ILo
         var trapName = speedTrapId is { } trapId
             ? await db.SpeedTraps.Where(t => t.Id == trapId).Select(t => t.Name).FirstOrDefaultAsync(ct)
             : null;
-        var text = message(cameraName, units, trapName is null ? "" : $" ({trapName})");
-
-        await AlertEvaluatorService.DispatchAsync(entity, text,
+        await AlertEvaluatorService.DispatchAsync(entity, () => message(cameraName, units, trapName),
             scope.ServiceProvider.GetRequiredService<AlertChannelSenderFactory>(),
             scope.ServiceProvider.GetRequiredService<IAuditService>(), logger, ct,
             scope.ServiceProvider.GetRequiredService<INotificationService>(), cameraId,

@@ -1,6 +1,7 @@
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 
 namespace LarisVMS.Web.Helpers;
 
@@ -72,7 +73,7 @@ public sealed record NodeSettingsState(
     {
         if (string.IsNullOrWhiteSpace(archiveRoot)) return null;
         if (archiveRoot.Length > 300)
-            return "Archive storage root is too long — keep it under 300 characters.";
+            return Loc.T("server.nodeSettingsState.archiveStorageRootIsToo");
         if (!string.IsNullOrWhiteSpace(storageRoot))
         {
             var a = archiveRoot.TrimEnd('/', '\\');
@@ -82,7 +83,7 @@ public sealed record NodeSettingsState(
                 || a.StartsWith(s + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
                 || s.StartsWith(a + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
                 || s.StartsWith(a + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-                return "Archive storage root must be a separate location from this node's recording storage root.";
+                return Loc.T("server.nodeSettingsState.archiveStorageRootMustBe");
         }
         return null;
     }
@@ -107,24 +108,22 @@ public static class NodeConfirm
 {
     private const string Gap = "\n\n";
 
-    public static string Approve(string name) =>
-        $"Approve node \"{name}\"? Only approve a node you installed yourself.";
+    public static string Approve(string name) => Loc.T("admin.nodes.confirmApprove", new { name });
 
     public static string Restart(string name, int cameraCount) =>
-        $"Restart the LarisVMS node service on \"{name}\"?{Gap}Recording on its {cameraCount} camera(s) will stop for a few seconds. This restarts the service only, not the machine.";
+        Loc.T("admin.nodes.confirmRestart", new { name }) + Gap + Loc.Plural("admin.nodes.confirmRestartDetail", cameraCount);
 
     public static string ResetAuth(string name) =>
-        $"Reset the check-in nonce for \"{name}\"?{Gap}Use this only if the node shows repeated auth failures after a missed heartbeat — it clears the rolling nonce so the node re-syncs on its next check-in. No effect on a healthy node.";
+        Loc.T("admin.nodes.confirmResetAuth", new { name }) + Gap + Loc.T("admin.nodes.confirmResetAuthDetail");
 
     public static string Maintenance(bool currentlyInMaintenance, int cameraCount, string? backupNodeName)
     {
         if (currentlyInMaintenance)
-            return "Take this node out of maintenance? Its cameras return to it once it is a confirmed-healthy quorum.";
+            return Loc.T("admin.nodes.confirmMaintenanceOff");
         if (backupNodeName is not null)
-            return $"Put this node into maintenance? Its {cameraCount} camera(s) fail over to node {backupNodeName} for recording within about 15 seconds, and will not fail back until you turn maintenance off.";
-        return $"Put this node into maintenance? It has NO backup node - its {cameraCount} camera(s) will STOP recording until maintenance is turned off.";
+            return Loc.Plural("admin.nodes.confirmMaintenanceOn", cameraCount, new { backup = backupNodeName });
+        return Loc.Plural("admin.nodes.confirmMaintenanceOnNoBackup", cameraCount);
     }
 
-    public static string Delete(string name) =>
-        $"Delete node \"{name}\"? Cameras assigned to it will be unassigned, not deleted. Past recordings are unaffected.";
+    public static string Delete(string name) => Loc.T("admin.nodes.confirmDelete", new { name });
 }

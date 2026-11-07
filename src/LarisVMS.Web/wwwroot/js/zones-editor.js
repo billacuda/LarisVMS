@@ -24,10 +24,10 @@ window.larisvmsZonesEditor = (function () {
         Privacy: 'rgba(108,117,125,0.85)'
     };
     var KIND_LABELS = {
-        ServerMotion: 'Motion (server)',
-        Ignore: 'Ignore',
-        CameraMotion: 'Motion (camera) — inactive',
-        Privacy: 'Privacy mask'
+        ServerMotion: larisvmsI18n.t('js.zonesEditor.kindServerMotion'),
+        Ignore: larisvmsI18n.t('js.zonesEditor.kindIgnore'),
+        CameraMotion: larisvmsI18n.t('js.zonesEditor.kindCameraMotion'),
+        Privacy: larisvmsI18n.t('js.zonesEditor.kindPrivacy')
     };
 
     // Closing a polygon by clicking back near its first point needs a forgiving radius in *screen*
@@ -178,8 +178,8 @@ window.larisvmsZonesEditor = (function () {
                 ctx.font = '13px sans-serif';
                 ctx.textAlign = 'center';
                 ctx.fillText(snapshotFailed
-                    ? 'Could not load a snapshot from this camera — zones can still be drawn without one.'
-                    : 'Loading snapshot…', w / 2, h / 2);
+                    ? larisvmsI18n.t('js.zonesEditor.couldNotLoadASnapshot')
+                    : larisvmsI18n.t('js.zonesEditor.loadingSnapshot'), w / 2, h / 2);
                 ctx.textAlign = 'left';
             }
         }
@@ -447,10 +447,10 @@ window.larisvmsZonesEditor = (function () {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mode: mode })
             }).then(function (r) {
-                if (!r.ok) { alert('Could not switch modes.'); return; }
+                if (!r.ok) { alert(larisvmsI18n.t('js.zonesEditor.couldNotSwitchModes')); return; }
                 activeMode = mode;
                 showView(mode);
-            }).catch(function () { alert('Could not switch modes.'); });
+            }).catch(function () { alert(larisvmsI18n.t('js.zonesEditor.couldNotSwitchModes')); });
         }
 
         document.getElementById(opts.modeToggleGridId).addEventListener('click', function () { switchMode('Grid'); });
@@ -469,15 +469,15 @@ window.larisvmsZonesEditor = (function () {
                 .then(function (s) { if (s) toggle.checked = !!s.blocksDetections; })
                 .catch(function () { /* stays at the default (off) */ });
             toggle.addEventListener('change', function () {
-                if (status) status.textContent = 'Saving…';
+                if (status) status.textContent = larisvmsI18n.t('js.zonesEditor.saving');
                 fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocksDetections: toggle.checked }) })
                     .then(function (r) {
                         if (!r.ok) throw new Error();
-                        if (status) status.textContent = 'Saved. Takes effect on the recorder within about 30 seconds.';
+                        if (status) status.textContent = larisvmsI18n.t('js.zonesEditor.savedTakesEffectOnThe');
                     })
                     .catch(function () {
                         toggle.checked = !toggle.checked;
-                        if (status) status.textContent = 'Couldn\u2019t save. Try again.';
+                        if (status) status.textContent = larisvmsI18n.t('js.zonesEditor.couldntSaveTryAgain');
                     });
             });
         })();
@@ -512,22 +512,22 @@ window.larisvmsZonesEditor = (function () {
         }
 
         document.getElementById(opts.gridSaveBtnId).addEventListener('click', function () {
-            setGridStatus('Saving…');
+            setGridStatus(larisvmsI18n.t('js.zonesEditor.saving'));
             fetch('/api/cameras/' + opts.cameraId + '/motion-region/grid', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ gridSize: gridSize, mask: gridMask, sensitivity: gridSensitivity })
             }).then(function (r) {
-                if (r.ok) { setGridDirty(false); setGridStatus('Saved.'); }
-                else { setGridStatus('Could not save.'); }
-            }).catch(function () { setGridStatus('Could not save.'); });
+                if (r.ok) { setGridDirty(false); setGridStatus(larisvmsI18n.t('js.zonesEditor.saved')); }
+                else { setGridStatus(larisvmsI18n.t('js.zonesEditor.couldNotSave')); }
+            }).catch(function () { setGridStatus(larisvmsI18n.t('js.zonesEditor.couldNotSave')); });
         });
 
         document.getElementById(opts.gridSizeSelectId).addEventListener('change', function () {
             var select = this;
             var newSize = Number(select.value);
             if (newSize === gridSize) return;
-            if (!confirm('Changing the grid size clears the current mask. Continue?')) {
+            if (!confirm(larisvmsI18n.t('js.zonesEditor.changingTheGridSizeClears'))) {
                 select.value = String(gridSize);
                 return;
             }
@@ -535,7 +535,7 @@ window.larisvmsZonesEditor = (function () {
             gridMask = null;
             cellScores = null; // stale — belonged to the old size's cell layout
             setGridDirty(true);
-            setGridStatus('Unsaved changes.');
+            setGridStatus(larisvmsI18n.t('js.zonesEditor.unsavedChanges'));
             redraw();
         });
 
@@ -546,7 +546,7 @@ window.larisvmsZonesEditor = (function () {
         gridSensitivityInput.addEventListener('change', function () {
             gridSensitivity = Number(this.value) / 100;
             setGridDirty(true);
-            setGridStatus('Unsaved changes.');
+            setGridStatus(larisvmsI18n.t('js.zonesEditor.unsavedChanges'));
             redraw();
         });
 
@@ -580,7 +580,7 @@ window.larisvmsZonesEditor = (function () {
             if (isCellMasked(gridMask, idx) === gridDragTargetMasked) return; // already in the target state
             gridMask = setCellMasked(gridMask, gridSize, idx, gridDragTargetMasked);
             setGridDirty(true);
-            setGridStatus('Unsaved changes.');
+            setGridStatus(larisvmsI18n.t('js.zonesEditor.unsavedChanges'));
             redraw();
         }
 
@@ -616,8 +616,8 @@ window.larisvmsZonesEditor = (function () {
             var shown = visibleZones();
             if (!shown.length) {
                 panel.innerHTML = view === 'Privacy'
-                    ? '<p class="text-muted small">No privacy masks yet — draw one to black out an area in recordings, live view, snapshots, and exports.</p>'
-                    : '<p class="text-muted small">No zones yet — draw one to get started.</p>';
+                    ? '<p class="text-muted small">' + larisvmsI18n.html('js.zonesEditor.noPrivacyMasksYetDraw') + '</p>'
+                    : '<p class="text-muted small">' + larisvmsI18n.html('js.zonesEditor.noZonesYetDrawOne') + '</p>';
                 return;
             }
             var html = '<div class="list-group">';
@@ -627,7 +627,7 @@ window.larisvmsZonesEditor = (function () {
                     (z.id === selectedZoneId ? ' active' : '') + '" data-zone-id="' + z.id + '">' +
                     '<span class="d-inline-block rounded-circle me-2" style="width:10px;height:10px;background:' + color + ';"></span>' +
                     escHtml(z.name) +
-                    (z.isEnabled ? '' : ' <span class="text-muted small">(disabled)</span>') +
+                    (z.isEnabled ? '' : ' <span class="text-muted small">' + larisvmsI18n.html('js.zonesEditor.disabled') + '</span>') +
                     '<div class="text-muted small">' + (KIND_LABELS[z.kind] || z.kind) + '</div>' +
                     '</button>';
             });
@@ -653,7 +653,7 @@ window.larisvmsZonesEditor = (function () {
         function showForm(zone, polygonJsonForNew) {
             selectedZoneId = zone ? zone.id : null;
             document.getElementById(opts.formPanelId).style.display = '';
-            document.getElementById(opts.formTitleId).textContent = zone ? ('Edit zone: ' + zone.name) : 'New zone';
+            document.getElementById(opts.formTitleId).textContent = zone ? larisvmsI18n.t('js.zonesEditor.editZone', { name: zone.name }) : larisvmsI18n.t('js.zonesEditor.newZone');
             document.getElementById(opts.formIdInputId).value = zone ? zone.id : '';
             document.getElementById(opts.formPolygonInputId).value = zone ? zone.polygonJson : polygonJsonForNew;
             editPoints = parsePolygon(zone ? zone.polygonJson : polygonJsonForNew);
@@ -706,12 +706,12 @@ window.larisvmsZonesEditor = (function () {
                 sensitivity: Number(document.getElementById(opts.formSensitivityId).value) / 100,
                 isEnabled: document.getElementById(opts.formEnabledId).checked
             };
-            if (!body.name) { alert('Name is required.'); return; }
+            if (!body.name) { alert(larisvmsI18n.t('js.zonesEditor.nameIsRequired')); return; }
 
             var url = id ? '/api/zones/' + id : '/api/cameras/' + opts.cameraId + '/zones';
             var method = id ? 'PUT' : 'POST';
             var resp = await fetch(url, { method: method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-            if (!resp.ok) { alert('Could not save this zone.'); return; }
+            if (!resp.ok) { alert(larisvmsI18n.t('js.zonesEditor.couldNotSaveThisZone')); return; }
 
             hideForm();
             await loadZones();
@@ -719,9 +719,9 @@ window.larisvmsZonesEditor = (function () {
 
         document.getElementById(opts.formDeleteBtnId).addEventListener('click', async function () {
             var id = document.getElementById(opts.formIdInputId).value;
-            if (!id || !confirm('Delete this zone?')) return;
+            if (!id || !confirm(larisvmsI18n.t('js.zonesEditor.deleteThisZone'))) return;
             var resp = await fetch('/api/zones/' + id, { method: 'DELETE' });
-            if (!resp.ok) { alert('Could not delete this zone.'); return; }
+            if (!resp.ok) { alert(larisvmsI18n.t('js.zonesEditor.couldNotDeleteThisZone')); return; }
             hideForm();
             await loadZones();
         });
@@ -733,7 +733,7 @@ window.larisvmsZonesEditor = (function () {
             document.getElementById(opts.undoPointBtnId).style.display = on ? '' : 'none';
             document.getElementById(opts.polygonHintId).style.display = on ? '' : 'none';
             document.getElementById(opts.statusId).textContent = on
-                ? 'Click to place points; click the first point again (or double-click) to finish. Right-click removes the last point.'
+                ? larisvmsI18n.t('js.zonesEditor.polygonHint')
                 : '';
         }
 
@@ -814,12 +814,35 @@ window.larisvmsZonesEditor = (function () {
             return -1;
         }
 
+        // A click on a handle without dragging picks the point up, and the next click puts it down.
+        // That's the way to reshape a zone for anyone who can't drag, and for the keyboard.
+        var dragMoved = false;
+        var pickedIndex = -1;
+
+        function movePoint(index, e) {
+            var rect = canvas.getBoundingClientRect();
+            editPoints[index] = {
+                x: Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)),
+                y: Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height))
+            };
+            document.getElementById(opts.formPolygonInputId).value = polygonJsonFromPoints(editPoints);
+            redraw();
+        }
+
         canvas.addEventListener('mousedown', function (e) {
             if (view === 'Grid' || e.button !== 0) return;
+            if (pickedIndex >= 0 && editPoints && pickedIndex < editPoints.length) {
+                e.preventDefault();
+                movePoint(pickedIndex, e);
+                pickedIndex = -1;
+                return;
+            }
+            pickedIndex = -1;
             var i = handleAt(e);
             if (i < 0) return;
             e.preventDefault();
             dragIndex = i;
+            dragMoved = false;
             redraw();
         });
         canvas.addEventListener('mousemove', function (e) {
@@ -828,16 +851,12 @@ window.larisvmsZonesEditor = (function () {
         });
         window.addEventListener('mousemove', function (e) {
             if (dragIndex < 0 || !editPoints) return;
-            var rect = canvas.getBoundingClientRect();
-            editPoints[dragIndex] = {
-                x: Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)),
-                y: Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height))
-            };
-            document.getElementById(opts.formPolygonInputId).value = polygonJsonFromPoints(editPoints);
-            redraw();
+            dragMoved = true;
+            movePoint(dragIndex, e);
         });
         window.addEventListener('mouseup', function () {
             if (dragIndex < 0) return;
+            if (!dragMoved) pickedIndex = dragIndex;
             dragIndex = -1;
             redraw();
         });
@@ -849,6 +868,10 @@ window.larisvmsZonesEditor = (function () {
         });
 
         window.addEventListener('resize', function () { resizeCanvas(); redraw(); });
+
+        window.larisvmsCanvasKeyboard.wire(canvas, {
+            step: function () { return view === 'Grid' ? 1 / gridSize : 0.01; }
+        });
 
         resizeCanvas();
         setPaneVisibility(activeMode);

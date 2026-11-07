@@ -17,9 +17,9 @@
 @inject IAuditService AuditService
 @inject IPermissionService PermissionService
 
-<PageTitle>Active Directory settings - @AppName</PageTitle>
+<PageTitle>@L["settings.activeDirectory.activeDirectorySettings"] - @AppName</PageTitle>
 
-<h1>Settings</h1>
+<h1>@L["nav.settings"]</h1>
 <SettingsTabs ActiveKey="ActiveDirectory" />
 
 @if (!string.IsNullOrEmpty(SavedMessage))
@@ -28,47 +28,47 @@
 }
 @if (!string.IsNullOrEmpty(ErrorMessage))
 {
-    <div class="alert alert-danger">@ErrorMessage</div>
+    <div class="alert alert-danger" role="alert">@ErrorMessage</div>
 }
 
 <div class="lv-page-narrow">
 <EditForm Model="this" FormName="ad-settings" OnSubmit="HandleSettingsSubmitAsync" data-dirty-guard>
-    <SettingSection Title="Connection" Subtitle="Sign in with domain accounts, and give them roles from their AD groups.">
-        <SettingField Label="Status" Wide HelpLink="/Help/users#active-directory">
+    <SettingSection Title="@L["settings.activeDirectory.connection"]" Subtitle="@L["settings.activeDirectory.signInWithDomainAccounts"]">
+        <SettingField Label="@L["common.status"]" Wide HelpLink="/Help/users#active-directory">
             <div class="form-check form-switch mt-1">
                 <InputCheckbox @bind-Value="AdEnabled" class="form-check-input" id="adEnabled" />
-                <label class="form-check-label" for="adEnabled">Active Directory sign-in enabled</label>
+                <label class="form-check-label" for="adEnabled">@L["settings.activeDirectory.activeDirectorySignInEnabled"]</label>
             </div>
         </SettingField>
-        <SettingField Label="Domain" Hint="Just the domain name, e.g. corp.example.com.">
-            <InputText @bind-Value="Domain" class="form-control font-monospace" placeholder="corp.example.com" />
+        <SettingField For="field-domain" Label="@L["settings.activeDirectory.domain"]" Hint="@L["settings.activeDirectory.justTheDomainNameE"]">
+            <InputText id="field-domain" @bind-Value="Domain" class="form-control font-monospace" placeholder="corp.example.com" />
         </SettingField>
-        <SettingField Label="Encryption">
+        <SettingField Label="@L["settings.activeDirectory.encryption"]">
             <div class="form-check form-switch mt-1">
                 <InputCheckbox @bind-Value="UseLdaps" class="form-check-input" id="useLdaps" />
-                <label class="form-check-label" for="useLdaps">Use LDAPS (port 636)</label>
+                <label class="form-check-label" for="useLdaps">@L["settings.activeDirectory.useLdapsPort636"]</label>
             </div>
         </SettingField>
         <div class="lv-field lv-field-wide" data-show-when="UseLdaps=false">
             <div class="alert alert-warning mb-0">
-                ⚠️ LDAP on port 389 is insecure and not recommended. Use LDAPS with a certificate on your domain controllers.
+                @L["settings.activeDirectory.ldapOnPort389Is"]
             </div>
         </div>
-        <SettingField Label="Lookup account" Hint="Used to look up users and groups. Sign-in always checks the user's own password.">
-            <InputSelect @bind-Value="LookupAccount" class="form-select">
-                <option value="Integrated">Integrated security (this server's account)</option>
-                <option value="ServiceAccount">Service account</option>
+        <SettingField For="field-lookupAccount" Label="@L["settings.activeDirectory.lookupAccount"]" Hint="@L["settings.activeDirectory.usedToLookUpUsers"]">
+            <InputSelect id="field-lookupAccount" @bind-Value="LookupAccount" class="form-select">
+                <option value="Integrated">@L["settings.activeDirectory.integratedSecurityThisServerAccount"]</option>
+                <option value="ServiceAccount">@L["settings.activeDirectory.serviceAccount"]</option>
             </InputSelect>
         </SettingField>
-        <SettingField Label="Service account username" ShowWhen="LookupAccount=ServiceAccount" Hint="DOMAIN\username">
-            <InputText @bind-Value="ServiceAccountUsername" class="form-control font-monospace" placeholder="CORP\svc-larisvms" autocomplete="off" />
+        <SettingField For="field-serviceAccountUsername" Label="@L["settings.activeDirectory.serviceAccountUsername"]" ShowWhen="LookupAccount=ServiceAccount" Hint="DOMAIN\username">
+            <InputText id="field-serviceAccountUsername" @bind-Value="ServiceAccountUsername" class="form-control font-monospace" placeholder="CORP\svc-larisvms" autocomplete="off" />
         </SettingField>
-        <SettingField Label="Service account password" ShowWhen="LookupAccount=ServiceAccount" Hint="Leave blank to keep the current password.">
-            <InputText @bind-Value="ServiceAccountPassword" type="password" class="form-control" autocomplete="new-password"
-                       placeholder="@(HasStoredPassword ? "(unchanged)" : "")" />
+        <SettingField For="field-serviceAccountPassword" Label="@L["settings.activeDirectory.serviceAccountPassword"]" ShowWhen="LookupAccount=ServiceAccount" Hint="@L["settings.activeDirectory.leaveBlankToKeepThe"]">
+            <InputText id="field-serviceAccountPassword" @bind-Value="ServiceAccountPassword" type="password" class="form-control" autocomplete="new-password"
+                       placeholder="@(HasStoredPassword ? L["cameras.edit.unchanged"].Value : "")" />
         </SettingField>
-        <SettingField Label="Test" Wide>
-            <button type="submit" name="Action" value="TestConnection" class="btn btn-outline-secondary">Test connection</button>
+        <SettingField Label="@L["common.test"]" Wide>
+            <button type="submit" name="Action" value="TestConnection" class="btn btn-outline-secondary">@L["settings.activeDirectory.testConnection"]</button>
             @if (TestResult is not null)
             {
                 <div class="small mt-2 @(TestSucceeded ? "text-success" : "text-danger")">@TestResult</div>
@@ -76,22 +76,22 @@
         </SettingField>
     </SettingSection>
 
-    <SettingSection Title="Group sync" Subtitle="Members of linked groups get the linked role. Anyone disabled in AD, or in no linked group, is disabled here.">
-        <SettingField Label="Sync every (minutes)" Hint="5 to 1440 (24 hours). Default 30.">
-            <InputNumber @bind-Value="SyncIntervalMinutes" class="form-control" min="5" max="1440" />
+    <SettingSection Title="@L["settings.activeDirectory.groupSync"]" Subtitle="@L["settings.activeDirectory.membersOfLinkedGroupsGet"]">
+        <SettingField For="field-syncIntervalMinutes" Label="@L["settings.activeDirectory.syncEveryMinutes"]" Hint="@L["settings.activeDirectory.5To144024Hours"]">
+            <InputNumber id="field-syncIntervalMinutes" @bind-Value="SyncIntervalMinutes" class="form-control" min="5" max="1440" />
         </SettingField>
-        <SettingField Label="Last sync" Wide>
+        <SettingField Label="@L["settings.activeDirectory.lastSync"]" Wide>
             @if (Current?.LastSyncStartedAt is null)
             {
-                <div class="text-muted">Not synced yet.</div>
+                <div class="text-muted">@L["settings.activeDirectory.notSyncedYet"]</div>
             }
             else
             {
                 <div>
-                    Started <time datetime="@Current.LastSyncStartedAt.Value.ToUtcIso()" data-local="g">@Current.LastSyncStartedAt.Value.ToLocalTime().ToString("g")</time>
+                    @L.Markup("settings.activeDirectory.syncStarted", new { time = Current.LastSyncStartedAt.Value.ToTimeTag() })
                     @if (Current.LastSyncError is not null)
                     {
-                        <div class="text-danger small">Failed: @Current.LastSyncError No accounts were changed.</div>
+                        <div class="text-danger small">@L["settings.activeDirectory.syncFailed", new { error = Current.LastSyncError }]</div>
                     }
                     else if (Current.LastSyncSummary is not null)
                     {
@@ -99,15 +99,15 @@
                     }
                 </div>
             }
-            <button type="submit" name="Action" value="SyncNow" class="btn btn-outline-secondary btn-sm mt-2">Sync now</button>
+            <button type="submit" name="Action" value="SyncNow" class="btn btn-outline-secondary btn-sm mt-2">@L["settings.activeDirectory.syncNow"]</button>
         </SettingField>
     </SettingSection>
 
-    <SettingSection Title="Local sign-in" Subtitle="Email-address accounts created in LarisVMS.">
-        <SettingField Label="Local accounts" Wide Hint="Can only be turned off while Active Directory sign-in is on.">
+    <SettingSection Title="@L["settings.activeDirectory.localSignIn"]" Subtitle="@L["settings.activeDirectory.emailAddressAccountsCreatedIn"]">
+        <SettingField Label="@L["settings.activeDirectory.localAccounts"]" Wide Hint="@L["settings.activeDirectory.canOnlyBeTurnedOff"]">
             <div class="form-check form-switch mt-1">
                 <InputCheckbox @bind-Value="LocalLoginsEnabled" class="form-check-input" id="localLoginsEnabled" />
-                <label class="form-check-label" for="localLoginsEnabled">Allow local (email) sign-in</label>
+                <label class="form-check-label" for="localLoginsEnabled">@L["settings.activeDirectory.allowLocalEmailSignIn"]</label>
             </div>
         </SettingField>
         <div class="lv-field lv-field-wide" data-show-when="LocalLoginsEnabled=false">
@@ -121,21 +121,21 @@
     </SettingSection>
 
     <div class="lv-savebar">
-        <button type="submit" name="Action" value="Save" class="btn btn-primary">Save</button>
+        <button type="submit" name="Action" value="Save" class="btn btn-primary">@L["common.save"]</button>
     </div>
 </EditForm>
 
-<SettingSection Title="Group → role links" Subtitle="Start typing a group name. Tab picks the first match.">
+<SettingSection Title="@L["settings.activeDirectory.groupRoleLinks"]" Subtitle="@L["settings.activeDirectory.startTypingAGroupName"]">
     <div class="lv-field lv-field-wide">
         @if (Links.Count == 0)
         {
-            <div class="text-muted mb-3">No groups linked yet.</div>
+            <div class="text-muted mb-3">@L["settings.activeDirectory.noGroupsLinkedYet"]</div>
         }
         else
         {
             <table class="table table-sm align-middle mb-3">
                 <thead class="table-light">
-                    <tr><th>AD group</th><th>Role</th><th></th></tr>
+                    <tr><th>@L["settings.activeDirectory.adGroup"]</th><th>@L["common.role"]</th><th></th></tr>
                 </thead>
                 <tbody>
                     @foreach (var link in Links)
@@ -145,7 +145,7 @@
                                 @link.GroupName
                                 @if (link.IsMissing)
                                 {
-                                    <span class="badge text-bg-warning ms-1" title="This group no longer exists in Active Directory.">missing in AD</span>
+                                    <span class="badge text-bg-warning ms-1" title="@L["settings.activeDirectory.thisGroupNoLongerExists"]">@L["settings.activeDirectory.missingInAd"]</span>
                                 }
                             </td>
                             <td>@(RoleNames.GetValueOrDefault(link.RoleId, "?"))</td>
@@ -153,8 +153,8 @@
                                 <EditForm Model="this" FormName="@($"ad-remove-link-{link.Id}")" OnSubmit="HandleRemoveLinkAsync" class="d-inline">
                                     <input type="hidden" name="RemoveLinkId" value="@link.Id" />
                                     <button type="submit" class="btn btn-sm btn-outline-danger"
-                                            data-confirm="@($"Unlink \"{link.GroupName}\"? Its members lose this role at the next sync.")">
-                                        Remove
+                                            data-confirm="@L["settings.activeDirectory.unlinkConfirm", new { group = link.GroupName }]">
+                                        @L["common.remove"]
                                     </button>
                                 </EditForm>
                             </td>
@@ -166,18 +166,18 @@
 
         <EditForm Model="this" FormName="ad-add-link" OnSubmit="HandleAddLinkAsync" class="row g-2 align-items-end">
             <div class="col-sm-6">
-                <label class="form-label" for="adGroupInput">AD group</label>
+                <label class="form-label" for="adGroupInput">@L["settings.activeDirectory.adGroup"]</label>
                 <div class="position-relative">
                     <input type="text" id="adGroupInput" name="NewGroupName" class="form-control" autocomplete="off"
                            role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="adGroupList"
-                           placeholder="Start typing a group name" />
+                           placeholder="@L["settings.activeDirectory.startTypingAGroupName2"]" />
                     <input type="hidden" id="adGroupSid" name="NewGroupSid" />
                     <ul class="dropdown-menu w-100" id="adGroupList" role="listbox"></ul>
                 </div>
                 <div class="lv-hint" id="adGroupStatus" aria-live="polite"></div>
             </div>
             <div class="col-sm-4">
-                <label class="form-label" for="adRoleSelect">Role</label>
+                <label class="form-label" for="adRoleSelect">@L["common.role"]</label>
                 <select id="adRoleSelect" name="NewRoleId" class="form-select">
                     @foreach (var role in RoleNames.OrderBy(r => r.Value))
                     {
@@ -186,7 +186,7 @@
                 </select>
             </div>
             <div class="col-sm-2">
-                <button type="submit" class="btn btn-primary w-100">Link</button>
+                <button type="submit" class="btn btn-primary w-100">@L["settings.activeDirectory.link"]</button>
             </div>
         </EditForm>
     </div>
@@ -277,7 +277,7 @@
     {
         if (!AdDomain.IsValid(Domain))
         {
-            TestResult = "Enter a domain name like corp.example.com.";
+            TestResult = Loc.T("settings.activeDirectory.enterDomain");
             return;
         }
 
@@ -297,11 +297,11 @@
     {
         if (Current is not { IsEnabled: true })
         {
-            ErrorMessage = "Turn on Active Directory sign-in and save before syncing.";
+            ErrorMessage = Loc.T("settings.activeDirectory.turnOnActiveDirectorySign");
             return;
         }
         SyncTrigger.Request();
-        SavedMessage = "Sync started. Refresh this page in a moment to see the result.";
+        SavedMessage = Loc.T("settings.activeDirectory.syncStartedRefreshThisPage");
     }
 
     private async Task HandleSaveAsync()
@@ -312,37 +312,37 @@
 
         if (!string.IsNullOrWhiteSpace(Domain) && !AdDomain.IsValid(Domain))
         {
-            ErrorMessage = "Enter the domain as a DNS name, like corp.example.com.";
+            ErrorMessage = Loc.T("settings.activeDirectory.enterTheDomainAsA");
             return;
         }
         if (AdEnabled && !AdDomain.IsValid(Domain))
         {
-            ErrorMessage = "Enter a domain before enabling Active Directory sign-in.";
+            ErrorMessage = Loc.T("settings.activeDirectory.enterADomainBeforeEnabling");
             return;
         }
         if (AdEnabled && useServiceAccount && (string.IsNullOrWhiteSpace(ServiceAccountUsername)
             || (!hadStoredPassword && string.IsNullOrWhiteSpace(ServiceAccountPassword))))
         {
-            ErrorMessage = "Enter the service account's username and password, or use integrated security.";
+            ErrorMessage = Loc.T("settings.activeDirectory.enterTheServiceAccountUsername");
             return;
         }
         if (SyncIntervalMinutes is < ActiveDirectorySettings.MinSyncIntervalMinutes or > ActiveDirectorySettings.MaxSyncIntervalMinutes)
         {
-            ErrorMessage = "Sync interval must be between 5 and 1440 minutes.";
+            ErrorMessage = Loc.T("settings.activeDirectory.syncIntervalMustBeBetween");
             return;
         }
         if (!LocalLoginsEnabled)
         {
             if (!AdEnabled)
             {
-                ErrorMessage = "Local sign-in can only be turned off while Active Directory sign-in is on.";
+                ErrorMessage = Loc.T("settings.activeDirectory.localSignInCanOnly");
                 return;
             }
             // Otherwise saving would lock every admin out of the admin pages until someone edits the
             // database by hand.
             if (!await AnyEnabledAdSuperAdminAsync())
             {
-                ErrorMessage = "Before turning off local sign-in, link an AD group to the Super Admin role and make sure at least one of its members has been synced.";
+                ErrorMessage = Loc.T("settings.activeDirectory.beforeTurningOffLocalSign");
                 return;
             }
         }
@@ -384,7 +384,7 @@
 
         ServiceAccountPassword = null;
         await LoadAsync();
-        SavedMessage = "Saved.";
+        SavedMessage = Loc.T("common.saved");
     }
 
     private async Task HandleAddLinkAsync()
@@ -397,12 +397,12 @@
         if (!await CanChangeLinksForRoleAsync(roleId)) return;
         if (Current is null || !AdDomain.IsValid(Current.Domain))
         {
-            ErrorMessage = "Save an Active Directory domain first.";
+            ErrorMessage = Loc.T("settings.activeDirectory.saveAnActiveDirectoryDomain");
             return;
         }
         if (groupName.Length == 0 && groupSid.Length == 0)
         {
-            ErrorMessage = "Choose an AD group.";
+            ErrorMessage = Loc.T("settings.activeDirectory.chooseAnAdGroup");
             return;
         }
 
@@ -422,13 +422,13 @@
         }
         if (group is null)
         {
-            ErrorMessage = $"No AD security group named \"{groupName}\" was found.";
+            ErrorMessage = Loc.T("settings.activeDirectory.noAdSecurityGroupNamed", new { groupName });
             return;
         }
 
         if (await Db.AdGroupRoleLinks.AnyAsync(l => l.GroupSid == group.Sid && l.RoleId == roleId))
         {
-            ErrorMessage = $"\"{group.Name}\" is already linked to that role.";
+            ErrorMessage = Loc.T("settings.activeDirectory.isAlreadyLinkedToThat", new { name = group.Name });
             return;
         }
 
@@ -449,11 +449,11 @@
         if (Current?.IsEnabled == true)
         {
             SyncTrigger.Request();
-            SavedMessage = $"Linked \"{group.Name}\" to {roleName}. Syncing its members now.";
+            SavedMessage = Loc.T("settings.activeDirectory.linkedToSyncingItsMembers", new { name = group.Name, roleName });
         }
         else
         {
-            SavedMessage = $"Linked \"{group.Name}\" to {roleName}. Members sync once Active Directory sign-in is enabled.";
+            SavedMessage = Loc.T("settings.activeDirectory.linkedToMembersSyncOnce", new { name = group.Name, roleName });
         }
     }
 
@@ -475,7 +475,7 @@
 
         await LoadAsync();
         if (Current?.IsEnabled == true) SyncTrigger.Request();
-        SavedMessage = $"Unlinked \"{link.GroupName}\" from {roleName}.";
+        SavedMessage = Loc.T("settings.activeDirectory.unlinkedFrom", new { groupName = link.GroupName, roleName });
     }
 
     /// <summary>A link hands its role to every member, so it needs the same right as assigning that
@@ -484,12 +484,12 @@
     {
         if (!RoleNames.ContainsKey(roleId))
         {
-            ErrorMessage = "Choose a role.";
+            ErrorMessage = Loc.T("settings.activeDirectory.chooseARole");
             return false;
         }
         if (!(await AuthorizationService.AuthorizeAsync(User, "Roles.Assign")).Succeeded)
         {
-            ErrorMessage = "You don't have permission to assign roles.";
+            ErrorMessage = Loc.T("settings.activeDirectory.youDontHavePermissionTo");
             return false;
         }
 
@@ -498,7 +498,7 @@
         if (!RoleScopePolicy.CanAssignRole(await HighestScopeTierAsync(CurrentUserId), roleTier)
             || !(await AdminScope.ForAsync(Db, PermissionService, User)).CanBindRole(roleId))
         {
-            ErrorMessage = "You can't assign that role.";
+            ErrorMessage = Loc.T("settings.activeDirectory.youCantAssignThatRole");
             return false;
         }
         return true;

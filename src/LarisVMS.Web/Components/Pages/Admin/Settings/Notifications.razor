@@ -11,9 +11,9 @@
 @inject IAuditService AuditService
 @inject IEmailService Email
 
-<PageTitle>Notification settings - @AppName</PageTitle>
+<PageTitle>@L["settings.notifications.notificationSettings"] - @AppName</PageTitle>
 
-<h1>Settings</h1>
+<h1>@L["nav.settings"]</h1>
 <SettingsTabs ActiveKey="Notifications" />
 
 @if (!string.IsNullOrEmpty(SavedMessage))
@@ -22,72 +22,71 @@
 }
 @if (!string.IsNullOrEmpty(ErrorMessage))
 {
-    <div class="alert alert-danger">@ErrorMessage</div>
+    <div class="alert alert-danger" role="alert">@ErrorMessage</div>
 }
 
 <div class="lv-page-narrow">
 <p class="text-muted small">
-    Users subscribe to shared notifications, or make their own, under <a href="/Notifications">My notifications</a>.
-    Shared notifications are set up under <a href="/Admin/Alerts">Alerts</a>. <a href="/Help/alerts#notifications">Learn more</a>
+    @L.Markup("settings.notifications.intro")
 </p>
 
 <EditForm Model="this" FormName="notification-settings" OnSubmit="HandleSaveAsync" data-dirty-guard>
-    <SettingSection Title="Notification types" Subtitle="Turn a type off to stop it reaching users. Team channels on alert rules (email lists, Slack, webhooks, and so on) aren't affected.">
+    <SettingSection Title="@L["settings.notifications.notificationTypes"]" Subtitle="@L["settings.notifications.turnATypeOffTo"]">
         @foreach (var (type, label) in NotificationSettings.Types)
         {
             <SettingField Label="@label">
                 <div class="form-check form-switch mt-1">
                     <input type="checkbox" class="form-check-input" id="@($"type-{type}")" name="@($"type-{type}")" value="true"
                            checked="@(TypeEnabled.GetValueOrDefault(type, true))" />
-                    <label class="form-check-label" for="@($"type-{type}")">Users can receive it</label>
+                    <label class="form-check-label" for="@($"type-{type}")">@L["settings.notifications.usersCanReceiveIt"]</label>
                 </div>
             </SettingField>
         }
     </SettingSection>
 
-    <SettingSection Title="Browser delivery" Subtitle="How notifications reach a user's browser. Each user turns them on per browser under My notifications.">
-        <SettingField Label="While LarisVMS is open" Wide Hint="Fully on-premises: notifications go straight from this server to open LarisVMS tabs and the installed app. No internet needed.">
+    <SettingSection Title="@L["settings.notifications.browserDelivery"]" Subtitle="@L["settings.notifications.howNotificationsReachAUser"]">
+        <SettingField Label="@L["settings.notifications.whileLarisvmsIsOpen"]" Wide Hint="@L["settings.notifications.fullyOnPremisesNotificationsGo"]">
             <div class="form-check form-switch mt-1">
                 <input type="checkbox" class="form-check-input" id="onPrem" name="onPrem" value="true" checked="@OnPrem" />
-                <label class="form-check-label" for="onPrem">On</label>
+                <label class="form-check-label" for="onPrem">@L["common.on"]</label>
             </div>
         </SettingField>
 
-        <SettingField Label="Web Push" Wide Hint="Standard browser push in Chrome, Edge, Firefox, and Safari, even when the browser is closed. No account needed, but this server needs outbound internet access to the browser makers' push services.">
+        <SettingField Label="@L["settings.notifications.webPush"]" Wide Hint="@L["settings.notifications.standardBrowserPushInChrome"]">
             <div class="form-check form-switch mt-1">
                 <input type="checkbox" class="form-check-input" id="webPush" name="webPush" value="true" checked="@WebPush" />
-                <label class="form-check-label" for="webPush">On</label>
+                <label class="form-check-label" for="webPush">@L["common.on"]</label>
             </div>
             <div class="small mt-1">
                 @if (HasVapidKeys)
                 {
-                    <span class="text-success">Keys generated.</span> <span class="text-muted">Generating new keys signs every browser out of push until it turns notifications on again.</span>
+                    <span class="text-success">@L["settings.notifications.keysGenerated"]</span> <span class="text-muted">@L["settings.notifications.generatingNewKeysSignsEvery"]</span>
                 }
                 else
                 {
-                    <span class="text-warning-emphasis">No keys yet — generate them before turning Web Push on.</span>
+                    <span class="text-warning-emphasis">@L["settings.notifications.noKeysYetGenerateThem"]</span>
                 }
             </div>
         </SettingField>
-        <SettingField Label="Contact for push services" Hint="An email address the push services can reach you at about this server.">
-            <input type="email" class="form-control" name="subject" value="@Subject" placeholder="admin@example.com" />
+        <SettingField For="field-subject" Label="@L["settings.notifications.contactForPushServices"]" Hint="@L["settings.notifications.anEmailAddressThePush"]">
+            <input id="field-subject" type="email" class="form-control" name="subject" value="@Subject" placeholder="admin@example.com" />
         </SettingField>
 
-        <SettingField Label="Firebase Cloud Messaging" Wide Hint="Send through your own Firebase project instead. Used only when Web Push is off, since a browser can only hold one push registration.">
+        <SettingField Label="@L["settings.notifications.firebaseCloudMessaging"]" Wide Hint="@L["settings.notifications.sendThroughYourOwnFirebase"]">
             <div class="form-check form-switch mt-1">
                 <input type="checkbox" class="form-check-input" id="fcm" name="fcm" value="true" checked="@Fcm" />
-                <label class="form-check-label" for="fcm">On</label>
+                <label class="form-check-label" for="fcm">@L["common.on"]</label>
             </div>
         </SettingField>
-        <SettingField Label="Firebase web app config" Wide Hint="From Firebase console → Project settings → Your apps → Web app → Config (the JSON object with apiKey, projectId, messagingSenderId, and appId).">
-            <textarea class="form-control font-monospace small" name="fcmWebConfig" rows="5" placeholder='{ "apiKey": "…", "projectId": "…", "messagingSenderId": "…", "appId": "…" }'>@FcmWebConfig</textarea>
+        <SettingField For="field-fcmWebConfig" Label="@L["settings.notifications.firebaseWebAppConfig"]" Wide Hint="@L["settings.notifications.fromFirebaseConsoleProjectSettings"]">
+            <textarea id="field-fcmWebConfig" class="form-control font-monospace small" name="fcmWebConfig" rows="5" placeholder='{ "apiKey": "…", "projectId": "…", "messagingSenderId": "…", "appId": "…" }'>@FcmWebConfig</textarea>
         </SettingField>
-        <SettingField Label="Firebase web push certificate" Hint="Project settings → Cloud Messaging → Web Push certificates → Key pair.">
-            <input type="text" class="form-control font-monospace small" name="fcmVapidKey" value="@FcmVapidKey" />
+        <SettingField For="field-fcmVapidKey" Label="@L["settings.notifications.firebaseWebPushCertificate"]" Hint="@L["settings.notifications.projectSettingsCloudMessagingWeb"]">
+            <input id="field-fcmVapidKey" type="text" class="form-control font-monospace small" name="fcmVapidKey" value="@FcmVapidKey" />
         </SettingField>
-        <SettingField Label="Firebase service account" Wide Hint="Project settings → Service accounts → Generate new private key. Paste the whole JSON file. It's stored encrypted.">
-            <textarea class="form-control font-monospace small" name="fcmServiceAccount" rows="4"
-                      placeholder="@(HasFcmServiceAccount ? "(unchanged — paste a new key to replace it)" : "{ \"type\": \"service_account\", … }")"></textarea>
+        <SettingField For="field-fcmServiceAccount" Label="@L["settings.notifications.firebaseServiceAccount"]" Wide Hint="@L["settings.notifications.projectSettingsServiceAccountsGenerate"]">
+            <textarea id="field-fcmServiceAccount" class="form-control font-monospace small" name="fcmServiceAccount" rows="4"
+                      placeholder="@(HasFcmServiceAccount ? L["settings.notifications.unchangedPasteANewKey"].Value : "{ \"type\": \"service_account\", … }")"></textarea>
             @if (FcmAccountProblem is not null)
             {
                 <div class="small text-danger mt-1">@FcmAccountProblem</div>
@@ -95,26 +94,26 @@
         </SettingField>
     </SettingSection>
 
-    <SettingSection Title="Email delivery">
-        <SettingField Label="Email notifications" Wide Hint="@(EmailConfigured ? "Sent to each user's own address through the email set up under Settings → Email." : "Set up email under Settings → Email first.")">
+    <SettingSection Title="@L["settings.notifications.emailDelivery"]">
+        <SettingField Label="@L["settings.notifications.emailNotifications"]" Wide Hint="@(EmailConfigured ? L["settings.notifications.sentToEachUserOwn"].Value : L["settings.notifications.setUpEmailUnderSettings"].Value)">
             <div class="form-check form-switch mt-1">
                 <input type="checkbox" class="form-check-input" id="emailOn" name="emailOn" value="true" checked="@EmailOn" />
-                <label class="form-check-label" for="emailOn">Users can choose email</label>
+                <label class="form-check-label" for="emailOn">@L["settings.notifications.usersCanChooseEmail"]</label>
             </div>
         </SettingField>
     </SettingSection>
 
     <div class="lv-savebar">
-        <button type="submit" class="btn btn-primary">Save</button>
-        <button type="button" class="btn btn-outline-secondary" id="notifTestBtn">Send a test to me</button>
+        <button type="submit" class="btn btn-primary">@L["common.save"]</button>
+        <button type="button" class="btn btn-outline-secondary" id="notifTestBtn">@L["settings.notifications.sendATestToMe"]</button>
         <span id="notifTestStatus" class="small" role="status" aria-live="polite"></span>
     </div>
 </EditForm>
 
 <EditForm Model="this" FormName="notification-vapid" OnSubmit="HandleGenerateKeysAsync" class="mt-2">
     <button type="submit" class="btn btn-sm btn-outline-secondary"
-            data-confirm="@(HasVapidKeys ? "Generate new Web Push keys? Every browser has to turn notifications on again." : null)">
-        @(HasVapidKeys ? "Generate new Web Push keys" : "Generate Web Push keys")
+            data-confirm="@(HasVapidKeys ? L["settings.notifications.generateNewWebPushKeys"].Value : null)">
+        @(HasVapidKeys ? L["settings.notifications.generateNewWebPushKeys2"].Value : L["settings.notifications.generateWebPushKeys"].Value)
     </button>
 </EditForm>
 </div>
@@ -206,7 +205,7 @@
         if (webConfig.Length > 0)
         {
             try { using var _ = System.Text.Json.JsonDocument.Parse(webConfig); }
-            catch (System.Text.Json.JsonException) { await LoadAsync(); ErrorMessage = "The Firebase web app config isn't valid JSON."; return; }
+            catch (System.Text.Json.JsonException) { await LoadAsync(); ErrorMessage = Loc.T("settings.notifications.theFirebaseWebAppConfig"); return; }
         }
         var newAccount = form["fcmServiceAccount"].ToString().Trim();
         if (newAccount.Length > 0)
@@ -218,7 +217,7 @@
         if (webPushOn && string.IsNullOrEmpty(await Settings.GetRawAsync(NotificationSettings.WebPushPublicKey)))
         {
             await LoadAsync();
-            ErrorMessage = "Generate Web Push keys before turning Web Push on.";
+            ErrorMessage = Loc.T("settings.notifications.generateWebPushKeysBefore");
             return;
         }
 
@@ -245,7 +244,7 @@
                 HttpContext?.Connection.RemoteIpAddress?.ToString(), details);
 
         await LoadAsync();
-        SavedMessage = "Saved.";
+        SavedMessage = Loc.T("common.saved");
     }
 
     private async Task HandleGenerateKeysAsync()
@@ -257,7 +256,7 @@
         await AuditService.LogAsync("Settings.Update", user.FindFirst(ClaimTypes.NameIdentifier)?.Value, by,
             HttpContext?.Connection.RemoteIpAddress?.ToString(), "Generated new Web Push (VAPID) keys.");
         await LoadAsync();
-        SavedMessage = "New Web Push keys generated. Turn Web Push on and save, then turn notifications on in each browser.";
+        SavedMessage = Loc.T("settings.notifications.newWebPushKeysGenerated");
     }
 
     // Each returns the audit field; AuditDiff.Build leaves out the ones that didn't change.

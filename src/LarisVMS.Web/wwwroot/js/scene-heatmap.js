@@ -156,9 +156,9 @@
     /// A legend bar: the colour scale from "Less" to "More".
     function legend(maxText) {
         var stops = STOPS.map(function (s) { return 'rgb(' + s[1].join(',') + ') ' + Math.round(s[0] * 100) + '%'; }).join(', ');
-        return '<span class="small text-muted">Less</span>' +
+        return '<span class="small text-muted">' + larisvmsI18n.html('js.sceneHeatmap.less') + '</span>' +
             '<span class="scene-heatmap-legend" style="background: linear-gradient(to right, ' + stops + ');"></span>' +
-            '<span class="small text-muted">More' + (maxText ? ' (' + maxText + ')' : '') + '</span>';
+            '<span class="small text-muted">' + (maxText ? larisvmsI18n.html('js.sceneHeatmap.moreMax', { max: maxText }) : larisvmsI18n.html('js.sceneHeatmap.more')) + '</span>';
     }
 
     window.larisvmsSceneHeatmap = { render: render, legend: legend, reset: reset, layoutGrid: layoutGrid };

@@ -37,9 +37,9 @@ window.larisvmsAudioControls = (function () {
         return (
             '<span class="audio-controls d-inline-flex align-items-center gap-1">' +
                 '<input type="range" class="audio-volume" min="0" max="100" step="1" value="0" ' +
-                    'title="Volume" aria-label="Volume">' +
+                    'title="' + larisvmsI18n.html('js.audioControls.volumeLabel') + '" aria-label="' + larisvmsI18n.html('js.audioControls.volumeLabel') + '">' +
                 '<button type="button" class="btn btn-sm btn-outline-light audio-mute" ' +
-                    'style="padding:.1rem .35rem;" title="Unmute" aria-label="Unmute">🔇</button>' +
+                    'style="padding:.1rem .35rem;" title="' + larisvmsI18n.html('js.audioControls.unmute') + '" aria-label="' + larisvmsI18n.html('js.audioControls.unmute') + '">🔇</button>' +
             '</span>'
         );
     }
@@ -63,13 +63,13 @@ window.larisvmsAudioControls = (function () {
             var effective = muted ? 0 : volume;
             if (slider) {
                 slider.value = String(Math.round(effective * 100));
-                slider.title = 'Volume — ' + Math.round(effective * 100) + '%';
+                slider.title = larisvmsI18n.t('js.audioControls.volume', { percent: Math.round(effective * 100) });
             }
             if (muteBtn) {
                 // Three levels rather than two: at a low volume an unmuted tile can be inaudible in
                 // a noisy room, and 🔊 next to silence reads as a bug. 🔉 says "on, but quiet".
                 muteBtn.textContent = effective === 0 ? '🔇' : (effective < 0.5 ? '🔉' : '🔊');
-                muteBtn.title = muted ? 'Unmute' : 'Mute';
+                muteBtn.title = muted ? larisvmsI18n.t('js.audioControls.unmute') : larisvmsI18n.t('js.audioControls.mute');
                 muteBtn.setAttribute('aria-label', muteBtn.title);
             }
         }

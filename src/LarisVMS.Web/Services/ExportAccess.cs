@@ -1,8 +1,10 @@
+using LarisVMS.Core.Auth;
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 using LarisVMS.Infrastructure.Data;
 
 namespace LarisVMS.Web.Services;
@@ -31,7 +33,7 @@ public sealed class ExportAccess
     {
         var granted = await permissions.GetGrantedAsync(user, ct);
         var exportable = await cameraAccess.GetAccessibleCameraIdsAsync(user, CameraAccessActions.Export, ct);
-        return new ExportAccess(user.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty, granted.IsAdministrator, exportable);
+        return new ExportAccess(user.ActorId() ?? string.Empty, granted.IsAdministrator, exportable);
     }
 
     public bool CanExportCamera(Guid cameraId) => Exportable is null || Exportable.Contains(cameraId);
@@ -59,6 +61,6 @@ public sealed class ExportAccess
         var item = job.Items.First(i => i.Id == itemId);
         return CanSee(job) && CanExportCamera(item.CameraId)
             ? null
-            : Results.Problem("You don't have export access to this camera.", statusCode: StatusCodes.Status403Forbidden);
+            : Results.Problem(Loc.T("server.exportAccess.youDontHaveExportAccess"), statusCode: StatusCodes.Status403Forbidden);
     }
 }

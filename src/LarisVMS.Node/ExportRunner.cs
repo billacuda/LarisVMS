@@ -185,20 +185,25 @@ public class ExportRunner(NodeApiClient api, string ffmpegPath, ILogger<ExportRu
 
     /// <summary>An export's redaction areas (ExportJobItem.RedactionJson, a JSON array of zone-format
     /// polygons) as black-box filters — the same exact-shape mask as Privacy zones. Empty when there
-    /// are none or the JSON is unreadable.</summary>
-    internal static IReadOnlyList<string> RedactionFilters(string? redactionJson)
+    /// are none. Null when areas were asked for but can't be read: the export must then fail rather
+    /// than go out unredacted.</summary>
+    internal static IReadOnlyList<string>? RedactionFilters(string? redactionJson)
     {
         if (string.IsNullOrWhiteSpace(redactionJson)) return [];
         try
         {
             using var doc = System.Text.Json.JsonDocument.Parse(redactionJson);
-            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array) return [];
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array) return null;
+            if (doc.RootElement.GetArrayLength() == 0) return [];
             var polygons = doc.RootElement.EnumerateArray().Select(p => ZoneRasterizer.ParsePolygon(p.GetRawText())).ToList();
-            return PrivacyMaskFilterBuilder.BuildMaskFilters(polygons);
+            // Every area has to be a real shape; one that reads as nothing would leave its part showing.
+            if (polygons.Any(p => p.Count < 3)) return null;
+            var filters = PrivacyMaskFilterBuilder.BuildMaskFilters(polygons);
+            return filters.Count > 0 ? filters : null;
         }
-        catch (System.Text.Json.JsonException)
+        catch (Exception ex) when (ex is System.Text.Json.JsonException or InvalidOperationException or FormatException)
         {
-            return [];
+            return null;
         }
     }
 

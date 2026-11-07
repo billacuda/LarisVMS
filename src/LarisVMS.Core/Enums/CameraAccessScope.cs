@@ -22,5 +22,6 @@ public enum CameraAccessActions
     Export = 4,
     Ptz = 8,
     Talk = 16,
-    Configure = 32
+    Configure = 32,
+    Record = 64
 }

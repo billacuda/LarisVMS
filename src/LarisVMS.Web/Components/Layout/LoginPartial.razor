@@ -4,16 +4,16 @@
 <div class="d-flex align-items-center gap-2">
 @if (_isSignedIn)
 {
-    <a class="btn btn-link btn-sm p-0 text-decoration-none" href="/Notifications" title="My notifications" aria-label="My notifications">🔔</a>
+    <a class="btn btn-link btn-sm p-0 text-decoration-none" href="/Notifications" title="@L["layout.myNotifications"]" aria-label="@L["layout.myNotifications"]">🔔</a>
     <span class="text-muted small d-none d-sm-inline text-truncate lv-username" title="@_userName">@_userName</span>
     <form action="/Identity/Account/Logout?returnUrl=%2F" method="post" class="d-inline">
         <AntiforgeryToken />
-        <button type="submit" class="btn btn-link btn-sm p-0">Logout</button>
+        <button type="submit" class="btn btn-link btn-sm p-0">@L["layout.logout"]</button>
     </form>
 }
 else
 {
-    <a class="btn btn-link btn-sm p-0" href="/Identity/Account/Login">Login</a>
+    <a class="btn btn-link btn-sm p-0" href="/Identity/Account/Login">@L["layout.login"]</a>
 }
 </div>
 

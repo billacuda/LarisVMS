@@ -1,6 +1,7 @@
 using System.Text.Json;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 using MailKit.Net.Smtp;
 using MailKit.Security;
 using MimeKit;
@@ -17,7 +18,7 @@ public class SmtpEmailProvider : IEmailProvider
         string htmlBody, string? textBody = null, CancellationToken ct = default)
     {
         var config = JsonSerializer.Deserialize<SmtpEmailConfig>(configJson)
-            ?? throw new InvalidOperationException("SMTP configuration is missing or malformed.");
+            ?? throw new InvalidOperationException(Loc.T("server.smtpEmail.smtpConfigurationIsMissingOr"));
 
         var message = new MimeMessage();
         message.From.Add(new MailboxAddress(fromName, fromAddress));

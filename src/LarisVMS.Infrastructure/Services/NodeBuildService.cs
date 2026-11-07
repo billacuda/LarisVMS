@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 using LarisVMS.Infrastructure.Data;
 
 namespace LarisVMS.Infrastructure.Services;
@@ -93,7 +94,7 @@ public class NodeBuildService(ApplicationDbContext db) : INodeBuildService
     private async Task<NodeBuildVersion> SetStatusAsync(Guid buildId, NodeBuildStatus status, string approvedBy, CancellationToken ct)
     {
         var build = await db.NodeBuildVersions.FirstOrDefaultAsync(b => b.Id == buildId, ct)
-            ?? throw new InvalidOperationException($"Node build {buildId} not found.");
+            ?? throw new InvalidOperationException(Loc.T("server.nodeBuild.nodeBuildNotFound", new { buildId }));
         build.Status = status;
         build.ApprovedAt = DateTime.UtcNow;
         build.ApprovedBy = approvedBy;

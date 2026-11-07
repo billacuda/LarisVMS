@@ -36,6 +36,9 @@ public sealed class PlayViewModel
     /// A tile only offers push-to-talk when its camera also has an audio output.</summary>
     public HashSet<Guid>? TalkCameraIds { get; set; }
 
+    /// <summary>Cameras this user may record manually; null means all of them.</summary>
+    public HashSet<Guid>? RecordCameraIds { get; set; }
+
     public bool IsTour { get; set; }
     public List<Guid> TourViewIds { get; set; } = [];
     public int TourIndex { get; set; }

@@ -135,8 +135,8 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     // shortly *after* a segment ends can still claim it as pre-roll — see
     // PendingGatedSegmentDecision and GatedDecisionLoopAsync. Concurrent for the same reason as the
     // other queues here: enqueued from whichever camera's RecordingSession task happens to complete
-    // a segment, dequeued from the single decision loop. Schedule mode never enqueues here — see
-    // HandleSegmentCompleted's doc comment for why its decision needs no deferral.
+    // a segment, dequeued from the single decision loop. Schedule and Manual segments only come here
+    // to be discarded, after the grace period — see HandleSegmentCompleted's doc comment.
     private readonly ConcurrentQueue<PendingGatedSegmentDecision> _pendingGatedDecisions = new();
 
     // M8 pass 6: a real, confirmed bug — RecordingSession.SegmentCompleted used to close over the
@@ -501,7 +501,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             // than lose track of it — the motion sessions above were just cancelled, but their
             // MotionSession objects (and the LastMotionAtUtc they hold per zone) aren't cleared by
             // that, so this still reflects the freshest information actually available.
-            while (_pendingGatedDecisions.TryDequeue(out var pending)) DecideGatedSegment(pending);
+            while (_pendingGatedDecisions.TryDequeue(out var pending)) DecideGatedSegment(pending, shuttingDown: true);
 
             await FlushSegmentsAsync(CancellationToken.None);
             await FlushStreamInfoAsync(CancellationToken.None);
@@ -559,7 +559,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 // backs up (it probes their /health on its own cadence; the results ride the next
                 // heartbeat below).
                 partnerHealthTracker.SetPartners(config.PartnersToProbe);
-                _protectedFootage = new ProtectedFootage(config.ProtectedRanges);
+                ApplyFootageRanges(config);
                 var storageRoot = Reconcile(config, ct);
                 PersistConfigCache(config);
                 var usage = DiskSpace.TryGetUsage(storageRoot);
@@ -624,6 +624,13 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// SHA-256 that UpdateService checks the download against.</summary>
     private bool TrustUpdate(NodeUpdateInfoDto update)
     {
+        // A signed offer for an older build (a replayed one) would roll the node back to it.
+        if (Version.TryParse(update.Version, out var offered) && Version.TryParse(NodeVersion.Current, out var running)
+            && offered <= running)
+        {
+            _logger.LogError("Not installing update {Version}: this node already runs {Running}.", update.Version, NodeVersion.Current);
+            return false;
+        }
         var payload = UpdateSignature.UpdatePayload("win-x64", update.Version, update.Sha256, update.VisionSha256);
         if (!UpdateSignature.Check(_registration.UpdateSigningKeyPem, update.SigningKeyPem, update.Signature, payload,
                 out var keyToPin, out var error))
@@ -655,6 +662,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             "Server unreachable and no cameras are recording yet — starting from the last config " +
             "cached locally so this node doesn't sit idle for the rest of the outage.");
         MediaSigningKey = _cachedConfig.MediaSigningKey;
+        ApplyFootageRanges(_cachedConfig);
         Reconcile(_cachedConfig, ct);
     }
 
@@ -797,7 +805,8 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             _pendingStreamInfo.Enqueue(new StreamInfoReportItem(
                 cameraId, "Main", Width: null, Height: null, Codec: null,
                 Fps: session.CurrentFps, BitrateKbps: session.CurrentBitrateKbps, ReconnectCount: session.TotalReconnectCount,
-                IsEngineBuilding: visionStatus?.IsEngineBuilding, EngineBuildFailed: visionStatus?.EngineBuildFailed));
+                IsEngineBuilding: visionStatus?.IsEngineBuilding, EngineBuildFailed: visionStatus?.EngineBuildFailed,
+                IsKeepingFootage: IsKeepingFootageNow(cameraId)));
         }
     }
 
@@ -1067,6 +1076,14 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         var storageRoot = string.IsNullOrWhiteSpace(config.StorageRootPath) ? fallbackStorageRoot : config.StorageRootPath;
         StorageRoot = storageRoot;
         ArchiveRoot = string.IsNullOrWhiteSpace(config.ArchiveRootPath) ? null : config.ArchiveRootPath;
+        // The server only stores RTSP addresses, but ffmpeg opens whatever it's given; this also
+        // covers a cached config or an edited database.
+        foreach (var camera in config.Cameras)
+        {
+            if (camera.Streams.RemoveAll(s => !StreamUris.IsAllowed(s.RtspUri)) > 0)
+                _logger.LogWarning("Camera {CameraId} ({Name}) has a stream address that isn't rtsp:// or rtsps:// - that stream is ignored.",
+                    camera.CameraId, camera.Name);
+        }
         var desired = config.Cameras.ToDictionary(c => c.CameraId);
 
         foreach (var cameraId in _active.Keys.Except(desired.Keys).ToList())
@@ -1753,7 +1770,9 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             config.LocalModelName,
             // Speed traps (per camera) and Detection.ColorClassification (global): both change what
             // the pipeline measures, so a change restarts it. Redrawing a trap only resets tracking.
-            SpeedTrapSignature(camera.SpeedTraps), config.ColorClassification, config.MovingObjects);
+            SpeedTrapSignature(camera.SpeedTraps), config.ColorClassification, config.MovingObjects,
+            // Detection.IgnoredObjects — per camera; changes what reaches the tracker.
+            camera.IgnoredObjects);
 
         if (_activeVision.TryGetValue(camera.CameraId, out var existing) && existing.ConfigSignature == signature) return; // already watching, unchanged
 
@@ -1796,7 +1815,9 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             camera.SpeedTraps ?? [], config.ColorClassification,
             // Detection.MovementMode / MovementSensitivity — per-camera; Detection.MovingObjects —
             // global. All in `signature` above.
-            camera.MovementMode, camera.MovementSensitivity, config.MovingObjects);
+            camera.MovementMode, camera.MovementSensitivity, config.MovingObjects,
+            // Detection.IgnoredObjects — per camera; in `signature` above.
+            camera.IgnoredObjects);
 
         // Never stack two starts for the same camera — see _visionStartsInFlight's own comment.
         if (!_visionStartsInFlight.TryAdd(camera.CameraId, 0)) return;
@@ -1808,7 +1829,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
 
     private static string SpeedTrapSignature(List<VisionSpeedTrapDto>? traps) =>
         traps is null or { Count: 0 } ? "" : string.Join(';', traps.OrderBy(t => t.Id).Select(t =>
-            string.Join(',', t.Id, t.AX1, t.AY1, t.AX2, t.AY2, t.BX1, t.BY1, t.BX2, t.BY2, t.DistanceMeters)));
+            string.Join(',', t.Id, t.AX1, t.AY1, t.AX2, t.AY2, t.BX1, t.BY1, t.BX2, t.BY2, t.DistanceMeters, t.Direction)));
 
     /// <summary>Maps a resolved AiAccelerator to VisionSession's own -hwaccel value. Only Nvidia
     /// maps to a real value: CUDA's scale_cuda GPU-hybrid decode is the only pairing actually
@@ -2126,8 +2147,8 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// Pure and unit-tested directly — the actual rule is exactly two booleans, kept separate from
     /// the file-lookup/deletion side effects in DecideGatedSegment so the rule itself can be tested
     /// without a real MotionSession or filesystem. Callers only ever reach this once the mode is
-    /// already known to be Motion or Event (Continuous/Schedule never enqueue a pending decision at
-    /// all — see HandleSegmentCompleted), so there's no mode parameter here any more.
+    /// already known to be Motion or Event (no other mode's pending decision reaches this — see
+    /// DecideGatedSegment), so there's no mode parameter here any more.
     ///
     /// hasSignalSession false (no enabled ServerMotion zone/Sub stream for Motion, or no driving
     /// EventTagRule for Event — including a session that existed when the decision was *deferred*
@@ -2221,10 +2242,11 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// default, and every camera before this feature existed) always report immediately, same as
     /// before this feature existed at all.
     ///
-    /// Schedule mode is decided right here, synchronously — unlike Motion/Event, there's nothing to
-    /// retroactively claim: whether segment.StartUtc fell inside a configured window is fully known
-    /// the instant the segment completes, so deferring it through the same pending-decision queue
-    /// Motion/Event use would only add latency for no benefit.
+    /// Schedule mode is decided right here — unlike Motion/Event, there's nothing to retroactively
+    /// claim: whether segment.StartUtc fell inside a configured window is fully known the instant the
+    /// segment completes. Manual mode is the same. A segment either of them would discard still waits
+    /// in the pending-decision queue for ManualStartGrace, in case a manual recording covering it
+    /// hasn't reached this node yet.
     ///
     /// Motion and Event both take the deferred path, via ProcessDueGatedDecisions/DecideGatedSegment
     /// below — Event mode gates on *only* its driving EventTagRule signal (a ServerMotion zone or
@@ -2273,17 +2295,19 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                     "treated as a discard-everything condition.", cameraId, camera.Name);
             }
 
-            if (IsWithinSchedule(camera.ScheduleWindows, segment.StartUtc)
-                || KeepForEvidenceLock(cameraId, segment)) ReportSegment(cameraId, mainStream, segment);
-            else DiscardSegment(segment, cameraId, camera.Name, "started outside every configured schedule window");
+            if (IsWithinSchedule(camera.ScheduleWindows, segment.StartUtc)) ReportSegment(cameraId, mainStream, segment);
+            else EnqueueDiscard(cameraId, camera.Name, segment, mainStream, mode, "started outside every configured schedule window");
+            return;
+        }
+
+        // Before the fail-open checks below: having nothing configured is the point of this mode.
+        if (mode == RecordingMode.Manual)
+        {
+            EnqueueDiscard(cameraId, camera.Name, segment, mainStream, mode, "no manual recording was on");
             return;
         }
 
         // Motion or Event from here down.
-        var hasMotionSession = _activeMotion.ContainsKey(cameraId);
-        var hasEventSession = _activeEvents.ContainsKey(cameraId);
-        var hasIntegration = _activeIntegrations.ContainsKey(cameraId);
-        var hasVision = _activeVision.ContainsKey(cameraId);
         // M8 pass 6: any signal source counts for Motion — a camera relying only on its own onboard
         // detection (no ServerMotion zone drawn at all), only a vendor integration, or only AI
         // detection must still gate correctly, not just one with a server-side zone (object detection
@@ -2291,13 +2315,9 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         // broader check below, which already counted both). Event mode is narrower: only a *driving*
         // EventTagRule counts, since Event mode's whole point is "record only for this specific
         // tagged trigger," not "any activity" — an event session with no DrivesRecording=true rule
-        // contributes nothing, same as having no session at all. See DecideGatedSegment for the
+        // contributes nothing, same as having no session at all. See HasKeepSignal for the
         // matching hadSignalInWindow check per mode.
-        var hasSignalSource = mode == RecordingMode.Event
-            ? hasEventSession && camera.EventTagRules.Any(r => r.DrivesRecording)
-            : hasMotionSession || hasEventSession || hasIntegration || hasVision;
-
-        if (!hasSignalSource)
+        if (!HasSignalSource(cameraId, camera, mode))
         {
             var warned = mode == RecordingMode.Event ? _warnedEventModeMissingRule : _warnedMotionModeMissingSession;
             if (warned.TryAdd(cameraId, 0))
@@ -2335,21 +2355,95 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// about. Deliberately best-effort: a delete failure is logged, not retried or escalated — the
     /// file just lingers on disk until a real retention sweep eventually claims it, which is a far
     /// safer failure mode than treating a stray file as something worth crashing recording over.</summary>
-    private void DecideGatedSegment(PendingGatedSegmentDecision pending)
+    private void DecideGatedSegment(PendingGatedSegmentDecision pending, bool shuttingDown = false)
     {
-        var hasMotionSession = _activeMotion.TryGetValue(pending.CameraId, out var motionRecorder);
-        var hasEventSession = _activeEvents.TryGetValue(pending.CameraId, out var eventRecorder);
-        var hasIntegration = _activeIntegrations.TryGetValue(pending.CameraId, out var integrationRecorder);
-        // Anchored to the segment's START, not its end — see HasMotionSince's doc comment for why
-        // anchoring to EndUtc silently discarded segments with real motion in them once PostRoll
-        // (an operator-configurable, potentially small value) was shorter than "how far before the
-        // segment's end the motion happened."
-        var windowStart = pending.Segment.StartUtc.AddSeconds(-pending.PostRollSeconds);
+        // A discard reason means the decision was already made and only a manual recording or evidence
+        // lock can rescue it now. Re-running the signal check after the grace period would count events
+        // well past this segment's real pre-roll.
+        var discard = pending.DiscardReason is not null;
+        if (!discard)
+        {
+            // Anchored to the segment's START, not its end — see HasMotionSince's doc comment for why
+            // anchoring to EndUtc silently discarded segments with real motion in them once PostRoll
+            // (an operator-configurable, potentially small value) was shorter than "how far before the
+            // segment's end the motion happened."
+            var hadSignalInWindow = HasKeepSignal(pending.CameraId, pending.Mode,
+                pending.Segment.StartUtc.AddSeconds(-pending.PostRollSeconds), out var hasSignalSession);
+            discard = ShouldDiscardSegment(hasSignalSession, hadSignalInWindow);
+        }
 
-        bool hasSignalSession;
+        if (!discard || KeepForEvidenceLock(pending.CameraId, pending.Segment) || KeepForManualRecording(pending.CameraId, pending.Segment))
+        {
+            ReportSegment(pending.CameraId, pending.MainStream, pending.Segment);
+            return;
+        }
+
+        var reason = pending.DiscardReason ?? "no activity within the pre/post-roll window";
+        if (!shuttingDown && ShouldWaitBeforeDiscard(pending.Segment.EndUtc, DateTime.UtcNow))
+        {
+            _pendingGatedDecisions.Enqueue(pending with { DecideAtUtc = pending.Segment.EndUtc + ManualStartGrace, DiscardReason = reason });
+            return;
+        }
+
+        DiscardSegment(pending.Segment, pending.CameraId, pending.CameraName, reason);
+    }
+
+    /// <summary>How long after a segment ends it must survive before being discarded. Longer than the
+    /// 30s config poll, so a recording started just before the segment ended reaches this node in time
+    /// even if the immediate reconcile call didn't get through.</summary>
+    internal static readonly TimeSpan ManualStartGrace = TimeSpan.FromSeconds(45);
+
+    /// <summary>Pure so the grace period is unit-testable without a real camera.</summary>
+    internal static bool ShouldWaitBeforeDiscard(DateTime segmentEndUtc, DateTime nowUtc) => nowUtc < segmentEndUtc + ManualStartGrace;
+
+    private void EnqueueDiscard(Guid cameraId, string cameraName, RecordingSegment segment, NodeConfigStreamDto? mainStream, RecordingMode mode, string reason) =>
+        _pendingGatedDecisions.Enqueue(new PendingGatedSegmentDecision(cameraId, cameraName, segment, mainStream, mode, 0,
+            segment.EndUtc + ManualStartGrace, reason));
+
+    /// <summary>Whether a Motion- or Event-mode camera has anything able to produce a signal. Without
+    /// one the mode fails open and keeps everything.</summary>
+    private bool HasSignalSource(Guid cameraId, NodeConfigCameraDto camera, RecordingMode mode)
+    {
+        var hasEventSession = _activeEvents.ContainsKey(cameraId);
+        return mode == RecordingMode.Event
+            ? hasEventSession && camera.EventTagRules.Any(r => r.DrivesRecording)
+            : _activeMotion.ContainsKey(cameraId) || hasEventSession || _activeIntegrations.ContainsKey(cameraId) || _activeVision.ContainsKey(cameraId);
+    }
+
+    /// <summary>Whether this camera's footage is being kept right now, by the same rules that decide
+    /// each segment, so the live indicator can't disagree with what's actually saved.</summary>
+    private bool IsKeepingFootageNow(Guid cameraId)
+    {
+        if (!_latestCameraConfig.TryGetValue(cameraId, out var camera)) return true; // same fail-open as HandleSegmentCompleted
+        if (!Enum.TryParse<RecordingMode>(camera.RecordingMode, ignoreCase: true, out var mode)) mode = RecordingMode.Continuous;
+
+        var now = DateTime.UtcNow;
+        var gatedBySignal = mode is RecordingMode.Motion or RecordingMode.Event;
+        var hasSource = gatedBySignal && HasSignalSource(cameraId, camera, mode);
+        var hadSignal = hasSource && HasKeepSignal(cameraId, mode, now.AddSeconds(-camera.MotionPostRollSeconds), out _);
+        return IsKeeping(mode, _manualFootage.Covers(cameraId, now, now), IsWithinSchedule(camera.ScheduleWindows, now), hasSource, hadSignal);
+    }
+
+    /// <summary>Pure so each mode's rule is unit-testable without a real camera.</summary>
+    internal static bool IsKeeping(RecordingMode mode, bool manualOn, bool inSchedule, bool hasSignalSource, bool hadSignal) =>
+        manualOn || mode switch
+        {
+            RecordingMode.Continuous => true,
+            RecordingMode.Manual => false,
+            RecordingMode.Schedule => inSchedule,
+            _ => !hasSignalSource || hadSignal
+        };
+
+    /// <summary>Whether a Motion- or Event-mode camera had a keep signal since windowStart. Also says
+    /// whether it has a session able to signal at all; see ShouldDiscardSegment.</summary>
+    private bool HasKeepSignal(Guid cameraId, RecordingMode mode, DateTime windowStart, out bool hasSignalSession)
+    {
+        var hasMotionSession = _activeMotion.TryGetValue(cameraId, out var motionRecorder);
+        var hasEventSession = _activeEvents.TryGetValue(cameraId, out var eventRecorder);
+        var hasIntegration = _activeIntegrations.TryGetValue(cameraId, out var integrationRecorder);
+
         bool hadSignalInWindow;
-
-        if (pending.Mode == RecordingMode.Event)
+        if (mode == RecordingMode.Event)
         {
             // Only the driving-rule signal counts — see HandleSegmentCompleted's own comment on why
             // Event mode is narrower than Motion mode's OR-chain.
@@ -2359,7 +2453,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
         }
         else // Motion
         {
-            var hasVision = _activeVision.TryGetValue(pending.CameraId, out var visionRecorder);
+            var hasVision = _activeVision.TryGetValue(cameraId, out var visionRecorder);
 
             // Object detection plan decision 9: exactly one of the three generic "something moved"
             // sources (ServerMotion/CameraEvent/Integration) counts toward hadSignalInWindow — whichever
@@ -2373,7 +2467,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             // keep a segment the primary source alone wouldn't have. Being OR terms throughout, none of
             // this can ever *discard* footage that would otherwise have been kept — only the three
             // generic sources' own relative weight changed.
-            var explicitChoice = _latestCameraConfig.TryGetValue(pending.CameraId, out var freshCamera) ? freshCamera.MotionDetectionSource : null;
+            var explicitChoice = _latestCameraConfig.TryGetValue(cameraId, out var freshCamera) ? freshCamera.MotionDetectionSource : null;
             var primarySource = ResolvePrimaryMotionSource(explicitChoice, hasIntegration, hasEventSession);
 
             hasSignalSession = hasMotionSession || hasEventSession || hasIntegration || hasVision;
@@ -2401,22 +2495,31 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 (hasVision && (visionRecorder!.AnyDetectionSince(windowStart) || visionRecorder.AnyDetectionActive));
         }
 
-        if (ShouldDiscardSegment(hasSignalSession, hadSignalInWindow) && !KeepForEvidenceLock(pending.CameraId, pending.Segment))
-        {
-            DiscardSegment(pending.Segment, pending.CameraId, pending.CameraName, "no activity within the pre/post-roll window");
-            return;
-        }
-
-        ReportSegment(pending.CameraId, pending.MainStream, pending.Segment);
+        return hadSignalInWindow;
     }
 
-    /// <summary>Shared discard side effect for every gated mode (Schedule's immediate discard in
-    /// HandleSegmentCompleted, Motion/Event's deferred one in DecideGatedSegment) — deletes the
+    /// <summary>Shared discard side effect for every gated mode, called from DecideGatedSegment once
+    /// the segment's grace period has passed — deletes the
     /// already-recorded file, logs at Debug (routine, not a problem), and best-effort-only on a
     /// delete failure (see DecideGatedSegment's own doc comment for why that's the safe choice).</summary>
     // Evidence locks from the latest config: a gated-mode discard never removes footage under a lock
     // (a user can lock the last few minutes while they are still being recorded).
     private ProtectedFootage _protectedFootage = ProtectedFootage.None;
+
+    // Manual recordings from the latest config. Same lookup as evidence locks, different meaning: these
+    // only stop a recording-mode discard, while locks also protect footage from retention.
+    private ProtectedFootage _manualFootage = ProtectedFootage.None;
+
+    /// <summary>Called before every Reconcile, including a cold start from cached config during a server
+    /// outage, so a restart can't discard footage under a running recording or a lock.</summary>
+    private void ApplyFootageRanges(NodeConfigResponse config)
+    {
+        _protectedFootage = new ProtectedFootage(config.ProtectedRanges);
+        _manualFootage = new ProtectedFootage(config.ManualRecordingRanges);
+    }
+
+    private bool KeepForManualRecording(Guid cameraId, RecordingSegment segment) =>
+        _manualFootage.Covers(cameraId, segment.StartUtc, segment.EndUtc);
 
     private bool KeepForEvidenceLock(Guid cameraId, RecordingSegment segment)
     {

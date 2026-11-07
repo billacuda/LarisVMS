@@ -8,16 +8,18 @@ using LarisVMS.Core.Interfaces;
 namespace LarisVMS.Web.Pages.Views;
 
 [Authorize("Views.View")]
-public class IndexModel(IViewService viewService) : PageModel
+public class IndexModel(IViewService viewService, IAuthorizationService authorization) : PageModel
 {
     public List<View> Views { get; set; } = [];
     public List<View> TourViews { get; set; } = [];
     public string? CurrentUserId { get; set; }
     public string? ErrorMessage { get; set; }
+    public bool CanEditViews { get; set; }
 
     public async Task OnGetAsync()
     {
         CurrentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        CanEditViews = await CanEditViewsAsync();
         Views = await viewService.ListVisibleToAsync(CurrentUserId ?? string.Empty);
         TourViews = await viewService.GetTourViewsAsync();
     }
@@ -38,7 +40,7 @@ public class IndexModel(IViewService viewService) : PageModel
         var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
         try
         {
-            await viewService.DeleteAsync(id, userId);
+            await viewService.DeleteAsync(id, userId, await CanEditViewsAsync());
         }
         catch (UnauthorizedAccessException ex)
         {
@@ -48,4 +50,6 @@ public class IndexModel(IViewService viewService) : PageModel
         }
         return RedirectToPage();
     }
+
+    private async Task<bool> CanEditViewsAsync() => (await authorization.AuthorizeAsync(User, "Views.Edit")).Succeeded;
 }

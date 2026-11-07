@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 
 namespace LarisVMS.Web.Pages.Setup;
 
@@ -38,7 +39,7 @@ public class DatabaseModel(ISetupService setupService) : PageModel
             // Once an admin exists, the site's database isn't changed from here.
             if (await setupService.IsAdminCreatedAsync())
             {
-                ErrorMessage = "Setup has already created an administrator, so the database can't be changed here.";
+                ErrorMessage = Loc.T("setup.database.setupHasAlreadyCreatedAn");
                 return Page();
             }
             // An existing, already set-up LarisVMS database: its admin, branding, storage and node
@@ -52,40 +53,40 @@ public class DatabaseModel(ISetupService setupService) : PageModel
             // "Error locating server/instance" or "server not found" for a name with no instance part.
             // SQL Server Express installs as the named instance SQLEXPRESS, so "." or "localhost" alone
             // looks for a default instance that isn't there.
-            ErrorMessage = $"{ex.Message} If you installed SQL Server Express, use {ServerName}\\SQLEXPRESS as the server name.";
+            ErrorMessage = Loc.T("setup.database.ifYouInstalledSqlServer", new { message = ex.Message, serverName = ServerName });
             return Page();
         }
         catch (Microsoft.Data.SqlClient.SqlException ex) when (ex.Message.Contains("certificate", StringComparison.OrdinalIgnoreCase))
         {
-            ErrorMessage = $"{ex.Message} If this SQL Server uses a self-signed certificate, tick \"Trust this server's certificate\".";
+            ErrorMessage = Loc.T("setup.database.ifThisSqlServerUses", new { message = ex.Message });
             return Page();
         }
         catch (MySqlConnector.MySqlException ex) when (ex.ErrorCode == MySqlConnector.MySqlErrorCode.UnableToConnectToHost)
         {
-            ErrorMessage = $"{ex.Message} Check the host and port, and that MariaDB accepts network connections (bind-address, firewall).";
+            ErrorMessage = Loc.T("setup.database.checkTheHostAndPort", new { message = ex.Message });
             return Page();
         }
         catch (MySqlConnector.MySqlException ex) when (ex.ErrorCode == MySqlConnector.MySqlErrorCode.AccessDenied)
         {
-            ErrorMessage = $"{ex.Message} Check the user name and password, and that the user may connect from this machine.";
+            ErrorMessage = Loc.T("setup.database.checkTheUserNameAnd", new { message = ex.Message });
             return Page();
         }
         catch (MySqlConnector.MySqlException ex) when (ex.ErrorCode == MySqlConnector.MySqlErrorCode.DatabaseAccessDenied)
         {
-            ErrorMessage = $"{ex.Message} The user needs permission to create the database, or create it first and grant the user ALL on it.";
+            ErrorMessage = Loc.T("setup.database.theUserNeedsPermissionTo", new { message = ex.Message });
             return Page();
         }
         catch (MySqlConnector.MySqlException ex) when (ex.Message.Contains("does not support SSL", StringComparison.OrdinalIgnoreCase))
         {
             // MariaDB before 11.4 has no certificate until one is set up, and the password isn't sent
             // to another machine unencrypted.
-            ErrorMessage = $"{ex.Message} This MariaDB server has TLS turned off. Give it a certificate (ssl_cert and ssl_key in my.ini, see Help › Installation), or upgrade to MariaDB 11.4 or later, which sets one up itself.";
+            ErrorMessage = Loc.T("setup.database.mariaDbNoTls", new { message = ex.Message });
             return Page();
         }
         catch (Exception ex) when (ex is System.Security.Authentication.AuthenticationException
                                    || ex.InnerException is System.Security.Authentication.AuthenticationException)
         {
-            ErrorMessage = $"{ex.Message} If this MariaDB server uses a self-signed certificate, tick \"Trust this server's certificate\".";
+            ErrorMessage = Loc.T("setup.database.ifThisMariadbServerUses", new { message = ex.Message });
             return Page();
         }
         catch (Exception ex)

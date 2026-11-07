@@ -22,6 +22,7 @@
             if (!href) return;
             var isActive = href === '/' ? path === '/' : path.indexOf(href) === 0;
             link.classList.toggle('active', isActive);
+            if (isActive) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
         });
     }
 

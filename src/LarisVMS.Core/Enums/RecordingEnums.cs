@@ -1,16 +1,21 @@
 namespace LarisVMS.Core.Enums;
 
-/// <summary>Recording.Mode's four values (see ISettingsResolver). Stored as this enum's ToString()
+/// <summary>Recording.Mode's values (see ISettingsResolver). Stored as this enum's ToString()
 /// in the setting's raw string value — the string wire format (Cameras/Edit's dropdown, the
 /// NodeConfigCameraDto.RecordingMode string, Admin/Settings) is unchanged; NodeWorker is the one
 /// place that parses it back into this enum, since it's the one place doing real branching logic
-/// across four modes rather than just passing the value through.</summary>
+/// across the modes rather than just passing the value through.</summary>
 public enum RecordingMode
 {
     Continuous = 0,
     Motion = 1,
     Schedule = 2,
-    Event = 3
+    Event = 3,
+
+    /// <summary>Keeps nothing unless a manual recording is on, so the camera is live view only the
+    /// rest of the time. Unlike the other gated modes it doesn't fail open: having nothing configured
+    /// is the whole point.</summary>
+    Manual = 4
 }
 
 /// <summary>Days a ScheduleWindow applies to. [Flags] so one window can span several days (e.g.

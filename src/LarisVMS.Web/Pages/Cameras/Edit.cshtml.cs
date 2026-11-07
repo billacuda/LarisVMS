@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using LarisVMS.Core.Localization;
 using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
@@ -71,6 +72,13 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
     /// "Standard"/"Legacy" and "Low"/"Normal"/"High".</summary>
     [BindProperty] public string MovementModeOverride { get; set; } = "";
     [BindProperty] public string MovementSensitivityOverride { get; set; } = "";
+    /// <summary>Detection.IgnoredObjects for this camera: "" = inherit, "Custom" = this camera's own
+    /// list, posted through IgnoredObjectsPicker's fields. Choosing nothing stores IgnoreNothing.</summary>
+    [BindProperty] public string IgnoredObjectsMode { get; set; } = "";
+    /// <summary>This camera's own Detection.IgnoredObjects override (null = none), for the picker.</summary>
+    public string? IgnoredObjectsOverride { get; set; }
+    /// <summary>What the camera would inherit, as a readable list ("nothing" when empty).</summary>
+    public string EffectiveIgnoredObjects { get; set; } = "";
     /// <summary>Detection.MaxFps for this camera, or null to inherit the node/global ceiling — same
     /// nullable-override shape as ConfidenceOverride/MotionJitterPixelsOverride. A camera that only
     /// needs to catch a parked-vehicle alert has no use for the same frame rate a busy street camera
@@ -235,6 +243,15 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
         MovementSensitivityOverride = ownSensitivity is "Low" or "Normal" or "High" ? ownSensitivity : "";
         var sensitivity = await settings.GetAsync("Detection.MovementSensitivity", "Normal", cameraId: cameraId, nodeId: nodeId);
         EffectiveMovementSensitivity = sensitivity is "Low" or "High" ? sensitivity : "Normal";
+        IgnoredObjectsOverride = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "Detection.IgnoredObjects");
+        IgnoredObjectsMode = IgnoredObjectsOverride is null ? "" : "Custom";
+        // The inherited value: the node's override if it has one, otherwise the global default.
+        var inherited = (nodeId is { } nid ? await settings.GetOwnOverrideAsync(SettingScope.Node, nid, "Detection.IgnoredObjects") : null)
+            ?? await settings.GetRawAsync("Detection.IgnoredObjects");
+        var inheritedSet = LarisVMS.Core.CocoCategoryMap.ParseIgnoredObjects(inherited);
+        EffectiveIgnoredObjects = inheritedSet.Count == 0
+            ? Loc.T("cameras.edit.ignoredObjectsNothing")
+            : string.Join(", ", inheritedSet.Select(LarisVMS.Core.CocoCategoryMap.LocalizedClassName));
 
         var ownMaxFps = await settings.GetOwnOverrideAsync(SettingScope.Camera, cameraId, "Detection.MaxFps");
         MaxFpsOverride = int.TryParse(ownMaxFps, out var maxFps) ? maxFps : null;
@@ -346,6 +363,12 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
                 MovementModeOverride is "Standard" or "Legacy" ? MovementModeOverride : null, User.Identity?.Name);
             await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Detection.MovementSensitivity",
                 MovementSensitivityOverride is "Low" or "Normal" or "High" ? MovementSensitivityOverride : null, User.Identity?.Name);
+            // "Custom" with nothing ticked is a real choice (detect everything here), so it's stored
+            // as IgnoreNothing; an empty override would mean inherit.
+            var ignoredObjects = IgnoredObjectsMode == "Custom"
+                ? Components.Shared.IgnoredObjectsPicker.FromForm(Request.Form) is { Length: > 0 } chosen ? chosen : LarisVMS.Core.CocoCategoryMap.IgnoreNothing
+                : null;
+            await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Detection.IgnoredObjects", ignoredObjects, User.Identity?.Name);
             // Same 0-60 clamp Admin/Settings/Detection applies to the global default; 0 = no cap.
             var clampedMaxFpsOverride = MaxFpsOverride is { } mf ? Math.Clamp(mf, 0, 60) : (int?)null;
             await settings.SetOverrideAsync(SettingScope.Camera, Id.Value, "Detection.MaxFps",
@@ -368,8 +391,8 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
             var created = await cameraService.SplitChannelsAsync(Id.Value);
             await LogAsync("Camera.SplitChannels", $"{Name} ({Id}) — {created} channel camera(s) added");
             ProbeMessage = created == 0
-                ? "No additional channels to add — every channel on this device already has a camera."
-                : $"Added {created} camera(s), one per additional channel on this device.";
+                ? Loc.T("cameras.edit.noAdditionalChannelsToAdd")
+                : Loc.Plural("cameras.edit.addedCamerasPerChannel", created);
         }
         catch (Exception ex)
         {
@@ -396,8 +419,8 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
 
         var summary = await cameraService.ProbeAsync(Id.Value);
         ProbeMessage = summary.Error is null
-            ? $"Probed successfully — {summary.StreamCount} stream(s) found."
-            : $"Probe failed: {summary.Error}";
+            ? Loc.Plural("cameras.edit.probedStreamsFound", summary.StreamCount)
+            : Loc.T("cameras.edit.probeFailed", new { error = summary.Error });
 
         // Only meaningful right after a probe, which is the only thing that reports the device's
         // channel list — the page's normal GET has no probe result to read it from.
@@ -467,7 +490,8 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
 
     public async Task<IActionResult> OnPostUpdateStreamAsync(Guid streamId, bool streamIsEnabled, string? customName)
     {
-        await cameraService.UpdateStreamAsync(streamId, streamIsEnabled, customName);
+        if (Id is not { } cameraId || !await cameraService.UpdateStreamAsync(cameraId, streamId, streamIsEnabled, customName))
+            return NotFound();
         return RedirectToPage("Edit", new { id = Id });
     }
 }

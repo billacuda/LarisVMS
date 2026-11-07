@@ -182,16 +182,38 @@ public sealed class DahuaCgiEventSession(
             readCts.CancelAfter(ReadTimeout);
 
             string? line;
-            try { line = await reader.ReadLineAsync(readCts.Token); }
+            bool tooLong;
+            try { (line, tooLong) = await ReadBoundedLineAsync(reader, readCts.Token); }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
                 logger.LogWarning("No smart-event traffic for {Minutes} minutes — reconnecting.", ReadTimeout.TotalMinutes);
                 return;
             }
 
+            if (tooLong)
+            {
+                logger.LogWarning("The camera sent a smart-event line over {Kb} KB — reconnecting.", MaxPendingChars / 1024);
+                return;
+            }
             if (line is null) return; // camera closed the stream — reconnect
             HandleLine(line);
         }
+    }
+
+    /// <summary>ReadLineAsync, but a line never grows past <see cref="MaxPendingChars"/>: a camera
+    /// sending one endless line would otherwise grow memory without bound.</summary>
+    private static async Task<(string? Line, bool TooLong)> ReadBoundedLineAsync(StreamReader reader, CancellationToken ct)
+    {
+        var line = new System.Text.StringBuilder();
+        var one = new char[1];
+        while (await reader.ReadAsync(one.AsMemory(), ct) > 0)
+        {
+            if (one[0] == '\n')
+                return (line.Length > 0 && line[^1] == '\r' ? line.ToString(0, line.Length - 1) : line.ToString(), false);
+            if (line.Length >= MaxPendingChars) return (null, true);
+            line.Append(one[0]);
+        }
+        return (line.Length > 0 ? line.ToString() : null, false);
     }
 
     // An event's data payload is pretty-printed JSON spanning many lines, so a line-at-a-time reader

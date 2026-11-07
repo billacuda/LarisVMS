@@ -14,7 +14,7 @@
         input.type = reveal ? 'text' : 'password';
         button.setAttribute('aria-pressed', reveal ? 'true' : 'false');
         var label = button.getAttribute('data-secret-label') || 'value';
-        button.setAttribute('aria-label', (reveal ? 'Hide ' : 'Show ') + label);
+        button.setAttribute('aria-label', larisvmsI18n.t(reveal ? 'js.secretReveal.hide' : 'js.secretReveal.show', { label: label }));
         var glyph = button.querySelector('[data-secret-glyph]') || button;
         glyph.textContent = reveal ? SHOWN : HIDDEN;
     }

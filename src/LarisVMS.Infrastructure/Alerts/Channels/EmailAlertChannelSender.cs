@@ -1,6 +1,7 @@
 using System.Text.Json;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 
 namespace LarisVMS.Infrastructure.Alerts.Channels;
 
@@ -18,7 +19,7 @@ public class EmailAlertChannelSender(IEmailService emailService) : IAlertChannel
     }
 
     private static EmailDeliveryConfig Deserialize(string? configJson) =>
-        string.IsNullOrWhiteSpace(configJson) ? throw new InvalidOperationException("Email delivery configuration is missing.")
+        string.IsNullOrWhiteSpace(configJson) ? throw new InvalidOperationException(Loc.T("server.emailAlertChannel.emailDeliveryConfigurationIsMissing"))
             : JsonSerializer.Deserialize<EmailDeliveryConfig>(configJson)
-                ?? throw new InvalidOperationException("Email delivery configuration is malformed.");
+                ?? throw new InvalidOperationException(Loc.T("server.emailAlertChannel.emailDeliveryConfigurationIsMalformed"));
 }

@@ -72,8 +72,9 @@ public interface ICameraService
     /// <summary>Toggles a stream's IsEnabled and/or sets its display-name override. A disabled Main
     /// stream stops being handed to nodes (NodeService.GetConfigAsync), so this is how recording on
     /// a specific stream is turned off without touching the camera itself. A blank customName clears
-    /// the override back to the default Role-based label.</summary>
-    Task UpdateStreamAsync(Guid streamId, bool isEnabled, string? customName, CancellationToken ct = default);
+    /// the override back to the default Role-based label. False when the stream isn't one of
+    /// <paramref name="cameraId"/>'s.</summary>
+    Task<bool> UpdateStreamAsync(Guid cameraId, Guid streamId, bool isEnabled, string? customName, CancellationToken ct = default);
 
     /// <summary>Flips Camera.IsEnabled in one round trip (SQL-side NOT, no read-modify-write race) —
     /// the fast path for "stop this one camera without opening Edit" on Cameras/Index.</summary>

@@ -10,10 +10,10 @@
 }
 else
 {
-    <h1>Live</h1>
+    <h1>@L["nav.live"]</h1>
 
     <p class="text-muted">
-        No views exist yet, <a asp-page="/Views/Index">click here to create one!</a>
+        @L.Html("live.noViewsYet")
     </p>
 }
 

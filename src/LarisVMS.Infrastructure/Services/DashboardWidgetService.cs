@@ -1,3 +1,4 @@
+using LarisVMS.Core.Localization;
 using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
@@ -247,16 +248,17 @@ public class DashboardWidgetService(ApplicationDbContext db, ICameraService came
         return result;
     }
 
-    private static readonly IReadOnlyList<DashboardReportColumn> SpeedLogColumns =
+    // A property, not a field: built per request, in that viewer's language.
+    private static IReadOnlyList<DashboardReportColumn> SpeedLogColumns =>
     [
-        new("time", "When", "time", "time"),
-        new("camera", "Camera", SortKey: "camera"),
-        new("trap", "Speed trap", SortKey: "trap"),
-        new("object", "Object", SortKey: "object"),
-        new("color", "Color"),
-        new("speed", "Speed", "number", "speed"),
-        new("limit", "Limit"),
-        new("kph", "Speed (km/h)", "number", CsvOnly: true),
+        new("time", Loc.T("server.dashboardWidget.colWhen"), "time", "time"),
+        new("camera", Loc.T("common.camera"), SortKey: "camera"),
+        new("trap", Loc.T("server.dashboardWidget.colSpeedTrap"), SortKey: "trap"),
+        new("object", Loc.T("server.dashboardWidget.colObject"), SortKey: "object"),
+        new("color", Loc.T("server.dashboardWidget.colColor")),
+        new("speed", Loc.T("server.dashboardWidget.colSpeed"), "number", "speed"),
+        new("limit", Loc.T("server.dashboardWidget.colLimit")),
+        new("kph", Loc.T("server.dashboardWidget.colKph"), "number", CsvOnly: true),
     ];
 
     /// <summary>The speed log as widget/report rows: the object (with its color) as the name, when /
@@ -277,7 +279,7 @@ public class DashboardWidgetService(ApplicationDbContext db, ICameraService came
             var link = $"/Playback?cameraId={e.CameraId}&atUtc={Uri.EscapeDataString(e.AtUtc.AddSeconds(-5).ToString("o", inv))}";
             return new DashboardWidgetRow(e.Id.ToString(inv), what, "speed", link, null, null, e.SpeedKph, speed,
                 Note: "{time} · " + where,
-                Badge: e.OverLimit ? "Over limit" : null, BadgeClass: e.OverLimit ? "text-bg-danger" : null,
+                Badge: e.OverLimit ? Loc.T("server.dashboardWidget.overLimit") : null, BadgeClass: e.OverLimit ? "text-bg-danger" : null,
                 NoteTimeUtc: e.AtUtc,
                 Cells: new Dictionary<string, string?>
                 {

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 using MailKit.Net.Smtp;
 using MailKit.Security;
 using MimeKit;
@@ -21,7 +22,7 @@ public class GmailEmailProvider : IEmailProvider
         string htmlBody, string? textBody = null, CancellationToken ct = default)
     {
         var config = JsonSerializer.Deserialize<GmailEmailConfig>(configJson)
-            ?? throw new InvalidOperationException("Gmail configuration is missing or malformed.");
+            ?? throw new InvalidOperationException(Loc.T("server.gmailEmail.gmailConfigurationIsMissingOr"));
         var accessToken = await RefreshAccessTokenAsync(config, ct);
 
         var message = new MimeMessage();

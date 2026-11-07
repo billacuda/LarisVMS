@@ -18,11 +18,17 @@ window.larisvmsScheduleEditor = (function () {
         { name: 'Friday', abbr: 'Fri', bit: 32 },
         { name: 'Saturday', abbr: 'Sat', bit: 64 }
     ];
+    // name matches the form's checkbox values; abbr is shown, so it's in the page's language
+    // (1 Jan 2023 was a Sunday).
+    DAYS.forEach(function (d, i) {
+        try { d.abbr = new Date(Date.UTC(2023, 0, 1 + i)).toLocaleDateString(larisvmsI18n.locale, { weekday: 'short', timeZone: 'UTC' }); }
+        catch (e) { /* keep the English abbreviation */ }
+    });
 
     function daysSummary(bitmask) {
         var included = DAYS.filter(function (d) { return (bitmask & d.bit) !== 0; });
-        if (included.length === 7) return 'Every day';
-        if (included.length === 0) return '(no days selected)';
+        if (included.length === 7) return larisvmsI18n.t('js.scheduleEditor.everyDay');
+        if (included.length === 0) return larisvmsI18n.t('js.scheduleEditor.noDaysSelected');
         return included.map(function (d) { return d.abbr; }).join(', ');
     }
 
@@ -37,7 +43,7 @@ window.larisvmsScheduleEditor = (function () {
         function renderList() {
             var panel = document.getElementById(opts.listPanelId);
             if (!windows.length) {
-                panel.innerHTML = '<p class="text-muted small">No schedule windows yet — with none configured, a Schedule-mode camera keeps everything (fails open).</p>';
+                panel.innerHTML = '<p class="text-muted small">' + larisvmsI18n.html('js.scheduleEditor.noScheduleWindowsYetWith') + '</p>';
                 return;
             }
             var sorted = windows.slice().sort(function (a, b) { return a.startTime.localeCompare(b.startTime); });
@@ -46,8 +52,8 @@ window.larisvmsScheduleEditor = (function () {
                 html += '<button type="button" class="list-group-item list-group-item-action py-2' +
                     (w.id === selectedId ? ' active' : '') + '" data-window-id="' + w.id + '">' +
                     toInputTime(w.startTime) + '&ndash;' + toInputTime(w.endTime) +
-                    (w.endTime < w.startTime ? ' <span class="text-muted small">(crosses midnight)</span>' : '') +
-                    (w.isEnabled ? '' : ' <span class="text-muted small">(disabled)</span>') +
+                    (w.endTime < w.startTime ? ' <span class="text-muted small">' + larisvmsI18n.html('js.scheduleEditor.crossesMidnight') + '</span>' : '') +
+                    (w.isEnabled ? '' : ' <span class="text-muted small">' + larisvmsI18n.html('js.scheduleEditor.disabled') + '</span>') +
                     '<div class="text-muted small">' + daysSummary(w.days) + '</div>' +
                     '</button>';
             });
@@ -72,7 +78,7 @@ window.larisvmsScheduleEditor = (function () {
         function showForm(win) {
             selectedId = win ? win.id : null;
             document.getElementById(opts.formPanelId).style.display = '';
-            document.getElementById(opts.formTitleId).textContent = win ? 'Edit window' : 'New window';
+            document.getElementById(opts.formTitleId).textContent = win ? larisvmsI18n.t('js.scheduleEditor.editWindow') : larisvmsI18n.t('js.scheduleEditor.newWindow');
             document.getElementById(opts.formIdInputId).value = win ? win.id : '';
             document.getElementById(opts.formStartTimeId).value = win ? toInputTime(win.startTime) : '09:00';
             document.getElementById(opts.formEndTimeId).value = win ? toInputTime(win.endTime) : '17:00';
@@ -106,7 +112,7 @@ window.larisvmsScheduleEditor = (function () {
             var id = document.getElementById(opts.formIdInputId).value;
             var checkedNames = Array.prototype.filter.call(dayCheckboxes(), function (cb) { return cb.checked; })
                 .map(function (cb) { return cb.value; });
-            if (!checkedNames.length) { alert('Select at least one day.'); return; }
+            if (!checkedNames.length) { alert(larisvmsI18n.t('js.scheduleEditor.selectAtLeastOneDay')); return; }
 
             var body = {
                 days: checkedNames.join(','),
@@ -118,7 +124,7 @@ window.larisvmsScheduleEditor = (function () {
             var url = id ? '/api/schedule-windows/' + id : '/api/cameras/' + opts.cameraId + '/schedule-windows';
             var method = id ? 'PUT' : 'POST';
             var resp = await fetch(url, { method: method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-            if (!resp.ok) { alert('Could not save this window.'); return; }
+            if (!resp.ok) { alert(larisvmsI18n.t('js.scheduleEditor.couldNotSaveThisWindow')); return; }
 
             hideForm();
             await loadWindows();
@@ -126,9 +132,9 @@ window.larisvmsScheduleEditor = (function () {
 
         document.getElementById(opts.formDeleteBtnId).addEventListener('click', async function () {
             var id = document.getElementById(opts.formIdInputId).value;
-            if (!id || !confirm('Delete this schedule window?')) return;
+            if (!id || !confirm(larisvmsI18n.t('js.scheduleEditor.deleteThisScheduleWindow'))) return;
             var resp = await fetch('/api/schedule-windows/' + id, { method: 'DELETE' });
-            if (!resp.ok) { alert('Could not delete this window.'); return; }
+            if (!resp.ok) { alert(larisvmsI18n.t('js.scheduleEditor.couldNotDeleteThisWindow')); return; }
             hideForm();
             await loadWindows();
         });

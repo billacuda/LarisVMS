@@ -74,10 +74,10 @@
     function countRow(label, c) {
         if (!c) return '';
         return '<tr><td>' + label + '</td>' +
-            '<td class="text-end">' + c.lastHour.toLocaleString() + '</td>' +
-            '<td class="text-end">' + c.last24Hours.toLocaleString() + '</td>' +
-            '<td class="text-end">' + c.last7Days.toLocaleString() + '</td>' +
-            '<td class="text-end">' + c.last30Days.toLocaleString() + '</td></tr>';
+            '<td class="text-end">' + c.lastHour.toLocaleString(larisvmsI18n.locale) + '</td>' +
+            '<td class="text-end">' + c.last24Hours.toLocaleString(larisvmsI18n.locale) + '</td>' +
+            '<td class="text-end">' + c.last7Days.toLocaleString(larisvmsI18n.locale) + '</td>' +
+            '<td class="text-end">' + c.last30Days.toLocaleString(larisvmsI18n.locale) + '</td></tr>';
     }
 
     function renderNode(n) {
@@ -88,18 +88,18 @@
             '</div>';
         if (n.hostStatsFresh) {
             var mem = memoryPercent(n);
-            html += '<div class="small mb-1">CPU <span class="float-end">' + percent(n.cpuPercent) + '</span></div>' + bar(n.cpuPercent) +
-                '<div class="small mb-1">Memory <span class="float-end">' + gigabytes(n.memoryUsedBytes) + ' / ' + gigabytes(n.memoryTotalBytes) + ' GB</span></div>' + bar(mem) +
-                '<div class="small mb-1">Network <span class="float-end">↓ ' + mbits(n.netReceiveBytesPerSec) + ' · ↑ ' + mbits(n.netSendBytesPerSec) + ' Mbit/s</span></div>';
+            html += '<div class="small mb-1">' + larisvmsI18n.html('js.dashboard.cpu') + ' <span class="float-end">' + percent(n.cpuPercent) + '</span></div>' + bar(n.cpuPercent) +
+                '<div class="small mb-1">' + larisvmsI18n.html('js.dashboard.memory') + ' <span class="float-end">' + larisvmsI18n.html('js.dashboard.memoryValue', { used: gigabytes(n.memoryUsedBytes), total: gigabytes(n.memoryTotalBytes) }) + '</span></div>' + bar(mem) +
+                '<div class="small mb-1">' + larisvmsI18n.html('js.dashboard.network') + ' <span class="float-end">' + larisvmsI18n.html('js.dashboard.networkValue', { down: mbits(n.netReceiveBytesPerSec), up: mbits(n.netSendBytesPerSec) }) + '</span></div>';
         } else {
-            html += '<div class="small text-muted mb-1">No load figures from this node yet.</div>';
+            html += '<div class="small text-muted mb-1">' + larisvmsI18n.html('js.dashboard.noLoadFiguresFromThis') + '</div>';
         }
-        html += '<div class="small mb-1">Recording <span class="float-end">' + n.totalFps + ' fps from ' + n.camerasReporting + ' camera(s)</span></div>';
+        html += '<div class="small mb-1">' + larisvmsI18n.html('js.dashboard.recording') + ' <span class="float-end">' + larisvmsI18n.plural('js.dashboard.recordingValue', n.camerasReporting, { fps: n.totalFps }) + '</span></div>';
         if (n.objectDetectionEnabled && n.events) {
             html += '<table class="table table-sm small mb-0 mt-2"><thead><tr><th></th>' +
-                '<th class="text-end">1 h</th><th class="text-end">24 h</th><th class="text-end">7 d</th><th class="text-end">30 d</th></tr></thead><tbody>' +
-                countRow('Events', n.events) + countRow('Humans', n.humans) +
-                countRow('Vehicles', n.vehicles) + countRow('Animals', n.animals) +
+                '<th class="text-end">' + larisvmsI18n.html('js.dashboard.window1h') + '</th><th class="text-end">' + larisvmsI18n.html('js.dashboard.window24h') + '</th><th class="text-end">' + larisvmsI18n.html('js.dashboard.window7d') + '</th><th class="text-end">' + larisvmsI18n.html('js.dashboard.window30d') + '</th></tr></thead><tbody>' +
+                countRow(larisvmsI18n.t('js.dashboard.events'), n.events) + countRow(larisvmsI18n.t('js.dashboard.humans'), n.humans) +
+                countRow(larisvmsI18n.t('js.dashboard.vehicles'), n.vehicles) + countRow(larisvmsI18n.t('js.dashboard.animals'), n.animals) +
                 '</tbody></table>';
         }
         return html + '</div></div></div>';
@@ -111,10 +111,10 @@
     }
 
     function statusBadge(r) {
-        if (!r.cameraEnabled) return '<span class="badge text-bg-secondary">Disabled</span>';
-        if (!r.nodeAssigned) return '<span class="badge text-bg-warning">No node</span>';
-        if (r.healthFresh) return '<span class="badge text-bg-success">Recording</span>';
-        return '<span class="badge text-bg-danger">Not reporting</span>';
+        if (!r.cameraEnabled) return '<span class="badge text-bg-secondary">' + larisvmsI18n.html('js.dashboard.disabled') + '</span>';
+        if (!r.nodeAssigned) return '<span class="badge text-bg-warning">' + larisvmsI18n.html('js.dashboard.noNode') + '</span>';
+        if (r.healthFresh) return '<span class="badge text-bg-success">' + larisvmsI18n.html('js.dashboard.recording') + '</span>';
+        return '<span class="badge text-bg-danger">' + larisvmsI18n.html('js.dashboard.notReporting') + '</span>';
     }
 
     // Orthogonal to statusBadge above — a camera can be recording fine while its AI-detection engine
@@ -124,15 +124,15 @@
     // be fine or not-fine at. Empty string (nothing rendered) when neither flag is set — the common
     // case once a camera's engine has finished its one-time build.
     function detectionBadge(r) {
-        if (r.engineBuildFailed) return ' <span class="badge text-bg-danger" title="AI detection failed to start — check the vision log">AI detection failed</span>';
-        if (r.isEngineBuilding) return ' <span class="badge text-bg-info"><span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Starting AI detection…</span>';
+        if (r.engineBuildFailed) return ' <span class="badge text-bg-danger" title="' + larisvmsI18n.html('js.dashboard.aiDetectionFailedToStart') + '">' + larisvmsI18n.html('js.dashboard.aiDetectionFailed') + '</span>';
+        if (r.isEngineBuilding) return ' <span class="badge text-bg-info"><span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> ' + larisvmsI18n.html('js.dashboard.startingAi') + '</span>';
         return '';
     }
 
     function nodeCell(r) {
         if (!r.nodeAssigned) return '<span class="text-muted">unassigned</span>';
         var badgeClass = r.nodeOnline ? 'text-bg-success' : 'text-bg-secondary';
-        return escapeHtml(r.nodeName) + ' <span class="badge ' + badgeClass + ' ms-1">' + (r.nodeOnline ? 'online' : 'offline') + '</span>';
+        return escapeHtml(r.nodeName) + ' <span class="badge ' + badgeClass + ' ms-1">' + larisvmsI18n.html(r.nodeOnline ? 'js.dashboard.online' : 'js.dashboard.offline') + '</span>';
     }
 
     // Must produce the identical string Pages/Index.cshtml's own AudioSummary does for the same row
@@ -164,12 +164,12 @@
             '<td>' + nodeCell(r) + '</td>' +
             '<td>' + statusBadge(r) + detectionBadge(r) + '</td>' +
             '<td class="text-end" data-sort-value="' + (fps !== null ? fps : '') + '">' + (fps !== null ? fps : '—') + '</td>' +
-            '<td class="text-end" data-sort-value="' + (bitrate !== null ? bitrate : '') + '">' + (bitrate !== null ? bitrate.toLocaleString() + ' kbps' : '—') + '</td>' +
+            '<td class="text-end" data-sort-value="' + (bitrate !== null ? bitrate : '') + '">' + (bitrate !== null ? bitrate.toLocaleString(larisvmsI18n.locale) + ' kbps' : '—') + '</td>' +
             '<td data-sort-value="' + (r.audioSampleRateHz !== null && r.audioSampleRateHz !== undefined ? r.audioSampleRateHz : '') + '">' + audioCell(r) + '</td>' +
             '<td class="text-end" data-sort-value="' + (r.reconnectCount !== null && r.reconnectCount !== undefined ? r.reconnectCount : '') + '">' +
                 (r.reconnectCount !== null && r.reconnectCount !== undefined ? r.reconnectCount : '—') + '</td>' +
             '<td class="small text-muted" data-sort-value="' + (reported ? reported.getTime() : 0) + '">' +
-                (reported ? '<span title="' + reported.toISOString() + '">' + reported.toLocaleString() + '</span>' : '<span>never</span>') +
+                (reported ? '<span title="' + reported.toISOString() + '">' + reported.toLocaleString(larisvmsI18n.locale) + '</span>' : '<span>never</span>') +
             '</td>' +
             '</tr>';
     }
@@ -210,13 +210,13 @@
             .then(function (resp) { return resp.ok ? resp.json() : Promise.reject(new Error('HTTP ' + resp.status)); })
             .then(function (data) {
                 render(data);
-                setRefreshStatus('Updated ' + new Date().toLocaleTimeString(), false);
+                setRefreshStatus(larisvmsI18n.t('js.dashboard.updatedAt', { time: new Date().toLocaleTimeString(larisvmsI18n.locale) }), false);
             })
             .catch(function () {
                 // Transient network/server hiccup — keep whatever's already on screen (stale data
                 // beats a blank page) and just flag that the last refresh attempt failed; the next
                 // interval tick tries again on its own, no special retry/backoff needed for a 60s poll.
-                setRefreshStatus('Refresh failed — retrying at the next interval', true);
+                setRefreshStatus(larisvmsI18n.t('js.dashboard.refreshFailedRetryingAtThe'), true);
             });
     }
 
@@ -240,6 +240,6 @@
     window.larisvmsPreferences.whenReady().then(function () {
         initThumbToggle();
         poll();
-        setInterval(poll, POLL_INTERVAL_MS);
+        setInterval(function () { if (!window.larisvmsDashboardPaused) poll(); }, POLL_INTERVAL_MS);
     });
 })();

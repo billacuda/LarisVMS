@@ -1,6 +1,7 @@
 using System.DirectoryServices.Protocols;
 using System.Net;
 using LarisVMS.Core.Entities;
+using LarisVMS.Core.Localization;
 
 namespace LarisVMS.Infrastructure.ActiveDirectory;
 
@@ -218,7 +219,7 @@ public sealed class ActiveDirectoryService : IActiveDirectoryService
 
         var how = settings.UseServiceAccount ? $"as {settings.ServiceAccountUsername}" : "with integrated security";
         var transport = settings.UseLdaps ? "LDAPS (636)" : "LDAP (389)";
-        return $"Connected to {host} over {transport} {how}.";
+        return Loc.T("server.activeDirectory.connectedToOver", new { host, transport, how });
     }, ct);
 
     // ── Internals ────────────────────────────────────────────────────────────
@@ -226,7 +227,7 @@ public sealed class ActiveDirectoryService : IActiveDirectoryService
     private static string RequireDomain(ActiveDirectorySettings settings) =>
         AdDomain.IsValid(settings.Domain)
             ? settings.Domain!.Trim()
-            : throw new ActiveDirectoryException("No valid Active Directory domain is configured.");
+            : throw new ActiveDirectoryException(Loc.T("server.activeDirectory.noValidActiveDirectoryDomain"));
 
     private static LdapConnection ConnectForLookup(ActiveDirectorySettings settings)
     {
@@ -234,7 +235,7 @@ public sealed class ActiveDirectoryService : IActiveDirectoryService
         if (settings.UseServiceAccount)
         {
             if (string.IsNullOrWhiteSpace(settings.ServiceAccountUsername) || string.IsNullOrEmpty(settings.ServiceAccountPassword))
-                throw new ActiveDirectoryException("The service account username or password isn't set.");
+                throw new ActiveDirectoryException(Loc.T("server.activeDirectory.theServiceAccountUsernameOr"));
             var (domain, user) = AdUsername.SplitServiceAccount(settings.ServiceAccountUsername, RequireDomain(settings));
             credential = new NetworkCredential(user, settings.ServiceAccountPassword, domain);
         }
@@ -246,8 +247,8 @@ public sealed class ActiveDirectoryService : IActiveDirectoryService
         catch (LdapException ex) when (ex.ErrorCode == InvalidCredentials)
         {
             throw new ActiveDirectoryException(settings.UseServiceAccount
-                ? "Active Directory rejected the service account's username or password."
-                : "Active Directory rejected this server's own identity. Use a service account, or run the web service as a domain account.", ex);
+                ? Loc.T("server.activeDirectory.activeDirectoryRejectedTheService")
+                : Loc.T("server.activeDirectory.activeDirectoryRejectedThisServer"), ex);
         }
         catch (LdapException ex)
         {
@@ -366,13 +367,11 @@ public sealed class ActiveDirectoryService : IActiveDirectoryService
     {
         if (ex is LdapException { ErrorCode: 81 or 91 })
         {
-            var hint = settings.UseLdaps
-                ? " If the domain controller is up, check that it has an LDAPS certificate this server trusts."
-                : "";
             return new ActiveDirectoryException(
-                $"Can't reach a domain controller for {settings.Domain} on port {settings.Port}.{hint}", ex);
+                Loc.T(settings.UseLdaps ? "server.activeDirectory.cantReachDcLdaps" : "server.activeDirectory.cantReachDc",
+                    new { domain = settings.Domain, port = settings.Port }), ex);
         }
-        return new ActiveDirectoryException($"Active Directory error: {ex.Message}", ex);
+        return new ActiveDirectoryException(Loc.T("server.activeDirectory.error", new { message = ex.Message }), ex);
     }
 
     private static AdUserEntry ToUserEntry(SearchResultEntry entry, IEnumerable<string> groupSids)
@@ -380,7 +379,7 @@ public sealed class ActiveDirectoryService : IActiveDirectoryService
         var uac = int.TryParse(ReadString(entry, "userAccountControl"), out var u) ? u : 0;
         var expires = long.TryParse(ReadString(entry, "accountExpires"), out var e) ? e : 0;
         return new AdUserEntry(
-            ReadSid(entry) ?? throw new ActiveDirectoryException("A directory user has no objectSid."),
+            ReadSid(entry) ?? throw new ActiveDirectoryException(Loc.T("server.activeDirectory.aDirectoryUserHasNo")),
             ReadString(entry, "sAMAccountName") ?? "",
             ReadString(entry, "mail"),
             ReadString(entry, "displayName"),

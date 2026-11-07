@@ -1,3 +1,4 @@
+using LarisVMS.Core.Localization;
 namespace LarisVMS.Core;
 
 /// <summary>Display units for measured speeds (setting <c>Detection.SpeedUnits</c>, global). Speeds
@@ -14,7 +15,7 @@ public static class SpeedUnits
     public static string Normalize(string? unit) =>
         string.Equals(unit, Mph, StringComparison.OrdinalIgnoreCase) ? Mph : Kmh;
 
-    public static string Label(string? unit) => Normalize(unit) == Mph ? "mph" : "km/h";
+    public static string Label(string? unit) => Normalize(unit) == Mph ? Loc.T("units.mph") : Loc.T("units.kmh");
 
     public static double FromKph(double kph, string? unit) => Normalize(unit) == Mph ? kph / KmPerMile : kph;
 

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 using LarisVMS.Infrastructure.Data;
 using LarisVMS.Infrastructure.Email;
 using Microsoft.EntityFrameworkCore;
@@ -31,9 +32,9 @@ public class EmailService(ApplicationDbContext db, EmailProviderFactory provider
     public async Task SendAsync(string to, string subject, string htmlBody, string? textBody = null, CancellationToken ct = default)
     {
         var s = await GetSettingsAsync(ct)
-            ?? throw new InvalidOperationException("Email isn't configured yet — see Admin -> Settings -> Email.");
+            ?? throw new InvalidOperationException(Loc.T("server.email.emailIsntConfiguredYetSee"));
         if (!s.IsEnabled)
-            throw new InvalidOperationException("Email is configured but disabled — see Admin -> Settings -> Email.");
+            throw new InvalidOperationException(Loc.T("server.email.emailIsConfiguredButDisabled"));
 
         var provider = providerFactory.Get(s.Provider);
         var configJson = s.Provider switch
@@ -44,7 +45,7 @@ public class EmailService(ApplicationDbContext db, EmailProviderFactory provider
                 s.GraphTenantId ?? string.Empty, s.GraphClientId ?? string.Empty, s.GraphClientSecret ?? string.Empty, s.GraphSharedMailbox)),
             EmailProviderType.Gmail => JsonSerializer.Serialize(new GmailEmailConfig(
                 s.GmailClientId ?? string.Empty, s.GmailClientSecret ?? string.Empty, s.GmailRefreshToken ?? string.Empty, s.GmailEmailAddress ?? string.Empty)),
-            _ => throw new InvalidOperationException($"'{s.Provider}' isn't implemented yet.")
+            _ => throw new InvalidOperationException(Loc.T("server.email.isntImplementedYet", new { provider = s.Provider }))
         };
 
         await provider.SendAsync(configJson, s.FromAddress, s.FromName, to, subject, htmlBody, textBody, ct);

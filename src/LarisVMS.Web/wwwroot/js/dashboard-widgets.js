@@ -89,7 +89,7 @@
             };
         }).sort(function (a, b) { return a.y - b.y || a.x - b.x; });
         window.larisvmsPreferences.set(LAYOUT_KEY, JSON.stringify({ items: out })).then(function (ok) {
-            setLayoutStatus(ok ? '' : 'Couldn\'t save your dashboard layout — it will reset when the page reloads.');
+            setLayoutStatus(ok ? '' : larisvmsI18n.t('js.dashboardWidgets.couldntSaveYourDashboardLayout'));
         });
     }
 
@@ -111,26 +111,26 @@
         var html = '';
         if (def.hasWindow) {
             var current = options.window || '24h';
-            html += '<select class="form-select form-select-sm py-0 dashboard-widget-window" aria-label="Time window">' +
+            html += '<select class="form-select form-select-sm py-0 dashboard-widget-window" aria-label="' + larisvmsI18n.html('js.dashboardWidgets.timeWindow') + '">' +
                 ['1h', '24h', '7d', '30d'].map(function (w) {
                     return '<option value="' + w + '"' + (w === current ? ' selected' : '') + '>' + w + '</option>';
                 }).join('') + '</select>';
         }
         if (def.hasDirectionToggle) {
             html += '<button type="button" class="btn btn-sm btn-outline-secondary py-0 dashboard-widget-dir" ' +
-                'title="Switch between highest and lowest first">' + (options.asc ? '↑ Lowest' : '↓ Highest') + '</button>';
+                'title="Switch between highest and lowest first">' + (options.asc ? larisvmsI18n.t('js.dashboardWidgets.lowest') : larisvmsI18n.t('js.dashboardWidgets.highest')) + '</button>';
         }
         if (isHeatmap(def)) {
             var cams = config.activityCameras || [];
-            html += '<select class="form-select form-select-sm py-0 dashboard-widget-camera" aria-label="Camera">' +
-                '<option value="all"' + (options.cameraId === 'all' ? ' selected' : '') + '>All cameras</option>' +
+            html += '<select class="form-select form-select-sm py-0 dashboard-widget-camera" aria-label="' + larisvmsI18n.html('js.dashboardWidgets.camera') + '">' +
+                '<option value="all"' + (options.cameraId === 'all' ? ' selected' : '') + '>' + larisvmsI18n.html('js.dashboardWidgets.allCameras') + '</option>' +
                 cams.map(function (c) {
                     return '<option value="' + escapeHtml(c.id) + '"' + (c.id === options.cameraId ? ' selected' : '') + '>' + escapeHtml(c.name) + '</option>';
                 }).join('') + '</select>';
         }
         if (def.hasKindFilter) {
             html += '<button type="button" class="btn btn-sm btn-outline-secondary py-0 dashboard-widget-config" ' +
-                'title="Choose which detections to show" aria-label="Choose which detections to show">⚙</button>';
+                'title="' + larisvmsI18n.html('js.dashboardWidgets.chooseWhichDetectionsToShow') + '" aria-label="' + larisvmsI18n.html('js.dashboardWidgets.chooseWhichDetectionsToShow') + '">⚙</button>';
         }
         return html;
     }
@@ -160,7 +160,7 @@
             // A span acting as a button rather than a <button>: GridStack never starts a drag on a real
             // button, and while customizing the title bar is the drag handle.
             ? '<span role="button" tabindex="0" class="fw-semibold text-truncate dashboard-widget-title" ' +
-              'title="Open the full report">' + escapeHtml(def.title) + '</span>'
+              'title="' + larisvmsI18n.html('js.dashboardWidgets.openReport') + '">' + escapeHtml(def.title) + '</span>'
             : '<span class="fw-semibold text-truncate">' + escapeHtml(def.title) + '</span>';
 
         el.innerHTML =
@@ -168,8 +168,9 @@
                 '<div class="card-header d-flex align-items-center gap-2 py-1 px-2 dashboard-widget-header">' +
                     titleHtml +
                     '<span class="ms-auto d-flex align-items-center gap-1 flex-shrink-0">' + controlsHtml(def, options) + '</span>' +
-                    '<button type="button" class="btn-close dashboard-widget-remove" aria-label="Remove ' + escapeHtml(def.title) + '"></button>' +
+                    '<button type="button" class="btn-close dashboard-widget-remove" aria-label="' + larisvmsI18n.html('js.dashboardWidgets.removeWidget', { title: def.title }) + '"></button>' +
                 '</div>' +
+                window.larisvmsGridKeyboard.html(def.title) +
                 '<div class="card-body dashboard-widget-body' + (hasPoolBody(def) ? ' p-2' : ' p-0') + '"></div>' +
             '</div>';
 
@@ -178,7 +179,7 @@
             var source = pool.querySelector('[data-widget-body="' + def.key + '"]');
             if (source) body.appendChild(source);
         } else {
-            body.innerHTML = '<div class="text-muted small m-2">Loading…</div>';
+            body.innerHTML = '<div class="text-muted small m-2">' + larisvmsI18n.html('js.dashboardWidgets.loading') + '</div>';
         }
 
         items[def.key] = { el: el, body: body, options: options };
@@ -187,6 +188,8 @@
     }
 
     function wireWidget(def, el, options) {
+        window.larisvmsGridKeyboard.wire(grid, el);
+
         // While customizing, the title bar is the drag handle — a click there shouldn't open the report.
         var title = el.querySelector('.dashboard-widget-title');
         if (title) {
@@ -206,7 +209,7 @@
         var cameraSelect = el.querySelector('.dashboard-widget-camera');
         if (cameraSelect) cameraSelect.addEventListener('change', function () {
             options.cameraId = cameraSelect.value;
-            items[def.key].body.innerHTML = '<div class="text-muted small m-2">Loading…</div>';
+            items[def.key].body.innerHTML = '<div class="text-muted small m-2">' + larisvmsI18n.html('js.dashboardWidgets.loading') + '</div>';
             saveLayout();
             pollHeatmaps();
         });
@@ -221,7 +224,7 @@
         var dir = el.querySelector('.dashboard-widget-dir');
         if (dir) dir.addEventListener('click', function () {
             options.asc = !options.asc;
-            dir.textContent = options.asc ? '↑ Lowest' : '↓ Highest';
+            dir.textContent = options.asc ? larisvmsI18n.t('js.dashboardWidgets.lowest') : larisvmsI18n.t('js.dashboardWidgets.highest');
             saveLayout();
             poll();
         });
@@ -265,7 +268,7 @@
             empty = document.createElement('p');
             empty.id = 'dashboardEmptyLayout';
             empty.className = 'text-muted';
-            empty.textContent = 'No widgets on your dashboard. Use Customize → Add widget to add some.';
+            empty.textContent = larisvmsI18n.t('js.dashboardWidgets.noWidgetsOnYourDashboard');
             gridEl.parentNode.insertBefore(empty, gridEl);
         } else if (!none && empty) {
             empty.remove();
@@ -294,15 +297,14 @@
 
     function renderList(def, entry, result) {
         if (!result.rows || result.rows.length === 0) {
-            entry.body.innerHTML = '<div class="text-muted small m-2">' + escapeHtml(result.emptyMessage || 'Nothing to show') + '</div>';
+            entry.body.innerHTML = '<div class="text-muted small m-2">' + escapeHtml(result.emptyMessage || larisvmsI18n.t('js.dashboardWidgets.nothingToShow')) + '</div>';
             return;
         }
         var html = '<table class="table table-sm table-hover align-middle mb-0 dashboard-toplist"><tbody>' +
             result.rows.map(function (r, i) { return rowHtml(r, i, def); }).join('') +
             '</tbody></table>';
         if (result.total > result.rows.length) {
-            html += '<div class="text-end px-2 py-1"><button type="button" class="btn btn-link btn-sm p-0 dashboard-view-all">View all ' +
-                result.total.toLocaleString() + '</button></div>';
+            html += '<div class="text-end px-2 py-1"><button type="button" class="btn btn-link btn-sm p-0 dashboard-view-all">' + larisvmsI18n.html('js.dashboardWidgets.viewAll', { count: result.total }) + '</button></div>';
         }
         entry.body.innerHTML = html;
         var viewAll = entry.body.querySelector('.dashboard-view-all');
@@ -322,7 +324,7 @@
         return '<img src="' + src + '" loading="lazy" alt="" class="rounded" data-on-error="invisible">' +
             '<div class="small text-truncate">' + escapeHtml(labels) + '</div>' +
             '<div class="small text-muted text-truncate" title="' + escapeHtml(at.toISOString()) + '">' +
-                escapeHtml(s.cameraName) + ' · ' + escapeHtml(at.toLocaleString()) + '</div>';
+                escapeHtml(s.cameraName) + ' · ' + escapeHtml(at.toLocaleString(larisvmsI18n.locale)) + '</div>';
     }
 
     // Updates the strip in place rather than redrawing it: cards already shown keep their element (no
@@ -332,7 +334,7 @@
     function renderSnapshots(entry, result) {
         var snaps = result.snapshots || [];
         if (snaps.length === 0) {
-            entry.body.innerHTML = '<div class="text-muted small m-2">' + escapeHtml(result.emptyMessage || 'Nothing to show') + '</div>';
+            entry.body.innerHTML = '<div class="text-muted small m-2">' + escapeHtml(result.emptyMessage || larisvmsI18n.t('js.dashboardWidgets.nothingToShow')) + '</div>';
             return;
         }
 
@@ -402,11 +404,11 @@
     // endpoint and draws a compact copy of that chart (same cells and colors — see activity.js).
     function renderHeatmap(def, entry, data) {
         if (!data || data.total === 0) {
-            entry.body.innerHTML = '<div class="text-muted small m-2">' + escapeHtml(def.emptyMessage || 'Nothing to show') + '</div>';
+            entry.body.innerHTML = '<div class="text-muted small m-2">' + escapeHtml(def.emptyMessage || larisvmsI18n.t('js.dashboardWidgets.nothingToShow')) + '</div>';
             return;
         }
         var steps = 6;
-        var html = '<div class="p-2"><div class="activity-grid activity-grid--compact" role="img" aria-label="' + escapeHtml(data.peak || 'Activity heatmap') + '">' +
+        var html = '<div class="p-2"><div class="activity-grid activity-grid--compact" role="img" aria-label="' + escapeHtml(data.peak || larisvmsI18n.t('js.activity.activityHeatmap')) + '">' +
             '<div></div>' + data.columnLabels.map(function (c, i) {
                 return '<div class="activity-col-label' + (i % 3 === 0 ? '' : ' activity-col-label--minor') + '">' + (i % 3 === 0 ? escapeHtml(c) : '') + '</div>';
             }).join('');
@@ -414,7 +416,7 @@
             html += '<div class="activity-row-label">' + escapeHtml(label) + '</div>';
             data.cells[r].forEach(function (v, c) {
                 var stepN = v && data.max ? Math.max(1, Math.ceil(v / data.max * steps)) : 0;
-                html += '<div class="activity-cell activity-step-' + stepN + '" title="' + escapeHtml(label + ' ' + data.columnLabels[c] + ': ' + v.toLocaleString()) + '"></div>';
+                html += '<div class="activity-cell activity-step-' + stepN + '" title="' + escapeHtml(label + ' ' + data.columnLabels[c] + ': ' + v.toLocaleString(larisvmsI18n.locale)) + '"></div>';
             });
         });
         html += '</div>' + (data.peak ? '<div class="small text-muted mt-2">' + escapeHtml(data.peak) + '</div>' : '') + '</div>';
@@ -425,7 +427,7 @@
         Object.keys(items).filter(function (k) { return isHeatmap(defs[k]); }).forEach(function (k) {
             var entry = items[k];
             if (!entry.options.cameraId) {
-                entry.body.innerHTML = '<div class="text-muted small m-2">No cameras you can review.</div>';
+                entry.body.innerHTML = '<div class="text-muted small m-2">' + larisvmsI18n.html('js.dashboardWidgets.noCamerasYouCanReview') + '</div>';
                 return;
             }
             var url = entry.options.cameraId === 'all' ? '/api/activity?range=7d'
@@ -501,7 +503,7 @@
             // for anyone who never changed this.
             entry.options.kinds = isDefault ? null : chosen;
             bootstrap.Modal.getOrCreateInstance(kindsModalEl).hide();
-            entry.body.innerHTML = '<div class="text-muted small m-2">Loading…</div>';
+            entry.body.innerHTML = '<div class="text-muted small m-2">' + larisvmsI18n.html('js.dashboardWidgets.loading') + '</div>';
             saveLayout();
             poll();
         });
@@ -543,8 +545,8 @@
                     return '<div class="list-group-item d-flex align-items-center gap-2">' +
                         '<span class="flex-grow-1">' + escapeHtml(d.title) + '</span>' +
                         (onBoard
-                            ? '<span class="small text-muted">On dashboard</span>'
-                            : '<button type="button" class="btn btn-sm btn-outline-primary" data-add-widget="' + escapeHtml(d.key) + '">Add</button>') +
+                            ? '<span class="small text-muted">' + larisvmsI18n.html('js.dashboardWidgets.onDashboard') + '</span>'
+                            : '<button type="button" class="btn btn-sm btn-outline-primary" data-add-widget="' + escapeHtml(d.key) + '">' + larisvmsI18n.html('js.dashboardWidgets.add') + '</button>') +
                         '</div>';
                 }).join('') + '</div>';
         }).join('');
@@ -573,7 +575,7 @@
         }
 
         if (resetBtn) resetBtn.addEventListener('click', function () {
-            if (!confirm('Reset your dashboard to the default widgets and layout?')) return;
+            if (!confirm(larisvmsI18n.t('js.dashboardWidgets.resetYourDashboardToThe'))) return;
             Object.keys(items).forEach(function (k) { removeWidget(k); });
             window.larisvmsPreferences.set(LAYOUT_KEY, '');
             buildLayout(loadLayout());
@@ -611,8 +613,21 @@
             resizeTimer = setTimeout(syncCustomizeAvailability, 200);
         });
 
+        wirePause();
         poll();
-        setInterval(poll, POLL_INTERVAL_MS);
+        setInterval(function () { if (!window.larisvmsDashboardPaused) poll(); }, POLL_INTERVAL_MS);
+    }
+
+    // Stops every widget updating, for anyone who finds moving content distracting. dashboard.js reads
+    // the same flag.
+    function wirePause() {
+        var button = document.getElementById('dashboardPause');
+        if (!button) return;
+        button.addEventListener('click', function () {
+            window.larisvmsDashboardPaused = !window.larisvmsDashboardPaused;
+            button.textContent = larisvmsI18n.t(window.larisvmsDashboardPaused ? 'js.dashboardWidgets.resumeUpdates' : 'js.dashboardWidgets.pauseUpdates');
+            if (!window.larisvmsDashboardPaused) poll();
+        });
     }
 
     window.larisvmsPreferences.whenReady().then(init);

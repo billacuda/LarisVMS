@@ -150,7 +150,7 @@ public class TwoWayAudioFollowUpTests
     [Fact]
     public void RedactedExportReEncodesTheVideoWithTheMask()
     {
-        var filters = ExportRunner.RedactionFilters("[{\"points\":[[0.1,0.1],[0.4,0.1],[0.4,0.4],[0.1,0.4]]}]");
+        var filters = ExportRunner.RedactionFilters("[{\"points\":[[0.1,0.1],[0.4,0.1],[0.4,0.4],[0.1,0.4]]}]")!;
         Assert.NotEmpty(filters);
 
         var plain = ExportRunner.BuildArgs("list.txt", "out.mp4", [], true, filters, "h264_qsv");
@@ -166,12 +166,22 @@ public class TwoWayAudioFollowUpTests
     }
 
     [Fact]
-    public void UnreadableOrEmptyRedactionsLeaveAPlainRemux()
+    public void EmptyRedactionsLeaveAPlainRemux()
     {
-        Assert.Empty(ExportRunner.RedactionFilters(null));
-        Assert.Empty(ExportRunner.RedactionFilters("not json"));
-        Assert.Empty(ExportRunner.RedactionFilters("[]"));
+        Assert.Empty(ExportRunner.RedactionFilters(null)!);
+        Assert.Empty(ExportRunner.RedactionFilters("")!);
+        Assert.Empty(ExportRunner.RedactionFilters("[]")!);
         Assert.Equal(["-nostdin", "-f", "concat", "-safe", "0", "-i", "list.txt", "-c", "copy", "-y", "out.mp4"],
             ExportRunner.BuildArgs("list.txt", "out.mp4", [], true, [], null));
+    }
+
+    [Theory]
+    [InlineData("not json")]
+    [InlineData("{\"points\":[[0.1,0.1],[0.4,0.1],[0.4,0.4]]}")]   // not an array of areas
+    [InlineData("[{\"points\":[[0.1,0.1]]}]")]                   // an area that isn't a shape
+    [InlineData("[{\"nope\":1}]")]
+    public void UnreadableRedactionsFailClosed(string json)
+    {
+        Assert.Null(ExportRunner.RedactionFilters(json));
     }
 }

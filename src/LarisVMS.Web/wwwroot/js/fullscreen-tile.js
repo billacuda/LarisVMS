@@ -61,7 +61,7 @@ window.larisvmsFullscreenTile = (function () {
         resetBtn.type = 'button';
         resetBtn.className = 'btn btn-sm btn-dark position-absolute bottom-0 end-0 me-1 mb-5 tile-zoom-reset';
         resetBtn.style.cssText = 'z-index:6; display:none; opacity:.85; padding:.1rem .45rem;';
-        resetBtn.title = 'Reset zoom (or right-click the video)';
+        resetBtn.title = larisvmsI18n.t('js.fullscreenTile.resetZoomOrRightClick');
         resetBtn.textContent = '⤺ 1×';
         resetBtn.addEventListener('click', function (e) {
             e.stopPropagation();

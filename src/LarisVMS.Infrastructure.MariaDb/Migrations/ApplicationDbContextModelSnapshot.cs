@@ -344,6 +344,9 @@ namespace LarisVMS.Infrastructure.MariaDb.Migrations
                     b.Property<string>("CreatedByUserId")
                         .HasColumnType("longtext");
 
+                    b.Property<DateTime?>("ExpiresAtUtc")
+                        .HasColumnType("datetime(6)");
+
                     b.Property<string>("KeyHash")
                         .IsRequired()
                         .HasMaxLength(64)
@@ -362,6 +365,9 @@ namespace LarisVMS.Infrastructure.MariaDb.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("varchar(200)");
 
+                    b.Property<bool>("PermissionsLimited")
+                        .HasColumnType("tinyint(1)");
+
                     b.Property<DateTime?>("RevokedAtUtc")
                         .HasColumnType("datetime(6)");
 
@@ -376,6 +382,24 @@ namespace LarisVMS.Infrastructure.MariaDb.Migrations
                         .IsUnique();
 
                     b.ToTable("ApiKeys");
+                });
+
+            modelBuilder.Entity("LarisVMS.Core.Entities.ApiKeyPermission", b =>
+                {
+                    b.Property<Guid>("ApiKeyId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("Resource")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<string>("Action")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)");
+
+                    b.HasKey("ApiKeyId", "Resource", "Action");
+
+                    b.ToTable("ApiKeyPermissions");
                 });
 
             modelBuilder.Entity("LarisVMS.Core.Entities.AppVersion", b =>
@@ -972,6 +996,9 @@ namespace LarisVMS.Infrastructure.MariaDb.Migrations
                     b.Property<bool?>("IsEngineBuilding")
                         .HasColumnType("tinyint(1)");
 
+                    b.Property<bool?>("IsKeepingFootage")
+                        .HasColumnType("tinyint(1)");
+
                     b.Property<string>("ProfileToken")
                         .IsRequired()
                         .HasMaxLength(200)
@@ -1530,6 +1557,38 @@ namespace LarisVMS.Infrastructure.MariaDb.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("FootageMasterKeys");
+                });
+
+            modelBuilder.Entity("LarisVMS.Core.Entities.ManualRecording", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<Guid>("CameraId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("EndUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("EndedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("varchar(256)");
+
+                    b.Property<DateTime>("StartUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("StartedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("varchar(256)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CameraId", "EndUtc");
+
+                    b.ToTable("ManualRecordings");
                 });
 
             modelBuilder.Entity("LarisVMS.Core.Entities.MediaProxy", b =>
@@ -2893,6 +2952,15 @@ namespace LarisVMS.Infrastructure.MariaDb.Migrations
                     b.Navigation("AlertRule");
                 });
 
+            modelBuilder.Entity("LarisVMS.Core.Entities.ApiKeyPermission", b =>
+                {
+                    b.HasOne("LarisVMS.Core.Entities.ApiKey", null)
+                        .WithMany()
+                        .HasForeignKey("ApiKeyId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("LarisVMS.Core.Entities.Camera", b =>
                 {
                     b.HasOne("LarisVMS.Core.Entities.Node", null)
@@ -3030,6 +3098,17 @@ namespace LarisVMS.Infrastructure.MariaDb.Migrations
                         .HasForeignKey("LarisVMS.Core.Entities.ExportManifest", "ExportJobItemId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("LarisVMS.Core.Entities.ManualRecording", b =>
+                {
+                    b.HasOne("LarisVMS.Core.Entities.Camera", "Camera")
+                        .WithMany()
+                        .HasForeignKey("CameraId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Camera");
                 });
 
             modelBuilder.Entity("LarisVMS.Core.Entities.MotionSpan", b =>

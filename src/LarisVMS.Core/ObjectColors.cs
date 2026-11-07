@@ -1,3 +1,4 @@
+using LarisVMS.Core.Localization;
 namespace LarisVMS.Core;
 
 /// <summary>
@@ -34,6 +35,7 @@ public static class ObjectColors
 
     public static bool IsKnown(string? name) => Find(name) is not null;
 
+    /// <summary>The color's name in the viewer's language ("Red" in English).</summary>
     public static string Display(string name) =>
-        name.Length == 0 ? name : char.ToUpperInvariant(name[0]) + name[1..];
+        name.Length == 0 ? name : Loc.TOr("color." + name.ToLowerInvariant(), char.ToUpperInvariant(name[0]) + name[1..]);
 }

@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Text for the Web, Node and Proxy installers. To translate: copy this file to Strings.<culture>.wxl
+     (for example Strings.fr-FR.wxl), set Culture and Language (the Windows LCID, 1036 for French),
+     add Codepage when the language needs one other than Western European (1251 for Cyrillic,
+     932 for Japanese, and so on), translate each Value, and build with: .\build-installers.ps1 -Cultures en-US,fr-FR
+     The stock WiX dialogs (Welcome, Ready, Progress, and so on) already come translated. Overridable
+     lets a translation replace a string; anything it leaves out stays English.
+     Keep [PROPERTY] references and {0}, {1} placeholders as they are; "&amp;" before a letter marks
+     its keyboard shortcut. -->
+<WixLocalization Culture="en-US" Language="1033" xmlns="http://wixtoolset.org/schemas/v4/wxl">
+  <!-- Shared -->
+  <String Id="DlgTitle" Overridable="yes" Value="[ProductName] Setup" />
+  <String Id="DowngradeError" Overridable="yes" Value="A newer version of [ProductName] is already installed." />
+  <String Id="AccountTitle" Overridable="yes" Value="Service account" />
+  <String Id="AccountDescription" Overridable="yes" Value="The Windows account the [ProductName] service runs as." />
+  <String Id="AccountLabel" Overridable="yes" Value="Account:" />
+  <String Id="AccountHint" Overridable="yes" Value="DOMAIN\user, or blank for LocalSystem. Use an account when storage or SQL Server needs network credentials (MariaDB never does)." />
+  <String Id="PasswordLabel" Overridable="yes" Value="Password:" />
+  <String Id="UpgradeTitle" Overridable="yes" Value="Ready to upgrade [ProductName]" />
+  <String Id="UpgradeDescription" Overridable="yes" Value="An existing installation was found." />
+  <String Id="UpgradeText" Overridable="yes" Value="Click Upgrade to update [ProductName] to version [ProductVersion]. The current settings, certificate, and service account are kept. To change a setting, run setup with it on the command line (msiexec /i &lt;msi&gt; PROPERTY=value)." />
+  <String Id="UpgradeButton" Overridable="yes" Value="&amp;Upgrade" />
+  <String Id="ServerUrlLabel" Overridable="yes" Value="Server URL:" />
+  <String Id="RegistrationKeyLabel" Overridable="yes" Value="Registration key:" />
+  <String Id="AcceptServerSelfSigned" Overridable="yes" Value="Accept the server's self-signed certificate" />
+  <String Id="ClientPortLabel" Overridable="yes" Value="Client port:" />
+  <String Id="HostLabel" Overridable="yes" Value="Host name (FQDN):" />
+  <String Id="CertPathLabel" Overridable="yes" Value="Certificate (.pfx) path:" />
+  <String Id="CertPasswordLabel" Overridable="yes" Value="Certificate password:" />
+  <String Id="AllowSelfSigned" Overridable="yes" Value="Allow a self-signed certificate (testing only)" />
+
+  <!-- Web -->
+  <String Id="WebSummary" Overridable="yes" Value="LarisVMS web server" />
+  <String Id="WebServiceDescription" Overridable="yes" Value="LarisVMS web server - admin UI, live/playback relay, and node control plane." />
+  <String Id="WebTitle" Overridable="yes" Value="Web server" />
+  <String Id="WebDescription" Overridable="yes" Value="The HTTPS port and certificate for the LarisVMS site." />
+  <String Id="HttpsPortLabel" Overridable="yes" Value="HTTPS port:" />
+  <String Id="WebCertHint" Overridable="yes" Value="Optional. Blank uses a self-signed certificate on a new install. A renewed .pfx at the same path is picked up automatically. A share path must be readable by the service account." />
+  <String Id="WebCertStoredHint" Overridable="yes" Value="A password is already saved for this certificate. Leave the field blank to keep it, or enter a new one. A share path must be readable by the service account." />
+  <String Id="WebNextSteps" Overridable="yes" Value="After setup, browse to https://localhost:[HTTPSPORT]/ to run the setup wizard (database, first admin account, and node registration key)." />
+
+  <!-- Node -->
+  <String Id="NodeSummary" Overridable="yes" Value="LarisVMS recorder node" />
+  <String Id="NodeServiceDescription" Overridable="yes" Value="LarisVMS recorder node - supervises FFmpeg-based 24/7 camera recording." />
+  <String Id="NodeServerTitle" Overridable="yes" Value="Server and storage" />
+  <String Id="NodeServerDescription" Overridable="yes" Value="Where this node registers, and where it records." />
+  <String Id="AlreadyRegistered" Overridable="yes" Value="Already registered with the server." />
+  <String Id="KeyFromServer" Overridable="yes" Value="From Settings &gt; Node defaults on the server." />
+  <String Id="StorageLabel" Overridable="yes" Value="Storage path:" />
+  <String Id="ArchiveLabel" Overridable="yes" Value="Archive path (optional):" />
+  <String Id="FfmpegLabel" Overridable="yes" Value="FFmpeg path (optional):" />
+  <String Id="LivePortLabel" Overridable="yes" Value="Live port:" />
+  <String Id="DirectStreaming" Overridable="yes" Value="Stream directly from this node to browsers (configure next)" />
+  <String Id="EndpointTitle" Overridable="yes" Value="Direct streaming" />
+  <String Id="EndpointDescription" Overridable="yes" Value="The HTTPS endpoint browsers use to stream straight from this node." />
+  <String Id="KeepPasswordHint" Overridable="yes" Value="Leave blank to keep the current password." />
+
+  <!-- Proxy -->
+  <String Id="ProxySummary" Overridable="yes" Value="LarisVMS media proxy" />
+  <String Id="ProxyServiceDescription" Overridable="yes" Value="LarisVMS media proxy - a TLS-terminating relay between browsers and recorder nodes." />
+  <String Id="ProxyTitle" Overridable="yes" Value="Proxy settings" />
+  <String Id="ProxyDescription" Overridable="yes" Value="Where this proxy registers, and the endpoint browsers connect to." />
+
+  <!-- Setup checks (installer\CustomActions). {0}, {1}, {2} are filled in by setup. -->
+  <String Id="ErrServerUrl" Overridable="yes" Value="Enter the LarisVMS server URL, for example https://vms.example.com:8444 (property SERVERURL)." />
+  <String Id="ErrRegistrationKey" Overridable="yes" Value="Enter the registration key from Settings &gt; Node defaults on the server (property REGISTRATIONKEY)." />
+  <String Id="ErrLivePort" Overridable="yes" Value="Live port must be a number from 1 to 65535 (property LIVEPORT)." />
+  <String Id="ErrLiveAllowFrom" Overridable="yes" Value="Live port allow list must be IP addresses or CIDR blocks separated by commas, for example 10.0.0.5,10.0.1.0/24 (property LIVEALLOWFROM)." />
+  <String Id="ErrFfmpegNotFound" Overridable="yes" Value="FFmpeg was not found. Install it with 'winget install ffmpeg --scope machine', or set its path (property FFMPEGPATH)." />
+  <String Id="ErrFfmpegNotFoundAt" Overridable="yes" Value="FFmpeg was not found at {0} (property FFMPEGPATH)." />
+  <String Id="ErrHttpsPort" Overridable="yes" Value="HTTPS port must be a number from 1 to 65535 (property HTTPSPORT)." />
+  <String Id="ErrClientPort" Overridable="yes" Value="Client port must be a number from 1 to 65535 (property CLIENTPORT)." />
+  <String Id="ErrServicePassword" Overridable="yes" Value="Enter the password for {0} (property SERVICEPASSWORD), or leave the account blank to run as LocalSystem." />
+  <String Id="ErrCertNotFound" Overridable="yes" Value="Certificate file not found or not readable from this account: {0} (property {1})." />
+  <String Id="ErrCertCantOpen" Overridable="yes" Value="Could not open {0} — {1} Check the certificate password (property {2})." />
+  <String Id="WarnCudaMissing" Overridable="yes" Value="LarisVMS couldn't find {0} on this computer, so AI detection will run on DirectML, which is much slower than CUDA. Install the CUDA Toolkit 12.x and cuDNN 9.x for CUDA 12 (developer.nvidia.com/cudnn, or: pip install nvidia-cudnn-cu12), then repair this installation." />
+</WixLocalization>

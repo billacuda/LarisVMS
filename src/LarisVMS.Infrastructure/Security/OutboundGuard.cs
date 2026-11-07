@@ -23,7 +23,49 @@ public static class OutboundGuard
             : endpoint.Host.Equals(s, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>A handler whose connections only reach public addresses.</summary>
-    public static SocketsHttpHandler PublicOnlyHandler() => new()
+    public static SocketsHttpHandler PublicOnlyHandler() => GuardedHandler(IsPublic, "isn't a public address");
+
+    /// <summary>For service URLs an admin types (alert webhooks, ntfy, Slack, Teams): the LAN is fine,
+    /// since people self-host these, but not this machine itself or link-local addresses, where cloud
+    /// metadata services answer.</summary>
+    public static SocketsHttpHandler NoLocalHandler() =>
+        GuardedHandler(a => !IsHostOrLinkLocal(a, allowLoopback: false), "is this machine or a link-local address");
+
+    /// <summary>Like <see cref="NoLocalHandler"/>, but this machine is allowed: an inference service
+    /// is often bound to loopback next to the server.</summary>
+    public static SocketsHttpHandler NoLinkLocalHandler() =>
+        GuardedHandler(a => !IsHostOrLinkLocal(a, allowLoopback: true), "is a link-local address");
+
+    /// <summary>For cameras (ONVIF): anything on the network, link-local too, since a camera with no
+    /// DHCP lease falls back to 169.254.x.x. Only cloud metadata services, and addresses no camera
+    /// can have, are refused. Accepts the self-signed certificate every HTTPS camera has.</summary>
+    public static SocketsHttpHandler CameraHandler()
+    {
+        var handler = GuardedHandler(IsCameraAddress, "isn't an address a camera can have");
+#pragma warning disable S4830 // Deliberate: camera certificates are self-signed and can't chain to anything.
+        handler.SslOptions.RemoteCertificateValidationCallback = (_, _, _, _) => true;
+#pragma warning restore S4830
+        return handler;
+    }
+
+    private static readonly IPAddress CloudMetadataV4 = IPAddress.Parse("169.254.169.254");
+
+    public static bool IsCameraAddress(IPAddress address)
+    {
+        if (address.IsIPv4MappedToIPv6) address = address.MapToIPv4();
+        if (address.Equals(CloudMetadataV4) || address.Equals(Ec2MetadataV6)) return false;
+        if (address.Equals(IPAddress.Any) || address.Equals(IPAddress.IPv6Any)
+            || address.Equals(IPAddress.Broadcast) || address.Equals(IPAddress.IPv6None))
+            return false;
+        if (address.AddressFamily == AddressFamily.InterNetwork)
+        {
+            var b = address.GetAddressBytes();
+            return b[0] != 0 && b[0] < 224;
+        }
+        return !address.IsIPv6Multicast;
+    }
+
+    private static SocketsHttpHandler GuardedHandler(Func<IPAddress, bool> allowed, string refusal) => new()
     {
         ConnectCallback = async (context, ct) =>
         {
@@ -32,8 +74,8 @@ public static class OutboundGuard
             var isConfiguredProxy = context.InitialRequestMessage.RequestUri is { } requestUri
                 && HttpClient.DefaultProxy.GetProxy(requestUri) is { } proxyUri
                 && string.Equals(proxyUri.Host, context.DnsEndPoint.Host, StringComparison.OrdinalIgnoreCase);
-            var target = addresses.FirstOrDefault(a => isConfiguredProxy || IsPublic(a))
-                ?? throw new HttpRequestException($"{context.DnsEndPoint.Host} isn't a public address.");
+            var target = addresses.FirstOrDefault(a => isConfiguredProxy || allowed(a))
+                ?? throw new HttpRequestException($"{context.DnsEndPoint.Host} {refusal}.");
             var socket = new Socket(target.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
             try
             {
@@ -47,6 +89,28 @@ public static class OutboundGuard
             }
         },
     };
+
+    // AWS's IPv6 instance metadata address; the IPv4 one (169.254.169.254) is link-local.
+    private static readonly IPAddress Ec2MetadataV6 = IPAddress.Parse("fd00:ec2::254");
+
+    /// <summary>This machine (unless <paramref name="allowLoopback"/>), unspecified, broadcast,
+    /// link-local, or multicast — never a reasonable target for an admin-entered service URL.</summary>
+    public static bool IsHostOrLinkLocal(IPAddress address, bool allowLoopback)
+    {
+        if (address.IsIPv4MappedToIPv6) address = address.MapToIPv4();
+        if (IPAddress.IsLoopback(address)) return !allowLoopback;
+        if (address.Equals(IPAddress.Any) || address.Equals(IPAddress.IPv6Any)
+            || address.Equals(IPAddress.Broadcast) || address.Equals(IPAddress.IPv6None))
+            return true;
+
+        if (address.AddressFamily == AddressFamily.InterNetwork)
+        {
+            var b = address.GetAddressBytes();
+            return b[0] == 0 || (b[0] == 169 && b[1] == 254) || b[0] >= 224;
+        }
+
+        return address.IsIPv6LinkLocal || address.IsIPv6Multicast || address.Equals(Ec2MetadataV6);
+    }
 
     public static bool IsPublic(IPAddress address)
     {

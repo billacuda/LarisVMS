@@ -1,3 +1,4 @@
+using LarisVMS.Core.Localization;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Identity;
 using LarisVMS.Core.Interfaces;
@@ -25,7 +26,9 @@ public class SetupMiddleware(RequestDelegate next, IServiceScopeFactory scopeFac
         // page; redirecting it to /Setup turned any exception on a wizard page into a redirect loop.
         "/setup", "/identity", "/_framework", "/favicon", "/health", "/api/nodes", "/error",
         // PWA manifest/service worker/icons — the browser fetches these on every page, the wizard's too.
-        "/manifest.webmanifest", "/sw.js", "/icons"
+        "/manifest.webmanifest", "/sw.js", "/icons",
+        // The language picker (POST /locale) and each language's script-side text (/locales/…).
+        "/locale"
     ];
 
     /// <summary>True while setup hasn't completed, for a request let through to a wizard-exempt
@@ -44,6 +47,17 @@ public class SetupMiddleware(RequestDelegate next, IServiceScopeFactory scopeFac
         {
             if (!_setupFinalized && await IsSetupFinalizedAsync()) _setupFinalized = true;
             if (_setupFinalized) { context.Response.Redirect("/"); return; }
+
+            // A configured database that can't be reached: every "is setup done?" check reads false
+            // then, which would hand the wizard (repoint the database, create a Super Admin) to anyone
+            // until it's back.
+            if (await IsDatabaseUnreachableAsync())
+            {
+                context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                context.Response.Headers.RetryAfter = "30";
+                await context.Response.WriteAsync(Loc.T("server.setupMiddleware.theDatabaseCantBeReached"), context.RequestAborted);
+                return;
+            }
 
             // Once the admin account exists the rest of the wizard (storage, node key, branding) is
             // only for a signed-in Super Admin. Before this, a wizard abandoned after the Admin step
@@ -78,6 +92,14 @@ public class SetupMiddleware(RequestDelegate next, IServiceScopeFactory scopeFac
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         return await scope.ServiceProvider.GetRequiredService<ISetupService>().IsSetupFinalizedAsync();
+    }
+
+    private async Task<bool> IsDatabaseUnreachableAsync()
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var configuration = scope.ServiceProvider.GetRequiredService<IConfiguration>();
+        return LarisVMS.Infrastructure.Data.DatabaseConfig.IsConfigured(configuration)
+               && !await scope.ServiceProvider.GetRequiredService<ISetupService>().IsDatabaseConfiguredAsync();
     }
 
     // This runs before UseAuthentication, so it reads the sign-in cookie itself.

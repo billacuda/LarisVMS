@@ -12,6 +12,8 @@
 
   <ItemGroup>
     <Compile Include="..\Common\Common.wxs" />
+    <!-- Installer text, one file per language. -->
+    <EmbeddedResource Include="..\Common\Strings.*.wxl" />
     <BindPath Include="$(NodePackageDir)" BindName="Node" />
   </ItemGroup>
 

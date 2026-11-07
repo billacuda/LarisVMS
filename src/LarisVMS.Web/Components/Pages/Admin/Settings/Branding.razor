@@ -6,13 +6,13 @@
 @inject IBrandingService BrandingService
 @inject IAuditService AuditService
 
-<PageTitle>Branding - @AppName</PageTitle>
+<PageTitle>@L["settings.branding.branding"] - @AppName</PageTitle>
 
-<h1>Settings</h1>
+<h1>@L["nav.settings"]</h1>
 <SettingsTabs ActiveKey="Branding" />
 
 <div class="lv-page-narrow">
-<p class="text-muted small">Applies across the site, including sign-in. Blank fields use the built-in default.</p>
+<p class="text-muted small">@L["settings.branding.appliesAcrossTheSiteIncluding"]</p>
 
 @if (!string.IsNullOrEmpty(SavedMessage))
 {
@@ -20,27 +20,27 @@
 }
 @if (!string.IsNullOrEmpty(ErrorMessage))
 {
-    <div class="alert alert-danger">@ErrorMessage</div>
+    <div class="alert alert-danger" role="alert">@ErrorMessage</div>
 }
 
 <EditForm Model="this" FormName="branding-settings" OnSubmit="HandleSaveAsync" data-dirty-guard>
-    <SettingSection Title="Identity">
-        <SettingField Label="Application name" For="AppNameField" Hint="Navbar, browser tab, and footer.">
+    <SettingSection Title="@L["settings.branding.identity"]">
+        <SettingField Label="@L["settings.branding.applicationName"]" For="AppNameField" Hint="@L["settings.branding.navbarBrowserTabAndFooter"]">
             <InputText @bind-Value="FormAppName" id="AppNameField" class="form-control" maxlength="100" />
         </SettingField>
-        <SettingField Label="Logo" For="LogoFile" Wide Hint="@($"PNG, JPEG, GIF, or WebP under {MaxLogoBytes / 1024}KB. SVG isn't accepted.")">
+        <SettingField Label="@L["settings.branding.logo"]" For="LogoFile" Wide Hint="@($"PNG, JPEG, GIF, or WebP under {MaxLogoBytes / 1024}KB. SVG isn't accepted.")">
             <div class="d-flex align-items-center gap-3 mb-2">
-                <img id="logoPreview" src="@(LogoDataUri ?? "")" alt="Current logo preview"
+                <img id="logoPreview" src="@(LogoDataUri ?? "")" alt="@L["settings.branding.currentLogoPreview"]"
                      class="border rounded bg-body-tertiary p-1"
                      style="max-height: 48px; width: auto; @(LogoDataUri is null ? "display:none;" : "")" />
-                <span id="logoEmpty" class="text-muted small @(LogoDataUri is null ? "" : "d-none")">No logo set.</span>
+                <span id="logoEmpty" class="text-muted small @(LogoDataUri is null ? "" : "d-none")">@L["settings.branding.noLogoSet"]</span>
             </div>
             <input type="file" id="LogoFile" class="form-control" accept="image/png,image/jpeg,image/gif,image/webp" />
             @if (LogoDataUri is not null)
             {
                 <div class="form-check mt-2">
                     <InputCheckbox @bind-Value="RemoveLogo" class="form-check-input" id="RemoveLogo" />
-                    <label class="form-check-label" for="RemoveLogo">Remove the current logo</label>
+                    <label class="form-check-label" for="RemoveLogo">@L["settings.branding.removeTheCurrentLogo"]</label>
                 </div>
             }
             @* Read client-side and posted as a data URI in this hidden field — also exactly how it's
@@ -48,30 +48,38 @@
             <InputText @bind-Value="LogoDataUri" type="hidden" id="LogoDataUri" />
         </SettingField>
     </SettingSection>
-    <SettingSection Title="Look">
-        <SettingField Label="Primary color" For="PrimaryColor" Hint="Buttons and links.">
+    <SettingSection Title="@L["settings.branding.look"]">
+        <SettingField Label="@L["settings.branding.primaryColor"]" For="PrimaryColor" Hint="@L["settings.branding.buttonsAndLinks"]">
             <div class="input-group">
                 @* The picker can't represent "unset", so the text box is what posts. *@
                 <input type="color" class="form-control form-control-color" id="PrimaryColorPicker"
-                       value="@(PrimaryColor ?? "#0d6efd")" title="Pick a primary color"
-                       aria-label="Pick a primary color" />
-                <InputText @bind-Value="PrimaryColor" id="PrimaryColor" class="form-control" placeholder="#0d6efd"
+                       value="@(PrimaryColor ?? "#0d6efd")" title="@L["settings.branding.pickAPrimaryColor"]"
+                       aria-label="@L["settings.branding.pickAPrimaryColor"]" />
+                <InputText @bind-Value="PrimaryColor" id="PrimaryColor" class="form-control" placeholder="@L["settings.branding.0d6efd"]"
                        pattern="^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$" />
             </div>
         </SettingField>
-        <SettingField Label="Navbar color" For="AccentColor">
+        <SettingField Label="@L["settings.branding.navbarColor"]" For="AccentColor">
             <div class="input-group">
                 <input type="color" class="form-control form-control-color" id="AccentColorPicker"
-                       value="@(AccentColor ?? "#212529")" title="Pick a navbar color"
-                       aria-label="Pick a navbar color" />
+                       value="@(AccentColor ?? "#212529")" title="@L["settings.branding.pickANavbarColor"]"
+                       aria-label="@L["settings.branding.pickANavbarColor"]" />
                 <InputText @bind-Value="AccentColor" id="AccentColor" class="form-control" placeholder="#212529"
                        pattern="^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$" />
             </div>
         </SettingField>
-        <SettingField Label="Font" For="FontKey" Hint="A fixed list of common font stacks.">
+        @if (LarisVMS.Core.Branding.NormalizeColor(PrimaryColor) is { } savedPrimary && !LarisVMS.Core.Branding.IsReadablePrimary(savedPrimary))
+        {
+            <div class="alert alert-warning py-2 small" role="status">@L["settings.branding.primaryHardToRead"]</div>
+        }
+        @if (LarisVMS.Core.Branding.NormalizeColor(AccentColor) is { } savedAccent && !LarisVMS.Core.Branding.IsReadableAccent(savedAccent))
+        {
+            <div class="alert alert-warning py-2 small" role="status">@L["settings.branding.navbarHardToRead"]</div>
+        }
+        <SettingField Label="@L["settings.branding.font"]" For="FontKey" Hint="@L["settings.branding.aFixedListOfCommon"]">
             @* Plain <select>, not InputSelect — InputSelect can't mark the saved option under Static SSR. *@
             <select name="FontKey" id="FontKey" class="form-select">
-                <option value="" selected="@string.IsNullOrEmpty(FontKey)">Default</option>
+                <option value="" selected="@string.IsNullOrEmpty(FontKey)">@L["common.default"]</option>
                 @foreach (var (key, label) in FontChoices)
                 {
                     <option value="@key" selected="@(key == FontKey)">@label</option>
@@ -80,7 +88,7 @@
         </SettingField>
     </SettingSection>
     <div class="lv-savebar">
-        <button type="submit" class="btn btn-primary">Save</button>
+        <button type="submit" class="btn btn-primary">@L["common.save"]</button>
     </div>
 </EditForm>
 </div>
@@ -179,12 +187,11 @@
         // Validated here as well as in the service so the form can actually tell the user *which*
         // field it rejected, rather than silently dropping it to null on save.
         if (!string.IsNullOrWhiteSpace(PrimaryColor) && LarisVMS.Core.Branding.NormalizeColor(PrimaryColor) is null)
-            ErrorMessage = "Primary color must be a hex value like #0d6efd.";
+            ErrorMessage = Loc.T("settings.branding.primaryColorMustBeA");
         else if (!string.IsNullOrWhiteSpace(AccentColor) && LarisVMS.Core.Branding.NormalizeColor(AccentColor) is null)
-            ErrorMessage = "Accent color must be a hex value like #212529.";
+            ErrorMessage = Loc.T("settings.branding.accentColorMustBeA");
         else if (!RemoveLogo && !string.IsNullOrWhiteSpace(LogoDataUri) && LarisVMS.Core.Branding.NormalizeLogoDataUri(LogoDataUri) is null)
-            ErrorMessage = $"The logo must be a PNG, JPEG, GIF, or WebP image under {MaxLogoBytes / 1024}KB. " +
-                "SVG isn't accepted, since an SVG can carry script.";
+            ErrorMessage = Loc.T("settings.branding.logoInvalid", new { size = MaxLogoBytes / 1024 });
 
         if (ErrorMessage is not null) return;
 
@@ -210,7 +217,7 @@
             user.FindFirst(ClaimTypes.NameIdentifier)?.Value,
             user.Identity?.Name, HttpContext?.Connection.RemoteIpAddress?.ToString(), details);
 
-        SavedMessage = "Branding saved.";
+        SavedMessage = Loc.T("settings.branding.brandingSaved");
         await LoadAsync();
     }
 }

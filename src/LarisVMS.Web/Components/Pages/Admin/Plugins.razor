@@ -4,17 +4,17 @@
 @using LarisVMS.Core.Interfaces
 @inject ICameraService CameraService
 
-<PageTitle>Plugins - @AppName</PageTitle>
+<PageTitle>@L["admin.plugins.plugins"] - @AppName</PageTitle>
 
-<h1 class="h3 mb-3">Plugins</h1>
+<h1 class="h3 mb-3">@L["admin.plugins.plugins"]</h1>
 
 <p class="text-muted small">
-    Integrations for features ONVIF doesn't cover. Cameras are matched by make and model. <a href="/Help/cameras#integrations">Learn more</a>
+    @L["admin.plugins.integrationsForFeaturesOnvifDoesnt"] <a href="/Help/cameras#integrations">@L["common.learnMore"]</a>
 </p>
 
 @if (PluginRows.Count == 0)
 {
-    <p class="text-muted">This build ships no camera integrations.</p>
+    <p class="text-muted">@L["admin.plugins.thisBuildShipsNoCamera"]</p>
 }
 else
 {
@@ -22,11 +22,11 @@ else
         <table class="table table-hover align-middle" id="pluginsTable" data-sortable>
             <thead>
                 <tr>
-                    <th>Plugin</th>
-                    <th>Key</th>
-                    <th>Version</th>
-                    <th class="text-end" data-sort-numeric>Cameras</th>
-                    <th data-no-sort>Using it</th>
+                    <th>@L["admin.plugins.plugin"]</th>
+                    <th>@L["common.key"]</th>
+                    <th>@L["common.version"]</th>
+                    <th class="text-end" data-sort-numeric>@L["nav.cameras"]</th>
+                    <th data-no-sort>@L["admin.plugins.usingIt"]</th>
                 </tr>
             </thead>
             <tbody>
@@ -43,7 +43,7 @@ else
                         <td>
                             @if (p.CameraNames.Count == 0)
                             {
-                                <span class="text-muted">no cameras matched</span>
+                                <span class="text-muted">@L["admin.plugins.noCamerasMatched"]</span>
                             }
                             else
                             {
@@ -63,9 +63,8 @@ else
        and degrades to "no integration" rather than breaking node config generation, which means it
        otherwise happens completely silently. *@
     <div class="alert alert-warning">
-        <strong>Some cameras reference a plugin this build doesn't have.</strong>
-        They're recording normally but get no vendor events until the plugin returns or they're
-        re-probed: @string.Join(", ", OrphanedCameraNames)
+        <strong>@L["admin.plugins.someCamerasReferenceAPlugin"]</strong>
+        @L["admin.plugins.orphanedCameras", new { cameras = string.Join(", ", OrphanedCameraNames) }]
     </div>
 }
 

@@ -88,7 +88,6 @@ if (config is null)
 // Registered: the one-time key isn't needed any more.
 LarisVMS.Core.Security.RegistrationKeyFile.Delete();
 
-var insecureTls = HasFlag(args, "--insecure-tls") || Environment.GetEnvironmentVariable("LARISVMS_INSECURE_TLS") == "1";
 var apiClient = new NodeApiClient(config.ServerUrl, trust);
 apiClient.SetCredentials(config.NodeId, config.Secret);
 
@@ -126,7 +125,8 @@ var onvifHttpClient = new HttpClient(new HttpClientHandler
 {
     ServerCertificateCustomValidationCallback = (_, _, _, _) => true
 })
-{ Timeout = TimeSpan.FromSeconds(45) };
+// Capped like the Web's client: the response is read whole before SafeXml's own limit applies.
+{ Timeout = TimeSpan.FromSeconds(45), MaxResponseContentBufferSize = LarisVMS.Onvif.Soap.SafeXml.MaxCharacters };
 var onvifEventsClient = new OnvifEventsClient(new OnvifSoapClient(onvifHttpClient));
 
 // Thread-pool starvation mitigation for a measured, chronic fault: this process was observed
@@ -209,7 +209,7 @@ if (certHolder is not null)
             certHolder, sp.GetRequiredService<ILoggerFactory>().CreateLogger<CertWatcherService>()));
 }
 builder.Services.AddSingleton(sp => new UpdateService(
-    config, insecureTls, sp.GetRequiredService<ILoggerFactory>().CreateLogger<UpdateService>(),
+    config, sp.GetRequiredService<ILoggerFactory>().CreateLogger<UpdateService>(),
     sp.GetRequiredService<IHostApplicationLifetime>()));
 // Failover plan phase 3: recording-failover quorum — this node probes the /health of any node it is
 // the backup for and reports the verdict each heartbeat.
@@ -1162,6 +1162,15 @@ app.MapPost("/export/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, Ex
         return;
     }
 
+    // Fails closed: redaction areas that can't be read refuse the export instead of sending the
+    // footage out with nothing blacked out.
+    if (ExportRunner.RedactionFilters(request.RedactionJson) is not { } redactionFilters)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await ctx.Response.WriteAsync("redaction areas unreadable");
+        return;
+    }
+
     ctx.Response.StatusCode = StatusCodes.Status202Accepted;
     await ctx.Response.CompleteAsync();
 
@@ -1184,7 +1193,6 @@ app.MapPost("/export/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, Ex
         }
     }
 
-    var redactionFilters = ExportRunner.RedactionFilters(request.RedactionJson);
     var redactionEncoder = redactionFilters.Count > 0 ? EncoderSelection.ChooseH264Encoder(worker.DetectedEncoders) : null;
 
     _ = Task.Run(() => exportRunner.RunAsync(request.ExportItemId, cameraId, validatedPaths, storageRoot, outputFileName, CancellationToken.None,

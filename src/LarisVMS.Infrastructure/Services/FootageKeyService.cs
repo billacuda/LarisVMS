@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 using LarisVMS.Infrastructure.Data;
 
 namespace LarisVMS.Infrastructure.Services;
@@ -55,7 +56,7 @@ public class FootageKeyService(ApplicationDbContext db) : IFootageKeyService
 
     public async Task<string?> ExportBackupAsync(string passphrase, CancellationToken ct = default)
     {
-        if (passphrase.Length < MinPassphraseLength) throw new ArgumentException($"Use a passphrase of at least {MinPassphraseLength} characters.");
+        if (passphrase.Length < MinPassphraseLength) throw new ArgumentException(Loc.T("server.footageKey.useAPassphraseOfAt", new { minPassphraseLength = MinPassphraseLength }));
         var master = await db.FootageMasterKeys.OrderBy(k => k.CreatedAt).FirstOrDefaultAsync(ct);
         if (master is null) return null;
 

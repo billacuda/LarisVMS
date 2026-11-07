@@ -8,27 +8,26 @@
 @inject IPermissionService Permissions
 @inject LarisVMS.Infrastructure.Data.ApplicationDbContext Db
 
-<PageTitle>Evidence locks - @AppName</PageTitle>
+<PageTitle>@L["nav.evidenceLocks"] - @AppName</PageTitle>
 
-<h1>Evidence locks</h1>
+<h1>@L["nav.evidenceLocks"]</h1>
 <p class="text-muted small">
-    Footage that retention won't delete. Lock footage from the Playback page.
-    A removed lock keeps protecting its footage for 24 hours, in case it was removed by mistake.
-    <a href="/Help/live-and-playback#evidence-locks">Learn more</a>
+    @L["evidenceLocks.footageThatRetentionWontDelete"]
+    <a href="/Help/live-and-playback#evidence-locks">@L["common.learnMore"]</a>
 </p>
 
 @if (!string.IsNullOrEmpty(Message))
 {
-    <div class="alert @(MessageIsError ? "alert-danger" : "alert-success") py-2">@Message</div>
+    <div class="alert @(MessageIsError ? "alert-danger" : "alert-success") py-2" role="alert">@Message</div>
 }
 
 <div class="row g-2 align-items-center mb-2">
     <div class="col-sm-4">
-        <input type="search" class="form-control" data-filter-table="locksTable" placeholder="Filter by camera, reason, person&hellip;" />
+        <input type="search" class="form-control" data-filter-table="locksTable" placeholder="@L["evidenceLocks.filterByCameraReasonPerson"]" />
     </div>
     <div class="col-sm-auto">
         <a class="btn btn-sm btn-outline-secondary" href="@(ShowAll ? "/EvidenceLocks" : "/EvidenceLocks?all=true")">
-            @(ShowAll ? "Show only locks protecting footage" : "Also show expired and released locks")
+            @(ShowAll ? L["evidenceLocks.showOnlyLocksProtectingFootage"].Value : L["evidenceLocks.alsoShowExpiredAndReleased"].Value)
         </a>
     </div>
     @if (Locks.Count > 0)
@@ -41,7 +40,7 @@
 
 @if (Locks.Count == 0)
 {
-    <p class="text-muted">No evidence locks@(ShowAll ? "" : " protecting footage right now").</p>
+    <p class="text-muted">@(ShowAll ? L["evidenceLocks.noLocks"] : L["evidenceLocks.noLocksProtecting"])</p>
 }
 else
 {
@@ -49,13 +48,13 @@ else
         <table class="table align-middle" id="locksTable" data-sortable data-paginate>
             <thead>
                 <tr>
-                    <th>Camera</th>
-                    <th>Footage</th>
-                    <th>Reason</th>
-                    <th>Locked by</th>
-                    <th>Kept until</th>
-                    <th data-sort-numeric>Size</th>
-                    <th>Status</th>
+                    <th>@L["common.camera"]</th>
+                    <th>@L["evidenceLocks.footage"]</th>
+                    <th>@L["evidenceLocks.reason"]</th>
+                    <th>@L["evidenceLocks.lockedBy"]</th>
+                    <th>@L["evidenceLocks.keptUntil"]</th>
+                    <th data-sort-numeric>@L["common.size"]</th>
+                    <th>@L["common.status"]</th>
                     <th data-no-sort></th>
                 </tr>
             </thead>
@@ -80,7 +79,7 @@ else
                             }
                             else
                             {
-                                <span>Indefinitely</span>
+                                <span>@L["evidenceLocks.indefinitely"]</span>
                             }
                         </td>
                         <td class="small" data-sort-value="@l.SizeBytes">@ByteFormat.Format(l.SizeBytes)</td>
@@ -88,31 +87,31 @@ else
                             @switch (l.Status)
                             {
                                 case "Active":
-                                    <span class="badge text-bg-primary">🔒 Active</span>
+                                    <span class="badge text-bg-primary">@L["evidenceLocks.active"]</span>
                                     break;
                                 case "RemovedInGrace":
-                                    <span class="badge text-bg-warning" title="Removed by @(l.RemovedByUserName ?? "?"): @l.RemovalReason">Removed, protected for now</span>
+                                    <span class="badge text-bg-warning" title="@L["evidenceLocks.removedByTitle", new { user = l.RemovedByUserName ?? "?", reason = l.RemovalReason }]">@L["evidenceLocks.removedProtectedForNow"]</span>
                                     break;
                                 case "Expired":
-                                    <span class="badge text-bg-secondary">Expired</span>
+                                    <span class="badge text-bg-secondary">@L["evidenceLocks.expired"]</span>
                                     break;
                                 default:
-                                    <span class="badge text-bg-secondary" title="Removed by @(l.RemovedByUserName ?? "?"): @l.RemovalReason">Released</span>
+                                    <span class="badge text-bg-secondary" title="@L["evidenceLocks.removedByTitle", new { user = l.RemovedByUserName ?? "?", reason = l.RemovalReason }]">@L["evidenceLocks.released"]</span>
                                     break;
                             }
                         </td>
                         <td class="text-end text-nowrap">
-                            <a class="btn btn-sm btn-outline-primary" href="/Playback?cameraId=@l.CameraId&atUtc=@l.FromUtc.ToUtcIso()">▶ Play</a>
+                            <a class="btn btn-sm btn-outline-primary" href="/Playback?cameraId=@l.CameraId&atUtc=@l.FromUtc.ToUtcIso()">@L["evidenceLocks.play"]</a>
                             @if (l.CanManage && l.Status == "Active")
                             {
                                 <button type="button" class="btn btn-sm btn-outline-danger" data-bs-toggle="modal" data-bs-target="#removeLockModal"
-                                        data-lock-id="@l.Id" data-lock-camera="@l.CameraName">Remove&hellip;</button>
+                                        data-lock-id="@l.Id" data-lock-camera="@l.CameraName">@L["evidenceLocks.remove"]</button>
                             }
                             @if (l.CanManage && l.Status == "RemovedInGrace")
                             {
                                 <EditForm Model="this" FormName="@($"restore-lock-{l.Id}")" OnValidSubmit="HandleRestoreAsync" class="d-inline">
                                     <input type="hidden" name="Id" value="@l.Id" />
-                                    <button type="submit" class="btn btn-sm btn-outline-secondary">↶ Undo removal</button>
+                                    <button type="submit" class="btn btn-sm btn-outline-secondary">@L["evidenceLocks.undoRemoval"]</button>
                                 </EditForm>
                             }
                         </td>
@@ -131,17 +130,17 @@ else
                 <EditForm Model="this" FormName="remove-lock" OnValidSubmit="HandleRemoveAsync">
                     <input type="hidden" name="Id" id="removeLockId" />
                     <div class="modal-header">
-                        <h5 class="modal-title" id="removeLockTitle">Remove lock on <span id="removeLockCamera"></span></h5>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        <h5 class="modal-title" id="removeLockTitle">@L.Markup("evidenceLocks.removeLockOn", new { camera = new MarkupString("<span id=\"removeLockCamera\"></span>") })</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="@L["common.close"]"></button>
                     </div>
                     <div class="modal-body">
-                        <label class="form-label" for="removeLockReason">Why remove it?</label>
+                        <label class="form-label" for="removeLockReason">@L["evidenceLocks.whyRemoveIt"]</label>
                         <input type="text" class="form-control mb-2" id="removeLockReason" name="Reason" maxlength="500" required />
-                        <div class="small text-muted">The footage stays protected for another 24 hours, and the lock can be restored until then.</div>
+                        <div class="small text-muted">@L["evidenceLocks.theFootageStaysProtectedFor"]</div>
                     </div>
                     <div class="modal-footer">
-                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
-                        <button type="submit" class="btn btn-danger">Remove lock</button>
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">@L["common.cancel"]</button>
+                        <button type="submit" class="btn btn-danger">@L["evidenceLocks.removeLock"]</button>
                     </div>
                 </EditForm>
             </div>
@@ -215,7 +214,7 @@ else
         try
         {
             await LockService.RemoveAsync(FormId(), HttpContext?.Request.Form["Reason"].ToString() ?? "", await ActorAsync());
-            Message = "Lock removed. The footage stays protected for another 24 hours — undo the removal here until then.";
+            Message = Loc.T("evidenceLocks.lockRemovedTheFootageStays");
             MessageIsError = false;
         }
         catch (Exception ex) when (ex is EvidenceLockValidationException or EvidenceLockForbiddenException or KeyNotFoundException)
@@ -238,7 +237,7 @@ else
         try
         {
             await LockService.RestoreAsync(FormId(), await ActorAsync());
-            Message = "Lock restored.";
+            Message = Loc.T("evidenceLocks.lockRestored");
             MessageIsError = false;
         }
         catch (Exception ex) when (ex is EvidenceLockValidationException or EvidenceLockForbiddenException or KeyNotFoundException)

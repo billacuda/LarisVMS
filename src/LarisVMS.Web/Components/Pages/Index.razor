@@ -13,12 +13,12 @@
 @inject ICameraService CameraService
 @inject ICameraAccessService CameraAccess
 
-<PageTitle>Dashboard - @AppName</PageTitle>
+<PageTitle>@L["nav.dashboard"] - @AppName</PageTitle>
 
 @if (!_canViewDashboard)
 {
-    <h1>Welcome</h1>
-    <p class="text-muted">Your role doesn't include the dashboard. Use the menu to open the pages you have access to.</p>
+    <h1>@L["dashboard.welcome"]</h1>
+    <p class="text-muted">@L["dashboard.yourRoleDoesntIncludeThe"]</p>
 }
 else
 {
@@ -27,19 +27,20 @@ else
 </HeadContent>
 
 <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
-    <h1 class="mb-0">Dashboard</h1>
+    <h1 class="mb-0">@L["nav.dashboard"]</h1>
     @* dashboard.js's poll() fills this in ("Updated h:mm:ss a") after every successful refresh —
        server-rendered blank so a JS-disabled/failed-to-load page doesn't show a stale claim. *@
     <span id="dashboardRefreshStatus" class="text-muted small"></span>
     @* Customizing needs the full 12-column grid: on a phone it collapses to one column, and a layout
        dragged around there would overwrite the desktop one. dashboard-widgets.js hides this bar
        whenever the grid isn't 12 columns wide. *@
-    <div class="ms-auto d-flex gap-2" id="dashboardCustomizeBar">
-        <button type="button" class="btn btn-sm btn-outline-secondary" id="dashboardCustomize">Customize</button>
+    <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" id="dashboardPause">@L["dashboard.pauseUpdates"]</button>
+    <div class="d-flex gap-2" id="dashboardCustomizeBar">
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="dashboardCustomize">@L["dashboard.customize"]</button>
         <span class="d-none gap-2" id="dashboardEditControls">
-            <button type="button" class="btn btn-sm btn-primary" id="dashboardAddWidget">Add widget</button>
-            <button type="button" class="btn btn-sm btn-outline-danger" id="dashboardResetLayout">Reset layout</button>
-            <button type="button" class="btn btn-sm btn-success" id="dashboardDone">Done</button>
+            <button type="button" class="btn btn-sm btn-primary" id="dashboardAddWidget">@L["dashboard.addWidget"]</button>
+            <button type="button" class="btn btn-sm btn-outline-danger" id="dashboardResetLayout">@L["dashboard.resetLayout"]</button>
+            <button type="button" class="btn btn-sm btn-success" id="dashboardDone">@L["common.done"]</button>
         </span>
     </div>
 </div>
@@ -59,7 +60,7 @@ else
         <div class="card text-center">
             <div class="card-body">
                 <div class="display-6" id="dashRecordingCount">@RecordingCount</div>
-                <div class="text-muted small">Recording</div>
+                <div class="text-muted small">@L["dashboard.recording"]</div>
             </div>
         </div>
     </div>
@@ -67,7 +68,7 @@ else
         <div class="card text-center">
             <div class="card-body">
                 <div class="display-6 @(NotReportingCount > 0 ? "text-danger" : "")" id="dashNotReportingCount">@NotReportingCount</div>
-                <div class="text-muted small">Not reporting</div>
+                <div class="text-muted small">@L["dashboard.notReporting"]</div>
             </div>
         </div>
     </div>
@@ -75,7 +76,7 @@ else
         <div class="card text-center">
             <div class="card-body">
                 <div class="display-6 text-muted" id="dashDisabledCount">@DisabledCount</div>
-                <div class="text-muted small">Disabled</div>
+                <div class="text-muted small">@L["common.disabled"]</div>
             </div>
         </div>
     </div>
@@ -83,7 +84,7 @@ else
         <div class="card text-center">
             <div class="card-body">
                 <div class="display-6 @(NodesOnlineCount < NodesTotalCount ? "text-danger" : "")" id="dashNodesOnline">@NodesOnlineCount / @NodesTotalCount</div>
-                <div class="text-muted small">Nodes online</div>
+                <div class="text-muted small">@L["dashboard.nodesOnline"]</div>
             </div>
         </div>
     </div>
@@ -106,17 +107,17 @@ else
                     </div>
                     @if (n.HostStatsFresh)
                     {
-                        <div class="small mb-1">CPU <span class="float-end">@Percent(n.CpuPercent)</span></div>
+                        <div class="small mb-1">@L["dashboard.cpu"] <span class="float-end">@Percent(n.CpuPercent)</span></div>
                         <div class="progress mb-2" style="height: 6px;"><div class="progress-bar @BarClass(n.CpuPercent)" style="width: @BarWidth(n.CpuPercent)%"></div></div>
-                        <div class="small mb-1">Memory <span class="float-end">@Gigabytes(n.MemoryUsedBytes) / @Gigabytes(n.MemoryTotalBytes) GB</span></div>
+                        <div class="small mb-1">@L["dashboard.memory"] <span class="float-end">@L["dashboard.memoryValue", new { used = Gigabytes(n.MemoryUsedBytes), total = Gigabytes(n.MemoryTotalBytes) }]</span></div>
                         <div class="progress mb-2" style="height: 6px;"><div class="progress-bar @BarClass(MemoryPercent(n))" style="width: @BarWidth(MemoryPercent(n))%"></div></div>
-                        <div class="small mb-1">Network <span class="float-end">↓ @Mbits(n.NetReceiveBytesPerSec) · ↑ @Mbits(n.NetSendBytesPerSec) Mbit/s</span></div>
+                        <div class="small mb-1">@L["dashboard.network"] <span class="float-end">@L["dashboard.networkValue", new { down = Mbits(n.NetReceiveBytesPerSec), up = Mbits(n.NetSendBytesPerSec) }]</span></div>
                     }
                     else
                     {
-                        <div class="small text-muted mb-1">No load figures from this node yet.</div>
+                        <div class="small text-muted mb-1">@L["dashboard.noLoadFiguresFromThis"]</div>
                     }
-                    <div class="small mb-1">Recording <span class="float-end">@n.TotalFps fps from @n.CamerasReporting camera(s)</span></div>
+                    <div class="small mb-1">@L["dashboard.recording"] <span class="float-end">@L.Plural("dashboard.recordingValue", n.CamerasReporting, new { fps = n.TotalFps })</span></div>
                     @if (n.ObjectDetectionEnabled && n.Events is not null)
                     {
                         <table class="table table-sm small mb-0 mt-2">
@@ -152,16 +153,16 @@ else
        kept so the option can come back without rebuilding it. *@
     <div class="form-check form-switch mb-0 d-none">
         <input class="form-check-input" type="checkbox" role="switch" id="dashboardThumbToggle">
-        <label class="form-check-label" for="dashboardThumbToggle">Show thumbnails</label>
+        <label class="form-check-label" for="dashboardThumbToggle">@L["dashboard.showThumbnails"]</label>
     </div>
     <div class="d-flex align-items-center gap-2">
-        <label class="form-label small mb-0" for="dashboardPageSize">Rows per page</label>
+        <label class="form-label small mb-0" for="dashboardPageSize">@L["dashboard.rowsPerPage"]</label>
         <select id="dashboardPageSize" class="form-select form-select-sm" style="width: auto;" data-paginate-size-for="dashboardTable">
             <option value="10">10</option>
             <option value="20" selected>20</option>
             <option value="50">50</option>
             <option value="100">100</option>
-            <option value="all">All</option>
+            <option value="all">@L["common.all"]</option>
         </select>
         <ColumnPicker TableId="dashboardTable" />
     </div>
@@ -174,23 +175,23 @@ else
 </style>
 
 <p class="text-muted" id="dashboardEmptyMessage" style="@(Rows.Count == 0 ? "" : "display:none;")">
-    No cameras yet — add one from <a href="/Cameras">Cameras</a>.
+    @L.Markup("dashboard.noCamerasYet")
 </p>
 
 <div class="table-responsive" id="dashboardTableWrap" style="@(Rows.Count == 0 ? "display:none;" : "")">
     <table class="table table-hover align-middle hide-thumb-col" id="dashboardTable" data-sortable data-paginate data-column-picker>
         <thead>
             <tr>
-                <th class="thumb-col" data-no-sort>Thumbnail</th>
-                <th>Camera</th>
-                <th data-col="node">Node</th>
-                <th data-no-sort>Status</th>
-                <th class="text-end" data-sort-numeric data-col="fps">FPS</th>
-                <th class="text-end" data-sort-numeric data-col="bitrate">Bitrate</th>
+                <th class="thumb-col" data-no-sort>@L["dashboard.thumbnail"]</th>
+                <th>@L["common.camera"]</th>
+                <th data-col="node">@L["common.node"]</th>
+                <th data-no-sort>@L["common.status"]</th>
+                <th class="text-end" data-sort-numeric data-col="fps">@L["dashboard.fps"]</th>
+                <th class="text-end" data-sort-numeric data-col="bitrate">@L["dashboard.bitrate"]</th>
                 @* Sorted by sample rate, the only numeric part of the cell. *@
-                <th data-sort-numeric data-col="audio">Audio</th>
-                <th class="text-end" data-sort-numeric data-col="reconnects">Reconnects</th>
-                <th data-sort-numeric data-col="lastreport">Last report</th>
+                <th data-sort-numeric data-col="audio">@L["dashboard.audio"]</th>
+                <th class="text-end" data-sort-numeric data-col="reconnects">@L["dashboard.reconnects"]</th>
+                <th data-sort-numeric data-col="lastreport">@L["dashboard.lastReport"]</th>
             </tr>
         </thead>
         <tbody id="dashboardTableBody">
@@ -202,7 +203,7 @@ else
                     <td>
                         @if (!r.NodeAssigned)
                         {
-                            <span class="text-muted">unassigned</span>
+                            <span class="text-muted">@L["dashboard.unassigned"]</span>
                         }
                         else
                         {
@@ -213,27 +214,27 @@ else
                     <td>
                         @if (!r.CameraEnabled)
                         {
-                            <span class="badge text-bg-secondary">Disabled</span>
+                            <span class="badge text-bg-secondary">@L["common.disabled"]</span>
                         }
                         else if (!r.NodeAssigned)
                         {
-                            <span class="badge text-bg-warning">No node</span>
+                            <span class="badge text-bg-warning">@L["dashboard.noNode"]</span>
                         }
                         else if (r.HealthFresh)
                         {
-                            <span class="badge text-bg-success">Recording</span>
+                            <span class="badge text-bg-success">@L["dashboard.recording"]</span>
                         }
                         else
                         {
-                            <span class="badge text-bg-danger">Not reporting</span>
+                            <span class="badge text-bg-danger">@L["dashboard.notReporting"]</span>
                         }
                         @if (r.EngineBuildFailed == true)
                         {
-                            <text> </text><span class="badge text-bg-danger" title="AI detection failed to start — check the vision log">AI detection failed</span>
+                            <text> </text><span class="badge text-bg-danger" title="@L["dashboard.aiDetectionFailedToStart"]">@L["dashboard.aiDetectionFailed"]</span>
                         }
                         else if (r.IsEngineBuilding == true)
                         {
-                            <text> </text><span class="badge text-bg-info"><span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Starting AI detection&hellip;</span>
+                            <text> </text><span class="badge text-bg-info"><span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> @L["dashboard.startingAiDetection"]</span>
                         }
                     </td>
                     <td class="text-end" data-sort-value="@(r.HealthFresh ? r.Fps : null)">@(r.HealthFresh ? r.Fps?.ToString() ?? "—" : "—")</td>
@@ -248,7 +249,7 @@ else
                         }
                         else
                         {
-                            <span>never</span>
+                            <span>@L["dashboard.never"]</span>
                         }
                     </td>
                 </tr>
@@ -265,8 +266,8 @@ else
     <div class="modal-dialog modal-lg modal-dialog-scrollable">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title" id="dashboardAddModalTitle">Add widgets</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                <h5 class="modal-title" id="dashboardAddModalTitle">@L["dashboard.addWidgets"]</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="@L["common.close"]"></button>
             </div>
             <div class="modal-body" id="dashboardAddList"></div>
         </div>
@@ -278,14 +279,14 @@ else
     <div class="modal-dialog modal-dialog-scrollable">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title" id="dashboardKindsTitle">Show these detections</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                <h5 class="modal-title" id="dashboardKindsTitle">@L["dashboard.showTheseDetections"]</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="@L["common.close"]"></button>
             </div>
             <div class="modal-body" id="dashboardKindsList"></div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-sm btn-outline-secondary me-auto" id="dashboardKindsDefault">Defaults</button>
-                <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-sm btn-primary" id="dashboardKindsSave">Save</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary me-auto" id="dashboardKindsDefault">@L["dashboard.defaults"]</button>
+                <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">@L["common.cancel"]</button>
+                <button type="button" class="btn btn-sm btn-primary" id="dashboardKindsSave">@L["common.save"]</button>
             </div>
         </div>
     </div>
@@ -296,37 +297,37 @@ else
     <div class="modal-dialog modal-xl modal-dialog-scrollable">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title" id="dashboardReportTitle">Report</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                <h5 class="modal-title" id="dashboardReportTitle">@L["dashboard.report"]</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="@L["common.close"]"></button>
             </div>
             <div class="modal-body">
                 <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
                     <input type="search" class="form-control form-control-sm" id="dashboardReportFilter"
-                           placeholder="Filter by name, node, or details" style="max-width: 280px;" aria-label="Filter" />
-                    <select class="form-select form-select-sm w-auto" id="dashboardReportNode" aria-label="Node">
-                        <option value="">All nodes</option>
+                           placeholder="@L["dashboard.filterByNameNodeOr"]" style="max-width: 280px;" aria-label="@L["common.filter"]" />
+                    <select class="form-select form-select-sm w-auto" id="dashboardReportNode" aria-label="@L["common.node"]">
+                        <option value="">@L["dashboard.allNodes"]</option>
                     </select>
                     <span class="small text-muted ms-auto" id="dashboardReportCount"></span>
-                    <button type="button" class="btn btn-sm btn-outline-secondary" id="dashboardReportCsv">Download CSV</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="dashboardReportCsv">@L["dashboard.downloadCsv"]</button>
                 </div>
                 <div class="table-responsive">
                     <table class="table table-sm table-hover align-middle mb-2">
                         <thead id="dashboardReportHead">
                             <tr>
                                 <th class="text-muted" style="width: 3rem;">#</th>
-                                <th><button type="button" class="btn btn-link btn-sm p-0 text-reset fw-semibold text-decoration-none" data-report-sort="name">Name</button></th>
-                                <th data-report-node-col><button type="button" class="btn btn-link btn-sm p-0 text-reset fw-semibold text-decoration-none" data-report-sort="node">Node</button></th>
-                                <th>Details</th>
-                                <th class="text-end"><button type="button" class="btn btn-link btn-sm p-0 text-reset fw-semibold text-decoration-none" data-report-sort="value" id="dashboardReportValueHeader">Value</button></th>
+                                <th><button type="button" class="btn btn-link btn-sm p-0 text-reset fw-semibold text-decoration-none" data-report-sort="name">@L["common.name"]</button></th>
+                                <th data-report-node-col><button type="button" class="btn btn-link btn-sm p-0 text-reset fw-semibold text-decoration-none" data-report-sort="node">@L["common.node"]</button></th>
+                                <th>@L["common.details"]</th>
+                                <th class="text-end"><button type="button" class="btn btn-link btn-sm p-0 text-reset fw-semibold text-decoration-none" data-report-sort="value" id="dashboardReportValueHeader">@L["common.value"]</button></th>
                             </tr>
                         </thead>
                         <tbody id="dashboardReportBody"></tbody>
                     </table>
                 </div>
                 <nav class="d-flex align-items-center gap-2" id="dashboardReportPager">
-                    <button type="button" class="btn btn-sm btn-outline-secondary" id="dashboardReportPrev">&lsaquo; Previous</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="dashboardReportPrev">@L["dashboard.previous"]</button>
                     <span class="small text-muted" id="dashboardReportPage"></span>
-                    <button type="button" class="btn btn-sm btn-outline-secondary" id="dashboardReportNext">Next &rsaquo;</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="dashboardReportNext">@L["dashboard.next"]</button>
                 </nav>
             </div>
         </div>
@@ -343,6 +344,7 @@ else
    when its first refresh runs. *@
 <SectionContent SectionName="PageScripts">
     <PageScript Src="/lib/gridstack/dist/gridstack-all.js" />
+    <PageScript Src="/js/grid-keyboard.js" />
     <PageScript Src="/js/dashboard-report.js" />
     <PageScript Src="/js/dashboard-widgets.js" />
     <PageScript Src="/js/dashboard.js" />
@@ -416,15 +418,15 @@ else
     {
         var options = new List<object>();
         foreach (var kind in DetectionDisplay.AllKinds)
-            options.Add(new { token = kind.ToString(), label = DetectionDisplay.Label(kind), emoji = DetectionDisplay.Emoji(kind), byDefault = true });
+            options.Add(new { token = kind.ToString(), label = DetectionDisplay.LocalizedLabel(kind), emoji = DetectionDisplay.Emoji(kind), byDefault = true });
         var kindNames = DetectionDisplay.AllKinds.Select(k => k.ToString()).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var categoryNames = (await TimelineService.GetDetectedObjectCategoriesAsync())
             .Select(category => category.Name)
             .Where(name => !kindNames.Contains(name));
         foreach (var name in categoryNames)
             options.Add(new { token = name, label = name, emoji = CocoCategoryMap.Emoji(name), byDefault = true });
-        options.Add(new { token = LarisVMS.Infrastructure.Services.TimelineService.CustomTagKindToken, label = "Custom tags", emoji = "🏷️", byDefault = true });
-        options.Add(new { token = DashboardWidgetCatalog.MotionKindToken, label = "Motion with nothing identified", emoji = EventColors.MotionEmoji, byDefault = false });
+        options.Add(new { token = LarisVMS.Infrastructure.Services.TimelineService.CustomTagKindToken, label = L["dashboard.kindCustomTags"].Value, emoji = "🏷️", byDefault = true });
+        options.Add(new { token = DashboardWidgetCatalog.MotionKindToken, label = L["dashboard.kindMotionOnly"].Value, emoji = EventColors.MotionEmoji, byDefault = false });
         return options;
     }
 

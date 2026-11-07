@@ -19,9 +19,9 @@
 @inject ClientEndpointCspCache CspCache
 @inject LarisVMS.Web.Security.CspReports CspReports
 
-<PageTitle>Security settings - @AppName</PageTitle>
+<PageTitle>@L["settings.security.securitySettings"] - @AppName</PageTitle>
 
-<h1>Settings</h1>
+<h1>@L["nav.settings"]</h1>
 <SettingsTabs ActiveKey="Security" />
 
 @if (!string.IsNullOrEmpty(SavedMessage))
@@ -30,80 +30,80 @@
 }
 @if (!string.IsNullOrEmpty(ErrorMessage))
 {
-    <div class="alert alert-danger">@ErrorMessage</div>
+    <div class="alert alert-danger" role="alert">@ErrorMessage</div>
 }
 
 <div class="lv-page-narrow">
 <EditForm Model="this" FormName="security-settings" OnSubmit="HandleSaveAsync" data-dirty-guard>
-    <SettingSection Title="IP allow lists" Subtitle="One IP or CIDR per line; # starts a comment. Blank means unrestricted.">
-        <SettingField Label="Management / API" Hint="Admin pages and the REST API. A list that excludes you is refused." HelpLink="/Help/security#allow-lists">
-            <InputTextArea @bind-Value="ManagementAllowList" class="form-control font-monospace" rows="5"
+    <SettingSection Title="@L["settings.security.ipAllowLists"]" Subtitle="@L["settings.security.oneIpOrCidrPer"]">
+        <SettingField For="field-managementAllowList" Label="@L["settings.security.managementApi"]" Hint="@L["settings.security.adminPagesAndTheRest"]" HelpLink="/Help/security#allow-lists">
+            <InputTextArea id="field-managementAllowList" @bind-Value="ManagementAllowList" class="form-control font-monospace" rows="5"
                            placeholder="10.0.0.0/24&#10;192.168.1.50&#10;# office VPN"></InputTextArea>
         </SettingField>
-        <SettingField Label="Live view / playback" Hint="Live video, playback, thumbnails, exports, and snapshots.">
-            <InputTextArea @bind-Value="LiveViewAllowList" class="form-control font-monospace" rows="5"
+        <SettingField For="field-liveViewAllowList" Label="@L["settings.security.liveViewPlayback"]" Hint="@L["settings.security.liveVideoPlaybackThumbnailsExports"]">
+            <InputTextArea id="field-liveViewAllowList" @bind-Value="LiveViewAllowList" class="form-control font-monospace" rows="5"
                            placeholder="10.0.0.0/24"></InputTextArea>
         </SettingField>
     </SettingSection>
-    <SettingSection Title="Entra ID sign-in" Subtitle="Adds “Sign in with Microsoft” for accounts an admin has linked on the Users page.">
-        <SettingField Label="Status" Wide Hint="@($"Redirect URI: https://{HttpContext?.Request.Host}/signin-oidc")" HelpLink="/Help/users#entra">
+    <SettingSection Title="@L["settings.security.entraIdSignIn"]" Subtitle="@L["settings.security.addsSignInWithMicrosoft"]">
+        <SettingField Label="@L["common.status"]" Wide Hint="@($"Redirect URI: https://{HttpContext?.Request.Host}/signin-oidc")" HelpLink="/Help/users#entra">
             <div class="form-check form-switch mt-1">
                 <InputCheckbox @bind-Value="EntraEnabled" class="form-check-input" id="entraEnabled" />
-                <label class="form-check-label" for="entraEnabled">Enabled</label>
+                <label class="form-check-label" for="entraEnabled">@L["common.enabled"]</label>
             </div>
         </SettingField>
-        <SettingField Label="Tenant ID" ShowWhen="EntraEnabled=true">
-            <InputText @bind-Value="EntraTenantId" class="form-control font-monospace" placeholder="00000000-0000-0000-0000-000000000000" />
+        <SettingField For="field-entraTenantId" Label="@L["settings.security.tenantId"]" ShowWhen="EntraEnabled=true">
+            <InputText id="field-entraTenantId" @bind-Value="EntraTenantId" class="form-control font-monospace" placeholder="00000000-0000-0000-0000-000000000000" />
         </SettingField>
-        <SettingField Label="Client ID" ShowWhen="EntraEnabled=true">
-            <InputText @bind-Value="EntraClientId" class="form-control font-monospace" placeholder="00000000-0000-0000-0000-000000000000" />
+        <SettingField For="field-entraClientId" Label="@L["settings.security.clientId"]" ShowWhen="EntraEnabled=true">
+            <InputText id="field-entraClientId" @bind-Value="EntraClientId" class="form-control font-monospace" placeholder="00000000-0000-0000-0000-000000000000" />
         </SettingField>
-        <SettingField Label="Client secret" ShowWhen="EntraEnabled=true" Hint="Leave blank to keep the current secret.">
-            <InputText @bind-Value="EntraClientSecret" type="password" class="form-control" autocomplete="off"
-                       placeholder="@(HasStoredEntraClientSecret ? "(unchanged)" : "")" />
+        <SettingField For="field-entraClientSecret" Label="@L["settings.security.clientSecret"]" ShowWhen="EntraEnabled=true" Hint="@L["settings.security.leaveBlankToKeepThe"]">
+            <InputText id="field-entraClientSecret" @bind-Value="EntraClientSecret" type="password" class="form-control" autocomplete="off"
+                       placeholder="@(HasStoredEntraClientSecret ? L["cameras.edit.unchanged"].Value : "")" />
         </SettingField>
     </SettingSection>
-    <SettingSection Title="Web server">
-        <SettingField Label="HTTP/3" Wide Hint="Faster connections for browsers that support it. Needs UDP open on the HTTPS port and a service restart." HelpLink="/Help/security#http3">
+    <SettingSection Title="@L["settings.security.webServer"]">
+        <SettingField Label="HTTP/3" Wide Hint="@L["settings.security.fasterConnectionsForBrowsersThat"]" HelpLink="/Help/security#http3">
             <div class="form-check form-switch mt-1">
                 <InputCheckbox @bind-Value="Http3Enabled" class="form-check-input" id="http3Enabled" disabled="@(!ServerProtocols.Http3Supported)" />
-                <label class="form-check-label" for="http3Enabled">Enabled</label>
+                <label class="form-check-label" for="http3Enabled">@L["common.enabled"]</label>
             </div>
             <div class="small text-muted">
                 @if (!ServerProtocols.Http3Supported)
                 {
-                    <span>Not supported on this version of Windows.</span>
+                    <span>@L["settings.security.notSupportedOnThisVersion"]</span>
                 }
                 else
                 {
-                    <span>Running now: @(ServerProtocols.Http3Active ? "on" : "off").</span>
+                    <span>@(ServerProtocols.Http3Active ? L["settings.security.runningNowOn"] : L["settings.security.runningNowOff"])</span>
                     @if (Http3Enabled != ServerProtocols.Http3Active)
                     {
-                        <span> Restart the service to apply.</span>
+                        <span> @L["settings.security.restartTheServiceToApply"]</span>
                     }
                 }
             </div>
         </SettingField>
-        <SettingField Label="Strict script policy" Wide Hint="Browsers run only this site's own scripts, so script injected into a page can't run. Off, anything it would block is reported below instead." HelpLink="/Help/security#strict-script-policy">
+        <SettingField Label="@L["settings.security.strictScriptPolicy"]" Wide Hint="@L["settings.security.browsersRunOnlyThisSite"]" HelpLink="/Help/security#strict-script-policy">
             <div class="form-check form-switch mt-1">
                 <InputCheckbox @bind-Value="StrictScripts" class="form-check-input" id="strictScripts" />
-                <label class="form-check-label" for="strictScripts">Enforce</label>
+                <label class="form-check-label" for="strictScripts">@L["settings.security.enforce"]</label>
             </div>
             <div class="small text-muted">
                 @if (CspReports.Total == 0)
                 {
-                    <span>No reports since the service started.</span>
+                    <span>@L["settings.security.noReportsSinceTheService"]</span>
                 }
                 else
                 {
-                    <span>@CspReports.Total report(s) since the service started@(CspReports.Total > RecentReports.Count ? $"; the latest {RecentReports.Count}:" : ":")</span>
+                    <span>@(CspReports.Total > RecentReports.Count ? L.Plural("settings.security.cspReportsLatest", CspReports.Total, new { latest = RecentReports.Count }) : L.Plural("settings.security.cspReports", CspReports.Total))</span>
                 }
             </div>
             @if (RecentReports.Count > 0)
             {
                 <div class="table-responsive mt-1" style="max-height: 16rem;">
                     <table class="table table-sm small mb-0">
-                        <thead><tr><th>When</th><th>Directive</th><th>Blocked</th><th>Where</th></tr></thead>
+                        <thead><tr><th>@L["settings.security.when"]</th><th>@L["settings.security.directive"]</th><th>@L["settings.security.blocked"]</th><th>@L["settings.security.where"]</th></tr></thead>
                         <tbody>
                             @foreach (var r in RecentReports)
                             {
@@ -121,7 +121,7 @@
         </SettingField>
     </SettingSection>
     <div class="lv-savebar">
-        <button type="submit" class="btn btn-primary">Save</button>
+        <button type="submit" class="btn btn-primary">@L["common.save"]</button>
     </div>
 </EditForm>
 </div>
@@ -176,7 +176,7 @@
         var invalid = management.InvalidLines.Concat(liveView.InvalidLines).ToList();
         if (invalid.Count > 0)
         {
-            ErrorMessage = $"Not a valid IP or CIDR block: {string.Join(", ", invalid)}";
+            ErrorMessage = Loc.T("settings.security.notAValidIpOr", new { entries = string.Join(", ", invalid) });
             return;
         }
 
@@ -187,7 +187,7 @@
         var remoteIp = HttpContext?.Connection.RemoteIpAddress;
         if (!IpAllowListPolicy.IsAllowed(remoteIp, management.Networks))
         {
-            ErrorMessage = $"Not saved — the management/API list you entered would block your own address ({remoteIp}). Add it to the list first.";
+            ErrorMessage = Loc.T("settings.security.notSavedTheManagementApi", new { remoteIp });
             return;
         }
 
@@ -196,7 +196,7 @@
         if (EntraEnabled && (string.IsNullOrWhiteSpace(EntraTenantId) || string.IsNullOrWhiteSpace(EntraClientId)
             || (!hadStoredSecret && string.IsNullOrWhiteSpace(EntraClientSecret))))
         {
-            ErrorMessage = "Enter a Tenant ID, Client ID, and Client Secret before enabling Entra sign-in.";
+            ErrorMessage = Loc.T("settings.security.enterATenantIdClient");
             HasStoredEntraClientSecret = hadStoredSecret;
             return;
         }
@@ -204,7 +204,7 @@
         // accounts from any Microsoft tenant.
         if (EntraEnabled && EntraTenantId!.Trim().ToLowerInvariant() is "common" or "organizations" or "consumers")
         {
-            ErrorMessage = "Enter your own directory's Tenant ID (a GUID or yourcompany.onmicrosoft.com), not a multi-tenant value.";
+            ErrorMessage = Loc.T("settings.security.enterYourOwnDirectoryTenant");
             HasStoredEntraClientSecret = hadStoredSecret;
             return;
         }
@@ -260,6 +260,6 @@
         EntraClientSecret = null;
         HasStoredEntraClientSecret = !string.IsNullOrEmpty(entra.ClientSecret);
 
-        SavedMessage = "Saved.";
+        SavedMessage = Loc.T("common.saved");
     }
 }

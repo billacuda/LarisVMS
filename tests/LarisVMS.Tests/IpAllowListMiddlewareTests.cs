@@ -30,7 +30,8 @@ public class IpAllowListMiddlewareTests
         // slate, same as a real request would see after any real admin save.
         await settings.InvalidateAsync();
         var middleware = new IpAllowListMiddleware(_ => Task.CompletedTask);
-        await middleware.InvokeAsync(context, settings);
+        await middleware.InvokeAsync(context, settings,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<IpAllowListMiddleware>.Instance);
         return context;
     }
 
@@ -66,6 +67,18 @@ public class IpAllowListMiddlewareTests
         var context = await Run(db, "/Admin/Nodes", "10.0.0.42");
 
         Assert.NotEqual(StatusCodes.Status404NotFound, context.Response.StatusCode);
+    }
+
+    [Fact]
+    public async Task AListWithNoValidLineRefusesEveryoneRatherThanOpeningUp()
+    {
+        using var db = NewDb();
+        db.Settings.Add(new Core.Entities.Setting { Id = Guid.NewGuid(), Key = IpAllowListMiddleware.ManagementSettingKey, Value = "10.0.0.0/99\nnot-an-ip" });
+        await db.SaveChangesAsync();
+
+        var context = await Run(db, "/Admin/Nodes", "10.0.0.42");
+
+        Assert.Equal(StatusCodes.Status404NotFound, context.Response.StatusCode);
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using LarisVMS.Core.Localization;
 namespace LarisVMS.Core.Enums;
 
 public enum ZoneKind
@@ -146,6 +147,19 @@ public static class DetectionDisplay
         DetectionKind.ObjectAppeared => "Object appeared",
         DetectionKind.ObjectMissing => "Object missing",
         _ => "Object"
+    };
+
+    /// <summary><see cref="Label"/> in the viewer's language, for display only — Label itself stays
+    /// English, since activity rollups store it and match on it.</summary>
+    public static string LocalizedLabel(DetectionKind kind) => kind switch
+    {
+        DetectionKind.Human => Loc.T("detection.kind.human"),
+        DetectionKind.Vehicle => Loc.T("detection.kind.vehicle"),
+        DetectionKind.Face => Loc.T("detection.kind.face"),
+        DetectionKind.Animal => Loc.T("detection.kind.animal"),
+        DetectionKind.ObjectAppeared => Loc.T("detection.kind.objectAppeared"),
+        DetectionKind.ObjectMissing => Loc.T("detection.kind.objectMissing"),
+        _ => Loc.T("detection.kind.object")
     };
 
     /// <summary>Emoji marker for the live-tile badge, matching this app's emoji-as-icons convention.

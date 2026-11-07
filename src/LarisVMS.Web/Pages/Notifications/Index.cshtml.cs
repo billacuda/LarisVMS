@@ -1,3 +1,4 @@
+using LarisVMS.Core.Localization;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -227,10 +228,10 @@ public class IndexModel(ApplicationDbContext db, ICameraService cameraService, I
     /// user can view, and node-wide types only for users who can see node health.</summary>
     private string? ValidateOwnRule()
     {
-        if (EnabledTypes.All(t => t.Type != ConditionType)) return "That kind of notification isn't available.";
-        if (CameraId is { } cam && Cameras.All(c => c.Id != cam)) return "You don't have access to that camera.";
-        if (NodeId is { } node && Nodes.All(n => n.Id != node)) return "You don't have access to that node.";
-        if (DeliverEmail && !EmailAvailable && !DeliverBrowser) return "Email notifications aren't available. Choose the browser.";
+        if (EnabledTypes.All(t => t.Type != ConditionType)) return Loc.T("notifications.thatKindOfNotificationIsnt");
+        if (CameraId is { } cam && Cameras.All(c => c.Id != cam)) return Loc.T("notifications.youDontHaveAccessTo");
+        if (NodeId is { } node && Nodes.All(n => n.Id != node)) return Loc.T("notifications.youDontHaveAccessTo2");
+        if (DeliverEmail && !EmailAvailable && !DeliverBrowser) return Loc.T("notifications.emailNotificationsArentAvailableChoose");
         return null;
     }
 

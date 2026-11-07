@@ -104,7 +104,7 @@ window.larisvmsViewPlay = (function () {
         return (
             '<div class="h-100 d-flex flex-column border rounded overflow-hidden" data-camera-tile="' + cell.cameraId + '">' +
                 '<div class="view-cell-frame position-relative flex-grow-1 bg-black" style="min-height: 0;">' +
-                    '<video class="view-cell-video" style="width:100%; height:100%; object-fit:contain;" muted playsinline></video>' +
+                    '<video class="view-cell-video" style="width:100%; height:100%; object-fit:contain;" muted playsinline aria-label="' + larisvmsI18n.html('js.video.from', { camera: cam ? cam.name : '' }) + '"></video>' +
                     '<div class="position-absolute top-50 start-50 translate-middle text-white small text-center px-2 view-cell-status" role="status" aria-live="polite"></div>' +
                     // One badge row: the motion badge first (toggled by live-view.js's motion poller),
                     // then the object badges live-view.js's renderDetectionBadges appends after it —
@@ -119,7 +119,7 @@ window.larisvmsViewPlay = (function () {
                     '<div class="position-absolute ' + badgePos + badgeAlign + ' d-flex flex-wrap gap-1 live-detection-badges"' +
                         ' style="max-width: calc(100% - .5rem);">' +
                         '<span class="badge bg-danger live-motion-badge d-none"' +
-                            ' title="Motion detected — movement with no object class attached">🌀 Motion</span>' +
+                            ' title="' + larisvmsI18n.html('js.viewPlay.motionDetectedMovementWithNo') + '">🌀 ' + larisvmsI18n.html('js.viewPlay.motion') + '</span>' +
                     '</div>' +
                     // Only shown once this one cell has been toggled into playback mode (see the
                     // view-cell-playback button below) — every other cell keeps showing pure live
@@ -130,14 +130,17 @@ window.larisvmsViewPlay = (function () {
                     // and a fixed clearance would either overlap them or waste timeline width on
                     // every silent camera.
                     '<div class="position-absolute bottom-0 start-0 d-none d-flex align-items-end gap-1 p-1 view-cell-mini-timeline-area"' +
-                        ' style="right:' + (cam && cam.hasAudio ? 176 : 70) + 'px;">' +
-                        '<button type="button" class="btn btn-outline-light btn-sm view-cell-mini-playpause" style="padding:.1rem .35rem;" title="Play/Pause" aria-label="Play/Pause">▶</button>' +
+                        ' style="right:' + ((cam && cam.hasAudio ? 176 : 70) + (cam && cam.canRecord ? 30 : 0)) + 'px;">' +
+                        '<button type="button" class="btn btn-outline-light btn-sm view-cell-mini-playpause" style="padding:.1rem .35rem;" title="' + larisvmsI18n.html('js.viewPlay.playPause') + '" aria-label="' + larisvmsI18n.html('js.viewPlay.playPause') + '">▶</button>' +
                         // 30px, matching the Playback page's own timeline canvases — not smaller:
                         // timeline.js draws its coverage bar across the top ~55% and the tick marks
                         // plus their 9px labels *below* that, so anything much shorter clips the
                         // labels (and part of the bar) off the bottom of the canvas entirely.
                         '<canvas class="view-cell-mini-timeline flex-grow-1" style="height:30px; touch-action:none; cursor:pointer; display:block;"></canvas>' +
                     '</div>' +
+                    // Must stay after the mini timeline: site.css hides these while it's showing, since
+                    // both sit in this corner.
+                    window.larisvmsManualRecording.badgesHtml() +
                     // Shown on hover — not native <video controls>: that includes
                     // click-anywhere-on-the-video-to-pause in most browsers, which makes no sense for
                     // a continuous live feed and was confirmed live as unwanted.
@@ -145,13 +148,13 @@ window.larisvmsViewPlay = (function () {
                     // A flex row rather than one btn-group, since the audio group leads with a volume
                     // slider (audio-controls.js) that isn't a button and shouldn't inherit
                     // btn-group's own joined-corners styling. The remaining buttons keep their group.
-                    '<div class="position-absolute bottom-0 end-0 m-1 d-flex align-items-center gap-1 view-cell-controls d-none">' +
+                    '<div class="position-absolute bottom-0 end-0 m-1 d-flex align-items-center gap-1 view-cell-controls">' +
                         // Push-to-talk (talk.js) — only when the camera has a speaker and this user may use it.
                         (window.larisvmsTalk ? window.larisvmsTalk.html(cam && cam.canTalk) : '') +
                         window.larisvmsAudioControls.html(cam && (cam.hasAudio || cam.hasSpeaker)) +
                         '<div class="btn-group btn-group-sm">' +
                             (cam && cam.hasPtz
-                                ? '<button type="button" class="btn btn-outline-light view-cell-ptz-toggle" style="padding:.1rem .35rem;" title="PTZ controls" aria-label="PTZ controls">🕹️</button>'
+                                ? '<button type="button" class="btn btn-outline-light view-cell-ptz-toggle" style="padding:.1rem .35rem;" title="' + larisvmsI18n.html('js.viewPlay.ptzControls') + '" aria-label="' + larisvmsI18n.html('js.viewPlay.ptzControls') + '">🕹️</button>'
                                 : '') +
                             // M18: only offered when both the deployment-wide toggle is on and this
                             // particular camera has a Sub stream to switch to — a camera without one
@@ -162,10 +165,11 @@ window.larisvmsViewPlay = (function () {
                             // as "currently auto / forced high / forced low" at a glance doesn't exist
                             // the way ⏱/⛶'s do for a two-state toggle.
                             (opts.adaptiveStreamingEnabled && cam && cam.hasSub
-                                ? '<button type="button" class="btn btn-outline-light view-cell-quality" style="padding:.1rem .35rem; font-size:.7rem;" title="Stream quality: Auto" aria-label="Stream quality">Auto</button>'
+                                ? '<button type="button" class="btn btn-outline-light view-cell-quality" style="padding:.1rem .35rem; font-size:.7rem;" title="' + larisvmsI18n.html('js.viewPlay.streamQualityAuto') + '" aria-label="' + larisvmsI18n.html('js.viewPlay.streamQualityValue', { quality: larisvmsI18n.t('js.viewPlay.auto') }) + '">' + larisvmsI18n.html('js.viewPlay.auto') + '</button>'
                                 : '') +
-                            '<button type="button" class="btn btn-outline-light view-cell-playback" style="padding:.1rem .35rem;" title="Playback" aria-label="Playback">⏱</button>' +
-                            '<button type="button" class="btn btn-outline-light view-cell-fullscreen" style="padding:.1rem .35rem;" title="Fullscreen" aria-label="Fullscreen">⛶</button>' +
+                            window.larisvmsManualRecording.buttonHtml(cam && cam.canRecord) +
+                            '<button type="button" class="btn btn-outline-light view-cell-playback" style="padding:.1rem .35rem;" title="' + larisvmsI18n.html('js.viewPlay.playback') + '" aria-label="' + larisvmsI18n.html('js.viewPlay.playback') + '">⏱</button>' +
+                            '<button type="button" class="btn btn-outline-light view-cell-fullscreen" style="padding:.1rem .35rem;" title="' + larisvmsI18n.html('js.viewPlay.fullscreen') + '" aria-label="' + larisvmsI18n.html('js.viewPlay.fullscreen') + '">⛶</button>' +
                         '</div>' +
                     '</div>' +
                     // Top-center, deliberately clear of every corner (badges) and both bottom edges
@@ -226,6 +230,7 @@ window.larisvmsViewPlay = (function () {
         var frameEl = el.querySelector('.view-cell-frame');
         var controls = el.querySelector('.view-cell-controls');
         var fullscreenBtn = el.querySelector('.view-cell-fullscreen');
+        window.larisvmsManualRecording.wire(el.querySelector('[data-camera-tile]') || el, cell.cameraId);
         var playbackToggleBtn = el.querySelector('.view-cell-playback');
         var miniTimelineArea = el.querySelector('.view-cell-mini-timeline-area');
         var miniTimelineCanvas = el.querySelector('.view-cell-mini-timeline');
@@ -258,8 +263,8 @@ window.larisvmsViewPlay = (function () {
         }
 
         if (hoverTarget && controls) {
-            hoverTarget.addEventListener('mouseenter', function () { controls.classList.remove('d-none'); });
-            hoverTarget.addEventListener('mouseleave', function () { controls.classList.add('d-none'); });
+            hoverTarget.addEventListener('mouseenter', function () { controls.classList.add('is-shown'); });
+            hoverTarget.addEventListener('mouseleave', function () { controls.classList.remove('is-shown'); });
         }
         // Mute toggle + volume slider, and the reapply-on-load handling that keeps an unmuted cell
         // unmuted across a live reconnect or a switch into playback mode — both of which reload this
@@ -277,7 +282,7 @@ window.larisvmsViewPlay = (function () {
                 onFullscreenChange: function (active) {
                     if (fullscreenBtn) {
                         fullscreenBtn.textContent = active ? '⤢' : '⛶';
-                        fullscreenBtn.title = active ? 'Exit fullscreen' : 'Fullscreen';
+                        fullscreenBtn.title = active ? larisvmsI18n.t('js.viewPlay.exitFullscreen') : larisvmsI18n.t('js.viewPlay.fullscreen');
                     }
                     // M18: entering/exiting fullscreen can change effectiveRole() (see its own doc
                     // comment on why fullscreen always wins) — restart live with the new role. Only
@@ -315,9 +320,10 @@ window.larisvmsViewPlay = (function () {
             qualityBtn.addEventListener('click', function (e) {
                 e.stopPropagation();
                 qualityOverride = qualityOverride === null ? 'main' : (qualityOverride === 'main' ? 'sub' : null);
-                var label = qualityOverride === 'main' ? 'HD' : (qualityOverride === 'sub' ? 'SD' : 'Auto');
+                var label = qualityOverride === 'main' ? 'HD' : (qualityOverride === 'sub' ? 'SD' : larisvmsI18n.t('js.viewPlay.auto'));
                 qualityBtn.textContent = label;
-                qualityBtn.title = 'Stream quality: ' + label;
+                qualityBtn.title = larisvmsI18n.t('js.viewPlay.streamQualityValue', { quality: label });
+                qualityBtn.setAttribute('aria-label', qualityBtn.title);
                 if (!inPlaybackMode && liveStop) { liveStop(); startLive(); }
             });
         }
@@ -341,9 +347,9 @@ window.larisvmsViewPlay = (function () {
             exitAnyOtherPlaybackTile(cell.id);
             if (liveStop) { liveStop(); liveStop = null; }
             inPlaybackMode = true;
-            if (playbackToggleBtn) { playbackToggleBtn.textContent = '📡'; playbackToggleBtn.title = 'Back to live'; }
+            if (playbackToggleBtn) { playbackToggleBtn.textContent = '📡'; playbackToggleBtn.title = larisvmsI18n.t('js.viewPlay.backToLive'); }
             if (miniTimelineArea) miniTimelineArea.classList.remove('d-none');
-            status.textContent = 'Loading…';
+            status.textContent = larisvmsI18n.t('js.viewPlay.loading');
 
             pbPlayer = window.larisvmsPlaybackPlayer.createTile(cameraId, video, status, codec, hasAudio);
             // 30s back from now, not "most recent segment's start" — toggling playback on a *live*
@@ -392,7 +398,7 @@ window.larisvmsViewPlay = (function () {
         function exitPlaybackModeIfActive() {
             if (!inPlaybackMode) return;
             inPlaybackMode = false;
-            if (playbackToggleBtn) { playbackToggleBtn.textContent = '⏱'; playbackToggleBtn.title = 'Playback'; }
+            if (playbackToggleBtn) { playbackToggleBtn.textContent = '⏱'; playbackToggleBtn.title = larisvmsI18n.t('js.viewPlay.playback'); }
             if (miniTimelineArea) miniTimelineArea.classList.add('d-none');
             if (pbPlayer) { pbPlayer.teardown(); pbPlayer = null; }
             pbTimeline = null;
@@ -505,7 +511,7 @@ window.larisvmsViewPlay = (function () {
 
         if (!visible.length) {
             container.style.gridAutoRows = CELL_HEIGHT + 'px';
-            container.innerHTML = '<p class="text-muted">This view has no cameras yet.</p>';
+            container.innerHTML = '<p class="text-muted">' + larisvmsI18n.html('js.viewPlay.thisViewHasNoCameras') + '</p>';
             return;
         }
 
@@ -586,7 +592,7 @@ window.larisvmsViewPlay = (function () {
 
         if (!visible.length) {
             container.style.gridAutoRows = '';
-            container.innerHTML = '<p class="text-muted">No cameras in this view are visible on phones.</p>';
+            container.innerHTML = '<p class="text-muted">' + larisvmsI18n.html('js.viewPlay.noCamerasInThisView') + '</p>';
             return;
         }
 
@@ -692,7 +698,7 @@ window.larisvmsViewPlay = (function () {
             if (!list.children.length) {
                 var empty = document.createElement('div');
                 empty.className = 'text-muted small px-2 py-1';
-                empty.textContent = 'No cameras match.';
+                empty.textContent = larisvmsI18n.t('js.viewPlay.noCamerasMatch');
                 list.appendChild(empty);
             }
         }
@@ -746,21 +752,21 @@ window.larisvmsViewPlay = (function () {
             if (pathCb) {
                 pathCb.disabled = !showMovingDetections;
                 pathCb.title = showMovingDetections
-                    ? 'Show the path each moving object has taken'
-                    : 'Turn on Moving first — paths follow moving objects';
+                    ? larisvmsI18n.t('js.viewPlay.showThePathEachMoving')
+                    : larisvmsI18n.t('js.viewPlay.turnOnMovingForPaths');
             }
             // Speed and Color label boxes too, like Confidence.
             var anyBoxes = showMovingDetections || showIdleDetections;
-            [[speedCb, 'Show each object’s speed once a speed trap has timed it'], [colorCb, 'Show each object’s color']].forEach(function (pair) {
+            [[speedCb, larisvmsI18n.t('js.viewPlay.showSpeed')], [colorCb, larisvmsI18n.t('js.viewPlay.showColor')]].forEach(function (pair) {
                 if (!pair[0]) return;
                 pair[0].disabled = !anyBoxes;
-                pair[0].title = anyBoxes ? pair[1] : 'Turn on Moving or Idle first — there are no boxes to label';
+                pair[0].title = anyBoxes ? pair[1] : larisvmsI18n.t('js.viewPlay.turnOnMovingOrIdle');
             });
             if (!confidenceCb) return;
             confidenceCb.disabled = !anyBoxes;
             confidenceCb.title = anyBoxes
-                ? 'Show each box’s detection confidence'
-                : 'Turn on Moving or Idle first — there are no boxes to label';
+                ? larisvmsI18n.t('js.viewPlay.showEachBoxDetectionConfidence')
+                : larisvmsI18n.t('js.viewPlay.turnOnMovingOrIdle');
         }
 
         movingCb.addEventListener('change', function () {
@@ -867,7 +873,14 @@ window.larisvmsViewPlay = (function () {
         }, intervalMs);
     }
 
+    function recordableViewCameras() {
+        return cells
+            .filter(function (c) { return cameraById[c.cameraId] && cameraById[c.cameraId].canRecord; })
+            .map(function (c) { return c.cameraId; });
+    }
+
     function init(o) {
+        window.larisvmsManualRecording.init(recordableViewCameras);
         opts = o;
         cameraById = {};
         (o.cameras || []).forEach(function (c) { cameraById[c.id] = c; });

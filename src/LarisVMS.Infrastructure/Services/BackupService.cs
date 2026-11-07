@@ -1,6 +1,7 @@
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 using LarisVMS.Infrastructure.Data;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
@@ -9,7 +10,7 @@ using Microsoft.Extensions.Logging;
 namespace LarisVMS.Infrastructure.Services;
 
 /// <summary>
-/// M11: runs BACKUP DATABASE (SQL Server) or mariadb-dump (MariaDB, experimental) against the app's own database over its existing connection — the whole
+/// M11: runs BACKUP DATABASE (SQL Server) or mariadb-dump (MariaDB) against the app's own database over its existing connection — the whole
 /// point being SQL Express installs, which have no SQL Agent to schedule backups with. The .bak is
 /// written by the SQL Server service on the SQL host: for the typical same-machine Express setup
 /// that's local disk; for a remote SQL Server the path is on that server, and app-side file
@@ -30,7 +31,7 @@ public class BackupService(ApplicationDbContext db, ISettingsResolver settings, 
         if (!await Gate.WaitAsync(0, ct))
         {
             entry.Status = BackupStatus.Failed;
-            entry.Error = "A backup is already running.";
+            entry.Error = Loc.T("server.backup.aBackupIsAlreadyRunning");
             entry.CompletedAt = DateTime.UtcNow;
             db.BackupHistoryEntries.Add(entry);
             await db.SaveChangesAsync(ct);
@@ -137,11 +138,11 @@ public class BackupService(ApplicationDbContext db, ISettingsResolver settings, 
         if (string.IsNullOrWhiteSpace(path)) return null;
         path = path.Trim();
         if (!Path.IsPathRooted(path))
-            return @"Enter the full path to mariadb-dump (e.g. C:\Program Files\MariaDB 11.4\bin\mariadb-dump.exe).";
+            return Loc.T("server.backup.enterFullDumpPath");
         var name = Path.GetFileNameWithoutExtension(path);
         if (!name.Equals("mariadb-dump", StringComparison.OrdinalIgnoreCase) && !name.Equals("mysqldump", StringComparison.OrdinalIgnoreCase))
-            return "The dump tool must be mariadb-dump or mysqldump.";
-        return File.Exists(path) ? null : "That file doesn't exist on this server.";
+            return Loc.T("server.backup.theDumpToolMustBe");
+        return File.Exists(path) ? null : Loc.T("server.backup.fileDoesntExist");
     }
 
     /// <summary>MariaDB has no BACKUP DATABASE: runs mariadb-dump on this machine and gzips its output.
@@ -151,7 +152,7 @@ public class BackupService(ApplicationDbContext db, ISettingsResolver settings, 
     {
         var tool = FindMariaDbDump(await settings.GetRawAsync(MariaDbDumpPathKey, ct: ct))
             ?? throw new InvalidOperationException(
-                "mariadb-dump wasn't found at the path set on Admin → Backups.");
+                Loc.T("server.backup.mariadbDumpWasntFoundAt"));
 
         var b = new MySqlConnector.MySqlConnectionStringBuilder(connectionString);
         Directory.CreateDirectory(LarisVMS.Core.Security.LocalDataAcl.Root);
@@ -173,12 +174,12 @@ public class BackupService(ApplicationDbContext db, ISettingsResolver settings, 
             System.Diagnostics.Process process;
             try
             {
-                process = System.Diagnostics.Process.Start(psi) ?? throw new InvalidOperationException($"Could not start {tool}.");
+                process = System.Diagnostics.Process.Start(psi) ?? throw new InvalidOperationException(Loc.T("server.backup.couldNotStart", new { tool }));
             }
             catch (System.ComponentModel.Win32Exception ex)
             {
                 throw new InvalidOperationException(
-                    $"Could not run {tool} ({ex.Message}). Install the MariaDB client tools on this machine, or set the path to mariadb-dump on Admin → Backups.", ex);
+                    Loc.T("server.backup.couldNotRunInstallThe", new { tool, message = ex.Message }), ex);
             }
 
             using (process)
@@ -298,13 +299,13 @@ public class BackupService(ApplicationDbContext db, ISettingsResolver settings, 
     internal static string? ValidateDirectory(string? directory, IReadOnlyList<string>? allowedRoots = null)
     {
         if (string.IsNullOrWhiteSpace(directory))
-            return "No backup directory is configured. Set one on Admin → Backups.";
+            return Loc.T("server.backup.noBackupDirectoryIsConfigured");
         if (directory.IndexOfAny(['\'', ';', '[', ']', '\"']) >= 0)
-            return "The backup directory contains invalid characters.";
+            return Loc.T("server.backup.theBackupDirectoryContainsInvalid");
         if (!Path.IsPathRooted(directory))
-            return "The backup directory must be an absolute path (e.g. D:\\Backups\\LarisVMS).";
+            return Loc.T("server.backup.theBackupDirectoryMustBe");
         if (allowedRoots is { Count: > 0 } && !IsUnderAny(directory, allowedRoots))
-            return "That backup folder isn't one of the allowed backup locations (Backups:AllowedRoots).";
+            return Loc.T("server.backup.folderNotAllowed");
         return null;
     }
 

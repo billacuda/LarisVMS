@@ -129,11 +129,41 @@ public sealed class InstallerUtilTests
         }
         try
         {
-            Assert.Null(Util.CheckPfx(path, "right-^-pass", "CERTPATH", "CERTPASSWORD"));
-            Assert.Contains("CERTPASSWORD", Util.CheckPfx(path, "wrong", "CERTPATH", "CERTPASSWORD"));
-            Assert.Contains("CERTPATH", Util.CheckPfx(path + ".missing", "right-^-pass", "CERTPATH", "CERTPASSWORD"));
+            const string notFound = "Not found: {0} (property {1}).", cantOpen = "Could not open {0}: {1} (property {2}).";
+            Assert.Null(Util.CheckPfx(path, "right-^-pass", "CERTPATH", "CERTPASSWORD", notFound, cantOpen));
+            Assert.Contains("CERTPASSWORD", Util.CheckPfx(path, "wrong", "CERTPATH", "CERTPASSWORD", notFound, cantOpen));
+            Assert.Contains("CERTPATH", Util.CheckPfx(path + ".missing", "right-^-pass", "CERTPATH", "CERTPASSWORD", notFound, cantOpen));
         }
         finally { File.Delete(path); }
+    }
+
+    // Setup's messages come from the language file through LARIS_TEXT_<id> properties; a missing link
+    // shows the bare id in the error dialog.
+    [Fact]
+    public void EveryInstallerMessage_HasAPropertyAndEnglishText()
+    {
+        var installer = Path.Combine(RepoRoot(), "installer");
+        var code = string.Join('\n', Directory.GetFiles(Path.Combine(installer, "CustomActions"), "*.cs").Select(File.ReadAllText));
+        var common = File.ReadAllText(Path.Combine(installer, "Common", "Common.wxs"));
+        var english = File.ReadAllText(Path.Combine(installer, "Common", "Strings.en-US.wxl"));
+
+        var ids = System.Text.RegularExpressions.Regex.Matches(code, @"Text\(session, ""(\w+)""|LARIS_TEXT_(\w+)|Util\.Format\([^,]+, ""(\w+)""")
+            .Select(m => m.Groups.Cast<System.Text.RegularExpressions.Group>().Skip(1).First(g => g.Success).Value)
+            .Distinct().ToList();
+        Assert.NotEmpty(ids);
+        foreach (var id in ids)
+        {
+            Assert.Contains($"<Property Id=\"LARIS_TEXT_{id}\" Value=\"!(loc.{id})\" />", common);
+            Assert.Contains($"<String Id=\"{id}\"", english);
+        }
+    }
+
+    private static string RepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "LarisVMS.slnx"))) dir = dir.Parent;
+        Assert.NotNull(dir);
+        return dir.FullName;
     }
 
     // What a node takeover or upgrade must leave in onnxruntime-backends\cuda: losing these is what

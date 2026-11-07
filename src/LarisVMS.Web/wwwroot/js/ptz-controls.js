@@ -11,17 +11,26 @@ window.larisvmsPtzControls = (function () {
 
     var MOVE_REISSUE_MS = 2000; // comfortably inside PtzService's own 5s device-side timeout
 
+    // Each button says which way it moves, so a screen reader doesn't announce eight "Pan/tilt"s.
+    var DIRECTION_KEYS = {
+        '-1,1': 'js.ptzControls.upLeft', '0,1': 'js.ptzControls.up', '1,1': 'js.ptzControls.upRight',
+        '-1,0': 'js.ptzControls.left', '1,0': 'js.ptzControls.right',
+        '-1,-1': 'js.ptzControls.downLeft', '0,-1': 'js.ptzControls.down', '1,-1': 'js.ptzControls.downRight'
+    };
+
     function dirBtn(panX, tiltY, label) {
+        var name = larisvmsI18n.t(DIRECTION_KEYS[panX + ',' + tiltY]);
         return '<button type="button" class="btn btn-outline-light btn-sm p-0 ptz-dir" ' +
-            'style="width:1.6rem; height:1.6rem; line-height:1;" ' +
+            'style="width:1.75rem; height:1.75rem; line-height:1;" ' +
             'data-ptz-pan="' + panX + '" data-ptz-tilt="' + tiltY + '" ' +
-            'title="Pan/tilt" aria-label="Pan/tilt">' + label + '</button>';
+            'title="' + name + '" aria-label="' + name + '"><span aria-hidden="true">' + label + '</span></button>';
     }
 
     function zoomBtn(zoomX, label) {
+        var name = larisvmsI18n.t(zoomX > 0 ? 'js.ptzControls.zoomIn' : 'js.ptzControls.zoomOut');
         return '<button type="button" class="btn btn-outline-light btn-sm p-0 ptz-zoom" ' +
-            'style="width:1.6rem; height:1.6rem; line-height:1;" ' +
-            'data-ptz-zoom="' + zoomX + '" title="Zoom" aria-label="Zoom">' + label + '</button>';
+            'style="width:1.75rem; height:1.75rem; line-height:1;" ' +
+            'data-ptz-zoom="' + zoomX + '" title="' + name + '" aria-label="' + name + '"><span aria-hidden="true">' + label + '</span></button>';
     }
 
     /// Markup for one tile's PTZ pad, hidden (d-none) until toggled on — call sites drop this inside
@@ -31,7 +40,7 @@ window.larisvmsPtzControls = (function () {
         if (!hasPtz) return '';
         return (
             '<div class="ptz-pad d-none bg-dark bg-opacity-75 rounded p-1" style="pointer-events:auto;">' +
-                '<div style="display:grid; grid-template-columns:repeat(3,1.6rem); grid-auto-rows:1.6rem; gap:2px;">' +
+                '<div style="display:grid; grid-template-columns:repeat(3,1.75rem); grid-auto-rows:1.75rem; gap:2px;">' +
                     dirBtn(-1, 1, '↖') + dirBtn(0, 1, '↑') + dirBtn(1, 1, '↗') +
                     dirBtn(-1, 0, '←') + '<span></span>' + dirBtn(1, 0, '→') +
                     dirBtn(-1, -1, '↙') + dirBtn(0, -1, '↓') + dirBtn(1, -1, '↘') +
@@ -78,7 +87,7 @@ window.larisvmsPtzControls = (function () {
                 if (res.status === 409) {
                     res.json().then(function (problem) {
                         var retry = problem && problem.retryAfterSeconds;
-                        showStatus(retry ? 'Locked by higher priority — retry in ' + retry + 's' : 'Locked by higher priority',
+                        showStatus(retry ? larisvmsI18n.t('js.ptzControls.lockedRetryIn', { seconds: retry }) : larisvmsI18n.t('js.ptzControls.lockedByHigherPriority'),
                             Math.min(Math.max((retry || 5) * 1000, 2000), 15000));
                     }).catch(function () { /* body wasn't JSON — nothing more to show */ });
                 }
@@ -115,6 +124,27 @@ window.larisvmsPtzControls = (function () {
             }
             btn.addEventListener('pointerup', end);
             btn.addEventListener('pointercancel', end);
+
+            // Enter or Space held down moves, the same as holding the button with a pointer. Losing
+            // focus has to stop it too, or the key-up never reaches this button.
+            var keyHeld = false;
+            function endKey() {
+                if (!keyHeld) return;
+                keyHeld = false;
+                stopMove();
+            }
+            btn.addEventListener('keydown', function (e) {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                e.preventDefault();
+                e.stopPropagation();
+                if (keyHeld) return; // the key's own auto-repeat
+                keyHeld = true;
+                startMove(panX, tiltY, zoomX);
+            });
+            btn.addEventListener('keyup', function (e) {
+                if (e.key === 'Enter' || e.key === ' ') endKey();
+            });
+            btn.addEventListener('blur', endKey);
             // A press that drags off the button before releasing (common on touch) must still stop —
             // pointer capture keeps the up/cancel events coming to this same element regardless of
             // where the pointer physically is by then, so 'leave' itself needs no separate handler.

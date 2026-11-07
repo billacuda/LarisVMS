@@ -57,5 +57,6 @@ public static class PermissionCatalog
         new("EvidenceLocks", "Create", "Lock footage so retention can't delete it"),
         new("Notifications", "Subscribe", "Subscribe to shared notifications"),
         new("Notifications", "CreateOwn", "Create personal notifications"),
+        new("Recording", "Manual", "Start and stop manual recording"),
     ];
 }

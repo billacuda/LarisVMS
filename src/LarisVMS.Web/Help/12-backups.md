@@ -11,8 +11,6 @@ Restoring is done outside LarisVMS, with SSMS or `sqlcmd`. Backups are full back
 
 ## MariaDB
 
-**Experimental:** MariaDB 10.11 and later are now supported, but support is new. For an installation that needs to be stable, use SQL Server for now, and please [report any issues](https://github.com/billacuda/LarisVMS/issues).
-
 On MariaDB, backups are made with `mariadb-dump` and saved as compressed `.sql.gz` files. `mariadb-dump` runs on the LarisVMS server, so the MariaDB client tools must be installed there, even when MariaDB itself runs on another machine. LarisVMS finds them under `C:\Program Files\MariaDB …`, or a Super Admin can set the path to `mariadb-dump.exe` on the Backups page.
 
 - **Backup directory**: a folder on the LarisVMS server (or a share) that the *LarisVMS service* can write to, outside the install folder. Old backups are always cleaned up, wherever MariaDB runs.

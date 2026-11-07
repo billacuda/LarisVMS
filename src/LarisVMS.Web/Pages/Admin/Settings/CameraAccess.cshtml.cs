@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
+using LarisVMS.Core.Localization;
 using LarisVMS.Core;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
@@ -68,7 +69,7 @@ public class CameraAccessModel(ApplicationDbContext db, IAuditService auditServi
         await LoadAsync(ct);
 
         var role = Roles.FirstOrDefault(r => r.Id == RoleId);
-        if (role is null) { ErrorMessage = "Choose a role."; return Page(); }
+        if (role is null) { ErrorMessage = Loc.T("settings.cameraAccess.chooseARole2"); return Page(); }
         if (!(await LarisVMS.Web.Services.AdminScope.ForAsync(db, permissions, User, ct)).CanEditRole(role.Id))
         {
             ErrorMessage = LarisVMS.Web.Services.AdminScope.OwnRoleMessage;
@@ -78,7 +79,7 @@ public class CameraAccessModel(ApplicationDbContext db, IAuditService auditServi
         if (ScopeType != CameraAccessScopeType.All && ScopeId is null)
         {
             ErrorMessage = ScopeType == CameraAccessScopeType.Group
-                ? "Choose a camera group." : "Choose a camera.";
+                ? Loc.T("settings.cameraAccess.chooseACameraGroup") : Loc.T("settings.cameraAccess.chooseACamera2");
             return Page();
         }
 
@@ -93,7 +94,7 @@ public class CameraAccessModel(ApplicationDbContext db, IAuditService auditServi
         }
 
         var actions = ParseActions(Actions);
-        if (actions == CameraAccessActions.None) { ErrorMessage = "Choose at least one action to grant."; return Page(); }
+        if (actions == CameraAccessActions.None) { ErrorMessage = Loc.T("settings.cameraAccess.chooseAtLeastOneAction"); return Page(); }
 
         db.CameraAccesses.Add(new CameraAccess
         {
@@ -112,7 +113,7 @@ public class CameraAccessModel(ApplicationDbContext db, IAuditService auditServi
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             $"{role.Name}: {actions} on {scopeText}", ct);
 
-        SavedMessage = "Grant added.";
+        SavedMessage = Loc.T("settings.cameraAccess.grantAdded");
         await LoadAsync(ct);
         return Page();
     }
@@ -128,7 +129,7 @@ public class CameraAccessModel(ApplicationDbContext db, IAuditService auditServi
         await LoadAsync(ct);
 
         var row = await db.CameraAccesses.FirstOrDefaultAsync(a => a.Id == id, ct);
-        if (row is null) { ErrorMessage = "That grant no longer exists."; return Page(); }
+        if (row is null) { ErrorMessage = Loc.T("settings.cameraAccess.thatGrantNoLongerExists"); return Page(); }
         if (!(await LarisVMS.Web.Services.AdminScope.ForAsync(db, permissions, User, ct)).CanEditRole(row.PrincipalId))
         {
             ErrorMessage = LarisVMS.Web.Services.AdminScope.OwnRoleMessage;
@@ -141,7 +142,7 @@ public class CameraAccessModel(ApplicationDbContext db, IAuditService auditServi
         if (scopeType != CameraAccessScopeType.All && scopeId is null)
         {
             ErrorMessage = scopeType == CameraAccessScopeType.Group
-                ? "Choose a camera group." : "Choose a camera.";
+                ? Loc.T("settings.cameraAccess.chooseACameraGroup") : Loc.T("settings.cameraAccess.chooseACamera2");
             return Page();
         }
 
@@ -156,7 +157,7 @@ public class CameraAccessModel(ApplicationDbContext db, IAuditService auditServi
         }
 
         var parsedActions = ParseActions(actions);
-        if (parsedActions == CameraAccessActions.None) { ErrorMessage = "Choose at least one action to grant."; return Page(); }
+        if (parsedActions == CameraAccessActions.None) { ErrorMessage = Loc.T("settings.cameraAccess.chooseAtLeastOneAction"); return Page(); }
 
         var oldScopeText = ScopeText(row.ScopeType, row.ScopeId);
         var oldActions = row.Actions;
@@ -175,7 +176,7 @@ public class CameraAccessModel(ApplicationDbContext db, IAuditService auditServi
             HttpContext.Connection.RemoteIpAddress?.ToString(),
             details is null ? $"{roleName}: {newScopeText}" : $"{roleName}: {details}", ct);
 
-        SavedMessage = "Grant updated.";
+        SavedMessage = Loc.T("settings.cameraAccess.grantUpdated");
         await LoadAsync(ct);
         return Page();
     }
@@ -199,7 +200,7 @@ public class CameraAccessModel(ApplicationDbContext db, IAuditService auditServi
                 HttpContext.Connection.RemoteIpAddress?.ToString(), $"{roleName}: {row.Actions} on scope {row.ScopeType}", ct);
         }
 
-        SavedMessage = "Grant removed.";
+        SavedMessage = Loc.T("settings.cameraAccess.grantRemoved");
         await LoadAsync(ct);
         return Page();
     }

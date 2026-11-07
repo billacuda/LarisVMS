@@ -8,7 +8,7 @@ and administration all run in the browser, on desktop, tablet, and phone.
   <a href="https://www.buymeacoffee.com/billacuda"><img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=%E2%98%95&slug=billacuda&button_colour=5F7FFF&font_colour=ffffff&font_family=Cookie&outline_colour=000000&coffee_colour=FFDD00" alt="Buy me a coffee" height="50" /></a>
 </p>
 
-**Current version: [0.219.0](CHANGELOG.md)**
+**Current version: [0.220.0](CHANGELOG.md)**
 
 📖 **[Documentation](https://www.larisvms.com/docs/)**: how to install, set up, and use LarisVMS. Worth a
 read before you install.
@@ -32,7 +32,7 @@ read before you install.
 
 **Recording**
 - One Windows-service recorder node per machine, with as many nodes as you need. Recording is `ffmpeg -c copy`, so no re-encoding (except cameras with a privacy mask, which are re-encoded in their own codec and bitrate).
-- Recording modes: Continuous, Motion, Schedule, and Event, set globally or per camera, with pre/post-roll.
+- Recording modes: Continuous, Motion, Schedule, Event, and Manual only, set globally or per camera, with pre/post-roll.
 - Retention set globally, per node, and per camera, plus per-camera quotas and a disk watermark backstop. Footage left behind when a camera or storage path moves is still aged out and confirmed deleted.
 - Evidence locks keep chosen footage from retention for days, until a date, or indefinitely, with a 24-hour grace period after removal and a full audit trail.
 - An optional archive volume (SMB share or USB drive) that receives aged-out footage instead of deleting it.
@@ -62,11 +62,13 @@ read before you install.
 - Digital zoom on any live or playback tile: drag a box to zoom in, right-click to reset.
 - Multi-camera exports, bookmarks, and a snapshots browser.
 - Live overlay switches for travel paths, speed, color, and confidence on each box.
+- 🔴 and Ⓜ️ indicators on live tiles show when footage is being kept, and when a manual recording is on.
 - Basic PTZ controls, and two-way audio: hold 🎙️ on a live tile to talk through the camera's speaker, with both directions recorded.
 - A camera map on a street map or uploaded floorplans, showing where each camera points and what it sees.
 - Video relayed through the server, through media proxies, or sent directly from node to browser.
 - Phone-friendly layout, installable as an app from Chrome on Android or Safari on iOS, with pinch-to-zoom on timelines and in fullscreen. See [Using it on a phone](#-6-use-it-on-your-phone-optional).
 - Dark mode.
+- Keyboard and screen reader support across the app, including the timeline, PTZ, and drawing tools, and it follows your browser's font size, reduced motion, and high contrast settings.
 
 **Administration**
 - Roles, a permissions matrix, and per-camera/group access control, with auto-expiring role assignments and PTZ priority between roles.
@@ -75,18 +77,20 @@ read before you install.
 - Alert rules that watch a camera or node, or fire on detected objects and speeds, sent by email (SMTP, Microsoft Graph, Gmail), webhook, ntfy, Pushover, Slack, and Teams.
 - Personal notifications: people subscribe to shared rules or make their own (a camera, a node, or everything; certain hours), delivered by email or to the browser while LarisVMS is open (on-premises), through Web Push, or through Firebase Cloud Messaging.
 - Audit log, system logs, scheduled database backups, and a customizable dashboard of widgets, each with a full report: per-camera fps, bitrate, and reconnects, per-node CPU, memory, network, fps, and detection counts, recent alerts, latest detections, and more.
-- API keys for automation, and a monitoring status endpoint.
+- Manual recording from a live tile or the API, for one camera or a whole view, including cameras that otherwise only show live video.
+- A REST API for monitoring, recording, PTZ, playback data, bookmarks, exports, and evidence locks, with API keys that can each have different permissions.
 - A warning on the Nodes page, and a notification, when a node's AI detection falls back to a slower backend than the one asked for.
 - Nightly database index and statistics upkeep, with no SQL Agent job needed.
 - IP allow lists, an optional separate port for video traffic, and secrets encrypted at rest.
 - Branding: app name, colors, font, and logo.
+- Drop-in languages: translate one text file and upload it, or copy it into a folder, to show the interface in that language. Each person picks theirs, and alerts reach them in it.
 - Built-in **Help** with documentation for every feature.
 
 ## 🏗️ Architecture
 
 | Component | Runs as | Role |
 |---|---|---|
-| **LarisVMS Web** | Windows service (Kestrel, HTTPS) | Web UI, REST API, and node control plane. Stores configuration in SQL Server (or, experimentally, MariaDB). |
+| **LarisVMS Web** | Windows service (Kestrel, HTTPS) | Web UI, REST API, and node control plane. Stores configuration in SQL Server or MariaDB. |
 | **LarisVMS Node** | Windows service, one per recording machine | Ingests RTSP, writes segments, enforces retention, runs motion detection, serves live and playback video. |
 | **LarisVMS Vision Service** | Child process of a node (optional) | GPU/CPU object detection. It's isolated, so a driver fault never stops recording. |
 | **LarisVMS Proxy** | Windows service (optional) | Relays video between browsers and nodes, for remote sites or low-bandwidth links. |
@@ -97,11 +101,8 @@ Settings are inherited **global → node → camera**, and the most specific val
 
 - **Operating system:** any 64-bit Windows version supported by [.NET 10](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md), for both the server and the recorder nodes.
 - **Server:** SQL Server (Express works) using SQL or Integrated authentication. For SQL Server Express, the server name is `.\SQLEXPRESS`. Building from source also needs the [.NET 10 SDK](https://dotnet.microsoft.com/download); the MSIs don't need any .NET runtime.
-- **MariaDB (experimental):** MariaDB 10.11 or later can be used instead of SQL Server, with a MariaDB user and password. Built-in backups need the MariaDB client tools (`mariadb-dump`) on the LarisVMS server.
-
-> [!WARNING]
-> MariaDB 10.11 and later are now supported, but support is new and experimental. For an installation that needs to be stable, use SQL Server for now, and please [report any issues](https://github.com/billacuda/LarisVMS/issues).
-- **.NET version:** developed with the .NET SDK 10.0.402. The 0.219.0 installers were built with it and include the .NET 10.0.13 runtime (ASP.NET Core 10.0.13).
+- **MariaDB:** MariaDB 10.11 or later can be used instead of SQL Server, with a MariaDB user and password. Built-in backups need the MariaDB client tools (`mariadb-dump`) on the LarisVMS server.
+- **.NET version:** developed with the .NET SDK 10.0.402. The 0.220.0 installers were built with it and include the .NET 10.0.13 runtime (ASP.NET Core 10.0.13).
 - **Each recorder node:** [FFmpeg](https://ffmpeg.org/) (`winget install ffmpeg --scope machine`).
 - **LarisVision (optional):** a GPU and its driver, or CPU only. NVIDIA additionally needs CUDA Toolkit 12.x and cuDNN 9.x (see [LarisVision](#-larisvision-ai-detection)) if you want to use CUDA or TensorRT acceleration, otherwise DirectML works out of the box.
 - **Cameras:** ONVIF Profile S or T.
@@ -152,9 +153,9 @@ Double-click an installer to be prompted for its settings, or pass them on the c
 ### 🌐 1. Install the web server
 
 ```powershell
-msiexec /i LarisVMS-Web-0.219.0-x64.msi
+msiexec /i LarisVMS-Web-0.220.0-x64.msi
 # silent, with a certificate:
-msiexec /i LarisVMS-Web-0.219.0-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx CERTPASSWORD=secret /qn
+msiexec /i LarisVMS-Web-0.220.0-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx CERTPASSWORD=secret /qn
 ```
 
 | Property | Default | Purpose |
@@ -168,7 +169,7 @@ msiexec /i LarisVMS-Web-0.219.0-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx
 
 Browse to `https://<server>:8444/`. The wizard sets up the database connection, the first admin account, and the branding, and shows the **node registration key**. You can find the key again later under **Nodes → Updates and registration**.
 
-The wizard asks which database to use: **SQL Server**, or **MariaDB** (experimental — for an installation that needs to be stable, use SQL Server for now, and please report any issues). A SQL login or MariaDB password is stored encrypted on the server (DPAPI, this machine only).
+The wizard asks which database to use: **SQL Server** or **MariaDB**. A SQL login or MariaDB password is stored encrypted on the server (DPAPI, this machine only).
 
 Pointing the wizard at an existing LarisVMS database, for example when reinstalling, uses that database as it is: it's upgraded if needed, nothing is seeded or overwritten, and the wizard's remaining steps are skipped. A database that isn't a LarisVMS one is refused. Once setup is complete, the wizard is closed.
 
@@ -177,7 +178,7 @@ Pointing the wizard at an existing LarisVMS database, for example when reinstall
 Install [FFmpeg](https://ffmpeg.org/) on each recording machine first (`winget install ffmpeg --scope machine`), then:
 
 ```powershell
-msiexec /i LarisVMS-Node-0.219.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> STORAGEROOT=D:\Recordings /qn
+msiexec /i LarisVMS-Node-0.220.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> STORAGEROOT=D:\Recordings /qn
 ```
 
 | Property | Default | Purpose |
@@ -197,7 +198,7 @@ The node registers itself and appears under **Nodes**.
 ### 🔀 4. Install media proxies (optional)
 
 ```powershell
-msiexec /i LarisVMS-Proxy-0.219.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> CLIENTPORT=4443 /qn
+msiexec /i LarisVMS-Proxy-0.220.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> CLIENTPORT=4443 /qn
 ```
 
 Properties: `SERVERURL`, `REGISTRATIONKEY`, `CLIENTPORT` (default 4443), `CLIENTENDPOINTHOST`, `CLIENTPFXPATH`, `CLIENTPFXPASSWORD`, `CLIENTALLOWINSECURE`, `INSECURETLS`, `SERVICEACCOUNT`, `SERVICEPASSWORD`, `INSTALLFOLDER`, with the same meanings as for the node.
@@ -306,7 +307,9 @@ machines, and you own them: nobody else can see them.
 ## 📚 Documentation
 
 - **In-app Help:** the **Help** item in the sidebar documents every feature and setting, including
-  troubleshooting.
+  troubleshooting, the [API](https://www.larisvms.com/docs/api/), [languages](https://www.larisvms.com/docs/languages/),
+  and [accessibility](https://www.larisvms.com/docs/accessibility/). The same pages are on the
+  [website](https://www.larisvms.com/docs/).
 - **[CHANGELOG.md](CHANGELOG.md):** release notes. Older releases are in [`changelog-archive/`](changelog-archive/).
 
 ## 🔨 Building from source
@@ -344,7 +347,7 @@ and `build-installers.ps1` refuse to run if any of these disagree. Releases up t
 src/
   LarisVMS.Core             Domain entities, enums, interfaces
   LarisVMS.Infrastructure   EF Core, identity, settings resolution, node control plane
-  LarisVMS.Infrastructure.MariaDb  EF Core migrations for MariaDB (experimental)
+  LarisVMS.Infrastructure.MariaDb  EF Core migrations for MariaDB
   LarisVMS.Onvif            ONVIF SOAP clients, WS-Discovery
   LarisVMS.Media            FFmpeg supervision, segment handling
   LarisVMS.Web              Web UI (Blazor static SSR + Razor Pages) and API
@@ -370,6 +373,7 @@ tools/export-models         Python: exports detection models to ONNX
 - Scene heatmaps use the camera's current framing. After a camera is moved or re-aimed, older heat no longer lines up with the picture until new history builds up.
 - HTTP/3 needs Windows 11, Windows Server 2022, or later; older versions use HTTP/2.
 - PTZ has not been tested against real PTZ hardware.
+- Accessibility hasn't been independently audited, and the player has no captions or audio description, because cameras don't record them.
 - Windows only (server and nodes).
 - Entra SSO has not been tested (I don't have a tenant to test it against, but in theory it should work)
 - Some features listed may have placeholders (webhooks, Teams/Slack integration)

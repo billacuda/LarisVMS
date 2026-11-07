@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
+using LarisVMS.Core.Localization;
 using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
@@ -146,7 +147,7 @@ public class EditModel(ApplicationDbContext db, ICameraService cameraService, IN
             var existing = await db.AlertRules.Include(r => r.Deliveries).FirstOrDefaultAsync(r => r.Id == id && r.OwnerUserId == null, ct);
             if (existing is null)
             {
-                ErrorMessage = "That rule no longer exists.";
+                ErrorMessage = Loc.T("admin.alerts.edit.thatRuleNoLongerExists");
                 await LoadPickersAsync(ct);
                 return Page();
             }

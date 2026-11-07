@@ -147,9 +147,7 @@ namespace LarisVMS.Installer
                     || d.StartsWith("cudart", StringComparison.OrdinalIgnoreCase)).ToList();
                 if (blocking.Count > 0)
                 {
-                    var text = "LarisVMS couldn't find " + string.Join(" and ", blocking) + " on this computer, so AI detection " +
-                        "will run on DirectML, which is much slower than CUDA. Install the CUDA Toolkit 12.x and cuDNN 9.x for " +
-                        "CUDA 12 (developer.nvidia.com/cudnn, or: pip install nvidia-cudnn-cu12), then repair this installation.";
+                    var text = Util.Format(data["CudaWarning"], "WarnCudaMissing", string.Join(", ", blocking));
                     using (var record = new Record(1) { FormatString = "[1]" })
                     {
                         record.SetString(1, text);

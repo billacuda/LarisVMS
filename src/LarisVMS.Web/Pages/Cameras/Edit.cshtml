@@ -2,7 +2,7 @@
 @model LarisVMS.Web.Pages.Cameras.EditModel
 @using LarisVMS.Core.Entities
 @{
-    ViewData["Title"] = Model.IsNew ? "Add camera" : "Edit camera";
+    ViewData["Title"] = Model.IsNew ? L["cameras.edit.addCamera"].Value : L["cameras.edit.editCamera"].Value;
     var hasOnvifEvents = Model.Capabilities?.HasEvents ?? false;
     // data-show-when for the inherit ("") option: only known when the camera has no override of its
     // own — EffectiveRecordingMode includes this camera's override.
@@ -11,30 +11,30 @@
         + (string.IsNullOrEmpty(Model.RecordingModeOverride) && modes.Contains(Model.EffectiveRecordingMode) ? "," : "");
 }
 <div class="lv-page-narrow">
-<nav aria-label="breadcrumb" class="small mb-1"><a href="/Cameras">&larr; Cameras</a></nav>
+<nav aria-label="@L["cameras.edit.breadcrumb"]" class="small mb-1"><a href="/Cameras">@L["cameras.edit.cameras"]</a></nav>
 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
-    <h1 class="mb-0">@(Model.IsNew ? "Add camera" : Model.Name)</h1>
+    <h1 class="mb-0">@(Model.IsNew ? L["cameras.edit.addCamera"].Value : Model.Name)</h1>
     @if (!Model.IsNew)
     {
         <div class="btn-group">
             @if (!string.IsNullOrWhiteSpace(Model.DeviceServiceUri))
             {
                 <a class="btn btn-outline-secondary" asp-page="DeviceSettings" asp-route-id="@Model.Id"
-                   title="Change the camera's own stream, image, and audio settings">Device settings</a>
+                   title="@L["cameras.edit.changeTheCameraOwnStream"]">@L["cameras.edit.deviceSettings"]</a>
             }
-            <a class="btn btn-outline-secondary" asp-page="Zones" asp-route-id="@Model.Id">Zones</a>
-            <a class="btn btn-outline-secondary" asp-page="SpeedTraps" asp-route-id="@Model.Id">Speed traps</a>
-            <a class="btn btn-outline-secondary" href="/Cameras/EventTags/@Model.Id">Event tags</a>
-            <a class="btn btn-outline-secondary" asp-page="Schedule" asp-route-id="@Model.Id">Schedule</a>
+            <a class="btn btn-outline-secondary" asp-page="Zones" asp-route-id="@Model.Id">@L["cameras.edit.zones"]</a>
+            <a class="btn btn-outline-secondary" asp-page="SpeedTraps" asp-route-id="@Model.Id">@L["cameras.edit.speedTraps"]</a>
+            <a class="btn btn-outline-secondary" href="/Cameras/EventTags/@Model.Id">@L["cameras.edit.eventTags"]</a>
+            <a class="btn btn-outline-secondary" asp-page="Schedule" asp-route-id="@Model.Id">@L["cameras.edit.schedule"]</a>
             <button type="submit" form="cameraForm" asp-page-handler="Probe" class="btn btn-outline-secondary"
-                    title="Re-read this camera's capabilities and streams"><span aria-hidden="true">🔍</span> Re-probe</button>
+                    title="@L["cameras.edit.reReadThisCameraCapabilities"]"><span aria-hidden="true">🔍</span> @L["cameras.edit.reProbe"]</button>
         </div>
     }
 </div>
 
 @if (!string.IsNullOrEmpty(Model.ErrorMessage))
 {
-    <div class="alert alert-danger">@Model.ErrorMessage</div>
+    <div class="alert alert-danger" role="alert">@Model.ErrorMessage</div>
 }
 @if (!string.IsNullOrEmpty(Model.ProbeMessage))
 {
@@ -47,15 +47,15 @@
 {
     <div class="alert alert-warning d-flex flex-wrap align-items-center gap-2">
         <div class="flex-grow-1">
-            <strong>This device has @Model.DetectedChannelCount channels.</strong>
-            Split it into one camera per lens so each records the right one. This camera becomes channel 1 and keeps its recordings.
-            <a href="/Help/cameras#multi-channel">Learn more</a>
+            <strong>@L.Plural("cameras.edit.deviceChannels", Model.DetectedChannelCount)</strong>
+            @L["cameras.edit.splitItIntoOneCamera"]
+            <a href="/Help/cameras#multi-channel">@L["common.learnMore"]</a>
         </div>
         <form method="post">
             <input type="hidden" asp-for="Id" />
             <button type="submit" asp-page-handler="SplitChannels" class="btn btn-warning"
-                    data-confirm="Add one camera per channel on this device?">
-                <span aria-hidden="true">🔀</span> Split into @Model.DetectedChannelCount cameras
+                    data-confirm="@L["cameras.edit.addOneCameraPerChannel"]">
+                <span aria-hidden="true">🔀</span> @L.Plural("cameras.edit.splitInto", Model.DetectedChannelCount)
             </button>
         </form>
     </div>
@@ -65,74 +65,74 @@
     <input type="hidden" asp-for="Id" />
 
     <section class="lv-section">
-        <div class="lv-section-head"><h2 class="lv-section-title">General</h2></div>
+        <div class="lv-section-head"><h2 class="lv-section-title">@L["cameras.edit.general"]</h2></div>
         <div class="lv-section-body">
             <div class="lv-field">
-                <label class="form-label" asp-for="Name">Name</label>
+                <label class="form-label" asp-for="Name">@L["common.name"]</label>
                 <input asp-for="Name" class="form-control" required />
             </div>
             @if (!Model.IsNew)
             {
                 <div class="lv-field">
-                    <label class="form-label">Status</label>
+                    <div class="form-label">@L["common.status"]</div>
                     <div class="form-check mt-1">
                         <input asp-for="IsEnabled" class="form-check-input" type="checkbox" />
-                        <label class="form-check-label" asp-for="IsEnabled">Enabled</label>
+                        <label class="form-check-label" asp-for="IsEnabled">@L["common.enabled"]</label>
                     </div>
-                    <div class="lv-hint">Disabled cameras don't record or stream.</div>
+                    <div class="lv-hint">@L["cameras.edit.disabledCamerasDontRecordOr"]</div>
                 </div>
                 <div class="lv-field lv-field-wide">
-                    <label class="form-label">Groups</label>
+                    <div class="form-label">@L["common.groups"]</div>
                     <div>
                         @if (Model.CurrentGroups.Count == 0)
                         {
-                            <span class="text-muted small">Not in any group.</span>
+                            <span class="text-muted small">@L["cameras.edit.notInAnyGroup"]</span>
                         }
                         @foreach (var g in Model.CurrentGroups)
                         {
                             <span class="badge text-bg-secondary me-1">@g.Name</span>
                         }
-                        <a class="small ms-1" href="/Cameras/Groups">Manage groups</a>
+                        <a class="small ms-1" href="/Cameras/Groups">@L["cameras.edit.manageGroups"]</a>
                     </div>
                 </div>
             }
             @if (Model.VideoSourceToken is { } channelToken)
             {
                 <div class="lv-field lv-field-wide">
-                    <div class="lv-hint">🔀 One channel of a multi-sensor device (video source <code>@channelToken</code>). Its other channels are separate cameras.</div>
+                    <div class="lv-hint">@L.Html("cameras.edit.oneChannelOfAMulti", new { token = channelToken })</div>
                 </div>
             }
         </div>
     </section>
 
     <section class="lv-section">
-        <div class="lv-section-head"><h2 class="lv-section-title">Connection</h2></div>
+        <div class="lv-section-head"><h2 class="lv-section-title">@L["cameras.edit.connection"]</h2></div>
         <div class="lv-section-body">
             <div class="lv-field lv-field-wide">
-                <label class="form-label" asp-for="DeviceServiceUri">Device service URL</label>
+                <label class="form-label" asp-for="DeviceServiceUri">@L["cameras.edit.deviceServiceUrl"]</label>
                 <input asp-for="DeviceServiceUri" class="form-control font-monospace" placeholder="http://192.168.1.50/onvif/device_service" required />
                 @if (!Model.IsNew)
                 {
-                    <div class="lv-hint">Changing the address re-probes the camera on save.</div>
+                    <div class="lv-hint">@L["cameras.edit.changingTheAddressReProbes"]</div>
                 }
             </div>
             <div class="lv-field">
-                <label class="form-label" asp-for="Username">Username</label>
+                <label class="form-label" asp-for="Username">@L["common.username"]</label>
                 <input asp-for="Username" class="form-control" autocomplete="off" />
             </div>
             <div class="lv-field">
-                <label class="form-label" asp-for="Password">Password</label>
+                <label class="form-label" asp-for="Password">@L["common.password"]</label>
                 <input asp-for="Password" type="password" class="form-control" autocomplete="new-password"
-                       placeholder="@(Model.IsNew ? "" : "(unchanged)")" />
+                       placeholder="@(Model.IsNew ? "" : L["cameras.edit.unchanged"].Value)" />
                 @if (!Model.IsNew)
                 {
-                    <div class="lv-hint">Leave blank to keep the current password.</div>
+                    <div class="lv-hint">@L["cameras.edit.leaveBlankToKeepThe"]</div>
                 }
             </div>
             <div class="lv-field">
-                <label class="form-label" asp-for="NodeId">Recorder node</label>
+                <label class="form-label" asp-for="NodeId">@L["cameras.edit.recorderNode"]</label>
                 <select asp-for="NodeId" class="form-select">
-                    <option value="">(unassigned — won't record)</option>
+                    <option value="">@L["cameras.edit.unassignedWontRecord"]</option>
                     @foreach (var n in Model.Nodes)
                     {
                         <option value="@n.Id">@n.Name</option>
@@ -140,7 +140,7 @@
                 </select>
                 @if (Model.Nodes.Count == 0)
                 {
-                    <div class="lv-hint">No nodes have registered yet. See <a href="/Help/installation">Installation</a>.</div>
+                    <div class="lv-hint">@L["cameras.edit.noNodesHaveRegisteredYet"] <a href="/Help/installation">@L["cameras.edit.installation"]</a>.</div>
                 }
             </div>
         </div>
@@ -150,33 +150,34 @@
     {
         <section class="lv-section">
             <div class="lv-section-head">
-                <h2 class="lv-section-title">Recording</h2>
-                <div class="lv-section-sub">Blank fields inherit from the node or global settings.</div>
+                <h2 class="lv-section-title">@L["cameras.edit.recording"]</h2>
+                <div class="lv-section-sub">@L["cameras.edit.blankFieldsInheritFromThe"]</div>
             </div>
             <div class="lv-section-body">
                 <div class="lv-field">
-                    <label class="form-label" asp-for="RecordingModeOverride">Recording mode</label>
+                    <label class="form-label" asp-for="RecordingModeOverride">@L["cameras.edit.recordingMode"]</label>
                     <select asp-for="RecordingModeOverride" class="form-select">
-                        <option value="">inherit — @Model.EffectiveRecordingMode</option>
-                        <option value="Continuous">Continuous</option>
-                        <option value="Motion">Motion only</option>
-                        <option value="Schedule">Schedule</option>
-                        <option value="Event">Event (tagged trigger)</option>
+                        <option value="">@L["common.inheritValue", new { value = Model.EffectiveRecordingMode }]</option>
+                        <option value="Continuous">@L["cameras.edit.continuous"]</option>
+                        <option value="Motion">@L["cameras.edit.motionOnly"]</option>
+                        <option value="Schedule">@L["cameras.edit.schedule"]</option>
+                        <option value="Event">@L["cameras.edit.eventTaggedTrigger"]</option>
+                        <option value="Manual">@L["cameras.edit.manualOnly"]</option>
                     </select>
-                    <div class="lv-hint">Which footage is kept. <a href="/Help/recording#modes">Learn more</a></div>
+                    <div class="lv-hint">@L["cameras.edit.whichFootageIsKept"] <a href="/Help/recording#modes">@L["common.learnMore"]</a></div>
                 </div>
                 <div class="lv-field">
-                    <label class="form-label" asp-for="SegmentSecondsOverride">Segment length (seconds)</label>
+                    <label class="form-label" asp-for="SegmentSecondsOverride">@L["cameras.edit.segmentLengthSeconds"]</label>
                     <input asp-for="SegmentSecondsOverride" type="number" min="5" max="300" class="form-control"
-                           placeholder="inherit — @Model.EffectiveSegmentSeconds" />
-                    <div class="lv-hint">Shorter means faster playback seeking. Changing it briefly restarts recording.</div>
+                           placeholder="@L["common.inheritValue", new { value = Model.EffectiveSegmentSeconds }]" />
+                    <div class="lv-hint">@L["cameras.edit.shorterMeansFasterPlaybackSeeking"]</div>
                 </div>
                 @if (!Model.HasServerMotionZone && !hasOnvifEvents)
                 {
                     <div class="lv-field lv-field-wide" data-show-when="@ModeShowWhen("Motion")">
                         <div class="alert alert-warning py-2 mb-0 small">
-                            No motion zone or camera motion events yet, so Motion mode keeps everything.
-                            <a asp-page="Zones" asp-route-id="@Model.Id">Add a zone</a>
+                            @L["cameras.edit.noMotionZoneOrCamera"]
+                            <a asp-page="Zones" asp-route-id="@Model.Id">@L["cameras.edit.addAZone"]</a>
                         </div>
                     </div>
                 }
@@ -184,8 +185,8 @@
                 {
                     <div class="lv-field lv-field-wide" data-show-when="@ModeShowWhen("Schedule")">
                         <div class="alert alert-warning py-2 mb-0 small">
-                            No schedule window yet, so Schedule mode keeps everything.
-                            <a asp-page="Schedule" asp-route-id="@Model.Id">Add a schedule</a>
+                            @L["cameras.edit.noScheduleWindowYetSo"]
+                            <a asp-page="Schedule" asp-route-id="@Model.Id">@L["cameras.edit.addASchedule"]</a>
                         </div>
                     </div>
                 }
@@ -193,76 +194,76 @@
                 {
                     <div class="lv-field lv-field-wide" data-show-when="@ModeShowWhen("Event")">
                         <div class="alert alert-warning py-2 mb-0 small">
-                            No event tag rule drives recording yet, so Event mode keeps everything.
-                            <a href="/Cameras/EventTags/@Model.Id">Add a rule</a>
+                            @L["cameras.edit.noEventTagRuleDrives"]
+                            <a href="/Cameras/EventTags/@Model.Id">@L["cameras.edit.addARule"]</a>
                         </div>
                     </div>
                 }
                 <div class="lv-field" data-show-when="@ModeShowWhen("Motion", "Event")">
-                    <label class="form-label" asp-for="MotionPreRollSecondsOverride">Pre-roll (seconds)</label>
+                    <label class="form-label" asp-for="MotionPreRollSecondsOverride">@L["cameras.edit.preRollSeconds"]</label>
                     <input asp-for="MotionPreRollSecondsOverride" type="number" min="0" class="form-control"
-                           placeholder="inherit — @Model.EffectiveMotionPreRollSeconds" />
-                    <div class="lv-hint">Footage kept before activity starts.</div>
+                           placeholder="@L["common.inheritValue", new { value = Model.EffectiveMotionPreRollSeconds }]" />
+                    <div class="lv-hint">@L["cameras.edit.footageKeptBeforeActivityStarts"]</div>
                 </div>
                 <div class="lv-field" data-show-when="@ModeShowWhen("Motion", "Event")">
-                    <label class="form-label" asp-for="MotionPostRollSecondsOverride">Post-roll (seconds)</label>
+                    <label class="form-label" asp-for="MotionPostRollSecondsOverride">@L["cameras.edit.postRollSeconds"]</label>
                     <input asp-for="MotionPostRollSecondsOverride" type="number" min="0" class="form-control"
-                           placeholder="inherit — @Model.EffectiveMotionPostRollSeconds" />
-                    <div class="lv-hint">Footage kept after activity stops.</div>
+                           placeholder="@L["common.inheritValue", new { value = Model.EffectiveMotionPostRollSeconds }]" />
+                    <div class="lv-hint">@L["cameras.edit.footageKeptAfterActivityStops"]</div>
                 </div>
             </div>
         </section>
 
         <section class="lv-section">
-            <div class="lv-section-head"><h2 class="lv-section-title">Storage &amp; retention</h2></div>
+            <div class="lv-section-head"><h2 class="lv-section-title">@L["cameras.edit.storageRetention"]</h2></div>
             <div class="lv-section-body">
                 <div class="lv-field">
-                    <label class="form-label" asp-for="QuotaGb">Storage quota (GB)</label>
-                    <input asp-for="QuotaGb" type="number" step="0.1" min="0" class="form-control" placeholder="no quota" />
-                    <div class="lv-hint">Using @ByteFormat.Format(Model.StorageUsedBytes). Oldest footage goes first when over.</div>
+                    <label class="form-label" asp-for="QuotaGb">@L["cameras.edit.storageQuotaGb"]</label>
+                    <input asp-for="QuotaGb" type="number" step="0.1" min="0" class="form-control" placeholder="@L["cameras.edit.noQuota"]" />
+                    <div class="lv-hint">@L["cameras.edit.usingStorage", new { size = ByteFormat.Format(Model.StorageUsedBytes) }]</div>
                 </div>
                 <div class="lv-field">
-                    <label class="form-label" asp-for="RetentionDaysOverride">Retention (days)</label>
+                    <label class="form-label" asp-for="RetentionDaysOverride">@L["cameras.edit.retentionDays"]</label>
                     <input asp-for="RetentionDaysOverride" type="number" min="0" class="form-control"
-                           placeholder="inherit — @Model.EffectiveRetentionDays" />
-                    <div class="lv-hint">0 keeps forever.</div>
+                           placeholder="@L["common.inheritValue", new { value = Model.EffectiveRetentionDays }]" />
+                    <div class="lv-hint">@L["cameras.edit.0KeepsForever"]</div>
                 </div>
                 <div class="lv-field">
-                    <label class="form-label" asp-for="ArchiveRetentionDaysOverride">Archive retention (days)</label>
+                    <label class="form-label" asp-for="ArchiveRetentionDaysOverride">@L["cameras.edit.archiveRetentionDays"]</label>
                     <input asp-for="ArchiveRetentionDaysOverride" type="number" min="0" class="form-control"
-                           placeholder="inherit — @Model.EffectiveArchiveRetentionDays" />
+                           placeholder="@L["common.inheritValue", new { value = Model.EffectiveArchiveRetentionDays }]" />
                     <div class="lv-hint">
-                        Archiving is @(Model.EffectiveArchiveEnabled ? "on" : "off") for this camera. 0 keeps forever.
-                        <a href="/Help/storage#archive">Learn more</a>
+                        @(Model.EffectiveArchiveEnabled ? L["cameras.edit.archivingOn"] : L["cameras.edit.archivingOff"])
+                        <a href="/Help/storage#archive">@L["common.learnMore"]</a>
                     </div>
                 </div>
                 <div class="lv-field">
-                    <label class="form-label" asp-for="EncryptOverride">Encryption</label>
+                    <label class="form-label" asp-for="EncryptOverride">@L["cameras.edit.encryption"]</label>
                     <select asp-for="EncryptOverride" class="form-select" disabled="@(!Model.EncryptionReady)">
-                        <option value="">inherit — @(Model.EffectiveEncrypt switch { "Video" => "video", "VideoAndImages" => "video, snapshots, and thumbnails", _ => "off" })</option>
-                        <option value="Off">Off</option>
-                        <option value="Video">Video (recordings and talk audio)</option>
-                        <option value="VideoAndImages">Video, snapshots, and thumbnails</option>
+                        <option value="">@L["common.inheritValue", new { value = (Model.EffectiveEncrypt switch { "Video" => L["cameras.edit.encryptVideo"].Value, "VideoAndImages" => L["cameras.edit.encryptVideoAndImages"].Value, _ => L["common.offLower"].Value }) }]</option>
+                        <option value="Off">@L["common.off"]</option>
+                        <option value="Video">@L["cameras.edit.videoRecordingsAndTalkAudio"]</option>
+                        <option value="VideoAndImages">@L["cameras.edit.videoSnapshotsAndThumbnails"]</option>
                     </select>
                     <div class="lv-hint">
                         @if (!Model.EncryptionReady)
                         {
-                            <span>Set up the master key and its backup under Settings → Encryption first.</span>
+                            <span>@L["cameras.edit.setUpTheMasterKey"]</span>
                         }
                         else if (Model.EffectiveEncrypt != "Off")
                         {
-                            <span>New footage is encrypted. Existing footage stays as it is unless you
-                            <button type="submit" form="cameraForm" asp-page-handler="EncryptExisting" formnovalidate class="btn btn-link btn-sm p-0 align-baseline">encrypt existing footage</button>.</span>
+                            <span>@L["cameras.edit.newFootageIsEncryptedExisting"]
+                            <button type="submit" form="cameraForm" asp-page-handler="EncryptExisting" formnovalidate class="btn btn-link btn-sm p-0 align-baseline">@L["cameras.edit.encryptExistingFootage"]</button>.</span>
                         }
                         else
                         {
-                            <span>Encrypts recordings on the recorder's disks.</span>
+                            <span>@L["cameras.edit.encryptsRecordingsOnTheRecorder"]</span>
                         }
-                        <a href="/Help/storage#encryption">Learn more</a>
+                        <a href="/Help/storage#encryption">@L["common.learnMore"]</a>
                     </div>
                     @if (Request.Query["encrypting"] == "existing")
                     {
-                        <div class="alert alert-info py-1 small mt-1 mb-0">The recorder will encrypt this camera's existing footage in the background over the next while.</div>
+                        <div class="alert alert-info py-1 small mt-1 mb-0">@L["cameras.edit.theRecorderWillEncryptThis"]</div>
                     }
                 </div>
             </div>
@@ -270,144 +271,156 @@
 
         <section class="lv-section">
             <div class="lv-section-head">
-                <h2 class="lv-section-title">AI detection</h2>
-                <div class="lv-section-sub">Unchecked “Override” inherits from AI detection settings.</div>
+                <h2 class="lv-section-title">@L["cameras.edit.aiDetection"]</h2>
+                <div class="lv-section-sub">@L["cameras.edit.uncheckedOverrideInheritsFromAi"]</div>
             </div>
             <div class="lv-section-body">
                 <div class="lv-field lv-field-wide">
                     <div class="form-check">
                         <input asp-for="AiDetectionEnabled" class="form-check-input" type="checkbox" />
-                        <label class="form-check-label fw-semibold" asp-for="AiDetectionEnabled">Watch this camera for objects</label>
+                        <label class="form-check-label fw-semibold" asp-for="AiDetectionEnabled">@L["cameras.edit.watchThisCameraForObjects"]</label>
                     </div>
-                    <div class="lv-hint">The accelerator is chosen per node. <a href="/Help/ai-detection">Learn more</a></div>
+                    <div class="lv-hint">@L["cameras.edit.theAcceleratorIsChosenPer"] <a href="/Help/ai-detection">@L["common.learnMore"]</a></div>
                 </div>
                 <div class="lv-field" data-show-when="AiDetectionEnabled=true">
-                    <label class="form-label" asp-for="AiDetectionStreamRoleOverride">Detection stream</label>
+                    <label class="form-label" asp-for="AiDetectionStreamRoleOverride">@L["cameras.edit.detectionStream"]</label>
                     <select asp-for="AiDetectionStreamRoleOverride" class="form-select">
-                        <option value="">inherit — @Model.EffectiveAiDetectionStreamRole</option>
-                        <option value="Sub">Sub</option>
-                        <option value="Main">Main</option>
+                        <option value="">@L["common.inheritValue", new { value = Model.EffectiveAiDetectionStreamRole }]</option>
+                        <option value="Sub">@L["cameras.edit.sub"]</option>
+                        <option value="Main">@L["cameras.edit.main"]</option>
                     </select>
                 </div>
                 <div class="lv-field" data-show-when="AiDetectionEnabled=true">
-                    <label class="form-label" asp-for="AiDetectionOrientationOverride">Orientation</label>
+                    <label class="form-label" asp-for="AiDetectionOrientationOverride">@L["cameras.edit.orientation"]</label>
                     <select asp-for="AiDetectionOrientationOverride" class="form-select">
-                        <option value="">inherit — @Model.EffectiveAiDetectionOrientation</option>
-                        <option value="Auto">Auto</option>
-                        <option value="Landscape">Landscape</option>
-                        <option value="Portrait">Portrait</option>
+                        <option value="">@L["common.inheritValue", new { value = Model.EffectiveAiDetectionOrientation }]</option>
+                        <option value="Auto">@L["cameras.edit.auto"]</option>
+                        <option value="Landscape">@L["cameras.edit.landscape"]</option>
+                        <option value="Portrait">@L["cameras.edit.portrait"]</option>
                     </select>
-                    <div class="lv-hint">Use Portrait for corridor-mode cameras.</div>
+                    <div class="lv-hint">@L["cameras.edit.usePortraitForCorridorMode"]</div>
                 </div>
                 <div class="lv-field" data-show-when="AiDetectionEnabled=true">
-                    <label class="form-label" for="confidenceOverrideSlider">Confidence threshold</label>
+                    <label class="form-label" for="confidenceOverrideSlider">@L["cameras.edit.confidenceThreshold"]</label>
                     <div class="d-flex align-items-center gap-2">
                         <div class="form-check form-check-inline mb-0">
                             <input type="checkbox" class="form-check-input" id="confidenceOverrideToggle" checked="@(Model.ConfidenceOverride.HasValue)" />
-                            <label class="form-check-label small" for="confidenceOverrideToggle">Override</label>
+                            <label class="form-check-label small" for="confidenceOverrideToggle">@L["cameras.edit.override"]</label>
                         </div>
                         <input type="range" name="ConfidenceOverride" id="confidenceOverrideSlider" min="0" max="1" step="0.05" class="form-range"
                                value="@((Model.ConfidenceOverride ?? Model.EffectiveConfidence).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))"
                                disabled="@(!Model.ConfidenceOverride.HasValue)" />
                         <output class="text-muted small" style="min-width: 2.5em;" id="confidenceOverrideReadout">@Math.Round((Model.ConfidenceOverride ?? Model.EffectiveConfidence) * 100)</output>
                     </div>
-                    <div class="lv-hint">Raise it for a camera with false detections.</div>
+                    <div class="lv-hint">@L["cameras.edit.raiseItForACamera"]</div>
                 </div>
                 <div class="lv-field" data-show-when="AiDetectionEnabled=true">
-                    <label class="form-label" for="iouOverrideSlider">IoU threshold</label>
+                    <label class="form-label" for="iouOverrideSlider">@L["cameras.edit.iouThreshold"]</label>
                     <div class="d-flex align-items-center gap-2">
                         <div class="form-check form-check-inline mb-0">
                             <input type="checkbox" class="form-check-input" id="iouOverrideToggle" checked="@(Model.IouOverride.HasValue)" />
-                            <label class="form-check-label small" for="iouOverrideToggle">Override</label>
+                            <label class="form-check-label small" for="iouOverrideToggle">@L["cameras.edit.override"]</label>
                         </div>
                         <input type="range" name="IouOverride" id="iouOverrideSlider" min="0" max="1" step="0.05" class="form-range"
                                value="@((Model.IouOverride ?? Model.EffectiveIou).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))"
                                disabled="@(!Model.IouOverride.HasValue)" />
                         <output class="text-muted small" style="min-width: 2.5em;" id="iouOverrideReadout">@Math.Round((Model.IouOverride ?? Model.EffectiveIou) * 100)</output>
                     </div>
-                    <div class="lv-hint">Overlap for merging duplicate boxes.</div>
+                    <div class="lv-hint">@L["cameras.edit.overlapForMergingDuplicateBoxes"]</div>
                 </div>
                 <div class="lv-field" data-show-when="AiDetectionEnabled=true">
-                    <label class="form-label" for="maxFpsOverrideSlider">Detection frame rate (fps)</label>
+                    <label class="form-label" for="maxFpsOverrideSlider">@L["cameras.edit.detectionFrameRateFps"]</label>
                     <div class="d-flex align-items-center gap-2">
                         <div class="form-check form-check-inline mb-0">
                             <input type="checkbox" class="form-check-input" id="maxFpsOverrideToggle" checked="@(Model.MaxFpsOverride.HasValue)" />
-                            <label class="form-check-label small" for="maxFpsOverrideToggle">Override</label>
+                            <label class="form-check-label small" for="maxFpsOverrideToggle">@L["cameras.edit.override"]</label>
                         </div>
                         <input type="range" name="MaxFpsOverride" id="maxFpsOverrideSlider" min="0" max="30" step="1" class="form-range"
                                value="@(Model.MaxFpsOverride ?? Model.EffectiveMaxFps)"
                                disabled="@(!Model.MaxFpsOverride.HasValue)" />
                         @{ var maxFpsShown = Model.MaxFpsOverride ?? Model.EffectiveMaxFps; }
-                        <output class="text-muted small" style="min-width: 3.5em;" id="maxFpsOverrideReadout">@(maxFpsShown == 0 ? "no cap" : maxFpsShown.ToString())</output>
+                        <output class="text-muted small" style="min-width: 3.5em;" id="maxFpsOverrideReadout">@(maxFpsShown == 0 ? L["cameras.edit.noCap"].Value : maxFpsShown.ToString())</output>
                     </div>
-                    <div class="lv-hint">Lower saves GPU/CPU. 0 is no cap.</div>
+                    <div class="lv-hint">@L["cameras.edit.lowerSavesGpuCpu0"]</div>
                 </div>
                 <div class="lv-field" data-show-when="AiDetectionEnabled=true">
-                    <label class="form-label" asp-for="MovementModeOverride">Movement detection</label>
+                    <label class="form-label" asp-for="MovementModeOverride">@L["cameras.edit.movementDetection"]</label>
                     <select asp-for="MovementModeOverride" class="form-select">
-                        <option value="">inherit — @Model.EffectiveMovementMode</option>
-                        <option value="Standard">Standard</option>
-                        <option value="Legacy">Legacy</option>
+                        <option value="">@L["common.inheritValue", new { value = Model.EffectiveMovementMode }]</option>
+                        <option value="Standard">@L["cameras.edit.standard"]</option>
+                        <option value="Legacy">@L["cameras.edit.legacy"]</option>
                     </select>
-                    <div class="lv-hint">How an object is judged to be moving. <a href="/Help/ai-detection#movement">Learn more</a></div>
+                    <div class="lv-hint">@L["cameras.edit.howAnObjectIsJudged"] <a href="/Help/ai-detection#movement">@L["common.learnMore"]</a></div>
                 </div>
                 <div class="lv-field" data-show-when="AiDetectionEnabled=true">
-                    <label class="form-label" asp-for="MovementSensitivityOverride">Movement sensitivity</label>
+                    <label class="form-label" asp-for="MovementSensitivityOverride">@L["cameras.edit.movementSensitivity"]</label>
                     <select asp-for="MovementSensitivityOverride" class="form-select">
-                        <option value="">inherit — @Model.EffectiveMovementSensitivity</option>
-                        <option value="Low">Low</option>
-                        <option value="Normal">Normal</option>
-                        <option value="High">High</option>
+                        <option value="">@L["common.inheritValue", new { value = Model.EffectiveMovementSensitivity }]</option>
+                        <option value="Low">@L["cameras.edit.low"]</option>
+                        <option value="Normal">@L["cameras.edit.normal"]</option>
+                        <option value="High">@L["cameras.edit.high"]</option>
                     </select>
-                    <div class="lv-hint">Standard only. Higher picks up movement sooner; lower ignores more box wobble.</div>
+                    <div class="lv-hint">@L["cameras.edit.standardOnlyHigherPicksUp"]</div>
                 </div>
                 <div class="lv-field" data-show-when="AiDetectionEnabled=true">
-                    <label class="form-label" asp-for="RejectMotionJitterOverride">Stationary-object jitter rejection</label>
+                    <label class="form-label" asp-for="IgnoredObjectsMode">@L["cameras.edit.ignoredObjects"]</label>
+                    <select asp-for="IgnoredObjectsMode" class="form-select">
+                        <option value="">@L["common.inheritValue", new { value = Model.EffectiveIgnoredObjects }]</option>
+                        <option value="Custom">@L["cameras.edit.ignoredObjectsCustom"]</option>
+                    </select>
+                    <div data-show-when="IgnoredObjectsMode=Custom">
+                        <component type="typeof(LarisVMS.Web.Components.Shared.IgnoredObjectsPicker)" render-mode="Static"
+                                   param-Value="Model.IgnoredObjectsOverride" />
+                    </div>
+                    <div class="lv-hint">@L["cameras.edit.ignoredObjectsHint"] <a href="/Help/ai-detection#ignored-objects">@L["common.learnMore"]</a></div>
+                </div>
+                <div class="lv-field" data-show-when="AiDetectionEnabled=true">
+                    <label class="form-label" asp-for="RejectMotionJitterOverride">@L["cameras.edit.stationaryObjectJitterRejection"]</label>
                     <select asp-for="RejectMotionJitterOverride" class="form-select">
-                        <option value="">inherit — @(Model.EffectiveRejectMotionJitter ? "on" : "off")</option>
-                        <option value="True">On</option>
-                        <option value="False">Off</option>
+                        <option value="">@L["common.inheritValue", new { value = (Model.EffectiveRejectMotionJitter ? L["common.onLower"].Value : L["common.offLower"].Value) }]</option>
+                        <option value="True">@L["common.on"]</option>
+                        <option value="False">@L["common.off"]</option>
                     </select>
-                    <div class="lv-hint">Legacy only. Stops parked cars' box wobble counting as motion. <a href="/Help/ai-detection#jitter">Learn more</a></div>
+                    <div class="lv-hint">@L["cameras.edit.legacyOnlyStopsParkedCars"] <a href="/Help/ai-detection#jitter">@L["common.learnMore"]</a></div>
                 </div>
                 <div class="lv-field" data-show-when="AiDetectionEnabled=true">
-                    <label class="form-label" for="jitterPixelsOverrideSlider">Jitter threshold (pixels)</label>
+                    <label class="form-label" for="jitterPixelsOverrideSlider">@L["cameras.edit.jitterThresholdPixels"]</label>
                     <div class="d-flex align-items-center gap-2">
                         <div class="form-check form-check-inline mb-0">
                             <input type="checkbox" class="form-check-input" id="jitterPixelsOverrideToggle" checked="@(Model.MotionJitterPixelsOverride.HasValue)" />
-                            <label class="form-check-label small" for="jitterPixelsOverrideToggle">Override</label>
+                            <label class="form-check-label small" for="jitterPixelsOverrideToggle">@L["cameras.edit.override"]</label>
                         </div>
                         <input type="range" name="MotionJitterPixelsOverride" id="jitterPixelsOverrideSlider" min="1" max="15" step="1" class="form-range"
                                value="@(Model.MotionJitterPixelsOverride ?? Model.EffectiveMotionJitterPixels)"
                                disabled="@(!Model.MotionJitterPixelsOverride.HasValue)" />
                         <output class="text-muted small" style="min-width: 2.5em;" id="jitterPixelsOverrideReadout">@(Model.MotionJitterPixelsOverride ?? Model.EffectiveMotionJitterPixels)</output>
                     </div>
-                    <div class="lv-hint">The smallest box movement that ever counts as moving. Legacy uses it only with jitter rejection on.</div>
+                    <div class="lv-hint">@L["cameras.edit.theSmallestBoxMovementThat"]</div>
                 </div>
             </div>
         </section>
 
         <section class="lv-section">
-            <div class="lv-section-head"><h2 class="lv-section-title">Motion</h2></div>
+            <div class="lv-section-head"><h2 class="lv-section-title">@L["cameras.edit.motion"]</h2></div>
             <div class="lv-section-body">
                 <div class="lv-field">
-                    <label class="form-label" asp-for="MotionDetectionSourceOverride">Motion source</label>
+                    <label class="form-label" asp-for="MotionDetectionSourceOverride">@L["cameras.edit.motionSource"]</label>
                     <select asp-for="MotionDetectionSourceOverride" class="form-select">
-                        <option value="">Auto (best available)</option>
-                        <option value="ServerMotion">Server-side motion (pixel zone)</option>
-                        <option value="CameraEvent">Camera events (ONVIF)</option>
-                        <option value="Integration">Vendor integration</option>
-                        <option value="AiDetection">AI detection</option>
+                        <option value="">@L["cameras.edit.autoBestAvailable"]</option>
+                        <option value="ServerMotion">@L["cameras.edit.serverSideMotionPixelZone"]</option>
+                        <option value="CameraEvent">@L["cameras.edit.cameraEventsOnvif"]</option>
+                        <option value="Integration">@L["cameras.edit.vendorIntegration"]</option>
+                        <option value="AiDetection">@L["cameras.edit.aiDetection"]</option>
                     </select>
-                    <div class="lv-hint">Which signal gates Motion-mode recording. <a href="/Help/motion#source">Learn more</a></div>
+                    <div class="lv-hint">@L["cameras.edit.whichSignalGatesMotionMode"] <a href="/Help/motion#source">@L["common.learnMore"]</a></div>
                 </div>
                 <div class="lv-field">
-                    <label class="form-label">Server-side motion</label>
+                    <div class="form-label">@L["cameras.edit.serverSideMotion"]</div>
                     <div class="form-check mt-1">
                         <input asp-for="ServerMotionEnabled" class="form-check-input" type="checkbox" />
-                        <label class="form-check-label" asp-for="ServerMotionEnabled">Run pixel motion detection</label>
+                        <label class="form-check-label" asp-for="ServerMotionEnabled">@L["cameras.edit.runPixelMotionDetection"]</label>
                     </div>
-                    <div class="lv-hint">Tags plain motion on the timeline. Off saves CPU.</div>
+                    <div class="lv-hint">@L["cameras.edit.tagsPlainMotionOnThe"]</div>
                 </div>
             </div>
         </section>
@@ -416,8 +429,8 @@
     <div class="lv-savebar">
         @* Explicit handler — a handler-less submit posts to the current URL, which still carries
            "?handler=Probe" after Re-probe and would re-probe rather than save. *@
-        <button type="submit" class="btn btn-primary" asp-page-handler="Save">@(Model.IsNew ? "Add & probe" : "Save")</button>
-        <a href="/Cameras" class="btn btn-link">Cancel</a>
+        <button type="submit" class="btn btn-primary" asp-page-handler="Save">@(Model.IsNew ? L["cameras.edit.addAndProbe"] : L["common.save"])</button>
+        <a href="/Cameras" class="btn btn-link">@L["common.cancel"]</a>
     </div>
 </form>
 
@@ -425,41 +438,41 @@
 {
     <details class="lv-section mt-3">
         <summary class="lv-section-head" style="cursor: pointer;">
-            <span class="lv-section-title">Device</span>
-            <span class="lv-section-sub ms-2">Integration, capabilities, and streams</span>
+            <span class="lv-section-title">@L["cameras.edit.device"]</span>
+            <span class="lv-section-sub ms-2">@L["cameras.edit.integrationCapabilitiesAndStreams"]</span>
         </summary>
         <div class="p-3">
             @if (Model.Integration is { } integration)
             {
                 <p class="small mb-3">
-                    <span aria-hidden="true">🧩</span> <strong>@integration.DisplayName</strong> integration is active.
+                    <span aria-hidden="true">🧩</span> <strong>@integration.DisplayName</strong> @L["cameras.edit.integrationIsActive"]
                     <span class="text-muted">@integration.Summary</span>
                 </p>
             }
 
             @if (Model.Capabilities is { } cap)
             {
-                <h3 class="h6">Capabilities <span class="text-muted small fw-normal">probed <time datetime="@cap.ProbedAt.ToUtcIso()" data-local="g">@cap.ProbedAt.ToLocalTime().ToString("g")</time></span></h3>
+                <h3 class="h6">@L["cameras.edit.capabilities"] <span class="text-muted small fw-normal">@L["cameras.edit.probed"] <time datetime="@cap.ProbedAt.ToUtcIso()" data-local="g">@cap.ProbedAt.ToLocalTime().ToString("g")</time></span></h3>
                 <div class="d-flex flex-wrap gap-1 mb-3">
                     @foreach (var (label, has) in new[] {
-                        ("Profile S", cap.ProfileS), ("Profile T", cap.ProfileT), ("Profile G", cap.ProfileG), ("Profile M", cap.ProfileM),
-                        ("PTZ", cap.HasPtz), ("Imaging", cap.HasImaging), ("Events", cap.HasEvents), ("Analytics", cap.HasAnalyticsMetadata),
-                        ("Two-way audio", cap.HasAudioOut), ("Relay outputs", cap.HasRelayOutputs), ("Digital inputs", cap.HasDigitalInputs) })
+                        (L["cameras.edit.capProfile", new { profile = "S" }].Value, cap.ProfileS), (L["cameras.edit.capProfile", new { profile = "T" }].Value, cap.ProfileT), (L["cameras.edit.capProfile", new { profile = "G" }].Value, cap.ProfileG), (L["cameras.edit.capProfile", new { profile = "M" }].Value, cap.ProfileM),
+                        ("PTZ", cap.HasPtz), (L["cameras.edit.capImaging"].Value, cap.HasImaging), (L["cameras.edit.capEvents"].Value, cap.HasEvents), (L["cameras.edit.capAnalytics"].Value, cap.HasAnalyticsMetadata),
+                        (L["cameras.edit.capTwoWayAudio"].Value, cap.HasAudioOut), (L["cameras.edit.capRelayOutputs"].Value, cap.HasRelayOutputs), (L["cameras.edit.capDigitalInputs"].Value, cap.HasDigitalInputs) })
                     {
                         <span class="badge @(has ? "text-bg-success" : "bg-transparent text-body-secondary border")">@(has ? "✓" : "✗") @label</span>
                     }
                 </div>
 
-                <h3 class="h6">Streams</h3>
+                <h3 class="h6">@L["cameras.edit.streams"]</h3>
                 @if (Model.Streams.Count == 0)
                 {
-                    <p class="text-muted small">No streams recorded.</p>
+                    <p class="text-muted small">@L["cameras.edit.noStreamsRecorded"]</p>
                 }
                 else
                 {
                     <div class="table-responsive">
                         <table class="table table-sm align-middle">
-                            <thead><tr><th>On</th><th>Name</th><th>Role</th><th>Resolution</th><th>Codec</th><th>FPS</th><th>Bitrate</th><th>Audio</th><th></th></tr></thead>
+                            <thead><tr><th>@L["common.on"]</th><th>@L["common.name"]</th><th>@L["common.role"]</th><th>@L["cameras.edit.resolution"]</th><th>@L["cameras.edit.codec"]</th><th>@L["cameras.edit.fps"]</th><th>@L["cameras.edit.bitrate"]</th><th>@L["cameras.edit.audio"]</th><th></th></tr></thead>
                             <tbody>
                                 @foreach (var s in Model.Streams.OrderBy(s => s.Role))
                                 {
@@ -478,28 +491,28 @@
                                             <td>@(s.Codec ?? "—")</td>
                                             <td>@(s.Fps?.ToString() ?? "—")</td>
                                             <td>@(s.BitrateKbps is not null ? $"{s.BitrateKbps} kbps" : "—")</td>
-                                            <td>@(s.HasAudio ? s.AudioCodec ?? "yes" : "no")</td>
-                                            <td class="text-end"><button type="submit" class="btn btn-sm btn-outline-primary">Save</button></td>
+                                            <td>@(s.HasAudio ? s.AudioCodec ?? L["common.yes"].Value : L["common.no"].Value)</td>
+                                            <td class="text-end"><button type="submit" class="btn btn-sm btn-outline-primary">@L["common.save"]</button></td>
                                         </form>
                                     </tr>
                                 }
                             </tbody>
                         </table>
                     </div>
-                    <div class="lv-hint">Hover a stream for its RTSP URL.</div>
+                    <div class="lv-hint">@L["cameras.edit.hoverAStreamForIts"]</div>
                 }
             }
             else
             {
-                <p class="text-muted small mb-0">Not probed yet. Use Re-probe to read the camera's capabilities.</p>
+                <p class="text-muted small mb-0">@L["cameras.edit.notProbedYetUseRe"]</p>
             }
         </div>
     </details>
 
     <div class="lv-danger-zone d-flex flex-wrap align-items-center gap-2">
-        <div class="flex-grow-1 small">Deleting a camera removes it from LarisVMS.</div>
+        <div class="flex-grow-1 small">@L["cameras.edit.deletingACameraRemovesIt"]</div>
         <button type="submit" form="cameraForm" asp-page-handler="Delete" class="btn btn-sm btn-outline-danger"
-                data-confirm="Delete this camera?">Delete camera</button>
+                data-confirm="@L["cameras.edit.deleteThisCamera"]">@L["cameras.edit.deleteCamera"]</button>
     </div>
 }
 </div>

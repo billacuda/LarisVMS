@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Install a recorder node (LarisVMS.Node) as a Windows Service.
 
@@ -603,6 +603,18 @@ if ($LiveAllowFrom.Count -gt 0) {
 # run's -ClientPort that's still in effect. Confirmed live as exactly this failure: re-running with a
 # new -ServerUrl and no -ClientPort deleted the rule and never recreated it, leaving the endpoint
 # listening but silently unreachable (dropped packets, not a fast refusal) until it was added back.
+# A config file that may hold a certificate password: locked to SYSTEM, Administrators, and the
+# service's account before anything is written to it, so other local users never get to read it.
+function Write-ProtectedFile([string]$Path, [string]$Content, [string]$ReaderAccount) {
+    if (-not (Test-Path $Path)) { New-Item -ItemType File -Path $Path | Out-Null }
+    $grants = @('/grant:r', '*S-1-5-18:(F)', '/grant:r', '*S-1-5-32-544:(F)')
+    if ($ReaderAccount -and $ReaderAccount -notin 'LocalSystem', '.\LocalSystem', 'NT AUTHORITY\SYSTEM') {
+        $grants += @('/grant:r', "${ReaderAccount}:(R)")
+    }
+    & icacls $Path /inheritance:r @grants | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Couldn't restrict access to $Path." }
+    Set-Content -Path $Path -Value $Content -Encoding UTF8
+}
 $clientEndpointRuleName = "LarisVMS Node Client Endpoint"
 if ($ClientPort -gt 0) {
     Write-Step "Writing client-endpoint.json and firewall rule (TCP $ClientPort)"
@@ -616,7 +628,7 @@ if ($ClientPort -gt 0) {
     if ($ClientPfxPath)      { $clientCfg.pfxPath = $ClientPfxPath }
     if ($ClientPfxPassword)  { $clientCfg.pfxPassword = $ClientPfxPassword }
     if ($ClientEndpointHost) { $clientCfg.host = $ClientEndpointHost }
-    $clientCfg | ConvertTo-Json | Set-Content -Path (Join-Path $clientCfgDir 'client-endpoint.json') -Encoding UTF8
+    Write-ProtectedFile (Join-Path $clientCfgDir 'client-endpoint.json') ($clientCfg | ConvertTo-Json) $runAs
     # Idempotent remove-then-add so re-running with a *changed* -ClientPort replaces the old rule
     # instead of leaving a stale one alongside the new one — same pattern as the live-view rule above.
     Get-NetFirewallRule -DisplayName $clientEndpointRuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue

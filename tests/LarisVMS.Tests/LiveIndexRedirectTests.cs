@@ -30,7 +30,7 @@ public class LiveIndexRedirectTests
         }
         public Task<View> CreateAsync(string name, string ownerId, CancellationToken ct = default) => throw new NotImplementedException();
         public Task UpdateAsync(Guid id, string userId, string name, bool isShared, string layoutJson, int sequenceIntervalSeconds, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task DeleteAsync(Guid id, string userId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task DeleteAsync(Guid id, string userId, bool canEditShared, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<List<View>> GetTourViewsAsync(CancellationToken ct = default) => throw new NotImplementedException();
     }
 
@@ -43,7 +43,7 @@ public class LiveIndexRedirectTests
     private static (IndexModel Model, FakeViewService Views) NewModel(List<View> visible, Dictionary<string, string>? saved = null)
     {
         var views = new FakeViewService(visible);
-        var builder = new PlayViewModelBuilder(views, null!, null!, null!, null!);
+        var builder = new PlayViewModelBuilder(views, null!, null!, null!, null!, null!);
         var model = new IndexModel(views, new FakePreferenceService(saved ?? []), builder);
         var user = new ClaimsPrincipal(new ClaimsIdentity(
             [new Claim(ClaimTypes.NameIdentifier, "user-1")], "TestAuth"));

@@ -23,7 +23,7 @@ namespace LarisVMS.Proxy;
 /// short interruption a node update already causes, and browsers reconnect through the fallback chain
 /// (backup proxy → direct-to-node → central) in the meantime.
 /// </summary>
-public class ProxyUpdateService(ProxyConfig config, bool insecureTls, ILogger log, IHostApplicationLifetime lifetime,
+public class ProxyUpdateService(ProxyConfig config, ILogger log, IHostApplicationLifetime lifetime,
     HttpMessageHandler? httpHandler = null)
 {
     private static readonly string UpdateDir = Path.Combine(
@@ -164,14 +164,8 @@ public class ProxyUpdateService(ProxyConfig config, bool insecureTls, ILogger lo
     {
         // The same certificate check as the proxy's other calls to the server.
         if (ProxyConfigStore.Trust is { } trust) return trust.CreateHandler();
-        var handler = new HttpClientHandler();
-        if (insecureTls)
-        {
-            // Same rationale as ProxyApiClient's own acceptAnyCertificate flag: a self-hosted
-            // LarisVMS.Web behind a self-signed cert on a LAN is a normal deployment shape here.
-            handler.ServerCertificateCustomValidationCallback = (_, _, _, _) => true;
-        }
-        return handler;
+        // No live check yet (only before startup creates one): the system's own validation.
+        return new HttpClientHandler();
     }
 
     private static async Task<string> ComputeSha256Async(string path, CancellationToken ct)

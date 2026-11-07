@@ -27,7 +27,14 @@ public static class MediaRoutes
         // /api/cameras/{id}/snapshot — a dynamic segment in the middle rules out a plain prefix
         // match, but /api/cameras/ itself also covers non-media JSON endpoints (motion-state,
         // detection-state) that must stay reachable on the management port, so this checks both ends.
-        return value.StartsWith("/api/cameras/", StringComparison.OrdinalIgnoreCase)
-            && value.EndsWith("/snapshot", StringComparison.OrdinalIgnoreCase);
+        if (value.StartsWith("/api/cameras/", StringComparison.OrdinalIgnoreCase)
+            && value.EndsWith("/snapshot", StringComparison.OrdinalIgnoreCase)) return true;
+
+        // The public API's copies of media routes follow the same port and allow list as the originals.
+        return (value.StartsWith("/api/v1/cameras/", StringComparison.OrdinalIgnoreCase)
+                && (value.EndsWith("/snapshot", StringComparison.OrdinalIgnoreCase)
+                    || value.EndsWith("/thumbnail/latest", StringComparison.OrdinalIgnoreCase)))
+            || (value.StartsWith("/api/v1/exports/items/", StringComparison.OrdinalIgnoreCase)
+                && value.EndsWith("/download", StringComparison.OrdinalIgnoreCase));
     }
 }

@@ -12,27 +12,27 @@
       <Publish Dialog="WelcomeDlg" Control="Next" Property="LARIS_ACCOUNT_BACK" Value="WelcomeDlg" Order="4" Condition="NOT Installed AND LARIS_UPGRADE" />
       <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="[LARIS_UPGRADE_DLG]" Order="5" Condition="NOT Installed AND LARIS_UPGRADE" />
 
-      <Dialog Id="ProxySettingsDlg" Width="370" Height="270" Title="[ProductName] Setup">
+      <Dialog Id="ProxySettingsDlg" Width="370" Height="270" Title="!(loc.DlgTitle)">
         <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
         <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
         <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
-        <Control Id="Title" Type="Text" X="15" Y="6" Width="300" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Proxy settings" />
-        <Control Id="Description" Type="Text" X="25" Y="23" Width="320" Height="15" Transparent="yes" NoPrefix="yes" Text="Where this proxy registers, and the endpoint browsers connect to." />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="300" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}!(loc.ProxyTitle)" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="320" Height="15" Transparent="yes" NoPrefix="yes" Text="!(loc.ProxyDescription)" />
 
-        <Control Id="ServerUrlLabel" Type="Text" X="20" Y="56" Width="110" Height="15" Text="Server URL:" />
+        <Control Id="ServerUrlLabel" Type="Text" X="20" Y="56" Width="110" Height="15" Text="!(loc.ServerUrlLabel)" />
         <Control Id="ServerUrl" Type="Edit" X="135" Y="54" Width="215" Height="17" Property="SERVERURL" DisableCondition="ALREADYREGISTERED=&quot;1&quot;" />
-        <Control Id="KeyLabel" Type="Text" X="20" Y="78" Width="110" Height="15" Text="Registration key:" />
+        <Control Id="KeyLabel" Type="Text" X="20" Y="78" Width="110" Height="15" Text="!(loc.RegistrationKeyLabel)" />
         <Control Id="Key" Type="Edit" X="135" Y="76" Width="215" Height="17" Property="REGISTRATIONKEY" Password="yes" DisableCondition="ALREADYREGISTERED=&quot;1&quot;" />
-        <Control Id="Insecure" Type="CheckBox" X="135" Y="95" Width="215" Height="12" Property="INSECURETLS" CheckBoxValue="1" Text="Accept the server's self-signed certificate" />
-        <Control Id="PortLabel" Type="Text" X="20" Y="116" Width="110" Height="15" Text="Client port:" />
+        <Control Id="Insecure" Type="CheckBox" X="135" Y="95" Width="215" Height="12" Property="INSECURETLS" CheckBoxValue="1" Text="!(loc.AcceptServerSelfSigned)" />
+        <Control Id="PortLabel" Type="Text" X="20" Y="116" Width="110" Height="15" Text="!(loc.ClientPortLabel)" />
         <Control Id="Port" Type="Edit" X="135" Y="114" Width="60" Height="17" Property="CLIENTPORT" />
-        <Control Id="HostLabel" Type="Text" X="20" Y="138" Width="110" Height="15" Text="Host name (FQDN):" />
+        <Control Id="HostLabel" Type="Text" X="20" Y="138" Width="110" Height="15" Text="!(loc.HostLabel)" />
         <Control Id="Host" Type="Edit" X="135" Y="136" Width="215" Height="17" Property="CLIENTENDPOINTHOST" />
-        <Control Id="PfxLabel" Type="Text" X="20" Y="160" Width="110" Height="15" Text="Certificate (.pfx) path:" />
+        <Control Id="PfxLabel" Type="Text" X="20" Y="160" Width="110" Height="15" Text="!(loc.CertPathLabel)" />
         <Control Id="Pfx" Type="Edit" X="135" Y="158" Width="215" Height="17" Property="CLIENTPFXPATH" />
-        <Control Id="PfxPwdLabel" Type="Text" X="20" Y="182" Width="110" Height="15" Text="Certificate password:" />
+        <Control Id="PfxPwdLabel" Type="Text" X="20" Y="182" Width="110" Height="15" Text="!(loc.CertPasswordLabel)" />
         <Control Id="PfxPwd" Type="Edit" X="135" Y="180" Width="215" Height="17" Property="CLIENTPFXPASSWORD" Password="yes" />
-        <Control Id="AllowInsecure" Type="CheckBox" X="20" Y="206" Width="330" Height="15" Property="CLIENTALLOWINSECURE" CheckBoxValue="1" Text="Allow a self-signed certificate (testing only)" />
+        <Control Id="AllowInsecure" Type="CheckBox" X="20" Y="206" Width="330" Height="15" Property="CLIENTALLOWINSECURE" CheckBoxValue="1" Text="!(loc.AllowSelfSigned)" />
 
         <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)">
           <Publish Event="NewDialog" Value="WelcomeDlg" />

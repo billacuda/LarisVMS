@@ -15,14 +15,14 @@
 @inject IAuditService AuditService
 @inject IPermissionService PermissionService
 
-<PageTitle>Permissions — Roles - @AppName</PageTitle>
+<PageTitle>@L["settings.permissions.roles.permissionsRoles"] - @AppName</PageTitle>
 
-<h1>Settings</h1>
+<h1>@L["nav.settings"]</h1>
 <SettingsTabs ActiveKey="Permissions" />
 <PermissionsTabs ActiveKey="Roles" />
 
 <p class="text-muted small">
-    Each role's scope, expiry, and PTZ priority. Grant permissions on the <a href="/Admin/Settings/Permissions/Matrix">Permissions matrix</a>. <a href="/Help/users#roles">Learn more</a>
+    @L.Markup("settings.permissions.roles.intro")
 </p>
 
 @if (!string.IsNullOrEmpty(SavedMessage))
@@ -31,19 +31,19 @@
 }
 @if (!string.IsNullOrEmpty(ErrorMessage))
 {
-    <div class="alert alert-danger">@ErrorMessage</div>
+    <div class="alert alert-danger" role="alert">@ErrorMessage</div>
 }
 
 <div class="card mb-3">
-    <div class="card-header fw-semibold">Add a role</div>
+    <div class="card-header fw-semibold">@L["settings.permissions.roles.addARole"]</div>
     <div class="card-body">
         <EditForm Model="this" FormName="create-role" OnValidSubmit="HandleCreateAsync" class="row g-3">
             <div class="col-sm-6">
-                <label class="form-label">Name</label>
-                <InputText @bind-Value="NewRoleName" class="form-control" placeholder="e.g. Operator" />
+                <label for="field-newRoleName" class="form-label">@L["common.name"]</label>
+                <InputText id="field-newRoleName" @bind-Value="NewRoleName" class="form-control" placeholder="@L["settings.permissions.roles.eGOperator"]" />
             </div>
             <div class="col-12">
-                <button type="submit" class="btn btn-primary">Add role</button>
+                <button type="submit" class="btn btn-primary">@L["settings.permissions.roles.addRole"]</button>
             </div>
         </EditForm>
     </div>
@@ -52,22 +52,23 @@
 <style>
     .role-caret { display: inline-block; transition: transform .15s ease; }
     .card-header[aria-expanded="true"] .role-caret { transform: rotate(90deg); }
+    .role-toggle { color: inherit; }
 </style>
 
 @foreach (var role in RoleRows)
 {
     var bodyId = $"role-body-{role.Id}";
     <div class="card mb-3">
-        <div class="card-header fw-semibold d-flex justify-content-between align-items-center" role="button"
-             style="cursor:pointer" data-bs-toggle="collapse" data-bs-target="#@bodyId"
-             aria-expanded="false" aria-controls="@bodyId">
+        <button type="button" class="card-header fw-semibold d-flex justify-content-between align-items-center w-100 text-start border-0 role-toggle"
+                data-bs-toggle="collapse" data-bs-target="#@bodyId"
+                aria-expanded="false" aria-controls="@bodyId">
             <span>
-                <span class="role-caret me-1">▶</span>
+                <span class="role-caret me-1" aria-hidden="true">▶</span>
                 @role.Name
-                @if (role.IsSystemRole) { <span class="badge text-bg-secondary ms-1">built-in</span> }
-                <span class="text-muted fw-normal">(@role.UserCount user@(role.UserCount == 1 ? "" : "s"))</span>
+                @if (role.IsSystemRole) { <span class="badge text-bg-secondary ms-1">@L["settings.permissions.roles.builtIn"]</span> }
+                <span class="text-muted fw-normal">@L.Plural("settings.permissions.roles.userCount", role.UserCount)</span>
             </span>
-        </div>
+        </button>
         <div class="collapse" id="@bodyId">
         <div class="card-body">
             @* FormName unique per row — see delete-role's own copy of this comment below. *@
@@ -75,28 +76,26 @@
                 <input type="hidden" name="SaveRoleId" value="@role.Id" />
                 <div class="row g-3 mb-3">
                     <div class="col-sm-6">
-                        <label class="form-label">Name</label>
-                        <input type="text" name="SaveName" class="form-control" value="@role.Name" readonly="@role.IsProtected" />
+                        <label class="form-label" for="@($"roleName-{role.Id}")">@L["common.name"]</label>
+                        <input id="@($"roleName-{role.Id}")" type="text" name="SaveName" class="form-control" value="@role.Name" readonly="@role.IsProtected" />
                     </div>
                 </div>
 
                 @if (role.IsProtected)
                 {
                     <p class="text-muted small mb-0">
-                        The Super Admin role always holds every permission at organization scope, never
-                        expires, and always pre-empts every other PTZ priority — none of that is
-                        editable here.
+                        @L["settings.permissions.roles.theSuperAdminRoleAlways"]
                     </p>
                 }
                 else
                 {
                     <div class="row g-3 mb-3">
                         <div class="col-sm-4">
-                            <label class="form-label">Max scope tier</label>
-                            <select name="SaveMaxScopeTier" class="form-select">
+                            <label class="form-label" for="tier-@role.Id">@L["settings.permissions.roles.maxScopeTier"]</label>
+                            <select name="SaveMaxScopeTier" id="tier-@role.Id" class="form-select">
                                 @foreach (RoleScopeTier tier in Enum.GetValues<RoleScopeTier>())
                                 {
-                                    <option value="@((int)tier)" selected="@(tier == role.MaxScopeTier)">@tier</option>
+                                    <option value="@((int)tier)" selected="@(tier == role.MaxScopeTier)">@TierLabel(tier)</option>
                                 }
                             </select>
                         </div>
@@ -107,28 +106,28 @@
                             <div class="form-check form-switch">
                                 <input class="form-check-input" type="checkbox" name="SaveAutoExpires" value="true"
                                        id="expires-@role.Id" checked="@role.AutoExpires" />
-                                <label class="form-check-label" for="expires-@role.Id">Auto-expires</label>
+                                <label class="form-check-label" for="expires-@role.Id">@L["settings.permissions.roles.autoExpires"]</label>
                             </div>
                         </div>
                         <div class="col-sm-4">
-                            <label class="form-label">
-                                Default expiry (minutes)
+                            <label for="field-saveDefaultExpiryMinutes" class="form-label">
+                                @L["settings.permissions.roles.defaultExpiryMinutes"]
                             </label>
-                            <input type="number" min="1" name="SaveDefaultExpiryMinutes" class="form-control"
+                            <input id="field-saveDefaultExpiryMinutes" type="number" min="1" name="SaveDefaultExpiryMinutes" class="form-control"
                                    value="@role.DefaultExpiryMinutes" />
-                            <div class="lv-hint">e.g. 480 = 8h shift, 1440 = 24h, 43200 = 30d.</div>
+                            <div class="lv-hint">@L["settings.permissions.roles.eG4808hShift"]</div>
                         </div>
                     </div>
 
                     <div class="row g-3 mb-3">
                         <div class="col-sm-4">
-                            <label class="form-label">PTZ priority level</label>
-                            <input type="number" min="1" max="9999" name="SavePtzPriorityLevel" class="form-control"
-                                   value="@role.PtzPriorityLevel" placeholder="(none — no PTZ arbitration)" />
+                            <label for="field-savePtzPriorityLevel" class="form-label">@L["settings.permissions.roles.ptzPriorityLevel"]</label>
+                            <input id="field-savePtzPriorityLevel" type="number" min="1" max="9999" name="SavePtzPriorityLevel" class="form-control"
+                                   value="@role.PtzPriorityLevel" placeholder="@L["settings.permissions.roles.noneNoPtzArbitration"]" />
                         </div>
                         <div class="col-sm-4">
-                            <label class="form-label">PTZ lockout (seconds)</label>
-                            <input type="number" min="0" name="SavePtzLockoutSeconds" class="form-control"
+                            <label for="field-savePtzLockoutSeconds" class="form-label">@L["settings.permissions.roles.ptzLockoutSeconds"]</label>
+                            <input id="field-savePtzLockoutSeconds" type="number" min="0" name="SavePtzLockoutSeconds" class="form-control"
                                    value="@role.PtzLockoutSeconds" />
                         </div>
                     </div>
@@ -136,16 +135,16 @@
 
                 <div class="row g-3 mb-3">
                     <div class="col-sm-4">
-                        <label class="form-label">
-                            Session lifetime (hours)
+                        <label for="field-saveSessionLifetimeHours" class="form-label">
+                            @L["settings.permissions.roles.sessionLifetimeHours"]
                         </label>
-                        <input type="number" min="0" name="SaveSessionLifetimeHours" class="form-control"
+                        <input id="field-saveSessionLifetimeHours" type="number" min="0" name="SaveSessionLifetimeHours" class="form-control"
                                value="@role.SessionLifetimeHours" />
-                        <div class="lv-hint">0 = never expire.</div>
+                        <div class="lv-hint">@L["settings.permissions.roles.0NeverExpire"]</div>
                     </div>
                 </div>
 
-                <button type="submit" class="btn btn-primary btn-sm">Save</button>
+                <button type="submit" class="btn btn-primary btn-sm">@L["common.save"]</button>
             </EditForm>
             @* Razor Pages' formaction="?handler=Delete" (one shared <form>, a second button routing to
                a different handler) has no Blazor EditForm equivalent — split into its own adjacent
@@ -159,10 +158,10 @@
                 <EditForm Model="this" FormName="@($"delete-role-{role.Id}")" OnValidSubmit="HandleDeleteAsync" class="d-inline">
                     <input type="hidden" name="DeleteRoleId" value="@role.Id" />
                     <button type="submit" class="btn btn-outline-danger btn-sm"
-                            data-confirm="@(role.UserCount > 0 ? null : $"Delete role \"{role.Name}\"?")"
+                            data-confirm="@(role.UserCount > 0 ? null : L["settings.permissions.roles.deleteConfirm", new { name = role.Name }].Value)"
                             disabled="@(role.UserCount > 0)"
-                            title="@(role.UserCount > 0 ? "Move its users to another role first." : null)">
-                        Delete
+                            title="@(role.UserCount > 0 ? L["settings.permissions.roles.moveItsUsersToAnother"].Value : null)">
+                        @L["common.delete"]
                     </button>
                 </EditForm>
             }
@@ -172,6 +171,13 @@
 }
 
 @code {
+    private string TierLabel(RoleScopeTier tier) => tier switch
+    {
+        RoleScopeTier.Org => L["settings.permissions.roles.tierOrg"],
+        RoleScopeTier.Site => L["settings.permissions.roles.tierSite"],
+        _ => L["settings.permissions.roles.tierGroup"],
+    };
+
     private sealed record RoleRow(
         string Id, string Name, string? Tag, bool IsProtected, bool IsSystemRole, int UserCount,
         RoleScopeTier MaxScopeTier, bool AutoExpires, int? DefaultExpiryMinutes,
@@ -242,13 +248,13 @@
         var name = (NewRoleName ?? "").Trim();
         if (string.IsNullOrEmpty(name))
         {
-            ErrorMessage = "Enter a role name.";
+            ErrorMessage = Loc.T("settings.permissions.roles.enterARoleName");
             await LoadAsync();
             return;
         }
         if (await RoleManagerService.RoleExistsAsync(name))
         {
-            ErrorMessage = $"A role named \"{name}\" already exists.";
+            ErrorMessage = Loc.T("settings.permissions.roles.aRoleNamedAlreadyExists", new { name });
             await LoadAsync();
             return;
         }
@@ -262,7 +268,7 @@
         }
 
         await AuditService.LogAsync("Role.Create", CurrentUserId, CurrentUserName, RemoteIp, name);
-        SavedMessage = $"Role \"{name}\" created.";
+        SavedMessage = Loc.T("settings.permissions.roles.roleCreated", new { name });
         await LoadAsync();
     }
 
@@ -282,7 +288,7 @@
         var role = await RoleManagerService.FindByIdAsync(roleId);
         if (role is null)
         {
-            ErrorMessage = "That role no longer exists.";
+            ErrorMessage = Loc.T("settings.permissions.roles.thatRoleNoLongerExists");
             await LoadAsync();
             return;
         }
@@ -301,7 +307,7 @@
         if (Enum.TryParse<RoleScopeTier>(SaveMaxScopeTierRaw, out var requestedTier) && !scope.CanSetTier(requestedTier)
             && requestedTier != profile?.MaxScopeTier)
         {
-            ErrorMessage = "You can't give a role wider reach than your own.";
+            ErrorMessage = Loc.T("settings.permissions.roles.youCantGiveARole");
             await LoadAsync();
             return;
         }
@@ -311,19 +317,19 @@
         {
             if (!RoleManagementPolicy.CanRename(profile?.Tag))
             {
-                ErrorMessage = "The Super Admin role can't be renamed.";
+                ErrorMessage = Loc.T("settings.permissions.roles.theSuperAdminRoleCant");
                 await LoadAsync();
                 return;
             }
             if (string.IsNullOrEmpty(newName))
             {
-                ErrorMessage = "Role name can't be blank.";
+                ErrorMessage = Loc.T("settings.permissions.roles.roleNameCantBeBlank");
                 await LoadAsync();
                 return;
             }
             if (await RoleManagerService.RoleExistsAsync(newName))
             {
-                ErrorMessage = $"A role named \"{newName}\" already exists.";
+                ErrorMessage = Loc.T("settings.permissions.roles.aRoleNamedAlreadyExists2", new { newName });
                 await LoadAsync();
                 return;
             }
@@ -381,7 +387,7 @@
         if (details is not null)
             await AuditService.LogAsync("Role.Update", CurrentUserId, CurrentUserName, RemoteIp, details);
 
-        SavedMessage = "Saved.";
+        SavedMessage = Loc.T("common.saved");
         await LoadAsync();
     }
 
@@ -401,8 +407,8 @@
         if (!RoleManagementPolicy.CanDelete(profile?.Tag, userCount))
         {
             ErrorMessage = RoleManagementPolicy.IsProtected(profile?.Tag)
-                ? "The Super Admin role can't be deleted."
-                : $"\"{role.Name}\" still has {userCount} user(s) assigned — move them to another role first.";
+                ? Loc.T("settings.permissions.roles.theSuperAdminRoleCant2")
+                : Loc.Plural("settings.permissions.roles.stillHasUsers", userCount, new { name = role.Name });
             await LoadAsync();
             return;
         }
@@ -418,7 +424,7 @@
         await RoleManagerService.DeleteAsync(role);
         await AuditService.LogAsync("Role.Delete", CurrentUserId, CurrentUserName, RemoteIp, name);
 
-        SavedMessage = $"Role \"{name}\" deleted.";
+        SavedMessage = Loc.T("settings.permissions.roles.roleDeleted", new { name });
         await LoadAsync();
     }
 }

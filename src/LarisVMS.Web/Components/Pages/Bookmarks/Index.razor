@@ -6,29 +6,29 @@
 @inject ICameraAccessService CameraAccess
 @inject IPermissionService Permissions
 
-<PageTitle>Bookmarks - @AppName</PageTitle>
+<PageTitle>@L["nav.bookmarks"] - @AppName</PageTitle>
 
-<h1>Bookmarks</h1>
-<p class="text-muted small">Moments marked from Playback, shared with everyone who can view playback. Each one expires with its footage.</p>
+<h1>@L["nav.bookmarks"]</h1>
+<p class="text-muted small">@L["bookmarks.momentsMarkedFromPlaybackShared"]</p>
 
 @if (Bookmarks.Count == 0)
 {
-    <p class="text-muted">No bookmarks yet — add one from the Playback page while reviewing footage.</p>
+    <p class="text-muted">@L["bookmarks.noBookmarksYetAddOne"]</p>
 }
 else
 {
     <div class="row g-2 align-items-center mb-2">
         <div class="col-sm-4">
             <input type="search" class="form-control" data-filter-table="bookmarksTable"
-                   placeholder="Filter by camera, note&hellip;" />
+                   placeholder="@L["bookmarks.filterByCameraNote"]" />
         </div>
         <div class="col-sm-auto d-flex align-items-center gap-2">
-            <label class="form-label small mb-0" for="bookmarksPageSize">Rows per page</label>
+            <label class="form-label small mb-0" for="bookmarksPageSize">@L["bookmarks.rowsPerPage"]</label>
             <select id="bookmarksPageSize" class="form-select form-select-sm" style="width: auto;" data-paginate-size-for="bookmarksTable">
                 <option value="10">10</option>
                 <option value="25" selected>25</option>
                 <option value="50">50</option>
-                <option value="all">All</option>
+                <option value="all">@L["common.all"]</option>
             </select>
         </div>
     </div>
@@ -37,10 +37,10 @@ else
         <table class="table align-middle" id="bookmarksTable" data-sortable data-paginate>
             <thead>
                 <tr>
-                    <th>Camera</th>
-                    <th>Time</th>
-                    <th>Note</th>
-                    <th>Created by</th>
+                    <th>@L["common.camera"]</th>
+                    <th>@L["common.time"]</th>
+                    <th>@L["bookmarks.note"]</th>
+                    <th>@L["bookmarks.createdBy"]</th>
                     <th data-no-sort></th>
                 </tr>
             </thead>
@@ -57,14 +57,14 @@ else
                         <td class="text-end text-nowrap">
                             <a class="btn btn-sm btn-outline-primary"
                                href="/Playback?cameraId=@b.CameraId&atUtc=@b.TimestampUtc.ToString("o")">
-                                ▶ Play
+                                @L["bookmarks.play"]
                             </a>
                             @* FormName is unique per row — Blazor throws "more than one named submit
                                event with the name X" if a loop renders the same FormName twice. *@
                             <EditForm Model="this" FormName="@($"delete-bookmark-{b.Id}")" OnValidSubmit="HandleDeleteAsync" class="d-inline">
                                 <input type="hidden" name="Id" value="@b.Id" />
                                 <button type="submit" class="btn btn-sm btn-outline-danger"
-                                        data-confirm="Delete this bookmark?">🗑️ Delete</button>
+                                        data-confirm="@L["bookmarks.deleteThisBookmark"]">@L["bookmarks.delete"]</button>
                             </EditForm>
                         </td>
                     </tr>

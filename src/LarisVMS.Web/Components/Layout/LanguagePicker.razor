@@ -1,0 +1,42 @@
+@using LarisVMS.Core.Interfaces
+@using LarisVMS.Core.Localization
+@using LarisVMS.Web.Localization
+@using Microsoft.Extensions.DependencyInjection
+@inject LocaleCatalog LocaleCatalog
+@inject IServiceScopeFactory ScopeFactory
+
+@* Blazor copy of Pages/Shared/_LanguagePicker.cshtml — keep the two in step. *@
+@if (_choices.Count > 1)
+{
+    <div class="dropdown">
+        <button class="lv-darktoggle" type="button" data-bs-toggle="dropdown" aria-expanded="false"
+                title="@L["layout.language"]" aria-label="@L["layout.language"]"><span aria-hidden="true">🌐</span></button>
+        <form method="post" action="/locale" class="dropdown-menu dropdown-menu-end">
+            <AntiforgeryToken />
+            <input type="hidden" name="returnUrl" value="@_returnUrl" />
+            @foreach (var choice in _choices)
+            {
+                var isCurrent = string.Equals(choice.Culture, _current, StringComparison.OrdinalIgnoreCase);
+                <button type="submit" name="culture" value="@choice.Culture" lang="@choice.Culture"
+                        class="dropdown-item@(isCurrent ? " active" : "")" aria-current="@(isCurrent ? "true" : null)">@choice.Name</button>
+            }
+        </form>
+    </div>
+}
+
+@code {
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    private IReadOnlyList<LocaleInfo> _choices = [];
+    private string _current = LocaleCatalog.English;
+    private string _returnUrl = "/";
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Own scope, for the same reason as MainLayout: the page's DbContext may be busy.
+        using var scope = ScopeFactory.CreateScope();
+        _choices = await LanguageChoices.GetAsync(LocaleCatalog, scope.ServiceProvider.GetService<ISettingsResolver>());
+        _current = LanguageChoices.Lang;
+        if (HttpContext is not null) _returnUrl = HttpContext.Request.Path + HttpContext.Request.QueryString;
+    }
+}

@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 using LarisVMS.Infrastructure.Data;
 
 namespace LarisVMS.Infrastructure.Services;
@@ -33,7 +34,7 @@ public class ScheduleWindowService(ApplicationDbContext db) : IScheduleWindowSer
     public async Task UpdateAsync(Guid id, DayOfWeekFlags days, TimeOnly startTime, TimeOnly endTime, bool isEnabled, CancellationToken ct = default)
     {
         var window = await db.ScheduleWindows.FirstOrDefaultAsync(w => w.Id == id, ct)
-            ?? throw new InvalidOperationException("Schedule window not found.");
+            ?? throw new InvalidOperationException(Loc.T("server.scheduleWindow.scheduleWindowNotFound"));
         window.Days = days;
         window.StartTime = startTime;
         window.EndTime = endTime;

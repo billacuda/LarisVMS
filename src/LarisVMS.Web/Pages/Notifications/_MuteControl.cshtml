@@ -9,19 +9,19 @@
     @if (muted)
     {
         <span class="small text-muted">
-            Muted @if (Model.MutedUntilUtc == DateTime.MaxValue) { <text>until turned back on</text> }
-            else { <text>until <time datetime="@Model.MutedUntilUtc.ToUtcIso()" data-local="g">@Model.MutedUntilUtc.ToLocalTime().ToString("g")</time></text> }
+            @if (Model.MutedUntilUtc == DateTime.MaxValue) { <text>@L["notifications.muteControl.mutedUntilOn"]</text> }
+            else { <text>@L.Html("notifications.muteControl.mutedUntil", new { time = Model.MutedUntilUtc.ToTimeTag() })</text> }
         </span>
-        <button type="submit" name="muteFor" value="off" class="btn btn-sm btn-outline-secondary">Unmute</button>
+        <button type="submit" name="muteFor" value="off" class="btn btn-sm btn-outline-secondary">@L["notifications.muteControl.unmute"]</button>
     }
     else
     {
-        <select name="muteFor" class="form-select form-select-sm" style="width: auto;" aria-label="Mute" data-submit-on-change>
-            <option value="">Mute…</option>
-            <option value="1">for 1 hour</option>
-            <option value="8">for 8 hours</option>
-            <option value="24">for 1 day</option>
-            <option value="forever">until I turn it back on</option>
+        <select name="muteFor" class="form-select form-select-sm" style="width: auto;" aria-label="@L["notifications.muteControl.mute"]" title="@L["common.appliesImmediately"]" data-submit-on-change>
+            <option value="">@L["notifications.muteControl.mute2"]</option>
+            <option value="1">@L["notifications.muteControl.for1Hour"]</option>
+            <option value="8">@L["notifications.muteControl.for8Hours"]</option>
+            <option value="24">@L["notifications.muteControl.for1Day"]</option>
+            <option value="forever">@L["notifications.muteControl.untilITurnItBack"]</option>
         </select>
     }
 </form>

@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 using LarisVMS.Infrastructure.Data;
 
 namespace LarisVMS.Infrastructure.Services;
@@ -37,7 +38,7 @@ public class EventTagRuleService(ApplicationDbContext db) : IEventTagRuleService
         string colorHex, bool drivesRecording, bool isEnabled, CancellationToken ct = default)
     {
         var rule = await db.EventTagRules.FirstOrDefaultAsync(r => r.Id == id, ct)
-            ?? throw new InvalidOperationException("Event tag rule not found.");
+            ?? throw new InvalidOperationException(Loc.T("server.eventTagRule.eventTagRuleNotFound"));
         rule.Name = name;
         rule.StartTopic = startTopic;
         rule.StopTopic = string.IsNullOrWhiteSpace(stopTopic) ? null : stopTopic;

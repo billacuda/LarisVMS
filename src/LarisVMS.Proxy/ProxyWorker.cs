@@ -138,6 +138,13 @@ public sealed class ProxyWorker(ProxyApiClient api, ProxyConfig registration, Pr
     /// <summary>Only an update signed with the server's key is installed — see NodeWorker.TrustUpdate.</summary>
     private bool TrustUpdate(ProxyUpdateInfoDto update)
     {
+        // A signed offer for an older build (a replayed one) would roll the proxy back to it.
+        if (Version.TryParse(update.Version, out var offered) && Version.TryParse(ProxyVersion.Current, out var running)
+            && offered <= running)
+        {
+            logger.LogError("Not installing update {Version}: this proxy already runs {Running}.", update.Version, ProxyVersion.Current);
+            return false;
+        }
         var payload = LarisVMS.Core.Security.UpdateSignature.UpdatePayload("proxy-win-x64", update.Version, update.Sha256, null);
         if (!LarisVMS.Core.Security.UpdateSignature.Check(_registration.UpdateSigningKeyPem, update.SigningKeyPem, update.Signature,
                 payload, out var keyToPin, out var error))

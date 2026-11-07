@@ -5,6 +5,7 @@ using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 using LarisVMS.Infrastructure.Data;
 using LarisVMS.Onvif.Clients;
 using LarisVMS.Onvif.Soap;
@@ -166,20 +167,20 @@ public class CameraDeviceSettingsService(ApplicationDbContext db, Func<HttpClien
     public async Task<IReadOnlyList<BulkDeviceSettingsCameraResult>> ApplyBulkAsync(BulkDeviceSettingsRequest request, CancellationToken ct = default)
     {
         var ids = request.CameraIds.Distinct().ToList();
-        if (ids.Count == 0) throw new DeviceSettingsValidationException("Choose at least one camera.");
+        if (ids.Count == 0) throw new DeviceSettingsValidationException(Loc.T("server.cameraDeviceSettings.chooseAtLeastOneCamera"));
         if ((request.Video is null || request.Video.Count == 0) && request.Image is null && request.Audio is null)
-            throw new DeviceSettingsValidationException("There's nothing to apply.");
+            throw new DeviceSettingsValidationException(Loc.T("server.cameraDeviceSettings.thereNothingToApply"));
 
         var cameras = await db.Cameras.AsNoTracking()
             .Include(c => c.Capabilities)
             .Include(c => c.Streams)
             .Where(c => ids.Contains(c.Id))
             .ToListAsync(ct);
-        if (cameras.Count != ids.Count) throw new DeviceSettingsValidationException("One or more of the chosen cameras no longer exist.");
+        if (cameras.Count != ids.Count) throw new DeviceSettingsValidationException(Loc.T("server.cameraDeviceSettings.oneOrMoreOfThe"));
 
         var keys = cameras.Select(ModelKey).Distinct().ToList();
         if (keys.Count != 1 || keys[0] is null)
-            throw new DeviceSettingsValidationException("Bulk changes only apply to cameras of the same make and model.");
+            throw new DeviceSettingsValidationException(Loc.T("server.cameraDeviceSettings.bulkChangesOnlyApplyTo"));
 
         var results = new ConcurrentDictionary<Guid, (BulkDeviceSettingsCameraResult Result, bool Reprobe)>();
         await Parallel.ForEachAsync(cameras, new ParallelOptions { MaxDegreeOfParallelism = BulkParallelism, CancellationToken = ct },
@@ -251,7 +252,7 @@ public class CameraDeviceSettingsService(ApplicationDbContext db, Func<HttpClien
             {
                 var main = target.Streams.FirstOrDefault(s => s.Role == CameraStreamRole.Main);
                 var token = main is null ? null : FindProfile(profiles, main.ProfileToken)?.AudioEncoderConfigurationToken;
-                if (token is null) throw new DeviceSettingsUnavailableException("This camera has no audio encoder on its Main stream.");
+                if (token is null) throw new DeviceSettingsUnavailableException(Loc.T("server.cameraDeviceSettings.thisCameraHasNoAudio"));
                 return ApplyAudioAsync(soap, target, profiles, token, audio, ct);
             }, needsReprobe: true);
         }
@@ -272,13 +273,13 @@ public class CameraDeviceSettingsService(ApplicationDbContext db, Func<HttpClien
         string role, VideoEncoderValues change, CancellationToken ct)
     {
         if (!Enum.TryParse<CameraStreamRole>(role, ignoreCase: true, out var streamRole) || !Enum.IsDefined(streamRole))
-            throw new DeviceSettingsValidationException($"Unknown stream \"{role}\".");
+            throw new DeviceSettingsValidationException(Loc.T("server.cameraDeviceSettings.unknownStream", new { role }));
         var stream = target.Streams.FirstOrDefault(s => s.Role == streamRole)
-            ?? throw new DeviceSettingsUnavailableException($"This camera has no {streamRole} stream.");
+            ?? throw new DeviceSettingsUnavailableException(Loc.T("server.cameraDeviceSettings.thisCameraHasNoStream", new { streamRole }));
         var profile = FindProfile(profiles, stream.ProfileToken)
-            ?? throw new DeviceSettingsUnavailableException($"The camera no longer reports the {stream.Label} stream. Re-probe it from its Edit page.");
+            ?? throw new DeviceSettingsUnavailableException(Loc.T("server.cameraDeviceSettings.theCameraNoLongerReports", new { label = stream.Label }));
         var configToken = profile.VideoEncoderConfigurationToken
-            ?? throw new DeviceSettingsUnavailableException($"The camera doesn't report encoder settings for the {stream.Label} stream.");
+            ?? throw new DeviceSettingsUnavailableException(Loc.T("server.cameraDeviceSettings.theCameraDoesntReportEncoder", new { label = stream.Label }));
 
         var state = await ReadEncoderAsync(soap, target, configToken, profile.Token, ct);
         var onvifChange = ValidateVideo(change, state.Config, state.Options, state.ViaMedia2);
@@ -293,9 +294,9 @@ public class CameraDeviceSettingsService(ApplicationDbContext db, Func<HttpClien
     private static async Task ApplyImageAsync(OnvifSoapClient soap, Target target, IReadOnlyList<OnvifMediaProfile> profiles,
         ImageSettingsValues change, CancellationToken ct)
     {
-        var imagingUri = target.Imaging ?? throw new DeviceSettingsUnavailableException("This camera doesn't have adjustable image settings.");
+        var imagingUri = target.Imaging ?? throw new DeviceSettingsUnavailableException(Loc.T("server.cameraDeviceSettings.thisCameraDoesntHaveAdjustable"));
         var sourceToken = SourceToken(target, profiles)
-            ?? throw new DeviceSettingsUnavailableException("The camera doesn't report which video source to adjust.");
+            ?? throw new DeviceSettingsUnavailableException(Loc.T("server.cameraDeviceSettings.theCameraDoesntReportWhich"));
 
         var imaging = new OnvifImagingClient(soap);
         var settings = await imaging.GetImagingSettingsAsync(imagingUri, sourceToken, target.Credentials, ct);
@@ -310,7 +311,7 @@ public class CameraDeviceSettingsService(ApplicationDbContext db, Func<HttpClien
     {
         // Only configurations this camera's own streams use — never an arbitrary token from the request.
         var owner = target.Streams.FirstOrDefault(s => FindProfile(profiles, s.ProfileToken)?.AudioEncoderConfigurationToken == configToken)
-            ?? throw new DeviceSettingsUnavailableException("This camera's streams don't use that audio encoder.");
+            ?? throw new DeviceSettingsUnavailableException(Loc.T("server.cameraDeviceSettings.thisCameraStreamsDontUse"));
 
         var media = new OnvifMediaClient(soap);
         var config = await media.GetAudioEncoderConfigurationAsync(target.Media, configToken, target.Credentials, ct);
@@ -331,7 +332,7 @@ public class CameraDeviceSettingsService(ApplicationDbContext db, Func<HttpClien
         {
             throw new DeviceSettingsValidationException(change.Codec is not null
                 ? $"{CodecName(change.Codec)} isn't available on this stream."
-                : "The camera didn't report which settings this stream accepts.");
+                : Loc.T("server.cameraDeviceSettings.theCameraDidntReportWhich"));
         }
         var codecChanged = change.Codec is not null && !string.Equals(change.Codec, current.Encoding, StringComparison.OrdinalIgnoreCase);
 
@@ -339,59 +340,59 @@ public class CameraDeviceSettingsService(ApplicationDbContext db, Func<HttpClien
         if (change.Width is not null || change.Height is not null)
         {
             if (change.Width is not { } w || change.Height is not { } h)
-                throw new DeviceSettingsValidationException("Choose both a width and a height.");
+                throw new DeviceSettingsValidationException(Loc.T("server.cameraDeviceSettings.chooseBothAWidthAnd"));
             if (opts.Resolutions.Count == 0)
-                throw new DeviceSettingsValidationException("Resolution isn't adjustable on this stream.");
+                throw new DeviceSettingsValidationException(Loc.T("server.cameraDeviceSettings.resolutionIsntAdjustableOnThis"));
             if (!opts.Resolutions.Contains(new OnvifResolution(w, h)))
                 throw new DeviceSettingsValidationException($"{w}×{h} isn't available for {CodecName(opts.Encoding)}.");
             resolution = new OnvifResolution(w, h);
         }
         else if (codecChanged && current.Resolution is { } cr && opts.Resolutions.Count > 0 && !opts.Resolutions.Contains(cr))
         {
-            throw new DeviceSettingsValidationException($"{cr.Width}×{cr.Height} isn't available for {CodecName(opts.Encoding)}. Choose a resolution too.");
+            throw new DeviceSettingsValidationException(Loc.T("server.cameraDeviceSettings.resolutionNotForCodec", new { resolution = $"{cr.Width}×{cr.Height}", codec = CodecName(opts.Encoding) }));
         }
 
         if (change.FrameRate is { } fps)
         {
-            if (fps <= 0) throw new DeviceSettingsValidationException("Frame rate must be above 0.");
+            if (fps <= 0) throw new DeviceSettingsValidationException(Loc.T("server.cameraDeviceSettings.frameRateMustBeAbove"));
             if (opts.FrameRatesSupported.Count > 0)
             {
                 if (!opts.FrameRatesSupported.Any(f => Math.Abs(f - fps) < 0.01))
-                    throw new DeviceSettingsValidationException($"{Num(fps)} fps isn't offered. Choose one of {JoinList(opts.FrameRatesSupported.Select(Num))}.");
+                    throw new DeviceSettingsValidationException(Loc.T("server.cameraDeviceSettings.fpsNotOffered", new { fps = Num(fps), options = JoinList(opts.FrameRatesSupported.Select(Num)) }));
             }
             else if (opts.FrameRateRange is { } fr)
             {
-                InRange(fps, fr, "Frame rate");
+                InRange(fps, fr, Loc.T("server.cameraDeviceSettings.labelFrameRate"));
             }
-            else throw new DeviceSettingsValidationException("Frame rate isn't adjustable on this stream.");
+            else throw new DeviceSettingsValidationException(Loc.T("server.cameraDeviceSettings.frameRateIsntAdjustableOn"));
         }
 
         if (change.BitrateKbps is { } kbps)
         {
             if (opts.BitrateRangeKbps is { } br) InRange(kbps, br, "Bitrate");
-            else if (current.BitrateLimitKbps is null) throw new DeviceSettingsValidationException("Bitrate isn't adjustable on this stream.");
-            else if (kbps is < 16 or > 100_000) throw new DeviceSettingsValidationException("Bitrate must be between 16 and 100000 kbps.");
+            else if (current.BitrateLimitKbps is null) throw new DeviceSettingsValidationException(Loc.T("server.cameraDeviceSettings.bitrateIsntAdjustableOnThis"));
+            else if (kbps is < 16 or > 100_000) throw new DeviceSettingsValidationException(Loc.T("server.cameraDeviceSettings.bitrateMustBeBetween16"));
         }
 
         bool? constantBitRate = null;
         if (change.RateControl is { } rc)
         {
             if (!viaMedia2 || !opts.ConstantBitRateSupported)
-                throw new DeviceSettingsValidationException("This stream doesn't offer a choice between CBR and VBR.");
+                throw new DeviceSettingsValidationException(Loc.T("server.cameraDeviceSettings.thisStreamDoesntOfferA"));
             constantBitRate = rc.ToUpperInvariant() switch
             {
                 "CBR" => true,
                 "VBR" => false,
-                _ => throw new DeviceSettingsValidationException("Bitrate mode must be CBR or VBR."),
+                _ => throw new DeviceSettingsValidationException(Loc.T("server.cameraDeviceSettings.bitrateModeMustBeCbr")),
             };
         }
 
         if (change.GovLength is { } gov)
         {
-            if (opts.Encoding == "JPEG") throw new DeviceSettingsValidationException("JPEG has no keyframe interval.");
-            if (opts.GovLengthRange is { } gr) InRange(gov, gr, "Keyframe interval");
-            else if (current.GovLength is null) throw new DeviceSettingsValidationException("Keyframe interval isn't adjustable on this stream.");
-            else if (gov is < 1 or > 1000) throw new DeviceSettingsValidationException("Keyframe interval must be between 1 and 1000 frames.");
+            if (opts.Encoding == "JPEG") throw new DeviceSettingsValidationException(Loc.T("server.cameraDeviceSettings.jpegHasNoKeyframeInterval"));
+            if (opts.GovLengthRange is { } gr) InRange(gov, gr, Loc.T("server.cameraDeviceSettings.labelKeyframeInterval"));
+            else if (current.GovLength is null) throw new DeviceSettingsValidationException(Loc.T("server.cameraDeviceSettings.keyframeIntervalIsntAdjustableOn"));
+            else if (gov is < 1 or > 1000) throw new DeviceSettingsValidationException(Loc.T("server.cameraDeviceSettings.keyframeIntervalMustBeBetween"));
         }
 
         string? profileName = null;
@@ -399,13 +400,13 @@ public class CameraDeviceSettingsService(ApplicationDbContext db, Func<HttpClien
         {
             profileName = opts.Profiles.FirstOrDefault(x => string.Equals(x, p, StringComparison.OrdinalIgnoreCase))
                 ?? throw new DeviceSettingsValidationException(opts.Profiles.Count == 0
-                    ? "Encoding profile isn't adjustable on this stream."
-                    : $"\"{p}\" isn't available. Choose one of {JoinList(opts.Profiles)}.");
+                    ? Loc.T("server.cameraDeviceSettings.encodingProfileIsntAdjustableOn")
+                    : Loc.T("server.cameraDeviceSettings.valueNotAvailable", new { value = $"\"{p}\"", options = JoinList(opts.Profiles) }));
         }
 
         if (change.Quality is { } q)
         {
-            if (opts.QualityRange is not { } qr) throw new DeviceSettingsValidationException("Quality isn't adjustable on this stream.");
+            if (opts.QualityRange is not { } qr) throw new DeviceSettingsValidationException(Loc.T("server.cameraDeviceSettings.qualityIsntAdjustableOnThis"));
             InRange(q, qr, "Quality");
         }
 
@@ -425,7 +426,7 @@ public class CameraDeviceSettingsService(ApplicationDbContext db, Func<HttpClien
         double? Level(double? value, OnvifRange? range, string label)
         {
             if (value is not { } v) return null;
-            if (range is not { } r) throw new DeviceSettingsValidationException($"{label} isn't adjustable on this camera.");
+            if (range is not { } r) throw new DeviceSettingsValidationException(Loc.T("server.cameraDeviceSettings.isntAdjustableOnThisCamera", new { label }));
             InRange(v, r, label);
             return v;
         }
@@ -433,25 +434,25 @@ public class CameraDeviceSettingsService(ApplicationDbContext db, Func<HttpClien
         string? Mode(string? value, IReadOnlyList<string> modes, string label)
         {
             if (value is null) return null;
-            if (modes.Count == 0) throw new DeviceSettingsValidationException($"{label} isn't adjustable on this camera.");
+            if (modes.Count == 0) throw new DeviceSettingsValidationException(Loc.T("server.cameraDeviceSettings.isntAdjustableOnThisCamera", new { label }));
             return modes.FirstOrDefault(m => string.Equals(m, value, StringComparison.OrdinalIgnoreCase))
-                ?? throw new DeviceSettingsValidationException($"\"{value}\" isn't available for {label.ToLowerInvariant()}. Choose one of {JoinList(modes)}.");
+                ?? throw new DeviceSettingsValidationException(Loc.T("server.cameraDeviceSettings.modeNotAvailable", new { value, label, options = JoinList(modes) }));
         }
 
         return new OnvifImagingChange(
-            Brightness: Level(change.Brightness, options.Brightness, "Brightness"),
-            ColorSaturation: Level(change.Saturation, options.ColorSaturation, "Saturation"),
-            Contrast: Level(change.Contrast, options.Contrast, "Contrast"),
-            Sharpness: Level(change.Sharpness, options.Sharpness, "Sharpness"),
-            IrCutFilter: Mode(change.IrCutFilter, options.IrCutFilterModes, "Day/night mode"),
+            Brightness: Level(change.Brightness, options.Brightness, Loc.T("server.cameraDeviceSettings.labelBrightness")),
+            ColorSaturation: Level(change.Saturation, options.ColorSaturation, Loc.T("server.cameraDeviceSettings.labelSaturation")),
+            Contrast: Level(change.Contrast, options.Contrast, Loc.T("server.cameraDeviceSettings.labelContrast")),
+            Sharpness: Level(change.Sharpness, options.Sharpness, Loc.T("server.cameraDeviceSettings.labelSharpness")),
+            IrCutFilter: Mode(change.IrCutFilter, options.IrCutFilterModes, Loc.T("server.cameraDeviceSettings.labelDayNight")),
             WideDynamicRangeMode: Mode(change.WdrMode, options.WideDynamicRangeModes, "WDR"),
-            WideDynamicRangeLevel: Level(change.WdrLevel, options.WideDynamicRangeLevel, "WDR level"),
-            BacklightCompensationMode: Mode(change.BacklightMode, options.BacklightCompensationModes, "Backlight compensation"),
-            BacklightCompensationLevel: Level(change.BacklightLevel, options.BacklightCompensationLevel, "Backlight compensation level"),
-            ExposureMode: Mode(change.ExposureMode, options.ExposureModes, "Exposure mode"),
-            WhiteBalanceMode: Mode(change.WhiteBalanceMode, options.WhiteBalanceModes, "White balance"),
-            WhiteBalanceCrGain: Level(change.WhiteBalanceCrGain, options.WhiteBalanceCrGain, "Red gain"),
-            WhiteBalanceCbGain: Level(change.WhiteBalanceCbGain, options.WhiteBalanceCbGain, "Blue gain"));
+            WideDynamicRangeLevel: Level(change.WdrLevel, options.WideDynamicRangeLevel, Loc.T("server.cameraDeviceSettings.labelWdrLevel")),
+            BacklightCompensationMode: Mode(change.BacklightMode, options.BacklightCompensationModes, Loc.T("server.cameraDeviceSettings.labelBacklight")),
+            BacklightCompensationLevel: Level(change.BacklightLevel, options.BacklightCompensationLevel, Loc.T("server.cameraDeviceSettings.labelBacklightLevel")),
+            ExposureMode: Mode(change.ExposureMode, options.ExposureModes, Loc.T("server.cameraDeviceSettings.labelExposure")),
+            WhiteBalanceMode: Mode(change.WhiteBalanceMode, options.WhiteBalanceModes, Loc.T("server.cameraDeviceSettings.labelWhiteBalance")),
+            WhiteBalanceCrGain: Level(change.WhiteBalanceCrGain, options.WhiteBalanceCrGain, Loc.T("server.cameraDeviceSettings.labelRedGain")),
+            WhiteBalanceCbGain: Level(change.WhiteBalanceCbGain, options.WhiteBalanceCbGain, Loc.T("server.cameraDeviceSettings.labelBlueGain")));
     }
 
     internal static OnvifAudioEncoderChange ValidateAudio(AudioEncoderValues change, OnvifAudioEncoderConfig current,
@@ -460,15 +461,15 @@ public class CameraDeviceSettingsService(ApplicationDbContext db, Func<HttpClien
         var codec = change.Codec ?? current.Encoding;
         var opts = options.FirstOrDefault(o => string.Equals(o.Encoding, codec, StringComparison.OrdinalIgnoreCase))
             ?? throw new DeviceSettingsValidationException(change.Codec is not null
-                ? $"{change.Codec} audio isn't available on this camera."
-                : "The camera didn't report which audio settings it accepts.");
+                ? Loc.T("server.cameraDeviceSettings.audioIsntAvailableOnThis", new { codec = change.Codec })
+                : Loc.T("server.cameraDeviceSettings.theCameraDidntReportWhich2"));
 
         int? Pick(int? value, IReadOnlyList<int> allowed, string label, string unit)
         {
             if (value is not { } v) return null;
-            if (allowed.Count == 0) throw new DeviceSettingsValidationException($"Audio {label} isn't adjustable for {opts.Encoding}.");
+            if (allowed.Count == 0) throw new DeviceSettingsValidationException(Loc.T("server.cameraDeviceSettings.audioIsntAdjustableFor", new { label, encoding = opts.Encoding }));
             if (!allowed.Contains(v))
-                throw new DeviceSettingsValidationException($"{v} {unit} isn't available. Choose one of {JoinList(allowed.Select(a => $"{a} {unit}"))}.");
+                throw new DeviceSettingsValidationException(Loc.T("server.cameraDeviceSettings.valueNotAvailable", new { value = $"{v} {unit}", options = JoinList(allowed.Select(a => $"{a} {unit}")) }));
             return v;
         }
 
@@ -489,15 +490,15 @@ public class CameraDeviceSettingsService(ApplicationDbContext db, Func<HttpClien
             .FirstOrDefaultAsync(c => c.Id == cameraId, ct);
 
     private async Task<Target> LoadTargetAsync(Guid cameraId, CancellationToken ct)
-        => ToTarget(await LoadCameraAsync(cameraId, ct) ?? throw new KeyNotFoundException("Camera not found."));
+        => ToTarget(await LoadCameraAsync(cameraId, ct) ?? throw new KeyNotFoundException(Loc.T("server.cameraDeviceSettings.cameraNotFound")));
 
     internal static Target ToTarget(Camera camera)
     {
         if (string.IsNullOrWhiteSpace(camera.DeviceServiceUri))
-            throw new DeviceSettingsUnavailableException("This camera has no ONVIF device address.");
+            throw new DeviceSettingsUnavailableException(Loc.T("server.cameraDeviceSettings.thisCameraHasNoOnvif"));
         var raw = camera.Capabilities?.RawProbeJson;
         var media = OnvifServiceAddresses.Get(raw, "Media")
-            ?? throw new DeviceSettingsUnavailableException("This camera hasn't been probed over ONVIF yet. Re-probe it from its Edit page.");
+            ?? throw new DeviceSettingsUnavailableException(Loc.T("server.cameraDeviceSettings.thisCameraHasntBeenProbed"));
 
         var streams = camera.Streams
             .Where(s => !string.IsNullOrEmpty(s.ProfileToken))

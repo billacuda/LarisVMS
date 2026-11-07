@@ -25,4 +25,9 @@ public class ApiKey
     public string? CreatedByUserId { get; set; }
     public DateTime? LastUsedAtUtc { get; set; }
     public DateTime? RevokedAtUtc { get; set; }
+    /// <summary>When the key stops working on its own; null = never. Chosen at creation.</summary>
+    public DateTime? ExpiresAtUtc { get; set; }
+    /// <summary>True narrows the key to its ApiKeyPermission rows, on top of its role. A separate flag
+    /// because a limited key with nothing allowed would otherwise look like an unlimited one.</summary>
+    public bool PermissionsLimited { get; set; }
 }

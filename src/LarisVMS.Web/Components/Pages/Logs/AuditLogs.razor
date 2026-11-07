@@ -7,24 +7,22 @@
 @inject ApplicationDbContext Db
 @inject IAuthorizationService AuthorizationService
 
-<PageTitle>Audit Logs - @AppName</PageTitle>
+<PageTitle>@L["logs.auditLogs.auditLogs"] - @AppName</PageTitle>
 
-<h1>Logs</h1>
+<h1>@L["logs.auditLogs.logs"]</h1>
 <LogsTabs ActiveKey="AuditLogs" />
 
 <p class="text-muted">
-    Who did what and when — logins, camera/node/settings changes, and exports. Retention is
-    configurable on <a href="/Admin/Settings/Logs">Admin &rarr; Settings &rarr; Logs</a>
-    (kept forever by default).
+    @L.Markup("logs.auditLogs.intro")
 </p>
 
 @* Selections survive navigating away and refreshing — see remember-filters.js. *@
 <form method="get" class="row g-2 mb-3" data-remember-filters="auditlogs">
     <div class="col-md-3">
-        <input type="text" name="q" value="@Query" class="form-control form-control-sm" placeholder="Search action or details..." />
+        <input type="text" name="q" value="@Query" class="form-control form-control-sm" placeholder="@L["logs.auditLogs.searchActionOrDetails"]" />
     </div>
     <div class="col-md-2">
-        <input type="text" name="actor" value="@ActorFilter" class="form-control form-control-sm" placeholder="Actor username..." />
+        <input type="text" name="actor" value="@ActorFilter" class="form-control form-control-sm" placeholder="@L["logs.auditLogs.actorUsername"]" />
     </div>
     <div class="col-md-2">
         <input type="date" name="from" value="@From" class="form-control form-control-sm" />
@@ -33,16 +31,16 @@
         <input type="date" name="to" value="@To" class="form-control form-control-sm" />
     </div>
     <div class="col-md-1">
-        <button type="submit" class="btn btn-sm btn-primary w-100">Filter</button>
+        <button type="submit" class="btn btn-sm btn-primary w-100">@L["common.filter"]</button>
     </div>
     <div class="col-md-1">
-        <a href="/Logs/AuditLogs" class="btn btn-sm btn-outline-secondary w-100" data-clear-filters>Clear</a>
+        <a href="/Logs/AuditLogs" class="btn btn-sm btn-outline-secondary w-100" data-clear-filters>@L["common.clear"]</a>
     </div>
     @if (CanExport)
     {
         <div class="col-md-1">
             <a href="/api/logs/audit/export?q=@Uri.EscapeDataString(Query ?? "")&actor=@Uri.EscapeDataString(ActorFilter ?? "")&from=@Uri.EscapeDataString(From ?? "")&to=@Uri.EscapeDataString(To ?? "")"
-               class="btn btn-sm btn-outline-secondary w-100">Export CSV</a>
+               class="btn btn-sm btn-outline-secondary w-100">@L["logs.auditLogs.exportCsv"]</a>
         </div>
     }
 </form>
@@ -52,11 +50,11 @@
         <table class="table table-sm table-hover mb-0">
             <thead class="table-light">
                 <tr>
-                    <th>Time</th>
-                    <th>Action</th>
-                    <th>Actor</th>
-                    <th>Details</th>
-                    <th>IP</th>
+                    <th>@L["common.time"]</th>
+                    <th>@L["logs.auditLogs.action"]</th>
+                    <th>@L["logs.auditLogs.actor"]</th>
+                    <th>@L["common.details"]</th>
+                    <th>@L["logs.auditLogs.ip"]</th>
                 </tr>
             </thead>
             <tbody>
@@ -72,7 +70,7 @@
                 }
                 @if (Logs.Count == 0)
                 {
-                    <tr><td colspan="5" class="text-center text-muted py-3">No audit log entries found.</td></tr>
+                    <tr><td colspan="5" class="text-center text-muted py-3">@L["logs.auditLogs.noAuditLogEntriesFound"]</td></tr>
                 }
             </tbody>
         </table>

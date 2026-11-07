@@ -3,56 +3,56 @@
 @using LarisVMS.Core
 @using LarisVMS.Core.Enums
 @{
-    ViewData["Title"] = Model.Id is null ? "Add alert rule" : "Edit alert rule";
+    ViewData["Title"] = Model.Id is null ? L["admin.alerts.edit.addAlertRule"].Value : L["admin.alerts.edit.editAlertRule"].Value;
 }
-<h1>@(Model.Id is null ? "Add alert rule" : "Edit alert rule")</h1>
+<h1>@(Model.Id is null ? L["admin.alerts.edit.addAlertRule"].Value : L["admin.alerts.edit.editAlertRule"].Value)</h1>
 
 @if (!string.IsNullOrEmpty(Model.ErrorMessage))
 {
-    <div class="alert alert-danger">@Model.ErrorMessage</div>
+    <div class="alert alert-danger" role="alert">@Model.ErrorMessage</div>
 }
 
 <form method="post" asp-page-handler="Save">
     <input type="hidden" asp-for="Id" />
 
     <div class="card mb-3">
-        <div class="card-header fw-semibold">Condition</div>
+        <div class="card-header fw-semibold">@L["admin.alerts.edit.condition"]</div>
         <div class="card-body">
             <div class="form-check form-switch mb-3">
                 <input class="form-check-input" type="checkbox" asp-for="IsEnabled" id="isEnabled" />
-                <label class="form-check-label" for="isEnabled">Enabled</label>
+                <label class="form-check-label" for="isEnabled">@L["common.enabled"]</label>
             </div>
             <div class="row g-3">
                 <div class="col-sm-6">
-                    <label class="form-label">Name</label>
-                    <input type="text" asp-for="Name" class="form-control" placeholder="e.g. Front door camera offline" />
+                    <label for="Name" class="form-label">@L["common.name"]</label>
+                    <input type="text" asp-for="Name" class="form-control" placeholder="@L["admin.alerts.edit.eGFrontDoorCamera"]" />
                 </div>
                 <div class="col-sm-3">
-                    <label class="form-label">
-                        Cooldown (minutes)
+                    <label for="CooldownMinutes" class="form-label">
+                        @L["admin.alerts.edit.cooldownMinutes"]
                     </label>
                     <input type="number" asp-for="CooldownMinutes" class="form-control" min="1" />
-                    <div class="lv-hint">Minimum time between repeat firings.</div>
+                    <div class="lv-hint">@L["admin.alerts.edit.minimumTimeBetweenRepeatFirings"]</div>
                 </div>
                 <div class="col-sm-3">
-                    <label class="form-label">Condition type</label>
+                    <label for="conditionType" class="form-label">@L["admin.alerts.edit.conditionType"]</label>
                     <select asp-for="ConditionType" id="conditionType" class="form-select">
-                        <option value="@AlertConditionType.CameraNotReporting">Camera not reporting</option>
-                        <option value="@AlertConditionType.NodeOffline">Node offline</option>
-                        <option value="@AlertConditionType.NodeStorageLow">Node storage low</option>
-                        <option value="@AlertConditionType.NodeFailoverActivated">Node failover activated</option>
-                        <option value="@AlertConditionType.MotionDetected">Motion detected</option>
-                        <option value="@AlertConditionType.ObjectDetected">Object detected</option>
-                        <option value="@AlertConditionType.SpeedOver">Speed over a limit</option>
-                        <option value="@AlertConditionType.EvidenceLockExpiringSoon">Evidence lock ending soon</option>
-                        <option value="@AlertConditionType.EvidenceLockRemoved">Evidence lock removed</option>
+                        <option value="@AlertConditionType.CameraNotReporting">@L["admin.alerts.edit.cameraNotReporting"]</option>
+                        <option value="@AlertConditionType.NodeOffline">@L["admin.alerts.edit.nodeOffline"]</option>
+                        <option value="@AlertConditionType.NodeStorageLow">@L["admin.alerts.edit.nodeStorageLow"]</option>
+                        <option value="@AlertConditionType.NodeFailoverActivated">@L["admin.alerts.edit.nodeFailoverActivated"]</option>
+                        <option value="@AlertConditionType.MotionDetected">@L["admin.alerts.edit.motionDetected"]</option>
+                        <option value="@AlertConditionType.ObjectDetected">@L["admin.alerts.edit.objectDetected"]</option>
+                        <option value="@AlertConditionType.SpeedOver">@L["admin.alerts.edit.speedOverALimit"]</option>
+                        <option value="@AlertConditionType.EvidenceLockExpiringSoon">@L["admin.alerts.edit.evidenceLockEndingSoon"]</option>
+                        <option value="@AlertConditionType.EvidenceLockRemoved">@L["admin.alerts.edit.evidenceLockRemoved"]</option>
                     </select>
                 </div>
 
                 <div class="col-sm-6" id="cameraField">
-                    <label class="form-label">Camera</label>
+                    <label for="cameraSelect" class="form-label">@L["common.camera"]</label>
                     <select asp-for="CameraId" id="cameraSelect" class="form-select">
-                        <option value="" id="cameraEmptyOption">(choose a camera)</option>
+                        <option value="" id="cameraEmptyOption">@L["admin.alerts.edit.chooseACamera"]</option>
                         @foreach (var c in Model.Cameras)
                         {
                             <option value="@c.Id">@c.Name</option>
@@ -60,9 +60,9 @@
                     </select>
                 </div>
                 <div class="col-sm-6" id="nodeField">
-                    <label class="form-label" id="nodeLabel">Node</label>
+                    <label for="nodeSelect" class="form-label" id="nodeLabel">@L["common.node"]</label>
                     <select asp-for="NodeId" id="nodeSelect" class="form-select">
-                        <option value="" id="nodeEmptyOption">(choose a node)</option>
+                        <option value="" id="nodeEmptyOption">@L["admin.alerts.edit.chooseANode"]</option>
                         @foreach (var n in Model.Nodes)
                         {
                             <option value="@n.Id">@n.Name</option>
@@ -70,11 +70,11 @@
                     </select>
                 </div>
                 <div class="col-sm-3" id="thresholdField">
-                    <label class="form-label">
-                        Free space threshold (%)
+                    <label for="ThresholdPercent" class="form-label">
+                        @L["admin.alerts.edit.freeSpaceThreshold"]
                     </label>
                     <input type="number" asp-for="ThresholdPercent" class="form-control" min="1" max="99" />
-                    <div class="lv-hint">Fires when free space drops below this.</div>
+                    <div class="lv-hint">@L["admin.alerts.edit.firesWhenFreeSpaceDrops"]</div>
                 </div>
             </div>
 
@@ -82,20 +82,19 @@
                uses only the zone and the schedule. *@
             <div id="detectionFields" class="row g-3 mt-1">
                 <div class="col-12"><hr class="my-1" /><div class="small text-muted" data-detection-only>
-                    Fires within seconds of a matching AI detection. Leave a filter empty to match anything.
-                    Needs AI detection on the camera; colors and zones use each object's own box.
+                    @L["admin.alerts.edit.firesWithinSecondsOfA"]
                 </div><div class="small text-muted" data-motion-only>
-                    Fires within seconds of motion on the camera, or only in one server motion zone.
+                    @L["admin.alerts.edit.firesWithinSecondsOfMotion"]
                 </div></div>
                 <div class="col-sm-3" id="speedField">
-                    <label class="form-label">Speed limit (@SpeedUnits.Label(Model.SpeedUnit))</label>
+                    <label class="form-label" for="SpeedThreshold">@L["admin.alerts.edit.speedLimit", new { unit = SpeedUnits.Label(Model.SpeedUnit) }]</label>
                     <input type="number" asp-for="SpeedThreshold" class="form-control" min="1" step="any" />
-                    <div class="lv-hint">Fires at or over this. Speeds come from speed traps (Cameras → Speed traps).</div>
+                    <div class="lv-hint">@L["admin.alerts.edit.firesAtOrOverThis"]</div>
                 </div>
                 <div class="col-sm-3" data-detection-only>
-                    <label class="form-label">Category</label>
+                    <label for="CategoryFilter" class="form-label">@L["admin.alerts.edit.category"]</label>
                     <select asp-for="CategoryFilter" class="form-select">
-                        <option value="">(any)</option>
+                        <option value="">@L["admin.alerts.edit.any"]</option>
                         @foreach (var name in Model.Categories.Select(c => c.Name))
                         {
                             <option value="@name">@name</option>
@@ -103,8 +102,8 @@
                     </select>
                 </div>
                 <div class="col-sm-3" data-detection-only>
-                    <label class="form-label">Label</label>
-                    <input type="text" asp-for="LabelFilter" class="form-control" list="alertLabelList" placeholder="e.g. truck" />
+                    <label for="LabelFilter" class="form-label">@L["admin.alerts.edit.label"]</label>
+                    <input type="text" asp-for="LabelFilter" class="form-control" list="alertLabelList" placeholder="@L["admin.alerts.edit.eGTruck"]" />
                     <datalist id="alertLabelList">
                         @foreach (var l in Model.Labels.Select(l => l.Label).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(l => l))
                         {
@@ -113,44 +112,44 @@
                     </datalist>
                 </div>
                 <div class="col-sm-3" data-detection-only>
-                    <label class="form-label">Color</label>
+                    <label for="ColorFilter" class="form-label">@L["admin.alerts.edit.color"]</label>
                     <select asp-for="ColorFilter" class="form-select">
-                        <option value="">(any)</option>
+                        <option value="">@L["admin.alerts.edit.any"]</option>
                         @foreach (var name in ObjectColors.All.Select(c => c.Name))
                         {
                             <option value="@name">@ObjectColors.Display(name)</option>
                         }
                     </select>
-                    <div class="lv-hint">For people, matches the shirt or the pants.</div>
+                    <div class="lv-hint">@L["admin.alerts.edit.forPeopleMatchesTheShirt"]</div>
                 </div>
                 <div class="col-sm-4">
-                    <label class="form-label">Zone</label>
+                    <label for="zoneSelect" class="form-label">@L["admin.alerts.edit.zone"]</label>
                     <select asp-for="ZoneId" id="zoneSelect" class="form-select">
-                        <option value="" id="zoneAnyOption">(anywhere in view)</option>
+                        <option value="" id="zoneAnyOption">@L["admin.alerts.edit.anywhereInView"]</option>
                         @foreach (var z in Model.Zones)
                         {
                             <option value="@z.Id" data-camera="@z.CameraId" data-kind="@z.Kind">@z.Name</option>
                         }
                     </select>
-                    <div class="lv-hint" data-detection-only>Where the object stands (the bottom of its box). Pick a camera first.</div>
-                    <div class="lv-hint" data-motion-only>Server motion zones only. Pick a camera first.</div>
+                    <div class="lv-hint" data-detection-only>@L["admin.alerts.edit.whereTheObjectStandsThe"]</div>
+                    <div class="lv-hint" data-motion-only>@L["admin.alerts.edit.serverMotionZonesOnlyPick"]</div>
                 </div>
                 <div class="col-sm-8">
-                    <label class="form-label d-block">Active</label>
+                    <div class="form-label d-block">@L["admin.alerts.edit.active"]</div>
                     <div class="d-flex flex-wrap gap-2 align-items-center">
                         @foreach (var d in new[] { DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday, DayOfWeek.Friday, DayOfWeek.Saturday, DayOfWeek.Sunday })
                         {
                             <div class="form-check form-check-inline me-0">
                                 <input class="form-check-input" type="checkbox" name="ScheduleDays" value="@d" id="day-@d"
                                        checked="@Model.ScheduleDays.Contains(d)" />
-                                <label class="form-check-label small" for="day-@d">@d.ToString()[..3]</label>
+                                <label class="form-check-label small" for="day-@d">@System.Globalization.CultureInfo.CurrentUICulture.DateTimeFormat.GetAbbreviatedDayName(d)</label>
                             </div>
                         }
-                        <input type="time" asp-for="ScheduleStart" class="form-control form-control-sm" style="width: 8rem;" aria-label="From" />
-                        <span class="small">to</span>
-                        <input type="time" asp-for="ScheduleEnd" class="form-control form-control-sm" style="width: 8rem;" aria-label="Until" />
+                        <input type="time" asp-for="ScheduleStart" class="form-control form-control-sm" style="width: 8rem;" aria-label="@L["common.from"]" />
+                        <span class="small">@L["admin.alerts.edit.to"]</span>
+                        <input type="time" asp-for="ScheduleEnd" class="form-control form-control-sm" style="width: 8rem;" aria-label="@L["admin.alerts.edit.until"]" />
                     </div>
-                    <div class="lv-hint">No days ticked = every day; no times = all day. 22:00 to 06:00 runs overnight. In <span id="tzName">@(Model.ScheduleTimeZoneName ?? "your time zone")</span>.</div>
+                    <div class="lv-hint">No days ticked = every day; no times = all day. 22:00 to 06:00 runs overnight. In <span id="tzName">@(Model.ScheduleTimeZoneName ?? L["admin.alerts.edit.yourTimeZone"].Value)</span>.</div>
                     <input type="hidden" asp-for="TimeZoneId" id="timeZoneId" />
                 </div>
             </div>
@@ -158,49 +157,47 @@
     </div>
 
     <div class="card mb-3">
-        <div class="card-header fw-semibold">Notifications to users</div>
+        <div class="card-header fw-semibold">@L["admin.alerts.edit.notificationsToUsers"]</div>
         <div class="card-body">
             <div class="form-check form-switch">
                 <input class="form-check-input" type="checkbox" asp-for="AllowSubscribe" id="allowSubscribe" />
-                <label class="form-check-label" for="allowSubscribe">Let users subscribe</label>
+                <label class="form-check-label" for="allowSubscribe">@L["admin.alerts.edit.letUsersSubscribe"]</label>
             </div>
-            <div class="lv-hint">Users can then turn this on for themselves under My notifications, in the browser or by email.
-                Each user only gets it for cameras they can view. <a href="/Help/alerts#notifications">Learn more</a></div>
+            <div class="lv-hint">@L["admin.alerts.edit.usersCanThenTurnThis"] <a href="/Help/alerts#notifications">@L["common.learnMore"]</a></div>
             @if (Model.Id is null)
             {
-                <div class="small text-muted mt-2">Save the rule to add subscribers.</div>
+                <div class="small text-muted mt-2">@L["admin.alerts.edit.saveTheRuleToAdd"]</div>
             }
         </div>
     </div>
 
     <div class="card mb-3">
-        <div class="card-header fw-semibold">Team channels</div>
+        <div class="card-header fw-semibold">@L["admin.alerts.edit.teamChannels"]</div>
         <div class="card-body">
-            <p class="text-muted small">At most one delivery per channel. Turn a channel on and fill
-                in its fields to send a firing there.</p>
+            <p class="text-muted small">@L["admin.alerts.edit.atMostOneDeliveryPer"]</p>
 
             <div class="row g-3 align-items-end border-bottom pb-3 mb-3">
                 <div class="col-sm-2">
                     <div class="form-check form-switch">
                         <input class="form-check-input" type="checkbox" asp-for="EmailEnabled" id="emailEnabled" />
-                        <label class="form-check-label" for="emailEnabled">Email</label>
+                        <label class="form-check-label" for="emailEnabled">@L["common.email"]</label>
                     </div>
                 </div>
                 <div class="col-sm-6">
-                    <input type="email" asp-for="EmailTo" class="form-control" placeholder="ops@example.com" />
+                    <input type="email" asp-for="EmailTo" class="form-control" placeholder="ops@example.com" aria-label="@L["common.email"]" />
                 </div>
-                <div class="col-sm-4 text-muted small">Sends through Admin → Settings → Email.</div>
+                <div class="col-sm-4 text-muted small">@L["admin.alerts.edit.sendsThroughAdminSettingsEmail"]</div>
             </div>
 
             <div class="row g-3 align-items-end border-bottom pb-3 mb-3">
                 <div class="col-sm-2">
                     <div class="form-check form-switch">
                         <input class="form-check-input" type="checkbox" asp-for="WebhookEnabled" id="webhookEnabled" />
-                        <label class="form-check-label" for="webhookEnabled">Webhook</label>
+                        <label class="form-check-label" for="webhookEnabled">@L["admin.alerts.edit.webhook"]</label>
                     </div>
                 </div>
                 <div class="col-sm-10">
-                    <input type="url" asp-for="WebhookUrl" class="form-control" placeholder="https://example.com/hook" />
+                    <input type="url" asp-for="WebhookUrl" class="form-control" placeholder="https://example.com/hook" aria-label="@L["admin.alerts.edit.webhook"]" />
                 </div>
             </div>
 
@@ -208,14 +205,14 @@
                 <div class="col-sm-2">
                     <div class="form-check form-switch">
                         <input class="form-check-input" type="checkbox" asp-for="NtfyEnabled" id="ntfyEnabled" />
-                        <label class="form-check-label" for="ntfyEnabled">ntfy</label>
+                        <label class="form-check-label" for="ntfyEnabled">@L["admin.alerts.edit.ntfy"]</label>
                     </div>
                 </div>
                 <div class="col-sm-5">
-                    <input type="text" asp-for="NtfyTopic" class="form-control" placeholder="Topic" />
+                    <input type="text" asp-for="NtfyTopic" class="form-control" placeholder="@L["admin.alerts.edit.topic"]" aria-label="@L["admin.alerts.edit.topic"]" />
                 </div>
                 <div class="col-sm-5">
-                    <input type="url" asp-for="NtfyServerUrl" class="form-control" placeholder="Server (default https://ntfy.sh)" />
+                    <input type="url" asp-for="NtfyServerUrl" class="form-control" placeholder="@L["admin.alerts.edit.serverDefaultHttpsNtfySh"]" aria-label="@L["admin.alerts.edit.serverDefaultHttpsNtfySh"]" />
                 </div>
             </div>
 
@@ -223,14 +220,14 @@
                 <div class="col-sm-2">
                     <div class="form-check form-switch">
                         <input class="form-check-input" type="checkbox" asp-for="PushoverEnabled" id="pushoverEnabled" />
-                        <label class="form-check-label" for="pushoverEnabled">Pushover</label>
+                        <label class="form-check-label" for="pushoverEnabled">@L["admin.alerts.edit.pushover"]</label>
                     </div>
                 </div>
                 <div class="col-sm-5">
-                    <input type="text" asp-for="PushoverAppToken" class="form-control" placeholder="App token" autocomplete="off" />
+                    <input type="text" asp-for="PushoverAppToken" class="form-control" placeholder="@L["admin.alerts.edit.appToken"]" aria-label="@L["admin.alerts.edit.appToken"]" autocomplete="off" />
                 </div>
                 <div class="col-sm-5">
-                    <input type="text" asp-for="PushoverUserKey" class="form-control" placeholder="User key" autocomplete="off" />
+                    <input type="text" asp-for="PushoverUserKey" class="form-control" placeholder="@L["admin.alerts.edit.userKey"]" aria-label="@L["admin.alerts.edit.userKey"]" autocomplete="off" />
                 </div>
             </div>
 
@@ -238,11 +235,11 @@
                 <div class="col-sm-2">
                     <div class="form-check form-switch">
                         <input class="form-check-input" type="checkbox" asp-for="SlackEnabled" id="slackEnabled" />
-                        <label class="form-check-label" for="slackEnabled">Slack</label>
+                        <label class="form-check-label" for="slackEnabled">@L["admin.alerts.edit.slack"]</label>
                     </div>
                 </div>
                 <div class="col-sm-10">
-                    <input type="url" asp-for="SlackWebhookUrl" class="form-control" placeholder="Incoming webhook URL" />
+                    <input type="url" asp-for="SlackWebhookUrl" class="form-control" placeholder="@L["admin.alerts.edit.incomingWebhookUrl"]" aria-label="@L["admin.alerts.edit.incomingWebhookUrl"]" />
                 </div>
             </div>
 
@@ -250,33 +247,33 @@
                 <div class="col-sm-2">
                     <div class="form-check form-switch">
                         <input class="form-check-input" type="checkbox" asp-for="TeamsEnabled" id="teamsEnabled" />
-                        <label class="form-check-label" for="teamsEnabled">Teams</label>
+                        <label class="form-check-label" for="teamsEnabled">@L["admin.alerts.edit.teams"]</label>
                     </div>
                 </div>
                 <div class="col-sm-10">
-                    <input type="url" asp-for="TeamsWebhookUrl" class="form-control" placeholder="Incoming webhook URL" />
+                    <input type="url" asp-for="TeamsWebhookUrl" class="form-control" placeholder="@L["admin.alerts.edit.incomingWebhookUrl"]" aria-label="@L["admin.alerts.edit.incomingWebhookUrl"]" />
                 </div>
             </div>
         </div>
     </div>
 
-    <button type="submit" class="btn btn-primary">Save</button>
-    <a asp-page="Index" class="btn btn-outline-secondary">Cancel</a>
+    <button type="submit" class="btn btn-primary">@L["common.save"]</button>
+    <a asp-page="Index" class="btn btn-outline-secondary">@L["common.cancel"]</a>
 </form>
 
 @if (Model.Id is { } ruleId)
 {
     <div class="card my-3">
-        <div class="card-header fw-semibold">Subscribers</div>
+        <div class="card-header fw-semibold">@L["admin.alerts.edit.subscribers"]</div>
         <div class="card-body">
             @if (Model.Subscribers.Count == 0)
             {
-                <p class="text-muted small">Nobody gets this as a personal notification yet.</p>
+                <p class="text-muted small">@L["admin.alerts.edit.nobodyGetsThisAsA"]</p>
             }
             else
             {
                 <table class="table table-sm align-middle">
-                    <thead><tr><th>User</th><th>Browser</th><th>Email</th><th>Muted</th><th></th></tr></thead>
+                    <thead><tr><th>@L["common.user"]</th><th>@L["admin.alerts.edit.browser"]</th><th>@L["common.email"]</th><th>@L["admin.alerts.edit.muted"]</th><th></th></tr></thead>
                     <tbody>
                         @foreach (var sub in Model.Subscribers)
                         {
@@ -295,7 +292,7 @@
                                 <td class="text-end">
                                     <form method="post" asp-page-handler="RemoveSubscriber" asp-route-id="@ruleId" class="d-inline">
                                         <input type="hidden" name="subscriptionId" value="@sub.Id" />
-                                        <button type="submit" class="btn btn-sm btn-outline-danger">Remove</button>
+                                        <button type="submit" class="btn btn-sm btn-outline-danger">@L["common.remove"]</button>
                                     </form>
                                 </td>
                             </tr>
@@ -305,33 +302,33 @@
             }
             <form method="post" asp-page-handler="AddSubscribers" asp-route-id="@ruleId" class="row g-2 align-items-end">
                 <div class="col-sm-4">
-                    <label class="form-label small mb-0" for="addUserId">Add a user</label>
+                    <label class="form-label small mb-0" for="addUserId">@L["admin.alerts.edit.addAUser"]</label>
                     <select name="addUserId" id="addUserId" class="form-select form-select-sm">
-                        <option value="">(none)</option>
+                        <option value="">@L["admin.alerts.edit.none"]</option>
                         @foreach (var u in Model.Users) { <option value="@u.Id">@u.Name</option> }
                     </select>
                 </div>
                 <div class="col-sm-3">
-                    <label class="form-label small mb-0" for="addRoleId">or everyone in a role</label>
+                    <label class="form-label small mb-0" for="addRoleId">@L["admin.alerts.edit.orEveryoneInARole"]</label>
                     <select name="addRoleId" id="addRoleId" class="form-select form-select-sm">
-                        <option value="">(none)</option>
+                        <option value="">@L["admin.alerts.edit.none"]</option>
                         @foreach (var r in Model.Roles) { <option value="@r.Id">@r.Name</option> }
                     </select>
                 </div>
                 <div class="col-sm-auto">
                     <div class="form-check form-check-inline">
                         <input class="form-check-input" type="checkbox" name="addBrowser" value="true" id="addBrowser" checked />
-                        <label class="form-check-label small" for="addBrowser">Browser</label>
+                        <label class="form-check-label small" for="addBrowser">@L["admin.alerts.edit.browser"]</label>
                     </div>
                     <div class="form-check form-check-inline">
                         <input class="form-check-input" type="checkbox" name="addEmail" value="true" id="addEmail" />
-                        <label class="form-check-label small" for="addEmail">Email</label>
+                        <label class="form-check-label small" for="addEmail">@L["common.email"]</label>
                     </div>
                 </div>
                 <div class="col-sm-auto">
-                    <button type="submit" class="btn btn-sm btn-outline-primary">Add</button>
+                    <button type="submit" class="btn btn-sm btn-outline-primary">@L["common.add"]</button>
                 </div>
-                <div class="col-12 lv-hint">Each person can change how they get it, mute it, or unsubscribe under My notifications.</div>
+                <div class="col-12 lv-hint">@L["admin.alerts.edit.eachPersonCanChangeHow"]</div>
             </form>
         </div>
     </div>
@@ -384,7 +381,7 @@
                 speedField.style.display = isSpeed ? '' : 'none';
                 Array.prototype.forEach.call(detectionFields.querySelectorAll('[data-detection-only]'), function (el) { el.style.display = isMotion ? 'none' : ''; });
                 Array.prototype.forEach.call(detectionFields.querySelectorAll('[data-motion-only]'), function (el) { el.style.display = isMotion ? '' : 'none'; });
-                document.getElementById('zoneAnyOption').textContent = isMotion ? '(whole camera)' : '(anywhere in view)';
+                document.getElementById('zoneAnyOption').textContent = isMotion ? larisvmsI18n.t('js.zones.wholeCamera') : larisvmsI18n.t('js.zones.anywhereInView');
                 updateZones();
             }
 

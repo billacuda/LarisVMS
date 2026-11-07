@@ -18,12 +18,13 @@
     }
 </HeadContent>
 
+<a class="visually-hidden-focusable lv-skip-link" href="#main-content">@L["layout.skipToContent"]</a>
 <div class="lv-shell">
     @* Every item below is permission-gated the same way _Layout.cshtml's were — see the `_show*`
        fields computed in OnInitializedAsync, one per nav item, mirroring the policy on the page it
        links to. Element IDs (lvSidebar/lvTopbar) must stay exactly as in the old layout: JS-heavy
        pages migrated in a later phase (kiosk fullscreen mode, etc.) reach into them by id. *@
-    <aside class="lv-side offcanvas-lg offcanvas-start" id="lvSidebar" tabindex="-1" aria-label="Navigation">
+    <aside class="lv-side offcanvas-lg offcanvas-start" id="lvSidebar" tabindex="-1" aria-label="@L["layout.navigation"]">
         <div class="lv-brand">
             @if (_logoDataUri is not null)
             {
@@ -31,59 +32,59 @@
             }
             <div>
                 <div class="lv-brand-text">@_appName</div>
-                <div class="lv-brand-sub">Video Management</div>
+                <div class="lv-brand-sub">@L["layout.brandSub"]</div>
             </div>
             <button type="button" class="btn-close d-lg-none ms-auto" data-bs-dismiss="offcanvas"
-                    data-bs-target="#lvSidebar" aria-label="Close navigation"></button>
+                    data-bs-target="#lvSidebar" aria-label="@L["layout.closeNav"]"></button>
         </div>
         <nav class="lv-nav">
             @if (_isAuthenticated)
             {
-                <a class="lv-navitem@(IsActive("/") ? " active" : "")" href="/"><span aria-hidden="true">🏠︎</span> Dashboard</a>
+                <a class="lv-navitem@(IsActive("/") ? " active" : "")" href="/" aria-current="@(IsActive("/") ? "page" : null)"><span aria-hidden="true">🏠︎</span> @L["nav.dashboard"]</a>
             }
             @if (_showLive)
             {
-                <a class="lv-navitem@(IsActive("/Live") ? " active" : "")" href="/Live"><span aria-hidden="true">📡</span> Live</a>
-                <a class="lv-navitem@(IsActive("/Map") ? " active" : "")" href="/Map"><span aria-hidden="true">🗺️</span> Map</a>
+                <a class="lv-navitem@(IsActive("/Live") ? " active" : "")" href="/Live" aria-current="@(IsActive("/Live") ? "page" : null)"><span aria-hidden="true">📡</span> @L["nav.live"]</a>
+                <a class="lv-navitem@(IsActive("/Map") ? " active" : "")" href="/Map" aria-current="@(IsActive("/Map") ? "page" : null)"><span aria-hidden="true">🗺️</span> @L["nav.map"]</a>
             }
             @if (_showPlayback)
             {
-                <a class="lv-navitem@(IsActive("/Playback") ? " active" : "")" href="/Playback"><span aria-hidden="true">▶️</span> Playback</a>
+                <a class="lv-navitem@(IsActive("/Playback") ? " active" : "")" href="/Playback" aria-current="@(IsActive("/Playback") ? "page" : null)"><span aria-hidden="true">▶️</span> @L["nav.playback"]</a>
             }
             @if (_showExports)
             {
-                <a class="lv-navitem@(IsActive("/Exports") ? " active" : "")" href="/Exports"><span aria-hidden="true">🎬</span> Exports</a>
+                <a class="lv-navitem@(IsActive("/Exports") ? " active" : "")" href="/Exports" aria-current="@(IsActive("/Exports") ? "page" : null)"><span aria-hidden="true">🎬</span> @L["nav.exports"]</a>
             }
             @if (_showBookmarks)
             {
-                <a class="lv-navitem@(IsActive("/Bookmarks") ? " active" : "")" href="/Bookmarks"><span aria-hidden="true">🔖</span> Bookmarks</a>
-                <a class="lv-navitem@(IsActive("/EvidenceLocks") ? " active" : "")" href="/EvidenceLocks"><span aria-hidden="true">🔒</span> Evidence locks</a>
+                <a class="lv-navitem@(IsActive("/Bookmarks") ? " active" : "")" href="/Bookmarks" aria-current="@(IsActive("/Bookmarks") ? "page" : null)"><span aria-hidden="true">🔖</span> @L["nav.bookmarks"]</a>
+                <a class="lv-navitem@(IsActive("/EvidenceLocks") ? " active" : "")" href="/EvidenceLocks" aria-current="@(IsActive("/EvidenceLocks") ? "page" : null)"><span aria-hidden="true">🔒</span> @L["nav.evidenceLocks"]</a>
             }
             @if (_showSnapshots)
             {
-                <a class="lv-navitem@(IsActive("/Snapshots") ? " active" : "")" href="/Snapshots"><span aria-hidden="true">📸</span> Snapshots</a>
-                <a class="lv-navitem@(IsActive("/Activity") ? " active" : "")" href="/Activity"><span aria-hidden="true">🔥</span> Activity</a>
+                <a class="lv-navitem@(IsActive("/Snapshots") ? " active" : "")" href="/Snapshots" aria-current="@(IsActive("/Snapshots") ? "page" : null)"><span aria-hidden="true">📸</span> @L["nav.snapshots"]</a>
+                <a class="lv-navitem@(IsActive("/Activity") ? " active" : "")" href="/Activity" aria-current="@(IsActive("/Activity") ? "page" : null)"><span aria-hidden="true">🔥</span> @L["nav.activity"]</a>
             }
             @if (_showViews)
             {
-                <a class="lv-navitem@(IsActive("/Views") ? " active" : "")" href="/Views"><span aria-hidden="true">🖼️</span> Views</a>
+                <a class="lv-navitem@(IsActive("/Views") ? " active" : "")" href="/Views" aria-current="@(IsActive("/Views") ? "page" : null)"><span aria-hidden="true">🖼️</span> @L["nav.views"]</a>
             }
             @if (_showCameras)
             {
-                <a class="lv-navitem@(IsActive("/Cameras") ? " active" : "")" href="/Cameras"><span aria-hidden="true">📷</span> Cameras</a>
+                <a class="lv-navitem@(IsActive("/Cameras") ? " active" : "")" href="/Cameras" aria-current="@(IsActive("/Cameras") ? "page" : null)"><span aria-hidden="true">📷</span> @L["nav.cameras"]</a>
             }
             @if (_showNodes)
             {
-                <a class="lv-navitem@(IsActive("/Admin/Nodes") ? " active" : "")" href="/Admin/Nodes"><span aria-hidden="true">🔌</span> Nodes</a>
+                <a class="lv-navitem@(IsActive("/Admin/Nodes") ? " active" : "")" href="/Admin/Nodes" aria-current="@(IsActive("/Admin/Nodes") ? "page" : null)"><span aria-hidden="true">🔌</span> @L["nav.nodes"]</a>
             }
             @if (_showSettingsHub)
             {
-                <a class="lv-navitem@(IsActive("/Admin/Settings") ? " active" : "")" href="/Admin/Settings"><span aria-hidden="true">⚙️</span> Settings</a>
+                <a class="lv-navitem@(IsActive("/Admin/Settings") ? " active" : "")" href="/Admin/Settings" aria-current="@(IsActive("/Admin/Settings") ? "page" : null)"><span aria-hidden="true">⚙️</span> @L["nav.settings"]</a>
             }
             @if (_isAuthenticated)
             {
-                <a class="lv-navitem@(IsActive("/Notifications") ? " active" : "")" href="/Notifications"><span aria-hidden="true">🔔</span> Notifications</a>
-                <a class="lv-navitem@(IsActive("/Help") ? " active" : "")" href="/Help"><span aria-hidden="true">❓</span> Help</a>
+                <a class="lv-navitem@(IsActive("/Notifications") ? " active" : "")" href="/Notifications" aria-current="@(IsActive("/Notifications") ? "page" : null)"><span aria-hidden="true">🔔</span> @L["nav.notifications"]</a>
+                <a class="lv-navitem@(IsActive("/Help") ? " active" : "")" href="/Help" aria-current="@(IsActive("/Help") ? "page" : null)"><span aria-hidden="true">❓</span> @L["nav.help"]</a>
             }
         </nav>
         <div class="lv-side-foot">
@@ -94,7 +95,7 @@
     <div class="lv-main">
         <div class="lv-topbar" id="lvTopbar">
             <button class="btn btn-outline-secondary d-lg-none" type="button" data-bs-toggle="offcanvas"
-                    data-bs-target="#lvSidebar" aria-controls="lvSidebar" aria-label="Open navigation">
+                    data-bs-target="#lvSidebar" aria-controls="lvSidebar" aria-label="@L["layout.openNav"]">
                 <span aria-hidden="true">☰</span>
             </button>
             @* Filled from the page's own <h1> by page-title.js (also after each enhanced navigation). *@
@@ -103,15 +104,16 @@
                 @if (_availableRelease is not null)
                 {
                     <a class="lv-update-notice" href="@_availableRelease.Url" target="_blank" rel="noopener noreferrer"
-                       title="See what's new in @_availableRelease.Version">✨ <span class="d-none d-sm-inline">Version </span>@_availableRelease.Version<span class="d-none d-sm-inline"> is available</span></a>
+                       title="@L["layout.updateTitle", new { version = _availableRelease.Version }]">✨ <span class="d-none d-sm-inline">@L["layout.updateAvailable", new { version = _availableRelease.Version }]</span><span class="d-sm-none">@_availableRelease.Version</span></a>
                 }
+                <LanguagePicker />
                 <button class="lv-darktoggle" id="themeToggle" type="button"
-                        data-action="toggle-theme" title="Toggle theme" aria-label="Toggle theme"><span id="themeIcon" aria-hidden="true">🌙</span></button>
+                        data-action="toggle-theme" title="@L["layout.toggleTheme"]" aria-label="@L["layout.toggleTheme"]"><span id="themeIcon" aria-hidden="true">🌙</span></button>
                 <LoginPartial />
             </div>
         </div>
 
-        <main role="main" class="lv-content">
+        <main role="main" class="lv-content" id="main-content" tabindex="-1">
             @* Lets a migrated page build "PageName - AppName" as <PageTitle> without its own
                IBrandingService round trip — see Components/Pages/Index.razor for the consumer side. *@
             <CascadingValue Value="_appName" Name="AppName">

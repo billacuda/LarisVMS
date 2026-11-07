@@ -9,7 +9,7 @@
         @if (Model.Views.Count > 0)
         {
             <select class="form-select form-select-sm" style="width:auto;" id="viewPlayPicker"
-                    title="Switch view" aria-label="Switch view"
+                    title="@L["playContent.switchViewNow"]" aria-label="@L["playContent.switchViewNow"]"
                     data-navigate-prefix="/Views/Play/">
                 @* Camera count in the label, so switching views is a choice between "House (6)" and
                    "Yard (2)" rather than between two bare names. Counts cells, matching the Cameras
@@ -17,7 +17,7 @@
                    the same camera in more than one cell. *@
                 @foreach (var v in Model.Views)
                 {
-                    <option value="@v.Id" selected="@(v.Id == Model.CurrentViewId ? "selected" : null)">@v.Name (@ViewLayout.CountCells(v.LayoutJson))</option>
+                    <option value="@v.Id" selected="@(v.Id == Model.CurrentViewId ? "selected" : null)">@L["views.nameWithCells", new { name = v.Name, cells = ViewLayout.CountCells(v.LayoutJson) }]</option>
                 }
             </select>
         }
@@ -31,12 +31,12 @@
         {
             <details class="d-inline-block position-relative" id="cameraPickerDetails">
                 <summary class="btn btn-sm btn-outline-secondary" style="list-style:none; cursor:pointer;">
-                    <span aria-hidden="true">📷</span> Camera
+                    <span aria-hidden="true">📷</span> @L["common.camera"]
                 </summary>
                 <div class="position-absolute end-0 mt-1 p-2 bg-body border rounded shadow"
                      style="z-index:1000; width:16rem; max-width:calc(100vw - 24px); max-height:20rem; overflow-y:auto;">
                     <input type="search" class="form-control form-control-sm mb-2" id="cameraPickerFilter"
-                           placeholder="Filter cameras…" aria-label="Filter cameras" autocomplete="off" />
+                           placeholder="@L["playContent.filterCameras"]" aria-label="@L["playContent.filterCameras2"]" autocomplete="off" />
                     <div id="cameraPickerList" class="list-group list-group-flush"></div>
                 </div>
             </details>
@@ -48,34 +48,34 @@
            Path (each moving object's travel path) needs Moving — see wireDetectionToggles for those
            dependencies. All four persist per user (server-backed preferences, not localStorage) so
            they survive a refresh and a sign-in elsewhere. *@
-        <div class="d-flex flex-wrap align-items-center gap-3 small" id="detectionToggleGroup" title="AI detection boxes">
+        <div class="d-flex flex-wrap align-items-center gap-3 small" id="detectionToggleGroup" title="@L["playContent.aiDetectionBoxes"]">
             <div class="form-check form-switch form-check-inline mb-0 me-0">
                 <input class="form-check-input" type="checkbox" role="switch" id="detectionShowMoving">
-                <label class="form-check-label" for="detectionShowMoving">Moving</label>
+                <label class="form-check-label" for="detectionShowMoving">@L["playContent.moving"]</label>
             </div>
             <div class="form-check form-switch form-check-inline mb-0 me-0">
                 <input class="form-check-input" type="checkbox" role="switch" id="detectionShowIdle">
-                <label class="form-check-label" for="detectionShowIdle">Idle</label>
+                <label class="form-check-label" for="detectionShowIdle">@L["playContent.idle"]</label>
             </div>
             <div class="form-check form-switch form-check-inline mb-0 me-0">
                 <input class="form-check-input" type="checkbox" role="switch" id="detectionShowConfidence" disabled>
-                <label class="form-check-label" for="detectionShowConfidence">Confidence</label>
+                <label class="form-check-label" for="detectionShowConfidence">@L["playContent.confidence"]</label>
             </div>
             <div class="form-check form-switch form-check-inline mb-0 me-0">
                 <input class="form-check-input" type="checkbox" role="switch" id="detectionShowSpeed" disabled checked>
-                <label class="form-check-label" for="detectionShowSpeed">Speed</label>
+                <label class="form-check-label" for="detectionShowSpeed">@L["playContent.speed"]</label>
             </div>
             <div class="form-check form-switch form-check-inline mb-0 me-0">
                 <input class="form-check-input" type="checkbox" role="switch" id="detectionShowColor" disabled checked>
-                <label class="form-check-label" for="detectionShowColor">Color</label>
+                <label class="form-check-label" for="detectionShowColor">@L["playContent.color"]</label>
             </div>
             <div class="form-check form-switch form-check-inline mb-0 me-0">
                 <input class="form-check-input" type="checkbox" role="switch" id="detectionShowPath" disabled>
-                <label class="form-check-label" for="detectionShowPath">Path</label>
+                <label class="form-check-label" for="detectionShowPath">@L["common.path"]</label>
             </div>
         </div>
-        <button type="button" class="btn btn-sm btn-outline-secondary" id="kioskBtn" title="Toggle fullscreen kiosk mode">⛶ Fullscreen</button>
-        <a class="btn btn-sm btn-outline-secondary" asp-page="/Views/Index">Back to views</a>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="kioskBtn" title="@L["playContent.toggleFullscreenKioskMode"]">@L["playContent.fullscreen"]</button>
+        <a class="btn btn-sm btn-outline-secondary" asp-page="/Views/Index">@L["playContent.backToViews"]</a>
     </div>
 </div>
 

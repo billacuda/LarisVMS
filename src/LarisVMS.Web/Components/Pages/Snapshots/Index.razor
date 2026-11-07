@@ -16,10 +16,10 @@
 @inject ISettingsResolver Settings
 @inject ICameraAccessService CameraAccess
 
-<PageTitle>Snapshots - @AppName</PageTitle>
+<PageTitle>@L["nav.snapshots"] - @AppName</PageTitle>
 
-<h1>Snapshots <span id="snapshotLoadStatus" class="badge bg-secondary ms-2 d-none fw-normal"></span></h1>
-<p class="text-muted small">Every detection and event tag, newest first. Plain motion is only on the Playback timeline.</p>
+<h1>@L["nav.snapshots"] <span id="snapshotLoadStatus" role="status" class="badge bg-secondary ms-2 d-none fw-normal"></span></h1>
+<p class="text-muted small">@L["snapshots.everyDetectionAndEventTag"]</p>
 
 @* data-remember-filters: these selections survive navigating away and coming back, or a refresh —
    see remember-filters.js. The Clear link below carries data-clear-filters so clearing actually
@@ -27,10 +27,10 @@
 <form method="get" class="row g-2 mb-3" data-remember-filters="snapshots" id="snapshotFilterForm">
     <div class="col-md-2">
         <select name="mode" id="snapshotMode" class="form-select form-select-sm">
-            <option value="single" selected="@(Mode == "single")">Single camera</option>
-            <option value="all" selected="@(Mode == "all")">All cameras</option>
-            <option value="group" selected="@(Mode == "group")">Camera group</option>
-            <option value="view" selected="@(Mode == "view")">View</option>
+            <option value="single" selected="@(Mode == "single")">@L["snapshots.singleCamera"]</option>
+            <option value="all" selected="@(Mode == "all")">@L["snapshots.allCameras"]</option>
+            <option value="group" selected="@(Mode == "group")">@L["snapshots.cameraGroup"]</option>
+            <option value="view" selected="@(Mode == "view")">@L["snapshots.view"]</option>
         </select>
     </div>
     <div class="col-md-3 snapshot-mode-target" data-for-mode="single">
@@ -43,7 +43,7 @@
     </div>
     <div class="col-md-3 snapshot-mode-target d-none" data-for-mode="group">
         <select name="groupId" class="form-select form-select-sm">
-            <option value="">Select a group…</option>
+            <option value="">@L["snapshots.selectAGroup"]</option>
             @foreach (var g in Groups)
             {
                 <option value="@g.Id" selected="@(GroupId == g.Id)">@(new string('—', Depth(g))) @g.Name</option>
@@ -52,7 +52,7 @@
     </div>
     <div class="col-md-3 snapshot-mode-target d-none" data-for-mode="view">
         <select name="viewId" class="form-select form-select-sm">
-            <option value="">Select a view…</option>
+            <option value="">@L["snapshots.selectAView"]</option>
             @foreach (var v in Views)
             {
                 <option value="@v.Id" selected="@(ViewId == v.Id)">@v.Name</option>
@@ -66,10 +66,10 @@
         <input type="date" name="to" value="@To" class="form-control form-control-sm" />
     </div>
     <div class="col-md-1">
-        <button type="submit" class="btn btn-sm btn-primary w-100">Filter</button>
+        <button type="submit" class="btn btn-sm btn-primary w-100">@L["common.filter"]</button>
     </div>
     <div class="col-md-1">
-        <a href="/Snapshots" class="btn btn-sm btn-outline-secondary w-100" data-clear-filters>Clear</a>
+        <a href="/Snapshots" class="btn btn-sm btn-outline-secondary w-100" data-clear-filters>@L["common.clear"]</a>
     </div>
 </form>
 
@@ -85,7 +85,7 @@
         <div class="d-flex flex-column gap-1">
             <div class="form-check mb-0">
                 <input type="checkbox" class="form-check-input" id="kind-customtag" name="kinds" value="@CustomTagToken" checked="@IsKindChecked(CustomTagToken)" form="snapshotFilterForm" />
-                <label class="form-check-label small" for="kind-customtag">🏷️ Custom tags</label>
+                <label class="form-check-label small" for="kind-customtag">@L["snapshots.customTags"]</label>
             </div>
             @foreach (var node in TopLevelNodes)
             {
@@ -157,7 +157,7 @@
                     @if (MinSpeed is not null) { <span class="badge bg-primary ms-1">1</span> }
                 </summary>
                 <div class="d-flex align-items-center gap-1 mt-1 ms-3 small">
-                    <label for="snapshotMinSpeed" class="text-nowrap">At or over</label>
+                    <label for="snapshotMinSpeed" class="text-nowrap">@L["snapshots.atOrOver"]</label>
                     <input type="number" id="snapshotMinSpeed" name="minSpeed" min="1" step="any" value="@MinSpeed"
                            class="form-control form-control-sm" style="width: 5rem;" form="snapshotFilterForm" />
                     <span>@SpeedUnits.Label(SpeedUnit)</span>
@@ -169,11 +169,11 @@
     <div class="flex-grow-1">
     @if (Results.Items.Count == 0)
     {
-        <p class="text-muted">No detections found@(Mode != "all" || From is not null || To is not null ? " for this filter." : " yet.")</p>
+        <p class="text-muted">@(Mode != "all" || From is not null || To is not null ? L["snapshots.noDetectionsForFilter"] : L["snapshots.noDetectionsYet"])</p>
     }
     else
     {
-    <PaginationControls Model="@(new PaginationViewModel(Results.CurrentPage, Results.TotalPages, SnapshotPageUrl, CssClass: "mb-3", AriaLabel: "Pagination (top)"))" />
+    <PaginationControls Model="@(new PaginationViewModel(Results.CurrentPage, Results.TotalPages, SnapshotPageUrl, CssClass: "mb-3", AriaLabel: L["snapshots.paginationTop"].Value))" />
     <div class="row row-cols-1 row-cols-sm-2 row-cols-md-3 row-cols-lg-4 g-3">
         @foreach (var s in Results.Items)
         {
@@ -196,11 +196,11 @@
                     <a href="/Playback?cameraId=@s.CameraId&atUtc=@Uri.EscapeDataString(playFromUtcIso)">
                         <img src="@imgSrc"
                              loading="lazy" class="card-img-top" data-snapshot-thumb style="aspect-ratio: 16/9; object-fit: contain; background: var(--bs-secondary-bg);"
-                             alt="Snapshot thumbnail"
+                             alt="@L["snapshots.snapshotThumbnail"]"
                              data-on-error="hide-show-next" />
                         <div class="d-none text-muted small text-center d-flex align-items-center justify-content-center"
                              style="aspect-ratio: 16/9; background: var(--bs-secondary-bg);">
-                            No thumbnail available
+                            @L["snapshots.noThumbnailAvailable"]
                         </div>
                     </a>
                     <div class="card-body py-2 px-2">
@@ -208,25 +208,25 @@
                         {
                             <span class="badge" style="background-color: @badge.ColorHex;">
                                 @badge.Emoji @badge.Label@if (badge.MovingCount is { } n && n > 1)
-                                {<span class="snapshot-badge-count" title="@n moving at once">&times;@n</span>}@if (badge.Confidence is { } c)
-                                {<span class="snapshot-badge-confidence" title="Detection confidence">@FormatConfidence(c)</span>}
+                                {<span class="snapshot-badge-count" title="@L["snapshots.movingAtOnce", new { count = n }]">&times;@n</span>}@if (badge.Confidence is { } c)
+                                {<span class="snapshot-badge-confidence" title="@L["snapshots.detectionConfidence"]">@FormatConfidence(c)</span>}
                             </span>
                         }
                         @foreach (var (text, color, count) in ColorBadges(s.Objects))
                         {
                             <span class="badge snapshot-color-badge" style="background-color: @color.SwatchHex; color: @color.TextHex;"
-                                  title="Detected color">@text@if (count > 1) {<span class="snapshot-badge-count">&times;@count</span>}</span>
+                                  title="@L["snapshots.detectedColor"]">@text@if (count > 1) {<span class="snapshot-badge-count">&times;@count</span>}</span>
                         }
                         @if (s.Objects.Where(o => o.SpeedKph is not null).Select(o => o.SpeedKph!.Value).DefaultIfEmpty().Max() is var fastest && fastest > 0)
                         {
-                            <span class="badge bg-dark" title="Measured by a speed trap">⏱ @SpeedUnits.Format(fastest, SpeedUnit)</span>
+                            <span class="badge bg-dark" title="@L["snapshots.measuredByASpeedTrap"]">⏱ @SpeedUnits.Format(fastest, SpeedUnit)</span>
                         }
-                        <span class="badge bg-secondary" title="How long this event lasted">@FormatDuration(s.Duration)</span>
+                        <span class="badge bg-secondary" title="@L["snapshots.howLongThisEventLasted"]">@FormatDuration(s.Duration)</span>
                         <div class="d-flex align-items-center gap-2 mt-1">
                             <div class="small text-muted text-truncate" title="@s.CameraName · @s.AtUtc.ToString("u")">
                                 @s.CameraName · <time datetime="@s.AtUtc.ToUtcIso()" data-local="G">@s.AtUtc.ToLocalTime().ToString("G")</time>
                             </div>
-                            <a class="btn btn-sm btn-outline-primary py-0 ms-auto flex-shrink-0" aria-label="Play"
+                            <a class="btn btn-sm btn-outline-primary py-0 ms-auto flex-shrink-0" aria-label="@L["common.play"]"
                                href="/Playback?cameraId=@s.CameraId&atUtc=@Uri.EscapeDataString(playFromUtcIso)">▶</a>
                         </div>
                     </div>
@@ -304,8 +304,8 @@
         {
             if (o.UpperColor is not null || o.LowerColor is not null)
             {
-                if (ObjectColors.Find(o.UpperColor) is { } upper) badges.Add(($"{ObjectColors.Display(upper.Name)} shirt", upper));
-                if (ObjectColors.Find(o.LowerColor) is { } lower) badges.Add(($"{ObjectColors.Display(lower.Name)} pants", lower));
+                if (ObjectColors.Find(o.UpperColor) is { } upper) badges.Add((Loc.T("alerts.shirt", new { color = ObjectColors.Display(upper.Name) }), upper));
+                if (ObjectColors.Find(o.LowerColor) is { } lower) badges.Add((Loc.T("alerts.pants", new { color = ObjectColors.Display(lower.Name) }), lower));
             }
             else if (ObjectColors.Find(o.PrimaryColor) is { } primary)
             {

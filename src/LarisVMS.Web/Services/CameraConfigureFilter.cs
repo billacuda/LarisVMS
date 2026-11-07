@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 using LarisVMS.Infrastructure.Data;
 
 namespace LarisVMS.Web.Services;
@@ -60,8 +61,8 @@ public static class CameraConfigureFilter
             var allowed = await access.GetAccessibleCameraIdsAsync(http.User, action, http.RequestAborted);
             if (allowed is not null && !allowed.Contains(cameraId))
                 return Results.Problem(action == CameraAccessActions.Configure
-                    ? "You don't have configuration access to this camera."
-                    : "You don't have access to this camera.", statusCode: StatusCodes.Status403Forbidden);
+                    ? Loc.T("server.cameraConfigureFilter.youDontHaveConfigurationAccess")
+                    : Loc.T("server.cameraConfigureFilter.youDontHaveAccessTo"), statusCode: StatusCodes.Status403Forbidden);
         }
         return await next(ctx);
     }

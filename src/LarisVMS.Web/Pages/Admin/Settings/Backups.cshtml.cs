@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
+using LarisVMS.Core.Localization;
 using LarisVMS.Core;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
@@ -76,12 +77,12 @@ public class BackupsModel(ApplicationDbContext db, IBackupService backupService,
     {
         if (!TimeOnly.TryParse(BackupTime, CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
         {
-            ErrorMessage = "Enter the backup time as HH:mm (e.g. 03:00).";
+            ErrorMessage = Loc.T("settings.backups.enterTheBackupTimeAs");
             return RedirectToPage();
         }
         if (BackupEnabled && string.IsNullOrWhiteSpace(BackupDirectory))
         {
-            ErrorMessage = "A backup directory is required when scheduled backups are enabled.";
+            ErrorMessage = Loc.T("settings.backups.aBackupDirectoryIsRequired");
             return RedirectToPage();
         }
 
@@ -106,19 +107,19 @@ public class BackupsModel(ApplicationDbContext db, IBackupService backupService,
         var dumpPathChanged = !string.Equals(oldDumpPath?.Trim() ?? "", MariaDbDumpPath?.Trim() ?? "", StringComparison.OrdinalIgnoreCase);
         if ((directoryChanged || certificateChanged || dumpPathChanged) && !(await permissions.GetGrantedAsync(User)).IsAdministrator)
         {
-            ErrorMessage = "Only a Super Admin can change the backup folder, its encryption, or the dump tool.";
+            ErrorMessage = Loc.T("settings.backups.onlyASuperAdminCan");
             return RedirectToPage();
         }
         if (directoryChanged && !string.IsNullOrWhiteSpace(BackupDirectory)
             && LarisVMS.Infrastructure.Services.BackupService.AllowedRoots(configuration) is { Length: > 0 } roots
             && !LarisVMS.Infrastructure.Services.BackupService.IsUnderAny(BackupDirectory, roots))
         {
-            ErrorMessage = $"Backups can only go to: {string.Join(", ", roots)}.";
+            ErrorMessage = Loc.T("settings.backups.backupsCanOnlyGoTo", new { folders = string.Join(", ", roots) });
             return RedirectToPage();
         }
         if (!string.IsNullOrWhiteSpace(EncryptionCertificate) && !LarisVMS.Infrastructure.Services.BackupService.IsValidCertificateName(EncryptionCertificate.Trim()))
         {
-            ErrorMessage = "Enter the certificate's name as created in SQL Server (letters, digits, spaces, _ and -).";
+            ErrorMessage = Loc.T("settings.backups.enterTheCertificateNameAs");
             return RedirectToPage();
         }
 
@@ -152,16 +153,22 @@ public class BackupsModel(ApplicationDbContext db, IBackupService backupService,
         // Where the whole database goes is worth every Super Admin knowing about.
         if (directoryChanged || certificateChanged || dumpPathChanged)
         {
-            var dumpTool = string.IsNullOrWhiteSpace(MariaDbDumpPath) ? "the one found automatically" : MariaDbDumpPath.Trim();
-            string what;
-            if (directoryChanged) what = $"the backup folder to {BackupDirectory?.Trim()}";
-            else if (certificateChanged) what = "backup encryption";
-            else what = $"the backup dump tool to {dumpTool}";
-            await notifications.NotifySuperAdminsAsync("Backup settings changed", $"{by ?? "Someone"} changed {what}.",
+            var dumpTool = string.IsNullOrWhiteSpace(MariaDbDumpPath) ? null : MariaDbDumpPath.Trim();
+            var folder = BackupDirectory?.Trim();
+            string message()
+            {
+                var who = by ?? Loc.T("alerts.someone");
+                if (directoryChanged) return Loc.T("settings.backups.noticeFolder", new { who, folder });
+                if (certificateChanged) return Loc.T("settings.backups.noticeEncryption", new { who });
+                return dumpTool is null
+                    ? Loc.T("settings.backups.noticeDumpToolAuto", new { who })
+                    : Loc.T("settings.backups.noticeDumpTool", new { who, tool = dumpTool });
+            }
+            await notifications.NotifySuperAdminsAsync(() => Loc.T("settings.backups.backupSettingsChanged"), message,
                 "/Admin/Settings/Backups");
         }
 
-        Message = "Backup settings saved.";
+        Message = Loc.T("settings.backups.backupSettingsSaved");
         return RedirectToPage();
     }
 
@@ -174,9 +181,9 @@ public class BackupsModel(ApplicationDbContext db, IBackupService backupService,
             HttpContext.Connection.RemoteIpAddress?.ToString(), $"{entry.Status} — {entry.FilePath ?? entry.Error}");
 
         if (entry.Status == BackupStatus.Success)
-            Message = $"Backup completed: {entry.FilePath}";
+            Message = Loc.T("settings.backups.backupCompleted", new { filePath = entry.FilePath });
         else
-            ErrorMessage = $"Backup failed: {entry.Error}";
+            ErrorMessage = Loc.T("settings.backups.backupFailed", new { error = entry.Error });
         return RedirectToPage();
     }
 }

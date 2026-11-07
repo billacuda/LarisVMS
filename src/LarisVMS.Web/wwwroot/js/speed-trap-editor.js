@@ -25,6 +25,7 @@
         var formUnit = document.getElementById('trapFormDistanceUnit');
         var formEnabled = document.getElementById('trapFormEnabled');
         var formLimit = document.getElementById('trapFormLimit');
+        var formDirection = document.getElementById('trapFormDirection');
         var mph = opts.speedUnit === 'mph';
         function limitToDisplay(kph) { return Math.round((mph ? kph / KM_PER_MILE : kph) * 10) / 10; }
         function limitToKph(v) { return mph ? v * KM_PER_MILE : v; }
@@ -75,9 +76,9 @@
         function parseGates(json) {
             try {
                 var g = JSON.parse(json);
-                if (g && Array.isArray(g.a) && Array.isArray(g.b)) return { a: g.a, b: g.b };
+                if (g && Array.isArray(g.a) && Array.isArray(g.b)) return { a: g.a, b: g.b, dir: g.dir === 'ab' || g.dir === 'ba' ? g.dir : 'any' };
             } catch (e) { /* fall through */ }
-            return { a: [], b: [] };
+            return { a: [], b: [], dir: 'any' };
         }
 
         // ── Drawing ─────────────────────────────────────────────────────────
@@ -93,7 +94,7 @@
                 } else {
                     ctx.fillStyle = '#6c757d';
                     ctx.font = '14px sans-serif';
-                    ctx.fillText('Loading picture…', 12, 24);
+                    ctx.fillText(larisvmsI18n.t('js.speedTrapEditor.loadingPicture'), 12, 24);
                 }
             }
 
@@ -101,7 +102,7 @@
                 if (draft && draft.id === t.id) return;
                 drawTrap(parseGates(t.gatesJson), t.name, false);
             });
-            if (draft) drawTrap(draft, formName.value || 'New speed trap', true);
+            if (draft) drawTrap(draft, formName.value || larisvmsI18n.t('js.speedTrapEditor.newSpeedTrap'), true);
         }
 
         function drawTrap(g, name, active) {
@@ -170,10 +171,10 @@
 
         function updateHint() {
             var stage = drawingStage();
-            if (!draft) hintEl.textContent = 'Select a speed trap to adjust it, or start a new one.';
-            else if (stage === 'a') hintEl.textContent = draft.a.length === 0 ? 'Click one end of line A (where vehicles cross first).' : 'Click the other end of line A.';
-            else if (stage === 'b') hintEl.textContent = draft.b.length === 0 ? 'Click one end of line B.' : 'Click the other end of line B.';
-            else hintEl.textContent = 'Drag an end to adjust a line. Enter the distance between the lines, then Save.';
+            if (!draft) hintEl.textContent = larisvmsI18n.t('js.speedTrapEditor.selectASpeedTrapTo');
+            else if (stage === 'a') hintEl.textContent = draft.a.length === 0 ? larisvmsI18n.t('js.speedTrapEditor.clickOneEndOfLine') : larisvmsI18n.t('js.speedTrapEditor.clickTheOtherEndOf');
+            else if (stage === 'b') hintEl.textContent = draft.b.length === 0 ? larisvmsI18n.t('js.speedTrapEditor.clickOneEndOfLine2') : larisvmsI18n.t('js.speedTrapEditor.clickTheOtherEndOf2');
+            else hintEl.textContent = larisvmsI18n.t('js.speedTrapEditor.dragAnEndToAdjust');
             redrawBtn.style.display = draft && !stage ? '' : 'none';
         }
 
@@ -191,6 +192,11 @@
             return found;
         }
 
+        // A click on a point without dragging picks it up, and the next click puts it down. That's
+        // the way to adjust a line for anyone who can't drag, and for the keyboard.
+        var dragMoved = false;
+        var picked = null;
+
         canvas.addEventListener('mousedown', function (evt) {
             if (evt.button !== 0 || !draft) return;
             var stage = drawingStage();
@@ -200,17 +206,28 @@
                 redraw();
                 return;
             }
+            if (picked) {
+                draft[picked.gate][picked.index] = toFrame(evt);
+                picked = null;
+                redraw();
+                return;
+            }
             dragging = handleAt(evt);
+            dragMoved = false;
         });
         canvas.addEventListener('mousemove', function (evt) {
             if (dragging) {
+                dragMoved = true;
                 draft[dragging.gate][dragging.index] = toFrame(evt);
                 redraw();
                 return;
             }
             canvas.style.cursor = draft && (drawingStage() || handleAt(evt)) ? (drawingStage() ? 'crosshair' : 'grab') : 'default';
         });
-        window.addEventListener('mouseup', function () { dragging = null; });
+        window.addEventListener('mouseup', function () {
+            if (dragging && !dragMoved) picked = dragging;
+            dragging = null;
+        });
         // Right-click removes the last point while drawing.
         canvas.addEventListener('contextmenu', function (evt) {
             if (!draft || !drawingStage()) return;
@@ -219,6 +236,8 @@
             updateHint();
             redraw();
         });
+
+        window.larisvmsCanvasKeyboard.wire(canvas);
 
         // ── List and form ───────────────────────────────────────────────────
         function distanceText(m) {
@@ -230,7 +249,7 @@
             if (traps.length === 0) {
                 var empty = document.createElement('p');
                 empty.className = 'text-muted small';
-                empty.textContent = 'No speed traps yet.';
+                empty.textContent = larisvmsI18n.t('js.speedTrapEditor.noSpeedTrapsYet');
                 listPanel.appendChild(empty);
                 return;
             }
@@ -246,7 +265,7 @@
                 var meta = document.createElement('span');
                 meta.className = 'small' + (draft && draft.id === t.id ? '' : ' text-muted');
                 meta.textContent = distanceText(t.distanceMeters)
-                    + (t.speedLimitKph ? ' · limit ' + limitToDisplay(t.speedLimitKph) + (mph ? ' mph' : ' km/h') : '');
+                    + (t.speedLimitKph ? ' · ' + larisvmsI18n.t('js.speedTrapEditor.limit', { speed: limitToDisplay(t.speedLimitKph), unit: mph ? 'mph' : 'km/h' }) : '');
                 item.appendChild(name);
                 item.appendChild(meta);
                 item.addEventListener('click', function () { openTrap(t); });
@@ -256,15 +275,16 @@
         }
 
         function openTrap(t) {
-            var g = t ? parseGates(t.gatesJson) : { a: [], b: [] };
+            var g = t ? parseGates(t.gatesJson) : { a: [], b: [], dir: 'any' };
             draft = { id: t ? t.id : null, a: g.a, b: g.b };
-            formTitle.textContent = t ? 'Edit speed trap' : 'New speed trap';
+            formTitle.textContent = t ? larisvmsI18n.t('js.speedTrapEditor.editSpeedTrap') : larisvmsI18n.t('js.speedTrapEditor.newSpeedTrap');
             formName.value = t ? t.name : '';
             formDistance.value = t
                 ? (formUnit.value === 'ft' ? Math.round(t.distanceMeters * FEET_PER_METRE * 100) / 100 : Math.round(t.distanceMeters * 100) / 100)
                 : '';
             formEnabled.checked = t ? t.isEnabled : true;
             if (formLimit) formLimit.value = t && t.speedLimitKph ? limitToDisplay(t.speedLimitKph) : '';
+            if (formDirection) formDirection.value = g.dir || 'any';
             formError.textContent = '';
             deleteBtn.style.display = t ? '' : 'none';
             formPanel.style.display = '';
@@ -294,15 +314,17 @@
         saveBtn.addEventListener('click', async function () {
             if (!draft) return;
             formError.textContent = '';
-            if (drawingStage()) { formError.textContent = 'Draw both lines first.'; return; }
+            if (drawingStage()) { formError.textContent = larisvmsI18n.t('js.speedTrapEditor.drawBothLinesFirst'); return; }
             var value = parseFloat(formDistance.value);
-            if (!(value > 0)) { formError.textContent = 'Enter the distance between the lines.'; return; }
+            if (!(value > 0)) { formError.textContent = larisvmsI18n.t('js.speedTrapEditor.enterTheDistanceBetweenThe'); return; }
             var metres = formUnit.value === 'ft' ? value / FEET_PER_METRE : value;
             var limitValue = formLimit && formLimit.value !== '' ? parseFloat(formLimit.value) : null;
-            if (limitValue !== null && !(limitValue > 0)) { formError.textContent = 'Enter a speed limit above 0, or leave it blank.'; return; }
+            if (limitValue !== null && !(limitValue > 0)) { formError.textContent = larisvmsI18n.t('js.speedTrapEditor.enterASpeedLimitAbove'); return; }
             var body = {
-                name: formName.value.trim() || 'Speed trap',
-                gatesJson: JSON.stringify({ a: draft.a, b: draft.b }),
+                name: formName.value.trim() || larisvmsI18n.t('js.speedTrapEditor.speedTrap'),
+                gatesJson: JSON.stringify(formDirection && formDirection.value !== 'any'
+                    ? { a: draft.a, b: draft.b, dir: formDirection.value }
+                    : { a: draft.a, b: draft.b }),
                 distanceMeters: metres,
                 isEnabled: formEnabled.checked,
                 speedLimitKph: limitValue === null ? null : limitToKph(limitValue)
@@ -316,14 +338,14 @@
                     body: JSON.stringify(body)
                 });
                 if (!resp.ok) {
-                    formError.textContent = (await resp.text()).replace(/^"|"$/g, '') || 'Could not save.';
+                    formError.textContent = (await resp.text()).replace(/^"|"$/g, '') || larisvmsI18n.t('js.speedTrapEditor.couldNotSave');
                     return;
                 }
-                statusEl.textContent = 'Saved. It takes effect within about 30 seconds.';
+                statusEl.textContent = larisvmsI18n.t('js.speedTrapEditor.savedItTakesEffectWithin');
                 await loadTraps();
                 closeForm();
             } catch (e) {
-                formError.textContent = 'Could not save: ' + e.message;
+                formError.textContent = larisvmsI18n.t('js.speedTrapEditor.saveFailed', { message: e.message });
             } finally {
                 saveBtn.disabled = false;
             }
@@ -331,10 +353,10 @@
 
         deleteBtn.addEventListener('click', async function () {
             if (!draft || !draft.id) return;
-            if (!confirm('Delete this speed trap?')) return;
+            if (!confirm(larisvmsI18n.t('js.speedTrapEditor.deleteThisSpeedTrap'))) return;
             var resp = await fetch('/api/speed-traps/' + draft.id, { method: 'DELETE' });
-            if (!resp.ok) { formError.textContent = 'Could not delete.'; return; }
-            statusEl.textContent = 'Deleted.';
+            if (!resp.ok) { formError.textContent = larisvmsI18n.t('js.speedTrapEditor.couldNotDelete'); return; }
+            statusEl.textContent = larisvmsI18n.t('js.speedTrapEditor.deleted');
             await loadTraps();
             closeForm();
         });

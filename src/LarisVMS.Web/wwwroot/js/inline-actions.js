@@ -17,9 +17,26 @@
 (function () {
     'use strict';
 
+    // Blazor pages set <base href="/">, which makes a browser resolve href="#x" to /#x and leave the
+    // page. That would send the skip link to the dashboard, so such links are followed here instead.
+    function followFragmentLink(e) {
+        if (!document.querySelector('base')) return;
+        var link = e.target.closest && e.target.closest('a[href^="#"]');
+        if (!link || link.hasAttribute('data-bs-toggle')) return;
+        var id = link.getAttribute('href').slice(1);
+        var target = id && document.getElementById(decodeURIComponent(id));
+        if (!target) return;
+        e.preventDefault();
+        location.hash = id;
+        if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
+        target.focus();
+    }
+
     // Capture phase, so a declined confirm stops the click before anything else (a form submit,
     // Bootstrap) sees it.
     document.addEventListener('click', function (e) {
+        followFragmentLink(e);
+
         var confirmEl = e.target.closest && e.target.closest('[data-confirm]:not(form)');
         if (confirmEl && !window.confirm(confirmEl.getAttribute('data-confirm'))) {
             e.preventDefault();

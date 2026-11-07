@@ -12,14 +12,14 @@
 @inject IAuditService AuditService
 @inject IPermissionService PermissionService
 
-<PageTitle>Permissions Matrix - @AppName</PageTitle>
+<PageTitle>@L["settings.permissions.matrix.permissionsMatrix"] - @AppName</PageTitle>
 
-<h1>Settings</h1>
+<h1>@L["nav.settings"]</h1>
 <SettingsTabs ActiveKey="Permissions" />
 <PermissionsTabs ActiveKey="Matrix" />
 
 <p class="text-muted small">
-    What each role is allowed to do. Super Admin always has everything. <a href="/Help/users#permissions">Learn more</a>
+    @L["settings.permissions.matrix.whatEachRoleIsAllowed"] <a href="/Help/users#permissions">@L["common.learnMore"]</a>
 </p>
 
 @if (!string.IsNullOrEmpty(SavedMessage))
@@ -28,12 +28,12 @@
 }
 @if (!string.IsNullOrEmpty(ErrorMessage))
 {
-    <div class="alert alert-danger">@ErrorMessage</div>
+    <div class="alert alert-danger" role="alert">@ErrorMessage</div>
 }
 
 @if (RoleColumns.Count == 0)
 {
-    <p class="text-muted">No roles exist yet.</p>
+    <p class="text-muted">@L["settings.permissions.matrix.noRolesExistYet"]</p>
 }
 else
 {
@@ -57,7 +57,7 @@ else
         <table class="table table-sm align-middle mb-3">
             <thead class="table-light">
                 <tr>
-                    <th>Permission</th>
+                    <th>@L["settings.permissions.matrix.permission"]</th>
                     @foreach (var col in RoleColumns)
                     {
                         <th class="text-center text-nowrap">
@@ -80,7 +80,7 @@ else
                             <td class="text-center">
                                 @if (col.IsProtected)
                                 {
-                                    <span class="text-success" title="Always granted">✓</span>
+                                    <span class="text-success" title="@L["settings.permissions.matrix.alwaysGranted"]">✓</span>
                                 }
                                 else
                                 {
@@ -94,13 +94,13 @@ else
                     </tr>
                 }
                 <tr>
-                    <td class="fw-semibold">Save</td>
+                    <td class="fw-semibold">@L["common.save"]</td>
                     @foreach (var col in RoleColumns)
                     {
                         <td class="text-center">
                             @if (!col.IsProtected)
                             {
-                                <button type="submit" form="@($"form-{col.Id}")" class="btn btn-sm btn-primary">Save</button>
+                                <button type="submit" form="@($"form-{col.Id}")" class="btn btn-sm btn-primary">@L["common.save"]</button>
                             }
                             else
                             {
@@ -164,7 +164,7 @@ else
         var role = await Db.Roles.FirstOrDefaultAsync(r => r.Id == roleId);
         if (role is null)
         {
-            ErrorMessage = "That role no longer exists.";
+            ErrorMessage = Loc.T("settings.permissions.matrix.thatRoleNoLongerExists");
             await LoadAsync();
             return;
         }
@@ -172,7 +172,7 @@ else
         var profile = await Db.RoleProfiles.FirstOrDefaultAsync(p => p.RoleId == roleId);
         if (RoleManagementPolicy.IsProtected(profile?.Tag))
         {
-            ErrorMessage = "The Super Admin role always holds every permission and its matrix can't be edited here.";
+            ErrorMessage = Loc.T("settings.permissions.matrix.theSuperAdminRoleAlways");
             await LoadAsync();
             return;
         }
@@ -197,7 +197,7 @@ else
         }
         if (toAdd.FirstOrDefault(p => !scope.CanGrant(p.Resource, p.Action)) is { Resource: not null } beyond)
         {
-            ErrorMessage = $"You can't grant {beyond.Resource}.{beyond.Action}: you don't have it yourself.";
+            ErrorMessage = Loc.T("settings.permissions.matrix.youCantGrantYouDont", new { resource = beyond.Resource, action = beyond.Action });
             await LoadAsync();
             return;
         }
@@ -220,7 +220,7 @@ else
                 await AuditService.LogAsync("Role.Update", CurrentUserId, CurrentUserName, RemoteIp, details);
         }
 
-        SavedMessage = $"Saved \"{role.Name}\".";
+        SavedMessage = Loc.T("settings.permissions.matrix.saved", new { name = role.Name });
         await LoadAsync();
     }
 }

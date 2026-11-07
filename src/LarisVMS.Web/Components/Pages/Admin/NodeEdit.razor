@@ -14,15 +14,15 @@
 @inject NodeControlClient NodeControlClient
 @inject NavigationManager NavigationManager
 
-<PageTitle>@(Node?.Name ?? "Node") - @AppName</PageTitle>
+<PageTitle>@(Node?.Name ?? L["common.node"].Value) - @AppName</PageTitle>
 
 <div class="lv-page-narrow">
-<nav aria-label="breadcrumb" class="small mb-1"><a href="/Admin/Nodes">&larr; Recorder nodes</a></nav>
+<nav aria-label="@L["admin.nodeEdit.breadcrumb"]" class="small mb-1"><a href="/Admin/Nodes">@L["admin.nodeEdit.recorderNodes"]</a></nav>
 
 @if (Node is null)
 {
-    <h1>Node not found</h1>
-    <p class="text-muted">It may have been deleted. <a href="/Admin/Nodes">Back to the node list</a>.</p>
+    <h1>@L["admin.nodeEdit.nodeNotFound"]</h1>
+    <p class="text-muted">@L["admin.nodeEdit.itMayHaveBeenDeleted"] <a href="/Admin/Nodes">@L["admin.nodeEdit.backToTheNodeList"]</a>.</p>
 }
 else
 {
@@ -36,202 +36,202 @@ else
         {
             <span class="badge @fb.Css">@fb.Text</span>
         }
-        <span class="text-muted small">@(n.LastIpAddress ?? "no address yet") &middot; v@(n.Version ?? "?") &middot; @(n.Platform ?? "unknown platform") &middot; @CameraCount camera(s)</span>
+        <span class="text-muted small">@(n.LastIpAddress ?? L["admin.nodeEdit.noAddressYet"].Value) &middot; v@(n.Version ?? "?") &middot; @(n.Platform ?? L["admin.nodeEdit.unknownPlatform"].Value) &middot; @CameraCount camera(s)</span>
     </div>
 
     @if (!string.IsNullOrEmpty(ErrorMessage))
     {
-        <div class="alert alert-danger">@ErrorMessage</div>
+        <div class="alert alert-danger" role="alert">@ErrorMessage</div>
     }
     @if (Saved && string.IsNullOrEmpty(ErrorMessage))
     {
-        <div class="alert alert-success" role="status">Saved.</div>
+        <div class="alert alert-success" role="status">@L["common.saved"]</div>
     }
     @if (string.IsNullOrWhiteSpace(n.StorageRootPath))
     {
-        <div class="alert alert-warning">This node has no storage path, so it is not recording. Set one under Storage &amp; retention.</div>
+        <div class="alert alert-warning">@L["admin.nodeEdit.thisNodeHasNoStorage"]</div>
     }
 
     <EditForm Model="this" FormName="update-node" OnValidSubmit="HandleUpdateAsync" data-dirty-guard>
         <input type="hidden" name="Snapshot" value="@S.Snapshot" />
 
-        <SettingSection Title="General">
-            <SettingField Label="Name" For="nodeName">
+        <SettingSection Title="@L["admin.nodeEdit.general"]">
+            <SettingField Label="@L["common.name"]" For="nodeName">
                 <input id="nodeName" name="Name" class="form-control" value="@n.Name" required />
             </SettingField>
-            <SettingField Label="Recording only" Hint="Turns AI object detection off for this node. It still records and tags camera events.">
+            <SettingField Label="@L["admin.nodeEdit.recordingOnly"]" Hint="@L["admin.nodeEdit.turnsAiObjectDetectionOff"]">
                 <div class="form-check mt-1">
                     <input class="form-check-input" type="checkbox" name="DisableAiObjectDetection" value="true" id="recOnly" checked="@n.DisableAiObjectDetection" />
-                    <label class="form-check-label" for="recOnly">AI detection off</label>
+                    <label class="form-check-label" for="recOnly">@L["admin.nodeEdit.aiDetectionOff"]</label>
                 </div>
             </SettingField>
         </SettingSection>
 
-        <SettingSection Title="Storage & retention" Subtitle="Blank fields inherit the global defaults from Storage & retention.">
-            <SettingField Label="Storage path" For="storageRoot" Hint="Required. Where this node writes recordings.">
-                <input id="storageRoot" name="StorageRootPath" class="form-control font-monospace" value="@n.StorageRootPath" placeholder="e.g. E:\LarisVMS\recordings" required />
+        <SettingSection Title="@L["admin.nodeEdit.storageRetention"]" Subtitle="@L["admin.nodeEdit.blankFieldsInheritTheGlobal"]">
+            <SettingField Label="@L["admin.nodeEdit.storagePath"]" For="storageRoot" Hint="@L["admin.nodeEdit.requiredWhereThisNodeWrites"]">
+                <input id="storageRoot" name="StorageRootPath" class="form-control font-monospace" value="@n.StorageRootPath" placeholder="@L["admin.nodeEdit.eGELarisvmsRecordings"]" required />
             </SettingField>
-            <SettingField Label="Archive path" For="archiveRoot" Hint="Optional second volume for aged-out footage. Must be separate from the storage path.">
-                <input id="archiveRoot" name="ArchiveRootPath" class="form-control font-monospace" value="@n.ArchiveRootPath" placeholder="(none)" />
+            <SettingField Label="@L["admin.nodeEdit.archivePath"]" For="archiveRoot" Hint="@L["admin.nodeEdit.optionalSecondVolumeForAged"]">
+                <input id="archiveRoot" name="ArchiveRootPath" class="form-control font-monospace" value="@n.ArchiveRootPath" placeholder="@L["admin.nodeEdit.none"]" />
             </SettingField>
-            <SettingField Label="Disk usage" Wide>
+            <SettingField Label="@L["admin.nodeEdit.diskUsage"]" Wide>
                 <NodeStorageBar Node="n" DaysRemaining="DaysRemaining" ArchiveDaysRemaining="ArchiveDaysRemaining" />
             </SettingField>
-            <SettingField Label="Retention (days)" For="retention" Hint="@($"Blank inherits the global value ({S.EffectiveRetentionDays}).")">
+            <SettingField Label="@L["admin.nodeEdit.retentionDays"]" For="retention" Hint="@($"Blank inherits the global value ({S.EffectiveRetentionDays}).")">
                 <input id="retention" name="RetentionDaysOverride" type="number" min="0" class="form-control" value="@S.RetentionOverride"
                        placeholder="@($"inherit — {S.EffectiveRetentionDays}")" />
             </SettingField>
-            <SettingField Label="Archive aged-out footage" For="archiveEnabled" Hint="Off deletes footage when it ages out.">
+            <SettingField Label="@L["admin.nodeEdit.archiveAgedOutFootage"]" For="archiveEnabled" Hint="@L["admin.nodeEdit.offDeletesFootageWhenIt"]">
                 <select id="archiveEnabled" name="ArchiveEnabledOverride" class="form-select">
-                    <option value="" selected="@(S.ArchiveEnabledOverride == "")">inherit — @(S.EffectiveArchiveEnabled ? "on" : "off")</option>
-                    <option value="True" selected="@(S.ArchiveEnabledOverride == "True")">On</option>
-                    <option value="False" selected="@(S.ArchiveEnabledOverride == "False")">Off</option>
+                    <option value="" selected="@(S.ArchiveEnabledOverride == "")">@L["common.inheritValue", new { value = (S.EffectiveArchiveEnabled ? L["common.onLower"].Value : L["common.offLower"].Value) }]</option>
+                    <option value="True" selected="@(S.ArchiveEnabledOverride == "True")">@L["common.on"]</option>
+                    <option value="False" selected="@(S.ArchiveEnabledOverride == "False")">@L["common.off"]</option>
                 </select>
             </SettingField>
-            <SettingField Label="Archive retention (days)" For="archiveDays" Hint="Counted from the original record date. 0 keeps forever.">
+            <SettingField Label="@L["admin.nodeEdit.archiveRetentionDays"]" For="archiveDays" Hint="@L["admin.nodeEdit.countedFromTheOriginalRecord"]">
                 <input id="archiveDays" name="ArchiveRetentionDaysOverride" type="number" min="0" class="form-control" value="@S.ArchiveRetentionOverride"
                        placeholder="@($"inherit — {S.EffectiveArchiveRetentionDays}")" />
             </SettingField>
         </SettingSection>
 
-        <SettingSection Title="AI detection" Subtitle="Overrides for this node only. Blank or “inherit” uses AI detection settings.">
-            <SettingField Label="Accelerator" For="accel" Hint="@AcceleratorHint">
+        <SettingSection Title="@L["admin.nodeEdit.aiDetection"]" Subtitle="@L["admin.nodeEdit.overridesForThisNodeOnly"]">
+            <SettingField Label="@L["admin.nodeEdit.accelerator"]" For="accel" Hint="@AcceleratorHint">
                 <select id="accel" name="AiAccelerator" class="form-select">
-                    <option value="" selected="@(n.AiAccelerator is null)">Auto</option>
-                    <option value="Nvidia" selected="@(n.AiAccelerator == AiAccelerator.Nvidia)">CUDA</option>
-                    <option value="TensorRt" selected="@(n.AiAccelerator == AiAccelerator.TensorRt)">TensorRT</option>
-                    <option value="Amd" selected="@(n.AiAccelerator == AiAccelerator.Amd)">DirectML</option>
-                    <option value="OpenVino" selected="@(n.AiAccelerator == AiAccelerator.OpenVino)">OpenVINO</option>
-                    <option value="Cpu" selected="@(n.AiAccelerator == AiAccelerator.Cpu)">CPU</option>
-                    <option value="MIGraphX" selected="@(n.AiAccelerator == AiAccelerator.MIGraphX)">MIGraphX (AMD) — not implemented</option>
+                    <option value="" selected="@(n.AiAccelerator is null)">@L["admin.nodeEdit.auto"]</option>
+                    <option value="Nvidia" selected="@(n.AiAccelerator == AiAccelerator.Nvidia)">@L["admin.nodeEdit.cuda"]</option>
+                    <option value="TensorRt" selected="@(n.AiAccelerator == AiAccelerator.TensorRt)">@L["admin.nodeEdit.tensorrt"]</option>
+                    <option value="Amd" selected="@(n.AiAccelerator == AiAccelerator.Amd)">@L["admin.nodeEdit.directml"]</option>
+                    <option value="OpenVino" selected="@(n.AiAccelerator == AiAccelerator.OpenVino)">@L["admin.nodeEdit.openvino"]</option>
+                    <option value="Cpu" selected="@(n.AiAccelerator == AiAccelerator.Cpu)">@L["admin.nodeEdit.cpu"]</option>
+                    <option value="MIGraphX" selected="@(n.AiAccelerator == AiAccelerator.MIGraphX)">@L["admin.nodeEdit.migraphxAmdNotImplemented"]</option>
                 </select>
-                <div class="lv-hint text-warning" data-show-when="AiAccelerator=MIGraphX">MIGraphX isn't implemented yet. No detection runs with this choice.</div>
+                <div class="lv-hint text-warning" data-show-when="AiAccelerator=MIGraphX">@L["admin.nodeEdit.migraphxIsntImplementedYetNo"]</div>
             </SettingField>
-            <SettingField Label="Model family" For="family" HelpLink="/Help/ai-detection#model-families">
+            <SettingField Label="@L["admin.nodeEdit.modelFamily"]" For="family" HelpLink="/Help/ai-detection#model-families">
                 <select id="family" name="ModelFamilyOverride" class="form-select">
-                    <option value="" selected="@(S.ModelFamilyOverride == "")">inherit — @S.EffectiveModelFamily</option>
-                    <option value="Auto" selected="@(S.ModelFamilyOverride == "Auto")">Auto (YOLOX)</option>
-                    <option value="YoloX" selected="@(S.ModelFamilyOverride == "YoloX")">YOLOX</option>
-                    <option value="DFine" selected="@(S.ModelFamilyOverride == "DFine")">D-FINE (experimental)</option>
-                    <option value="Custom" selected="@(S.ModelFamilyOverride == "Custom")">Custom model</option>
-                    <option value="RfDetr" disabled>RF-DETR (not yet available)</option>
+                    <option value="" selected="@(S.ModelFamilyOverride == "")">@L["common.inheritValue", new { value = S.EffectiveModelFamily }]</option>
+                    <option value="Auto" selected="@(S.ModelFamilyOverride == "Auto")">@L["admin.nodeEdit.autoYolox"]</option>
+                    <option value="YoloX" selected="@(S.ModelFamilyOverride == "YoloX")">@L["admin.nodeEdit.yolox"]</option>
+                    <option value="DFine" selected="@(S.ModelFamilyOverride == "DFine")">@L["admin.nodeEdit.dFineExperimental"]</option>
+                    <option value="Custom" selected="@(S.ModelFamilyOverride == "Custom")">@L["admin.nodeEdit.customModel"]</option>
+                    <option value="RfDetr" disabled>@L["admin.nodeEdit.rfDetrNotYetAvailable"]</option>
                 </select>
             </SettingField>
-            <SettingField Label="Custom model" For="localModel" ShowWhen="@FamilyShowWhen("Custom")"
-                          Hint="Models dropped into C:\ProgramData\LarisVMS\models on the node.">
+            <SettingField Label="@L["admin.nodeEdit.customModel"]" For="localModel" ShowWhen="@FamilyShowWhen("Custom")"
+                          Hint="@L["admin.nodeEdit.modelsDroppedIntoCProgramdata"]">
                 <div class="input-group">
                     <select id="localModel" name="LocalModelNameOverride" class="form-select" data-local-model-select>
-                        <option value="" selected="@string.IsNullOrEmpty(S.LocalModelNameOverride)">inherit</option>
+                        <option value="" selected="@string.IsNullOrEmpty(S.LocalModelNameOverride)">@L["admin.nodeEdit.inherit"]</option>
                         @if (!string.IsNullOrEmpty(S.LocalModelNameOverride))
                         {
-                            <option value="@S.LocalModelNameOverride" selected>@S.LocalModelNameOverride (saved)</option>
+                            <option value="@S.LocalModelNameOverride" selected>@L["admin.nodeEdit.savedModel", new { name = S.LocalModelNameOverride }]</option>
                         }
                     </select>
-                    <button type="button" class="btn btn-outline-secondary" data-refresh-local-models="@n.Id">Refresh</button>
+                    <button type="button" class="btn btn-outline-secondary" data-refresh-local-models="@n.Id">@L["common.refresh"]</button>
                 </div>
                 <div class="lv-hint" data-local-models-status></div>
             </SettingField>
-            <SettingField Label="YOLOX size" For="yoloSize" ShowWhen="@FamilyShowWhen("Auto", "YoloX")" Hint="Larger is more accurate and slower.">
+            <SettingField Label="@L["admin.nodeEdit.yoloxSize"]" For="yoloSize" ShowWhen="@FamilyShowWhen("Auto", "YoloX")" Hint="@L["admin.nodeEdit.largerIsMoreAccurateAnd"]">
                 <select id="yoloSize" name="YoloXSizeOverride" class="form-select">
-                    <option value="" selected="@(S.YoloXSizeOverride == "")">inherit</option>
+                    <option value="" selected="@(S.YoloXSizeOverride == "")">@L["admin.nodeEdit.inherit"]</option>
                     @foreach (var s in new[] { "Nano", "Tiny", "S", "M", "L", "X" })
                     {
                         <option value="@s" selected="@(S.YoloXSizeOverride == s)">YOLOX-@s</option>
                     }
                 </select>
             </SettingField>
-            <SettingField Label="D-FINE weights" For="dfineWeights" ShowWhen="@FamilyShowWhen("DFine")">
+            <SettingField Label="@L["admin.nodeEdit.dFineWeights"]" For="dfineWeights" ShowWhen="@FamilyShowWhen("DFine")">
                 <select id="dfineWeights" name="DFineWeightsOverride" class="form-select">
-                    <option value="" selected="@(S.DFineWeightsOverride == "")">inherit</option>
-                    <option value="Obj2Coco" selected="@(S.DFineWeightsOverride == "Obj2Coco")">Obj2Coco (small)</option>
-                    <option value="Obj2CocoMedium" selected="@(S.DFineWeightsOverride == "Obj2CocoMedium")">Obj2Coco (medium)</option>
-                    <option value="Obj365" selected="@(S.DFineWeightsOverride == "Obj365")">Obj365 (small)</option>
+                    <option value="" selected="@(S.DFineWeightsOverride == "")">@L["admin.nodeEdit.inherit"]</option>
+                    <option value="Obj2Coco" selected="@(S.DFineWeightsOverride == "Obj2Coco")">@L["admin.nodeEdit.obj2cocoSmall"]</option>
+                    <option value="Obj2CocoMedium" selected="@(S.DFineWeightsOverride == "Obj2CocoMedium")">@L["admin.nodeEdit.obj2cocoMedium"]</option>
+                    <option value="Obj365" selected="@(S.DFineWeightsOverride == "Obj365")">@L["admin.nodeEdit.obj365Small"]</option>
                 </select>
             </SettingField>
-            <SettingField Label="D-FINE TensorRT" For="dfineTrt" ShowWhen="@FamilyShowWhen("DFine")" Hint="FP16 falls back to FP32 on overflow.">
+            <SettingField Label="@L["admin.nodeEdit.dFineTensorrt"]" For="dfineTrt" ShowWhen="@FamilyShowWhen("DFine")" Hint="@L["admin.nodeEdit.fp16FallsBackToFp32"]">
                 <select id="dfineTrt" name="DFineTensorRtModeOverride" class="form-select">
-                    <option value="" selected="@(S.DFineTensorRtModeOverride == "")">inherit — @S.EffectiveDFineTensorRtMode</option>
-                    <option value="Off" selected="@(S.DFineTensorRtModeOverride == "Off")">Off (plain CUDA)</option>
+                    <option value="" selected="@(S.DFineTensorRtModeOverride == "")">@L["common.inheritValue", new { value = S.EffectiveDFineTensorRtMode }]</option>
+                    <option value="Off" selected="@(S.DFineTensorRtModeOverride == "Off")">@L["admin.nodeEdit.offPlainCuda"]</option>
                     <option value="FP32" selected="@(S.DFineTensorRtModeOverride == "FP32")">FP32</option>
                     <option value="FP16" selected="@(S.DFineTensorRtModeOverride == "FP16")">FP16</option>
                 </select>
             </SettingField>
-            <SettingField Label="Aspect fitting" For="aspect" Hint="Slice needs GPU preprocessing." HelpLink="/Help/ai-detection#aspect-fitting">
+            <SettingField Label="@L["admin.nodeEdit.aspectFitting"]" For="aspect" Hint="@L["admin.nodeEdit.sliceNeedsGpuPreprocessing"]" HelpLink="/Help/ai-detection#aspect-fitting">
                 <select id="aspect" name="AspectModeOverride" class="form-select">
-                    <option value="" selected="@(S.AspectModeOverride == "")">inherit — @S.EffectiveAspectMode</option>
-                    <option value="Letterbox" selected="@(S.AspectModeOverride == "Letterbox")">Letterbox</option>
-                    <option value="Stretch" selected="@(S.AspectModeOverride == "Stretch")">Stretch</option>
-                    <option value="Slice" selected="@(S.AspectModeOverride == "Slice")">Slice</option>
+                    <option value="" selected="@(S.AspectModeOverride == "")">@L["common.inheritValue", new { value = S.EffectiveAspectMode }]</option>
+                    <option value="Letterbox" selected="@(S.AspectModeOverride == "Letterbox")">@L["admin.nodeEdit.letterbox"]</option>
+                    <option value="Stretch" selected="@(S.AspectModeOverride == "Stretch")">@L["admin.nodeEdit.stretch"]</option>
+                    <option value="Slice" selected="@(S.AspectModeOverride == "Slice")">@L["admin.nodeEdit.slice"]</option>
                 </select>
             </SettingField>
-            <SettingField Label="Max detection fps" For="maxFps" Hint="Per camera. Blank inherits.">
+            <SettingField Label="@L["admin.nodeEdit.maxDetectionFps"]" For="maxFps" Hint="@L["admin.nodeEdit.perCameraBlankInherits"]">
                 <input id="maxFps" type="number" name="MaxFpsOverride" class="form-control" min="0" max="60"
-                       placeholder="inherit" value="@(S.MaxFpsOverride?.ToString())" />
+                       placeholder="@L["admin.nodeEdit.inherit"]" value="@(S.MaxFpsOverride?.ToString())" />
             </SettingField>
-            <SettingField Label="Backend" For="backend" HelpLink="/Help/ai-detection#external-backend">
+            <SettingField Label="@L["admin.nodeEdit.backend"]" For="backend" HelpLink="/Help/ai-detection#external-backend">
                 <select id="backend" name="BackendOverride" class="form-select">
-                    <option value="" selected="@(S.DetectionBackendOverride == "")">inherit — @(S.EffectiveDetectionBackend == "ExternalHttp" ? "External HTTP" : "Built-in")</option>
-                    <option value="BuiltIn" selected="@(S.DetectionBackendOverride == "BuiltIn")">Built-in</option>
-                    <option value="ExternalHttp" selected="@(S.DetectionBackendOverride == "ExternalHttp")">External HTTP service</option>
+                    <option value="" selected="@(S.DetectionBackendOverride == "")">@L["common.inheritValue", new { value = (S.EffectiveDetectionBackend == "ExternalHttp" ? L["admin.nodeEdit.externalHttp"].Value : L["admin.nodeEdit.builtIn"].Value) }]</option>
+                    <option value="BuiltIn" selected="@(S.DetectionBackendOverride == "BuiltIn")">@L["admin.nodeEdit.builtIn"]</option>
+                    <option value="ExternalHttp" selected="@(S.DetectionBackendOverride == "ExternalHttp")">@L["admin.nodeEdit.externalHttpService"]</option>
                 </select>
             </SettingField>
-            <SettingField Label="Service URL" For="extUrl" ShowWhen="@BackendShowWhen" Hint="Blank inherits the global URL.">
-                <input id="extUrl" name="ExternalUrlOverride" class="form-control" value="@S.ExternalInferenceUrlOverride" placeholder="inherit" />
+            <SettingField Label="@L["admin.nodeEdit.serviceUrl"]" For="extUrl" ShowWhen="@BackendShowWhen" Hint="@L["admin.nodeEdit.blankInheritsTheGlobalUrl"]">
+                <input id="extUrl" name="ExternalUrlOverride" class="form-control" value="@S.ExternalInferenceUrlOverride" placeholder="@L["admin.nodeEdit.inherit"]" />
             </SettingField>
-            <SettingField Label="Service model" For="extModel" ShowWhen="@BackendShowWhen">
-                <input id="extModel" name="ExternalModelOverride" class="form-control" value="@S.ExternalInferenceModelOverride" placeholder="inherit" />
+            <SettingField Label="@L["admin.nodeEdit.serviceModel"]" For="extModel" ShowWhen="@BackendShowWhen">
+                <input id="extModel" name="ExternalModelOverride" class="form-control" value="@S.ExternalInferenceModelOverride" placeholder="@L["admin.nodeEdit.inherit"]" />
             </SettingField>
-            <SettingField Label="Input size (px)" For="extSize" ShowWhen="@BackendShowWhen" Hint="Multiple of 32.">
+            <SettingField Label="@L["admin.nodeEdit.inputSizePx"]" For="extSize" ShowWhen="@BackendShowWhen" Hint="@L["admin.nodeEdit.multipleOf32"]">
                 <input id="extSize" type="number" name="ExternalInputSizeOverride" class="form-control" min="32" step="32"
-                       value="@(S.ExternalInferenceInputSizeOverride?.ToString())" placeholder="inherit" />
+                       value="@(S.ExternalInferenceInputSizeOverride?.ToString())" placeholder="@L["admin.nodeEdit.inherit"]" />
             </SettingField>
-            <SettingField Label="API key" For="extKey" ShowWhen="@BackendShowWhen" Hint="Write-only. Leave blank to keep the current key.">
+            <SettingField Label="@L["admin.nodeEdit.apiKey"]" For="extKey" ShowWhen="@BackendShowWhen" Hint="@L["admin.nodeEdit.writeOnlyLeaveBlankTo"]">
                 <input id="extKey" name="ExternalApiKeyOverride" type="password" autocomplete="new-password" class="form-control"
-                       placeholder="@(S.HasExternalInferenceApiKeyOverride ? "(unchanged)" : "inherit")" />
+                       placeholder="@(S.HasExternalInferenceApiKeyOverride ? L["cameras.edit.unchanged"] : L["admin.nodeEdit.inheritPlaceholder"])" />
             </SettingField>
         </SettingSection>
 
-        <SettingSection Title="Streaming" Subtitle="How live and playback video reach browsers from this node.">
-            <SettingField Label="Streaming mode" For="dsm" Hint="Direct sends video straight from the node to the browser." HelpLink="/Help/nodes#direct-streaming">
+        <SettingSection Title="@L["admin.nodeEdit.streaming"]" Subtitle="@L["admin.nodeEdit.howLiveAndPlaybackVideo"]">
+            <SettingField Label="@L["admin.nodeEdit.streamingMode"]" For="dsm" Hint="@L["admin.nodeEdit.directSendsVideoStraightFrom"]" HelpLink="/Help/nodes#direct-streaming">
                 <select id="dsm" name="DirectStreamingMode" class="form-select">
-                    <option value="" selected="@(string.IsNullOrEmpty(n.DirectStreamingMode))">inherit — @GlobalDirectStreaming</option>
-                    <option value="Proxy" selected="@(n.DirectStreamingMode == "Proxy")">Proxy</option>
-                    <option value="Direct" selected="@(n.DirectStreamingMode == "Direct")">Direct</option>
+                    <option value="" selected="@(string.IsNullOrEmpty(n.DirectStreamingMode))">@L["common.inheritValue", new { value = GlobalDirectStreaming }]</option>
+                    <option value="Proxy" selected="@(n.DirectStreamingMode == "Proxy")">@L["admin.nodeEdit.proxy"]</option>
+                    <option value="Direct" selected="@(n.DirectStreamingMode == "Direct")">@L["admin.nodeEdit.direct"]</option>
                 </select>
             </SettingField>
-            <SettingField Label="Client endpoint host" For="ceHost" ShowWhen="@DirectShowWhen" Hint="FQDN browsers use to reach this node.">
+            <SettingField Label="@L["admin.nodeEdit.clientEndpointHost"]" For="ceHost" ShowWhen="@DirectShowWhen" Hint="@L["admin.nodeEdit.fqdnBrowsersUseToReach"]">
                 <input id="ceHost" name="ClientEndpointHost" class="form-control" value="@n.ClientEndpointHost" placeholder="node1.example.com" />
             </SettingField>
-            <SettingField Label="Certificate (.pfx) path" For="cePfx" ShowWhen="@DirectShowWhen" Hint="Optional.">
+            <SettingField Label="@L["admin.nodeEdit.certificatePfxPath"]" For="cePfx" ShowWhen="@DirectShowWhen" Hint="@L["admin.nodeEdit.optional"]">
                 <input id="cePfx" name="ClientCertPfxPath" class="form-control font-monospace" value="@n.ClientCertPfxPath" />
             </SettingField>
-            <SettingField Label="Certificate password" For="cePwd" ShowWhen="@DirectShowWhen" Hint="Leave blank to keep the current password.">
-                <input id="cePwd" name="ClientCertPfxPassword" type="password" autocomplete="new-password" class="form-control" placeholder="(unchanged)" />
+            <SettingField Label="@L["admin.nodeEdit.certificatePassword"]" For="cePwd" ShowWhen="@DirectShowWhen" Hint="@L["admin.nodeEdit.leaveBlankToKeepThe"]">
+                <input id="cePwd" name="ClientCertPfxPassword" type="password" autocomplete="new-password" class="form-control" placeholder="@L["admin.nodeEdit.unchanged"]" />
             </SettingField>
-            <SettingField Label="Self-signed certificate" For="ceInsecure" ShowWhen="@DirectShowWhen">
+            <SettingField Label="@L["admin.nodeEdit.selfSignedCertificate"]" For="ceInsecure" ShowWhen="@DirectShowWhen">
                 <select id="ceInsecure" name="AllowInsecureClientEndpoint" class="form-select">
-                    <option value="" selected="@(n.AllowInsecureClientEndpoint is null)">inherit — @(GlobalAllowInsecureClientEndpoint ? "allow" : "block")</option>
-                    <option value="true" selected="@(n.AllowInsecureClientEndpoint == true)">Allow</option>
-                    <option value="false" selected="@(n.AllowInsecureClientEndpoint == false)">Block</option>
+                    <option value="" selected="@(n.AllowInsecureClientEndpoint is null)">@L["common.inheritValue", new { value = (GlobalAllowInsecureClientEndpoint ? L["admin.nodeEdit.allowLower"].Value : L["admin.nodeEdit.blockLower"].Value) }]</option>
+                    <option value="true" selected="@(n.AllowInsecureClientEndpoint == true)">@L["admin.nodeEdit.allow"]</option>
+                    <option value="false" selected="@(n.AllowInsecureClientEndpoint == false)">@L["admin.nodeEdit.block"]</option>
                 </select>
             </SettingField>
-            <SettingField Label="Endpoint status" Wide>
+            <SettingField Label="@L["admin.nodeEdit.endpointStatus"]" Wide>
                 <div class="small">
                     @if (n.ClientEndpointReportedPort is { } cePort)
                     {
-                        <text>Listening on :@cePort</text>
+                        <text>@L["admin.nodeEdit.listeningOn", new { port = cePort }]</text>
                         @if (n.ClientEndpointCertNotAfter is { } na)
                         {
-                            <text> &middot; cert valid to <time datetime="@na.ToUtcIso()" data-local="d">@na.ToLocalTime().ToString("d")</time></text>
+                            <text> &middot; @L.Markup("admin.nodeEdit.certValidTo", new { time = na.ToTimeTag("d") })</text>
                         }
                         @if (n.ClientEndpointCertIsSelfSigned == true)
                         {
-                            <span class="text-warning"> &middot; self-signed</span>
+                            <span class="text-warning"> @L["admin.nodeEdit.selfSigned"]</span>
                         }
                     }
                     else
                     {
-                        <span class="text-muted">No client endpoint running.</span>
+                        <span class="text-muted">@L["admin.nodeEdit.noClientEndpointRunning"]</span>
                     }
                     @if (!string.IsNullOrEmpty(n.ClientEndpointLastError))
                     {
@@ -241,21 +241,21 @@ else
             </SettingField>
         </SettingSection>
 
-        <SettingSection Title="Failover">
+        <SettingSection Title="@L["admin.nodeEdit.failover"]">
             @if (AvailableProxies.Count > 0)
             {
-                <SettingField Label="Media proxy" For="pxPrimary" Hint="Route this node's cameras through a proxy.">
+                <SettingField Label="@L["admin.nodeEdit.mediaProxy"]" For="pxPrimary" Hint="@L["admin.nodeEdit.routeThisNodeCamerasThrough"]">
                     <select id="pxPrimary" name="PrimaryProxyId" class="form-select">
-                        <option value="" selected="@(n.PrimaryProxyId is null)">None (direct / central)</option>
+                        <option value="" selected="@(n.PrimaryProxyId is null)">@L["admin.nodeEdit.noneDirectCentral"]</option>
                         @foreach (var px in AvailableProxies)
                         {
                             <option value="@px.Id" selected="@(n.PrimaryProxyId == px.Id)">@px.Name</option>
                         }
                     </select>
                 </SettingField>
-                <SettingField Label="Backup proxy" For="pxBackup" Hint="Used when the primary proxy is unhealthy.">
+                <SettingField Label="@L["admin.nodeEdit.backupProxy"]" For="pxBackup" Hint="@L["admin.nodeEdit.usedWhenThePrimaryProxy"]">
                     <select id="pxBackup" name="BackupProxyId" class="form-select">
-                        <option value="" selected="@(n.BackupProxyId is null)">None</option>
+                        <option value="" selected="@(n.BackupProxyId is null)">@L["common.none"]</option>
                         @foreach (var px in AvailableProxies)
                         {
                             <option value="@px.Id" selected="@(n.BackupProxyId == px.Id)">@px.Name</option>
@@ -268,9 +268,9 @@ else
                 <input type="hidden" name="PrimaryProxyId" value="@(n.PrimaryProxyId?.ToString() ?? "")" />
                 <input type="hidden" name="BackupProxyId" value="@(n.BackupProxyId?.ToString() ?? "")" />
             }
-            <SettingField Label="Backup recorder node" For="backupNode" Hint="Records this node's cameras while it is down." HelpLink="/Help/nodes#failover">
+            <SettingField Label="@L["admin.nodeEdit.backupRecorderNode"]" For="backupNode" Hint="@L["admin.nodeEdit.recordsThisNodeCamerasWhile"]" HelpLink="/Help/nodes#failover">
                 <select id="backupNode" name="BackupNodeId" class="form-select">
-                    <option value="" selected="@(n.BackupNodeId is null)">None (recording stops if down)</option>
+                    <option value="" selected="@(n.BackupNodeId is null)">@L["admin.nodeEdit.noneRecordingStopsIfDown"]</option>
                     @foreach (var bn in OtherNodes)
                     {
                         <option value="@bn.Id" selected="@(n.BackupNodeId == bn.Id)">@bn.Name</option>
@@ -286,12 +286,12 @@ else
             </SettingField>
         </SettingSection>
 
-        <SettingSection Title="Hardware" Subtitle="Reported by the node.">
-            <SettingField Label="Encoders">
+        <SettingSection Title="@L["admin.nodeEdit.hardware"]" Subtitle="@L["admin.nodeEdit.reportedByTheNode"]">
+            <SettingField Label="@L["admin.nodeEdit.encoders"]">
                 <div>
                     @if (Encoders.Count == 0)
                     {
-                        <span class="text-muted small">none reported</span>
+                        <span class="text-muted small">@L["admin.nodeEdit.noneReported"]</span>
                     }
                     @foreach (var enc in Encoders)
                     {
@@ -299,11 +299,11 @@ else
                     }
                 </div>
             </SettingField>
-            <SettingField Label="Detected accelerators">
+            <SettingField Label="@L["admin.nodeEdit.detectedAccelerators"]">
                 <div>
                     @if (DetectedAccelerators.Count == 0)
                     {
-                        <span class="text-muted small">none reported</span>
+                        <span class="text-muted small">@L["admin.nodeEdit.noneReported"]</span>
                     }
                     @foreach (var a in DetectedAccelerators)
                     {
@@ -311,7 +311,7 @@ else
                     }
                 </div>
             </SettingField>
-            <SettingField Label="Last seen">
+            <SettingField Label="@L["common.lastSeen"]">
                 <div class="small">
                     @if (n.LastSeenAt is { } seen)
                     {
@@ -319,42 +319,42 @@ else
                     }
                     else
                     {
-                        <span class="text-muted">never</span>
+                        <span class="text-muted">@L["admin.nodeEdit.never"]</span>
                     }
                     @if (n.ClockSkewSeconds is { } skew && Math.Abs(skew) > 60)
                     {
-                        <div class="text-warning">⚠️ Clock is off by about @Math.Round(skew) s. Check time sync on this machine.</div>
+                        <div class="text-warning">@L["admin.nodeEdit.clockOff", new { seconds = Math.Round(skew) }]</div>
                     }
                 </div>
             </SettingField>
         </SettingSection>
 
         <div class="lv-savebar">
-            <button type="submit" class="btn btn-primary">Save</button>
-            <a class="btn btn-link" href="/Admin/Nodes">Cancel</a>
+            <button type="submit" class="btn btn-primary">@L["common.save"]</button>
+            <a class="btn btn-link" href="/Admin/Nodes">@L["common.cancel"]</a>
         </div>
     </EditForm>
 
     @* Node actions post to the list page, which owns their handlers and shows the result. *@
     <div class="lv-danger-zone">
-        <div class="fw-semibold mb-2">Actions</div>
+        <div class="fw-semibold mb-2">@L["common.actions"]</div>
         <div class="d-flex flex-wrap gap-2">
             <NodeActionForm Handler="@($"restart-node-{n.Id}")" Field="RestartId" NodeId="n.Id"
-                            Css="btn-outline-secondary" Label="🔄 Restart service"
+                            Css="btn-outline-secondary" Label="@L["admin.nodeEdit.restartService"]"
                             Confirm="@NodeConfirm.Restart(n.Name, CameraCount)" />
             <NodeActionForm Handler="@($"reset-node-auth-{n.Id}")" Field="ResetAuthId" NodeId="n.Id"
-                            Css="btn-outline-warning" Label="🔑 Reset auth"
+                            Css="btn-outline-warning" Label="@L["admin.nodeEdit.resetAuth"]"
                             Confirm="@NodeConfirm.ResetAuth(n.Name)" />
             <NodeActionForm Handler="@($"set-node-maintenance-{n.Id}")" Field="MaintenanceId" NodeId="n.Id"
                             ExtraName="MaintenanceEnabled" ExtraValue="@((!n.MaintenanceMode).ToString().ToLowerInvariant())"
                             Css="@(n.MaintenanceMode ? "btn-warning" : "btn-outline-warning")"
-                            Label="@(n.MaintenanceMode ? "🛠️ End maintenance" : "🛠️ Maintenance")"
+                            Label="@(n.MaintenanceMode ? L["admin.nodeEdit.endMaintenance"].Value : L["admin.nodeEdit.maintenance"].Value)"
                             Confirm="@NodeConfirm.Maintenance(n.MaintenanceMode, CameraCount, BackupNodeName)" />
             <NodeActionForm Handler="@($"delete-node-{n.Id}")" Field="DeleteId" NodeId="n.Id"
-                            Css="btn-outline-danger" Label="🗑️ Delete node"
+                            Css="btn-outline-danger" Label="@L["admin.nodeEdit.deleteNode"]"
                             Confirm="@NodeConfirm.Delete(n.Name)" />
         </div>
-        <div class="lv-hint mt-2">Restart restarts the node's service, not the machine. Maintenance moves its cameras to the backup node until turned off.</div>
+        <div class="lv-hint mt-2">@L["admin.nodeEdit.restartRestartsTheNodeService"]</div>
     </div>
 }
 </div>
@@ -402,8 +402,8 @@ else
                     select.value = previousValue;
 
                     status.textContent = models.length === 0
-                        ? 'No models found on this node (or it is unreachable).'
-                        : models.length + ' model(s) found.';
+                        ? larisvmsI18n.t('js.nodeEdit.noModelsFound')
+                        : larisvmsI18n.plural('js.nodeEdit.modelsFound', models.length);
                 } catch (e) {
                     status.textContent = 'Could not reach this node.';
                 } finally {
@@ -440,8 +440,8 @@ else
     private string? ErrorMessage;
 
     private string AcceleratorHint => DetectedAccelerators.Count == 0
-        ? "Auto picks the best detected accelerator."
-        : $"Auto picks the best of: {string.Join(", ", DetectedAccelerators)}.";
+        ? Loc.T("admin.nodeEdit.acceleratorAuto")
+        : Loc.T("admin.nodeEdit.acceleratorAutoOf", new { options = string.Join(", ", DetectedAccelerators) });
 
     /// <summary>data-show-when spec for a field that only applies to some model families. The inherit
     /// option posts "" — included in the list when the inherited family is one of them.</summary>
@@ -553,7 +553,7 @@ else
         {
             if (string.IsNullOrWhiteSpace(storageRootPath))
             {
-                await Fail("A storage path is required — this is where the node records to.");
+                await Fail(Loc.T("admin.nodeEdit.aStoragePathIsRequired"));
                 return;
             }
             var archiveError = NodeSettingsState.ValidateArchiveRoot(archiveRootPath, storageRootPath);
@@ -563,12 +563,12 @@ else
             if (externalUrlOverride is not null
                 && (!Uri.TryCreate(externalUrlOverride, UriKind.Absolute, out var externalUri) || externalUri.Scheme is not ("http" or "https")))
             {
-                await Fail("The external service URL must be a full URL like http://192.168.1.50:8080, or blank to inherit.");
+                await Fail(Loc.T("admin.nodeEdit.theExternalServiceUrlMust"));
                 return;
             }
             if (externalInputSize is { } size && (size <= 0 || size % 32 != 0))
             {
-                await Fail("The external input size must be a positive multiple of 32 (e.g. 640), or blank to inherit.");
+                await Fail(Loc.T("admin.nodeEdit.theExternalInputSizeMust"));
                 return;
             }
 
@@ -583,21 +583,20 @@ else
                     : externalModel;
                 if (string.IsNullOrEmpty(effectiveUrl) || string.IsNullOrEmpty(effectiveModel))
                 {
-                    await Fail("This node uses the external HTTP backend but has no URL and model — set them here or on AI detection settings first.");
+                    await Fail(Loc.T("admin.nodeEdit.thisNodeUsesTheExternal"));
                     return;
                 }
             }
 
             var before = (await NodeService.ListAsync()).FirstOrDefault(x => x.Id == id);
-            if (before is null) { await Fail("That node no longer exists."); return; }
+            if (before is null) { await Fail(Loc.T("admin.nodeEdit.thatNodeNoLongerExists")); return; }
 
             // Stale-save guard: reject if this node's config changed since the page was rendered, rather
             // than writing this form's values over someone else's change.
             var current = await NodeSettingsState.LoadAsync(before, Settings);
             if (!string.Equals(snapshotField, current.Snapshot, StringComparison.Ordinal))
             {
-                await Fail($"{before.Name}'s settings changed (in another tab, or by someone else) since this page was loaded — " +
-                    "nothing was saved. Reload the page and re-apply your edit.");
+                await Fail(Loc.T("admin.nodeEdit.concurrentEdit", new { name = before.Name }));
                 return;
             }
 

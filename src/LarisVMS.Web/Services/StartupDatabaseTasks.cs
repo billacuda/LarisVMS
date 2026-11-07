@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Security.Principal;
 using System.ServiceProcess;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 using LarisVMS.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -69,7 +70,7 @@ public sealed class StartupDatabaseTasks(
             catch (Exception ex)
             {
                 logger.LogCritical(ex, "Database migration failed - the service will not start");
-                throw new InvalidOperationException("Database migration failed - the service will not start.", ex);
+                throw new InvalidOperationException(Loc.T("server.startupDatabaseTasks.databaseMigrationFailedTheService"), ex);
             }
         }
 

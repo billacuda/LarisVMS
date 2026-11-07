@@ -1,0 +1,21 @@
+@page
+@model LarisVMS.Web.Areas.Identity.Pages.Account.LogoutModel
+@{
+    ViewData["Title"] = L["account.logout.title"].Value;
+}
+<div class="row justify-content-center">
+    <div class="col-md-5">
+        <h1 class="h3 mb-3">@L["account.logout.title"]</h1>
+        @if (User.Identity?.IsAuthenticated ?? false)
+        {
+            <form method="post" asp-route-returnUrl="/">
+                <button type="submit" class="btn btn-primary">@L["layout.logout"]</button>
+            </form>
+        }
+        else
+        {
+            <p>@L["account.logout.signedOut"]</p>
+            <a class="btn btn-primary" href="/Identity/Account/Login">@L["account.login.logIn"]</a>
+        }
+    </div>
+</div>

@@ -19,9 +19,15 @@ A role is a named set of permissions, managed under **Settings → Roles**. Each
 
 **Settings → Permissions matrix** sets which actions each role is allowed (view cameras, playback, export, edit settings, and so on). The built-in **Super Admin** role always has every permission.
 
+**Start and stop manual recording** controls the record button on live tiles. It needs the **Record** camera access below too.
+
 ## Camera access
 
-**Settings → Camera access** decides which cameras each role can use: every camera, a group, or single cameras, separately for View, Playback, Export, PTZ, Talk (two-way audio), and Configure. A role with **no grants has no cameras**; Super Admin always has every camera. Export never reaches further than Playback. Upgrading from a version where roles without grants could use every camera adds an "all cameras" grant to keep each role and user's access the same.
+**Settings → Camera access** decides which cameras each role can use: every camera, a group, or single cameras, separately for View, Playback, Export, PTZ, Talk (two-way audio), Configure, and Record (manual recording). A role with **no grants has no cameras**; Super Admin always has every camera. Export never reaches further than Playback. Upgrading from a version where roles without grants could use every camera adds an "all cameras" grant to keep each role and user's access the same.
+
+## API keys
+
+**Admin → API keys** issues keys for the [API](/Help/api). Each key acts with the role it's bound to, and can be limited to some of that role's permissions, so several keys can do different things. The role's camera access decides which cameras a key can use.
 
 ## Entra
 
@@ -40,10 +46,16 @@ A role is a named set of permissions, managed under **Settings → Roles**. Each
 
 **Sync** runs every 30 minutes by default (5 minutes to 24 hours), or straight away with **Sync now**. An AD account that's disabled or expired in AD, or that's no longer in any linked group, is disabled here and signed out. If AD can't be reached, the sync changes nothing and tries again in 5 minutes. An account disabled by sync is re-enabled when it qualifies again. One disabled by hand on the Users page stays disabled.
 
-**Local sign-in** can be turned off while AD sign-in is on, once at least one AD account has Super Admin. Keep the Super Admin account created during setup, and its password, somewhere safe. If AD becomes unavailable, run this against the LarisVMS database and sign in with that account:
+**Local sign-in** can be turned off while AD sign-in is on, once at least one AD account has Super Admin. Keep the Super Admin account created during setup, and its password, somewhere safe. If AD becomes unavailable, run this against the LarisVMS database and sign in with that account. On SQL Server:
 
 ```sql
 UPDATE ActiveDirectorySettings SET LocalLoginsEnabled = 1
+```
+
+On MariaDB:
+
+```sql
+UPDATE `ActiveDirectorySettings` SET `LocalLoginsEnabled` = 1;
 ```
 
 ## Audit log

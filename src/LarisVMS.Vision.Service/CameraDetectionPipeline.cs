@@ -108,6 +108,9 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
     // Detection.MovingObjects: the kinds of object that can count as moving. Anything else (a potted
     // plant whose box keeps changing shape, say) is only ever idle.
     private readonly HashSet<string> _movingObjects;
+    // Detection.IgnoredObjects: kinds of object switched off on this camera, dropped straight out of
+    // inference (a deck the model keeps calling an airplane, say).
+    private readonly HashSet<string> _ignoredObjects;
     private readonly HttpClient _http;
     private readonly ILogger _logger;
     private readonly CancellationTokenSource _cts = new();
@@ -330,6 +333,7 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             MinNetDisplacementPixels = request.MotionJitterPixels,
         });
         _movingObjects = CocoCategoryMap.ParseMovingObjects(request.MovingObjects);
+        _ignoredObjects = CocoCategoryMap.ParseIgnoredObjects(request.IgnoredObjects);
         _departureGrace = TimeSpan.FromSeconds(Math.Clamp(request.DepartureGraceSeconds, 1, 10));
         // The camera's own name rather than its GUID — see VisionStartCameraRequest.DisplayName. The
         // full id still reaches the log on the pipeline-start line below and on every failure, so a
@@ -717,6 +721,11 @@ public sealed class CameraDetectionPipeline : IAsyncDisposable
             }
 
             MarkInferenceOk();
+
+            // Ignored kinds go before the tracker, so they never get a track ID. Removed in place:
+            // CanRejoin below indexes into this same list.
+            if (_ignoredObjects.Count > 0)
+                detections.RemoveAll(d => CocoCategoryMap.IsIgnored(_ignoredObjects, d.Label?.Name));
 
             var tracked = _tracker.Update(detections, (hiddenId, index) => CanRejoin(hiddenId, detections[index], frame, captured.Value.CapturedUtc));
             foreach (var (fromId, intoId, framesHidden) in _tracker.Rejoins)

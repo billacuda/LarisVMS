@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using LarisVMS.Core.Localization;
 
 namespace LarisVMS.Infrastructure.Notifications;
 
@@ -38,13 +39,13 @@ public sealed class FcmClient(Func<HttpClient> httpClientFactory)
     {
         ServiceAccount? account;
         try { account = JsonSerializer.Deserialize<ServiceAccount>(json); }
-        catch (JsonException) { throw new ArgumentException("That isn't valid JSON. Paste the whole service account key file."); }
+        catch (JsonException) { throw new ArgumentException(Loc.T("server.fcmClient.thatIsntValidJsonPaste")); }
         if (account is null || string.IsNullOrWhiteSpace(account.ProjectId) || string.IsNullOrWhiteSpace(account.ClientEmail)
             || string.IsNullOrWhiteSpace(account.PrivateKey))
-            throw new ArgumentException("The service account JSON needs project_id, client_email, and private_key.");
+            throw new ArgumentException(Loc.T("server.fcmClient.missingFields"));
         using var rsa = RSA.Create();
         try { rsa.ImportFromPem(account.PrivateKey); }
-        catch (Exception) { throw new ArgumentException("The service account's private_key couldn't be read."); }
+        catch (Exception) { throw new ArgumentException(Loc.T("server.fcmClient.privateKeyUnreadable")); }
         return account;
     }
 

@@ -29,13 +29,13 @@
     --bs-border-color: color-mix(in srgb, #201e1d 25%, transparent);
     --bs-border-color-translucent: color-mix(in srgb, #201e1d 15%, transparent);
 
-    --bs-link-color: #2f7ab5;
-    --bs-link-color-rgb: 47, 122, 181;
+    --bs-link-color: #2569a0;
+    --bs-link-color-rgb: 37, 105, 160;
     --bs-link-hover-color: #184e7d;
     --bs-link-hover-color-rgb: 24, 78, 125;
 
-    --bs-primary: #2f7ab5;
-    --bs-primary-rgb: 47, 122, 181;
+    --bs-primary: #2569a0;
+    --bs-primary-rgb: 37, 105, 160;
 
     /* Modernist is a zero-radius system — every Bootstrap component derives its own radius from
        these, so this alone squares off buttons/cards/badges/inputs/modals/alerts app-wide. */
@@ -52,10 +52,12 @@
     --lv-surface: #eae9e9;
     --lv-text: #201e1d;
     --lv-divider: color-mix(in srgb, #201e1d 40%, transparent);
-    --lv-accent: #2f7ab5;
+    --lv-accent: #2569a0;
+    /* The accent as a fill behind white text. Dark mode's accent is too light for that. */
+    --lv-accent-fill: var(--lv-accent);
     --lv-accent-100: #eaf3fa;
     --lv-accent-200: #cfe4f2;
-    --lv-accent-600: #2569a0;
+    --lv-accent-600: #1f5a8a;
     --lv-accent-700: #184e7d;
 }
 
@@ -85,6 +87,7 @@
     --lv-text: #eef0f2;
     --lv-divider: color-mix(in srgb, #eef0f2 22%, transparent);
     --lv-accent: #5fa8dd;
+    --lv-accent-fill: color-mix(in srgb, var(--lv-accent) 70%, black);
     --lv-accent-100: #16324a;
     --lv-accent-200: #1c3f5c;
     --lv-accent-600: #7fbce8;
@@ -131,10 +134,31 @@
     --bs-btn-focus-shadow-rgb: var(--bs-primary-rgb);
 }
 
+/* Dark mode's accent is light enough to read as text on the dark ground, which makes white text on
+   it too faint (about 2.6:1). As a fill behind white text it's darkened instead (4.9:1 for the
+   default accent), keeping an admin's chosen color recognizable. */
+[data-bs-theme="dark"] .btn-primary {
+    --bs-btn-bg: color-mix(in srgb, var(--lv-accent) 70%, black);
+    --bs-btn-border-color: color-mix(in srgb, var(--lv-accent) 70%, black);
+    --bs-btn-hover-bg: color-mix(in srgb, var(--lv-accent) 60%, black);
+    --bs-btn-hover-border-color: color-mix(in srgb, var(--lv-accent) 60%, black);
+    --bs-btn-active-bg: color-mix(in srgb, var(--lv-accent) 50%, black);
+    --bs-btn-active-border-color: color-mix(in srgb, var(--lv-accent) 50%, black);
+    --bs-btn-disabled-bg: color-mix(in srgb, var(--lv-accent) 70%, black);
+    --bs-btn-disabled-border-color: color-mix(in srgb, var(--lv-accent) 70%, black);
+}
+
+[data-bs-theme="dark"] .btn-outline-primary {
+    --bs-btn-hover-bg: color-mix(in srgb, var(--lv-accent) 70%, black);
+    --bs-btn-hover-border-color: color-mix(in srgb, var(--lv-accent) 70%, black);
+    --bs-btn-active-bg: color-mix(in srgb, var(--lv-accent) 60%, black);
+    --bs-btn-active-border-color: color-mix(in srgb, var(--lv-accent) 60%, black);
+}
+
 .bg-primary { background-color: var(--lv-accent) !important; }
 .text-primary { color: var(--lv-accent) !important; }
 .border-primary { border-color: var(--lv-accent) !important; }
-.text-bg-primary { background-color: var(--lv-accent) !important; color: #fff !important; }
+.text-bg-primary { background-color: var(--lv-accent-fill) !important; color: #fff !important; }
 
 .alert-primary {
     --bs-alert-color: var(--lv-accent-700);
@@ -149,13 +173,13 @@
 }
 
 .form-check-input:checked {
-    background-color: var(--lv-accent);
-    border-color: var(--lv-accent);
+    background-color: var(--lv-accent-fill);
+    border-color: var(--lv-accent-fill);
 }
 
 .form-check-input:focus {
     border-color: var(--lv-accent);
-    box-shadow: 0 0 0 .25rem color-mix(in srgb, var(--lv-accent) 25%, transparent);
+    box-shadow: none;
 }
 
 .form-range::-webkit-slider-thumb { background-color: var(--lv-accent); }
@@ -163,23 +187,23 @@
 
 .page-link { color: var(--lv-accent); }
 .page-item.active .page-link {
-    background-color: var(--lv-accent);
-    border-color: var(--lv-accent);
+    background-color: var(--lv-accent-fill);
+    border-color: var(--lv-accent-fill);
 }
 
 .dropdown-item.active,
 .dropdown-item:active {
-    background-color: var(--lv-accent);
+    background-color: var(--lv-accent-fill);
 }
 
 .nav-pills .nav-link.active,
 .nav-pills .show > .nav-link {
-    background-color: var(--lv-accent);
+    background-color: var(--lv-accent-fill);
 }
 
 .list-group-item.active {
-    background-color: var(--lv-accent);
-    border-color: var(--lv-accent);
+    background-color: var(--lv-accent-fill);
+    border-color: var(--lv-accent-fill);
 }
 
 .progress-bar { background-color: var(--lv-accent); }
@@ -191,3 +215,64 @@
     outline: 2px solid var(--lv-accent);
     outline-offset: 2px;
 }
+
+/* Bootstrap swaps the outline for a faint glow on these (under 2:1), so they get the same ring. */
+.btn:focus-visible,
+.btn-check:focus-visible + .btn,
+.btn-close:focus-visible,
+.form-check-input:focus-visible,
+.form-range:focus-visible,
+.nav-link:focus-visible,
+.page-link:focus-visible,
+.dropdown-item:focus-visible,
+.list-group-item-action:focus-visible,
+.accordion-button:focus-visible {
+    outline: 2px solid var(--lv-accent);
+    outline-offset: 2px;
+    box-shadow: none;
+}
+
+.form-control:focus,
+.form-select:focus {
+    outline: 2px solid var(--lv-accent);
+    outline-offset: 0;
+    box-shadow: none;
+}
+
+/* Over video the page's accent can vanish, so a white ring with a black edge reads on any picture. */
+.btn-outline-light:focus-visible {
+    outline-color: #fff;
+    box-shadow: 0 0 0 4px #000;
+}
+
+/* A field's edge needs 3:1 against the page. The general border token stays light for tables and cards. */
+.form-control,
+.form-select,
+.form-check-input {
+    border-color: color-mix(in srgb, var(--bs-body-color) 55%, transparent);
+}
+
+/* Bootstrap's text and outline-button colors fall short of 4.5:1 on this theme's backgrounds. */
+.text-danger { color: #b02a37 !important; }
+.text-success { color: #146c43 !important; }
+.text-warning { color: #7a5a00 !important; }
+.text-info { color: #055160 !important; }
+[data-bs-theme="dark"] .text-danger,
+.bg-dark .text-danger { color: #ea868f !important; }
+[data-bs-theme="dark"] .text-success,
+.bg-dark .text-success { color: #75b798 !important; }
+[data-bs-theme="dark"] .text-warning,
+.bg-dark .text-warning { color: #ffda6a !important; }
+[data-bs-theme="dark"] .text-info,
+.bg-dark .text-info { color: #6edff6 !important; }
+
+.btn-outline-secondary { --bs-btn-color: #565e64; --bs-btn-border-color: #565e64; }
+.btn-outline-danger { --bs-btn-color: #b02a37; --bs-btn-border-color: #b02a37; }
+.btn-outline-success { --bs-btn-color: #146c43; --bs-btn-border-color: #146c43; }
+.btn-outline-warning { --bs-btn-color: #7a5a00; --bs-btn-border-color: #7a5a00; }
+.btn-outline-info { --bs-btn-color: #055160; --bs-btn-border-color: #055160; }
+[data-bs-theme="dark"] .btn-outline-secondary { --bs-btn-color: #adb5bd; --bs-btn-border-color: #adb5bd; }
+[data-bs-theme="dark"] .btn-outline-danger { --bs-btn-color: #ea868f; --bs-btn-border-color: #ea868f; }
+[data-bs-theme="dark"] .btn-outline-success { --bs-btn-color: #75b798; --bs-btn-border-color: #75b798; }
+[data-bs-theme="dark"] .btn-outline-warning { --bs-btn-color: #ffda6a; --bs-btn-border-color: #ffda6a; }
+[data-bs-theme="dark"] .btn-outline-info { --bs-btn-color: #6edff6; --bs-btn-border-color: #6edff6; }

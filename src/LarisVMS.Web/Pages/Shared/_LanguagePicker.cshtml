@@ -1,0 +1,32 @@
+@using LarisVMS.Core.Interfaces
+@using LarisVMS.Core.Localization
+@using LarisVMS.Web.Localization
+@inject LocaleCatalog LocaleCatalog
+@inject IServiceProvider Services
+@{
+    // Razor Pages copy of Components/Layout/LanguagePicker.razor — keep the two in step. Hidden when
+    // English is the only language installed. Each language is its own submit button (not a select
+    // that submits on change), so moving through the list with the keyboard doesn't switch language.
+    ISettingsResolver? settings = null;
+    try { settings = Services.GetService<ISettingsResolver>(); } catch { /* pre-setup */ }
+    var choices = await LanguageChoices.GetAsync(LocaleCatalog, settings);
+    var current = LanguageChoices.Lang;
+    var returnUrl = Context.Request.Path + Context.Request.QueryString;
+}
+@if (choices.Count > 1)
+{
+    <div class="dropdown">
+        <button class="lv-darktoggle" type="button" data-bs-toggle="dropdown" aria-expanded="false"
+                title="@L["layout.language"]" aria-label="@L["layout.language"]"><span aria-hidden="true">🌐</span></button>
+        <form method="post" action="/locale" class="dropdown-menu dropdown-menu-end">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="returnUrl" value="@returnUrl" />
+            @foreach (var choice in choices)
+            {
+                var isCurrent = string.Equals(choice.Culture, current, StringComparison.OrdinalIgnoreCase);
+                <button type="submit" name="culture" value="@choice.Culture" lang="@choice.Culture"
+                        class="dropdown-item@(isCurrent ? " active" : "")" aria-current="@(isCurrent ? "true" : null)">@choice.Name</button>
+            }
+        </form>
+    </div>
+}

@@ -12,7 +12,10 @@ namespace LarisVMS.Web.Pages.Admin.ApiKeys;
 public class IndexModel(ApplicationDbContext db, IApiKeyService apiKeyService, IAuditService auditService) : PageModel
 {
     public record KeyRow(Guid Id, string Name, string RoleName, string KeyPrefix,
-        DateTime CreatedAtUtc, DateTime? LastUsedAtUtc, bool Revoked);
+        DateTime CreatedAtUtc, DateTime? LastUsedAtUtc, bool Revoked, DateTime? ExpiresAtUtc = null, bool Limited = false)
+    {
+        public bool Expired => ExpiresAtUtc is { } e && e <= DateTime.UtcNow;
+    }
 
     public List<KeyRow> Keys { get; set; } = [];
 
@@ -34,7 +37,7 @@ public class IndexModel(ApplicationDbContext db, IApiKeyService apiKeyService, I
 
         Keys = keys.Select(k => new KeyRow(k.Id, k.Name,
             roleNames.GetValueOrDefault(k.RoleId, "(deleted role)"), k.KeyPrefix,
-            k.CreatedAtUtc, k.LastUsedAtUtc, k.RevokedAtUtc is not null)).ToList();
+            k.CreatedAtUtc, k.LastUsedAtUtc, k.RevokedAtUtc is not null, k.ExpiresAtUtc, k.PermissionsLimited)).ToList();
     }
 
     public async Task<IActionResult> OnPostRevokeAsync(Guid id, CancellationToken ct)

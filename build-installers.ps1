@@ -9,8 +9,12 @@
       3. Publishes LarisVMS.Web self-contained (win-x64) and bundles the node/proxy packages and the
          CUDA provider into its packages\ folder — the web app registers them as Pending on startup
       4. Builds the three MSIs with WiX v5 (restored from NuGet; no global install needed)
-      5. Copies them to publish\installers\LarisVMS-{Web,Node,Proxy}-<version>-x64.msi, optionally
-         signing them
+      5. Copies them to publish\installers\LarisVMS-{Web,Node,Proxy}-<version>-x64.msi (other
+         languages from -Cultures get a -<culture> suffix)
+      6. Writes SHA256SUMS.txt beside them, to upload with the release
+
+    With -SignThumbprint, the node, proxy, updater, and Vision Service executables are signed before
+    they're bundled, and the MSIs after they're built.
 
     Needs the .NET 10 SDK. Does not need administrator rights — nothing is installed.
 
@@ -18,6 +22,7 @@
     .\build-installers.ps1
     .\build-installers.ps1 -SkipNodeVision
     .\build-installers.ps1 -SignThumbprint 0123456789ABCDEF0123456789ABCDEF01234567
+    .\build-installers.ps1 -Cultures en-US,fr-FR
 #>
 param(
     [string]$Configuration = 'Release',
@@ -26,9 +31,12 @@ param(
     [switch]$SkipVersionSyncCheck,
     # Skips refusing to build when a NuGet package has a known High or Critical vulnerability.
     [switch]$SkipVulnerabilityCheck,
-    # Optional code-signing certificate (CurrentUser\My or LocalMachine\My) used for the MSIs.
+    # Optional code-signing certificate (CurrentUser\My or LocalMachine\My) for the executables and MSIs.
     [string]$SignThumbprint = '',
-    [string]$TimestampUrl   = 'http://timestamp.digicert.com'
+    [string]$TimestampUrl   = 'http://timestamp.digicert.com',
+    # Installer languages: one MSI set per culture, each needing installer\Common\Strings.<culture>.wxl.
+    # The first is the main download; untranslated text falls back to English.
+    [string[]]$Cultures     = @('en-US')
 )
 
 Set-StrictMode -Version Latest
@@ -39,6 +47,19 @@ function Write-Ok([string]$Message) { Write-Host $Message -ForegroundColor Green
 function Invoke-Cmd([string]$Exe, [string[]]$Arguments) {
     & $Exe @Arguments
     if ($LASTEXITCODE -ne 0) { throw "'$Exe $($Arguments -join ' ')' failed with exit code $LASTEXITCODE." }
+}
+
+$signtool = $null
+if ($SignThumbprint) {
+    $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue |
+        Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+    if (-not $signtool) { throw "signtool.exe not found - install the Windows SDK, or omit -SignThumbprint." }
+}
+function Invoke-Sign([string[]]$Files) {
+    if (-not $signtool) { return }
+    foreach ($file in $Files) {
+        Invoke-Cmd $signtool @('sign', '/sha1', $SignThumbprint, '/fd', 'SHA256', '/tr', $TimestampUrl, '/td', 'SHA256', $file)
+    }
 }
 
 $webProject = Join-Path $PSScriptRoot 'src\LarisVMS.Web\LarisVMS.Web.csproj'
@@ -87,6 +108,18 @@ if ($SkipNodeVision) { $nodeArgs['SkipVision'] = $true }
 Write-Step "Building media proxy package"
 & (Join-Path $PSScriptRoot 'build-proxy.ps1') -Configuration $Configuration
 
+# Signed before they're bundled: the server hashes and signs exactly these files for auto-update,
+# and the MSIs pick up the same copies.
+if ($signtool) {
+    Write-Step "Signing node and proxy executables"
+    $executables = @(
+        'publish\LarisVMS.Node\win\LarisVMS.Node.exe', 'publish\LarisVMS.Node\win\LarisVMS.NodeUpdater.exe',
+        'publish\LarisVMS.Node\win\LarisVMS.Vision.Service.exe',
+        'publish\LarisVMS.Proxy\win\LarisVMS.Proxy.exe', 'publish\LarisVMS.Proxy\win\LarisVMS.NodeUpdater.exe'
+    ) | ForEach-Object { Join-Path $PSScriptRoot $_ } | Where-Object { Test-Path $_ }
+    Invoke-Sign $executables
+}
+
 # ── web, self-contained, with the packages bundled ───────────────────────────
 Write-Step "Publishing LarisVMS.Web (self-contained win-x64)"
 if (Test-Path $publishWeb) { Remove-Item $publishWeb -Recurse -Force }
@@ -113,26 +146,40 @@ Write-Ok "Web published with node/proxy packages bundled."
 # ── MSIs ─────────────────────────────────────────────────────────────────────
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 $built = @()
-foreach ($product in @('Web', 'Node', 'Proxy')) {
-    Write-Step "Building LarisVMS-$product MSI"
-    $proj = Join-Path $PSScriptRoot "installer\$product\LarisVMS.$product.Installer.wixproj"
-    Invoke-Cmd 'dotnet' @('build', $proj, '-c', $Configuration, "-p:ProductVersion=$version", '-nologo', '-v', 'minimal')
-    $msi = Join-Path $PSScriptRoot "installer\$product\bin\$Configuration\LarisVMS-$product.msi"
-    $target = Join-Path $OutputDir "LarisVMS-$product-$version-x64.msi"
-    Copy-Item $msi $target -Force
-    $built += $target
-}
-
-if ($SignThumbprint) {
-    Write-Step "Signing"
-    $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue |
-        Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
-    if (-not $signtool) { throw "signtool.exe not found - install the Windows SDK, or omit -SignThumbprint." }
-    foreach ($msi in $built) {
-        Invoke-Cmd $signtool @('sign', '/sha1', $SignThumbprint, '/fd', 'SHA256', '/tr', $TimestampUrl, '/td', 'SHA256', $msi)
+foreach ($culture in $Cultures) {
+    if (-not (Test-Path (Join-Path $PSScriptRoot "installer\Common\Strings.$culture.wxl"))) {
+        throw "No installer text for $culture - add installer\Common\Strings.$culture.wxl (copy Strings.en-US.wxl)."
     }
 }
+$cultureGroups = ($Cultures | ForEach-Object { if ($_ -eq 'en-US') { $_ } else { "$_,en-US" } }) -join ';'
+foreach ($product in @('Web', 'Node', 'Proxy')) {
+    Write-Step "Building LarisVMS-$product MSI ($($Cultures -join ', '))"
+    $proj = Join-Path $PSScriptRoot "installer\$product\LarisVMS.$product.Installer.wixproj"
+    # ';' and ',' escaped, or MSBuild reads them as separating properties.
+    Invoke-Cmd 'dotnet' @('build', $proj, '-c', $Configuration, "-p:ProductVersion=$version", "-p:Cultures=$($cultureGroups -replace ';', '%3B' -replace ',', '%2C')", '-nologo', '-v', 'minimal')
+    foreach ($culture in $Cultures) {
+        $msi = Join-Path $PSScriptRoot "installer\$product\bin\$Configuration\$culture\LarisVMS-$product.msi"
+        $suffix = if ($culture -eq $Cultures[0]) { '' } else { "-$culture" }
+        $target = Join-Path $OutputDir "LarisVMS-$product-$version-x64$suffix.msi"
+        Copy-Item $msi $target -Force
+        $built += $target
+    }
+}
+
+if ($signtool) {
+    Write-Step "Signing installers"
+    Invoke-Sign $built
+}
+
+# ── checksums ────────────────────────────────────────────────────────────────
+# Upload with the release, so a download can be checked against something other than the server
+# it came from: Get-FileHash <file> -Algorithm SHA256, or sha256sum -c SHA256SUMS.txt.
+Write-Step "Writing SHA256SUMS.txt"
+$sums = Join-Path $OutputDir 'SHA256SUMS.txt'
+$built | ForEach-Object { "$((Get-FileHash $_ -Algorithm SHA256).Hash.ToLowerInvariant())  $(Split-Path $_ -Leaf)" } |
+    Set-Content -Path $sums -Encoding ascii
 
 Write-Host ""
 Write-Ok "Installers:"
 $built | ForEach-Object { Write-Host "  $_  ($([math]::Round((Get-Item $_).Length / 1MB)) MB)" }
+Write-Host "  $sums"

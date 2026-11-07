@@ -10,31 +10,31 @@
 @inject INodeService NodeService
 @inject NodeControlClient NodeControlClient
 
-<PageTitle>AI detection settings - @AppName</PageTitle>
+<PageTitle>@L["settings.detection.aiDetectionSettings"] - @AppName</PageTitle>
 
-<h1>Settings</h1>
+<h1>@L["nav.settings"]</h1>
 <SettingsTabs ActiveKey="Detection" />
 
 @if (!string.IsNullOrEmpty(SavedMessage))
 {
-    <div class="alert @(StatusIsError ? "alert-danger" : "alert-success")">@SavedMessage</div>
+    <div class="alert @(StatusIsError ? "alert-danger" : "alert-success")" role="alert">@SavedMessage</div>
 }
 
-<p class="text-muted small">Defaults for every node and camera. Nodes and cameras can override most of these on their own pages. <a href="/Help/ai-detection">How AI detection works</a></p>
+<p class="text-muted small">@L["settings.detection.defaultsForEveryNodeAnd"] <a href="/Help/ai-detection">@L["settings.detection.howAiDetectionWorks"]</a></p>
 
 <div class="lv-page-narrow">
 <EditForm Model="this" FormName="detection-settings" OnSubmit="HandleSubmitAsync" data-dirty-guard>
-    <SettingSection Title="Backend">
-        <SettingField Label="Detection backend" For="backendSelect" Hint="Built-in runs a model on the node. External sends frames to your own server." HelpLink="/Help/ai-detection#external-backend">
+    <SettingSection Title="@L["settings.detection.backend"]">
+        <SettingField Label="@L["settings.detection.detectionBackend"]" For="backendSelect" Hint="@L["settings.detection.builtInRunsAModel"]" HelpLink="/Help/ai-detection#external-backend">
             <select name="Backend" class="form-select" id="backendSelect">
-                <option value="BuiltIn" selected="@(Backend == "BuiltIn")">Built-in</option>
-                <option value="ExternalHttp" selected="@(Backend == "ExternalHttp")">External HTTP service</option>
+                <option value="BuiltIn" selected="@(Backend == "BuiltIn")">@L["settings.detection.builtIn"]</option>
+                <option value="ExternalHttp" selected="@(Backend == "ExternalHttp")">@L["settings.detection.externalHttpService"]</option>
             </select>
         </SettingField>
-        <SettingField Label="Service URL" ShowWhen="Backend=ExternalHttp" Hint="Include the port.">
+        <SettingField For="field-externalUrl" Label="@L["settings.detection.serviceUrl"]" ShowWhen="Backend=ExternalHttp" Hint="@L["settings.detection.includeThePort"]">
             <div class="input-group">
-                <InputText type="url" @bind-Value="ExternalUrl" class="form-control" placeholder="http://192.168.1.50:8080" />
-                <button type="submit" name="Action" value="TestConnection" class="btn btn-outline-secondary">Test</button>
+                <InputText id="field-externalUrl" type="url" @bind-Value="ExternalUrl" class="form-control" placeholder="http://192.168.1.50:8080" />
+                <button type="submit" name="Action" value="TestConnection" class="btn btn-outline-secondary">@L["common.test"]</button>
             </div>
             @if (ProbeHealth is { } h)
             {
@@ -42,17 +42,17 @@
                     Service: <strong>@(h.Status ?? "?")</strong>
                     @if (!string.IsNullOrEmpty(h.Version)) { <text>· v@(h.Version)</text> }
                     @if (!string.IsNullOrEmpty(h.Backend)) { <text>· @(h.Backend)</text> }
-                    @if (h.ModelsReady is { } ready) { <text>· @ready model(s) ready</text> }
+                    @if (h.ModelsReady is { } ready) { <text>· @L.Plural("settings.detection.modelsReady", ready)</text> }
                     @if (h.ModelsFailed is { } failed and > 0) { <text>· @failed failed</text> }
                 </div>
             }
         </SettingField>
-        <SettingField Label="API key" ShowWhen="Backend=ExternalHttp" Hint="Sent as a Bearer token. Leave blank to keep the current key.">
-            <InputText type="password" @bind-Value="ExternalApiKey" autocomplete="new-password" class="form-control"
-                       placeholder="@(HasStoredExternalApiKey ? "(unchanged)" : "none")" />
+        <SettingField For="field-externalApiKey" Label="@L["settings.detection.apiKey"]" ShowWhen="Backend=ExternalHttp" Hint="@L["settings.detection.sentAsABearerToken"]">
+            <InputText id="field-externalApiKey" type="password" @bind-Value="ExternalApiKey" autocomplete="new-password" class="form-control"
+                       placeholder="@(HasStoredExternalApiKey ? L["cameras.edit.unchanged"].Value : "none")" />
         </SettingField>
-        <SettingField Label="Model" ShowWhen="Backend=ExternalHttp"
-                      Hint="@(AvailableModels.Count == 0 ? "Click Test to load the service's models." : "Its input size sets the frame size sent.")">
+        <SettingField For="externalModelSelect" Label="@L["common.model"]" ShowWhen="Backend=ExternalHttp"
+                      Hint="@(AvailableModels.Count == 0 ? L["settings.detection.clickTestToLoadThe"].Value : L["settings.detection.itsInputSizeSetsThe"].Value)">
             <select name="ExternalModel" class="form-select" id="externalModelSelect">
                 @{
                     var options = AvailableModels.ToList();
@@ -71,58 +71,58 @@
             </select>
             <input type="hidden" name="ExternalInputSize" value="@ExternalInputSize" id="externalInputSize" />
         </SettingField>
-        <SettingField Label="Transport" ShowWhen="Backend=ExternalHttp">
+        <SettingField For="externalTransportSelect" Label="@L["settings.detection.transport"]" ShowWhen="Backend=ExternalHttp">
             <select name="ExternalTransport" class="form-select" id="externalTransportSelect">
-                <option value="Auto" selected="@(ExternalTransport == "Auto")">Auto (JPEG)</option>
-                <option value="Jpeg" selected="@(ExternalTransport == "Jpeg")">JPEG</option>
-                <option value="PixelsYuv420" selected="@(ExternalTransport == "PixelsYuv420")">Raw YUV 4:2:0</option>
-                <option value="PixelsBgra" selected="@(ExternalTransport == "PixelsBgra")">Raw BGRA</option>
+                <option value="Auto" selected="@(ExternalTransport == "Auto")">@L["settings.detection.autoJpeg"]</option>
+                <option value="Jpeg" selected="@(ExternalTransport == "Jpeg")">@L["settings.detection.jpeg"]</option>
+                <option value="PixelsYuv420" selected="@(ExternalTransport == "PixelsYuv420")">@L["settings.detection.rawYuv420"]</option>
+                <option value="PixelsBgra" selected="@(ExternalTransport == "PixelsBgra")">@L["settings.detection.rawBgra"]</option>
             </select>
-            <div class="lv-hint" id="externalTransportHint">Raw modes skip JPEG but use much more bandwidth. Test first.</div>
+            <div class="lv-hint" id="externalTransportHint">@L["settings.detection.rawModesSkipJpegBut"]</div>
         </SettingField>
     </SettingSection>
 
     <div data-show-when="Backend=BuiltIn">
-        <SettingSection Title="Model" Subtitle="Runs once per node and serves all of its cameras.">
-            <SettingField Label="Detection model" Hint="Auto uses YOLOX. D-FINE is experimental." HelpLink="/Help/ai-detection#model-families">
+        <SettingSection Title="@L["common.model"]" Subtitle="@L["settings.detection.runsOncePerNodeAnd"]">
+            <SettingField For="field-modelFamily" Label="@L["settings.detection.detectionModel"]" Hint="@L["settings.detection.autoUsesYoloxDFine"]" HelpLink="/Help/ai-detection#model-families">
                 @* Plain <select> with selected="" per option, not InputSelect — under Static SSR
                    InputSelect never marks the saved option as selected. *@
-                <select name="ModelFamily" class="form-select">
-                    <option value="Auto" selected="@(ModelFamily == "Auto")">Auto (YOLOX)</option>
-                    <option value="YoloX" selected="@(ModelFamily == "YoloX")">YOLOX</option>
-                    <option value="DFine" selected="@(ModelFamily == "DFine")">D-FINE (experimental)</option>
-                    <option value="Custom" selected="@(ModelFamily == "Custom")">Custom model</option>
-                    <option value="RfDetr" disabled>RF-DETR (not yet available)</option>
+                <select name="ModelFamily" id="field-modelFamily" class="form-select">
+                    <option value="Auto" selected="@(ModelFamily == "Auto")">@L["settings.detection.autoYolox"]</option>
+                    <option value="YoloX" selected="@(ModelFamily == "YoloX")">@L["settings.detection.yolox"]</option>
+                    <option value="DFine" selected="@(ModelFamily == "DFine")">@L["settings.detection.dFineExperimental"]</option>
+                    <option value="Custom" selected="@(ModelFamily == "Custom")">@L["settings.detection.customModel"]</option>
+                    <option value="RfDetr" disabled>@L["settings.detection.rfDetrNotYetAvailable"]</option>
                 </select>
             </SettingField>
-            <SettingField Label="YOLOX size" ShowWhen="ModelFamily=Auto,YoloX" Hint="Nano/Tiny for low-power boxes, L/X for strong GPUs.">
-                <select name="YoloXSize" class="form-select">
-                    <option value="Nano" selected="@(YoloXSize == "Nano")">Nano (fastest)</option>
-                    <option value="Tiny" selected="@(YoloXSize == "Tiny")">Tiny</option>
-                    <option value="S" selected="@(YoloXSize == "S")">S (balanced, default)</option>
+            <SettingField For="field-yoloXSize" Label="@L["settings.detection.yoloxSize"]" ShowWhen="ModelFamily=Auto,YoloX" Hint="@L["settings.detection.nanoTinyForLowPower"]">
+                <select id="field-yoloXSize" name="YoloXSize" class="form-select">
+                    <option value="Nano" selected="@(YoloXSize == "Nano")">@L["settings.detection.nanoFastest"]</option>
+                    <option value="Tiny" selected="@(YoloXSize == "Tiny")">@L["settings.detection.tiny"]</option>
+                    <option value="S" selected="@(YoloXSize == "S")">@L["settings.detection.sBalancedDefault"]</option>
                     <option value="M" selected="@(YoloXSize == "M")">M</option>
                     <option value="L" selected="@(YoloXSize == "L")">L</option>
-                    <option value="X" selected="@(YoloXSize == "X")">X (most accurate)</option>
+                    <option value="X" selected="@(YoloXSize == "X")">@L["settings.detection.xMostAccurate"]</option>
                 </select>
             </SettingField>
-            <SettingField Label="D-FINE weights" ShowWhen="ModelFamily=DFine" Hint="Obj365 knows 365 object types; Obj2Coco knows 80.">
-                <select name="DFineWeights" class="form-select">
-                    <option value="Obj2Coco" selected="@(DFineWeights == "Obj2Coco")">Obj2Coco (small, default)</option>
-                    <option value="Obj2CocoMedium" selected="@(DFineWeights == "Obj2CocoMedium")">Obj2Coco (medium)</option>
-                    <option value="Obj365" selected="@(DFineWeights == "Obj365")">Obj365 (small)</option>
+            <SettingField For="field-dFineWeights" Label="@L["settings.detection.dFineWeights"]" ShowWhen="ModelFamily=DFine" Hint="@L["settings.detection.obj365Knows365ObjectTypes"]">
+                <select id="field-dFineWeights" name="DFineWeights" class="form-select">
+                    <option value="Obj2Coco" selected="@(DFineWeights == "Obj2Coco")">@L["settings.detection.obj2cocoSmallDefault"]</option>
+                    <option value="Obj2CocoMedium" selected="@(DFineWeights == "Obj2CocoMedium")">@L["settings.detection.obj2cocoMedium"]</option>
+                    <option value="Obj365" selected="@(DFineWeights == "Obj365")">@L["settings.detection.obj365Small"]</option>
                 </select>
             </SettingField>
-            <SettingField Label="D-FINE TensorRT" ShowWhen="ModelFamily=DFine" Hint="Needs TensorRT enabled on the node." HelpLink="/Help/ai-detection#tensorrt">
-                <select name="DFineTensorRtMode" class="form-select">
-                    <option value="Off" selected="@(DFineTensorRtMode == "Off")">Off (plain CUDA, default)</option>
+            <SettingField For="field-dFineTensorRtMode" Label="@L["settings.detection.dFineTensorrt"]" ShowWhen="ModelFamily=DFine" Hint="@L["settings.detection.needsTensorrtEnabledOnThe"]" HelpLink="/Help/ai-detection#tensorrt">
+                <select id="field-dFineTensorRtMode" name="DFineTensorRtMode" class="form-select">
+                    <option value="Off" selected="@(DFineTensorRtMode == "Off")">@L["settings.detection.offPlainCudaDefault"]</option>
                     <option value="FP32" selected="@(DFineTensorRtMode == "FP32")">FP32</option>
-                    <option value="FP16" selected="@(DFineTensorRtMode == "FP16")">FP16 (falls back to FP32)</option>
+                    <option value="FP16" selected="@(DFineTensorRtMode == "FP16")">@L["settings.detection.fp16FallsBackToFp32"]</option>
                 </select>
             </SettingField>
-            <SettingField Label="Custom model" ShowWhen="ModelFamily=Custom" Wide Hint="Models dropped into C:\ProgramData\LarisVMS\models on a node." HelpLink="/Help/ai-detection#custom-models">
+            <SettingField For="localModelNameSelect" Label="@L["settings.detection.customModel"]" ShowWhen="ModelFamily=Custom" Wide Hint="@L["settings.detection.modelsDroppedIntoCProgramdata"]" HelpLink="/Help/ai-detection#custom-models">
                 <div class="input-group">
                     <select name="LocalModelName" class="form-select" id="localModelNameSelect">
-                        <option value="" selected="@string.IsNullOrEmpty(LocalModelName)">(none selected)</option>
+                        <option value="" selected="@string.IsNullOrEmpty(LocalModelName)">@L["settings.detection.noneSelected"]</option>
                         @{
                             var localOptions = AvailableLocalModels.ToList();
                             if (localOptions.All(m => m.Name != LocalModelName) && !string.IsNullOrEmpty(LocalModelName))
@@ -137,102 +137,104 @@
                             </option>
                         }
                     </select>
-                    <button type="submit" name="Action" value="RefreshLocalModels" class="btn btn-outline-secondary">Refresh</button>
+                    <button type="submit" name="Action" value="RefreshLocalModels" class="btn btn-outline-secondary">@L["common.refresh"]</button>
                 </div>
                 @foreach (var m in AvailableLocalModels.Where(m => m.Warnings.Count > 0))
                 {
                     <div class="lv-hint text-warning">⚠️ <strong>@m.Name</strong>: @string.Join(" ", m.Warnings)</div>
                 }
             </SettingField>
-            <SettingField Label="Aspect fitting" Hint="Slice finds small objects on wide cameras but costs ~2x." HelpLink="/Help/ai-detection#aspect-fitting">
-                <select name="AspectMode" class="form-select">
-                    <option value="Letterbox" selected="@(AspectMode == "Letterbox")">Letterbox (default)</option>
-                    <option value="Stretch" selected="@(AspectMode == "Stretch")">Stretch</option>
-                    <option value="Slice" selected="@(AspectMode == "Slice")">Slice</option>
+        </SettingSection>
+        <SettingSection Title="@L["settings.detection.detectionInput"]" Subtitle="@L["settings.detection.detectionInputSubtitle"]">
+            <SettingField For="field-aspectMode" Label="@L["settings.detection.aspectFitting"]" Hint="@L["settings.detection.sliceFindsSmallObjectsOn"]" HelpLink="/Help/ai-detection#aspect-fitting">
+                <select id="field-aspectMode" name="AspectMode" class="form-select">
+                    <option value="Letterbox" selected="@(AspectMode == "Letterbox")">@L["settings.detection.letterboxDefault"]</option>
+                    <option value="Stretch" selected="@(AspectMode == "Stretch")">@L["settings.detection.stretch"]</option>
+                    <option value="Slice" selected="@(AspectMode == "Slice")">@L["settings.detection.slice"]</option>
                 </select>
             </SettingField>
-            <SettingField Label="GPU frame preprocessing" Hint="Moves frame conversion to the GPU to save CPU. Always on with Slice.">
+            <SettingField Label="@L["settings.detection.gpuFramePreprocessing"]" Hint="@L["settings.detection.movesFrameConversionToThe"]">
                 <div class="form-check mt-1">
                     <InputCheckbox @bind-Value="GpuPreprocessing" class="form-check-input" id="gpuPreprocessing" />
-                    <label class="form-check-label" for="gpuPreprocessing">Enabled</label>
+                    <label class="form-check-label" for="gpuPreprocessing">@L["common.enabled"]</label>
                 </div>
             </SettingField>
         </SettingSection>
     </div>
 
-    <SettingSection Title="Detection" Subtitle="Cameras can override these on their own page.">
-        <SettingField Label="Confidence threshold" For="confidenceRange" Hint="Lower catches more, with more false positives.">
+    <SettingSection Title="@L["settings.detection.detection"]" Subtitle="@L["settings.detection.camerasCanOverrideTheseOn"]">
+        <SettingField Label="@L["settings.detection.confidenceThreshold"]" For="confidenceRange" Hint="@L["settings.detection.lowerCatchesMoreWithMore"]">
             <div class="d-flex align-items-center gap-2">
                 <input type="range" name="Confidence" value="@Confidence" min="0" max="1" step="0.05" class="form-range" id="confidenceRange" />
                 <output class="text-muted small" style="min-width: 2.5em;" id="confidenceReadout">@Math.Round(Confidence * 100)</output>
             </div>
         </SettingField>
-        <SettingField Label="IoU threshold" For="iouRange" Hint="Overlap for merging duplicate boxes.">
+        <SettingField Label="@L["settings.detection.iouThreshold"]" For="iouRange" Hint="@L["settings.detection.overlapForMergingDuplicateBoxes"]">
             <div class="d-flex align-items-center gap-2">
                 <input type="range" name="Iou" value="@Iou" min="0" max="1" step="0.05" class="form-range" id="iouRange" />
                 <output class="text-muted small" style="min-width: 2.5em;" id="iouReadout">@Math.Round(Iou * 100)</output>
             </div>
         </SettingField>
-        <SettingField Label="Detection stream" Hint="Sub is lighter; Main sees more detail.">
-            <select name="StreamRole" class="form-select">
-                <option value="Sub" selected="@(StreamRole == "Sub")">Sub</option>
-                <option value="Main" selected="@(StreamRole == "Main")">Main</option>
+        <SettingField For="field-streamRole" Label="@L["settings.detection.detectionStream"]" Hint="@L["settings.detection.subIsLighterMainSees"]">
+            <select id="field-streamRole" name="StreamRole" class="form-select">
+                <option value="Sub" selected="@(StreamRole == "Sub")">@L["settings.detection.sub"]</option>
+                <option value="Main" selected="@(StreamRole == "Main")">@L["settings.detection.main"]</option>
             </select>
         </SettingField>
-        <SettingField Label="Camera orientation" Hint="Usually set per camera. Portrait fixes corridor-mode cameras.">
-            <select name="Orientation" class="form-select">
-                <option value="Auto" selected="@(Orientation == "Auto")">Auto</option>
-                <option value="Landscape" selected="@(Orientation == "Landscape")">Landscape</option>
-                <option value="Portrait" selected="@(Orientation == "Portrait")">Portrait</option>
+        <SettingField For="field-orientation" Label="@L["settings.detection.cameraOrientation"]" Hint="@L["settings.detection.usuallySetPerCameraPortrait"]">
+            <select id="field-orientation" name="Orientation" class="form-select">
+                <option value="Auto" selected="@(Orientation == "Auto")">@L["settings.detection.auto"]</option>
+                <option value="Landscape" selected="@(Orientation == "Landscape")">@L["settings.detection.landscape"]</option>
+                <option value="Portrait" selected="@(Orientation == "Portrait")">@L["settings.detection.portrait"]</option>
             </select>
         </SettingField>
-        <SettingField Label="Max detection frame rate" Hint="Per camera. 5–7 is enough for accurate detection; 0 is no cap.">
-            <InputNumber @bind-Value="MaxFps" min="0" max="60" class="form-control" required />
+        <SettingField For="field-maxFps" Label="@L["settings.detection.maxDetectionFrameRate"]" Hint="@L["settings.detection.perCamera57Is"]">
+            <InputNumber id="field-maxFps" @bind-Value="MaxFps" min="0" max="60" class="form-control" required />
         </SettingField>
     </SettingSection>
 
-    <SettingSection Title="Tracking & snapshots">
-        <SettingField Label="Idle timeout (seconds)" Hint="How long an object can go unseen before its snapshot closes.">
-            <InputNumber @bind-Value="IdleTimeoutSeconds" min="0" class="form-control" required />
+    <SettingSection Title="@L["settings.detection.trackingSnapshots"]">
+        <SettingField For="field-idleTimeoutSeconds" Label="@L["settings.detection.idleTimeoutSeconds"]" Hint="@L["settings.detection.howLongAnObjectCan"]">
+            <InputNumber id="field-idleTimeoutSeconds" @bind-Value="IdleTimeoutSeconds" min="0" class="form-control" required />
         </SettingField>
-        <SettingField Label="Snapshot crop margin (%)" For="snapshotMarginRange" Hint="Extra room around the object in its snapshot.">
+        <SettingField Label="@L["settings.detection.snapshotCropMargin"]" For="snapshotMarginRange" Hint="@L["settings.detection.extraRoomAroundTheObject"]">
             <div class="d-flex align-items-center gap-2">
                 <input type="range" name="SnapshotMarginPercent" value="@SnapshotMarginPercent" min="0" max="100" step="1" class="form-range" id="snapshotMarginRange" />
                 <output class="text-muted small" style="min-width: 2.5em;" id="snapshotMarginReadout">@SnapshotMarginPercent</output>
             </div>
         </SettingField>
-        <SettingField Label="Idle objects" Hint="Also report objects that are present but not moving.">
+        <SettingField Label="@L["settings.detection.idleObjects"]" Hint="@L["settings.detection.alsoReportObjectsThatAre"]">
             <div class="form-check mt-1">
                 <InputCheckbox @bind-Value="ReportIdleDetections" class="form-check-input" id="reportIdleDetections" />
-                <label class="form-check-label" for="reportIdleDetections">Report idle objects</label>
+                <label class="form-check-label" for="reportIdleDetections">@L["settings.detection.reportIdleObjects"]</label>
             </div>
         </SettingField>
-        <SettingField Label="Snapshot motion accuracy" Hint="Closes a snapshot soon after its object leaves." HelpLink="/Help/ai-detection#snapshots">
+        <SettingField Label="@L["settings.detection.snapshotMotionAccuracy"]" Hint="@L["settings.detection.closesASnapshotSoonAfter"]" HelpLink="/Help/ai-detection#snapshots">
             <div class="form-check mt-1">
                 <InputCheckbox @bind-Value="SnapshotMotionAccuracy" class="form-check-input" id="snapshotMotionAccuracy" />
-                <label class="form-check-label" for="snapshotMotionAccuracy">Enabled</label>
+                <label class="form-check-label" for="snapshotMotionAccuracy">@L["common.enabled"]</label>
             </div>
         </SettingField>
-        <SettingField Label="Departure grace (seconds)" For="departureGraceRange" ShowWhen="SnapshotMotionAccuracy=true" Hint="Wait after an object was last seen moving.">
+        <SettingField Label="@L["settings.detection.departureGraceSeconds"]" For="departureGraceRange" ShowWhen="SnapshotMotionAccuracy=true" Hint="@L["settings.detection.waitAfterAnObjectWas"]">
             <div class="d-flex align-items-center gap-2">
                 <input type="range" name="DepartureGraceSeconds" value="@DepartureGraceSeconds" min="1" max="10" step="1" class="form-range" id="departureGraceRange" />
                 <output class="text-muted small" style="min-width: 2.5em;" id="departureGraceReadout">@DepartureGraceSeconds</output>
             </div>
         </SettingField>
-        <SettingField Label="Movement detection" Hint="How an object is judged to be moving. Standard picks up fast, slow, and partly hidden objects sooner." HelpLink="/Help/ai-detection#movement">
-            <select name="MovementMode" class="form-select">
-                <option value="Standard" selected="@(MovementMode == "Standard")">Standard</option>
-                <option value="Legacy" selected="@(MovementMode == "Legacy")">Legacy</option>
+        <SettingField For="field-movementMode" Label="@L["settings.detection.movementDetection"]" Hint="@L["settings.detection.howAnObjectIsJudged"]" HelpLink="/Help/ai-detection#movement">
+            <select id="field-movementMode" name="MovementMode" class="form-select">
+                <option value="Standard" selected="@(MovementMode == "Standard")">@L["settings.detection.standard"]</option>
+                <option value="Legacy" selected="@(MovementMode == "Legacy")">@L["settings.detection.legacy"]</option>
             </select>
         </SettingField>
-        <SettingField Label="Movement sensitivity" ShowWhen="MovementMode=Standard" Hint="Higher picks up movement sooner; lower ignores more box wobble.">
-            <select name="MovementSensitivity" class="form-select">
-                <option value="Low" selected="@(MovementSensitivity == "Low")">Low</option>
-                <option value="Normal" selected="@(MovementSensitivity == "Normal")">Normal</option>
-                <option value="High" selected="@(MovementSensitivity == "High")">High</option>
+        <SettingField For="field-movementSensitivity" Label="@L["settings.detection.movementSensitivity"]" ShowWhen="MovementMode=Standard" Hint="@L["settings.detection.higherPicksUpMovementSooner"]">
+            <select id="field-movementSensitivity" name="MovementSensitivity" class="form-select">
+                <option value="Low" selected="@(MovementSensitivity == "Low")">@L["settings.detection.low"]</option>
+                <option value="Normal" selected="@(MovementSensitivity == "Normal")">@L["settings.detection.normal"]</option>
+                <option value="High" selected="@(MovementSensitivity == "High")">@L["settings.detection.high"]</option>
             </select>
         </SettingField>
-        <SettingField Label="Moving objects" Wide Hint="Only these can count as moving. Anything else is only ever idle, so it never triggers snapshots or alerts." HelpLink="/Help/ai-detection#moving-objects">
+        <SettingField Label="@L["settings.detection.movingObjects"]" Wide Hint="@L["settings.detection.onlyTheseCanCountAs"]" HelpLink="/Help/ai-detection#moving-objects">
             <div class="d-flex flex-wrap gap-3 mt-1">
                 @foreach (var (category, text) in MovingCategoryChoices)
                 {
@@ -245,7 +247,7 @@
             </div>
             <details class="position-relative column-picker mt-2" style="max-width: 22rem;">
                 <summary class="form-select form-select-sm text-start text-truncate">@OtherObjectsSummary</summary>
-                <div class="column-picker-menu" style="left: 0; right: auto; min-width: 16rem;">
+                <div class="column-picker-menu" style="inset-inline-start: 0; inset-inline-end: auto; min-width: 16rem;">
                     @foreach (var label in LarisVMS.Core.CocoCategoryMap.OtherObjectLabels)
                     {
                         <div class="form-check">
@@ -257,15 +259,18 @@
                 </div>
             </details>
             <input type="text" name="MovingObjectExtra" class="form-control form-control-sm mt-2" style="max-width: 22rem;" maxlength="300"
-                   value="@MovingObjectExtras" placeholder="More object names, comma-separated (e.g. package)" aria-label="More object names" />
+                   value="@MovingObjectExtras" placeholder="@L["settings.detection.moreObjectNamesCommaSeparated"]" aria-label="@L["settings.detection.moreObjectNames"]" />
         </SettingField>
-        <SettingField Label="Stationary-object jitter" ShowWhen="MovementMode=Legacy" Hint="Stops parked cars' box wobble counting as motion. Experimental." HelpLink="/Help/ai-detection#jitter">
+        <SettingField Label="@L["settings.detection.ignoredObjects"]" Wide Hint="@L["settings.detection.ignoredObjectsHint"]" HelpLink="/Help/ai-detection#ignored-objects">
+            <IgnoredObjectsPicker Value="@IgnoredObjects" />
+        </SettingField>
+        <SettingField Label="@L["settings.detection.stationaryObjectJitter"]" ShowWhen="MovementMode=Legacy" Hint="@L["settings.detection.stopsParkedCarsBoxWobble"]" HelpLink="/Help/ai-detection#jitter">
             <div class="form-check mt-1">
                 <InputCheckbox @bind-Value="RejectMotionJitter" class="form-check-input" id="rejectMotionJitter" />
-                <label class="form-check-label" for="rejectMotionJitter">Reject jitter</label>
+                <label class="form-check-label" for="rejectMotionJitter">@L["settings.detection.rejectJitter"]</label>
             </div>
         </SettingField>
-        <SettingField Label="Jitter threshold (pixels)" For="motionJitterPixelsRange" Hint="The smallest box movement that ever counts as moving. Legacy uses it only with Reject jitter on.">
+        <SettingField Label="@L["settings.detection.jitterThresholdPixels"]" For="motionJitterPixelsRange" Hint="@L["settings.detection.theSmallestBoxMovementThat"]">
             <div class="d-flex align-items-center gap-2">
                 <input type="range" name="MotionJitterPixels" value="@MotionJitterPixels" min="1" max="15" step="1" class="form-range" id="motionJitterPixelsRange" />
                 <output class="text-muted small" style="min-width: 2.5em;" id="motionJitterPixelsReadout">@MotionJitterPixels</output>
@@ -273,23 +278,23 @@
         </SettingField>
     </SettingSection>
 
-    <SettingSection Title="Object details">
-        <SettingField Label="Object colors" Hint="Names each object's color (and a person's shirt and pants) for snapshots, filters, and alerts." HelpLink="/Help/ai-detection#object-colors">
+    <SettingSection Title="@L["settings.detection.objectDetails"]">
+        <SettingField Label="@L["settings.detection.objectColors"]" Hint="@L["settings.detection.namesEachObjectColorAnd"]" HelpLink="/Help/ai-detection#object-colors">
             <div class="form-check mt-1">
                 <InputCheckbox @bind-Value="ColorClassification" class="form-check-input" id="colorClassification" />
-                <label class="form-check-label" for="colorClassification">Classify colors</label>
+                <label class="form-check-label" for="colorClassification">@L["settings.detection.classifyColors"]</label>
             </div>
         </SettingField>
-        <SettingField Label="Speed units" For="speedUnitsSelect" Hint="How speed trap readings are shown. Set up traps on each camera's Speed traps page." HelpLink="/Help/ai-detection#speed-traps">
+        <SettingField Label="@L["settings.detection.speedUnits"]" For="speedUnitsSelect" Hint="@L["settings.detection.howSpeedTrapReadingsAre"]" HelpLink="/Help/ai-detection#speed-traps">
             <select name="SpeedUnits" id="speedUnitsSelect" class="form-select">
                 <option value="@SpeedUnits.Kmh" selected="@(SpeedUnit == SpeedUnits.Kmh)">km/h</option>
-                <option value="@SpeedUnits.Mph" selected="@(SpeedUnit == SpeedUnits.Mph)">mph</option>
+                <option value="@SpeedUnits.Mph" selected="@(SpeedUnit == SpeedUnits.Mph)">@L["settings.detection.mph"]</option>
             </select>
         </SettingField>
     </SettingSection>
 
     <div class="lv-savebar">
-        <button type="submit" name="Action" value="Save" class="btn btn-primary">Save</button>
+        <button type="submit" name="Action" value="Save" class="btn btn-primary">@L["common.save"]</button>
     </div>
 </EditForm>
 </div>
@@ -388,6 +393,8 @@
     [SupplyParameterFromForm(FormName = "detection-settings")] private string? MovementSensitivity { get; set; }
     // Detection.MovingObjects, read from and written to the raw form (several checkboxes share a name).
     private HashSet<string> MovingObjectsSet = LarisVMS.Core.CocoCategoryMap.ParseMovingObjects(null);
+    // Detection.IgnoredObjects, the same way (IgnoredObjectsPicker.FromForm reads it back).
+    private string IgnoredObjects = "";
 
     private static readonly (string Category, string Text)[] MovingCategoryChoices =
     [
@@ -403,9 +410,9 @@
             var chosen = LarisVMS.Core.CocoCategoryMap.OtherObjectLabels.Where(MovingObjectsSet.Contains).ToList();
             return chosen.Count switch
             {
-                0 => "Other objects: none",
-                1 => $"Other objects: {chosen[0]}",
-                _ => $"Other objects: {chosen[0]} + {chosen.Count - 1} more",
+                0 => Loc.T("settings.detection.otherObjectsNone"),
+                1 => Loc.T("settings.detection.otherObjectsOne", new { first = chosen[0] }),
+                _ => Loc.T("settings.detection.otherObjectsMore", new { first = chosen[0], more = chosen.Count - 1 }),
             };
         }
     }
@@ -490,6 +497,7 @@
         MovementMode = NormalizeMovementMode(await Settings.GetAsync("Detection.MovementMode", "Standard"));
         MovementSensitivity = NormalizeMovementSensitivity(await Settings.GetAsync("Detection.MovementSensitivity", "Normal"));
         MovingObjectsSet = LarisVMS.Core.CocoCategoryMap.ParseMovingObjects(await Settings.GetRawAsync("Detection.MovingObjects"));
+        IgnoredObjects = await Settings.GetRawAsync("Detection.IgnoredObjects") ?? "";
         DepartureGraceSeconds = await Settings.GetAsync("Detection.DepartureGraceSeconds", 5);
         SnapshotMarginPercent = await Settings.GetAsync("Detection.SnapshotMarginPercent", 12);
         ColorClassification = await Settings.GetAsync("Detection.ColorClassification", true);
@@ -540,6 +548,10 @@
             ? MovingObjectsFromForm(HttpContext.Request.Form)
             : oldMovingObjects;
         MovingObjectsSet = LarisVMS.Core.CocoCategoryMap.ParseMovingObjects(movingObjects);
+        var oldIgnoredObjects = await Settings.GetRawAsync("Detection.IgnoredObjects") ?? "";
+        IgnoredObjects = HttpContext?.Request.HasFormContentType == true
+            ? IgnoredObjectsPicker.FromForm(HttpContext.Request.Form)
+            : oldIgnoredObjects;
         // A field hidden by data-show-when still posts, so both always arrive; anything else is the default.
         MovementMode = NormalizeMovementMode(MovementMode);
         MovementSensitivity = NormalizeMovementSensitivity(MovementSensitivity);
@@ -622,7 +634,7 @@
             ExternalInputSize = editedSize;
             ExternalApiKey = editedApiKey;
             ExternalTransport = editedTransport;
-            SavedMessage = "Enter the external service URL and pick a model (use \"Test connection\" to discover them) before selecting the external backend.";
+            SavedMessage = Loc.T("settings.detection.enterTheExternalServiceUrl");
             StatusIsError = true;
             return;
         }
@@ -639,6 +651,7 @@
         await Settings.SetGlobalAsync("Detection.MovementMode", MovementMode, by);
         await Settings.SetGlobalAsync("Detection.MovementSensitivity", MovementSensitivity, by);
         await Settings.SetGlobalAsync("Detection.MovingObjects", movingObjects, by);
+        await Settings.SetGlobalAsync("Detection.IgnoredObjects", IgnoredObjects, by);
         await Settings.SetGlobalAsync("Detection.DepartureGraceSeconds", DepartureGraceSeconds.ToString(), by);
         await Settings.SetGlobalAsync("Detection.SnapshotMarginPercent", SnapshotMarginPercent.ToString(), by);
         await Settings.SetGlobalAsync("Detection.MaxFps", MaxFps.ToString(), by);
@@ -677,6 +690,7 @@
             AuditDiff.Of("Detection.MovementMode", oldMovementMode, MovementMode),
             AuditDiff.Of("Detection.MovementSensitivity", oldMovementSensitivity, MovementSensitivity),
             AuditDiff.Of("Detection.MovingObjects", oldMovingObjects, movingObjects),
+            AuditDiff.Of("Detection.IgnoredObjects", oldIgnoredObjects, IgnoredObjects),
             AuditDiff.Of("Detection.DepartureGraceSeconds", oldDepartureGraceSeconds.ToString(), DepartureGraceSeconds.ToString()),
             AuditDiff.Of("Detection.SnapshotMarginPercent", oldSnapshotMarginPercent.ToString(), SnapshotMarginPercent.ToString()),
             AuditDiff.Of("Detection.MaxFps", oldMaxFps.ToString(), MaxFps.ToString()),
@@ -703,7 +717,7 @@
         // So the form's "unchanged" placeholder reflects a key just saved this request.
         HasStoredExternalApiKey = hadStoredApiKey || apiKeyChanged;
         ExternalApiKey = null;
-        SavedMessage = "Saved.";
+        SavedMessage = Loc.T("common.saved");
         StatusIsError = false;
 
         // A global default affects every node, so trigger all of them — fire-and-forget, exactly like
@@ -745,8 +759,8 @@
 
         AvailableLocalModels = [.. merged.Values.OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase)];
         SavedMessage = AvailableLocalModels.Count == 0
-            ? "No models found on any online node — drop an .onnx file into C:\\ProgramData\\LarisVMS\\models on a node, then refresh again."
-            : $"Found {AvailableLocalModels.Count} model(s) across {perNode.Count(p => p.Models.Count > 0)} node(s).";
+            ? Loc.T("settings.detection.noModelsFoundOnAny")
+            : Loc.Plural("settings.detection.foundModels", AvailableLocalModels.Count, new { nodes = Loc.Plural("settings.detection.nodeCount", perNode.Count(p => p.Models.Count > 0)) });
         StatusIsError = AvailableLocalModels.Count == 0;
     }
 
@@ -773,7 +787,7 @@
 
         if (string.IsNullOrEmpty(url))
         {
-            SavedMessage = "Enter the external service URL first (including its port, e.g. http://192.168.1.50:8080).";
+            SavedMessage = Loc.T("settings.detection.enterTheExternalServiceUrl2");
             StatusIsError = true;
             return;
         }
@@ -800,7 +814,7 @@
         await AuditService.LogAsync("Settings.DetectionExternalTestSucceeded", CurrentUserId, by,
             HttpContext?.Connection.RemoteIpAddress?.ToString(),
             $"{url}: {AvailableModels.Count} model(s) — {string.Join(", ", AvailableModels.Select(m => m.Name))}");
-        SavedMessage = $"Connected. {AvailableModels.Count} model(s) available — pick one and Save.";
+        SavedMessage = Loc.Plural("settings.detection.connectedModelsAvailable", AvailableModels.Count);
         StatusIsError = false;
     }
 

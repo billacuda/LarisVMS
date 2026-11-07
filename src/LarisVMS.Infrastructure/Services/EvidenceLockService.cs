@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 using LarisVMS.Infrastructure.Data;
 
 namespace LarisVMS.Infrastructure.Services;
@@ -22,19 +23,19 @@ public class EvidenceLockService(ApplicationDbContext db, IAuditService audit) :
         var reason = (request.Reason ?? "").Trim();
         var cameraIds = request.CameraIds.Distinct().ToList();
 
-        if (cameraIds.Count == 0) throw new EvidenceLockValidationException("Choose at least one camera.");
-        if (reason.Length == 0) throw new EvidenceLockValidationException("Enter a reason for the lock.");
-        if (reason.Length > 500) throw new EvidenceLockValidationException("The reason can be at most 500 characters.");
-        if (to <= from) throw new EvidenceLockValidationException("The end of the range must be after its start.");
-        if (to > now + FutureAllowance) throw new EvidenceLockValidationException("The range can't end in the future.");
+        if (cameraIds.Count == 0) throw new EvidenceLockValidationException(Loc.T("server.evidenceLock.chooseAtLeastOneCamera"));
+        if (reason.Length == 0) throw new EvidenceLockValidationException(Loc.T("server.evidenceLock.enterAReasonForThe"));
+        if (reason.Length > 500) throw new EvidenceLockValidationException(Loc.T("server.evidenceLock.theReasonCanBeAt"));
+        if (to <= from) throw new EvidenceLockValidationException(Loc.T("server.evidenceLock.theEndOfTheRange"));
+        if (to > now + FutureAllowance) throw new EvidenceLockValidationException(Loc.T("server.evidenceLock.theRangeCantEndIn"));
         if (to - from > EvidenceLockRules.MaxRange)
-            throw new EvidenceLockValidationException($"One lock can cover at most {EvidenceLockRules.MaxRange.TotalDays:0} days of footage.");
+            throw new EvidenceLockValidationException(Loc.T("server.evidenceLock.maxRange", new { days = Math.Round(EvidenceLockRules.MaxRange.TotalDays) }));
 
         var expiresAt = ResolveExpiry(request.Duration, request.CustomUntilUtc, now);
 
         var cameras = await db.Cameras.AsNoTracking().Where(c => cameraIds.Contains(c.Id))
             .Select(c => new { c.Id, c.Name }).ToListAsync(ct);
-        if (cameras.Count != cameraIds.Count) throw new EvidenceLockValidationException("One or more cameras no longer exist.");
+        if (cameras.Count != cameraIds.Count) throw new EvidenceLockValidationException(Loc.T("server.evidenceLock.oneOrMoreCamerasNo"));
 
         var locks = cameras.Select(c => new EvidenceLock
         {
@@ -58,9 +59,9 @@ public class EvidenceLockService(ApplicationDbContext db, IAuditService audit) :
     {
         var l = await LoadForChangeAsync(id, actor, ct);
         reason = (reason ?? "").Trim();
-        if (reason.Length == 0) throw new EvidenceLockValidationException("Enter a reason for removing the lock.");
-        if (reason.Length > 500) throw new EvidenceLockValidationException("The reason can be at most 500 characters.");
-        if (l.RemovedAtUtc is not null) throw new EvidenceLockValidationException("This lock has already been removed.");
+        if (reason.Length == 0) throw new EvidenceLockValidationException(Loc.T("server.evidenceLock.enterAReasonForRemoving"));
+        if (reason.Length > 500) throw new EvidenceLockValidationException(Loc.T("server.evidenceLock.theReasonCanBeAt"));
+        if (l.RemovedAtUtc is not null) throw new EvidenceLockValidationException(Loc.T("server.evidenceLock.thisLockHasAlreadyBeen"));
 
         var now = DateTime.UtcNow;
         l.RemovedAtUtc = now;
@@ -81,7 +82,7 @@ public class EvidenceLockService(ApplicationDbContext db, IAuditService audit) :
         var l = await LoadForChangeAsync(id, actor, ct);
         var now = DateTime.UtcNow;
         if (EvidenceLockRules.StatusOf(l, now) != EvidenceLockStatus.RemovedInGrace)
-            throw new EvidenceLockValidationException("Only a lock removed in the last 24 hours can be restored.");
+            throw new EvidenceLockValidationException(Loc.T("server.evidenceLock.onlyALockRemovedIn"));
 
         l.RemovedAtUtc = null;
         l.RemovedByUserId = null;
@@ -126,20 +127,20 @@ public class EvidenceLockService(ApplicationDbContext db, IAuditService audit) :
         if (key == "indefinite") return null;
         if (key == "custom")
         {
-            if (customUntilUtc is not { } until) throw new EvidenceLockValidationException("Choose the date the lock should end.");
+            if (customUntilUtc is not { } until) throw new EvidenceLockValidationException(Loc.T("server.evidenceLock.chooseTheDateTheLock"));
             until = AsUtc(until);
-            if (until <= nowUtc.AddHours(1)) throw new EvidenceLockValidationException("The end date must be in the future.");
+            if (until <= nowUtc.AddHours(1)) throw new EvidenceLockValidationException(Loc.T("server.evidenceLock.theEndDateMustBe"));
             return until;
         }
-        throw new EvidenceLockValidationException("Choose how long to keep the footage.");
+        throw new EvidenceLockValidationException(Loc.T("server.evidenceLock.chooseHowLongToKeep"));
     }
 
     private async Task<EvidenceLock> LoadForChangeAsync(Guid id, EvidenceLockActor actor, CancellationToken ct)
     {
         var l = await db.EvidenceLocks.Include(x => x.Camera).FirstOrDefaultAsync(x => x.Id == id, ct)
-            ?? throw new KeyNotFoundException("Evidence lock not found.");
+            ?? throw new KeyNotFoundException(Loc.T("server.evidenceLock.evidenceLockNotFound"));
         if (!CanManage(l, actor))
-            throw new EvidenceLockForbiddenException("Only the person who placed this lock, or a Super Admin, can change it.");
+            throw new EvidenceLockForbiddenException(Loc.T("server.evidenceLock.onlyThePersonWhoPlaced"));
         return l;
     }
 

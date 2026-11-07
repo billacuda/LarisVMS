@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 using LarisVMS.Infrastructure.Data;
 
 namespace LarisVMS.Infrastructure.Services;
@@ -16,7 +17,7 @@ public class CameraGroupService(ApplicationDbContext db) : ICameraGroupService
         if (parentId is not null)
         {
             var parent = await db.CameraGroups.FindAsync([parentId.Value], ct)
-                ?? throw new InvalidOperationException("Parent group not found.");
+                ?? throw new InvalidOperationException(Loc.T("server.cameraGroup.parentGroupNotFound"));
             parentPath = parent.MaterializedPath;
         }
 
@@ -41,11 +42,11 @@ public class CameraGroupService(ApplicationDbContext db) : ICameraGroupService
         if (group is null) return;
 
         if (id == CameraGroup.AllCamerasId)
-            throw new InvalidOperationException("The \"All Cameras\" group is built in and can't be deleted.");
+            throw new InvalidOperationException(Loc.T("server.cameraGroup.theAllCamerasGroupIs"));
 
         var hasChildren = await db.CameraGroups.AnyAsync(g => g.ParentId == id, ct);
         if (hasChildren)
-            throw new InvalidOperationException("Cannot delete a group that has child groups.");
+            throw new InvalidOperationException(Loc.T("server.cameraGroup.cannotDeleteAGroupThat"));
 
         db.CameraGroups.Remove(group);
         await db.SaveChangesAsync(ct);

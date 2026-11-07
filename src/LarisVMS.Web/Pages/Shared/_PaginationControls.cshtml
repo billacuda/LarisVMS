@@ -14,13 +14,13 @@
     <nav class="@Model.CssClass" aria-label="@Model.AriaLabel">
         <ul class="pagination pagination-sm flex-wrap mb-0">
             <li class="page-item @(atFirst ? "disabled" : "")">
-                <a class="page-link" href="@(atFirst ? "#" : Model.PageUrl(1))" title="First page" aria-label="First page">«</a>
+                <a class="page-link" href="@(atFirst ? "#" : Model.PageUrl(1))" title="@L["paginationControls.firstPage"]" aria-label="@L["paginationControls.firstPage"]">«</a>
             </li>
             <li class="page-item @(atFirst ? "disabled" : "")">
-                <a class="page-link" href="@(atFirst ? "#" : Model.PageUrl(Math.Max(1, Model.CurrentPage - 10)))" title="Back 10 pages" aria-label="Back 10 pages">‹‹</a>
+                <a class="page-link" href="@(atFirst ? "#" : Model.PageUrl(Math.Max(1, Model.CurrentPage - 10)))" title="@L["paginationControls.back10Pages"]" aria-label="@L["paginationControls.back10Pages"]">‹‹</a>
             </li>
             <li class="page-item @(atFirst ? "disabled" : "")">
-                <a class="page-link" href="@(atFirst ? "#" : Model.PageUrl(Model.CurrentPage - 1))" aria-label="Previous page">‹</a>
+                <a class="page-link" href="@(atFirst ? "#" : Model.PageUrl(Model.CurrentPage - 1))" aria-label="@L["paginationControls.previousPage"]">‹</a>
             </li>
             @foreach (var p in pages)
             {
@@ -36,13 +36,13 @@
                 }
             }
             <li class="page-item @(atLast ? "disabled" : "")">
-                <a class="page-link" href="@(atLast ? "#" : Model.PageUrl(Model.CurrentPage + 1))" aria-label="Next page">›</a>
+                <a class="page-link" href="@(atLast ? "#" : Model.PageUrl(Model.CurrentPage + 1))" aria-label="@L["paginationControls.nextPage"]">›</a>
             </li>
             <li class="page-item @(atLast ? "disabled" : "")">
-                <a class="page-link" href="@(atLast ? "#" : Model.PageUrl(Math.Min(Model.TotalPages, Model.CurrentPage + 10)))" title="Forward 10 pages" aria-label="Forward 10 pages">››</a>
+                <a class="page-link" href="@(atLast ? "#" : Model.PageUrl(Math.Min(Model.TotalPages, Model.CurrentPage + 10)))" title="@L["paginationControls.forward10Pages"]" aria-label="@L["paginationControls.forward10Pages"]">››</a>
             </li>
             <li class="page-item @(atLast ? "disabled" : "")">
-                <a class="page-link" href="@(atLast ? "#" : Model.PageUrl(Model.TotalPages))" title="Last page" aria-label="Last page">»</a>
+                <a class="page-link" href="@(atLast ? "#" : Model.PageUrl(Model.TotalPages))" title="@L["paginationControls.lastPage"]" aria-label="@L["paginationControls.lastPage"]">»</a>
             </li>
         </ul>
     </nav>

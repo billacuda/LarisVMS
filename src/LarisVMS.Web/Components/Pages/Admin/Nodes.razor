@@ -19,16 +19,16 @@
 @inject ISetupService SetupService
 @inject LarisVMS.Relay.CertHolder Certificates
 
-<PageTitle>Nodes - @AppName</PageTitle>
+<PageTitle>@L["nav.nodes"] - @AppName</PageTitle>
 
-<h1>Nodes</h1>
+<h1>@L["nav.nodes"]</h1>
 <p class="text-muted">
-    Each node is a Windows service that records its cameras. Click a node to edit its settings.
-    <a href="/Help/nodes">How nodes work</a>
+    @L["admin.nodes.eachNodeIsAWindows"]
+    <a href="/Help/nodes">@L["admin.nodes.howNodesWork"]</a>
 </p>
-<nav class="d-flex flex-wrap gap-2 mb-3 small" aria-label="On this page">
-    <a href="#nodes">Recorder nodes</a> &middot; <a href="#builds">Builds</a>
-    @if (CanEditSettings) { <text>&middot; <a href="#settings">Updates and registration</a></text> }
+<nav class="d-flex flex-wrap gap-2 mb-3 small" aria-label="@L["admin.nodes.onThisPage"]">
+    <a href="#nodes">@L["admin.nodes.recorderNodes"]</a> &middot; <a href="#builds">@L["admin.nodes.builds"]</a>
+    @if (CanEditSettings) { <text>&middot; <a href="#settings">@L["admin.nodes.updatesAndRegistration"]</a></text> }
 </nav>
 
 @if (!string.IsNullOrEmpty(StatusMessage))
@@ -39,11 +39,7 @@
 @if (NodesBehindCertificateChange.Count > 0)
 {
     <div class="alert alert-warning" role="status">
-        The server's self-signed certificate changed on
-        <time datetime="@CertificateChangedAt!.Value.ToUtcIso()" data-local="g">@CertificateChangedAt.Value.ToLocalTime().ToString("g")</time>.
-        These nodes haven't checked in since and need to be re-registered (run the node installer again, or
-        <code>LarisVMS.Node.exe --reset-server-pin</code> on the node):
-        @string.Join(", ", NodesBehindCertificateChange)
+        @L.Markup("admin.nodes.certificateChanged", new { time = CertificateChangedAt!.Value.ToTimeTag(), nodes = string.Join(", ", NodesBehindCertificateChange) })
     </div>
 }
 
@@ -51,38 +47,37 @@
 {
     <div class="alert alert-warning d-flex flex-wrap align-items-center gap-2" role="status">
         <span>
-            Footage records for @string.Join(", ", MissingNodeStaleCameras) belong to a node that no longer exists,
-            so nothing can confirm their deletion.
+            @L["admin.nodes.missingNodeFootage", new { cameras = string.Join(", ", MissingNodeStaleCameras) }]
         </span>
         <EditForm Model="this" FormName="forget-missing-node-segments" OnValidSubmit="HandleForgetMissingNodeSegmentsAsync">
             <button type="submit" class="btn btn-sm btn-outline-danger"
-                    data-confirm="Remove these footage records? Any files left on that node's storage are not touched.">
-                Forget these records
+                    data-confirm="@L["admin.nodes.removeTheseFootageRecordsAny"]">
+                @L["admin.nodes.forgetTheseRecords"]
             </button>
         </EditForm>
     </div>
 }
 
-<h2 class="h5" id="nodes">Recorder nodes</h2>
+<h2 class="h5" id="nodes">@L["admin.nodes.recorderNodes"]</h2>
 @if (NodeRows.Count == 0)
 {
-    <p class="text-muted">No nodes have registered yet. See <a href="/Help/installation">Installation</a>.</p>
+    <p class="text-muted">@L.Markup("admin.nodes.noNodesYet")</p>
 }
 else
 {
     <div class="row g-2 align-items-center mb-2">
         <div class="col-sm-4">
             <input type="search" class="form-control" data-filter-table="nodesTable"
-                   placeholder="Filter by name, IP, version&hellip;" />
+                   placeholder="@L["admin.nodes.filterByNameIpVersion"]" />
         </div>
         <div class="col-sm-auto d-flex align-items-center gap-2">
-            <label class="form-label small mb-0" for="nodesPageSize">Rows per page</label>
+            <label class="form-label small mb-0" for="nodesPageSize">@L["admin.nodes.rowsPerPage"]</label>
             <select id="nodesPageSize" class="form-select form-select-sm" style="width: auto;" data-paginate-size-for="nodesTable">
                 <option value="10">10</option>
                 <option value="25" selected>25</option>
                 <option value="50">50</option>
                 <option value="100">100</option>
-                <option value="all">All</option>
+                <option value="all">@L["common.all"]</option>
             </select>
         </div>
     </div>
@@ -91,13 +86,13 @@ else
         <table class="table align-middle" id="nodesTable" data-sortable data-paginate>
             <thead>
                 <tr>
-                    <th>Name</th>
-                    <th>Status</th>
-                    <th>IP</th>
-                    <th>Version</th>
-                    <th data-sort-numeric>Cameras</th>
-                    <th data-sort-numeric style="min-width: 12rem;">Storage</th>
-                    <th>Last seen</th>
+                    <th>@L["common.name"]</th>
+                    <th>@L["common.status"]</th>
+                    <th>@L["admin.nodes.ip"]</th>
+                    <th>@L["common.version"]</th>
+                    <th data-sort-numeric>@L["nav.cameras"]</th>
+                    <th data-sort-numeric style="min-width: 12rem;">@L["admin.nodes.storage"]</th>
+                    <th>@L["common.lastSeen"]</th>
                     <th data-no-sort></th>
                 </tr>
             </thead>
@@ -113,45 +108,45 @@ else
                             <span class="badge @(online ? "text-bg-success" : "text-bg-secondary")">@(online ? "online" : "offline")</span>
                             @if (n.Status == NodeStatus.Pending)
                             {
-                                <span class="badge text-bg-warning" title="Registered, but it records nothing until you approve it.">waiting for approval</span>
+                                <span class="badge text-bg-warning" title="@L["admin.nodes.registeredButItRecordsNothing"]">@L["admin.nodes.waitingForApproval"]</span>
                             }
                             else if (n.Status == NodeStatus.Disabled)
                             {
-                                <span class="badge text-bg-secondary">disabled</span>
+                                <span class="badge text-bg-secondary">@L["admin.nodes.disabled"]</span>
                             }
                             @if (n.FailoverState == NodeFailoverState.FailedOverAway)
                             {
                                 <span class="badge @(n.FailoverReason == NodeFailoverReason.Maintenance ? "text-bg-warning" : "text-bg-danger")">
-                                    @(n.FailoverReason == NodeFailoverReason.Maintenance ? "maintenance" : "failed over")
+                                    @(n.FailoverReason == NodeFailoverReason.Maintenance ? "maintenance" : L["admin.nodes.failedOver"].Value)
                                 </span>
                             }
                             else if (n.FailoverState == NodeFailoverState.HostingFailover)
                             {
-                                <span class="badge text-bg-info">hosting failover</span>
+                                <span class="badge text-bg-info">@L["admin.nodes.hostingFailover"]</span>
                             }
                             @if (StaleCameraCountByNode.GetValueOrDefault(n.Id) is > 0 and var staleCount)
                             {
                                 var staleRows = StaleCamerasByNode[n.Id];
-                                var staleTooltip = "Leftover footage from cameras moved off this node; clears on its own as it ages out:\n" + string.Join("\n", staleRows
+                                var staleTooltip = L["admin.nodes.staleFootage"] + "\n" + string.Join("\n", staleRows
                                     .OrderByDescending(r => r.Overdue).ThenBy(r => r.CameraName)
                                     .Select(r => $"{r.CameraName} — {r.Status}"));
-                                var staleTemplate = "Leftover footage from cameras moved off this node; clears on its own as it ages out:\n" + string.Join("\n", staleRows
+                                var staleTemplate = L["admin.nodes.staleFootage"] + "\n" + string.Join("\n", staleRows
                                     .OrderByDescending(r => r.Overdue).ThenBy(r => r.CameraName)
                                     .Select(r => $"{r.CameraName} — {r.StatusTemplate ?? r.Status}"));
                                 <span class="ms-1 @(staleRows.Any(r => r.Overdue) ? "text-danger" : "")" title="@staleTooltip" data-local-title-template="@staleTemplate">⚠️ @staleCount</span>
                             }
                             @if (string.IsNullOrWhiteSpace(n.StorageRootPath))
                             {
-                                <span class="ms-1 text-danger" title="No storage path set — this node is not recording.">⚠️ no storage path</span>
+                                <span class="ms-1 text-danger" title="@L["admin.nodes.noStoragePathSetThis"]">@L["admin.nodes.noStoragePath"]</span>
                             }
                             else if (n.StorageBlockedByEvidenceLocks)
                             {
                                 <a class="ms-1 text-danger" href="/EvidenceLocks"
-                                   title="Over the storage watermark, and the remaining footage is under evidence locks, which are never deleted. Recording stops if the disk fills: end or remove locks, export the footage elsewhere, or add storage.">⚠️ full of locked footage</a>
+                                   title="@L["admin.nodes.overTheStorageWatermarkAnd"]">@L["admin.nodes.fullOfLockedFootage"]</a>
                             }
                             else if (n.StoragePressureActive)
                             {
-                                <span class="ms-1 text-warning" title="Over the storage watermark — oldest footage is being archived or deleted early.">⚠️ storage full</span>
+                                <span class="ms-1 text-warning" title="@L["admin.nodes.overTheStorageWatermarkOldest"]">@L["admin.nodes.storageFull"]</span>
                             }
                             @if (VisionBackendOf(n) is { NeedsAttention: true } ai)
                             {
@@ -172,11 +167,11 @@ else
                             }
                             else
                             {
-                                <span class="text-muted">never</span>
+                                <span class="text-muted">@L["admin.nodes.never"]</span>
                             }
                             @if (n.ClockSkewSeconds is { } skew && Math.Abs(skew) > 60)
                             {
-                                <span class="ms-1" title="Clock is off by about @Math.Round(skew) s — check time sync on this machine.">⚠️ clock</span>
+                                <span class="ms-1" title="@L["admin.nodes.clockOffTitle", new { seconds = Math.Round(skew) }]">@L["admin.nodes.clock"]</span>
                             }
                         </td>
                         <td class="text-end text-nowrap">
@@ -185,35 +180,35 @@ else
                                 <EditForm Model="this" FormName="@($"approve-node-{n.Id}")" OnValidSubmit="HandleApproveAsync" class="d-inline">
                                     <input type="hidden" name="ApproveId" value="@n.Id" />
                                     <button type="submit" class="btn btn-sm btn-success"
-                                            data-confirm="@NodeConfirm.Approve(n.Name)">Approve</button>
+                                            data-confirm="@NodeConfirm.Approve(n.Name)">@L["common.approve"]</button>
                                 </EditForm>
                             }
-                            <a class="btn btn-sm btn-outline-primary" href="/Admin/Nodes/@n.Id">Edit</a>
+                            <a class="btn btn-sm btn-outline-primary" href="/Admin/Nodes/@n.Id">@L["common.edit"]</a>
                             <div class="dropdown d-inline-block">
-                                <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="More actions" data-bs-popper-config='{"strategy":"fixed"}'>⋯</button>
+                                <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="@L["common.moreActions"]" data-bs-popper-config='{"strategy":"fixed"}'>⋯</button>
                                 <div class="dropdown-menu dropdown-menu-end">
                                     @* Each action is its own named form; the node edit page posts to these
                                        same handlers (see NodeActionForm.razor). onclick, not onsubmit — an
                                        on* attribute on EditForm would rebind its own OnSubmit parameter. *@
                                     <EditForm Model="this" FormName="@($"restart-node-{n.Id}")" OnValidSubmit="HandleRestartAsync">
                                         <input type="hidden" name="RestartId" value="@n.Id" />
-                                        <button type="submit" class="dropdown-item" data-confirm="@NodeConfirm.Restart(n.Name, cams)">🔄 Restart service</button>
+                                        <button type="submit" class="dropdown-item" data-confirm="@NodeConfirm.Restart(n.Name, cams)">@L["admin.nodes.restartService"]</button>
                                     </EditForm>
                                     <EditForm Model="this" FormName="@($"reset-node-auth-{n.Id}")" OnValidSubmit="HandleResetAuthAsync">
                                         <input type="hidden" name="ResetAuthId" value="@n.Id" />
-                                        <button type="submit" class="dropdown-item" data-confirm="@NodeConfirm.ResetAuth(n.Name)">🔑 Reset auth</button>
+                                        <button type="submit" class="dropdown-item" data-confirm="@NodeConfirm.ResetAuth(n.Name)">@L["admin.nodes.resetAuth"]</button>
                                     </EditForm>
                                     <EditForm Model="this" FormName="@($"set-node-maintenance-{n.Id}")" OnValidSubmit="HandleSetMaintenanceAsync">
                                         <input type="hidden" name="MaintenanceId" value="@n.Id" />
                                         <input type="hidden" name="MaintenanceEnabled" value="@((!n.MaintenanceMode).ToString().ToLowerInvariant())" />
                                         <button type="submit" class="dropdown-item" data-confirm="@NodeConfirm.Maintenance(n.MaintenanceMode, cams, backupName)">
-                                            🛠️ @(n.MaintenanceMode ? "End maintenance" : "Maintenance")
+                                            🛠️ @(n.MaintenanceMode ? L["admin.nodes.endMaintenance"] : L["admin.nodes.maintenance"])
                                         </button>
                                     </EditForm>
                                     <div class="dropdown-divider"></div>
                                     <EditForm Model="this" FormName="@($"delete-node-{n.Id}")" OnValidSubmit="HandleDeleteAsync">
                                         <input type="hidden" name="DeleteId" value="@n.Id" />
-                                        <button type="submit" class="dropdown-item text-danger" data-confirm="@NodeConfirm.Delete(n.Name)">🗑️ Delete</button>
+                                        <button type="submit" class="dropdown-item text-danger" data-confirm="@NodeConfirm.Delete(n.Name)">@L["admin.nodes.delete"]</button>
                                     </EditForm>
                                 </div>
                             </div>
@@ -226,10 +221,14 @@ else
     <div data-paginate-controls-for="nodesTable" class="mt-2"></div>
 
     <p class="small text-muted mt-3">
-        Streaming relay since <time datetime="@RelayMetrics.SinceUtc.ToUtcIso()" data-local="g">@RelayMetrics.SinceUtc.ToLocalTime().ToString("g")</time>:
-        <strong>@RelayMetrics.ActiveLiveRelays</strong> live stream(s) now (@RelayMetrics.LiveRelaysStarted total) &middot;
-        <strong>@RelayMetrics.PlaybackSegmentsProxied</strong> playback segment(s) (@ByteFormat.Format(RelayMetrics.PlaybackBytesProxied)).
-        <a href="/Help/nodes#direct-streaming">Direct streaming</a> reduces these.
+        @L.Markup("admin.nodes.relayMetrics", new
+        {
+            time = RelayMetrics.SinceUtc.ToTimeTag(),
+            live = RelayMetrics.ActiveLiveRelays,
+            started = RelayMetrics.LiveRelaysStarted,
+            segments = RelayMetrics.PlaybackSegmentsProxied,
+            size = ByteFormat.Format(RelayMetrics.PlaybackBytesProxied)
+        })
     </p>
 }
 
@@ -423,11 +422,11 @@ else
     {
         RestartId = FormGuid(HttpContext?.Request.Form["RestartId"] ?? default);
         var node = (await NodeService.ListAsync()).FirstOrDefault(n => n.Id == RestartId);
-        if (node is null) { NavigateBare("That node no longer exists.", isError: true); return; }
+        if (node is null) { NavigateBare(Loc.T("admin.nodes.thatNodeNoLongerExists"), isError: true); return; }
 
         if (node is not { LastIpAddress: { } ip, LivePort: { } port, MediaSigningKey: { } key })
         {
-            NavigateBare($"{node.Name} hasn't reported its address yet — it needs at least one heartbeat before it can be restarted from here.", isError: true);
+            NavigateBare(Loc.T("admin.nodes.hasntReportedItsAddressYet", new { name = node.Name }), isError: true);
             return;
         }
 
@@ -443,7 +442,7 @@ else
             if (response.IsSuccessStatusCode)
             {
                 await LogAsync("Node.Restart", $"{node.Name} ({RestartId})");
-                NavigateBare($"{node.Name} is restarting. It should reappear as online within a minute.");
+                NavigateBare(Loc.T("admin.nodes.isRestartingItShouldReappear", new { name = node.Name }));
             }
             else
             {
@@ -454,7 +453,7 @@ else
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            NavigateBare($"Could not reach {node.Name}: {ex.Message}", isError: true);
+            NavigateBare(Loc.T("admin.nodes.couldNotReach", new { name = node.Name, message = ex.Message }), isError: true);
         }
     }
 
@@ -464,7 +463,7 @@ else
     {
         var removed = await CameraService.ForgetSegmentsOnMissingNodesAsync();
         await LogAsync("Segments.ForgetMissingNode", $"{removed} footage record(s) on deleted node(s) removed");
-        NavigateBare($"Removed {removed} footage record(s) that belonged to a deleted node.");
+        NavigateBare(Loc.Plural("admin.nodes.removedFootageRecords", removed));
     }
 
     /// <summary>Failover plan phase 5a: recovery for a node locked out because its rolling check-in
@@ -476,22 +475,22 @@ else
     {
         ApproveId = FormGuid(HttpContext?.Request.Form["ApproveId"] ?? default);
         var node = (await NodeService.ListAsync()).FirstOrDefault(n => n.Id == ApproveId);
-        if (node is null) { NavigateBare("That node no longer exists.", isError: true); return; }
-        if (!await NodeService.ApproveAsync(ApproveId)) { NavigateBare($"{node.Name} isn't waiting for approval.", isError: true); return; }
+        if (node is null) { NavigateBare(Loc.T("admin.nodes.thatNodeNoLongerExists"), isError: true); return; }
+        if (!await NodeService.ApproveAsync(ApproveId)) { NavigateBare(Loc.T("admin.nodes.isntWaitingForApproval", new { name = node.Name }), isError: true); return; }
 
         await LogAsync("Node.Approved", $"{node.Name} ({ApproveId}) from {node.LastIpAddress ?? "an unknown address"}");
-        NavigateBare($"{node.Name} approved. Assign cameras to it to start recording.");
+        NavigateBare(Loc.T("admin.nodes.approvedAssignCamerasToIt", new { name = node.Name }));
     }
 
     private async Task HandleResetAuthAsync()
     {
         ResetAuthId = FormGuid(HttpContext?.Request.Form["ResetAuthId"] ?? default);
         var node = (await NodeService.ListAsync()).FirstOrDefault(n => n.Id == ResetAuthId);
-        if (node is null) { NavigateBare("That node no longer exists.", isError: true); return; }
+        if (node is null) { NavigateBare(Loc.T("admin.nodes.thatNodeNoLongerExists"), isError: true); return; }
 
         await NodeService.ResetAuthAsync(ResetAuthId, rotateSecretNow: false);
         await LogAsync("Node.ResetAuth", $"{node.Name} ({ResetAuthId}) — check-in nonce cleared");
-        NavigateBare($"{node.Name}: check-in nonce cleared. If it was locked out, it should re-sync within a heartbeat cycle.");
+        NavigateBare(Loc.T("admin.nodes.checkInNonceClearedIf", new { name = node.Name }));
     }
 
     /// <summary>Failover plan phase 3: toggle a node into/out of maintenance mode. On = its cameras fail
@@ -503,13 +502,13 @@ else
         MaintenanceId = FormGuid(maintForm?["MaintenanceId"] ?? default);
         MaintenanceEnabled = maintForm?["MaintenanceEnabled"].ToString() == "true";
         var node = (await NodeService.ListAsync()).FirstOrDefault(n => n.Id == MaintenanceId);
-        if (node is null) { NavigateBare("That node no longer exists.", isError: true); return; }
+        if (node is null) { NavigateBare(Loc.T("admin.nodes.thatNodeNoLongerExists"), isError: true); return; }
 
         await NodeService.SetMaintenanceAsync(MaintenanceId, MaintenanceEnabled, User.Identity?.Name);
         await LogAsync(MaintenanceEnabled ? "Node.MaintenanceEntered" : "Node.MaintenanceExited", $"{node.Name} ({MaintenanceId})");
         NavigateBare(MaintenanceEnabled
-            ? $"{node.Name} is in maintenance — its cameras move to its backup node within ~15 seconds and stay there until you turn maintenance off."
-            : $"{node.Name} left maintenance — its cameras return to it once it is a confirmed-healthy quorum (or immediately if it stayed healthy).");
+            ? Loc.T("admin.nodes.isInMaintenanceItsCameras", new { name = node.Name })
+            : Loc.T("admin.nodes.leftMaintenanceItsCamerasReturn", new { name = node.Name }));
     }
 
     private async Task HandleDeleteAsync()

@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 using LarisVMS.Infrastructure.Data;
 
 namespace LarisVMS.Infrastructure.Services;
@@ -33,7 +34,7 @@ public class ZoneService(ApplicationDbContext db) : IZoneService
     public async Task UpdateAsync(Guid id, string name, ZoneKind kind, string polygonJson, double sensitivity, bool isEnabled, CancellationToken ct = default)
     {
         var zone = await db.Zones.FirstOrDefaultAsync(z => z.Id == id, ct)
-            ?? throw new InvalidOperationException("Zone not found.");
+            ?? throw new InvalidOperationException(Loc.T("server.zone.zoneNotFound"));
         zone.Name = name;
         zone.Kind = kind;
         zone.PolygonJson = polygonJson;

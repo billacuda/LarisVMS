@@ -37,6 +37,10 @@ public class CameraStream
     /// going offline) instead of a silently frozen last-known number.</summary>
     public DateTime? HealthReportedAt { get; set; }
 
+    /// <summary>Whether the node said this camera's footage was being kept in its last health report.
+    /// Only meaningful while HealthReportedAt is fresh. Null until a node that reports it does.</summary>
+    public bool? IsKeepingFootage { get; set; }
+
     /// <summary>This camera's AI-detection engine build state, from NodeWorker's own
     /// <c>_visionCameraStatus</c> (Vision Service's <c>GET /cameras/status</c>) — see
     /// <c>StreamInfoReportItem.IsEngineBuilding</c>'s own doc comment. Both null when AI detection

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core.Enums;
+using LarisVMS.Core.Localization;
 using LarisVMS.Core.Interfaces;
 using LarisVMS.Infrastructure.Alerts;
 using LarisVMS.Infrastructure.Data;
@@ -97,8 +98,9 @@ public class AlertEvaluatorService(IServiceScopeFactory scopeFactory, ILogger<Al
         foreach (var l in expiring)
         {
             var hours = Math.Max(1, (int)Math.Round((l.ExpiresAtUtc!.Value - now).TotalHours));
-            var message = $"The evidence lock on \"{l.Camera.Name}\" ends in about {hours} hour{(hours == 1 ? "" : "s")}. " +
-                          $"Reason: {l.Reason}. Export the footage if it needs to be kept longer.";
+            var lockedCamera = l.Camera.Name;
+            var reason = l.Reason;
+            string message() => Loc.Plural("alerts.lockEndsSoon", hours, new { camera = lockedCamera, reason });
             foreach (var rule in expiringRules.Where(r => CoversCamera(r, l.Camera)))
                 await DispatchAsync(rule, message, senderFactory, auditService, logger, ct, notifications, l.CameraId, "/EvidenceLocks");
             l.ExpiryWarnedAtUtc = now;
@@ -106,9 +108,17 @@ public class AlertEvaluatorService(IServiceScopeFactory scopeFactory, ILogger<Al
 
         foreach (var l in removed)
         {
-            var message = $"{l.RemovedByUserName ?? "Someone"} removed the evidence lock on \"{l.Camera.Name}\" " +
-                          $"(placed by {l.CreatedByUserName ?? "unknown"}). Reason: {l.RemovalReason}. " +
-                          "The footage stays protected for 24 hours, and the lock can be restored until then.";
+            var removedBy = l.RemovedByUserName;
+            var placedBy = l.CreatedByUserName;
+            var lockedCamera = l.Camera.Name;
+            var reason = l.RemovalReason;
+            string message() => Loc.T("alerts.lockRemoved", new
+            {
+                user = removedBy ?? Loc.T("alerts.someone"),
+                camera = lockedCamera,
+                placedBy = placedBy ?? Loc.T("alerts.unknownUser"),
+                reason
+            });
             foreach (var rule in removedRules.Where(r => CoversCamera(r, l.Camera)))
                 await DispatchAsync(rule, message, senderFactory, auditService, logger, ct, notifications, l.CameraId, "/EvidenceLocks");
             l.RemovalNotifiedAtUtc = now;
@@ -124,12 +134,17 @@ public class AlertEvaluatorService(IServiceScopeFactory scopeFactory, ILogger<Al
 
     /// <summary>Logs, audits and sends one firing through every enabled delivery of the rule.
     /// Shared with DetectionAlertService. A delivery that throws is logged and skipped so the
-    /// others still go out.</summary>
-    internal static async Task DispatchAsync(Core.Entities.AlertRule rule, string message,
+    /// others still go out. <paramref name="message"/> builds the text in the current UI language:
+    /// each subscriber gets it in their own, the team channels in the server's default, and the log
+    /// and audit trail in English.</summary>
+    internal static async Task DispatchAsync(Core.Entities.AlertRule rule, Func<string> message,
         AlertChannelSenderFactory senderFactory, IAuditService auditService, ILogger logger, CancellationToken ct,
         INotificationService? notifications = null, Guid? cameraId = null, string? url = null)
     {
-        logger.LogInformation("Alert rule {RuleId} ({Name}) fired: {Message}", rule.Id, rule.Name, message);
+        string english, teamText;
+        using (Loc.InLanguage(LocaleCatalog.English)) english = message();
+        using (Loc.InLanguage(null)) teamText = message();
+        logger.LogInformation("Alert rule {RuleId} ({Name}) fired: {Message}", rule.Id, rule.Name, english);
 
         // Personal notifications to the rule's subscribers (browser and email), then the team channels.
         var notified = 0;
@@ -143,14 +158,14 @@ public class AlertEvaluatorService(IServiceScopeFactory scopeFactory, ILogger<Al
         }
         var notifiedNote = "";
         if (notified > 0) notifiedNote = $" Notified {notified} subscriber{(notified == 1 ? "" : "s")}.";
-        await auditService.LogAsync("Alert.Fired", null, "System", null, $"{rule.Name}: {message}{notifiedNote}", ct);
+        await auditService.LogAsync("Alert.Fired", null, "System", null, $"{rule.Name}: {english}{notifiedNote}", ct);
 
         foreach (var delivery in rule.Deliveries.Where(d => d.IsEnabled))
         {
             try
             {
                 var sender = senderFactory.Get(delivery.Channel);
-                await sender.SendAsync(delivery.ConfigJson, rule.Name, message, ct);
+                await sender.SendAsync(delivery.ConfigJson, rule.Name, teamText, ct);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -160,11 +175,12 @@ public class AlertEvaluatorService(IServiceScopeFactory scopeFactory, ILogger<Al
         }
     }
 
-    /// <summary>Null when the condition isn't true; otherwise the human-readable message to send.
+    /// <summary>Null when the condition isn't true; otherwise what builds the message to send (in the
+    /// current UI language, so it can be built once per recipient).
     /// CameraId/NodeId not resolving to a real row (deleted since the rule was created) is treated as
     /// "condition not true" rather than an error — a dangling rule shouldn't spam an admin about
     /// something that no longer exists, and the admin UI is where that gets cleaned up.</summary>
-    private static async Task<string?> EvaluateAsync(ApplicationDbContext db, Core.Entities.AlertRule rule, DateTime nowUtc, CancellationToken ct)
+    private static async Task<Func<string>?> EvaluateAsync(ApplicationDbContext db, Core.Entities.AlertRule rule, DateTime nowUtc, CancellationToken ct)
     {
         switch (rule.ConditionType)
         {
@@ -177,8 +193,10 @@ public class AlertEvaluatorService(IServiceScopeFactory scopeFactory, ILogger<Al
                 if (camera is null) return null;
 
                 if (!AlertEvaluationPolicy.IsCameraNotReporting(camera.MainHealth, nowUtc)) return null;
-                var reportedSince = camera.MainHealth is { } reported ? $"{reported:u}." : "it was added.";
-                return $"Camera \"{camera.Name}\" hasn't reported health since {reportedSince}";
+                var cameraName = camera.Name;
+                return camera.MainHealth is { } reported
+                    ? () => Loc.T("alerts.cameraNotReportingSince", new { camera = cameraName, time = reported.ToString("u") })
+                    : () => Loc.T("alerts.cameraNotReportingSinceAdded", new { camera = cameraName });
             }
 
             case AlertConditionType.NodeOffline:
@@ -189,8 +207,10 @@ public class AlertEvaluatorService(IServiceScopeFactory scopeFactory, ILogger<Al
                 if (node is null) return null;
 
                 if (!AlertEvaluationPolicy.IsNodeOffline(node.LastSeenAt, nowUtc)) return null;
-                var seenSince = node.LastSeenAt is { } seen ? $"{seen:u}." : "it registered.";
-                return $"Node \"{node.Name}\" hasn't been seen since {seenSince}";
+                var nodeName = node.Name;
+                return node.LastSeenAt is { } seen
+                    ? () => Loc.T("alerts.nodeOfflineSince", new { node = nodeName, time = seen.ToString("u") })
+                    : () => Loc.T("alerts.nodeOfflineSinceRegistered", new { node = nodeName });
             }
 
             case AlertConditionType.NodeStorageLow:
@@ -202,7 +222,8 @@ public class AlertEvaluatorService(IServiceScopeFactory scopeFactory, ILogger<Al
 
                 if (!AlertEvaluationPolicy.IsNodeStorageLow(node.StorageFreeBytes, node.StorageTotalBytes, threshold)) return null;
                 var freePercent = node.StorageFreeBytes!.Value * 100.0 / node.StorageTotalBytes!.Value;
-                return $"Node \"{node.Name}\" has {freePercent:F1}% free storage, below the {threshold}% threshold.";
+                var lowNodeName = node.Name;
+                return () => Loc.T("alerts.nodeStorageLow", new { node = lowNodeName, free = Math.Round(freePercent, 1), threshold });
             }
 
             case AlertConditionType.NodeFailoverActivated:
@@ -215,11 +236,13 @@ public class AlertEvaluatorService(IServiceScopeFactory scopeFactory, ILogger<Al
                     .Select(n => new { n.Name, n.FailoverState, n.FailoverReason, n.FailoverSinceUtc }).FirstOrDefaultAsync(ct);
                 if (node is null || node.FailoverState != Core.Enums.NodeFailoverState.FailedOverAway) return null;
 
-                var why = node.FailoverReason == Core.Enums.NodeFailoverReason.Maintenance
-                    ? "was put into maintenance" : "was found down by a quorum of health checks";
-                return $"Node \"{node.Name}\" {why}" +
-                       (node.FailoverSinceUtc is { } since ? $" at {since:u}" : "") +
-                       " — its cameras are now recording on its backup node.";
+                var maintenance = node.FailoverReason == Core.Enums.NodeFailoverReason.Maintenance;
+                var failedNodeName = node.Name;
+                var at = node.FailoverSinceUtc?.ToString("u");
+                return () => Loc.T(maintenance
+                        ? (at is null ? "alerts.failoverMaintenance" : "alerts.failoverMaintenanceAt")
+                        : (at is null ? "alerts.failoverDown" : "alerts.failoverDownAt"),
+                    new { node = failedNodeName, time = at });
             }
 
             default:

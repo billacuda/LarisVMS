@@ -1,4 +1,5 @@
 using System.Globalization;
+using LarisVMS.Core.Localization;
 using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Enums;
@@ -116,7 +117,7 @@ public static class DashboardWidgetRanker
             .Select(c =>
             {
                 var age = d.NowUtc - c.OldestRecordingUtc!.Value;
-                return CameraRow(c, age.TotalSeconds, FormatDuration(age), note: "since " + TimePlaceholder, noteTimeUtc: c.OldestRecordingUtc);
+                return CameraRow(c, age.TotalSeconds, FormatDuration(age), note: Loc.T("server.dashboardWidget.since", new { time = TimePlaceholder }), noteTimeUtc: c.OldestRecordingUtc);
             })
             .ToList();
 
@@ -130,7 +131,7 @@ public static class DashboardWidgetRanker
             {
                 var gap = d.NowUtc - x.Since;
                 return CameraRow(x.Camera, gap.TotalSeconds, FormatDuration(gap),
-                    note: x.Camera.HealthReportedAt is null ? "never reported" : "since " + TimePlaceholder,
+                    note: x.Camera.HealthReportedAt is null ? Loc.T("server.dashboardWidget.neverReported") : Loc.T("server.dashboardWidget.since", new { time = TimePlaceholder }),
                     noteTimeUtc: x.Camera.HealthReportedAt is null ? null : x.Since);
             })
             .ToList();
@@ -148,10 +149,10 @@ public static class DashboardWidgetRanker
                 if (gap < TimeSpan.Zero) gap = TimeSpan.Zero;
                 var continuous = string.Equals(x.Camera.RecordingMode, nameof(RecordingMode.Continuous), StringComparison.OrdinalIgnoreCase);
                 var flagged = continuous && gap > ContinuousGapWarning;
-                var note = (x.Camera.LatestRecordingUtc is null ? "never recorded" : TimePlaceholder) +
+                var note = (x.Camera.LatestRecordingUtc is null ? Loc.T("server.dashboardWidget.neverRecorded") : TimePlaceholder) +
                            (x.Camera.RecordingMode is { } mode ? " · " + mode : "");
-                return CameraRow(x.Camera, gap.TotalSeconds, x.Camera.LatestRecordingUtc is null ? "never" : FormatDuration(gap) + " ago",
-                    note, flagged ? "Should be recording" : null, flagged ? "text-bg-danger" : null,
+                return CameraRow(x.Camera, gap.TotalSeconds, x.Camera.LatestRecordingUtc is null ? Loc.T("server.dashboardWidget.never") : Loc.T("server.dashboardWidget.ago", new { duration = FormatDuration(gap) }),
+                    note, flagged ? Loc.T("server.dashboardWidget.shouldBeRecording") : null, flagged ? "text-bg-danger" : null,
                     x.Camera.LatestRecordingUtc);
             })
             .ToList();
@@ -168,8 +169,8 @@ public static class DashboardWidgetRanker
             .Select(c => (Camera: c, Percent: 100.0 * c.StorageBytes / c.QuotaBytes!.Value))
             .OrderByDescending(x => x.Percent).ThenBy(x => x.Camera.Name)
             .Select(x => CameraRow(x.Camera, x.Percent, x.Percent.ToString("0", CultureInfo.InvariantCulture) + "%",
-                note: $"{FormatBytes(x.Camera.StorageBytes)} of {FormatBytes(x.Camera.QuotaBytes!.Value)}",
-                badge: x.Percent >= 100 ? "Full" : x.Percent >= 90 ? "Nearly full" : null,
+                note: Loc.T("server.dashboardWidget.sizeOf", new { used = FormatBytes(x.Camera.StorageBytes), total = FormatBytes(x.Camera.QuotaBytes!.Value) }),
+                badge: x.Percent >= 100 ? Loc.T("server.dashboardWidget.full") : x.Percent >= 90 ? Loc.T("server.dashboardWidget.nearlyFull") : null,
                 badgeClass: x.Percent >= 100 ? "text-bg-danger" : x.Percent >= 90 ? "text-bg-warning" : null))
             .ToList();
 
@@ -178,8 +179,8 @@ public static class DashboardWidgetRanker
         d.Cameras.Where(c => c.EngineFailed == true || c.EngineBuilding == true)
             .OrderByDescending(c => c.EngineFailed == true).ThenBy(c => c.Name)
             .Select(c => c.EngineFailed == true
-                ? CameraRow(c, 2, "Failed", note: "check the vision log", badge: "Failed", badgeClass: "text-bg-danger")
-                : CameraRow(c, 1, "Starting", note: "building the detection engine", badge: "Starting", badgeClass: "text-bg-info"))
+                ? CameraRow(c, 2, Loc.T("server.dashboardWidget.failed"), note: Loc.T("server.dashboardWidget.checkVisionLog"), badge: Loc.T("server.dashboardWidget.failed"), badgeClass: "text-bg-danger")
+                : CameraRow(c, 1, Loc.T("server.dashboardWidget.starting"), note: Loc.T("server.dashboardWidget.buildingEngine"), badge: Loc.T("server.dashboardWidget.starting"), badgeClass: "text-bg-info"))
             .ToList();
 
     internal static bool IsHuman(CameraEventCountRow r) => r.Name is "Human" or nameof(DetectionKind.Human) or nameof(DetectionKind.Face);
@@ -204,7 +205,7 @@ public static class DashboardWidgetRanker
             })
             .Where(x => x.Count > 0)
             .OrderByDescending(x => x.Count).ThenBy(x => x.Camera.Name)
-            .Select(x => CameraRow(x.Camera, x.Count, x.Count.ToString("N0", CultureInfo.InvariantCulture), note: "last " + label))
+            .Select(x => CameraRow(x.Camera, x.Count, x.Count.ToString("N0", CultureInfo.InvariantCulture), note: Loc.T("server.dashboardWidget.last", new { window = label })))
             .ToList();
     }
 
@@ -261,7 +262,7 @@ public static class DashboardWidgetRanker
             })
             .Where(x => x.Reporting > 0)
             .OrderByDescending(x => x.Fps).ThenBy(x => x.Node.Name)
-            .Select(x => NodeRow(d, x.Node, x.Fps, x.Fps.ToString("N0", CultureInfo.InvariantCulture), note: $"from {x.Reporting} camera(s)"))
+            .Select(x => NodeRow(d, x.Node, x.Fps, x.Fps.ToString("N0", CultureInfo.InvariantCulture), note: Loc.Plural("server.dashboardWidget.fromCameras", x.Reporting)))
             .ToList();
 
     /// <summary>The node's own network load (receive + send) from its last heartbeat.</summary>
@@ -277,7 +278,7 @@ public static class DashboardWidgetRanker
         d.Nodes.Where(n => HostFresh(n, d.NowUtc) && n.CpuPercent is not null)
             .OrderByDescending(n => n.CpuPercent).ThenBy(n => n.Name)
             .Select(n => NodeRow(d, n, n.CpuPercent, n.CpuPercent!.Value.ToString("0", CultureInfo.InvariantCulture) + "%",
-                badge: n.CpuPercent >= 90 ? "High" : null, badgeClass: n.CpuPercent >= 90 ? "text-bg-danger" : null))
+                badge: n.CpuPercent >= 90 ? Loc.T("server.dashboardWidget.high") : null, badgeClass: n.CpuPercent >= 90 ? "text-bg-danger" : null))
             .ToList();
 
     /// <summary>Least time left first. Nodes without cameras, or without a write rate to estimate
@@ -288,7 +289,7 @@ public static class DashboardWidgetRanker
             .OrderBy(x => x.Node.DaysRemaining).ThenBy(x => x.Node.Name)
             .Select(x => NodeRow(d, x.Node, x.Node.DaysRemaining, FormatDays(x.Node.DaysRemaining!.Value),
                 note: x.Node.StorageFreeBytes is { } free ? FormatBytes(free) + " free" : null,
-                badge: x.Node.DaysRemaining < 3 ? "Low" : null, badgeClass: x.Node.DaysRemaining < 3 ? "text-bg-danger" : null))
+                badge: x.Node.DaysRemaining < 3 ? Loc.T("server.dashboardWidget.low") : null, badgeClass: x.Node.DaysRemaining < 3 ? "text-bg-danger" : null))
             .ToList();
 
     /// <summary>One row per problem, worst first: offline, failed over, storage pressure, clock skew,
@@ -300,17 +301,17 @@ public static class DashboardWidgetRanker
         {
             var online = n.LastSeenAt is { } seen && d.NowUtc - seen < DashboardService.NodeOnlineWindow;
             if (!online)
-                issues.Add((n, 5, n.LastSeenAt, n.LastSeenAt is null ? "never connected" : "not seen", "Offline", "text-bg-danger"));
+                issues.Add((n, 5, n.LastSeenAt, n.LastSeenAt is null ? Loc.T("server.dashboardWidget.neverConnected") : Loc.T("server.dashboardWidget.notSeen"), Loc.T("server.dashboardWidget.offline"), "text-bg-danger"));
             if (n.FailoverState == NodeFailoverState.FailedOverAway)
                 issues.Add((n, 4, n.FailoverSinceUtc,
-                    n.FailoverReason == NodeFailoverReason.Maintenance ? "in maintenance — cameras on backup" : "failed over — cameras on backup",
-                    n.FailoverReason == NodeFailoverReason.Maintenance ? "Maintenance" : "Failed over", "text-bg-warning"));
+                    n.FailoverReason == NodeFailoverReason.Maintenance ? Loc.T("server.dashboardWidget.inMaintenanceNote") : Loc.T("server.dashboardWidget.failedOverNote"),
+                    n.FailoverReason == NodeFailoverReason.Maintenance ? Loc.T("server.dashboardWidget.maintenance") : Loc.T("server.dashboardWidget.failedOver"), "text-bg-warning"));
             if (n.StoragePressureActive)
-                issues.Add((n, 3, n.StoragePressureSince, "disk over the storage limit — deleting or archiving early", "Storage pressure", "text-bg-warning"));
+                issues.Add((n, 3, n.StoragePressureSince, Loc.T("server.dashboardWidget.storagePressureNote"), Loc.T("server.dashboardWidget.storagePressure"), "text-bg-warning"));
             if (n.ClockSkewSeconds is { } skew && Math.Abs(skew) > ClockSkewWarningSeconds)
-                issues.Add((n, 2, null, $"clock {FormatDuration(TimeSpan.FromSeconds(Math.Abs(skew)))} {(skew > 0 ? "behind" : "ahead")}", "Clock skew", "text-bg-warning"));
+                issues.Add((n, 2, null, Loc.T(skew > 0 ? "server.dashboardWidget.clockBehind" : "server.dashboardWidget.clockAhead", new { duration = FormatDuration(TimeSpan.FromSeconds(Math.Abs(skew))) }), Loc.T("server.dashboardWidget.clockSkew"), "text-bg-warning"));
             if (n.LatestBuild is { } latest && NodeVersionComparer.IsNewer(latest, n.Version))
-                issues.Add((n, 1, null, $"running {n.Version ?? "unknown"}, {latest} available", "Outdated", "text-bg-secondary"));
+                issues.Add((n, 1, null, Loc.T("server.dashboardWidget.runningOutdated", new { version = n.Version ?? Loc.T("alerts.unknownUser"), latest }), Loc.T("server.dashboardWidget.outdated"), "text-bg-secondary"));
         }
 
         return issues
@@ -338,23 +339,23 @@ public static class DashboardWidgetRanker
 
     private static string WindowLabel(string? window) => NormalizeWindow(window) switch
     {
-        "1h" => "hour",
-        "7d" => "7 days",
-        "30d" => "30 days",
-        _ => "24 hours",
+        "1h" => Loc.T("server.dashboardWidget.windowHour"),
+        "7d" => Loc.T("server.dashboardWidget.window7d"),
+        "30d" => Loc.T("server.dashboardWidget.window30d"),
+        _ => Loc.T("server.dashboardWidget.window24h"),
     };
 
     internal static string FormatDuration(TimeSpan span)
     {
         if (span < TimeSpan.Zero) span = TimeSpan.Zero;
-        if (span.TotalDays >= 1) return $"{(int)span.TotalDays}d {span.Hours}h";
-        if (span.TotalHours >= 1) return $"{(int)span.TotalHours}h {span.Minutes}m";
-        if (span.TotalMinutes >= 1) return $"{(int)span.TotalMinutes}m";
-        return $"{(int)span.TotalSeconds}s";
+        if (span.TotalDays >= 1) return Loc.T("common.durationDaysHours", new { d = (int)span.TotalDays, h = span.Hours });
+        if (span.TotalHours >= 1) return Loc.T("common.durationHoursMinutes", new { h = (int)span.TotalHours, m = span.Minutes });
+        if (span.TotalMinutes >= 1) return Loc.T("common.durationMinutes", new { m = (int)span.TotalMinutes });
+        return Loc.T("common.durationSeconds", new { s = (int)span.TotalSeconds });
     }
 
     private static string FormatDays(double days) =>
-        days >= 2 ? days.ToString("0", CultureInfo.InvariantCulture) + " days"
+        days >= 2 ? Loc.Plural("common.days", (long)Math.Round(days))
         : FormatDuration(TimeSpan.FromDays(days));
 
     /// <summary>Binary units with GB/TB labels — the same convention the node cards already use.</summary>

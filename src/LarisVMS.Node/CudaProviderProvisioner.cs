@@ -29,6 +29,7 @@ public sealed class CudaProviderProvisioner(string installDirectory, NodeApiClie
     private volatile bool _justProvisioned;
     private bool _warnedNoToolkit;
     private bool _warnedNoServerCopy;
+    private bool _warnedNoPinnedKey;
 
     private string CudaBackendDir => Path.Combine(installDirectory, "onnxruntime-backends", "cuda");
     private string TargetPath => Path.Combine(CudaBackendDir, FileName);
@@ -100,8 +101,18 @@ public sealed class CudaProviderProvisioner(string installDirectory, NodeApiClie
 
             // This library is loaded by the Vision Service: only a copy signed with the server's key
             // is installed, once the node has that key (registration, or its first signed update).
-            if (NodeConfigStore.Load()?.UpdateSigningKeyPem is { } pinnedKey
-                && !UpdateSignature.Check(pinnedKey, info.SigningKeyPem, info.Signature,
+            // Without the key nothing is installed: an unsigned native library is never loaded.
+            if (NodeConfigStore.Load()?.UpdateSigningKeyPem is not { } pinnedKey)
+            {
+                if (!_warnedNoPinnedKey)
+                {
+                    _warnedNoPinnedKey = true;
+                    logger.LogWarning("Not installing the CUDA provider library yet: this node doesn't have the server's " +
+                        "signing key, which it gets with its first signed update. It runs DirectML until then.");
+                }
+                return;
+            }
+            if (!UpdateSignature.Check(pinnedKey, info.SigningKeyPem, info.Signature,
                     UpdateSignature.NativePayload(info.Name, info.Sha256), out _, out var signatureError))
             {
                 logger.LogError("Not installing the CUDA provider library: {Reason}.", signatureError);

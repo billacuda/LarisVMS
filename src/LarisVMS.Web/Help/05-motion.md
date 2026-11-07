@@ -30,6 +30,6 @@ A camera's **Zones** page has two methods. Only one is active at a time, and swi
 - **Privacy**: an area to black out. Draw these under **🔒 Privacy masks**, which works whichever motion method (Grid or Polygon zones) the camera uses. It's hidden in recordings, live view (both streams), snapshots, and exports. Events still happen behind it as usual (their snapshots are masked like the video) unless you turn on **Also ignore detections inside privacy masks** for that camera, in the Privacy masks view. The mask follows the shape you draw, with a small margin so no edge shows through. A camera with a privacy zone has its video re-encoded while recording, which uses some CPU (or the GPU, when the node has a supported one).
 - **Camera-side motion** zones can be saved but are not active yet.
 
-To reshape a zone, select it in the list and drag its corners, then **Save**. While drawing, right-click removes the last point. Hovering a zone in the list highlights it on the picture.
+To reshape a zone, select it in the list and drag its corners, then **Save**. While drawing, right-click removes the last point. Hovering a zone in the list highlights it on the picture. You can also click a corner, then click where it should go.
 
 **Sensitivity** is the percentage of the zone's pixels that must change. Lower is more sensitive. Wide zones need lower values, because real movement covers only a small part of them. Start low (around 3%) and raise it only if wind or lighting changes trigger it.

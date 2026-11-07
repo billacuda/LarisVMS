@@ -21,26 +21,6 @@ public class NodeApiClient
         _downloadHttp = new HttpClient(trust.CreateHandler()) { BaseAddress = baseAddress, Timeout = TimeSpan.FromMinutes(10) };
     }
 
-    public NodeApiClient(string serverUrl, bool acceptAnyCertificate)
-    {
-        HttpClientHandler MakeHandler()
-        {
-            var h = new HttpClientHandler();
-            if (acceptAnyCertificate)
-            {
-                // Same rationale as CameraService's "onvif" HttpClient: a self-hosted LarisVMS.Web
-                // behind a self-signed cert on a LAN is a normal deployment shape, not a
-                // misconfiguration, and there is no CA a home/small-business install would have.
-                h.ServerCertificateCustomValidationCallback = (_, _, _, _) => true;
-            }
-            return h;
-        }
-
-        var baseAddress = new Uri(serverUrl.TrimEnd('/') + "/");
-        _http = new HttpClient(MakeHandler()) { BaseAddress = baseAddress, Timeout = TimeSpan.FromSeconds(15) };
-        _downloadHttp = new HttpClient(MakeHandler()) { BaseAddress = baseAddress, Timeout = TimeSpan.FromMinutes(10) };
-    }
-
     public void SetCredentials(Guid nodeId, string secret)
     {
         var auth = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", $"{nodeId}:{secret}");

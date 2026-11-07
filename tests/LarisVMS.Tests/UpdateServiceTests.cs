@@ -51,7 +51,7 @@ public class UpdateServiceTests
         var content = "fake LarisVMS.Node.exe bytes"u8.ToArray();
         var handler = new StubHandler(content);
         var lifetime = new FakeLifetime();
-        var service = new UpdateService(NewConfig(), insecureTls: false, NullLogger.Instance, lifetime, handler);
+        var service = new UpdateService(NewConfig(), NullLogger.Instance, lifetime, handler);
 
         // Deliberately the wrong hash — the real SHA-256 of `content` is something else entirely.
         var update = new NodeUpdateInfoDto("9.9.9", "https://larisvms.example.test/api/nodes/download/00000000-0000-0000-0000-000000000000",
@@ -71,7 +71,7 @@ public class UpdateServiceTests
     {
         var handler = new StubHandler([], HttpStatusCode.InternalServerError);
         var lifetime = new FakeLifetime();
-        var service = new UpdateService(NewConfig(), insecureTls: false, NullLogger.Instance, lifetime, handler);
+        var service = new UpdateService(NewConfig(), NullLogger.Instance, lifetime, handler);
 
         var update = new NodeUpdateInfoDto("9.9.9", "https://larisvms.example.test/api/nodes/download/00000000-0000-0000-0000-000000000000",
             Sha256: new string('0', 64), SizeBytes: 0);
@@ -95,7 +95,7 @@ public class UpdateServiceTests
         // here.
         var handler = new StubHandler("fake"u8.ToArray());
         var lifetime = new FakeLifetime();
-        var service = new UpdateService(NewConfig(), insecureTls: false, NullLogger.Instance, lifetime, handler);
+        var service = new UpdateService(NewConfig(), NullLogger.Instance, lifetime, handler);
         var update = new NodeUpdateInfoDto("9.9.9", "https://larisvms.example.test/api/nodes/download/00000000-0000-0000-0000-000000000000",
             Sha256: new string('0', 64), SizeBytes: 4);
 
@@ -126,7 +126,7 @@ public class UpdateServiceTests
         var content = "fake LarisVMS.Vision.Service.exe bytes"u8.ToArray();
         var expectedSha = await Sha256Async(content);
         using var http = new HttpClient(new StubHandler(content));
-        var service = new UpdateService(NewConfig(), insecureTls: false, NullLogger.Instance, new FakeLifetime());
+        var service = new UpdateService(NewConfig(), NullLogger.Instance, new FakeLifetime());
 
         var staged = await service.TryStageVisionAsync(http, "https://larisvms.example.test/api/nodes/download/vision", expectedSha, "0.157.0", CancellationToken.None);
 
@@ -138,7 +138,7 @@ public class UpdateServiceTests
     {
         var content = "fake LarisVMS.Vision.Service.exe bytes"u8.ToArray();
         using var http = new HttpClient(new StubHandler(content));
-        var service = new UpdateService(NewConfig(), insecureTls: false, NullLogger.Instance, new FakeLifetime());
+        var service = new UpdateService(NewConfig(), NullLogger.Instance, new FakeLifetime());
 
         // Deliberately the wrong hash.
         var staged = await service.TryStageVisionAsync(http, "https://larisvms.example.test/api/nodes/download/vision", new string('0', 64), "0.157.0", CancellationToken.None);
@@ -150,7 +150,7 @@ public class UpdateServiceTests
     public async Task TryStageVisionFailsOnNonSuccessStatusWithoutThrowing()
     {
         using var http = new HttpClient(new StubHandler([], HttpStatusCode.InternalServerError));
-        var service = new UpdateService(NewConfig(), insecureTls: false, NullLogger.Instance, new FakeLifetime());
+        var service = new UpdateService(NewConfig(), NullLogger.Instance, new FakeLifetime());
 
         var staged = await service.TryStageVisionAsync(http, "https://larisvms.example.test/api/nodes/download/vision", new string('0', 64), "0.157.0", CancellationToken.None);
 
@@ -167,7 +167,7 @@ public class UpdateServiceTests
     public async Task TryStageVisionFailsOnNetworkExceptionWithoutThrowing()
     {
         using var http = new HttpClient(new ThrowingHandler());
-        var service = new UpdateService(NewConfig(), insecureTls: false, NullLogger.Instance, new FakeLifetime());
+        var service = new UpdateService(NewConfig(), NullLogger.Instance, new FakeLifetime());
 
         var staged = await service.TryStageVisionAsync(http, "https://larisvms.example.test/api/nodes/download/vision", new string('0', 64), "0.157.0", CancellationToken.None);
 

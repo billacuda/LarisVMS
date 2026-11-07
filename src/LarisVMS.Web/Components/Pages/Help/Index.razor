@@ -3,10 +3,10 @@
 @using LarisVMS.Web.Services
 @inject HelpContentService Help
 
-<PageTitle>Help - @AppName</PageTitle>
+<PageTitle>@L["nav.help"] - @AppName</PageTitle>
 
-<h1>Help</h1>
-<p class="text-muted">How LarisVMS works, and what each setting does.</p>
+<h1>@L["nav.help"]</h1>
+<p class="text-muted">@L["help.howLarisvmsWorksAndWhat"]</p>
 
 <div class="row g-3">
     @foreach (var t in Help.Topics)

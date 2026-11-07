@@ -1,6 +1,7 @@
 @inject Microsoft.AspNetCore.Mvc.ViewFeatures.IFileVersionProvider FileVersion
+@inject LocaleCatalog LocaleCatalog
 <!DOCTYPE html>
-<html lang="en" data-bs-theme="light">
+<html lang="@LanguageChoices.Lang" dir="@LanguageChoices.Dir" data-bs-theme="light">
 <head>
     <meta charset="utf-8" />
     <script nonce="@Csp.Value">
@@ -19,7 +20,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <base href="/" />
-    <link rel="stylesheet" href="@V("/lib/bootstrap/dist/css/bootstrap.min.css")" />
+    <link rel="stylesheet" href="@V("/lib/bootstrap/dist/css/" + LanguageChoices.BootstrapCss)" />
     <link rel="stylesheet" href="@V("/css/theme.css")" />
     <link rel="stylesheet" href="@V("/css/site.css")" />
     <HeadOutlet />
@@ -36,7 +37,11 @@
             }
         })();
     </script>
+    @* Script-side UI text for this page's language, then the helper that reads it (larisvmsI18n). *@
+    <script src="@($"/locales/{LanguageChoices.Lang}.js?v={LocaleCatalog.Version}")"></script>
+    <script src="@V("/js/i18n.js")"></script>
     <script src="@V("/js/inline-actions.js")"></script>
+    <script src="@V("/js/form-errors.js")"></script>
 </head>
 @* data-enhance-nav="false": every link is an ordinary page load. Blazor's enhanced navigation swaps
    the next page into this document instead, and the scripts that page brings (its PageScripts —

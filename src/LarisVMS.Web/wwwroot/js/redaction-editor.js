@@ -21,30 +21,30 @@ window.larisvmsRedactionEditor = (function () {
         modalEl.setAttribute('aria-labelledby', 'redactionTitle');
         modalEl.innerHTML =
             '<div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content">' +
-                '<div class="modal-header"><h5 class="modal-title" id="redactionTitle">Redact areas</h5>' +
-                    '<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>' +
+                '<div class="modal-header"><h5 class="modal-title" id="redactionTitle">' + larisvmsI18n.html('js.redactionEditor.redactAreas') + '</h5>' +
+                    '<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="' + larisvmsI18n.html('js.redactionEditor.close') + '"></button></div>' +
                 '<div class="modal-body">' +
                     '<div class="d-flex flex-wrap align-items-center gap-2 mb-2">' +
-                        '<div class="btn-group btn-group-sm" role="group" aria-label="Drawing tool">' +
-                            '<button type="button" class="btn btn-outline-secondary active" data-tool="rect">▭ Rectangle</button>' +
-                            '<button type="button" class="btn btn-outline-secondary" data-tool="poly">⬠ Polygon</button>' +
+                        '<div class="btn-group btn-group-sm" role="group" aria-label="' + larisvmsI18n.html('js.redactionEditor.drawingTool') + '">' +
+                            '<button type="button" class="btn btn-outline-secondary active" data-tool="rect">▭ ' + larisvmsI18n.html('js.redactionEditor.rectangle') + '</button>' +
+                            '<button type="button" class="btn btn-outline-secondary" data-tool="poly">⬠ ' + larisvmsI18n.html('js.redactionEditor.polygonTool') + '</button>' +
                         '</div>' +
                         '<span class="small text-muted" data-hint></span>' +
                     '</div>' +
                     '<div class="row g-3">' +
                         '<div class="col-lg-9"><div class="redaction-stage position-relative">' +
-                            '<img alt="Frame from the start of the export" class="w-100 d-block rounded" draggable="false">' +
+                            '<img alt="' + larisvmsI18n.html('js.redactionEditor.frameFromTheStartOf') + '" class="w-100 d-block rounded" draggable="false">' +
                             '<canvas class="position-absolute top-0 start-0 w-100 h-100" style="cursor: crosshair; touch-action: none;"></canvas>' +
-                            '<div class="redaction-missing d-none text-muted small p-4">No recording at the export\'s start time to draw on. Pick a start time with footage.</div>' +
+                            '<div class="redaction-missing d-none text-muted small p-4">' + larisvmsI18n.html('js.redactionEditor.noRecordingAtTheExport') + '</div>' +
                         '</div></div>' +
-                        '<div class="col-lg-3"><div class="small fw-semibold mb-1">Areas</div><ol class="list-group list-group-numbered small" data-list></ol>' +
-                            '<button type="button" class="btn btn-link btn-sm px-0" data-clear>Clear all</button></div>' +
+                        '<div class="col-lg-3"><div class="small fw-semibold mb-1">' + larisvmsI18n.html('js.redactionEditor.areas') + '</div><ol class="list-group list-group-numbered small" data-list></ol>' +
+                            '<button type="button" class="btn btn-link btn-sm px-0" data-clear>' + larisvmsI18n.html('js.redactionEditor.clearAll') + '</button></div>' +
                     '</div>' +
                 '</div>' +
                 '<div class="modal-footer">' +
-                    '<span class="small text-muted me-auto">Areas are blacked out in this camera\'s exported video. The export is re-encoded, so it takes longer.</span>' +
-                    '<button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>' +
-                    '<button type="button" class="btn btn-sm btn-primary" data-save>Done</button>' +
+                    '<span class="small text-muted me-auto">' + larisvmsI18n.html('js.redactionEditor.areasAreBlackedOutIn') + '</span>' +
+                    '<button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">' + larisvmsI18n.html('js.redactionEditor.cancel') + '</button>' +
+                    '<button type="button" class="btn btn-sm btn-primary" data-save>' + larisvmsI18n.html('js.redactionEditor.done') + '</button>' +
                 '</div>' +
             '</div></div>';
         document.body.appendChild(modalEl);
@@ -74,17 +74,19 @@ window.larisvmsRedactionEditor = (function () {
         els.img.addEventListener('error', function () { els.missing.classList.remove('d-none'); els.img.classList.add('d-none'); });
         window.addEventListener('resize', function () { if (state) redraw(); });
         wireCanvas();
+        window.larisvmsCanvasKeyboard.wire(els.canvas);
     }
 
     function setTool(tool) {
         state.tool = tool;
         state.draft = null;
+        state.rectAnchor = null;
         Array.prototype.forEach.call(modalEl.querySelectorAll('[data-tool]'), function (b) {
             b.classList.toggle('active', b.getAttribute('data-tool') === tool);
         });
         els.hint.textContent = tool === 'rect'
-            ? 'Drag over the area to hide.'
-            : 'Click each corner; click the first point, double-click, or press Enter to finish. Right-click undoes a point.';
+            ? larisvmsI18n.t('js.redactionEditor.dragOverTheAreaTo')
+            : larisvmsI18n.t('js.redactionEditor.polygonHint');
         redraw();
     }
 
@@ -118,8 +120,17 @@ window.larisvmsRedactionEditor = (function () {
             if (!state || e.button !== 0) return;
             var pt = toFrame(e);
             if (state.tool === 'rect') {
+                if (state.rectAnchor) {
+                    // The second click of a two-click rectangle.
+                    state.polygons.push(rectPoints(state.rectAnchor, pt));
+                    state.rectAnchor = null;
+                    state.draft = null;
+                    redraw();
+                    return;
+                }
                 drag = { start: pt, end: pt };
-                els.canvas.setPointerCapture(e.pointerId);
+                // A click sent by canvas-keyboard.js has no real pointer to capture.
+                try { els.canvas.setPointerCapture(e.pointerId); } catch (ex) { /* nothing to capture */ }
                 state.draft = rectPoints(drag.start, drag.end);
                 redraw();
                 return;
@@ -132,14 +143,16 @@ window.larisvmsRedactionEditor = (function () {
             if (!state) return;
             state.cursor = toFrame(e);
             if (drag) { drag.end = state.cursor; state.draft = rectPoints(drag.start, drag.end); }
+            else if (state.rectAnchor) state.draft = rectPoints(state.rectAnchor, state.cursor);
             redraw();
         });
         els.canvas.addEventListener('pointerup', function () {
             if (!state || !drag) return;
             var a = drag.start, b = drag.end;
             drag = null;
-            // A click without a drag isn't an area.
+            // A click without a drag sets the first corner, and the next click sets the opposite one.
             if (Math.abs(a[0] - b[0]) > 0.005 && Math.abs(a[1] - b[1]) > 0.005) state.polygons.push(rectPoints(a, b));
+            else state.rectAnchor = a;
             state.draft = null;
             redraw();
         });
@@ -155,7 +168,7 @@ window.larisvmsRedactionEditor = (function () {
         document.addEventListener('keydown', function (e) {
             if (!state || !modalEl.classList.contains('show')) return;
             if (e.key === 'Enter' && state.tool === 'poly') { e.preventDefault(); finishPolygon(); }
-            else if (e.key === 'Escape' && state.draft) { e.preventDefault(); e.stopPropagation(); state.draft = null; redraw(); }
+            else if (e.key === 'Escape' && (state.draft || state.rectAnchor)) { e.preventDefault(); e.stopPropagation(); state.draft = null; state.rectAnchor = null; redraw(); }
         }, true);
     }
 
@@ -225,11 +238,11 @@ window.larisvmsRedactionEditor = (function () {
 
     function renderList() {
         els.list.innerHTML = state.polygons.length === 0
-            ? '<li class="list-group-item text-muted">None yet</li>'
+            ? '<li class="list-group-item text-muted">' + larisvmsI18n.html('js.redactionEditor.noneYet') + '</li>'
             : state.polygons.map(function (poly, i) {
                 return '<li class="list-group-item d-flex align-items-center" data-index="' + i + '">' +
-                    '<span class="ms-1">' + (isRect(poly) ? 'Rectangle' : 'Polygon, ' + poly.length + ' points') + '</span>' +
-                    '<button type="button" class="btn-close ms-auto" aria-label="Remove area ' + (i + 1) + '" data-remove="' + i + '"></button></li>';
+                    '<span class="ms-1">' + larisvmsI18n.html(isRect(poly) ? 'js.redactionEditor.rectangle' : 'js.redactionEditor.polygon', { count: poly.length }) + '</span>' +
+                    '<button type="button" class="btn-close ms-auto" aria-label="' + larisvmsI18n.html('js.redactionEditor.removeArea', { number: i + 1 }) + '" data-remove="' + i + '"></button></li>';
             }).join('');
     }
 
@@ -256,7 +269,7 @@ window.larisvmsRedactionEditor = (function () {
                 polygons: (options.polygons || []).map(function (p) { return p.map(function (pt) { return pt.slice(); }); }),
                 draft: null, cursor: null, hover: -1, tool: 'rect', saved: false, resolve: resolve
             };
-            els.title.textContent = 'Redact areas — ' + (options.title || 'camera');
+            els.title.textContent = larisvmsI18n.t('js.redactionEditor.titleFor', { camera: options.title || larisvmsI18n.t('js.redactionEditor.camera') });
             els.img.classList.remove('d-none');
             els.missing.classList.add('d-none');
             els.img.src = options.imageUrl;

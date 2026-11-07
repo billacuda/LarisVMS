@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Core.Localization;
 using LarisVMS.Infrastructure.Data;
 
 namespace LarisVMS.Infrastructure.Services;
@@ -30,9 +31,9 @@ public class ViewService(ApplicationDbContext db) : IViewService
         int sequenceIntervalSeconds, CancellationToken ct = default)
     {
         var view = await db.Views.FirstOrDefaultAsync(v => v.Id == id, ct)
-            ?? throw new InvalidOperationException("View not found.");
+            ?? throw new InvalidOperationException(Loc.T("server.view.viewNotFound"));
         if (view.OwnerId != userId && !view.IsShared)
-            throw new UnauthorizedAccessException("Only the owner can edit a personal view.");
+            throw new UnauthorizedAccessException(Loc.T("server.view.onlyTheOwnerCanEdit"));
 
         view.Name = name;
         view.IsShared = isShared;
@@ -42,12 +43,14 @@ public class ViewService(ApplicationDbContext db) : IViewService
         await db.SaveChangesAsync(ct);
     }
 
-    public async Task DeleteAsync(Guid id, string userId, CancellationToken ct = default)
+    public async Task DeleteAsync(Guid id, string userId, bool canEditShared, CancellationToken ct = default)
     {
         var view = await db.Views.FirstOrDefaultAsync(v => v.Id == id, ct);
         if (view is null) return;
         if (view.OwnerId != userId && !view.IsShared)
-            throw new UnauthorizedAccessException("Only the owner can delete a personal view.");
+            throw new UnauthorizedAccessException(Loc.T("server.view.onlyTheOwnerCanDelete"));
+        if (view.OwnerId != userId && !canEditShared)
+            throw new UnauthorizedAccessException(Loc.T("server.view.youNeedPermissionToEdit"));
         db.Views.Remove(view);
         await db.SaveChangesAsync(ct);
     }

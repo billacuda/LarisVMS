@@ -199,6 +199,32 @@ public class ObjectIntelligenceTests
         Assert.Equal(36, only.Kph, 0.5);
     }
 
+    [Theory]
+    [InlineData(SpeedTrapGates.AToB, true)]
+    [InlineData(SpeedTrapGates.BToA, false)]
+    [InlineData(SpeedTrapGates.AnyDirection, true)]
+    public void AOneWayTrapTimesOnlyItsDirection(string direction, bool timed)
+    {
+        // Gate A at y=0.4, B at y=0.6: moving down the frame crosses A first.
+        var meter = new SpeedTrapMeter([Trap with { Direction = direction }]);
+        var t0 = new DateTime(2026, 10, 14, 12, 0, 0, DateTimeKind.Utc);
+        SpeedMeasurement? result = null;
+        for (var i = 0; i <= 10 && result is null; i++)
+            result = meter.Observe(1, 0.5, 0.25 + 0.1 * i, t0.AddSeconds(0.3 * i));
+        Assert.Equal(timed, result is not null);
+    }
+
+    [Fact]
+    public void GateParsingReadsTheDirection()
+    {
+        Assert.Equal(SpeedTrapGates.BToA,
+            SpeedTrapGates.Parse("""{"a":[[0.1,0.4],[0.9,0.4]],"b":[[0.1,0.6],[0.9,0.6]],"dir":"ba"}""")!.Direction);
+        Assert.Equal(SpeedTrapGates.AnyDirection,
+            SpeedTrapGates.Parse("""{"a":[[0.1,0.4],[0.9,0.4]],"b":[[0.1,0.6],[0.9,0.6]],"dir":"sideways"}""")!.Direction);
+        Assert.Equal(SpeedTrapGates.AnyDirection,
+            SpeedTrapGates.Parse("""{"a":[[0.1,0.4],[0.9,0.4]],"b":[[0.1,0.6],[0.9,0.6]]}""")!.Direction);
+    }
+
     [Fact]
     public void IgnoresATrackThatMissesTheGates()
     {

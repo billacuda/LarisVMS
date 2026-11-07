@@ -118,18 +118,18 @@
             var prevBtn = document.createElement('button');
             prevBtn.type = 'button';
             prevBtn.className = 'btn btn-sm btn-outline-secondary';
-            prevBtn.textContent = '‹ Prev';
+            prevBtn.textContent = larisvmsI18n.t('js.tablePagination.prev');
             prevBtn.disabled = currentPage <= 1;
             prevBtn.addEventListener('click', function () { currentPage--; render(); });
 
             var info = document.createElement('span');
             info.className = 'text-muted';
-            info.textContent = 'Page ' + currentPage + ' of ' + totalPages + ' (' + total + (total === 1 ? ' row' : ' rows') + ')';
+            info.textContent = larisvmsI18n.plural('js.tablePagination.pageInfo', total, { page: currentPage, pages: totalPages });
 
             var nextBtn = document.createElement('button');
             nextBtn.type = 'button';
             nextBtn.className = 'btn btn-sm btn-outline-secondary';
-            nextBtn.textContent = 'Next ›';
+            nextBtn.textContent = larisvmsI18n.t('js.tablePagination.next');
             nextBtn.disabled = currentPage >= totalPages;
             nextBtn.addEventListener('click', function () { currentPage++; render(); });
 

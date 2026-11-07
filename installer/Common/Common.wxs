@@ -35,7 +35,22 @@
     <Property Id="SERVICEPASSWORD" Secure="yes" Hidden="yes" />
     <Property Id="SERVICEARGS" Secure="yes" Hidden="yes" />
     <Property Id="LEGACYINSTALL" Secure="yes" />
-    <Property Id="ALREADYREGISTERED" Secure="yes" />  </Fragment>
+    <Property Id="ALREADYREGISTERED" Secure="yes" />
+
+    <!-- Messages the custom actions show, in the installer's language (Strings.*.wxl). -->
+    <Property Id="LARIS_TEXT_ErrServerUrl" Value="!(loc.ErrServerUrl)" />
+    <Property Id="LARIS_TEXT_ErrRegistrationKey" Value="!(loc.ErrRegistrationKey)" />
+    <Property Id="LARIS_TEXT_ErrLivePort" Value="!(loc.ErrLivePort)" />
+    <Property Id="LARIS_TEXT_ErrLiveAllowFrom" Value="!(loc.ErrLiveAllowFrom)" />
+    <Property Id="LARIS_TEXT_ErrFfmpegNotFound" Value="!(loc.ErrFfmpegNotFound)" />
+    <Property Id="LARIS_TEXT_ErrFfmpegNotFoundAt" Value="!(loc.ErrFfmpegNotFoundAt)" />
+    <Property Id="LARIS_TEXT_ErrHttpsPort" Value="!(loc.ErrHttpsPort)" />
+    <Property Id="LARIS_TEXT_ErrClientPort" Value="!(loc.ErrClientPort)" />
+    <Property Id="LARIS_TEXT_ErrServicePassword" Value="!(loc.ErrServicePassword)" />
+    <Property Id="LARIS_TEXT_ErrCertNotFound" Value="!(loc.ErrCertNotFound)" />
+    <Property Id="LARIS_TEXT_ErrCertCantOpen" Value="!(loc.ErrCertCantOpen)" />
+    <Property Id="LARIS_TEXT_WarnCudaMissing" Value="!(loc.WarnCudaMissing)" />
+  </Fragment>
 
   <Fragment>
     <UI Id="LarisCommonUI">
@@ -64,7 +79,7 @@
       <Property Id="ARPNOMODIFY" Value="1" />
 
       <!-- Shown when a settings page fails validation; SETTINGS_ERROR is set by ValidateDialog. -->
-      <Dialog Id="SettingsErrorDlg" Width="270" Height="105" Title="[ProductName] Setup" NoMinimize="yes">
+      <Dialog Id="SettingsErrorDlg" Width="270" Height="105" Title="!(loc.DlgTitle)" NoMinimize="yes">
         <Control Id="Message" Type="Text" X="15" Y="15" Width="240" Height="55" Text="[SETTINGS_ERROR]" />
         <Control Id="OK" Type="PushButton" X="107" Y="78" Width="56" Height="17" Default="yes" Cancel="yes" Text="!(loc.WixUIOK)">
           <Publish Event="EndDialog" Value="Return" />
@@ -73,17 +88,17 @@
 
       <!-- Service account, shared by all three products. LARIS_ACCOUNT_BACK is set by the page that
            navigated here, so Back returns to the right product-specific dialog. -->
-      <Dialog Id="ServiceAccountDlg" Width="370" Height="270" Title="[ProductName] Setup">
+      <Dialog Id="ServiceAccountDlg" Width="370" Height="270" Title="!(loc.DlgTitle)">
         <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
         <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
         <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
-        <Control Id="Title" Type="Text" X="15" Y="6" Width="300" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Service account" />
-        <Control Id="Description" Type="Text" X="25" Y="23" Width="320" Height="15" Transparent="yes" NoPrefix="yes" Text="The Windows account the [ProductName] service runs as." />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="300" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}!(loc.AccountTitle)" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="320" Height="15" Transparent="yes" NoPrefix="yes" Text="!(loc.AccountDescription)" />
 
-        <Control Id="AccountLabel" Type="Text" X="20" Y="60" Width="110" Height="15" Text="Account:" />
+        <Control Id="AccountLabel" Type="Text" X="20" Y="60" Width="110" Height="15" Text="!(loc.AccountLabel)" />
         <Control Id="Account" Type="Edit" X="135" Y="58" Width="215" Height="17" Property="SERVICEACCOUNT" />
-        <Control Id="AccountHint" Type="Text" X="135" Y="78" Width="215" Height="26" NoPrefix="yes" Text="DOMAIN\user, or blank for LocalSystem. Use an account when storage or SQL needs network credentials." />
-        <Control Id="PasswordLabel" Type="Text" X="20" Y="112" Width="110" Height="15" Text="Password:" />
+        <Control Id="AccountHint" Type="Text" X="135" Y="78" Width="215" Height="26" NoPrefix="yes" Text="!(loc.AccountHint)" />
+        <Control Id="PasswordLabel" Type="Text" X="20" Y="112" Width="110" Height="15" Text="!(loc.PasswordLabel)" />
         <Control Id="Password" Type="Edit" X="135" Y="110" Width="215" Height="17" Property="SERVICEPASSWORD" Password="yes" />
 
         <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)">
@@ -104,19 +119,19 @@
            ask, so offer the upgrade directly. Stock VerifyReadyDlg's Update mode is for patches — on a
            major upgrade its Install and Update controls would both show. The Upgrade button mirrors
            VerifyReadyDlg's Install publishes. -->
-      <Dialog Id="UpgradeReadyDlg" Width="370" Height="270" Title="[ProductName] Setup">
+      <Dialog Id="UpgradeReadyDlg" Width="370" Height="270" Title="!(loc.DlgTitle)">
         <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
         <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
         <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
-        <Control Id="Title" Type="Text" X="15" Y="6" Width="300" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Ready to upgrade [ProductName]" />
-        <Control Id="Description" Type="Text" X="25" Y="23" Width="320" Height="15" Transparent="yes" NoPrefix="yes" Text="An existing installation was found." />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="300" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}!(loc.UpgradeTitle)" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="320" Height="15" Transparent="yes" NoPrefix="yes" Text="!(loc.UpgradeDescription)" />
         <Control Id="Text" Type="Text" X="25" Y="70" Width="320" Height="60" NoPrefix="yes"
-                 Text="Click Upgrade to update [ProductName] to version [ProductVersion]. The current settings, certificate and service account are kept. To change a setting, run setup with it on the command line (msiexec /i &lt;msi&gt; PROPERTY=value)." />
+                 Text="!(loc.UpgradeText)" />
 
         <Control Id="Back" Type="PushButton" X="156" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)">
           <Publish Event="NewDialog" Value="WelcomeDlg" />
         </Control>
-        <Control Id="Upgrade" Type="PushButton" X="212" Y="243" Width="80" Height="17" Default="yes" ElevationShield="yes" Text="&amp;Upgrade">
+        <Control Id="Upgrade" Type="PushButton" X="212" Y="243" Width="80" Height="17" Default="yes" ElevationShield="yes" Text="!(loc.UpgradeButton)">
           <Publish Event="EndDialog" Value="Return" Condition="OutOfDiskSpace &lt;&gt; 1" Order="1" />
           <Publish Event="SpawnDialog" Value="OutOfRbDiskDlg" Condition="OutOfDiskSpace = 1 AND OutOfNoRbDiskSpace = 0 AND (PROMPTROLLBACKCOST=&quot;P&quot; OR NOT PROMPTROLLBACKCOST)" Order="2" />
           <Publish Event="EndDialog" Value="Return" Condition="OutOfDiskSpace = 1 AND OutOfNoRbDiskSpace = 0 AND PROMPTROLLBACKCOST=&quot;D&quot;" Order="3" />

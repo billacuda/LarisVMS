@@ -16,7 +16,7 @@ public class IpAllowListMiddleware(RequestDelegate next)
     public const string ManagementSettingKey = "Security.ManagementIpAllowList";
     public const string LiveViewSettingKey = "Security.LiveViewIpAllowList";
 
-    public async Task InvokeAsync(HttpContext context, ISettingsResolver settings)
+    public async Task InvokeAsync(HttpContext context, ISettingsResolver settings, ILogger<IpAllowListMiddleware> logger)
     {
         if (SetupMiddleware.IsSetupPending(context)) { await next(context); return; }
 
@@ -29,8 +29,20 @@ public class IpAllowListMiddleware(RequestDelegate next)
         var raw = await settings.GetRawAsync(key, ct: context.RequestAborted);
         var parsed = IpAllowListPolicy.Parse(raw);
 
+        // A list that was set but has no line that parses isn't "unrestricted": it was meant to
+        // restrict something, so nothing is let through until it's fixed. Saving from Settings →
+        // Security refuses such a list, so this is a database edit or an import.
+        if (parsed.Networks.Count == 0 && parsed.InvalidLines.Count > 0)
+        {
+            AuthFailureLog.Record(logger, "IP allow list", context.Connection.RemoteIpAddress,
+                $"the {key} setting has no valid address or range; fix it in the database");
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+
         if (!IpAllowListPolicy.IsAllowed(context.Connection.RemoteIpAddress, parsed.Networks))
         {
+            AuthFailureLog.Record(logger, "IP allow list", context.Connection.RemoteIpAddress, isLive ? "live view" : "management");
             context.Response.StatusCode = StatusCodes.Status404NotFound;
             return;
         }

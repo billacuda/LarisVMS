@@ -1,3 +1,4 @@
+using LarisVMS.Core.Localization;
 namespace LarisVMS.Core;
 
 /// <summary>
@@ -31,9 +32,9 @@ public static class EventBadgeCorner
     /// <summary>Human-readable label for the admin dropdown.</summary>
     public static string Label(string corner) => corner switch
     {
-        TopRight => "Top right",
-        BottomRight => "Bottom right (shares the corner with the tile controls)",
-        BottomLeft => "Bottom left (shares the corner with the playback mini timeline)",
-        _ => "Top left (default)"
+        TopRight => Loc.T("settings.events.cornerTopRight"),
+        BottomRight => Loc.T("settings.events.cornerBottomRight"),
+        BottomLeft => Loc.T("settings.events.cornerBottomLeft"),
+        _ => Loc.T("settings.events.cornerTopLeft")
     };
 }

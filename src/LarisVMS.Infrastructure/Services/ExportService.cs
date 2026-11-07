@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using LarisVMS.Core.Localization;
 using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
@@ -125,7 +126,7 @@ public class ExportService(ApplicationDbContext db, ExportManifestBuilder? manif
             item.OutputSizeBytes = report.SizeBytes;
             item.OutputSha256 = report.Success && SegmentChain.IsHash(report.OutputSha256?.ToLowerInvariant())
                 ? report.OutputSha256!.ToLowerInvariant() : null;
-            item.ErrorMessage = report.Success ? null : Truncate(report.ErrorMessage ?? "Export failed.", 2000);
+            item.ErrorMessage = report.Success ? null : Truncate(report.ErrorMessage ?? Loc.T("server.export.exportFailed"), 2000);
             item.CompletedUtc = DateTime.UtcNow;
             affectedJobIds.Add(item.ExportJobId);
         }
@@ -184,7 +185,7 @@ public class ExportService(ApplicationDbContext db, ExportManifestBuilder? manif
         if (job is null) return null;
 
         if (job.Items.Any(i => i.Status is ExportItemStatus.Queued or ExportItemStatus.Running))
-            return new ExportJobDeletionInfo(false, "This export is still in progress.", []);
+            return new ExportJobDeletionInfo(false, Loc.T("server.export.stillInProgress"), []);
 
         var doneItems = job.Items
             .Where(i => i.Status == ExportItemStatus.Done && i.OutputFilePath is not null && i.NodeId is not null)

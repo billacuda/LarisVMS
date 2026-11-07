@@ -1,8 +1,9 @@
+@inject LocaleCatalog LocaleCatalog
 @{
     Layout = null;
 }
 <!DOCTYPE html>
-<html lang="en" data-bs-theme="light">
+<html lang="@LanguageChoices.Lang" dir="@LanguageChoices.Dir" data-bs-theme="light">
 <head>
     <meta charset="utf-8" />
     <script nonce="@Csp.Value">
@@ -20,8 +21,8 @@
     <meta name="theme-color" content="#15171c" media="(prefers-color-scheme: dark)" />
     <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
-    <title>@ViewData["Title"] - LarisVMS Setup</title>
-    <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" asp-append-version="true" />
+    <title>@ViewData["Title"] - @L["setup.title"]</title>
+    <link rel="stylesheet" href="~/lib/bootstrap/dist/css/@LanguageChoices.BootstrapCss" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/theme.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
     <script nonce="@Csp.Value">
@@ -37,13 +38,19 @@
             }
         })();
     </script>
+    <script src="/locales/@(LanguageChoices.Lang).js?v=@LocaleCatalog.Version"></script>
+    <script src="~/js/i18n.js" asp-append-version="true"></script>
     <script src="~/js/inline-actions.js" asp-append-version="true"></script>
+    <script src="~/js/form-errors.js" asp-append-version="true"></script>
 </head>
 <body class="bg-body-tertiary">
-    <button class="lv-darktoggle position-absolute top-0 end-0 m-3" id="themeToggle" type="button"
-            data-action="toggle-theme" title="Toggle theme" aria-label="Toggle theme"><span id="themeIcon" aria-hidden="true">🌙</span></button>
+    <div class="position-absolute top-0 end-0 m-3 d-flex gap-2">
+        <partial name="_LanguagePicker" />
+        <button class="lv-darktoggle" id="themeToggle" type="button"
+                data-action="toggle-theme" title="@L["layout.toggleTheme"]" aria-label="@L["layout.toggleTheme"]"><span id="themeIcon" aria-hidden="true">🌙</span></button>
+    </div>
     <div class="container" style="max-width: 640px; margin-top: 4rem;">
-        <h1 class="mb-4 text-center">LarisVMS Setup</h1>
+        <h1 class="mb-4 text-center">@L["setup.title"]</h1>
         <div class="card shadow-sm">
             <div class="card-body p-4">
                 @RenderBody()

@@ -1,0 +1,78 @@
+@* Detection.IgnoredObjects picker, shared by Settings → AI detection (the global default) and a
+   camera's edit page (its override). Plain form fields, read back with FromForm. *@
+@using LarisVMS.Core
+
+<div class="d-flex flex-wrap gap-3 mt-1">
+    @foreach (var (category, key) in Categories)
+    {
+        <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="IgnoredCategory" value="@category" id="ignored-@category"
+                   checked="@Has(category)" />
+            <label class="form-check-label" for="ignored-@category">@L[key]</label>
+        </div>
+    }
+</div>
+<details class="position-relative column-picker mt-2" style="max-width: 22rem;">
+    <summary class="form-select form-select-sm text-start text-truncate">@Summary</summary>
+    <div class="column-picker-menu" style="inset-inline-start: 0; inset-inline-end: auto; min-width: 16rem; max-height: 20rem; overflow-y: auto;">
+        @foreach (var label in CocoCategoryMap.AllCocoLabels)
+        {
+            var id = "ignored-label-" + label.Replace(' ', '-');
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="IgnoredObjectLabel" value="@label" id="@id" checked="@Has(label)" />
+                <label class="form-check-label small" for="@id">@CocoCategoryMap.LocalizedClassName(label)</label>
+            </div>
+        }
+    </div>
+</details>
+<input type="text" name="IgnoredObjectExtra" class="form-control form-control-sm mt-2" style="max-width: 22rem;" maxlength="300"
+       value="@Extras" placeholder="@L["settings.detection.moreObjectNamesCommaSeparated"]" aria-label="@L["settings.detection.moreObjectNames"]" />
+
+@code {
+    /// <summary>The current Detection.IgnoredObjects value (as stored; null or empty = nothing).</summary>
+    [Parameter] public string? Value { get; set; }
+
+    private static readonly (string Category, string Key)[] Categories =
+    [
+        (CocoCategoryMap.Human, "settings.detection.categoryPeople"),
+        (CocoCategoryMap.Vehicle, "settings.detection.categoryVehicles"),
+        (CocoCategoryMap.Animal, "settings.detection.categoryAnimals"),
+        (CocoCategoryMap.Object, "settings.detection.categoryOtherObjects"),
+    ];
+
+    private HashSet<string> Selected => CocoCategoryMap.ParseIgnoredObjects(Value);
+    private bool Has(string name) => Selected.Contains(name);
+
+    private string Summary
+    {
+        get
+        {
+            var chosen = CocoCategoryMap.AllCocoLabels.Where(Has).Select(CocoCategoryMap.LocalizedClassName).ToList();
+            return chosen.Count switch
+            {
+                0 => Loc.T("settings.detection.ignoredObjectsNone"),
+                1 => Loc.T("settings.detection.ignoredObjectsOne", new { first = chosen[0] }),
+                _ => Loc.T("settings.detection.ignoredObjectsMore", new { first = chosen[0], more = chosen.Count - 1 }),
+            };
+        }
+    }
+
+    /// <summary>Names that are neither a category nor in the list: a custom model's own object names.</summary>
+    private string Extras => string.Join(", ", Selected
+        .Where(v => Categories.All(c => !string.Equals(c.Category, v, StringComparison.OrdinalIgnoreCase))
+            && !CocoCategoryMap.AllCocoLabels.Contains(v, StringComparer.OrdinalIgnoreCase)
+));
+
+    /// <summary>The submitted choices as a Detection.IgnoredObjects value: the ticked categories and
+    /// objects, then the typed names (trimmed, at most 40 characters each, 60 in all).</summary>
+    public static string FromForm(Microsoft.AspNetCore.Http.IFormCollection form)
+    {
+        var categories = form["IgnoredCategory"].Where(v => Categories.Any(c => c.Category == v));
+        var offered = form["IgnoredObjectLabel"].Where(v => v is not null && CocoCategoryMap.AllCocoLabels.Contains(v));
+        var typed = form["IgnoredObjectExtra"].ToString()
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(v => v.Length <= 40);
+        return string.Join(",", categories.Concat(offered!).Concat(typed)
+            .Distinct(StringComparer.OrdinalIgnoreCase).Take(60));
+    }
+}

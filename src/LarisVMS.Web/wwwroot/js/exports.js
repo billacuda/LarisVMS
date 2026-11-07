@@ -44,24 +44,24 @@
             if (item.status === 'Done') {
                 var sizeSuffix = (item.outputSizeBytes !== null && item.outputSizeBytes !== undefined)
                     ? ' (' + formatBytes(item.outputSizeBytes) + ')' : '';
-                extra = '<a class="btn btn-sm btn-outline-primary ms-1" href="/export-download/' + item.id + '"><span aria-hidden="true">⬇️</span> Download' + sizeSuffix + '</a>';
+                extra = '<a class="btn btn-sm btn-outline-primary ms-1" href="/export-download/' + item.id + '"><span aria-hidden="true">⬇️</span> ' + larisvmsI18n.html('js.exports.download') + sizeSuffix + '</a>';
             } else if (item.status === 'Failed' && item.errorMessage) {
                 extra = '<span class="text-danger ms-1" title="' + escapeHtml(item.errorMessage) + '">&#9888; ' + escapeHtml(item.errorMessage) + '</span>' +
-                    '<button type="button" class="btn btn-sm btn-outline-secondary ms-1 js-retry-export" data-item-id="' + item.id + '">Retry</button>';
+                    '<button type="button" class="btn btn-sm btn-outline-secondary ms-1 js-retry-export" data-item-id="' + item.id + '">' + larisvmsI18n.html('js.exports.retry') + '</button>';
             }
             var nodeSuffix = item.nodeName ? ' <span class="text-muted">(' + escapeHtml(item.nodeName) + ')</span>' : '';
             // A redacted export has had areas blacked out — it isn't the footage exactly as recorded.
-            var redacted = item.redacted ? ' <span class="badge text-bg-dark" title="Areas were blacked out in this export">Redacted</span>' : '';
+            var redacted = item.redacted ? ' <span class="badge text-bg-dark" title="' + larisvmsI18n.html('js.exports.areasWereBlackedOutIn') + '">' + larisvmsI18n.html('js.exports.redacted') + '</span>' : '';
             return '<li class="mb-1">' + escapeHtml(item.cameraName) + nodeSuffix + ' <span class="badge ' + itemBadge + '">' + item.status + '</span>' + redacted + extra + '</li>';
         }).join('');
 
         var deleteBtn = inProgress ? '' :
-            '<button type="button" class="btn btn-sm btn-outline-danger js-delete-export" data-job-id="' + job.id + '" title="Delete this export">&#128465;</button>';
+            '<button type="button" class="btn btn-sm btn-outline-danger js-delete-export" data-job-id="' + job.id + '" title="' + larisvmsI18n.html('js.exports.deleteThisExport') + '">&#128465;</button>';
 
         return '<tr data-job-id="' + job.id + '">' +
-            '<td><span title="' + created.toISOString() + '">' + created.toLocaleString() + '</span>' +
+            '<td><span title="' + created.toISOString() + '">' + created.toLocaleString(larisvmsI18n.locale) + '</span>' +
             '<div class="text-muted small">by ' + escapeHtml(job.requestedByUserName || 'unknown') + '</div></td>' +
-            '<td class="small">' + from.toLocaleString() + ' &ndash; ' + to.toLocaleString() + '</td>' +
+            '<td class="small">' + from.toLocaleString(larisvmsI18n.locale) + ' &ndash; ' + to.toLocaleString(larisvmsI18n.locale) + '</td>' +
             '<td><span class="badge ' + badge + '">' + job.status + '</span></td>' +
             '<td><ul class="list-unstyled mb-0 small">' + itemsHtml + '</ul></td>' +
             '<td>' + deleteBtn + '</td>' +
@@ -104,7 +104,7 @@
     tbody.addEventListener('click', function (ev) {
         var deleteBtn = ev.target.closest('.js-delete-export');
         if (deleteBtn) {
-            if (!confirm('Delete this export? Finished output files will be removed.')) return;
+            if (!confirm(larisvmsI18n.t('js.exports.deleteThisExportFinishedOutput'))) return;
             deleteBtn.disabled = true;
             fetch('/api/exports/' + deleteBtn.dataset.jobId, { method: 'DELETE' })
                 .then(function (resp) {
@@ -112,7 +112,7 @@
                     if (!pollTimer) poll(); else fetch('/api/exports').then(function (r) { return r.json(); }).then(render);
                 })
                 .catch(function (err) {
-                    alert('Could not delete export: ' + (err && err.message ? err.message : err));
+                    alert(larisvmsI18n.t('js.exports.deleteFailed', { message: err && err.message ? err.message : err }));
                     deleteBtn.disabled = false;
                 });
             return;
@@ -127,7 +127,7 @@
                     if (!pollTimer) poll(); else fetch('/api/exports').then(function (r) { return r.json(); }).then(render);
                 })
                 .catch(function (err) {
-                    alert('Could not retry export: ' + (err && err.message ? err.message : err));
+                    alert(larisvmsI18n.t('js.exports.retryFailed', { message: err && err.message ? err.message : err }));
                     retryBtn.disabled = false;
                 });
         }

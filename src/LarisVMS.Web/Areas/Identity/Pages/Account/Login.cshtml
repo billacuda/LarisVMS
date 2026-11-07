@@ -1,11 +1,11 @@
 @page
 @model LarisVMS.Web.Areas.Identity.Pages.Account.LoginModel
 @{
-    ViewData["Title"] = "Log in";
+    ViewData["Title"] = L["account.login.logIn"].Value;
 }
 <div class="row justify-content-center">
     <div class="col-md-5">
-        <h1 class="h3 mb-3">Log in</h1>
+        <h1 class="h3 mb-3">@L["account.login.logIn"]</h1>
 
         @if (!ViewData.ModelState.IsValid)
         {
@@ -23,12 +23,12 @@
                 }
                 else
                 {
-                    <label asp-for="Input.Username" class="form-label">Email</label>
+                    <label asp-for="Input.Username" class="form-label">@L["common.email"]</label>
                 }
                 <input asp-for="Input.Username" class="form-control" autocomplete="username" autofocus />
                 @if (Model.AdEnabled)
                 {
-                    <div class="form-text">Domain accounts: just your username, without the domain.</div>
+                    <div class="form-text">@L["account.login.domainAccountsJustYourUsername"]</div>
                 }
                 <span asp-validation-for="Input.Username" class="text-danger small"></span>
             </div>
@@ -41,7 +41,7 @@
                 <input class="form-check-input" asp-for="Input.RememberMe" />
                 <label class="form-check-label" asp-for="Input.RememberMe"></label>
             </div>
-            <button type="submit" class="btn btn-primary w-100">Log in</button>
+            <button type="submit" class="btn btn-primary w-100">@L["account.login.logIn"]</button>
         </form>
 
         @if (Model.ShowEntraButton)
@@ -51,7 +51,7 @@
                 <input type="hidden" name="provider" value="@LoginModel.EntraSchemeName" />
                 <input type="hidden" name="returnUrl" value="@Model.ReturnUrl" />
                 <button type="submit" class="btn btn-outline-secondary w-100">
-                    <span aria-hidden="true">🪟</span> Sign in with Microsoft
+                    <span aria-hidden="true">🪟</span> @L["account.login.signInWithMicrosoft"]
                 </button>
             </form>
         }

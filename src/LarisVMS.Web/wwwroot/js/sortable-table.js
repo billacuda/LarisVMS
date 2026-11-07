@@ -52,13 +52,17 @@
         function applySort(th, columnIndex, ascending) {
             headers.forEach(function (h) {
                 h.removeAttribute('data-sort-dir');
+                if (h.classList.contains('sortable-header')) h.setAttribute('aria-sort', 'none');
                 var existingIndicator = h.querySelector('.sort-indicator');
                 if (existingIndicator) existingIndicator.remove();
             });
 
             th.setAttribute('data-sort-dir', ascending ? 'asc' : 'desc');
+            // Screen readers announce the order from aria-sort; the arrow is only for the eye.
+            th.setAttribute('aria-sort', ascending ? 'ascending' : 'descending');
             var indicator = document.createElement('span');
             indicator.className = 'sort-indicator ms-1';
+            indicator.setAttribute('aria-hidden', 'true');
             indicator.textContent = ascending ? '▲' : '▼';
             th.appendChild(indicator);
 
@@ -74,11 +78,20 @@
             th.classList.add('sortable-header');
             th.style.cursor = 'pointer';
             th.style.userSelect = 'none';
+            // Reachable and usable from the keyboard, not just the mouse.
+            th.tabIndex = 0;
+            th.setAttribute('aria-sort', 'none');
 
-            th.addEventListener('click', function () {
+            function toggle() {
                 var ascending = th.getAttribute('data-sort-dir') !== 'asc';
                 applySort(th, columnIndex, ascending);
                 if (table.id) window.larisvmsPreferences.set(prefKey, columnIndex + ':' + (ascending ? 'asc' : 'desc'));
+            }
+            th.addEventListener('click', toggle);
+            th.addEventListener('keydown', function (e) {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                e.preventDefault();
+                toggle();
             });
         });
 

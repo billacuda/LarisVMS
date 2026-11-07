@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
+using LarisVMS.Core.Localization;
 using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
@@ -94,7 +95,7 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
     public async Task<Camera> AddAsync(AddCameraRequest request, CancellationToken ct = default)
     {
         if (!Uri.TryCreate(request.DeviceServiceUri, UriKind.Absolute, out var deviceUri))
-            throw new ArgumentException("Device service URI is not a valid absolute URI.", nameof(request));
+            throw new ArgumentException(Loc.T("server.camera.deviceServiceUriIsNot"), nameof(request));
 
         var camera = new Camera
         {
@@ -142,7 +143,7 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
         CancellationToken ct = default)
     {
         var camera = await db.Cameras.FirstOrDefaultAsync(c => c.Id == id, ct)
-            ?? throw new InvalidOperationException("Camera not found.");
+            ?? throw new InvalidOperationException(Loc.T("server.camera.cameraNotFound"));
 
         camera.Name = name;
         camera.NodeId = nodeId;
@@ -157,7 +158,7 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
         if (!string.IsNullOrWhiteSpace(deviceServiceUri) && Uri.TryCreate(deviceServiceUri, UriKind.Absolute, out var newUri)
             && !string.Equals(newUri.Host, camera.Host, StringComparison.OrdinalIgnoreCase)
             && string.IsNullOrWhiteSpace(password) && !string.IsNullOrEmpty(camera.Password))
-            throw new ArgumentException("Enter the camera's password again to change its address to a different host.");
+            throw new ArgumentException(Loc.T("server.camera.enterTheCameraPasswordAgain"));
 
         // Blank fields leave the stored credential alone — the edit form never round-trips the
         // decrypted password back to the browser, so an empty submission must mean "unchanged",
@@ -173,7 +174,7 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
         if (!string.IsNullOrWhiteSpace(deviceServiceUri) && deviceServiceUri != camera.DeviceServiceUri)
         {
             if (!Uri.TryCreate(deviceServiceUri, UriKind.Absolute, out var deviceUri))
-                throw new ArgumentException("Device service URI is not a valid absolute URI.", nameof(deviceServiceUri));
+                throw new ArgumentException(Loc.T("server.camera.deviceServiceUriIsNot"), nameof(deviceServiceUri));
 
             camera.DeviceServiceUri = deviceServiceUri;
             camera.Host = deviceUri.Host;
@@ -195,7 +196,7 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
     public async Task SetCameraGroupsAsync(Guid cameraId, IReadOnlyList<Guid> groupIds, CancellationToken ct = default)
     {
         var camera = await db.Cameras.Include(c => c.Groups).FirstOrDefaultAsync(c => c.Id == cameraId, ct)
-            ?? throw new InvalidOperationException("Camera not found.");
+            ?? throw new InvalidOperationException(Loc.T("server.camera.cameraNotFound"));
 
         // The built-in "All Cameras" group is exempt from the single-site rule below (it's top-level
         // and on every camera, so naively including it would collide with each camera's real site) and
@@ -211,7 +212,7 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
             var parentIdByGroupId = await db.CameraGroups.AsNoTracking()
                 .Select(g => new { g.Id, g.ParentId }).ToDictionaryAsync(g => g.Id, g => g.ParentId, ct);
             if (!CameraGroupPolicy.AllShareOneSite(distinctIds, parentIdByGroupId))
-                throw new InvalidOperationException("A camera can only belong to groups under a single site.");
+                throw new InvalidOperationException(Loc.T("server.camera.aCameraCanOnlyBelong"));
         }
 
         var targetGroups = distinctIds.Count == 0
@@ -232,12 +233,13 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
             .Select(g => new { CameraId = g.Key, Bytes = g.Sum(s => s.SizeBytes) })
             .ToDictionaryAsync(x => x.CameraId, x => x.Bytes, ct);
 
-    public async Task UpdateStreamAsync(Guid streamId, bool isEnabled, string? customName, CancellationToken ct = default)
+    public async Task<bool> UpdateStreamAsync(Guid cameraId, Guid streamId, bool isEnabled, string? customName, CancellationToken ct = default)
     {
         var name = string.IsNullOrWhiteSpace(customName) ? null : customName.Trim();
-        await db.CameraStreams.Where(s => s.Id == streamId).ExecuteUpdateAsync(u => u
+        // Scoped to the camera so a caller checked for one camera can't change another camera's streams.
+        return await db.CameraStreams.Where(s => s.Id == streamId && s.CameraId == cameraId).ExecuteUpdateAsync(u => u
             .SetProperty(s => s.IsEnabled, isEnabled)
-            .SetProperty(s => s.CustomName, name), ct);
+            .SetProperty(s => s.CustomName, name), ct) > 0;
     }
 
     public async Task ToggleEnabledAsync(Guid id, CancellationToken ct = default)
@@ -305,7 +307,7 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
         // Locks that no longer protect anything are history; the audit log already holds their story,
         // so they're cleared to satisfy the Restrict foreign key.
         if (await db.EvidenceLocks.AnyAsync(EvidenceLockQueries.Protecting(DateTime.UtcNow).AndCamera(id), ct))
-            throw new InvalidOperationException("This camera has footage under an evidence lock. Remove or wait out its locks (Evidence locks page) before deleting the camera.");
+            throw new InvalidOperationException(Loc.T("server.camera.thisCameraHasFootageUnder"));
         await db.EvidenceLocks.Where(l => l.CameraId == id).ExecuteDeleteAsync(ct);
         await db.Cameras.Where(c => c.Id == id).ExecuteDeleteAsync(ct);
     }
@@ -316,7 +318,7 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
         // membership, which needs the collection actually loaded rather than the empty in-memory
         // default a plain FirstOrDefaultAsync would leave it as.
         var camera = await db.Cameras.Include(c => c.Groups).FirstOrDefaultAsync(c => c.Id == cameraId, ct)
-            ?? throw new InvalidOperationException("Camera not found.");
+            ?? throw new InvalidOperationException(Loc.T("server.camera.cameraNotFound"));
 
         var summary = await ProbeAsync(cameraId, ct);
         var channels = summary.VideoSourceTokens ?? [];
@@ -398,7 +400,7 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
         try
         {
             camera = await db.Cameras.FirstOrDefaultAsync(c => c.Id == cameraId, ct)
-                ?? throw new InvalidOperationException("Camera not found.");
+                ?? throw new InvalidOperationException(Loc.T("server.camera.cameraNotFound"));
         }
         catch (System.Security.Cryptography.CryptographicException ex)
         {
@@ -412,7 +414,7 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
                 .ExecuteUpdateAsync(s => s.SetProperty(c => c.LastProbedAt, DateTime.UtcNow), ct);
             return new CameraProbeSummary(false, false, false, false, false, false, false, false,
                 false, false, false, false, 0,
-                $"Stored credentials could not be decrypted ({ex.Message}). Delete and re-add this camera.");
+                Loc.T("server.camera.credentialsUndecryptable", new { message = ex.Message }));
         }
 
         camera.LastProbedAt = DateTime.UtcNow;
@@ -421,7 +423,7 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
         {
             await db.SaveChangesAsync(ct);
             return new CameraProbeSummary(false, false, false, false, false, false, false, false,
-                false, false, false, false, 0, "Camera has no valid device service URI.");
+                false, false, false, false, 0, Loc.T("server.camera.noValidDeviceUri"));
         }
 
         var credentials = camera.Username is null ? null : new OnvifCredentials(camera.Username, camera.Password ?? string.Empty);

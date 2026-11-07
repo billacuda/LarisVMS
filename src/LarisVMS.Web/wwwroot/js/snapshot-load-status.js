@@ -20,13 +20,13 @@
 
         function render() {
             if (resolved >= total) {
-                statusEl.textContent = 'All ' + total + ' ready';
+                statusEl.textContent = larisvmsI18n.t('js.snapshotLoadStatus.allReady', { count: total });
                 // Fades out shortly after finishing rather than lingering forever once there's
                 // nothing left to report — a live counter that never goes away starts reading as
                 // broken once it's stuck at "24 of 24" for the rest of the visit.
                 setTimeout(function () { statusEl.classList.add('d-none'); }, 3000);
             } else {
-                statusEl.textContent = resolved + ' of ' + total + ' ready (' + (total - resolved) + ' generating…)';
+                statusEl.textContent = larisvmsI18n.t('js.snapshotLoadStatus.progress', { ready: resolved, count: total, pending: total - resolved });
             }
         }
 

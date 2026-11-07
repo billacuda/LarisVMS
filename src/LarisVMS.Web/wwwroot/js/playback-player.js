@@ -324,7 +324,7 @@
                     // Previously silent — a tile that failed here just sat blank forever with
                     // nothing in the console to explain why, indistinguishable from "still loading".
                     console.error('[playback] segment list fetch failed for camera', cameraId, 'status', resp.status);
-                    if (statusEl) statusEl.textContent = 'Could not load recordings (' + resp.status + ').';
+                    if (statusEl) statusEl.textContent = larisvmsI18n.t('js.playbackPlayer.loadRecordingsFailed', { status: resp.status });
                     return;
                 }
                 var list = await resp.json();
@@ -337,7 +337,7 @@
             } catch (e) {
                 if (signal.aborted) return; // superseded by a newer seek — expected, not an error
                 console.error('[playback] segment list fetch threw for camera', cameraId, e);
-                if (statusEl) statusEl.textContent = 'Could not load recordings.';
+                if (statusEl) statusEl.textContent = larisvmsI18n.t('js.playbackPlayer.couldNotLoadRecordings');
             }
         }
 
@@ -392,7 +392,7 @@
                 // network fetch itself was eliminated — the text was the visible symptom, not the
                 // fetch latency it was written to describe.
                 if (!mimeType) {
-                    if (statusEl) statusEl.textContent = 'No supported codec for this browser.';
+                    if (statusEl) statusEl.textContent = larisvmsI18n.t('js.playbackPlayer.noSupportedCodecForThis');
                     hideFreezeFrameForLoadFailure();
                     return;
                 }
@@ -410,7 +410,7 @@
                         sourceBuffer = prefetchedMediaSource.addSourceBuffer(mimeType);
                         sourceBuffer._larisvmsMime = mimeType;
                     } catch (e) {
-                        if (statusEl) statusEl.textContent = 'This browser cannot decode this stream.';
+                        if (statusEl) statusEl.textContent = larisvmsI18n.t('js.playbackPlayer.thisBrowserCannotDecodeThis');
                         hideFreezeFrameForLoadFailure();
                         return;
                     }
@@ -425,10 +425,10 @@
             loadToken = myToken; // teardown() bumped it again — restore the token this call owns
             // Archived segments live on the node's slower cold-storage volume — say so, so a longer
             // wait reads as expected rather than a stall.
-            if (statusEl) statusEl.textContent = segment.isArchived ? 'Loading from archive…' : 'Loading…';
+            if (statusEl) statusEl.textContent = segment.isArchived ? larisvmsI18n.t('js.playbackPlayer.loadingFromArchive') : larisvmsI18n.t('js.playbackPlayer.loading');
 
             if (!mimeType) {
-                if (statusEl) statusEl.textContent = 'No supported codec for this browser.';
+                if (statusEl) statusEl.textContent = larisvmsI18n.t('js.playbackPlayer.noSupportedCodecForThis');
                 hideFreezeFrameForLoadFailure();
                 return;
             }
@@ -480,12 +480,12 @@
                         await loadSegment(segment, seekSeconds, autoplay, myToken, signal, true);
                         return;
                     }
-                    if (statusEl) statusEl.textContent = 'Recorder is not responding — try again shortly.';
+                    if (statusEl) statusEl.textContent = larisvmsI18n.t('js.playbackPlayer.recorderIsNotRespondingTry');
                     hideFreezeFrameForLoadFailure();
                     return;
                 }
 
-                if (statusEl) statusEl.textContent = 'Could not reach server.';
+                if (statusEl) statusEl.textContent = larisvmsI18n.t('js.playbackPlayer.couldNotReachServer');
                 hideFreezeFrameForLoadFailure();
                 return;
             }
@@ -498,7 +498,7 @@
                 // hiccup, worth retrying on the next seek rather than blacklisting for the rest of
                 // this page load).
                 if (resp.status === 404) knownBadSegmentIds[segment.id] = true;
-                if (statusEl) statusEl.textContent = 'Playback error (' + resp.status + ').';
+                if (statusEl) statusEl.textContent = larisvmsI18n.t('js.playbackPlayer.playbackErrorStatus', { status: resp.status });
                 hideFreezeFrameForLoadFailure();
                 return;
             }
@@ -526,7 +526,7 @@
                     sourceBuffer = mediaSource.addSourceBuffer(mimeType);
                     sourceBuffer._larisvmsMime = mimeType;
                 } catch (e) {
-                    if (statusEl) statusEl.textContent = 'This browser cannot decode this stream.';
+                    if (statusEl) statusEl.textContent = larisvmsI18n.t('js.playbackPlayer.thisBrowserCannotDecodeThis');
                     hideFreezeFrameForLoadFailure();
                     return;
                 }
@@ -601,7 +601,7 @@
                     // Nothing to show at the requested instant yet, but the tile shouldn't look dead
                     // while the rest of the segment streams in — a freeze frame from the previous
                     // segment (if any) is still up, so this only speaks when there's nothing to see.
-                    if (statusEl && !statusEl.textContent) statusEl.textContent = 'Loading…';
+                    if (statusEl && !statusEl.textContent) statusEl.textContent = larisvmsI18n.t('js.playbackPlayer.loading');
                     return;
                 }
 
@@ -657,7 +657,7 @@
                 if (startedPlayback) currentSegmentComplete = true;
                 if (!startedPlayback) {
                     console.error('[playback] segment fully streamed but nothing buffered for camera', cameraId);
-                    if (statusEl) statusEl.textContent = 'Segment could not be decoded.';
+                    if (statusEl) statusEl.textContent = larisvmsI18n.t('js.playbackPlayer.segmentCouldNotBeDecoded');
                     hideFreezeFrameForLoadFailure();
                 }
             }
@@ -675,14 +675,14 @@
                         sourceBuffer.appendBuffer(result.value);
                     } catch (e) {
                         console.error('[playback] appendBuffer failed for camera', cameraId, e);
-                        if (statusEl) statusEl.textContent = 'Playback error: ' + e.message;
+                        if (statusEl) statusEl.textContent = larisvmsI18n.t('js.liveView.playbackError', { message: e.message });
                         recoverUnrecoverableMediaSource('an appendBuffer failure (' + e.name + ')',
                             segment.startUtc + seekSeconds * 1000, autoplay);
                     }
                 }).catch(function (e) {
                     if (signal.aborted) return; // superseded — the reader was cancelled below, expected
                     console.error('[playback] segment stream read failed for camera', cameraId, e);
-                    if (statusEl) statusEl.textContent = 'Playback error reading segment.';
+                    if (statusEl) statusEl.textContent = larisvmsI18n.t('js.playbackPlayer.playbackErrorReadingSegment');
                 });
             }
 
@@ -706,7 +706,7 @@
             try {
                 bytes = new Uint8Array(await resp.arrayBuffer());
             } catch (e) {
-                if (!signal.aborted && statusEl) statusEl.textContent = 'Playback error reading segment.';
+                if (!signal.aborted && statusEl) statusEl.textContent = larisvmsI18n.t('js.playbackPlayer.playbackErrorReadingSegment');
                 return;
             }
             if (myToken !== loadToken) return;
@@ -743,7 +743,7 @@
                     // currentSegmentComplete's own comment for what this gates.
                     currentSegmentComplete = true;
                 } else {
-                    if (statusEl) statusEl.textContent = 'Segment could not be decoded.';
+                    if (statusEl) statusEl.textContent = larisvmsI18n.t('js.playbackPlayer.segmentCouldNotBeDecoded');
                     hideFreezeFrameForLoadFailure();
                     return;
                 }
@@ -760,7 +760,7 @@
                 sourceBuffer.appendBuffer(bytes);
             } catch (e) {
                 console.error('[playback] appendBuffer failed for camera', cameraId, e);
-                if (statusEl) statusEl.textContent = 'Playback error: ' + e.message;
+                if (statusEl) statusEl.textContent = larisvmsI18n.t('js.liveView.playbackError', { message: e.message });
                 recoverUnrecoverableMediaSource('an appendBuffer failure (' + e.name + ')',
                     segment.startUtc + seekSeconds * 1000, autoplay);
             }
@@ -785,7 +785,7 @@
                 // blank the entire time it was in flight, identical whether that took 50ms or never
                 // resolved at all. "Loading…" itself is set separately once a segment is actually
                 // found and its bytes are being fetched (loadSegment); this is the step before that.
-                if (statusEl) statusEl.textContent = 'Looking for a recording…';
+                if (statusEl) statusEl.textContent = larisvmsI18n.t('js.playbackPlayer.lookingForARecording');
                 await ensureSegmentsLoaded(targetMs - 2 * 3600 * 1000, targetMs + 2 * 3600 * 1000, signal);
                 if (myToken !== loadToken) return;
                 segment = findSegment(targetMs);
@@ -795,8 +795,8 @@
                 var next = nextSegmentAfter(targetMs);
                 if (statusEl) {
                     statusEl.textContent = next
-                        ? 'No recording here — next at ' + new Date(next.startUtc).toLocaleString()
-                        : 'No recording available.';
+                        ? larisvmsI18n.t('js.playbackPlayer.noRecordingNextAt', { time: new Date(next.startUtc).toLocaleString(larisvmsI18n.locale) })
+                        : larisvmsI18n.t('js.playbackPlayer.noRecordingAvailable');
                 }
                 teardown();
                 hideFreezeFrame(); // nothing is going to load here — a held frame would sit stale forever
@@ -808,7 +808,7 @@
                 // comment for why re-fetching it here matters, not just cosmetically.
                 teardown();
                 hideFreezeFrame();
-                if (statusEl) statusEl.textContent = 'This recording is unavailable (missing on the recorder).';
+                if (statusEl) statusEl.textContent = larisvmsI18n.t('js.playbackPlayer.thisRecordingIsUnavailableMissing');
                 return;
             }
 
@@ -913,7 +913,7 @@
                     consecutiveSameTargetRecoveries, 'consecutive stalls near', targetMs);
                 teardown();
                 hideFreezeFrame();
-                if (statusEl) statusEl.textContent = 'Playback stalled at this point — try scrubbing elsewhere.';
+                if (statusEl) statusEl.textContent = larisvmsI18n.t('js.playbackPlayer.playbackStalledAtThisPoint');
                 consecutiveSameTargetRecoveries = 0;
                 lastRecoveryTargetMs = null;
                 // The tile is now genuinely stopped (teardown() paused it and cleared its source) —
@@ -939,7 +939,7 @@
 
         videoEl.addEventListener('error', function () {
             if (!currentSegmentId) return; // nothing loaded yet, or already superseded — not our error to fix
-            recoverUnrecoverableMediaSource('a video decode error', computeCurrentWallClockMs(), shouldResumeAutoplay());
+            recoverUnrecoverableMediaSource(larisvmsI18n.t('js.playbackPlayer.aVideoDecodeError'), computeCurrentWallClockMs(), shouldResumeAutoplay());
         });
 
         // Each tile auto-advances to whatever's next *for this camera*, independent of any sibling
@@ -969,7 +969,7 @@
             stallTimer = setTimeout(function () {
                 stallTimer = null;
                 console.warn('[playback] camera', cameraId, 'tile stalled waiting for', lastSeekTargetMs, '— recovering');
-                recoverUnrecoverableMediaSource('a stalled seek', lastSeekTargetMs, shouldResumeAutoplay());
+                recoverUnrecoverableMediaSource(larisvmsI18n.t('js.playbackPlayer.aStalledSeek'), lastSeekTargetMs, shouldResumeAutoplay());
             }, STALL_TIMEOUT_MS);
         });
         videoEl.addEventListener('playing', clearStallTimer);
@@ -1172,7 +1172,7 @@
         if (!displayEl) return;
         var editing = false;
 
-        function render() { displayEl.textContent = new Date(playheadMs).toLocaleString(); }
+        function render() { displayEl.textContent = new Date(playheadMs).toLocaleString(larisvmsI18n.locale); }
 
         function commit(inputEl) {
             if (!editing) return;
@@ -1180,18 +1180,34 @@
             var ms = inputEl.value ? new Date(inputEl.value).getTime() : NaN;
             if (!isNaN(ms)) seekAll(ms, playing); // also repopulates displayEl's text, replacing the input
             else render();
+            makeOperable();
         }
 
         function cancel() {
             editing = false;
             render();
+            makeOperable();
+        }
+
+        function makeOperable() {
+            displayEl.setAttribute('role', 'button');
+            displayEl.tabIndex = 0;
         }
 
         displayEl.style.cursor = 'pointer';
-        displayEl.title = 'Click to jump to an exact time';
+        displayEl.title = larisvmsI18n.t('js.playbackPlayer.clickToJumpToAn');
+        makeOperable();
+        displayEl.addEventListener('keydown', function (e) {
+            if (editing || (e.key !== 'Enter' && e.key !== ' ')) return;
+            e.preventDefault();
+            displayEl.click();
+        });
         displayEl.addEventListener('click', function () {
             if (editing) return;
             editing = true;
+            // It holds a text field while editing, which can't sit inside a button.
+            displayEl.removeAttribute('role');
+            displayEl.removeAttribute('tabindex');
             var inputEl = document.createElement('input');
             inputEl.type = 'datetime-local';
             inputEl.step = '1';
@@ -1205,8 +1221,8 @@
             // off the keystrokes used to type into this field.
             inputEl.addEventListener('keydown', function (e) {
                 e.stopPropagation();
-                if (e.key === 'Enter') { e.preventDefault(); commit(inputEl); }
-                else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+                if (e.key === 'Enter') { e.preventDefault(); commit(inputEl); displayEl.focus(); }
+                else if (e.key === 'Escape') { e.preventDefault(); cancel(); displayEl.focus(); }
             });
             inputEl.addEventListener('blur', function () { commit(inputEl); });
         });
@@ -1238,18 +1254,21 @@
         return (
             '<div class="h-100 w-100 position-relative bg-black overflow-hidden pb-tile-frame" ' +
                 'style="outline:' + (isPrimary ? '3px solid var(--bs-primary)' : 'none') + '; outline-offset:-2px;">' +
-                '<video class="pb-video" muted playsinline ' +
+                '<video class="pb-video" muted playsinline aria-label="' + larisvmsI18n.html('js.video.from', { camera: cam.name }) + '" ' +
                     'style="width:100%; height:100%; object-fit:contain; transform-origin:center center; cursor:default; touch-action:none;"></video>' +
                 '<div class="position-absolute top-50 start-50 translate-middle text-white small text-center px-2 pb-status"></div>' +
-                '<div class="position-absolute top-0 start-0 m-1 px-2 py-1 small text-white text-truncate pb-select-primary" ' +
-                    'style="background:rgba(0,0,0,.55); border-radius:.25rem; max-width:calc(100% - 96px); pointer-events:none;" ' +
-                    'title="Click this tile to make it drive the per-camera timeline">' +
+                // A real button, so the keyboard can pick the tile too. Its click bubbles to the tile's
+                // own click handler, which does the selecting.
+                '<button type="button" class="position-absolute top-0 start-0 m-1 px-2 py-1 small text-white text-truncate pb-select-primary" ' +
+                    'style="background:rgba(0,0,0,.55); border-radius:.25rem; max-width:calc(100% - 96px);" ' +
+                    'aria-pressed="' + (isPrimary ? 'true' : 'false') + '" ' +
+                    'title="' + larisvmsI18n.html('js.playbackPlayer.selectTile') + '">' +
                     (isPrimary ? '★ ' : '') + escHtml(cam.name) +
-                '</div>' +
+                '</button>' +
                 '<div class="position-absolute top-0 end-0 m-1 btn-group btn-group-sm">' +
-                    '<button type="button" class="btn btn-outline-light pb-zoom-out" title="Zoom out" style="padding:.1rem .35rem;">−</button>' +
-                    '<button type="button" class="btn btn-outline-light pb-zoom-reset" title="Reset zoom" style="padding:.1rem .35rem;">⤢</button>' +
-                    '<button type="button" class="btn btn-outline-light pb-zoom-in" title="Zoom in" style="padding:.1rem .35rem;">+</button>' +
+                    '<button type="button" class="btn btn-outline-light pb-zoom-out" title="' + larisvmsI18n.html('js.playbackPlayer.zoomOut') + '" style="padding:.1rem .35rem;">−</button>' +
+                    '<button type="button" class="btn btn-outline-light pb-zoom-reset" title="' + larisvmsI18n.html('js.playbackPlayer.resetZoom') + '" style="padding:.1rem .35rem;">⤢</button>' +
+                    '<button type="button" class="btn btn-outline-light pb-zoom-in" title="' + larisvmsI18n.html('js.playbackPlayer.zoomIn') + '" style="padding:.1rem .35rem;">+</button>' +
                 '</div>' +
                 // Hidden until hover (matches Live's own .live-controls) or forced visible while this
                 // tile is the fullscreen element (see .tile-fullscreen in site.css) — the digital zoom
@@ -1259,7 +1278,7 @@
                 // A flex row rather than one btn-group: the audio group leads with a volume slider
                 // (audio-controls.js), which isn't a button and shouldn't pick up btn-group's own
                 // joined-corners styling. Same structure as a Views/Play cell's controls.
-                '<div class="position-absolute bottom-0 end-0 m-1 d-flex align-items-center gap-1 pb-fullscreen-controls d-none">' +
+                '<div class="position-absolute bottom-0 end-0 m-1 d-flex align-items-center gap-1 pb-fullscreen-controls">' +
                     window.larisvmsAudioControls.html(cam && (cam.hasAudio || cam.hasSpeaker)) +
                     '<div class="btn-group btn-group-sm">' +
                         // The page toolbar's own Play/Pause is a page-level element, so it isn't
@@ -1267,8 +1286,8 @@
                         // moved in (see wireFullscreen) but the transport control had no counterpart,
                         // leaving no way to start or stop playback without exiting fullscreen first.
                         // Drives the same togglePlay as the toolbar button and stays label-synced with it.
-                        '<button type="button" class="btn btn-outline-light pb-fs-playpause" title="Play/Pause" style="padding:.1rem .35rem;">▶</button>' +
-                        '<button type="button" class="btn btn-outline-light pb-fullscreen-toggle" title="Fullscreen" style="padding:.1rem .35rem;">⛶</button>' +
+                        '<button type="button" class="btn btn-outline-light pb-fs-playpause" title="' + larisvmsI18n.html('js.playbackPlayer.playPause') + '" style="padding:.1rem .35rem;">▶</button>' +
+                        '<button type="button" class="btn btn-outline-light pb-fullscreen-toggle" title="' + larisvmsI18n.html('js.playbackPlayer.fullscreen') + '" style="padding:.1rem .35rem;">⛶</button>' +
                     '</div>' +
                 '</div>' +
             '</div>'
@@ -1303,8 +1322,8 @@
             playBtn.textContent = playing ? '⏸' : '▶';
         }
 
-        frameEl.addEventListener('mouseenter', function () { if (controls) controls.classList.remove('d-none'); });
-        frameEl.addEventListener('mouseleave', function () { if (controls) controls.classList.add('d-none'); });
+        frameEl.addEventListener('mouseenter', function () { if (controls) controls.classList.add('is-shown'); });
+        frameEl.addEventListener('mouseleave', function () { if (controls) controls.classList.remove('is-shown'); });
 
         // Mute toggle + volume slider. Every segment boundary re-runs the tile's own
         // teardown()/videoEl.load() (see createTile/loadSegment above), which resets the element back
@@ -1361,7 +1380,7 @@
                 if (active) moveTimelineIntoFullscreen(); else restoreTimeline();
                 if (!fsBtn) return;
                 fsBtn.textContent = active ? '⤢' : '⛶';
-                fsBtn.title = active ? 'Exit fullscreen' : 'Fullscreen';
+                fsBtn.title = active ? larisvmsI18n.t('js.playbackPlayer.exitFullscreen') : larisvmsI18n.t('js.playbackPlayer.fullscreen');
             }
         });
         if (fsBtn) {
@@ -1402,7 +1421,7 @@
         syncTimelineCenters();
         schedulePositionSave();
         var el = opts.currentTimeId && document.getElementById(opts.currentTimeId);
-        if (el) el.textContent = new Date(targetMs).toLocaleString();
+        if (el) el.textContent = new Date(targetMs).toLocaleString(larisvmsI18n.locale);
         return Promise.all(pending);
     }
 
@@ -1474,7 +1493,10 @@
             var nameEl = tileEl.querySelector('.pb-select-primary');
             var isPrimary = id === cameraId;
             if (frameEl) frameEl.style.outline = isPrimary ? '3px solid var(--bs-primary)' : 'none';
-            if (nameEl) nameEl.textContent = (isPrimary ? '★ ' : '') + cameraById[id].name;
+            if (nameEl) {
+                nameEl.textContent = (isPrimary ? '★ ' : '') + cameraById[id].name;
+                nameEl.setAttribute('aria-pressed', isPrimary ? 'true' : 'false');
+            }
         });
         if (timeline) timeline.reload();
     }
@@ -1698,7 +1720,7 @@
     function setPlaying(value) {
         playing = value;
         var btn = document.getElementById(opts.playPauseBtnId);
-        if (btn) btn.textContent = playing ? '⏸ Pause' : '▶ Play';
+        if (btn) btn.textContent = playing ? larisvmsI18n.t('js.playbackPlayer.pause') : larisvmsI18n.t('js.playbackPlayer.play');
         // Every tile's fullscreen transport button mirrors the same state, so whichever one the user
         // is looking at reads correctly regardless of which control actually toggled it.
         document.querySelectorAll('.pb-fs-playpause').forEach(function (b) {
@@ -1890,7 +1912,7 @@
         resyncDriftingTiles(driving.id);
         schedulePositionSave();
         var el = opts.currentTimeId && document.getElementById(opts.currentTimeId);
-        if (el) el.textContent = new Date(playheadMs).toLocaleString();
+        if (el) el.textContent = new Date(playheadMs).toLocaleString(larisvmsI18n.locale);
     }
 
     // Waits for the preferences fetch (see user-preferences.js) before doing anything, so
@@ -2048,6 +2070,15 @@
             });
         }
 
+        // Zooming without a wheel or a pinch. The timeline passes the new range on to its sibling.
+        [['pbTimelineZoomIn', 0.5], ['pbTimelineZoomOut', 2]].forEach(function (zoom) {
+            var button = document.getElementById(zoom[0]);
+            if (button) button.addEventListener('click', function () {
+                var active = timeline || globalTimeline;
+                if (active) active.zoom(zoom[1]);
+            });
+        });
+
         var hour24Toggle = o.hour24ToggleId && document.getElementById(o.hour24ToggleId);
         if (hour24Toggle) {
             hour24Toggle.checked = hour24;
@@ -2131,7 +2162,7 @@
             // grants this viewer Playback on it — cameraById is already narrowed the same way the
             // view picker's own camera list is, so this is the one check that covers all three.
             if (statusEl) {
-                statusEl.textContent = "This camera is no longer available to you.";
+                statusEl.textContent = larisvmsI18n.t('js.playbackPlayer.thisCameraIsNoLonger');
                 statusEl.className = 'small alert alert-warning py-1 px-2 mb-0';
             }
             return;
@@ -2171,7 +2202,7 @@
         if (ids.length > 1) {
             var bar = document.createElement('div');
             bar.className = 'small mb-1 pb-1 border-bottom';
-            [['Select all', true], ['None', false]].forEach(function (pair, i) {
+            [[larisvmsI18n.t('js.playbackPlayer.selectAll'), true], [larisvmsI18n.t('js.playbackPlayer.selectNone'), false]].forEach(function (pair, i) {
                 if (i) bar.appendChild(document.createTextNode(' · '));
                 var b = document.createElement('button');
                 b.type = 'button';
@@ -2217,7 +2248,7 @@
             var cam = cameraById[cb.value];
             return cam ? cam.name : cb.value;
         });
-        summary.textContent = names.length === 0 ? 'Choose cameras'
+        summary.textContent = names.length === 0 ? larisvmsI18n.t('js.playbackPlayer.chooseCameras')
             : names.length === 1 ? names[0]
             : names[0] + ' + ' + (names.length - 1) + ' more';
         summary.title = names.join(', ');
@@ -2274,10 +2305,10 @@
                 var redactBtn = document.createElement('button');
                 redactBtn.type = 'button';
                 redactBtn.className = 'btn btn-link btn-sm p-0 text-nowrap';
-                redactBtn.title = 'Black out areas in this camera’s export';
+                redactBtn.title = larisvmsI18n.t('js.playbackPlayer.blackOutAreasInThis');
                 var refreshLabel = function () {
                     var n = (exportRedactions[id] || []).length;
-                    redactBtn.textContent = n ? '✏ ' + n + ' redacted' : '✏ Redact';
+                    redactBtn.textContent = n ? '✏ ' + n + ' redacted' : larisvmsI18n.t('js.playbackPlayer.redact');
                 };
                 refreshLabel();
                 redactBtn.addEventListener('click', function () {
@@ -2332,7 +2363,7 @@
         var cameraIds = Array.prototype.slice.call(camerasEl.querySelectorAll('.pbExportCameraCheck:checked'))
             .map(function (cb) { return cb.value; });
         if (cameraIds.length === 0) {
-            setStatus('Select at least one camera.', 'danger');
+            setStatus(larisvmsI18n.t('js.playbackPlayer.selectAtLeastOneCamera'), 'danger');
             return;
         }
 
@@ -2341,11 +2372,11 @@
         var fromMs = new Date(fromEl.value).getTime();
         var toMs = new Date(toEl.value).getTime();
         if (!isFinite(fromMs) || !isFinite(toMs) || toMs <= fromMs) {
-            setStatus('End time must be after start time.', 'danger');
+            setStatus(larisvmsI18n.t('js.playbackPlayer.endTimeMustBeAfter'), 'danger');
             return;
         }
 
-        setStatus('Starting…', null);
+        setStatus(larisvmsI18n.t('js.playbackPlayer.starting'), null);
         if (submitBtn) submitBtn.disabled = true;
 
         fetch('/api/exports', {
@@ -2364,9 +2395,9 @@
             if (!resp.ok) return resp.text().then(function (t) { throw new Error(t || ('HTTP ' + resp.status)); });
             return resp.json();
         }).then(function () {
-            setStatus('Export started — see the Exports page.', 'success');
+            setStatus(larisvmsI18n.t('js.playbackPlayer.exportStartedSeeTheExports'), 'success');
         }).catch(function (err) {
-            setStatus('Failed to start export: ' + (err && err.message ? err.message : err), 'danger');
+            setStatus(larisvmsI18n.t('js.playbackPlayer.exportFailed', { message: err && err.message ? err.message : err }), 'danger');
         }).finally(function () {
             if (submitBtn) submitBtn.disabled = false;
         });
@@ -2397,8 +2428,8 @@
         if (targetEl) {
             var cam = primaryCameraId && cameraById[primaryCameraId];
             targetEl.textContent = cam
-                ? cam.name + ' @ ' + new Date(playheadMs).toLocaleString()
-                : 'No camera selected.';
+                ? cam.name + ' @ ' + new Date(playheadMs).toLocaleString(larisvmsI18n.locale)
+                : larisvmsI18n.t('js.playbackPlayer.noCameraSelected');
         }
         var noteEl = opts.bookmarkNoteId && document.getElementById(opts.bookmarkNoteId);
         if (noteEl) noteEl.value = '';
@@ -2419,16 +2450,16 @@
         }
 
         if (!primaryCameraId) {
-            setStatus('No camera selected.', 'danger');
+            setStatus(larisvmsI18n.t('js.playbackPlayer.noCameraSelected'), 'danger');
             return;
         }
         var note = noteEl.value.trim();
         if (!note) {
-            setStatus('Enter a note.', 'danger');
+            setStatus(larisvmsI18n.t('js.playbackPlayer.enterANote'), 'danger');
             return;
         }
 
-        setStatus('Saving…', null);
+        setStatus(larisvmsI18n.t('js.playbackPlayer.saving'), null);
         if (submitBtn) submitBtn.disabled = true;
 
         fetch('/api/bookmarks', {
@@ -2443,14 +2474,14 @@
             if (!resp.ok) return resp.text().then(function (t) { throw new Error(t || ('HTTP ' + resp.status)); });
             return resp.json();
         }).then(function () {
-            setStatus('Bookmark saved.', 'success');
+            setStatus(larisvmsI18n.t('js.playbackPlayer.bookmarkSaved'), 'success');
             noteEl.value = '';
             // Without this the new marker never appears until something unrelated (a drag, a camera
             // switch) happens to trigger the per-camera timeline's own reload — confirmed live as
             // "bookmarks not showing on the timeline" right after saving one.
             if (timeline) timeline.reload();
         }).catch(function (err) {
-            setStatus('Failed to save bookmark: ' + (err && err.message ? err.message : err), 'danger');
+            setStatus(larisvmsI18n.t('js.playbackPlayer.bookmarkFailed', { message: err && err.message ? err.message : err }), 'danger');
         }).finally(function () {
             if (submitBtn) submitBtn.disabled = false;
         });
@@ -2556,17 +2587,17 @@
         }
 
         var cameraIds = Array.prototype.slice.call(document.querySelectorAll('.pbLockCameraCheck:checked')).map(function (cb) { return cb.value; });
-        if (cameraIds.length === 0) { setStatus('Select at least one camera.', 'danger'); return; }
+        if (cameraIds.length === 0) { setStatus(larisvmsI18n.t('js.playbackPlayer.selectAtLeastOneCamera'), 'danger'); return; }
         var fromMs = new Date((document.getElementById(opts.lockFromId) || {}).value).getTime();
         var toMs = new Date((document.getElementById(opts.lockToId) || {}).value).getTime();
-        if (!isFinite(fromMs) || !isFinite(toMs) || toMs <= fromMs) { setStatus('End time must be after start time.', 'danger'); return; }
+        if (!isFinite(fromMs) || !isFinite(toMs) || toMs <= fromMs) { setStatus(larisvmsI18n.t('js.playbackPlayer.endTimeMustBeAfter'), 'danger'); return; }
         var reason = ((document.getElementById(opts.lockReasonId) || {}).value || '').trim();
-        if (!reason) { setStatus('Enter a reason for the lock.', 'danger'); return; }
+        if (!reason) { setStatus(larisvmsI18n.t('js.playbackPlayer.enterAReasonForThe'), 'danger'); return; }
         var duration = (document.getElementById(opts.lockDurationId) || {}).value || '7d';
         var expiry = lockExpiryMs();
-        if (duration === 'custom' && !isFinite(expiry)) { setStatus('Choose the date the lock should end.', 'danger'); return; }
+        if (duration === 'custom' && !isFinite(expiry)) { setStatus(larisvmsI18n.t('js.playbackPlayer.chooseTheDateTheLock'), 'danger'); return; }
 
-        setStatus('Locking…', null);
+        setStatus(larisvmsI18n.t('js.playbackPlayer.locking'), null);
         if (submitBtn) submitBtn.disabled = true;
         fetch('/api/evidence-locks', {
             method: 'POST',
@@ -2584,10 +2615,10 @@
                 function () { throw new Error('HTTP ' + resp.status); });
             return resp.json();
         }).then(function (created) {
-            setStatus('Locked ' + created.length + ' camera' + (created.length === 1 ? '' : 's') + '. See the Evidence locks page.', 'success');
+            setStatus(larisvmsI18n.plural('js.playbackPlayer.lockedCameras', created.length), 'success');
             if (timeline) timeline.reload();
         }).catch(function (err) {
-            setStatus('Couldn’t lock the footage: ' + (err && err.message ? err.message : err), 'danger');
+            setStatus(larisvmsI18n.t('js.playbackPlayer.lockFailed', { message: err && err.message ? err.message : err }), 'danger');
         }).finally(function () {
             if (submitBtn) submitBtn.disabled = false;
         });

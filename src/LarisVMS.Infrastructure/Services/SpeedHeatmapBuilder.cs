@@ -1,4 +1,5 @@
 using System.Globalization;
+using LarisVMS.Core.Localization;
 using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
 
@@ -71,10 +72,10 @@ public static class SpeedHeatmapBuilder
 
         string Describe(double v, string where) => metric switch
         {
-            "max" => $"Top speed: {v:0} {SpeedUnits.Label(unit)}, {where}.",
-            "over" => $"Most over the limit: {where} ({v:N0}).",
-            "count" => $"Busiest: {where} ({v:N0} measured).",
-            _ => $"Highest average: {where} ({v:0} {SpeedUnits.Label(unit)}).",
+            "max" => Loc.T("server.speedHeatmap.topSpeed", new { speed = Math.Round(v), unit = SpeedUnits.Label(unit), where }),
+            "over" => Loc.T("server.speedHeatmap.mostOver", new { where, count = v.ToString("N0", CultureInfo.CurrentUICulture) }),
+            "count" => Loc.T("server.speedHeatmap.busiest", new { where, count = v.ToString("N0", CultureInfo.CurrentUICulture) }),
+            _ => Loc.T("server.speedHeatmap.highestAverage", new { where, speed = Math.Round(v), unit = SpeedUnits.Label(unit) }),
         };
 
         DateTime Local(DateTime hourUtc) => TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(hourUtc, DateTimeKind.Utc), zone);
@@ -127,7 +128,7 @@ public static class SpeedHeatmapBuilder
                 rowLabels = Enumerable.Range(0, 24).Select(ActivityHeatmapBuilder.HourLabel).ToList();
                 columnLabels = dates.Select(d => d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)).ToList();
                 dayValues = perDay.Select(Value).ToList();
-                where = (r, c) => $"{dates[c].ToString("ddd, MMM d", CultureInfo.InvariantCulture)}, {ActivityHeatmapBuilder.HourRange(r)}";
+                where = (r, c) => $"{dates[c].ToString("ddd, MMM d", CultureInfo.CurrentUICulture)}, {ActivityHeatmapBuilder.HourRange(r)}";
             }
             else
             {
@@ -139,10 +140,10 @@ public static class SpeedHeatmapBuilder
                     var local = Local(s.HourUtc);
                     cells[days.IndexOf(local.DayOfWeek)][local.Hour].Add(s);
                 }
-                var dayNames = CultureInfo.InvariantCulture.DateTimeFormat.DayNames;
+                var dayNames = CultureInfo.CurrentUICulture.DateTimeFormat.DayNames;
                 rowLabels = days.Select(d => dayNames[(int)d][..3]).ToList();
                 columnLabels = Enumerable.Range(0, 24).Select(ActivityHeatmapBuilder.HourLabel).ToList();
-                where = (r, c) => $"{dayNames[(int)days[r]]}s {ActivityHeatmapBuilder.HourRange(c)}";
+                where = (r, c) => Loc.T("server.speedHeatmap.weekdayHours", new { day = dayNames[(int)days[r]], hours = ActivityHeatmapBuilder.HourRange(c) });
             }
         }
 

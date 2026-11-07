@@ -159,6 +159,10 @@ public interface IUserPreferenceService
     /// fetches this once on page load rather than one request per key.</summary>
     Task<Dictionary<string, string>> GetAllAsync(string userId, CancellationToken ct = default);
 
+    /// <summary>One preference, or null if this user never set it.</summary>
+    async Task<string?> GetAsync(string userId, string key, CancellationToken ct = default) =>
+        (await GetAllAsync(userId, ct)).GetValueOrDefault(key);
+
     Task SetAsync(string userId, string key, string value, CancellationToken ct = default);
 }
 

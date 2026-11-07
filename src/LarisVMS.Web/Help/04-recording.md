@@ -12,12 +12,25 @@ Every camera records continuously to its node. The **recording mode** decides wh
 | **Motion** | Footage around motion: from a motion zone, the camera's own motion events, an integration, or AI detection (see [Motion](/Help/motion#source)). |
 | **Schedule** | Footage that starts inside an enabled schedule window. |
 | **Event** | Footage around an event tag rule that has *Drives recording* turned on. |
+| **Manual only** | Nothing, unless a [manual recording](#manual-recording) is on. The camera is live view only the rest of the time. |
 
 Footage that isn't kept is deleted shortly after it's written, rather than waiting for retention.
 
-All three non-continuous modes **fail open**. Until a camera has a motion zone, schedule window, or driving rule, it keeps everything instead of discarding it. The camera's page warns when this is happening.
+Motion, Schedule, and Event modes **fail open**. Until a camera has a motion zone, schedule window, or driving rule, it keeps everything instead of discarding it. The camera's page warns when this is happening. Manual only doesn't fail open, because keeping nothing is what it's for.
 
 Set the global mode under **Settings → Recording defaults**, and override it on a camera's page.
+
+## Manual recording
+
+A manual recording keeps a camera's footage until someone stops it, whatever the camera's recording mode is. Start one with the record button on a [live tile](/Help/live-and-playback#live-tiles) or through the [API](/Help/api#recording). It stays on through restarts and upgrades.
+
+It works alongside the camera's mode. A Motion camera keeps footage when it sees motion *or* when a manual recording is on, and events still tag the timeline as usual. On a Continuous camera, it only marks the timeline.
+
+- Footage is kept in whole segments, so up to a segment before and after the recording is saved too. Pre-roll and post-roll don't apply.
+- Saved footage follows the camera's normal retention. Add an [evidence lock](/Help/live-and-playback#evidence-locks) to keep it longer.
+- It shows on the timeline as a red band. Change the color under **Settings → Events**.
+- A camera that's offline saves nothing until it's back. The recording stays on.
+- Upgrade recorder nodes along with the server. An older node doesn't know about manual recordings.
 
 ## Pre-roll and post-roll
 

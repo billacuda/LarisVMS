@@ -16,7 +16,7 @@ window.larisvmsEventTagRulesEditor = (function () {
         function renderList() {
             var panel = document.getElementById(opts.listPanelId);
             if (!rules.length) {
-                panel.innerHTML = '<p class="text-muted small">No event tag rules yet.</p>';
+                panel.innerHTML = '<p class="text-muted small">' + larisvmsI18n.html('js.eventTagRulesEditor.noEventTagRulesYet') + '</p>';
                 return;
             }
             var html = '<div class="list-group">';
@@ -26,8 +26,8 @@ window.larisvmsEventTagRulesEditor = (function () {
                     (r.id === selectedId ? ' active' : '') + '" data-rule-id="' + r.id + '">' +
                     '<span class="d-inline-block rounded-circle me-2" style="width:10px;height:10px;background:' + escHtml(r.colorHex) + ';"></span>' +
                     escHtml(r.name) +
-                    (r.isEnabled ? '' : ' <span class="text-muted small">(disabled)</span>') +
-                    (r.drivesRecording ? ' <span class="badge text-bg-primary">drives recording</span>' : '') +
+                    (r.isEnabled ? '' : ' <span class="text-muted small">' + larisvmsI18n.html('js.eventTagRulesEditor.disabled') + '</span>') +
+                    (r.drivesRecording ? ' <span class="badge text-bg-primary">' + larisvmsI18n.html('js.eventTagRulesEditor.drivesRecording') + '</span>' : '') +
                     '<div class="text-muted small">' + topics + '</div>' +
                     '</button>';
             });
@@ -48,7 +48,7 @@ window.larisvmsEventTagRulesEditor = (function () {
         function showForm(rule) {
             selectedId = rule ? rule.id : null;
             document.getElementById(opts.formPanelId).style.display = '';
-            document.getElementById(opts.formTitleId).textContent = rule ? ('Edit rule: ' + rule.name) : 'New rule';
+            document.getElementById(opts.formTitleId).textContent = rule ? larisvmsI18n.t('js.eventTagRulesEditor.editRule', { name: rule.name }) : larisvmsI18n.t('js.eventTagRulesEditor.newRule');
             document.getElementById(opts.formIdInputId).value = rule ? rule.id : '';
             document.getElementById(opts.formNameId).value = rule ? rule.name : '';
             document.getElementById(opts.formStartTopicId).value = rule ? rule.startTopic : '';
@@ -84,12 +84,12 @@ window.larisvmsEventTagRulesEditor = (function () {
                 drivesRecording: document.getElementById(opts.formDrivesRecordingId).checked,
                 isEnabled: document.getElementById(opts.formEnabledId).checked
             };
-            if (!body.name || !body.startTopic) { alert('Name and Start topic are required.'); return; }
+            if (!body.name || !body.startTopic) { alert(larisvmsI18n.t('js.eventTagRulesEditor.nameAndStartTopicAre')); return; }
 
             var url = id ? '/api/event-tag-rules/' + id : '/api/cameras/' + opts.cameraId + '/event-tag-rules';
             var method = id ? 'PUT' : 'POST';
             var resp = await fetch(url, { method: method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-            if (!resp.ok) { alert('Could not save this rule.'); return; }
+            if (!resp.ok) { alert(larisvmsI18n.t('js.eventTagRulesEditor.couldNotSaveThisRule')); return; }
 
             hideForm();
             await loadRules();
@@ -97,9 +97,9 @@ window.larisvmsEventTagRulesEditor = (function () {
 
         document.getElementById(opts.formDeleteBtnId).addEventListener('click', async function () {
             var id = document.getElementById(opts.formIdInputId).value;
-            if (!id || !confirm('Delete this rule? Timeline history already tagged by it is kept, just no longer attributed to it.')) return;
+            if (!id || !confirm(larisvmsI18n.t('js.eventTagRulesEditor.deleteThisRuleTimelineHistory'))) return;
             var resp = await fetch('/api/event-tag-rules/' + id, { method: 'DELETE' });
-            if (!resp.ok) { alert('Could not delete this rule.'); return; }
+            if (!resp.ok) { alert(larisvmsI18n.t('js.eventTagRulesEditor.couldNotDeleteThisRule')); return; }
             hideForm();
             await loadRules();
         });
@@ -116,14 +116,14 @@ window.larisvmsEventTagRulesEditor = (function () {
             }).join('');
 
             if (!topics.length) {
-                panel.innerHTML = '<p class="text-muted small">No ONVIF events observed from this camera yet — once it sends some, they\'ll show up here.</p>';
+                panel.innerHTML = '<p class="text-muted small">' + larisvmsI18n.html('js.eventTagRulesEditor.noOnvifEventsObservedFrom') + '</p>';
                 return;
             }
             var html = '<div class="list-group">';
             topics.forEach(function (t) {
                 html += '<button type="button" class="list-group-item list-group-item-action py-2" data-topic="' + escHtml(t.topic) + '">' +
                     '<div class="small font-monospace">' + escHtml(t.topic) + '</div>' +
-                    '<div class="text-muted small">' + t.count + ' seen, last ' + new Date(t.lastSeenUtc).toLocaleString() + '</div>' +
+                    '<div class="text-muted small">' + larisvmsI18n.html('js.eventTagRulesEditor.seenLast', { count: t.count, time: new Date(t.lastSeenUtc).toLocaleString(larisvmsI18n.locale) }) + '</div>' +
                     '</button>';
             });
             html += '</div>';

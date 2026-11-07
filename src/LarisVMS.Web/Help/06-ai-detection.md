@@ -79,7 +79,7 @@ Colors come from the picture, not the model, so they work with any detector. The
 
 ## Speed traps
 
-A speed trap times objects between two lines across a road. On the camera's **Speed traps** page (from **Cameras → Edit**), click **New speed trap**, click the two ends of line **A**, then the two ends of line **B**, and enter the real distance between the lines, measured along the road. Every tracked object that crosses both lines, in either direction, gets a speed, shown on its live box and its snapshot. **Speed units** (km/h or mph) are under **Settings → AI detection**.
+A speed trap times objects between two lines across a road. On the camera's **Speed traps** page (from **Cameras → Edit**), click **New speed trap**, click the two ends of line **A**, then the two ends of line **B**, and enter the real distance between the lines, measured along the road. Every tracked object that crosses both lines gets a speed, shown on its live box and its snapshot. **Direction** times both ways by default; choose **A to B only** or **B to A only** to time one lane of a two-way road. **Speed units** (km/h or mph) are under **Settings → AI detection**.
 
 An object a trap times is recorded as moving even if it otherwise looks still, such as a vehicle driving straight toward the camera. The timing uses the bottom middle of each box, where the object touches the ground, so draw the lines on the road surface. For a good reading:
 
@@ -126,6 +126,12 @@ An object that was moving and goes out of sight behind a tree, a post, or a park
 Each moving object's path through the picture is kept with its event, for the **Scene** heatmap on the Activity page.
 
 **Moving objects** under **Settings → AI detection** chooses which kinds of object can count as moving. By default that's **People**, **Vehicles**, and **Animals**. Anything else is still detected, and shows as an idle box with **Idle** on, but never counts as moving, so it can't start a snapshot or an alert. Opt in to other objects one by one in the **Other objects** list: a delivered package usually shows up as a suitcase, backpack, or handbag. For a custom model, type its own object names, separated by commas.
+
+## Ignored objects
+
+**Ignored objects** under **Settings → AI detection** switches kinds of object off entirely. They're dropped as soon as the model reports them, so they never get a box, a snapshot, an event, or an alert. Use it for things the model keeps getting wrong on your cameras, like a deck it calls an airplane. Tick whole categories (**People**, **Vehicles**, **Animals**, and **Other objects**) or single objects from the list. Either model's spelling matches, so ignoring **airplane** also ignores **aeroplane**. For a custom model, type its own object names, separated by commas.
+
+A camera's **Edit** page can choose its own list instead of the global one: pick **Choose for this camera** under **Ignored objects**. Choosing nothing there detects everything on that camera, even what the global list ignores. Saving restarts that camera's detection, which only resets tracking.
 
 ## Jitter
 

@@ -77,10 +77,11 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
 
         var palette = await eventColors.GetAsync(ct);
         var talk = await TalkSpansAsync(db.TalkRecordings.Where(t => t.CameraId == cameraId), fromUtc, toUtc, ct);
+        var manual = await ManualSpansAsync(db.ManualRecordings.Where(r => r.CameraId == cameraId), palette, fromUtc, toUtc, ct);
 
         return Bucket(segments.Select(s => (s.StartUtc, s.EndUtc)),
             motionSpans.Select(m => (m.StartUtc, m.EndUtc, ResolveColor(palette, m.ColorHex, m.DetectionKind, m.AiCategoryName, m.AiCategoryColorHex)))
-                .Concat(talk),
+                .Concat(talk).Concat(manual),
             fromUtc, toUtc, bucketCount);
     }
 
@@ -92,6 +93,16 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
         var rows = await query.Where(t => t.StartUtc < toUtc && t.EndUtc > fromUtc)
             .Select(t => new { t.StartUtc, t.EndUtc }).ToListAsync(ct);
         return rows.Select(t => (t.StartUtc, t.EndUtc, (string?)EventColors.Talk)).ToList();
+    }
+
+    /// <summary>Manual recordings as timeline bands. One still running ends at now, not in the future.</summary>
+    private static async Task<List<(DateTime StartUtc, DateTime EndUtc, string? ColorHex)>> ManualSpansAsync(
+        IQueryable<Core.Entities.ManualRecording> query, EventPalette palette, DateTime fromUtc, DateTime toUtc, CancellationToken ct)
+    {
+        var rows = await query.Where(r => r.StartUtc < toUtc && (r.EndUtc == null || r.EndUtc > fromUtc))
+            .Select(r => new { r.StartUtc, r.EndUtc }).ToListAsync(ct);
+        var now = DateTime.UtcNow;
+        return rows.Select(r => (r.StartUtc, r.EndUtc ?? now, (string?)palette.ManualRecordingColor)).ToList();
     }
 
     public async Task<List<TimelineBucketDto>> GetGlobalBucketsAsync(DateTime fromUtc, DateTime toUtc, int bucketCount, IReadOnlyList<Guid>? cameraIds = null, CancellationToken ct = default)
@@ -139,10 +150,13 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
         var talkQuery = db.TalkRecordings.AsQueryable();
         if (cameraIds is { Count: > 0 }) talkQuery = talkQuery.Where(t => cameraIds.Contains(t.CameraId));
         var talk = await TalkSpansAsync(talkQuery, fromUtc, toUtc, ct);
+        var manualQuery = db.ManualRecordings.AsQueryable();
+        if (cameraIds is { Count: > 0 }) manualQuery = manualQuery.Where(r => cameraIds.Contains(r.CameraId));
+        var manual = await ManualSpansAsync(manualQuery, palette, fromUtc, toUtc, ct);
 
         return Bucket(segments.Select(s => (s.StartUtc, s.EndUtc)),
             motionSpans.Select(m => (m.StartUtc, m.EndUtc, ResolveColor(palette, m.ColorHex, m.DetectionKind, m.AiCategoryName, m.AiCategoryColorHex)))
-                .Concat(talk),
+                .Concat(talk).Concat(manual),
             fromUtc, toUtc, bucketCount);
     }
 
@@ -505,7 +519,7 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
                 g.Select(r => r.Kind)
                     .Distinct()
                     .OrderBy(k => k)
-                    .Select(k => new DetectionBadgeDto(k.ToString(), DetectionDisplay.Label(k),
+                    .Select(k => new DetectionBadgeDto(k.ToString(), DetectionDisplay.LocalizedLabel(k),
                         DetectionDisplay.Emoji(k), palette.ColorFor(k)))
                     .ToList()))
             .ToList();
@@ -786,15 +800,19 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
         var objectsBySpan = (await db.DetectedObjects.AsNoTracking()
                 .Where(o => pageSpanIds.Contains(o.MotionSpanId)
                     && (o.PrimaryColor != null || o.UpperColor != null || o.LowerColor != null || o.SpeedKph != null))
-                .Select(o => new { o.MotionSpanId, o.Label, o.PrimaryColor, o.UpperColor, o.LowerColor, o.SpeedKph, o.Confidence })
+                .Select(o => new { o.MotionSpanId, o.Label, o.PrimaryColor, o.UpperColor, o.LowerColor, o.SpeedKph, o.Confidence,
+                    o.FirstSeenUtc, o.LastSeenUtc })
                 .ToListAsync(ct))
                 .ToLookup(o => o.MotionSpanId);
 
-        IReadOnlyList<SnapshotObjectDto> ObjectsFor(IEnumerable<long> spanIds) => spanIds
-            .SelectMany(id => objectsBySpan[id])
-            .OrderByDescending(o => o.SpeedKph is not null).ThenByDescending(o => o.Confidence ?? 0)
+        // Track fragments of one walk-through fold back into one object, so one person shows one
+        // shirt and one pants badge instead of one per track ID.
+        IReadOnlyList<SnapshotObjectDto> ObjectsFor(IEnumerable<long> spanIds) => SnapshotObjectCollapser
+            .Collapse(spanIds.SelectMany(id => objectsBySpan[id]).Select(o => new SnapshotObjectCollapser.Row(
+                o.Label, o.PrimaryColor, o.UpperColor, o.LowerColor, o.SpeedKph, o.Confidence, o.FirstSeenUtc, o.LastSeenUtc)))
+            .OrderByDescending(c => c.Object.SpeedKph is not null).ThenByDescending(c => c.Confidence)
             .Take(8)
-            .Select(o => new SnapshotObjectDto(o.Label, o.PrimaryColor, o.UpperColor, o.LowerColor, o.SpeedKph))
+            .Select(c => c.Object)
             .ToList();
 
         // Pass G3: collapse AI-detection spans that overlap in time on the same camera into one card
@@ -849,7 +867,7 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
         (string Label, string Color, string Emoji, double? Confidence, int? MovingCount) AiBadge(long rowId)
         {
             var row = rows.First(x => x.Id == rowId);
-            var lbl = CocoCategoryMap.DisplayLabel(row.AiCategoryName!, row.DetectedObjectLabel);
+            var lbl = CocoCategoryMap.LocalizedDisplayLabel(row.AiCategoryName!, row.DetectedObjectLabel);
             return (lbl, palette.ColorForAiCategory(row.AiCategoryName, row.AiCategoryColorHex),
                 CocoCategoryMap.Emoji(row.AiCategoryName!), row.BestBoxConfidence, row.MovingCount);
         }
@@ -871,7 +889,7 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
             }
             else if (r.DetectionKind is { } kind)
             {
-                label = DetectionDisplay.Label(kind);
+                label = DetectionDisplay.LocalizedLabel(kind);
                 color = palette.ColorFor(kind);
                 emoji = DetectionDisplay.Emoji(kind);
             }
@@ -881,7 +899,7 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
                 // category — a card that only said "Vehicle" would lose exactly the detail
                 // (car vs. truck vs. bus) the open-ended category system exists to preserve.
                 // DisplayLabel drops the specific label only when it is redundant (Human — person).
-                label = CocoCategoryMap.DisplayLabel(r.AiCategoryName, r.DetectedObjectLabel);
+                label = CocoCategoryMap.LocalizedDisplayLabel(r.AiCategoryName, r.DetectedObjectLabel);
                 // The Events settings palette, not the category row's own auto-assigned ColorHex —
                 // see EventPalette.ColorForAiCategory for why that divergence was a bug.
                 color = palette.ColorForAiCategory(r.AiCategoryName, r.AiCategoryColorHex);

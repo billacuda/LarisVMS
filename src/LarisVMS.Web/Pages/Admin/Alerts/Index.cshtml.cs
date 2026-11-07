@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
+using LarisVMS.Core.Localization;
 using LarisVMS.Core;
 using LarisVMS.Core.Enums;
 using LarisVMS.Core.Interfaces;
@@ -103,27 +104,27 @@ public class IndexModel(ApplicationDbContext db, ICameraService cameraService, I
         rule.ConditionType switch
         {
             AlertConditionType.CameraNotReporting =>
-                $"Camera \"{(rule.CameraId is { } cid ? cameraNames.GetValueOrDefault(cid, "(deleted camera)") : "?")}\" not reporting",
+                Loc.T("admin.alerts.summaryCameraNotReporting", new { camera = rule.CameraId is { } cid ? cameraNames.GetValueOrDefault(cid, Loc.T("admin.alerts.deletedCamera")) : "?" }),
             AlertConditionType.NodeOffline =>
-                $"Node \"{(rule.NodeId is { } nid ? nodeNames.GetValueOrDefault(nid, "(deleted node)") : "?")}\" offline",
+                Loc.T("admin.alerts.summaryNodeOffline", new { node = rule.NodeId is { } nid ? nodeNames.GetValueOrDefault(nid, Loc.T("admin.alerts.deletedNode")) : "?" }),
             AlertConditionType.NodeStorageLow =>
-                $"Node \"{(rule.NodeId is { } snid ? nodeNames.GetValueOrDefault(snid, "(deleted node)") : "?")}\" storage below {rule.ThresholdPercent}%",
+                Loc.T("admin.alerts.summaryNodeStorageLow", new { node = rule.NodeId is { } snid ? nodeNames.GetValueOrDefault(snid, Loc.T("admin.alerts.deletedNode")) : "?", threshold = rule.ThresholdPercent }),
             AlertConditionType.NodeFailoverActivated =>
-                $"Node \"{(rule.NodeId is { } fnid ? nodeNames.GetValueOrDefault(fnid, "(deleted node)") : "?")}\" failover activated",
+                Loc.T("admin.alerts.summaryNodeFailover", new { node = rule.NodeId is { } fnid ? nodeNames.GetValueOrDefault(fnid, Loc.T("admin.alerts.deletedNode")) : "?" }),
             AlertConditionType.ObjectDetected =>
-                $"{DetectionWhat(rule)} detected on {DetectionWhere(rule, cameraNames, nodeNames)}{DetectionWhen(rule)}",
+                Loc.T("admin.alerts.summaryObjectDetected", new { what = DetectionWhat(rule), where = DetectionWhere(rule, cameraNames, nodeNames) }) + DetectionWhen(rule),
             AlertConditionType.MotionDetected =>
-                $"Motion on {DetectionWhere(rule, cameraNames, nodeNames)}{DetectionWhen(rule)}",
+                Loc.T("admin.alerts.summaryMotion", new { where = DetectionWhere(rule, cameraNames, nodeNames) }) + DetectionWhen(rule),
             AlertConditionType.SpeedOver =>
-                $"{DetectionWhat(rule)} at {SpeedUnits.Format(rule.SpeedThresholdKph ?? 0, speedUnit)} or faster on {DetectionWhere(rule, cameraNames, nodeNames)}{DetectionWhen(rule)}",
-            AlertConditionType.EvidenceLockExpiringSoon => $"Evidence lock ending soon on {DetectionWhere(rule, cameraNames, nodeNames)}",
-            AlertConditionType.EvidenceLockRemoved => $"Evidence lock removed on {DetectionWhere(rule, cameraNames, nodeNames)}",
+                Loc.T("admin.alerts.summarySpeedOver", new { what = DetectionWhat(rule), speed = SpeedUnits.Format(rule.SpeedThresholdKph ?? 0, speedUnit), where = DetectionWhere(rule, cameraNames, nodeNames) }) + DetectionWhen(rule),
+            AlertConditionType.EvidenceLockExpiringSoon => Loc.T("admin.alerts.summaryLockEnding", new { where = DetectionWhere(rule, cameraNames, nodeNames) }),
+            AlertConditionType.EvidenceLockRemoved => Loc.T("admin.alerts.summaryLockRemoved", new { where = DetectionWhere(rule, cameraNames, nodeNames) }),
             _ => rule.ConditionType.ToString()
         };
 
     private static string DetectionWhat(Core.Entities.AlertRule rule)
     {
-        var what = rule.LabelFilter ?? rule.CategoryFilter ?? "Anything";
+        var what = rule.LabelFilter ?? rule.CategoryFilter ?? Loc.T("admin.alerts.anything");
         what = char.ToUpperInvariant(what[0]) + what[1..];
         return rule.ColorFilter is { } color ? $"{what} ({color})" : what;
     }
@@ -131,16 +132,16 @@ public class IndexModel(ApplicationDbContext db, ICameraService cameraService, I
     private static string DetectionWhere(Core.Entities.AlertRule rule, Dictionary<Guid, string> cameraNames, Dictionary<Guid, string> nodeNames)
     {
         string where;
-        if (rule.CameraId is { } cid) where = $"camera \"{cameraNames.GetValueOrDefault(cid, "(deleted camera)")}\"";
-        else if (rule.NodeId is { } nid) where = $"cameras on node \"{nodeNames.GetValueOrDefault(nid, "(deleted node)")}\"";
-        else where = "any camera";
-        return where + (rule.ZoneId is not null ? ", in a zone" : "");
+        if (rule.CameraId is { } cid) where = Loc.T("admin.alerts.whereCamera", new { camera = cameraNames.GetValueOrDefault(cid, Loc.T("admin.alerts.deletedCamera")) });
+        else if (rule.NodeId is { } nid) where = Loc.T("admin.alerts.whereNode", new { node = nodeNames.GetValueOrDefault(nid, Loc.T("admin.alerts.deletedNode")) });
+        else where = Loc.T("admin.alerts.whereAnyCamera");
+        return rule.ZoneId is not null ? Loc.T("admin.alerts.whereInZone", new { where }) : where;
     }
 
     private static string DetectionWhen(Core.Entities.AlertRule rule)
     {
         var parts = new List<string>();
-        if (rule.ScheduleDays is { } days) parts.Add(days.ToString());
+        if (rule.ScheduleDays is { } days) parts.Add(string.Join(", ", Services.AlertRuleEditing.DaysOf(days).Select(d => System.Globalization.CultureInfo.CurrentUICulture.DateTimeFormat.GetAbbreviatedDayName(d))));
         if (rule.ScheduleStart is { } s && rule.ScheduleEnd is { } e) parts.Add($"{s:HH\\:mm}-{e:HH\\:mm}");
         return parts.Count == 0 ? "" : $" ({string.Join(", ", parts)})";
     }

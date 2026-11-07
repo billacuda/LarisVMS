@@ -13,6 +13,13 @@ public class UserPreferenceService(ApplicationDbContext db) : IUserPreferenceSer
             .Where(p => p.UserId == userId)
             .ToDictionaryAsync(p => p.Key, p => p.Value, ct);
 
+    public async Task<string?> GetAsync(string userId, string key, CancellationToken ct = default)
+        => await db.UserPreferences
+            .AsNoTracking()
+            .Where(p => p.UserId == userId && p.Key == key)
+            .Select(p => p.Value)
+            .FirstOrDefaultAsync(ct);
+
     public async Task SetAsync(string userId, string key, string value, CancellationToken ct = default)
     {
         var existing = await db.UserPreferences

@@ -1,62 +1,61 @@
 @page "{id:guid}"
 @model LarisVMS.Web.Pages.Cameras.ScheduleModel
 @{
-    ViewData["Title"] = "Schedule: " + Model.CameraName;
+    ViewData["Title"] = L["cameras.schedule.schedule"].Value + Model.CameraName;
 }
 <div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-3">
-    <h1 class="mb-0">Schedule: @Model.CameraName</h1>
-    <a class="btn btn-outline-secondary" asp-page="Edit" asp-route-id="@Model.CameraId">Back to camera</a>
+    <h1 class="mb-0">@L["cameras.schedule.heading", new { camera = Model.CameraName }]</h1>
+    <a class="btn btn-outline-secondary" asp-page="Edit" asp-route-id="@Model.CameraId">@L["cameras.schedule.backToCamera"]</a>
 </div>
 
 <p class="text-muted small">
-    Used when the camera's recording mode is <strong>Schedule</strong>. Footage starting inside an enabled window is kept,
-    using the node's local time. With no windows, everything is kept. <a href="/Help/recording#schedule">Learn more</a>
+    @L.Html("cameras.schedule.intro")
 </p>
 
 <div class="row g-3">
     <div class="col-lg-7">
         <div id="scheduleListPanel">
-            <p class="text-muted small">Loading windows…</p>
+            <p class="text-muted small">@L["cameras.schedule.loadingWindows"]</p>
         </div>
 
         <div id="scheduleFormPanel" class="border rounded p-3 mt-3" style="display: none;">
-            <h6 id="scheduleFormTitle">New window</h6>
+            <h6 id="scheduleFormTitle">@L["cameras.schedule.newWindow"]</h6>
             <input type="hidden" id="scheduleFormId" />
             <div class="mb-2">
-                <label class="form-label small d-block">Days</label>
+                <div class="form-label small d-block">@L["cameras.schedule.days"]</div>
                 <div class="d-flex flex-wrap gap-3">
                     @foreach (var day in new[] { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" })
                     {
                         <div class="form-check form-check-inline">
                             <input type="checkbox" class="form-check-input schedule-form-day" value="@day" id="scheduleFormDay@(day)" />
-                            <label class="form-check-label small" for="scheduleFormDay@(day)">@day[..3]</label>
+                            <label class="form-check-label small" for="scheduleFormDay@(day)">@System.Globalization.CultureInfo.CurrentUICulture.DateTimeFormat.GetAbbreviatedDayName(Enum.Parse<DayOfWeek>(day))</label>
                         </div>
                     }
                 </div>
             </div>
             <div class="row g-2">
                 <div class="col-6">
-                    <label class="form-label small">Start time</label>
+                    <label for="scheduleFormStartTime" class="form-label small">@L["cameras.schedule.startTime"]</label>
                     <input type="time" id="scheduleFormStartTime" class="form-control form-control-sm" required />
                 </div>
                 <div class="col-6">
-                    <label class="form-label small">End time</label>
+                    <label for="scheduleFormEndTime" class="form-label small">@L["cameras.schedule.endTime"]</label>
                     <input type="time" id="scheduleFormEndTime" class="form-control form-control-sm" required />
-                    <div class="form-text">Before the start time means the window crosses midnight.</div>
+                    <div class="form-text">@L["cameras.schedule.beforeTheStartTimeMeans"]</div>
                 </div>
             </div>
             <div class="form-check mb-2 mt-2">
                 <input type="checkbox" id="scheduleFormEnabled" class="form-check-input" checked />
-                <label class="form-check-label small" for="scheduleFormEnabled">Enabled</label>
+                <label class="form-check-label small" for="scheduleFormEnabled">@L["common.enabled"]</label>
             </div>
             <div class="d-flex gap-2">
-                <button type="button" id="scheduleFormSaveBtn" class="btn btn-primary btn-sm">Save</button>
-                <button type="button" id="scheduleFormCancelBtn" class="btn btn-outline-secondary btn-sm">Cancel</button>
-                <button type="button" id="scheduleFormDeleteBtn" class="btn btn-outline-danger btn-sm ms-auto" style="display: none;">Delete</button>
+                <button type="button" id="scheduleFormSaveBtn" class="btn btn-primary btn-sm">@L["common.save"]</button>
+                <button type="button" id="scheduleFormCancelBtn" class="btn btn-outline-secondary btn-sm">@L["common.cancel"]</button>
+                <button type="button" id="scheduleFormDeleteBtn" class="btn btn-outline-danger btn-sm ms-auto" style="display: none;">@L["common.delete"]</button>
             </div>
         </div>
 
-        <button type="button" id="scheduleNewBtn" class="btn btn-primary btn-sm mt-3">New window</button>
+        <button type="button" id="scheduleNewBtn" class="btn btn-primary btn-sm mt-3">@L["cameras.schedule.newWindow"]</button>
     </div>
 </div>
 

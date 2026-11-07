@@ -20,7 +20,7 @@ window.larisvmsViewEditor = (function () {
 
     function buildCellHtml(cell) {
         var cam = cameraById[cell.cameraId];
-        var camName = cam ? cam.name : 'Unknown camera';
+        var camName = cam ? cam.name : larisvmsI18n.t('js.viewEditor.unknownCamera');
         var aspect = window.LarisVMSAspectRatio.isValid(cell.aspect) ? cell.aspect : window.LarisVMSAspectRatio.default;
         var options = window.LarisVMSAspectRatio.options.map(function (a) {
             return '<option value="' + a + '"' + (a === aspect ? ' selected' : '') + '>' + a + '</option>';
@@ -29,16 +29,17 @@ window.larisvmsViewEditor = (function () {
             '<div class="view-cell h-100 d-flex flex-column" data-cell-id="' + cell.id + '" data-camera-id="' + cell.cameraId + '">' +
                 '<div class="view-cell-titlebar d-flex align-items-center gap-1 px-1 bg-dark text-white small" style="cursor: move;">' +
                     '<span class="flex-grow-1 text-truncate">' + escHtml(camName) + '</span>' +
-                    '<select class="form-select form-select-sm view-cell-aspect" title="Aspect ratio" aria-label="Aspect ratio" ' +
+                    '<select class="form-select form-select-sm view-cell-aspect" title="' + larisvmsI18n.html('js.viewEditor.aspectRatio') + '" aria-label="' + larisvmsI18n.html('js.viewEditor.aspectRatio') + '" ' +
                         'style="width: auto; padding: 0 1.2rem 0 .3rem; font-size: .7rem;">' + options + '</select>' +
-                    '<label class="mb-0" title="Hide on phone" style="cursor: pointer;">' +
+                    '<label class="mb-0" title="' + larisvmsI18n.html('js.viewEditor.hideOnPhone') + '" style="cursor: pointer;">' +
                         '<input type="checkbox" class="view-cell-hide-mobile d-none"' + (cell.hideOnPhone ? ' checked' : '') + ' />' +
                         '<span class="view-cell-hide-mobile-icon">' + (cell.hideOnPhone ? '📵' : '📱') + '</span>' +
                     '</label>' +
-                    '<button type="button" class="btn-close btn-close-white view-cell-remove" style="font-size: .6rem;" title="Remove" aria-label="Remove camera from view"></button>' +
+                    '<button type="button" class="btn-close btn-close-white view-cell-remove" style="font-size: .6rem;" title="' + larisvmsI18n.html('js.viewEditor.remove') + '" aria-label="' + larisvmsI18n.html('js.viewEditor.removeCameraFromView') + '"></button>' +
                 '</div>' +
+                window.larisvmsGridKeyboard.html(camName) +
                 '<div class="position-relative flex-grow-1 bg-black overflow-hidden" style="min-height: 0;">' +
-                    '<video class="view-cell-video" style="width:100%; height:100%; object-fit:contain;" muted playsinline></video>' +
+                    '<video class="view-cell-video" style="width:100%; height:100%; object-fit:contain;" muted playsinline aria-label="' + larisvmsI18n.html('js.video.from', { camera: camName }) + '"></video>' +
                     '<div class="position-absolute top-50 start-50 translate-middle text-white small text-center px-2 view-cell-status"></div>' +
                 '</div>' +
             '</div>'
@@ -106,6 +107,7 @@ window.larisvmsViewEditor = (function () {
         var cellEl = contentEl.querySelector('.view-cell');
         if (cellEl) {
             wireCellControls(cellEl);
+            window.larisvmsGridKeyboard.wire(grid, contentEl.closest('.grid-stack-item'));
             startCellVideo(cellEl);
         }
     }
@@ -234,6 +236,13 @@ window.larisvmsViewEditor = (function () {
         // wherever the pointer was released.
         var palette = document.getElementById('cameraPalette');
         if (palette) {
+            palette.addEventListener('keydown', function (e) {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                var item = e.target.closest('[data-camera-id]');
+                if (!item) return;
+                e.preventDefault();
+                item.click();
+            });
             palette.addEventListener('click', function (e) {
                 var contentEl = e.target.closest('.grid-stack-item-content[data-camera-id]');
                 if (contentEl) addCameraFromPalette(contentEl.getAttribute('data-camera-id'));

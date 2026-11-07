@@ -50,7 +50,7 @@ public class ProxyUpdateServiceTests
     {
         var content = "fake LarisVMS.Proxy.exe bytes"u8.ToArray();
         var lifetime = new FakeLifetime();
-        var service = new ProxyUpdateService(NewConfig(), insecureTls: false, NullLogger.Instance, lifetime,
+        var service = new ProxyUpdateService(NewConfig(), NullLogger.Instance, lifetime,
             new StubHandler(content));
 
         var applied = await service.TryApplyAsync(Update(new string('0', 64), content.Length), CancellationToken.None);
@@ -65,7 +65,7 @@ public class ProxyUpdateServiceTests
     public async Task FailedDownloadAbortsCleanlyAndResetsIsApplying()
     {
         var lifetime = new FakeLifetime();
-        var service = new ProxyUpdateService(NewConfig(), insecureTls: false, NullLogger.Instance, lifetime,
+        var service = new ProxyUpdateService(NewConfig(), NullLogger.Instance, lifetime,
             new StubHandler([], HttpStatusCode.InternalServerError));
 
         var applied = await service.TryApplyAsync(Update(new string('0', 64), 0), CancellationToken.None);
@@ -78,7 +78,7 @@ public class ProxyUpdateServiceTests
     [Fact]
     public async Task ReTriggeringWhileAlreadyApplyingIsIgnored()
     {
-        var service = new ProxyUpdateService(NewConfig(), insecureTls: false, NullLogger.Instance, new FakeLifetime(),
+        var service = new ProxyUpdateService(NewConfig(), NullLogger.Instance, new FakeLifetime(),
             new StubHandler("fake"u8.ToArray()));
 
         var first = service.TryApplyAsync(Update(new string('0', 64), 4), CancellationToken.None);

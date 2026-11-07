@@ -54,7 +54,7 @@
         if (!a || a.target === '_blank' || a.hasAttribute('download')) return;
         var href = a.getAttribute('href');
         if (!href || href.charAt(0) === '#' || a.origin !== location.origin) return;
-        if (confirm('Leave this page? Your changes have not been saved.')) dirty = false;
+        if (confirm(larisvmsI18n.t('js.conditionalFields.leaveThisPageYourChanges'))) dirty = false;
         else { e.preventDefault(); e.stopPropagation(); }
     }, true);
 

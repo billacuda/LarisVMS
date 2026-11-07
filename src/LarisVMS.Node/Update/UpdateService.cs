@@ -17,7 +17,7 @@ namespace LarisVMS.Node.Update;
 /// calls IHostApplicationLifetime.StopApplication() so the Service Control Manager stops this process
 /// cleanly, releasing the file lock the detached updater is waiting on.
 /// </summary>
-public class UpdateService(NodeConfig config, bool insecureTls, ILogger log, IHostApplicationLifetime lifetime,
+public class UpdateService(NodeConfig config, ILogger log, IHostApplicationLifetime lifetime,
     HttpMessageHandler? httpHandler = null)
 {
     private static readonly string UpdateDir = Path.Combine(
@@ -297,14 +297,8 @@ public class UpdateService(NodeConfig config, bool insecureTls, ILogger log, IHo
     {
         // The same certificate check as the node's other calls to the server.
         if (NodeConfigStore.Trust is { } trust) return trust.CreateHandler();
-        var handler = new HttpClientHandler();
-        if (insecureTls)
-        {
-            // Same rationale as NodeApiClient's own acceptAnyCertificate flag: a self-hosted
-            // LarisVMS.Web behind a self-signed cert on a LAN is a normal deployment shape here.
-            handler.ServerCertificateCustomValidationCallback = (_, _, _, _) => true;
-        }
-        return handler;
+        // No live check yet (only before startup creates one): the system's own validation.
+        return new HttpClientHandler();
     }
 
     private static async Task<string> ComputeSha256Async(string path, CancellationToken ct)

@@ -6,7 +6,7 @@ How LarisVMS fits together: the web server, recorder nodes, media proxies, and c
 
 | Piece | What it does |
 |---|---|
-| **Web server** | The LarisVMS web app. Stores configuration in SQL Server (or MariaDB, experimental), serves the UI and API, and relays live and playback video unless direct streaming is on. Runs as the *LarisVMS Web* Windows service. |
+| **Web server** | The LarisVMS web app. Stores configuration in SQL Server or MariaDB, serves the UI and API, and relays live and playback video unless direct streaming is on. Runs as the *LarisVMS Web* Windows service. |
 | **Recorder node** | A Windows service on each recording machine. Pulls RTSP from its cameras, writes segments to its storage path, enforces retention, runs motion and AI detection, and reports health. One server can have many nodes. |
 | **Vision service** | Optional child process of a node that runs AI object detection on the node's GPU (or CPU). A crash here never stops recording. |
 | **Media proxy** | Optional relay between browsers and nodes, for remote sites or low-bandwidth links. |
@@ -37,6 +37,8 @@ A blank field (or an “inherit — …” option) uses the next level up, and s
 The dashboard is made of widgets. Each user picks their own, and the layout is saved to their account, so it follows them to other browsers.
 
 - **Customize** (top right; hidden when the window is too narrow for the full grid) unlocks the layout. Drag a widget by its title bar, resize it from the corner, or remove it with ×. **Add widget** lists everything you can add, and **Reset layout** goes back to the default. Click **Done** when you're finished.
+- While customizing, each widget has buttons to move and resize it without dragging.
+- **Pause updates** stops widgets changing while you read them.
 - Most widgets are top-10 lists of cameras or nodes, such as storage used, frame rate, bandwidth, oldest footage, offline cameras, time since last recording, and detections. Some have a time window (1h, 24h, 7d, 30d), and some can switch between highest and lowest first.
 - Click a widget's title to open its full report: every camera or node, 100 per page, with a filter box, a node filter, sortable columns, and a CSV download.
 - **Camera activity** shows one camera's last 7 days as a heatmap by time of day; pick the camera in its title bar, and click the title for the full [Activity](/Help/live-and-playback#activity) page.
@@ -60,4 +62,7 @@ Installing needs a certificate the phone trusts. Browsers won't install a site u
 - New install: [Installation](/Help/installation)
 - Add cameras: [Cameras](/Help/cameras)
 - Choose what to keep: [Recording](/Help/recording) and [Storage & retention](/Help/storage)
+- Connect your own tools: [API](/Help/api)
+- Use another language: [Languages](/Help/languages)
+- Keyboard and screen readers: [Accessibility](/Help/accessibility)
 - Something wrong: [Troubleshooting](/Help/troubleshooting)

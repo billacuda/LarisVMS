@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using LarisVMS.Core.Localization;
 
 namespace LarisVMS.Web.Auth;
 
@@ -20,6 +21,6 @@ public static class EntraLinks
 
     public static bool IsPending(string providerKey) => providerKey.StartsWith("pending-oid:", StringComparison.Ordinal);
 
-    public const string NotLinkedMessage =
-        "This Microsoft account isn't linked to an account here. Ask your administrator to link it.";
+    public static string NotLinkedMessage =>
+        Loc.T("server.entraLinks.thisMicrosoftAccountIsntLinked");
 }

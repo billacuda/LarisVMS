@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Adds an EF Core migration for both database servers: SQL Server and MariaDB (experimental).
+    Adds an EF Core migration for both database servers: SQL Server and MariaDB.
 
 .DESCRIPTION
     Every schema change needs a migration in each provider's migrations assembly:

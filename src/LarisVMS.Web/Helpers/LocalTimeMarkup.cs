@@ -17,4 +17,10 @@ public static class LocalTimeMarkup
     public static string ToUtcIso(this DateTime value)
         => (value.Kind == DateTimeKind.Local ? value.ToUniversalTime() : DateTime.SpecifyKind(value, DateTimeKind.Utc))
             .ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
+
+    /// <summary>The whole &lt;time&gt; element, for a time in the middle of a translated sentence:
+    /// <c>@L.Markup("key", new { time = x.ToTimeTag() })</c>.</summary>
+    public static Microsoft.AspNetCore.Components.MarkupString ToTimeTag(this DateTime value, string style = "g")
+        => new($"<time datetime=\"{value.ToUtcIso()}\" data-local=\"{System.Net.WebUtility.HtmlEncode(style)}\">" +
+               $"{System.Net.WebUtility.HtmlEncode(value.ToLocalTime().ToString(style, CultureInfo.CurrentCulture))}</time>");
 }

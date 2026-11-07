@@ -8,10 +8,12 @@ namespace LarisVMS.Core;
 /// <param name="Motion">Plain pixel/PullPoint motion with no object class attached.</param>
 /// <param name="Recording">A bucket with footage but no motion.</param>
 /// <param name="Detections">Per-object-class overrides, keyed by kind. Absent key = default.</param>
+/// <param name="ManualRecording">A manual recording's band on the timeline.</param>
 public sealed record EventPalette(
     string? Motion,
     string? Recording,
-    IReadOnlyDictionary<DetectionKind, string> Detections)
+    IReadOnlyDictionary<DetectionKind, string> Detections,
+    string? ManualRecording = null)
 {
     public static EventPalette Empty { get; } =
         new(null, null, new Dictionary<DetectionKind, string>());
@@ -24,6 +26,9 @@ public sealed record EventPalette(
     /// <summary>The colour to draw for recorded-but-no-motion coverage. Blank counts as unset, same
     /// as MotionColor above.</summary>
     public string RecordingColor => string.IsNullOrWhiteSpace(Recording) ? EventColors.DefaultRecording : Recording;
+
+    /// <summary>The colour to draw for a manual recording. Blank counts as unset, same as MotionColor.</summary>
+    public string ManualRecordingColor => string.IsNullOrWhiteSpace(ManualRecording) ? EventColors.DefaultManualRecording : ManualRecording;
 
     /// <summary>The colour to draw for an object class, falling back to its built-in default.</summary>
     public string ColorFor(DetectionKind kind) =>
@@ -62,12 +67,14 @@ public static class EventColors
     /// fetched (and if that fetch ever fails) — the two must stay in step.</summary>
     public const string DefaultMotion = "#28e070";
     public const string DefaultRecording = "#1e6fd9";
+    public const string DefaultManualRecording = "#e5383b";
 
     /// <summary>Two-way audio: a recorded push-to-talk press on the timeline.</summary>
     public const string Talk = "#20c9c9";
 
     public const string MotionKey = "Timeline.Color.Motion";
     public const string RecordingKey = "Timeline.Color.Recording";
+    public const string ManualRecordingKey = "Timeline.Color.ManualRecording";
 
     /// <summary>Keyed by the enum's *name*, not its number, so the stored settings stay readable and
     /// a renumbering could never silently repoint a colour at a different class.</summary>

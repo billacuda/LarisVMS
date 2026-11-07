@@ -1,6 +1,6 @@
 # Security
 
-IP allow lists, a separate live/playback port, the strict script policy, certificates, and encrypted secrets.
+IP allow lists, a separate live/playback port, the strict script policy, certificates, host names, updates, and encrypted secrets.
 
 ## Allow lists
 
@@ -24,6 +24,20 @@ With **Settings → Security → Strict script policy** on, browsers run only th
 ## Certificates
 
 The server's certificate is a `.pfx` file set in `appsettings.Production.json`. A renewed file is picked up within a minute without a restart. Nodes using direct streaming have their own certificate setting on the node's page.
+
+## Host names
+
+By default the server answers whatever host name a browser uses, so it works by IP address, short name, and full name alike. To answer only the names you use, set `AllowedHosts` in `appsettings.Production.json` to them, separated by semicolons (for example `"AllowedHosts": "vms.example.com;vms;localhost"`), then `Restart-Service LarisVMSWeb`. Include every name that nodes, proxies, and people use to reach it: anything else gets an error.
+
+Behind a reverse proxy (IIS ARR, nginx, and so on), list its address in `appsettings.Production.json` as `"ReverseProxy": { "KnownProxies": [ "10.0.0.2" ] }`, then restart. The server then takes the client's real address and scheme from that proxy's `X-Forwarded-For` and `X-Forwarded-Proto` headers, so allow lists and the audit log see the person, not the proxy. Those headers are ignored from anything not on the list, and entirely while the list is empty.
+
+## Updates
+
+Three checks stand between a download and a running install:
+
+- **Release downloads** come with `SHA256SUMS.txt`. Check an installer before running it with `Get-FileHash <file> -Algorithm SHA256` and compare it with the line for that file, or run `sha256sum -c SHA256SUMS.txt`. When the installers are code-signed, Windows also shows the publisher.
+- **Node and proxy updates** are signed by this server's signing key. A node or proxy keeps that key from when it registered and installs nothing that isn't signed with it, even if its connection to the server were tampered with. It also refuses a build that isn't newer than the one it runs. See [Installation](/Help/installation#updates).
+- **The connection** to the server is checked as set under **Nodes → Updates and registration → Server certificate check** (see [Nodes](/Help/nodes#server-certificate)).
 
 ## Encrypted secrets
 

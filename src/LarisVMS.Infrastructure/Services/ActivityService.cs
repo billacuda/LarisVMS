@@ -1,6 +1,7 @@
 using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
+using LarisVMS.Core.Localization;
 using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
@@ -45,7 +46,7 @@ public class ActivityService(ApplicationDbContext db, ActivityRollupService roll
         {
             // All cameras: every camera this viewer can review, in the server's time zone (the
             // cameras may each have their own).
-            name = "All cameras";
+            name = Loc.T("common.allCameras");
             zone = TimeZoneInfo.Local;
             cameraIds = accessible;
         }
@@ -137,7 +138,7 @@ public class ActivityService(ApplicationDbContext db, ActivityRollupService roll
         }
         else
         {
-            name = "All cameras";
+            name = Loc.T("common.allCameras");
             zone = TimeZoneInfo.Local;
             cameraIds = accessible;
         }

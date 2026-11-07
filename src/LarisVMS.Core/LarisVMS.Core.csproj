@@ -6,13 +6,19 @@
     <Nullable>enable</Nullable>
     <!-- Version drives the footer via AppVersions, but this is the assembly's own version marker,
          bumped alongside CHANGELOG.md as described in the README. -->
-    <Version>0.219.0</Version>
+    <Version>0.220.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- Domain-only project: IAuthorizationRequirement, HttpContext-adjacent types used by Auth/,
          no other package dependencies. -->
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The built-in English UI text, embedded so a deploy can never ship without it; every other
+         language is a file in a locales folder (see Localization/LocaleCatalog.cs). -->
+    <EmbeddedResource Include="Localization\en.json" LogicalName="Locales/en.json" />
   </ItemGroup>
 
 </Project>
