@@ -9,7 +9,7 @@
 #>
 param(
     [string]$Version = 'v1.21.1',
-    [string]$NodeRelease = 'v0.221.0-beta'
+    [string]$NodeRelease = 'v0.221.0'
 )
 
 . "$PSScriptRoot\common.ps1"

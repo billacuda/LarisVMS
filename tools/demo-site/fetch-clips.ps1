@@ -27,7 +27,14 @@ New-Item -ItemType Directory -Force $srcDir | Out-Null
 foreach ($cam in $DemoConfig.cameras) {
     Write-Step "$($cam.id) $($cam.name)"
 
-    $src = Join-Path $srcDir "$($cam.pexelsId).mp4"
+    if ($cam.PSObject.Properties['sourceFile']) {
+        # A local clip (for example one you recorded or downloaded by hand) instead of a Pexels download.
+        if (-not (Test-Path -LiteralPath $cam.sourceFile)) { throw "Missing $($cam.sourceFile) for $($cam.id)." }
+        $src = Join-Path $srcDir "$($cam.id)$([IO.Path]::GetExtension($cam.sourceFile))"
+        if ($Force -or -not (Test-Path $src)) { Copy-Item -LiteralPath $cam.sourceFile $src -Force }
+    } else {
+        $src = Join-Path $srcDir "$($cam.pexelsId).mp4"
+    }
     if (-not (Test-Path $src)) {
         # /download/video/<id>/ redirects to the file on videos.pexels.com; w/h pick the 1080p rendition.
         $url = "https://www.pexels.com/download/video/$($cam.pexelsId)/?h=1080&w=1920"

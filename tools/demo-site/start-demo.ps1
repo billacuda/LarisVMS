@@ -62,6 +62,11 @@ function Wait-Port([string]$HostName, [int]$Port, [int]$Seconds = 120) {
 
 $ffmpeg = Get-ToolPath ffmpeg
 
+# Release builds restore in locked mode, which fails when this PC's SDK bundles a newer ILLink than
+# the one in packages.lock.json. The demo restores unlocked, into a lock file under each project's
+# obj\, so the repo's lock files stay as they are.
+$UnlockedRestore = @('-p:RestoreLockedMode=false', '-p:NuGetLockFilePath=obj/demo.packages.lock.json')
+
 if (-not $NodeOnly) {
     if (-not (Get-NetAdapter -Name "vEthernet ($($DemoConfig.network.switchName))" -ErrorAction SilentlyContinue)) {
         throw "The demo network isn't set up. Run setup-network.ps1 in an elevated PowerShell first."
@@ -103,13 +108,13 @@ $($paths -join "`n")
 
     Write-Step 'Fake ONVIF cameras'
     $env:FFMPEG_PATH = $ffmpeg
-    Start-DemoProcess 'fakeonvif' 'dotnet' @('run', '--project', "`"$DemoRoot\FakeOnvif`"", '-c', 'Release', '--',
-        '--config', "`"$DemoRoot\cameras.json`"")
+    Start-DemoProcess 'fakeonvif' 'dotnet' (@('run', '--project', "`"$DemoRoot\FakeOnvif`"", '-c', 'Release') + $UnlockedRestore +
+        @('--', '--config', "`"$DemoRoot\cameras.json`""))
 }
 
 if (-not $CamerasOnly -and -not $NodeOnly) {
     Write-Step 'LarisVMS Web'
-    Start-DemoProcess 'web' 'dotnet' @('run', '--project', "`"$RepoRoot\src\LarisVMS.Web`"", '-c', 'Release') $RepoRoot
+    Start-DemoProcess 'web' 'dotnet' (@('run', '--project', "`"$RepoRoot\src\LarisVMS.Web`"", '-c', 'Release') + $UnlockedRestore) $RepoRoot
     Write-Host 'Waiting for https://localhost:8444/ (the first build takes a minute or two)...'
     if (Wait-Port 'localhost' 8444 300) { Write-Ok 'Web is up: https://localhost:8444/' } else { Write-Warning "Web didn't come up; check $LogsDir\web.log" }
 }

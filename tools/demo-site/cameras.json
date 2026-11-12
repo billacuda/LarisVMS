@@ -1,5 +1,5 @@
 {
-  "$comment": "Fake cameras for the demo site. Clips are free stock footage from Pexels (https://www.pexels.com/license/): free to use, no attribution required. See README.md.",
+  "$comment": "Fake cameras for the demo site. Clips are free stock footage from Pexels (https://www.pexels.com/license/): free to use, no attribution required. Cameras with sourceFile use a local clip instead of downloading one. See README.md.",
   "dataRoot": "G:\\LarisDemo",
   "network": {
     "switchName": "LarisDemo",
@@ -101,6 +101,71 @@
       "audio": false,
       "pexelsId": 13458429,
       "source": "https://www.pexels.com/video/african-penguins-on-a-sandy-beach-13458429/"
+    },
+    {
+      "id": "cam10",
+      "name": "Grounds Crew",
+      "ip": "10.77.0.20",
+      "model": "LD-B4K21",
+      "codec": "H264",
+      "audio": false,
+      "sourceFile": "C:\\Users\\Bill\\Desktop\\larisvms\\new videos\\12778353_3840_2160_30fps.mp4",
+      "pexelsId": 12778353,
+      "source": "https://www.pexels.com/video/12778353/"
+    },
+    {
+      "id": "cam11",
+      "name": "Busy Street",
+      "ip": "10.77.0.21",
+      "model": "LD-B4K21",
+      "codec": "H264",
+      "audio": false,
+      "sourceFile": "C:\\Users\\Bill\\Desktop\\larisvms\\new videos\\busy street 1.mp4"
+    },
+    {
+      "id": "cam12",
+      "name": "Fuel Station Day",
+      "ip": "10.77.0.22",
+      "model": "LD-T8M30",
+      "codec": "H264",
+      "audio": false,
+      "sourceFile": "C:\\Users\\Bill\\Desktop\\larisvms\\new videos\\gas station 1.mp4"
+    },
+    {
+      "id": "cam13",
+      "name": "Fuel Station Night",
+      "ip": "10.77.0.23",
+      "model": "LD-B8K40",
+      "codec": "H264",
+      "audio": false,
+      "sourceFile": "C:\\Users\\Bill\\Desktop\\larisvms\\new videos\\gas station 2.mp4"
+    },
+    {
+      "id": "cam14",
+      "name": "Mall Atrium",
+      "ip": "10.77.0.24",
+      "model": "LD-D2M10",
+      "codec": "H264",
+      "audio": false,
+      "sourceFile": "C:\\Users\\Bill\\Desktop\\larisvms\\new videos\\mall.mp4"
+    },
+    {
+      "id": "cam15",
+      "name": "Visitor Parking",
+      "ip": "10.77.0.25",
+      "model": "LD-B4K21",
+      "codec": "H264",
+      "audio": false,
+      "sourceFile": "C:\\Users\\Bill\\Desktop\\larisvms\\new videos\\parking lot.mp4"
+    },
+    {
+      "id": "cam16",
+      "name": "Highway",
+      "ip": "10.77.0.26",
+      "model": "LD-B8K40",
+      "codec": "H264",
+      "audio": false,
+      "sourceFile": "C:\\Users\\Bill\\Desktop\\larisvms\\new videos\\traffic 1.mov"
     }
   ]
 }

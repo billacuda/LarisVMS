@@ -1,15 +1,15 @@
 # Demo site
 
-A throwaway LarisVMS with **9 fake ONVIF cameras** looping free stock footage, on a private virtual
+A throwaway LarisVMS with **16 fake ONVIF cameras** looping free stock footage, on a private virtual
 network. Use it for screenshots and testing without real cameras, and without showing anything about
 your own site.
 
 | Piece | What it is |
 |---|---|
-| `setup-network.ps1` | Hyper-V internal switch `LarisDemo`: host `10.77.0.1`, cameras `10.77.0.11`–`.19`. Can't be reached from your LAN. |
+| `setup-network.ps1` | Hyper-V internal switch `LarisDemo`: host `10.77.0.1`, cameras `10.77.0.11`–`.26`. Can't be reached from your LAN. |
 | `FakeOnvif/` | .NET app that acts as the cameras in `cameras.json`: the ONVIF device, media, media2 (H.265 cameras only), imaging, and events (PullPoint motion events) services; encoder, image, and audio settings that can be changed (kept in memory until it restarts); JPEG snapshots; and WS-Discovery replies. |
-| MediaMTX | RTSP server (`rtsp://10.77.0.1x:554/camNN_main` and `_sub`) looping each camera's clip with `ffmpeg -c copy`. |
-| `fetch-clips.ps1` | Downloads the clips and encodes camera-like Main (1080p25) and Sub (360p15) streams. |
+| MediaMTX | RTSP server (`rtsp://10.77.0.x:554/camNN_main` and `_sub`) looping each camera's clip with `ffmpeg -c copy`. |
+| `fetch-clips.ps1` | Downloads the clips (or copies a camera's local `sourceFile`) and encodes camera-like Main (1080p25) and Sub (360p15) streams. |
 | LarisVMS | Web from this repo's source (`dotnet run`). The recorder node and Vision Service are unpacked from the release MSI (see [Why the node comes from the MSI](#why-the-node-comes-from-the-msi)). |
 
 Cameras (see `cameras.json`); every scene has people, vehicles or animals for AI detection:
@@ -25,9 +25,16 @@ Cameras (see `cameras.json`); every scene has people, vehicles or animals for AI
 | cam07 | Tram Stop | Tram line, high angle | Has audio (AAC) |
 | cam08 | Avenue | Avenue at night, traffic lights | H.265 Main stream |
 | cam09 | Penguin Beach | African penguins walking on a beach (fixed camera) | |
+| cam10 | Grounds Crew | Workers and a tractor clearing leaves, high angle | Pexels 12778353 |
+| cam11 | Busy Street | Tree-lined street, parked cars and pedestrians | Local clip |
+| cam12 | Fuel Station Day | Gas station forecourt, daytime | Local clip |
+| cam13 | Fuel Station Night | Gas station at night, heavy scooter traffic | Local clip |
+| cam14 | Mall Atrium | Shopping mall atrium, shoppers on several levels | Local clip |
+| cam15 | Visitor Parking | Large parking lot beside a road | Local clip |
+| cam16 | Highway | Highway traffic at dusk, headlights | Local clip |
 
 Clips are from [Pexels](https://www.pexels.com/license/), which allows free use with no attribution;
-each camera's source page is in `cameras.json`. Everything downloaded or generated lives under
+each camera's source page is in `cameras.json`. Cameras with a `sourceFile` use a clip from this PC instead; `fetch-clips.ps1` copies it into `clips\src` first. Everything downloaded or generated lives under
 `dataRoot` (`G:\LarisDemo` by default), outside the repo. MediaMTX goes in `bin\`, which is gitignored.
 
 ## One-time setup
@@ -77,8 +84,8 @@ stops it. Logs are in `G:\LarisDemo\logs\`.
 ## Staging the demo
 
 1. **Cameras → Groups**: a site (for example "Riverside Campus"), with "Main Building" and "Grounds" under it.
-2. **Cameras → Discover** finds the 9 cameras on `10.77.0.x`. Add them with username `admin` and password `demo`, and assign them to the node.
-3. Turn on AI detection for the cameras you want boxes on. All 9 scenes have people, vehicles or animals. Use Continuous recording, with Motion recording on a couple of cameras.
+2. **Cameras → Discover** finds the 16 cameras on `10.77.0.x`. Add them with username `admin` and password `demo`, and assign them to the node.
+3. Turn on AI detection for the cameras you want boxes on. All 16 scenes have people, vehicles or animals. Use Continuous recording, with Motion recording on a couple of cameras.
 4. Leave it running for **2–4 hours**, so the timeline, motion events, detections and snapshots fill up.
 5. Add a saved camera wall, a bookmark, an export, and a second user with a restricted role.
 
