@@ -8,7 +8,7 @@ and administration all run in the browser, on desktop, tablet, and phone.
   <a href="https://www.buymeacoffee.com/billacuda"><img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=%E2%98%95&slug=billacuda&button_colour=5F7FFF&font_colour=ffffff&font_family=Cookie&outline_colour=000000&coffee_colour=FFDD00" alt="Buy me a coffee" height="50" /></a>
 </p>
 
-**Current version: [0.220.0](CHANGELOG.md)**
+**Current version: [0.221.0](CHANGELOG.md)**
 
 📖 **[Documentation](https://www.larisvms.com/docs/)**: how to install, set up, and use LarisVMS. Worth a
 read before you install.
@@ -84,6 +84,7 @@ read before you install.
 - IP allow lists, an optional separate port for video traffic, and secrets encrypted at rest.
 - Branding: app name, colors, font, and logo.
 - Drop-in languages: translate one text file and upload it, or copy it into a folder, to show the interface in that language. Each person picks theirs, and alerts reach them in it.
+- Ships in English, German, French, Italian, Portuguese (Brazil), Japanese, Korean, Chinese (Simplified and Traditional), and Spanish (Argentina). Apart from Spanish, these are machine-translated drafts, and corrections from native speakers are welcome (see [CONTRIBUTING.md](CONTRIBUTING.md#translations)).
 - Built-in **Help** with documentation for every feature.
 
 ## 🏗️ Architecture
@@ -102,7 +103,7 @@ Settings are inherited **global → node → camera**, and the most specific val
 - **Operating system:** any 64-bit Windows version supported by [.NET 10](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md), for both the server and the recorder nodes.
 - **Server:** SQL Server (Express works) using SQL or Integrated authentication. For SQL Server Express, the server name is `.\SQLEXPRESS`. Building from source also needs the [.NET 10 SDK](https://dotnet.microsoft.com/download); the MSIs don't need any .NET runtime.
 - **MariaDB:** MariaDB 10.11 or later can be used instead of SQL Server, with a MariaDB user and password. Built-in backups need the MariaDB client tools (`mariadb-dump`) on the LarisVMS server.
-- **.NET version:** developed with the .NET SDK 10.0.402. The 0.220.0 installers were built with it and include the .NET 10.0.13 runtime (ASP.NET Core 10.0.13).
+- **.NET version:** developed with the .NET SDK 10.0.402. The 0.221.0 installers were built with it and include the .NET 10.0.13 runtime (ASP.NET Core 10.0.13).
 - **Each recorder node:** [FFmpeg](https://ffmpeg.org/) (`winget install ffmpeg --scope machine`).
 - **LarisVision (optional):** a GPU and its driver, or CPU only. NVIDIA additionally needs CUDA Toolkit 12.x and cuDNN 9.x (see [LarisVision](#-larisvision-ai-detection)) if you want to use CUDA or TensorRT acceleration, otherwise DirectML works out of the box.
 - **Cameras:** ONVIF Profile S or T.
@@ -153,9 +154,9 @@ Double-click an installer to be prompted for its settings, or pass them on the c
 ### 🌐 1. Install the web server
 
 ```powershell
-msiexec /i LarisVMS-Web-0.220.0-x64.msi
+msiexec /i LarisVMS-Web-0.221.0-x64.msi
 # silent, with a certificate:
-msiexec /i LarisVMS-Web-0.220.0-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx CERTPASSWORD=secret /qn
+msiexec /i LarisVMS-Web-0.221.0-x64.msi HTTPSPORT=8444 CERTPATH=C:\certs\vms.pfx CERTPASSWORD=secret /qn
 ```
 
 | Property | Default | Purpose |
@@ -178,7 +179,7 @@ Pointing the wizard at an existing LarisVMS database, for example when reinstall
 Install [FFmpeg](https://ffmpeg.org/) on each recording machine first (`winget install ffmpeg --scope machine`), then:
 
 ```powershell
-msiexec /i LarisVMS-Node-0.220.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> STORAGEROOT=D:\Recordings /qn
+msiexec /i LarisVMS-Node-0.221.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> STORAGEROOT=D:\Recordings /qn
 ```
 
 | Property | Default | Purpose |
@@ -198,7 +199,7 @@ The node registers itself and appears under **Nodes**.
 ### 🔀 4. Install media proxies (optional)
 
 ```powershell
-msiexec /i LarisVMS-Proxy-0.220.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> CLIENTPORT=4443 /qn
+msiexec /i LarisVMS-Proxy-0.221.0-x64.msi SERVERURL=https://<server>:8444 REGISTRATIONKEY=<key> CLIENTPORT=4443 /qn
 ```
 
 Properties: `SERVERURL`, `REGISTRATIONKEY`, `CLIENTPORT` (default 4443), `CLIENTENDPOINTHOST`, `CLIENTPFXPATH`, `CLIENTPFXPASSWORD`, `CLIENTALLOWINSECURE`, `INSECURETLS`, `SERVICEACCOUNT`, `SERVICEPASSWORD`, `INSTALLFOLDER`, with the same meanings as for the node.
@@ -314,7 +315,7 @@ machines, and you own them: nobody else can see them.
 
 ## 🔨 Building from source
 
-Developed and built with the .NET SDK 10.0.402 (`dotnet --version`). Any later 10.0 SDK should work; there's no `global.json` pinning one.
+Developed and built with the .NET SDK 10.0.402. `global.json` sets that as the minimum: it or any newer .NET 10 SDK builds LarisVMS, and the newest one installed is used. A newer major version (.NET 11) isn't picked up on its own, so a build doesn't change under you. Get it from the [.NET 10 downloads](https://dotnet.microsoft.com/download/dotnet/10.0); `dotnet --list-sdks` shows which you have.
 
 ```powershell
 dotnet tool restore
@@ -334,6 +335,18 @@ a migration (`migrationBuilder.Sql`) goes in the right provider's copy; `MariaDb
 the MariaDB migrations fall behind the model.
 
 Release installers are built with `.\build-installers.ps1` (WiX v5, restored from NuGet).
+
+Release builds restore only the package versions and checksums recorded in the `packages.lock.json`
+files. After changing a package in `Directory.Packages.props`, build once in Debug so the lock files
+update, and commit them with the change.
+
+**Publisher key.** `.\tools\publisher-key.ps1 -New -PrivateKeyPath <path outside the repo>` makes the
+key that signs node and proxy updates (PowerShell 7). Commit the public key it writes to
+`src\LarisVMS.Core\Security\publisher-key.pem`, and keep the encrypted private key and its password
+offline. Pass `-PublisherKeyPath` to `deploy.ps1`, `build-node.ps1`, or `build-proxy.ps1` to sign a
+build: nodes and proxies built that way install only updates the publisher signed, so a compromised
+server can't push its own code to them. It's optional: without `-PublisherKeyPath`, a build is
+unsigned and carries no key, as before, so building from source never needs the private key.
 
 A release needs the same version in every project's `<Version>` (Web, Node, NodeUpdater, Proxy,
 Core), the same version and one-line release notes in `src\LarisVMS.Infrastructure\AppRelease.cs` (the

@@ -170,7 +170,7 @@ public sealed class DetectionAlertService(IServiceScopeFactory scopeFactory, ILo
         entity.LastFiredAt = now;
         await db.SaveChangesAsync(ct);
 
-        var cameraName = await db.Cameras.Where(c => c.Id == cameraId).Select(c => c.Name).FirstOrDefaultAsync(ct) ?? "(deleted camera)";
+        var cameraName = await db.Cameras.Where(c => c.Id == cameraId).Select(c => c.Name).FirstOrDefaultAsync(ct) ?? Loc.T("common.deletedCamera");
         var units = await scope.ServiceProvider.GetRequiredService<ISettingsResolver>()
             .GetAsync(SpeedUnits.SettingKey, SpeedUnits.Default, ct: ct);
         var trapName = speedTrapId is { } trapId
@@ -224,7 +224,7 @@ public sealed class DetectionAlertService(IServiceScopeFactory scopeFactory, ILo
                 ScopeCameraIds: r.CameraId is null && r.NodeId is { } nodeId ? camerasByNode.GetValueOrDefault(nodeId) ?? [] : null,
                 TimeZone: DetectionAlertMatcher.ResolveTimeZone(r.TimeZoneId),
                 MotionZoneId: motion ? r.ZoneId : null,
-                MotionZoneName: motion && r.ZoneId is { } mzid ? zoneNames.GetValueOrDefault(mzid, "(deleted zone)") : null);
+                MotionZoneName: motion && r.ZoneId is { } mzid ? zoneNames.GetValueOrDefault(mzid) ?? Loc.T("common.deletedZone") : null);
         }).ToList();
         _rulesLoadedUtc = DateTime.UtcNow;
     }

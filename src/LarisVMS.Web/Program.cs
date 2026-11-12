@@ -128,6 +128,10 @@ builder.Services.AddDbContext<ApplicationDbContext>((provider, options) =>
 var dataProtectionPath = Path.Combine(
     Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "keys");
 EnsureWritableDirectory(dataProtectionPath);
+// The key ring folder is locked down now, before the key ring is first written; the rest of the
+// data folder follows in the background below.
+if (LarisVMS.Core.Security.LocalDataAcl.SecureFolder(dataProtectionPath) is { } keysAclError)
+    webFileLogger.CreateLogger("Startup").LogWarning("Could not restrict access to {Path}: {Error}", dataProtectionPath, keysAclError);
 
 // %ProgramData%\LarisVMS (key ring, node builds, certificates) and the config files next to the
 // program that can hold passwords: SYSTEM, Administrators, and this service only. In the background,
@@ -165,10 +169,10 @@ builder.Services.AddRateLimiter(o =>
     static System.Threading.RateLimiting.FixedWindowRateLimiterOptions PerMinute(int permits) =>
         new() { PermitLimit = permits, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 };
     o.AddPolicy("sign-in", ctx => HttpMethods.IsPost(ctx.Request.Method)
-        ? System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(ctx.Connection.RemoteIpAddress?.ToString() ?? "", _ => PerMinute(10))
+        ? System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(LarisVMS.Web.Services.SignInThrottle.AddressKey(ctx.Connection.RemoteIpAddress), _ => PerMinute(10))
         : System.Threading.RateLimiting.RateLimitPartition.GetNoLimiter(""));
     o.AddPolicy("register", ctx =>
-        System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(ctx.Connection.RemoteIpAddress?.ToString() ?? "", _ => PerMinute(10)));
+        System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(LarisVMS.Web.Services.SignInThrottle.AddressKey(ctx.Connection.RemoteIpAddress), _ => PerMinute(10)));
     o.AddPolicy("per-user", ctx =>
         System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
             ctx.User.ActorId() ?? ctx.Connection.RemoteIpAddress?.ToString() ?? "",
@@ -184,7 +188,10 @@ builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
         // Length over complexity rules; applies to new and changed passwords.
         options.Password.RequiredLength = 12;
         options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
-        options.Lockout.MaxFailedAccessAttempts = 5;
+        // A cap for guessing spread over many addresses: SignInThrottle stops a single address after
+        // 5 wrong tries without locking the person out everywhere. Wrong codes and passwords given
+        // while signed in (Confirm, Change password, Two-factor) count toward it too.
+        options.Lockout.MaxFailedAccessAttempts = 20;
         options.Lockout.AllowedForNewUsers = true;
         // AD accounts use their sAMAccountName as UserName, which may contain spaces and other
         // characters Identity's default allow-list rejects. Empty disables the check; local accounts
@@ -194,8 +201,15 @@ builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
     .AddRoles<IdentityRole>()
     .AddEntityFrameworkStores<ApplicationDbContext>()
     .AddDefaultTokenProviders()
+    // Authenticator codes that can't be used twice (replaces the default "Authenticator" provider).
+    .AddTokenProvider<LarisVMS.Web.Auth.SingleUseAuthenticatorTokenProvider>(TokenOptions.DefaultAuthenticatorProvider)
     .AddErrorDescriber<LocalizedIdentityErrorDescriber>()
-    .AddDefaultUI();
+    .AddPasswordValidator<LarisVMS.Web.Services.CommonPasswordValidator>()
+    .AddDefaultUI()
+    // Asks Active Directory sign-ins for the two-factor code too. After AddDefaultUI, which registers
+    // the plain SignInManager again: the last registration wins, and LarisSignInManager is resolved
+    // through it (IdentityRegistrationTests).
+    .AddSignInManager<LarisVMS.Web.Auth.LarisSignInManager>();
 
 // The cookie property holding when the user actually signed in (session lifetime is measured from it).
 const string SignedInAtKey = ".larisvms.signedInUtc";
@@ -217,10 +231,18 @@ builder.Services.ConfigureApplicationCookie(options =>
     // is renewed (including the security-stamp refresh every 30 minutes), so the per-role session
     // limit below would otherwise only ever measure idle time. A re-sign-in that keeps the
     // properties (role changes) keeps the original time.
-    options.Events.OnSigningIn = ctx =>
+    options.Events.OnSigningIn = async ctx =>
     {
         ctx.Properties.Items.TryAdd(SignedInAtKey, DateTimeOffset.UtcNow.ToString("o"));
-        return Task.CompletedTask;
+        // A new sign-in starts a session; a re-sign-in that keeps the properties keeps its session.
+        var userId = ctx.Principal?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        if (userId is not null && !ctx.Properties.Items.ContainsKey(UserSessionService.CookieItem))
+        {
+            var started = await ctx.HttpContext.RequestServices.GetRequiredService<UserSessionService>().StartAsync(userId, ctx.HttpContext);
+            ctx.Properties.Items[UserSessionService.CookieItem] = started.Id.ToString();
+            ctx.HttpContext.Items[UserSessionService.RequestItem] = started.Id;
+            ctx.HttpContext.Items[UserSessionService.RequestRowItem] = started;
+        }
     };
 
     options.Events.OnSignedIn = async ctx =>
@@ -235,9 +257,12 @@ builder.Services.ConfigureApplicationCookie(options =>
 
     options.Events.OnSigningOut = async ctx =>
     {
+        var userId = ctx.HttpContext.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        if (userId is not null && UserSessionService.Current(ctx.HttpContext) is { } endingSession)
+            await ctx.HttpContext.RequestServices.GetRequiredService<UserSessionService>().EndAsync(endingSession, userId);
+
         var audit = ctx.HttpContext.RequestServices.GetService<IAuditService>();
         if (audit is null) return;
-        var userId = ctx.HttpContext.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
         var userName = ctx.HttpContext.User.Identity?.Name;
         var ip = ctx.HttpContext.Connection.RemoteIpAddress?.ToString();
         await audit.LogAsync("Logout", userId, userName, ip);
@@ -292,6 +317,36 @@ builder.Services.ConfigureApplicationCookie(options =>
             return;
         }
 
+        // The server's own record of this session (UserSessionService): gone means signed out from
+        // the Sessions page, by an admin, or by a password change elsewhere.
+        var sessions = ctx.HttpContext.RequestServices.GetRequiredService<UserSessionService>();
+        var nowUtc = DateTime.UtcNow;
+        LarisVMS.Core.Entities.UserSession? session = null;
+        if (userId is not null)
+        {
+            if (ctx.Properties.Items.TryGetValue(UserSessionService.CookieItem, out var sessionRaw) && Guid.TryParse(sessionRaw, out var sessionId))
+            {
+                session = await sessions.FindAsync(sessionId, userId);
+                if (session is null)
+                {
+                    ctx.RejectPrincipal();
+                    await ctx.HttpContext.SignOutAsync(IdentityConstants.ApplicationScheme);
+                    return;
+                }
+            }
+            else
+            {
+                // Signed in before sessions were tracked: tracked from now on (admin pages ask for
+                // the password first, since this isn't a fresh sign-in).
+                session = await sessions.StartAsync(userId, ctx.HttpContext, issuedUtc.Value.UtcDateTime, confirmed: false);
+                sessionId = session.Id;
+                ctx.Properties.Items[UserSessionService.CookieItem] = sessionId.ToString();
+                ctx.ShouldRenew = true;
+            }
+            ctx.HttpContext.Items[UserSessionService.RequestItem] = sessionId;
+            ctx.HttpContext.Items[UserSessionService.RequestRowItem] = session;
+        }
+
         var roleNames = ctx.Principal.FindAll(System.Security.Claims.ClaimTypes.Role)
             .Select(c => c.Value).ToList();
 
@@ -310,6 +365,25 @@ builder.Services.ConfigureApplicationCookie(options =>
             ctx.RejectPrincipal();
             await ctx.HttpContext.SignOutAsync(IdentityConstants.ApplicationScheme);
             return;
+        }
+
+        if (session is not null)
+        {
+            var idleMinutes = new List<int>();
+            foreach (var roleId in roleIds)
+                idleMinutes.Add(await settings.GetAsync(SessionIdlePolicy.SettingKey(roleId), 0));
+            if (SessionIdlePolicy.IsIdle(session.LastSeenUtc, nowUtc, SessionIdlePolicy.EffectiveTimeout(idleMinutes)))
+            {
+                await sessions.EndAsync(session.Id, userId!);
+                await ctx.HttpContext.RequestServices.GetRequiredService<IAuditService>().LogAsync("Logout.Idle", userId,
+                    ctx.Principal.Identity?.Name, ctx.HttpContext.Connection.RemoteIpAddress?.ToString(), $"Last active {session.LastSeenUtc:yyyy-MM-dd HH:mm} UTC");
+                ctx.RejectPrincipal();
+                await ctx.HttpContext.SignOutAsync(IdentityConstants.ApplicationScheme);
+                return;
+            }
+            if (nowUtc - session.LastSeenUtc >= UserSessionService.TouchInterval
+                && SessionIdlePolicy.IsActivity(ctx.HttpContext.Request.Method, ctx.HttpContext.Request.Path))
+                await sessions.TouchAsync(session.Id, nowUtc);
         }
 
         // Roles/permissions overhaul, pass 5: RoleAssignmentExpirySweepService only runs once a
@@ -368,6 +442,9 @@ builder.Services.AddSingleton<IAuthorizationPolicyProvider, PermissionPolicyProv
 // ── Application services ──────────────────────────────────────────────────────
 builder.Services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
 builder.Services.AddScoped<ISetupService, SetupService>();
+builder.Services.AddScoped<UserSessionService>();
+builder.Services.AddSingleton(_ => new SignInThrottle(TimeProvider.System));
+builder.Services.AddSingleton<SetupToken>();
 builder.Services.AddScoped<IRoleSeedService, RoleSeedService>();
 builder.Services.AddScoped<ICameraGroupSeedService, CameraGroupSeedService>();
 builder.Services.AddScoped<IPermissionService, PermissionService>();
@@ -486,6 +563,9 @@ builder.Services.AddHostedService<ExportJobDispatcher>();
 builder.Services.AddHostedService<BackupHostedService>();
 builder.Services.AddHostedService<LogsRetentionService>();
 builder.Services.AddHostedService<AuditLogRetentionService>();
+builder.Services.AddHostedService<AuditSyslogForwarder>();
+builder.Services.AddHostedService<CameraCertificatePinService>();
+builder.Services.AddHostedService<NodeTlsService>();
 builder.Services.AddHostedService<CameraReprobeService>();
 builder.Services.AddHostedService<AlertEvaluatorService>();
 // Detection alerts: NodeService publishes each recorded AI detection to IDetectionEventSink, and the
@@ -494,6 +574,7 @@ builder.Services.AddSingleton<DetectionAlertService>();
 builder.Services.AddSingleton<IDetectionEventSink>(sp => sp.GetRequiredService<DetectionAlertService>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DetectionAlertService>());
 builder.Services.AddHostedService<BookmarkRetentionService>();
+builder.Services.AddHostedService<ExportRetentionService>();
 builder.Services.AddHostedService<MotionSpanRetentionService>();
 builder.Services.AddHostedService<DatabaseMaintenanceService>();
 builder.Services.AddHostedService<ActivityRollupBackgroundService>();
@@ -524,6 +605,10 @@ builder.Services.AddHostedService<ReleaseCheckService>();
 // to cameras the user has explicitly added by IP/hostname on their own network, so the usual
 // MITM concern a browser's cert warning protects against doesn't apply here the same way. Scoped
 // narrowly to this named client so it can't accidentally weaken TLS for any other outbound call.
+// Requests to recorder nodes (media, exports, control): plain HTTP on the node's LAN port, or, for a
+// node with encrypted connections on, HTTPS to its pinned certificate (NodeTlsTargets).
+builder.Services.AddHttpClient(LarisVMS.Core.Security.NodeTlsTargets.HttpClientName)
+    .ConfigurePrimaryHttpMessageHandler(() => LarisVMS.Core.Security.NodeTlsTargets.Shared.CreateHandler());
 builder.Services.AddHttpClient("onvif", client => { client.Timeout = TimeSpan.FromSeconds(8); client.MaxResponseContentBufferSize = LarisVMS.Onvif.Soap.SafeXml.MaxCharacters; })
     .ConfigurePrimaryHttpMessageHandler(LarisVMS.Infrastructure.Security.OutboundGuard.CameraHandler);
 builder.Services.AddScoped<Func<HttpClient>>(sp =>
@@ -751,6 +836,10 @@ app.Services.GetRequiredService<LocaleCatalog>();
 
 // Wire the Data Protection provider into the DB-column encryption helper before any DB access.
 SecretProtection.Configure(app.Services.GetRequiredService<IDataProtectionProvider>());
+LarisVMS.Web.Helpers.UserFacingError.Logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Pages");
+// The audit chain's anchor (key fingerprint and start), kept outside the database: see AuditChainAnchorFile.
+LarisVMS.Infrastructure.Services.AuditChainStore.Anchors =
+    new LarisVMS.Infrastructure.Security.AuditChainAnchorFile(LarisVMS.Infrastructure.Security.AuditChainAnchorFile.DefaultPath);
 
 // Migrations, bundled builds and the role/camera-group seeds run in StartupDatabaseTasks (the first
 // hosted service), not here: work before app.Run() counts against the SCM's 30-second start timeout.
@@ -781,6 +870,21 @@ app.UsePortSegmentation();
 app.UseIpAllowList();
 
 app.UseRouting();
+// API responses (key backups, audit exports, export manifests, video downloads, JSON) aren't kept in
+// the browser's cache, where they'd outlast signing out on a shared computer. Responses that set
+// their own caching (thumbnails, scene images) keep it.
+app.Use(async (ctx, next) =>
+{
+    var path = ctx.Request.Path;
+    if (path.StartsWithSegments("/api") || path.StartsWithSegments("/export-download") || path.StartsWithSegments("/playback-segment"))
+        ctx.Response.OnStarting(() =>
+        {
+            if (!ctx.Response.Headers.ContainsKey(Microsoft.Net.Http.Headers.HeaderNames.CacheControl))
+                ctx.Response.Headers.CacheControl = "no-store";
+            return Task.CompletedTask;
+        });
+    await next(ctx);
+});
 // Needed before UseAuthorization so the /live WS upgrade request survives the pipeline as a
 // WebSocket rather than being treated as a normal HTTP request that happens to ask for an upgrade.
 app.UseWebSockets();
@@ -797,6 +901,11 @@ app.UseMiddleware<ProxyAuthMiddleware>();
 // this one *does* build a real ClaimsPrincipal (role claim only, no NameIdentifier) rather than using
 // HttpContext.Items the way NodeAuthMiddleware does.
 app.UseMiddleware<ApiKeyAuthMiddleware>();
+// A password an admin set must be replaced by the person's own, and two-factor sign-in set up when
+// it's required, before they use anything else.
+app.UseMiddleware<AccountSetupRequiredMiddleware>();
+// Admin pages ask for the password again unless it was given in the last 15 minutes.
+app.UseMiddleware<StepUpMiddleware>();
 // After every sign-in scheme above, so a signed-in user's own language choice is known.
 app.UseMiddleware<LocaleMiddleware>();
 app.UseAuthorization();
@@ -923,7 +1032,13 @@ nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest requ
         request.ArchiveFreeBytes, request.ArchiveTotalBytes, request.StoragePressureActive,
         request.ClientEndpointReportedPort, request.ClientEndpointCertNotAfterUtc,
         request.ClientEndpointCertIsSelfSigned, request.ClientEndpointLastError, request.PartnerHealthReports,
-        request.HostStats, ct, request.StorageBlockedByEvidenceLocks);
+        request.HostStats, ct, request.StorageBlockedByEvidenceLocks, request.ClientEndpointCertSha256);
+    // Camera certificates the node refused under pinning: audit log and Super Admins.
+    foreach (var refusal in (request.CameraCertificateRefusals ?? []).Take(50))
+        if (!string.IsNullOrWhiteSpace(refusal.Host) && refusal.Host.Length <= 255 && refusal.Presented is { Length: 64 } presented
+            && presented.All(char.IsAsciiHexDigit))
+            LarisVMS.Web.Services.CameraCertificatePinService.ReportRefusal(
+                new string(refusal.Host.Where(c => !char.IsControl(c)).ToArray()), presented, node.Name);
     // AI detection on a slower backend than the one asked for (say DirectML instead of CUDA, because
     // cuDNN went missing) is otherwise only a line in the node's log — tell someone who can fix it.
     if (await nodeService.RecordVisionBackendAsync(node.Id, request.VisionBackend, ct) && request.VisionBackend is { } degraded)
@@ -958,7 +1073,7 @@ nodesApi.MapPost("/heartbeat", async (HttpContext ctx, NodeHeartbeatRequest requ
                 latestBuild.Sha256, latestBuild.SizeBytes,
                 latestBuild.VisionFilePath is not null ? $"{baseUrl}/api/nodes/download/{latestBuild.Id}/vision" : null,
                 visionSha256, latestBuild.VisionSizeBytes,
-                signature.Signature, signature.PublicKeyPem);
+                signature.Signature, signature.PublicKeyPem, latestBuild.PublisherSignature);
         }
     }
 
@@ -1214,7 +1329,7 @@ proxiesApi.MapPost("/heartbeat", async (HttpContext ctx, ProxyHeartbeatRequest r
                 UpdateSignature.UpdatePayload("proxy-win-x64", latestBuild.Version, latestBuild.Sha256, null), ct);
             updateAvailable = new ProxyUpdateInfoDto(latestBuild.Version,
                 $"{baseUrl}/api/proxies/download/{latestBuild.Id}", latestBuild.Sha256, latestBuild.SizeBytes,
-                signature.Signature, signature.PublicKeyPem);
+                signature.Signature, signature.PublicKeyPem, latestBuild.PublisherSignature);
         }
     }
 
@@ -1298,13 +1413,18 @@ app.MapMethods("/live/{cameraId:guid}", WebSocketMethods, async (HttpContext ctx
     // node's own /live route already falls back to Main whenever Sub isn't actually available.
     var role = ctx.Request.Query["role"].ToString();
     var roleQuery = string.Equals(role, "sub", StringComparison.OrdinalIgnoreCase) ? "&role=sub" : "";
-    var nodeUri = new Uri($"ws://{ip}:{port}/live/{cameraId}?token={Uri.EscapeDataString(token)}{roleQuery}");
+    var nodeUri = NodeTlsTargets.Shared.Rewrite(new Uri($"ws://{ip}:{port}/live/{cameraId}?token={Uri.EscapeDataString(token)}{roleQuery}"));
 
     using var nodeSocket = new ClientWebSocket();
+    nodeSocket.Options.RemoteCertificateValidationCallback = NodeTlsTargets.Shared.Check;
     // Also sent as ?token= above for a node that hasn't updated yet — see MediaTokenRequest's own
     // doc comment. The WebSocket upgrade request is still a plain HTTP GET at the point the node
     // reads this, so the header arrives the same way it would on any other request.
     nodeSocket.Options.SetRequestHeader("Authorization", $"Bearer {token}");
+    // Tells the node this session is relayed (and ended) by this server, so its cap on
+    // browser-held tickets doesn't apply. A node without this check ignores the header.
+    nodeSocket.Options.SetRequestHeader(MediaToken.RelayHeader,
+        MediaToken.IssueFor(MediaToken.Purposes.Relay, cameraId, key, TimeSpan.FromSeconds(60)));
     try
     {
         await nodeSocket.ConnectAsync(nodeUri, ct);
@@ -1331,7 +1451,10 @@ app.MapMethods("/live/{cameraId:guid}", WebSocketMethods, async (HttpContext ctx
     {
         // Registered so disabling this user closes the relay at once, not when the viewer leaves.
         using var lease = connections.Register(ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, ct);
-        await ProxyLiveViewAsync(nodeSocket, browserSocket, lease.Token);
+        // And re-checked every minute, so a change to camera access or roles ends it too.
+        using var stillAllowed = CancellationTokenSource.CreateLinkedTokenSource(lease.Token);
+        _ = RecheckLiveAccessAsync(ctx.User, cameraId, cameraAccess, stillAllowed);
+        await ProxyLiveViewAsync(nodeSocket, browserSocket, stillAllowed.Token);
     }
     finally
     {
@@ -1411,7 +1534,8 @@ app.MapMethods("/talk/{cameraId:guid}", WebSocketMethods, async (HttpContext ctx
         nodeSocket.Options.SetRequestHeader("Authorization", $"Bearer {token}");
         try
         {
-            await nodeSocket.ConnectAsync(new Uri($"ws://{ip}:{port}/talk/{cameraId}?token={Uri.EscapeDataString(token)}"), ct);
+            nodeSocket.Options.RemoteCertificateValidationCallback = NodeTlsTargets.Shared.Check;
+            await nodeSocket.ConnectAsync(NodeTlsTargets.Shared.Rewrite(new Uri($"ws://{ip}:{port}/talk/{cameraId}?token={Uri.EscapeDataString(token)}")), ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -1465,9 +1589,10 @@ app.MapMethods("/live/{cameraId:guid}/detections", WebSocketMethods, async (Http
     }
 
     var token = MediaToken.Issue(cameraId, key, TimeSpan.FromSeconds(60));
-    var nodeUri = new Uri($"ws://{ip}:{port}/live/{cameraId}/detections?token={Uri.EscapeDataString(token)}");
+    var nodeUri = NodeTlsTargets.Shared.Rewrite(new Uri($"ws://{ip}:{port}/live/{cameraId}/detections?token={Uri.EscapeDataString(token)}"));
 
     using var nodeSocket = new ClientWebSocket();
+    nodeSocket.Options.RemoteCertificateValidationCallback = NodeTlsTargets.Shared.Check;
     nodeSocket.Options.SetRequestHeader("Authorization", $"Bearer {token}");
     try
     {
@@ -1528,9 +1653,10 @@ app.MapMethods("/live/{cameraId:guid}/motion-zones", WebSocketMethods, async (Ht
     }
 
     var token = MediaToken.IssueFor(MediaToken.Purposes.MotionZones, cameraId, key, TimeSpan.FromSeconds(60));
-    var nodeUri = new Uri($"ws://{ip}:{port}/live/{cameraId}/motion-zones?token={Uri.EscapeDataString(token)}");
+    var nodeUri = NodeTlsTargets.Shared.Rewrite(new Uri($"ws://{ip}:{port}/live/{cameraId}/motion-zones?token={Uri.EscapeDataString(token)}"));
 
     using var nodeSocket = new ClientWebSocket();
+    nodeSocket.Options.RemoteCertificateValidationCallback = NodeTlsTargets.Shared.Check;
     nodeSocket.Options.SetRequestHeader("Authorization", $"Bearer {token}");
     try
     {
@@ -1565,7 +1691,7 @@ var apiRoutes = new ApiRoutes(app.MapGroup("/api"), app.MapGroup("/api/v1"));
 // a real (if short) RTSP session against the camera, which is a configuration-adjacent action
 // (only the zone editor calls this in M8 pass 1), not a passive view.
 apiRoutes.Get("/cameras/{cameraId:guid}/snapshot", async (HttpContext ctx, Guid cameraId, ICameraService cameraService,
-    ICameraAccessService cameraAccess, IHttpClientFactory httpFactory,
+    ICameraAccessService cameraAccess, IHttpClientFactory httpFactory, IAuditService auditService,
     LarisVMS.Web.Services.MediaRoutingService routing, CancellationToken ct) =>
 {
     // Configure, not View/Playback — this is the zone editor's own configuration-adjacent capture
@@ -1584,18 +1710,32 @@ apiRoutes.Get("/cameras/{cameraId:guid}/snapshot", async (HttpContext ctx, Guid 
             statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 
-    var token = MediaToken.IssueFor(MediaToken.Purposes.Snapshot, cameraId, key, TimeSpan.FromSeconds(60));
-    var nodeUri = $"http://{ip}:{port}/snapshot/{cameraId}?token={Uri.EscapeDataString(token)}";
+    // The zone editor (/api, signed in) gets the whole picture, since it draws the privacy areas;
+    // the public API's copy gets it masked, like recordings.
+    var raw = !ctx.Request.Path.StartsWithSegments("/api/v1", StringComparison.OrdinalIgnoreCase);
+    await auditService.LogAsync(raw ? "Camera.SnapshotUnmasked" : "Camera.Snapshot",
+        ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, ctx.User.Identity?.Name,
+        ctx.Connection.RemoteIpAddress?.ToString(), camera.Name, ct);
 
-    var client = httpFactory.CreateClient();
+    var client = httpFactory.CreateClient(LarisVMS.Core.Security.NodeTlsTargets.HttpClientName);
     client.Timeout = TimeSpan.FromSeconds(15); // the node's own grab already bounds itself at 10s
+    Task<HttpResponseMessage> Request(string purpose)
+    {
+        var token = MediaToken.IssueFor(purpose, cameraId, key, TimeSpan.FromSeconds(60));
+        // See MediaTokenRequest's own doc comment: also sent as ?token= for a node that hasn't updated yet.
+        var nodeUri = $"http://{ip}:{port}/snapshot/{cameraId}?token={Uri.EscapeDataString(token)}";
+        return client.SendAsync(MediaTokenRequest.Create(HttpMethod.Get, nodeUri, token), HttpCompletionOption.ResponseHeadersRead, ct);
+    }
     HttpResponseMessage nodeResponse;
     try
     {
-        // See MediaTokenRequest's own doc comment: also sent as ?token= above for a node that
-        // hasn't updated yet.
-        nodeResponse = await client.SendAsync(MediaTokenRequest.Create(HttpMethod.Get, nodeUri, token),
-            HttpCompletionOption.ResponseHeadersRead, ct);
+        nodeResponse = await Request(raw ? MediaToken.Purposes.SnapshotRaw : MediaToken.Purposes.Snapshot);
+        // A node older than raw-snapshot tokens refuses one; its plain snapshot is the raw frame.
+        if (raw && nodeResponse.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+        {
+            nodeResponse.Dispose();
+            nodeResponse = await Request(MediaToken.Purposes.Snapshot);
+        }
     }
     catch (TaskCanceledException) when (!ct.IsCancellationRequested)
     {
@@ -1729,6 +1869,28 @@ static async Task<IResult> DeviceSettingsCall(Func<Task<IResult>> action)
 }
 
 // Browser-supplied text bound for the log: one line, bounded, so it can't forge entries.
+// Ends a relayed live stream once its viewer may no longer watch that camera: the check every
+// page and ticket makes, against the database (CameraAccessService reads a user's roles fresh).
+static async Task RecheckLiveAccessAsync(System.Security.Claims.ClaimsPrincipal user, Guid cameraId,
+    ICameraAccessService cameraAccess, CancellationTokenSource relay)
+{
+    try
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(1));
+        while (await timer.WaitForNextTickAsync(relay.Token))
+        {
+            var accessible = await cameraAccess.GetAccessibleCameraIdsAsync(user, CameraAccessActions.View, relay.Token);
+            if (accessible is not null && !accessible.Contains(cameraId))
+            {
+                await relay.CancelAsync();
+                return;
+            }
+        }
+    }
+    catch (OperationCanceledException) { /* the stream ended */ }
+    catch (ObjectDisposedException) { /* the request's services are gone: the stream ended */ }
+}
+
 static string? LogSafe(string? value) =>
     value is null ? null : new string(value.Take(200).Select(c => char.IsControl(c) ? ' ' : c).ToArray());
 
@@ -2122,7 +2284,9 @@ playbackApi.MapGet("/scene-heat", async (HttpContext ctx, Guid cameraId, string?
     if (accessible is not null && !accessible.Contains(cameraId))
         return Results.Problem(Loc.T("api.youDontHavePlaybackAccess"), statusCode: StatusCodes.Status403Forbidden);
     var categories = ctx.Request.Query["cat"].Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s!).Take(10).Order().ToList();
-    var key = $"scene-heat|{cameraId}|{range}|{source}|{fromHour}|{toHour}|{string.Join(',', categories)}";
+    // A reset changes the camera's generation, so the cleared map shows at once.
+    var generation = cache.TryGetValue($"scene-heat-gen|{cameraId}", out long gen) ? gen : 0;
+    var key = $"scene-heat|{cameraId}|{generation}|{range}|{source}|{fromHour}|{toHour}|{string.Join(',', categories)}";
     if (!cache.TryGetValue(key, out SceneHeatDto? heat))
     {
         heat = await activity.GetSceneHeatAsync(cameraId, accessible, range, source, categories, fromHour, toHour, ct);
@@ -2163,6 +2327,29 @@ playbackApi.MapGet("/scene-background", async (HttpContext ctx, Guid cameraId, A
     return await ProxyThumbnailAsync(cameraId, await timeline.GetLatestThumbnailInfoAsync(cameraId, ct), httpFactory, ct, ctx,
         longLivedCache: false, maxDimension: 1920, quality: 3);
 });
+
+// Starting the scene heatmap over (the camera was moved or re-aimed): camera configuration too.
+app.MapPost("/api/cameras/{cameraId:guid}/scene-heat/reset", async (HttpContext ctx, Guid cameraId, ApplicationDbContext db,
+    ISettingsResolver settings, IAuditService auditService, IMemoryCache cache, CancellationToken ct) =>
+{
+    if (!await db.Cameras.AnyAsync(c => c.Id == cameraId, ct)) return Results.NotFound();
+    var now = DateTime.UtcNow;
+    var by = ctx.User.Identity?.Name;
+    await settings.SetOverrideAsync(SettingScope.Camera, cameraId, SceneHeat.ResetSettingKey,
+        now.ToString("O", System.Globalization.CultureInfo.InvariantCulture), by, ct);
+    // The stored hours before it are no longer shown; removed to free the space.
+    if (db.Database.IsRelational())
+        await db.SceneHeatHourlies.Where(s => s.CameraId == cameraId && s.HourUtc < now).ExecuteDeleteAsync(ct);
+    else
+    {
+        db.SceneHeatHourlies.RemoveRange(await db.SceneHeatHourlies.Where(s => s.CameraId == cameraId && s.HourUtc < now).ToListAsync(ct));
+        await db.SaveChangesAsync(ct);
+    }
+    cache.Set($"scene-heat-gen|{cameraId}", now.Ticks);
+    await auditService.LogAsync("Camera.SceneHeatReset", ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, by,
+        ctx.Connection.RemoteIpAddress?.ToString(), $"Camera {cameraId}: scene heatmap reset.", ct);
+    return Results.NoContent();
+}).RequireAuthorization("Cameras.Edit").RequireCameraConfigure();
 
 // Uploading or removing that picture: camera configuration, like zones and speed traps.
 var sceneBackgroundApi = app.MapGroup("/api/cameras/{cameraId:guid}/scene-background")
@@ -2282,7 +2469,7 @@ mapsApi.MapPut("/{id:guid}", async (HttpContext ctx, Guid id, UpdateSiteMapReque
     if (!await maps.UpdateAsync(id, request, ct)) return Results.NotFound();
     await AuditMapAsync(ctx, auditService, "Map.Update", $"Map {id}", ct);
     return Results.NoContent();
-}).RequireAuthorization("Cameras.Edit");
+}).RequireAuthorization("Cameras.Edit").RequireConfigureEveryCameraOnMap();
 
 mapsApi.MapDelete("/{id:guid}", async (HttpContext ctx, Guid id, IMapService maps, IAuditService auditService, CancellationToken ct) =>
 {
@@ -2290,7 +2477,7 @@ mapsApi.MapDelete("/{id:guid}", async (HttpContext ctx, Guid id, IMapService map
     await auditService.LogAsync("Map.Delete", ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
         ctx.User.Identity?.Name, ctx.Connection.RemoteIpAddress?.ToString(), $"Map {id}", ct);
     return Results.NoContent();
-}).RequireAuthorization("Cameras.Edit");
+}).RequireAuthorization("Cameras.Edit").RequireConfigureEveryCameraOnMap();
 
 mapsApi.MapPut("/{id:guid}/placements/{cameraId:guid}", async (HttpContext ctx, Guid id, Guid cameraId, SavePlacementRequest request,
     IMapService maps, IAuditService auditService, CancellationToken ct) =>
@@ -2325,7 +2512,8 @@ mapsApi.MapPut("/tile-settings", async (HttpContext ctx, MapTileSettingsDto requ
         AuditDiff.Of("Tile URL", before.TileUrl, request.TileUrl),
         AuditDiff.Of("Attribution", before.Attribution, request.Attribution)), ct);
     return Results.NoContent();
-}).RequireAuthorization("Cameras.Edit");
+    // A server-wide setting, and the page's content policy allows images from this server: Settings.Edit too.
+}).RequireAuthorization("Cameras.Edit", "Settings.Edit");
 
 // The same heatmap for every camera this viewer can review, combined.
 app.MapGet("/api/activity", async (HttpContext ctx, string? range, string? view,
@@ -2772,7 +2960,7 @@ app.MapGet("/api/admin/ad/groups", async (string? q, ApplicationDbContext db, IA
 // page's combined check: [Authorize("Logs.View")] on the page itself, plus an inline Logs.Export
 // check inside the handler.
 app.MapGet("/api/logs/audit/export", async (HttpContext ctx, string? q, string? actor, string? from, string? to,
-    ApplicationDbContext db, CancellationToken ct) =>
+    ApplicationDbContext db, IAuditService audit, CancellationToken ct) =>
 {
     var query = db.AuditLogs.AsNoTracking().AsQueryable();
 
@@ -2809,6 +2997,10 @@ app.MapGet("/api/logs/audit/export", async (HttpContext ctx, string? q, string? 
             .Append(CsvField(log.Details)).Append('\n');
     }
 
+    // Taking a copy of the audit log is itself recorded.
+    await audit.LogAsync("AuditLog.Exported", ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
+        ctx.User.Identity?.Name, ctx.Connection.RemoteIpAddress?.ToString(),
+        $"{logs.Count} entries (search: {q ?? "-"}, user: {actor ?? "-"}, from: {from ?? "-"}, to: {to ?? "-"})", ct);
     return Results.File(Encoding.UTF8.GetBytes(csv.ToString()), "text/csv",
         $"audit-log-{DateTime.UtcNow:yyyyMMdd-HHmmss}.csv");
 }).RequireAuthorization("Logs.View", "Logs.Export");
@@ -2863,7 +3055,7 @@ app.MapGet("/playback-segment/{cameraId:guid}/{segmentId:long}", async (
     // Shorter than HttpClient's 100s default — a genuinely stuck node/storage read (confirmed
     // possible: a slow SMB share) shouldn't be able to hold this request open for nearly two
     // minutes with the browser just showing "Loading…" the whole time.
-    var client = httpFactory.CreateClient();
+    var client = httpFactory.CreateClient(LarisVMS.Core.Security.NodeTlsTargets.HttpClientName);
     client.Timeout = TimeSpan.FromSeconds(25);
     HttpResponseMessage nodeResponse;
     try
@@ -2933,7 +3125,7 @@ app.MapGet("/talk-audio/{cameraId:guid}/{recordingId:long}", async (HttpContext 
     using var request = MediaTokenRequest.Create(HttpMethod.Get, nodeUri, token);
     if (ctx.Request.Headers.Range.Count > 0) request.Headers.TryAddWithoutValidation("Range", ctx.Request.Headers.Range.ToString());
 
-    var client = httpFactory.CreateClient();
+    var client = httpFactory.CreateClient(LarisVMS.Core.Security.NodeTlsTargets.HttpClientName);
     client.Timeout = TimeSpan.FromSeconds(25);
     HttpResponseMessage nodeResponse;
     try
@@ -2977,7 +3169,7 @@ async Task<IResult> ProxyThumbnailAsync(Guid cameraId, ThumbnailInfo? thumb, IHt
     }
 
     // Shorter than /playback-segment's 25s — this relays one small JPEG frame, not a video segment.
-    var client = httpFactory.CreateClient();
+    var client = httpFactory.CreateClient(LarisVMS.Core.Security.NodeTlsTargets.HttpClientName);
     client.Timeout = TimeSpan.FromSeconds(15);
 
     Task<HttpResponseMessage> RequestAsync(int offsetSeconds)
@@ -3126,7 +3318,7 @@ async Task<IResult> ProxySnapshotImageAsync(Guid cameraId, SnapshotImageInfo? in
             statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 
-    var client = httpFactory.CreateClient();
+    var client = httpFactory.CreateClient(LarisVMS.Core.Security.NodeTlsTargets.HttpClientName);
     client.Timeout = TimeSpan.FromSeconds(15);
 
     // Reuses the existing hover-thumbnail token (cameraId+filePath+offsetSeconds) — see the node-side
@@ -3229,6 +3421,13 @@ apiRoutes.Post("/exports", async (HttpContext ctx, CreateExportRequest request, 
 {
     if (request.CameraIds.Count == 0) return Results.BadRequest(Loc.T("api.selectAtLeastOneCamera"));
     if (request.ToUtc <= request.FromUtc) return Results.BadRequest(Loc.T("api.endTimeMustBeAfter"));
+    request = request with { CameraIds = request.CameraIds.Distinct().ToList() };
+    switch (ExportLimits.Check(request.CameraIds.Count, request.FromUtc, request.ToUtc))
+    {
+        case "cameras": return Results.BadRequest(Loc.T("api.exportTooManyCameras", new { max = ExportLimits.MaxCameras }));
+        case "span": return Results.BadRequest(Loc.T("api.exportTooLong", new { days = (int)ExportLimits.MaxSpan.TotalDays }));
+        case "total": return Results.BadRequest(Loc.T("api.exportTooMuch", new { max = ExportLimits.MaxCameraHours }));
+    }
 
     // Checked here, not only by hiding cameras from the picker that built this request: unlike the
     // playback surfaces above, this creates a real, downloadable file — the most compliance-sensitive
@@ -3302,7 +3501,7 @@ var exportDownload = async (
     var nodeUri = $"http://{info.NodeIp}:{info.NodeLivePort}/export-file/{exportItemId}" +
         $"?path={Uri.EscapeDataString(info.FilePath)}&token={Uri.EscapeDataString(token)}";
 
-    var client = httpFactory.CreateClient();
+    var client = httpFactory.CreateClient(LarisVMS.Core.Security.NodeTlsTargets.HttpClientName);
     client.Timeout = TimeSpan.FromSeconds(25);
     HttpResponseMessage nodeResponse;
     try
@@ -3358,7 +3557,7 @@ apiRoutes.Get("/exports", async (HttpContext ctx, IExportService exportService, 
         {
             id = i.Id,
             cameraId = i.CameraId,
-            cameraName = cameraNames.GetValueOrDefault(i.CameraId, "(deleted camera)"),
+            cameraName = cameraNames.GetValueOrDefault(i.CameraId) ?? Loc.T("common.deletedCamera"),
             nodeName = i.NodeId is { } nid ? nodeNames.GetValueOrDefault(nid) : null,
             status = i.Status.ToString(),
             errorMessage = i.ErrorMessage,
@@ -3395,7 +3594,7 @@ apiRoutes.Delete("/exports/{jobId:guid}", async (
             var token = MediaToken.IssueForExportDelete(file.ExportItemId, file.FilePath, file.NodeMediaSigningKey, TimeSpan.FromSeconds(30));
             var nodeUri = $"http://{file.NodeIp}:{file.NodeLivePort}/export-file/{file.ExportItemId}" +
                 $"?path={Uri.EscapeDataString(file.FilePath)}&token={Uri.EscapeDataString(token)}";
-            var client = httpFactory.CreateClient();
+            var client = httpFactory.CreateClient(LarisVMS.Core.Security.NodeTlsTargets.HttpClientName);
             client.Timeout = TimeSpan.FromSeconds(10);
             // See MediaTokenRequest's own doc comment: also sent as ?token= above for a node that
             // hasn't updated yet.
@@ -3716,6 +3915,9 @@ static async Task ProxyDetectionOverlayAsync(WebSocket node, WebSocket browser, 
                 {
                     box.TrackId, box.Category, box.Label, box.MovementState,
                     box.X, box.Y, box.W, box.H, box.Confidence, ColorHex = colorHex,
+                    CategoryText = Loc.TOr("detection.category." + box.Category.ToLowerInvariant(), box.Category),
+                    LabelText = CocoCategoryMap.LocalizedClassName(box.Label),
+                    ColorText = string.IsNullOrEmpty(box.Color) ? box.Color : ObjectColors.Display(box.Color),
                     box.Color, SpeedText = box.SpeedKph is { } kph ? SpeedUnits.Format(kph, speedUnit) : null
                 });
             }

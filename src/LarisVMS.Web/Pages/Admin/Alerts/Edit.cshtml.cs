@@ -227,7 +227,7 @@ public class EditModel(ApplicationDbContext db, ICameraService cameraService, IN
         var ids = subs.Select(s => s.UserId).ToList();
         var names = await db.Users.AsNoTracking().Where(u => ids.Contains(u.Id))
             .ToDictionaryAsync(u => u.Id, u => u.DisplayName ?? u.UserName ?? u.Id, ct);
-        Subscribers = subs.Select(s => new SubscriberRow(s.Id, names.GetValueOrDefault(s.UserId, "(deleted user)"), s.Browser, s.Email, s.MutedUntilUtc))
+        Subscribers = subs.Select(s => new SubscriberRow(s.Id, names.GetValueOrDefault(s.UserId) ?? Loc.T("common.deletedUser"), s.Browser, s.Email, s.MutedUntilUtc))
             .OrderBy(s => s.UserName, StringComparer.OrdinalIgnoreCase).ToList();
         Users = (await db.Users.AsNoTracking().OrderBy(u => u.UserName).Select(u => new { u.Id, Name = u.DisplayName ?? u.UserName ?? u.Id }).ToListAsync(ct))
             .Select(u => (u.Id, u.Name)).ToList();

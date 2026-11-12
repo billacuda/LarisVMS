@@ -103,6 +103,7 @@ public class RoleAssignmentExpirySweepService(IServiceScopeFactory scopeFactory,
         }
 
         await userManager.RemoveFromRoleAsync(user, role.Name);
+        await disabler.EndSessionsAsync(user);
         db.RoleAssignmentExpiries.Remove(expiry);
         await db.SaveChangesAsync(ct);
         await auditService.LogAsync("Role.Expired", null, "System", null, $"{user.Email}: \"{role.Name}\" expired and was removed.", ct);

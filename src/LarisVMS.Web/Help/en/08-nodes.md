@@ -17,6 +17,12 @@ By default all live and playback video is relayed through the web server (**Prox
 
 Direct mode needs a **client endpoint host** that browsers can reach, and a certificate (a `.pfx` path on the node's page). **Allow self-signed** is for testing only, because viewers get a browser warning. A camera whose node has no healthy endpoint falls back to the proxy automatically.
 
+## Encrypted connections from the server
+
+The server and media proxies reach each node's video and control routes over plain HTTP on its live port (8554), which is fine on a trusted network. To encrypt that traffic, turn on **Encrypt connections from the server** on the node's page, then restart the node once (**Restart**). The node starts its HTTPS endpoint (with its own self-signed certificate if it has no `.pfx`) and reports the certificate, which the server then pins: the server and proxies accept only that certificate from the node, and the media token is no longer part of the address. Once it's encrypted, the node's plain port answers only `/health`.
+
+The **Encrypted** column on the Nodes page shows 🔒 for each node that's encrypted, and ⏳ for one that's turned on but still needs a restart. The status under the switch shows the certificate in use, or that the server is still waiting for it (until then, the server keeps using plain HTTP, so nothing stops working). It's off by default. Self-signed certificates used for this are never offered to browsers; direct streaming still needs a real one.
+
 ## Proxies
 
 A **media proxy** is a separate relay (`LarisVMS.Proxy`) between browsers and nodes, for remote sites or low-bandwidth links. Register proxies under **Settings → Media proxies**, then choose a primary and a backup proxy on each node's page. Browsers use the first healthy one.
@@ -41,4 +47,12 @@ The **Builds** section of the Nodes page shows the build each kind of node is ru
 - **Trusted certificate only**: only a certificate from a trusted CA that matches the server's name. Install one before choosing this.
 - **Don't check**: any certificate. Not safe: anyone on the network path could pose as the server.
 
+With trust on first use, a node trusts whatever certificate it sees the first time it connects. To have it check from the very first connection, pass the thumbprint shown under **Server certificate check** to the installer: `-ServerCertThumbprint` for `install-node.ps1` and `install-proxy.ps1`, or `SERVERCERTTHUMBPRINT=` for the MSI. The install commands on the Setup and Media proxies pages already include it. Behind a reverse proxy, use the thumbprint of the certificate the reverse proxy presents instead.
+
 The self-signed certificate the server makes for itself lasts 10 years and isn't replaced on its own. **Regenerate self-signed certificate** replaces it; every node and proxy then has to be re-registered, and the Nodes page lists the ones that haven't checked in since. To re-register a node, run the node installer again, or run `LarisVMS.Node.exe --reset-server-pin` on it and restart its service (proxies have the same option).
+
+## One-time registration codes
+
+New nodes and proxies register with the shared **registration key**, or with a one-time code. A one-time code registers a single node or proxy, then stops working. Unused, it expires after 1 hour, 24 hours, or 7 days. To make one, go to **Nodes → Updates and registration**, choose how long it lasts, and select **Create code**. The code is shown once. Use it wherever the installer asks for the registration key. **Revoke** cancels a code that hasn't been used yet.
+
+The shared key works for every install until it's changed. Once you use one-time codes, clear **Accept the shared registration key** so a copy of the key in an old script or email can't register anything. Nodes and proxies already registered aren't affected. Either way, a new node still waits for approval before it gets any cameras.

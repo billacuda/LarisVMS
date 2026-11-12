@@ -101,9 +101,13 @@ public static class AlertRuleEditing
         if (!string.IsNullOrEmpty(r.LabelFilter)) parts.Add(r.LabelFilter);
         else if (!string.IsNullOrEmpty(r.CategoryFilter)) parts.Add(r.CategoryFilter);
         if (!string.IsNullOrEmpty(r.ColorFilter)) parts.Add(ObjectColors.Display(r.ColorFilter));
-        if (r.CameraId is { } c) parts.Add(cameraNames.GetValueOrDefault(c, "(deleted camera)"));
-        else if (r.NodeId is { } n) parts.Add((IsNodeCondition(r.ConditionType) ? "" : "cameras on ") + nodeNames.GetValueOrDefault(n, "(deleted node)"));
-        else if (HasCameraScope(r.ConditionType)) parts.Add("all cameras");
+        if (r.CameraId is { } c) parts.Add(cameraNames.GetValueOrDefault(c) ?? Loc.T("common.deletedCamera"));
+        else if (r.NodeId is { } n)
+        {
+            var nodeName = nodeNames.GetValueOrDefault(n) ?? Loc.T("common.deletedNode");
+            parts.Add(IsNodeCondition(r.ConditionType) ? nodeName : Loc.T("common.camerasOnNode", new { node = nodeName }));
+        }
+        else if (HasCameraScope(r.ConditionType)) parts.Add(Loc.T("common.allCameras"));
         if (r.ScheduleStart is { } s && r.ScheduleEnd is { } e) parts.Add($"{s:HH\\:mm}–{e:HH\\:mm}");
         if (r.ScheduleDays is { } days and not DayOfWeekFlags.None)
             parts.Add(string.Join(", ", DaysOf(days).Select(d => System.Globalization.CultureInfo.CurrentUICulture.DateTimeFormat.GetAbbreviatedDayName(d))));

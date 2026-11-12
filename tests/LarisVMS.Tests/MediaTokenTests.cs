@@ -467,4 +467,39 @@ public class MediaTokenTests
         Assert.False(MediaToken.TryValidateSegment(tampered, cameraId, path, Key, out var error, out _));
         Assert.Equal("signature mismatch", error);
     }
+
+    // ── Purpose tokens that widen access: raw snapshots and relays ──────────
+
+    [Theory]
+    [InlineData(MediaToken.Purposes.Snapshot, MediaToken.Purposes.SnapshotRaw)]
+    [InlineData(MediaToken.Purposes.SnapshotRaw, MediaToken.Purposes.Snapshot)]
+    [InlineData(MediaToken.Purposes.Snapshot, MediaToken.Purposes.Relay)]
+    public void APurposeTokenOpensOnlyItsOwnPurpose(string issued, string checkedAs)
+    {
+        var camera = Guid.NewGuid();
+        var token = MediaToken.IssueFor(issued, camera, Key, TimeSpan.FromMinutes(1));
+        Assert.True(MediaToken.TryValidateFor(token, issued, camera, Key, out _));
+        Assert.False(MediaToken.TryValidateFor(token, checkedAs, camera, Key, out _));
+    }
+
+    [Fact]
+    public void ALiveViewTicketIsNotARelayToken()
+    {
+        // A browser holds live tickets; only the web server's relay token lifts the session cap.
+        var camera = Guid.NewGuid();
+        var ticket = MediaToken.Issue(camera, Key, TimeSpan.FromMinutes(1));
+        Assert.False(MediaToken.TryValidateFor(ticket, MediaToken.Purposes.Relay, camera, Key, out _));
+        var relay = MediaToken.IssueFor(MediaToken.Purposes.Relay, camera, Key, TimeSpan.FromMinutes(1));
+        Assert.False(MediaToken.TryValidate(relay, camera, Key, out _));
+    }
+
+    [Fact]
+    public void SnapshotArgs_AddPrivacyMasks_OnlyWhenGiven()
+    {
+        var masked = LarisVMS.Media.SnapshotCapture.BuildArgs("rtsp://cam/1", ["drawbox=a", "drawbox=b"]);
+        var vf = masked.ToList().IndexOf("-vf");
+        Assert.True(vf > masked.ToList().IndexOf("-i"));
+        Assert.Equal("drawbox=a,drawbox=b", masked[vf + 1]);
+        Assert.DoesNotContain("-vf", LarisVMS.Media.SnapshotCapture.BuildArgs("rtsp://cam/1", null));
+    }
 }

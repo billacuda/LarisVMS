@@ -59,8 +59,11 @@ public class AuditLogRetentionServiceTests
 
         await AuditLogRetentionService.SweepAsync(db, 14, CancellationToken.None);
 
-        var remaining = await db.AuditLogs.Select(l => l.OccurredAt).ToListAsync();
+        var remaining = await db.AuditLogs.Where(l => l.Action != "AuditLog.Pruned").Select(l => l.OccurredAt).ToListAsync();
         Assert.Equal(2, remaining.Count);
         Assert.DoesNotContain(remaining, t => t < now.AddDays(-14));
+        // The removal is itself recorded, so the syslog copy shows it.
+        var pruned = await db.AuditLogs.SingleAsync(l => l.Action == "AuditLog.Pruned");
+        Assert.Contains("Removed 1 entries", pruned.Details);
     }
 }

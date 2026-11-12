@@ -322,6 +322,27 @@ public class SecurityHardeningTests
         Assert.False(scope.CanGrant("Settings", "Edit")); // not theirs to give
     }
 
+    [Fact]
+    public void AnAdminCannotHandOutOrTakeOverPermissionsTheyLack()
+    {
+        var granted = new PermissionSet(false, new HashSet<(string, string)> { ("Users", "Edit"), ("Roles", "Assign"), ("Cameras", "View") });
+        var tiers = new Dictionary<string, RoleScopeTier> { ["viewer"] = RoleScopeTier.Group, ["config"] = RoleScopeTier.Group };
+        var scope = AdminScope.Create(false, RoleScopeTier.Site, ["site-admin"], ["super"], tiers, granted,
+        [
+            ("viewer", "Cameras", "View"),
+            ("config", "Cameras", "View"),
+            ("config", "Settings", "Edit"),
+        ]);
+
+        Assert.True(scope.CanBindRole("viewer"));
+        Assert.False(scope.CanBindRole("config"));               // a same-tier role with Settings.Edit
+        Assert.True(scope.HasEveryPermissionOf(["viewer"]));
+        Assert.False(scope.HasEveryPermissionOf(["viewer", "config"])); // no resetting that account's password
+
+        var super = AdminScope.Create(true, RoleScopeTier.Org, ["super"], ["super"], tiers, PermissionSet.None, [("config", "Settings", "Edit")]);
+        Assert.True(super.CanBindRole("config"));
+    }
+
     // ── Origin check ──────────────────────────────────────────────────────
 
     [Theory]
@@ -403,6 +424,33 @@ public class SecurityHardeningTests
 
         trust.ResetPin();
         Assert.True(trust.Validate(server, untrusted));
+    }
+
+    [Fact]
+    public void APinGivenAtInstallIsCheckedFromTheFirstConnection()
+    {
+        var server = SelfSigned("server");
+        var impostor = SelfSigned("server");
+        const System.Net.Security.SslPolicyErrors untrusted = System.Net.Security.SslPolicyErrors.RemoteCertificateChainErrors;
+
+        var pasted = string.Join(':', Convert.ToHexString(SHA256.HashData(server.RawData)).ToLowerInvariant().Chunk(2).Select(c => new string(c)));
+        var thumbprint = ServerCertificateTrust.NormalizeThumbprint(pasted);
+        Assert.Equal(server.GetCertHashString(HashAlgorithmName.SHA256), thumbprint);
+
+        var trust = new ServerCertificateTrust(ServerCertificateCheck.TrustOnFirstUse, null);
+        trust.Pin(thumbprint!);
+        Assert.False(trust.Validate(impostor, untrusted)); // not trusted on first use any more
+        Assert.True(trust.Validate(server, untrusted));
+    }
+
+    [Theory]
+    [InlineData("abc")]
+    [InlineData("ZZ00000000000000000000000000000000000000000000000000000000000000")]
+    [InlineData("0123456789ABCDEF0123456789ABCDEF01234567")] // SHA-1 length
+    public void AThumbprintThatIsntSha256IsRefused(string value)
+    {
+        Assert.Null(ServerCertificateTrust.NormalizeThumbprint(value));
+        Assert.NotNull(ServerCertificateTrust.FromArgs(value).Error);
     }
 
     [Fact]

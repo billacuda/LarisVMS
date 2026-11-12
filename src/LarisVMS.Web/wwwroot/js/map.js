@@ -265,7 +265,7 @@
             : available.map(function (c) {
                 // Not a <button>: Firefox won't drag one. Clicking or pressing Enter places it mid-map.
                 return '<div class="list-group-item list-group-item-action py-1 px-2 lv-map-palette-item" draggable="true" role="button" tabindex="0" ' +
-                    'title="' + larisvmsI18n.html('js.map.addToMap') + '" data-camera-id="' + c.id + '">📷 ' + escapeHtml(c.name) + '</div>';
+                    'title="' + larisvmsI18n.html('js.map.addToMap') + '" data-camera-id="' + escapeHtml(String(c.id)) + '">📷 ' + escapeHtml(c.name) + '</div>';
             }).join('');
     }
 

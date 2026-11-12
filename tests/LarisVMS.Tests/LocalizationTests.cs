@@ -106,6 +106,101 @@ public sealed class LocalizationTests : IDisposable
         Assert.Null(catalog.Match(null));
     }
 
+    [Theory]
+    [InlineData("zh-TW", "zh-Hant")]
+    [InlineData("zh-HK", "zh-Hant")]
+    [InlineData("zh-MO", "zh-Hant")]
+    [InlineData("zh-Hant-TW", "zh-Hant")]
+    [InlineData("zh-CN", "zh-Hans")]
+    [InlineData("zh-SG", "zh-Hans")]
+    [InlineData("zh", "zh-Hans")]
+    [InlineData("zh-Hans-CN", "zh-Hans")]
+    public void Match_ResolvesChineseRegionsToTheirScript(string requested, string expected)
+    {
+        File.WriteAllText(Path.Combine(_shipped, "zh-Hans.json"), """{ "nav.live": "实时" }""");
+        File.WriteAllText(Path.Combine(_shipped, "zh-Hant.json"), """{ "nav.live": "即時" }""");
+        Assert.Equal(expected, Catalog().Match(requested));
+    }
+
+    [Fact]
+    public void Match_FallsBackToAnotherRegionOfTheSameLanguage_BeforeEnglish()
+    {
+        File.WriteAllText(Path.Combine(_shipped, "pt-BR.json"), """{ "nav.live": "Ao vivo" }""");
+        File.WriteAllText(Path.Combine(_shipped, "es-AR.json"), """{ "nav.live": "En vivo" }""");
+        var catalog = Catalog();
+
+        Assert.Equal("pt-BR", catalog.Match("pt-PT"));
+        Assert.Equal("pt-BR", catalog.Match("pt"));
+        Assert.Equal("es-AR", catalog.Match("es-ES"));
+        Assert.Null(catalog.Match("de-DE"));
+        Assert.Null(catalog.Match("qps-plocm"));
+    }
+
+    [Fact]
+    public void Parse_ReadsMachineTranslatedFlag()
+    {
+        Assert.True(LocaleFile.Parse("de", """{ "_meta": { "machineTranslated": true }, "nav.live": "Live" }""").MachineTranslated);
+        Assert.False(LocaleFile.Parse("de", """{ "_meta": { "author": "A" }, "nav.live": "Live" }""").MachineTranslated);
+    }
+
+    /// <summary>Every language that ships with LarisVMS (src/LarisVMS.Web/locales) matches the
+    /// built-in English: no keys English doesn't have, the same {placeholders} for each key, and
+    /// script text (js.*) that the loader won't drop. A missing key only falls back to English, so
+    /// coverage is reported by tools/locale-check.ps1 rather than failed here.</summary>
+    [Fact]
+    public void ShippedLanguages_MatchEnglish()
+    {
+        var english = LocaleCatalog.LoadEmbeddedEnglish();
+        var englishBaseKeys = english.Keys.Select(LocaleFile.BaseKey).ToHashSet(StringComparer.Ordinal);
+        var folder = Path.Combine(FindWebProjectDirectory(), "locales");
+        var files = Directory.GetFiles(folder, "*.json");
+        Assert.NotEmpty(files);
+
+        var problems = new List<string>();
+        foreach (var path in files)
+        {
+            var culture = Path.GetFileNameWithoutExtension(path);
+            var json = File.ReadAllText(path);
+            var parsed = LocaleFile.Parse(culture, json);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                if (prop.Name == "_meta") continue;
+                var key = prop.Name;
+                var text = prop.Value.GetString() ?? "";
+                if (!english.ContainsKey(key) && !englishBaseKeys.Contains(LocaleFile.BaseKey(key)))
+                {
+                    problems.Add($"{culture}: {key} isn't an English key");
+                    continue;
+                }
+                if (key.StartsWith("js.", StringComparison.Ordinal) && !parsed.Entries.ContainsKey(key))
+                    problems.Add($"{culture}: {key} has <, >, or a double quote, so it would show in English");
+                var englishText = english.GetValueOrDefault(key) ?? english.GetValueOrDefault($"{LocaleFile.BaseKey(key)}_other");
+                if (englishText is null) continue;
+                var expected = LocaleFile.Placeholders(englishText);
+                var actual = LocaleFile.Placeholders(text);
+                // A plural form may leave {count} out ("one camera") or add it.
+                if (!actual.Except(["count"]).ToHashSet().SetEquals(expected.Except(["count"])))
+                    problems.Add($"{culture}: {key} has {{{string.Join("}, {", actual)}}}, English has {{{string.Join("}, {", expected)}}}");
+            }
+        }
+        Assert.Empty(problems);
+    }
+
+    /// <summary>Translated Help folders (src/LarisVMS.Web/Help/{culture}) only hold pages English has.</summary>
+    [Fact]
+    public void ShippedHelpTranslations_OnlyHaveEnglishPages()
+    {
+        var help = Path.Combine(FindWebProjectDirectory(), "Help");
+        var englishPages = Directory.GetFiles(Path.Combine(help, "en"), "*.md").Select(Path.GetFileName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var extra = Directory.GetDirectories(help)
+            .Where(d => !string.Equals(Path.GetFileName(d), "en", StringComparison.OrdinalIgnoreCase))
+            .SelectMany(d => Directory.GetFiles(d, "*.md").Where(f => !englishPages.Contains(Path.GetFileName(f)))
+                .Select(f => $"{Path.GetFileName(d)}/{Path.GetFileName(f)}"))
+            .ToList();
+        Assert.Empty(extra);
+    }
+
     [Fact]
     public void BrokenFile_IsSkipped_AndReported()
     {

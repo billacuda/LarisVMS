@@ -18,6 +18,8 @@
 @inject IAuthorizationService AuthorizationService
 @inject IAuditService AuditService
 @inject UserDisableService UserDisabler
+@inject UserSessionService Sessions
+@inject LarisVMS.Core.Interfaces.ISettingsResolver SettingsResolver
 @inject LarisVMS.Core.Interfaces.IPermissionService PermissionService
 
 <PageTitle>@L["settings.permissions.users.permissionsUsers"] - @AppName</PageTitle>
@@ -65,6 +67,10 @@
                             else if (u.EntraLink == "pending")
                             {
                                 <span class="badge text-bg-light text-dark border ms-1" title="@L["settings.permissions.users.linkedToAMicrosoftAccount"]">@L["settings.permissions.users.microsoftPending"]</span>
+                            }
+                            @if (u.TwoFactor)
+                            {
+                                <span class="badge text-bg-success ms-1" title="@L["settings.permissions.users.twoFactorOn"]">@L["settings.permissions.users.twoFactor"]</span>
                             }
                             @if (u.IsDirectoryManaged)
                             {
@@ -139,6 +145,26 @@
                                     @L["settings.permissions.users.resetPassword"]
                                 </button>
                             }
+                            @if (u.Id != CurrentUserId)
+                            {
+                                <EditForm Model="this" FormName="@($"end-sessions-{u.Id}")" OnValidSubmit="HandleEndSessionsAsync" class="d-inline">
+                                    <input type="hidden" name="EndSessionsUserId" value="@u.Id" />
+                                    <button type="submit" class="btn btn-sm btn-outline-secondary"
+                                            data-confirm="@L["settings.permissions.users.signOutEverywhereConfirm", new { email = u.Email }]">
+                                        @L["settings.permissions.users.signOutEverywhere"]
+                                    </button>
+                                </EditForm>
+                            }
+                            @if (u.TwoFactor)
+                            {
+                                <EditForm Model="this" FormName="@($"reset-two-factor-{u.Id}")" OnValidSubmit="HandleResetTwoFactorAsync" class="d-inline">
+                                    <input type="hidden" name="ResetTwoFactorUserId" value="@u.Id" />
+                                    <button type="submit" class="btn btn-sm btn-outline-secondary"
+                                            data-confirm="@L["settings.permissions.users.resetTwoFactorConfirm", new { email = u.Email }]">
+                                        @L["settings.permissions.users.resetTwoFactor"]
+                                    </button>
+                                </EditForm>
+                            }
                             @if (EntraEnabled && !u.IsDirectoryManaged)
                             {
                                 <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#entra-@u.Id">
@@ -176,6 +202,10 @@
                                         <label class="form-label small mb-1" for="reset-@u.Id">@L["settings.permissions.users.newPasswordFor", new { email = u.Email }]</label>
                                         <input type="password" name="NewPasswordForReset" id="reset-@u.Id" class="form-control form-control-sm" required minlength="12" autocomplete="new-password" />
                                     </div>
+                                    <div class="col-auto form-check mb-1">
+                                        <input class="form-check-input" type="checkbox" name="RequirePasswordChange" value="true" id="reset-change-@u.Id" checked="@TemporaryPasswords" />
+                                        <label class="form-check-label small" for="reset-change-@u.Id">@L["settings.permissions.users.mustChangePassword"]</label>
+                                    </div>
                                     <div class="col-auto">
                                         <button type="submit" class="btn btn-sm btn-primary">@L["settings.permissions.users.setPassword"]</button>
                                     </div>
@@ -207,7 +237,11 @@
             </div>
             <div class="col-sm-3">
                 <label for="field-newPassword" class="form-label">@L["common.password"]</label>
-                <InputText id="field-newPassword" type="password" @bind-Value="NewPassword" class="form-control" required minlength="12" />
+                <InputText id="field-newPassword" type="password" @bind-Value="NewPassword" class="form-control" required minlength="12" autocomplete="new-password" />
+                <div class="form-check mt-1">
+                    <input class="form-check-input" type="checkbox" name="NewRequirePasswordChange" value="true" id="field-newRequireChange" checked="@TemporaryPasswords" />
+                    <label class="form-check-label small" for="field-newRequireChange">@L["settings.permissions.users.mustChangePassword"]</label>
+                </div>
             </div>
             <div class="col-12">
                 <div class="form-label d-block">@L["common.roles"]</div>
@@ -231,7 +265,7 @@
     /// for an AD account (whose own email, if AD has one, is AdEmail).</summary>
     /// <param name="EntraLink">"linked", "pending" (an object ID entered, no sign-in yet), or null.</param>
     private sealed record UserRow(string Id, string Email, string? DisplayName, bool IsEnabled, IReadOnlyList<string> RoleNames,
-        IReadOnlyList<ExpiryRow> ActiveExpiries, bool IsDirectoryManaged, string? AdEmail, string? EntraLink = null);
+        IReadOnlyList<ExpiryRow> ActiveExpiries, bool IsDirectoryManaged, string? AdEmail, string? EntraLink = null, bool TwoFactor = false);
 
     private sealed record ExpiryRow(Guid Id, string RoleName, DateTime ExpiresAtUtc);
 
@@ -247,6 +281,7 @@
     [SupplyParameterFromForm(FormName = "create-user")] private string? NewPassword { get; set; }
     [SupplyParameterFromForm(FormName = "create-user")] private string? NewDisplayName { get; set; }
     [SupplyParameterFromForm(FormName = "create-user")] private List<string>? NewRoleIds { get; set; }
+    [SupplyParameterFromForm(FormName = "create-user")] private bool NewRequirePasswordChange { get; set; }
 
     // Read from the raw form, not [SupplyParameterFromForm] — save-user-roles/extend-expiry/
     // toggle-user-enabled/reset-user-password each have a unique per-row FormName now, which the
@@ -268,8 +303,12 @@
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
+    /// <summary>Settings → Security: admin-set passwords start as temporary (the checkboxes start checked).</summary>
+    private bool TemporaryPasswords { get; set; }
+
     private async Task LoadAsync()
     {
+        TemporaryPasswords = await SettingsResolver.GetAsync(PasswordChangeRequirement.TemporaryAdminPasswordsKey, false);
         RoleRows = await Db.Roles.OrderBy(r => r.Name).ToListAsync();
         var users = await Db.Users.OrderBy(u => u.Email).ToListAsync();
         var userRoles = await Db.UserRoles.ToListAsync();
@@ -294,7 +333,8 @@
                 .OrderBy(e => e.ExpiresAtUtc).ToList(),
             adUserIds.Contains(u.Id),
             adUserIds.Contains(u.Id) ? u.Email : null,
-            entraLinks.GetValueOrDefault(u.Id)
+            entraLinks.GetValueOrDefault(u.Id),
+            u.TwoFactorEnabled
         )).OrderBy(r => r.Email, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
@@ -332,6 +372,7 @@
         if (roleNames.Count > 0) await UserManagerService.AddToRolesAsync(user, roleNames);
         await SeedExpiriesForNewlyAssignedRolesAsync(user.Id, assignableRoleIds);
 
+        if (NewRequirePasswordChange) await PasswordChangeRequirement.RequireAsync(UserManagerService, user);
         await AuditService.LogAsync("User.Create", CurrentUserId, CurrentUserName, RemoteIp, email);
         SavedMessage = assignableRoleIds.Count < requestedRoleIds.Count
             ? Loc.T("settings.permissions.users.userCreatedSomeRoleSelections", new { email })
@@ -392,7 +433,11 @@
         var toAdd = targetRoleNames.Except(currentRoles).ToList();
         var toRemove = currentRoles.Except(targetRoleNames).ToList();
         if (toAdd.Count > 0) await UserManagerService.AddToRolesAsync(user, toAdd);
-        if (toRemove.Count > 0) await UserManagerService.RemoveFromRolesAsync(user, toRemove);
+        if (toRemove.Count > 0)
+        {
+            await UserManagerService.RemoveFromRolesAsync(user, toRemove);
+            await UserDisabler.EndSessionsAsync(user);
+        }
 
         var addedRoleIds = await Db.Roles.Where(r => toAdd.Contains(r.Name!)).Select(r => r.Id).ToListAsync();
         await SeedExpiriesForNewlyAssignedRolesAsync(user.Id, addedRoleIds);
@@ -420,9 +465,9 @@
 
     /// <summary>Drops any requested role id the caller isn't allowed to assign: all of them if the
     /// caller lacks Roles.Assign entirely, the Org-tier ones if they hold Roles.Assign but aren't
-    /// Org-tier themselves (RoleScopePolicy.CanAssignRole), and Super Admin unless they are one
-    /// (AdminScope.CanBindRole), so an Org-tier admin can't make anyone, themselves included, a Super
-    /// Admin, or take it away.</summary>
+    /// Org-tier themselves (RoleScopePolicy.CanAssignRole), Super Admin unless they are one, and any
+    /// role with a permission the caller doesn't have (AdminScope.CanBindRole) — so an admin can't make
+    /// an account that can do more than they can, and sign in as it.</summary>
     private async Task<List<string>> FilterAssignableRoleIdsAsync(List<string> requestedRoleIds)
     {
         if (requestedRoleIds.Count == 0) return [];
@@ -579,7 +624,15 @@
             await LoadAsync();
             return;
         }
-        if (await CannotActOnAsync(user, allowSelf: true) is { } denied)
+        // Your own password is changed with the current one (select your name, then Change password),
+        // so a session someone else got hold of can't set a new one here.
+        if (user.Id == CurrentUserId)
+        {
+            ErrorMessage = Loc.T("settings.permissions.users.changeYourOwnPasswordInstead");
+            await LoadAsync();
+            return;
+        }
+        if (await CannotActOnAsync(user, allowSelf: false) is { } denied)
         {
             ErrorMessage = denied;
             await LoadAsync();
@@ -595,8 +648,58 @@
             return;
         }
 
+        // Not for your own password: you just chose it.
+        if (resetForm?["RequirePasswordChange"].ToString() == "true" && user.Id != CurrentUserId)
+            await PasswordChangeRequirement.RequireAsync(UserManagerService, user);
+        else
+            await PasswordChangeRequirement.ClearAsync(UserManagerService, user);
+        // Their sessions end now (yours carries on if this was your own password).
+        await Sessions.EndAllAsync(user.Id, keep: user.Id == CurrentUserId && HttpContext is not null ? UserSessionService.Current(HttpContext) : null);
         await AuditService.LogAsync("User.PasswordReset", CurrentUserId, CurrentUserName, RemoteIp, user.Email);
         SavedMessage = Loc.T("settings.permissions.users.passwordResetFor", new { email = user.Email });
+        await LoadAsync();
+    }
+
+    /// <summary>For someone who lost their phone and their recovery codes: they sign in with just
+    /// their password and can set it up again (or are sent to, when it's required). Not for your own
+    /// account, which you change on your own Two-factor sign-in page.</summary>
+    private async Task HandleResetTwoFactorAsync()
+    {
+        var user = await UserManagerService.FindByIdAsync(HttpContext?.Request.Form["ResetTwoFactorUserId"].ToString() ?? "");
+        if (user is null) { await LoadAsync(); return; }
+        if (await CannotActOnAsync(user, allowSelf: false) is { } denied)
+        {
+            ErrorMessage = denied;
+            await LoadAsync();
+            return;
+        }
+
+        await UserManagerService.SetTwoFactorEnabledAsync(user, false);
+        // A new key, so the lost phone's codes never work again; and wherever the lost phone is
+        // signed in, it isn't any more.
+        await UserManagerService.ResetAuthenticatorKeyAsync(user);
+        await Sessions.EndAllAsync(user.Id);
+        await AuditService.LogAsync("User.TwoFactorReset", CurrentUserId, CurrentUserName, RemoteIp, user.Email ?? user.UserName);
+        SavedMessage = Loc.T("settings.permissions.users.twoFactorResetFor", new { email = user.Email ?? user.UserName });
+        await LoadAsync();
+    }
+
+    /// <summary>Signs someone out on every browser at once (a lost laptop, a shared PC); they can
+    /// sign in again. Disable the account to keep them out.</summary>
+    private async Task HandleEndSessionsAsync()
+    {
+        var user = await UserManagerService.FindByIdAsync(HttpContext?.Request.Form["EndSessionsUserId"].ToString() ?? "");
+        if (user is null) { await LoadAsync(); return; }
+        if (await CannotActOnAsync(user, allowSelf: false) is { } denied)
+        {
+            ErrorMessage = denied;
+            await LoadAsync();
+            return;
+        }
+
+        var ended = await Sessions.EndAllAsync(user.Id);
+        await AuditService.LogAsync("User.SignedOutEverywhere", CurrentUserId, CurrentUserName, RemoteIp, $"{user.Email ?? user.UserName}: {ended} sessions");
+        SavedMessage = Loc.T("settings.permissions.users.signedOutEverywhere", new { email = user.Email ?? user.UserName });
         await LoadAsync();
     }
 
@@ -655,8 +758,8 @@
 
     /// <summary>Null when the signed-in admin may reset, disable, or change the roles of
     /// <paramref name="target"/>; otherwise why not. A Super Admin may act on anyone. Anyone else may
-    /// not act on a Super Admin, or on an account whose roles reach wider than their own (a Site-tier
-    /// admin can't take over an Org-tier one). Nobody changes their own roles or disables themselves.</summary>
+    /// not act on a Super Admin, on an account whose roles reach wider than their own (a Site-tier
+    /// admin can't take over an Org-tier one), or on one with a permission they don't have. Nobody changes their own roles or disables themselves.</summary>
     private async Task<string?> CannotActOnAsync(ApplicationUser target, bool allowSelf)
     {
         if (!allowSelf && target.Id == CurrentUserId) return Loc.T("settings.permissions.users.youCantChangeYourOwn");
@@ -666,6 +769,10 @@
         if (await IncludesSuperAdminAsync(await UserManagerService.GetRolesAsync(actor))) return null;
         if (await IncludesSuperAdminAsync(await UserManagerService.GetRolesAsync(target))) return Loc.T("settings.permissions.users.onlyASuperAdminCan");
         if (await HighestScopeTierAsync(target.Id) < await HighestScopeTierAsync(actorId)) return Loc.T("settings.permissions.users.thisAccountHasWiderAccess");
+        // Resetting the password of an account that can do more than you would let you sign in as it.
+        var targetRoleIds = await Db.UserRoles.Where(ur => ur.UserId == target.Id).Select(ur => ur.RoleId).ToListAsync();
+        var scope = await LarisVMS.Web.Services.AdminScope.ForAsync(Db, PermissionService, User);
+        if (!scope.HasEveryPermissionOf(targetRoleIds)) return Loc.T("settings.permissions.users.thisAccountHasPermissionsYouLack");
         return null;
     }
 

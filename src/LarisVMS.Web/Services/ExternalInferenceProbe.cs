@@ -38,7 +38,8 @@ public sealed class ExternalInferenceProbe(IHttpClientFactory httpClientFactory,
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException && !ct.IsCancellationRequested)
         {
-            logger.LogInformation(ex, "External inference probe of {BaseUrl} failed.", baseUrl);
+            // Typed into a form: one line in the log, whatever it contains.
+            logger.LogInformation(ex, "External inference probe of {BaseUrl} failed.", baseUrl.Replace('\r', ' ').Replace('\n', ' '));
             return new ExternalInferenceProbeResult(Loc.T("server.externalInferenceProbe.couldNotReachTheService", new { baseUrl, message = ex.Message }));
         }
 

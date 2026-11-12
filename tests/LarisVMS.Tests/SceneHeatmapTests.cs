@@ -248,6 +248,37 @@ public class SceneHeatmapTests
         Assert.Equal((16, 16), (heat.Cols, heat.Rows));
     }
 
+    [Fact]
+    public async Task AfterAResetOnlyLaterHeatCounts()
+    {
+        // The camera was moved: heat from before the reset is no longer shown, later heat is.
+        using var db = NewDb();
+        var camera = new Camera
+        {
+            Id = Guid.NewGuid(), Name = "Yard", Host = "h", DeviceServiceUri = "http://h/onvif", TimeZoneId = "UTC",
+            ServerMotionEnabled = true, MotionRegionMode = MotionRegionMode.Grid, MotionGridSize = 16,
+        };
+        db.Cameras.Add(camera);
+        var now = DateTime.UtcNow;
+        var before = ActivityRollupService.FloorHour(now.AddHours(-5));
+        var after = ActivityRollupService.FloorHour(now.AddHours(-1));
+        byte[] Cells(int count) { var c = new int[256]; c[3] = count; return SceneHeat.EncodeCells(c); }
+        db.SceneHeatHourlies.Add(new SceneHeatHourly { CameraId = camera.Id, HourUtc = before, Source = SceneHeatSource.Motion, Cols = 16, Rows = 16, Cells = Cells(50) });
+        db.SceneHeatHourlies.Add(new SceneHeatHourly { CameraId = camera.Id, HourUtc = after, Source = SceneHeatSource.Motion, Cols = 16, Rows = 16, Cells = Cells(4) });
+        db.SettingOverrides.Add(new SettingOverride
+        {
+            Id = Guid.NewGuid(), Scope = SettingScope.Camera, ScopeId = camera.Id, Key = SceneHeat.ResetSettingKey,
+            Value = before.AddHours(2).ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+        });
+        await db.SaveChangesAsync();
+
+        var activity = new ActivityService(db, new ActivityRollupService(db), new MemoryCache(new MemoryCacheOptions()));
+        var heat = await activity.GetSceneHeatAsync(camera.Id, null, "24h", "motion", null, null, null);
+
+        Assert.Equal(4, heat!.MaxCount);
+        Assert.Equal(before.AddHours(2), heat.ResetUtc);
+    }
+
     // An uploaded background is laid under the heat edge to edge, so only the camera's own shape fits.
     [Theory]
     [InlineData(1920, 1080, 2560, 1440, true)]   // same shape, other size

@@ -12,6 +12,27 @@ namespace LarisVMS.Core.Dtos;
 public record CreateExportRequest(List<Guid> CameraIds, DateTime FromUtc, DateTime ToUtc,
     Dictionary<Guid, List<List<double[]>>>? Redactions = null);
 
+/// <summary>How much one export request may ask for, so a single request can't tie up the recorders
+/// for days: enough for a whole site for a while, or a few cameras for a month.</summary>
+public static class ExportLimits
+{
+    public const int MaxCameras = 64;
+    public static readonly TimeSpan MaxSpan = TimeSpan.FromDays(31);
+    /// <summary>Cameras times hours, over the whole request.</summary>
+    public const int MaxCameraHours = 1000;
+
+    /// <summary>Null when within the limits; otherwise which limit it's over ("cameras", "span", or
+    /// "total").</summary>
+    public static string? Check(int cameras, DateTime fromUtc, DateTime toUtc)
+    {
+        if (cameras > MaxCameras) return "cameras";
+        var span = toUtc - fromUtc;
+        if (span > MaxSpan) return "span";
+        if (cameras * span.TotalHours > MaxCameraHours) return "total";
+        return null;
+    }
+}
+
 /// <summary>Web -&gt; Node: what ExportJobDispatcher POSTs to a node's /export/{cameraId} once it has
 /// resolved that camera's segment file paths for the job's range. SegmentFilePaths is already
 /// ordered by StartUtc — the node writes them into its concat list file in exactly this order, no

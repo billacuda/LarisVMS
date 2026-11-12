@@ -7,17 +7,22 @@ namespace LarisVMS.Web.Services;
 /// authentication pipeline.
 ///
 /// A role with no configured value defaults to <see cref="DefaultHours"/> (24h, per the original
-/// ask — sessions were expiring too fast at the previous fixed 60-minute cookie timeout). 0 means
-/// that role never expires. A user holding several roles is bound by whichever is <b>most
-/// restrictive</b>: the shortest positive window among their roles always applies, even if another
-/// of their roles says "never" — a role marked unlimited should not let a user escape a stricter
-/// role's own limit just by holding both. Only a user whose <i>every</i> role says 0 gets no cap at
-/// all.
+/// ask — sessions were expiring too fast at the previous fixed 60-minute cookie timeout). A limit is
+/// at most <see cref="MaxHours"/> (30 days); 0 means never expire, for a home install where signing
+/// in again is only a chore. A user holding several roles is bound by whichever is <b>most
+/// restrictive</b>: the shortest limit among their roles applies, and "never" only when every role
+/// says so.
 /// </summary>
 public static class SessionLifetimePolicy
 {
     public const string SettingKeyPrefix = "SessionLifetime.Role.";
     public const int DefaultHours = 24;
+
+    /// <summary>The longest any session lasts before signing in again (ASVS 7.3.2).</summary>
+    public const int MaxHours = 720;
+
+    /// <summary>What a role's setting is stored and shown as: 0 (never) or 1 to <see cref="MaxHours"/>.</summary>
+    public static int Clamp(int hours) => hours <= 0 ? 0 : Math.Min(hours, MaxHours);
 
     /// <summary>Keyed by the role's real database Id, not its name — Settings keys are just strings
     /// this app controls the shape of, but keying by Id here deliberately mirrors the fix in
@@ -26,12 +31,14 @@ public static class SessionLifetimePolicy
     public static string SettingKey(string roleId) => SettingKeyPrefix + roleId;
 
     /// <summary>The effective session lifetime for a user holding roles with these configured hour
-    /// values, or null if the session should never expire (only when every value is 0 — including
-    /// when the list itself is empty, since a roleless user can't hold anything more restrictive).</summary>
+    /// values: the shortest limit, each clamped to <see cref="MaxHours"/>. Null (never expires) only
+    /// when every role is 0; a user with no roles gets the ceiling.</summary>
     public static TimeSpan? EffectiveWindow(IEnumerable<int> perRoleHours)
     {
-        var positive = perRoleHours.Where(h => h > 0).ToList();
-        return positive.Count == 0 ? null : TimeSpan.FromHours(positive.Min());
+        var all = perRoleHours.Select(Clamp).ToList();
+        if (all.Count == 0) return TimeSpan.FromHours(MaxHours);
+        var limits = all.Where(h => h > 0).ToList();
+        return limits.Count == 0 ? null : TimeSpan.FromHours(limits.Min());
     }
 
     /// <summary>Whether a ticket issued at <paramref name="issuedUtc"/> has aged past

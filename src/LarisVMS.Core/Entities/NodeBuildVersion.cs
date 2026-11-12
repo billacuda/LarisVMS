@@ -38,6 +38,10 @@ public class NodeBuildVersion
     /// upload — what LarisVMS.Node's UpdateService verifies its download against before applying it.</summary>
     public string Sha256 { get; set; } = string.Empty;
 
+    /// <summary>The publisher's signature over this build's update payload (PublisherKey), from the
+    /// publisher.sig the build script wrote; null for a build made without the publisher's key.</summary>
+    public string? PublisherSignature { get; set; }
+
     /// <summary>Object detection plan follow-up: the matching `LarisVMS.Vision.Service.exe` from the
     /// same `build-node.ps1` publish, if this deploy built one (a plain recording-only package built
     /// with `-SkipVision` has none) — same file-outside-the-IIS-directory storage as FilePath above,

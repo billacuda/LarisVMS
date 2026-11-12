@@ -310,6 +310,11 @@ namespace LarisVMS.Installer
                 if (!string.IsNullOrEmpty(session["ARCHIVEROOT"])) { args.Add("--archive-root"); args.Add(session["ARCHIVEROOT"]); }
             }
             if (session["INSECURETLS"] == "1") args.Add("--insecure-tls");
+            // Optional, from Settings > Nodes: pinned before the first connection (registration only).
+            if (!string.IsNullOrEmpty(session["SERVERCERTTHUMBPRINT"]) && !string.IsNullOrEmpty(session["REGISTRATIONKEY"]))
+            {
+                args.Add("--server-cert-thumbprint"); args.Add(session["SERVERCERTTHUMBPRINT"]);
+            }
 
             session["SERVICEARGS"] = string.Join(" ", args.Select(Util.QuoteArg));
             return ActionResult.Success;

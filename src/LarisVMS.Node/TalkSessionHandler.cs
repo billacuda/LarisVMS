@@ -26,6 +26,10 @@ public static class TalkSessionHandler
     public const int SampleRate = 8000;
     /// <summary>A stuck button (or a lost "stop") shouldn't open the camera's speaker indefinitely.</summary>
     public static readonly TimeSpan MaxPress = TimeSpan.FromMinutes(5);
+
+    /// <summary>Largest single message accepted: the browser sends audio in chunks of a few KB, so
+    /// anything bigger is refused rather than buffered without end (which could exhaust the node).</summary>
+    public const int MaxMessageBytes = 64 * 1024;
     /// <summary>Presses shorter than this are accidental clicks — not worth a recording.</summary>
     public static readonly TimeSpan MinRecorded = TimeSpan.FromMilliseconds(300);
 
@@ -81,6 +85,11 @@ public static class TalkSessionHandler
                 {
                     result = await socket.ReceiveAsync(buffer, ct);
                     if (result.MessageType == WebSocketMessageType.Close) return;
+                    if (message.Length + result.Count > MaxMessageBytes)
+                    {
+                        await socket.CloseOutputAsync(WebSocketCloseStatus.MessageTooBig, "Message too large.", CancellationToken.None);
+                        return;
+                    }
                     message.Write(buffer, 0, result.Count);
                 } while (!result.EndOfMessage);
 

@@ -80,7 +80,13 @@
         if (!el || !el.hasAttribute) return;
         if (el.hasAttribute('data-submit-on-change') && el.form) el.form.submit();
         var prefix = el.getAttribute('data-navigate-prefix');
-        if (prefix && el.value) window.location.href = prefix + el.value;
+        if (prefix && el.value) {
+            // Only a path on this site: the prefix and value come from the page, but a navigation
+            // never leaves it or runs a javascript: URL.
+            var target = new URL(prefix + encodeURIComponent(el.value), window.location.origin);
+            if (target.origin === window.location.origin && prefix.charAt(0) === '/' && prefix.charAt(1) !== '/')
+                window.location.href = target.pathname + target.search + target.hash;
+        }
     });
 
     // Load errors don't bubble, but they can be caught on the way down.

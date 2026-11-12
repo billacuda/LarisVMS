@@ -62,6 +62,17 @@ if (config is null)
     }
 
     var insecure = HasFlag(args, "--insecure-tls") || Environment.GetEnvironmentVariable("LARISVMS_INSECURE_TLS") == "1";
+    // A thumbprint from the installer (Settings → Nodes shows it) is pinned before the first
+    // connection, so even registration only talks to that server.
+    var (pinThumbprint, pinError) = LarisVMS.Core.Security.ServerCertificateTrust.FromArgs(GetArg(args, "--server-cert-thumbprint"));
+    if (pinError is not null)
+    {
+        Console.Error.WriteLine(pinError);
+        Environment.Exit(1);
+        return;
+    }
+    if (pinThumbprint is not null) trust.Pin(pinThumbprint);
+
     var registerClient = new NodeApiClient(serverUrl, trust);
     // "win-x64" (a RID, not Environment.OSVersion.Platform.ToString()'s "Win32NT") — this is what
     // LarisVMS.Web's heartbeat handler matches against NodeBuildVersion.Platform to decide whether an
@@ -121,9 +132,14 @@ var livePort = int.TryParse(GetArg(args, "--live-port") ?? Environment.GetEnviro
 // report, so this needs real headroom past that, not NodeApiClient's budget. Same cert-ignoring
 // rationale as LarisVMS.Web's "onvif" named client: LAN cameras almost universally present a
 // self-signed certificate with no CA behind it.
+// Camera certificate pinning (Settings → Security): only the pins the server sends are enforced here.
+LarisVMS.Core.Security.CameraCertificatePins.Shared.LearnUnknown = false;
+// Refused certificates go to the server with the next heartbeat (audit log, Super Admin notice).
+LarisVMS.Core.Security.CameraCertificatePins.Shared.Refused += LarisVMS.Node.CameraCertificateRefusals.Add;
 var onvifHttpClient = new HttpClient(new HttpClientHandler
 {
-    ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+    ServerCertificateCustomValidationCallback = (request, certificate, _, _) =>
+        LarisVMS.Core.Security.CameraCertificatePins.Shared.Check(request.RequestUri?.DnsSafeHost, certificate)
 })
 // Capped like the Web's client: the response is read whole before SafeXml's own limit applies.
 { Timeout = TimeSpan.FromSeconds(45), MaxResponseContentBufferSize = LarisVMS.Onvif.Soap.SafeXml.MaxCharacters };
@@ -179,7 +195,8 @@ if (clientEndpoint.Enabled)
     var selfSignedPfx = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "LarisVMS", "client-endpoint.selfsigned.pfx");
     certHolder = new CertHolder(
-        new CertHolderOptions(clientEndpoint.PfxPath, clientEndpoint.PfxPassword, clientEndpoint.AllowInsecure,
+        // Encrypted connections from the server can use the self-signed certificate: the server pins it.
+        new CertHolderOptions(clientEndpoint.PfxPath, clientEndpoint.PfxPassword, clientEndpoint.AllowInsecure || clientEndpoint.ServerTls,
             clientEndpoint.Host, selfSignedPfx),
         nodeFileLogger.CreateLogger("ClientEndpoint"));
     if (certHolder.Load())
@@ -239,6 +256,20 @@ var app = builder.Build();
 // Tidy up after the last auto-update, and say so in this log if it never got applied.
 app.Services.GetRequiredService<UpdateService>().CheckLastUpdate();
 app.UseWebSockets();
+// Encrypted connections from the server (opt-in per node): once this node serves HTTPS, the plain
+// LAN port refuses everything but /health and this machine's own callers. See ServerConnectionPolicy.
+LarisVMS.Node.ServerConnectionPolicy.EncryptedOnly = config.CachedConfig?.EncryptServerConnection == true;
+app.Use(async (ctx, next) =>
+{
+    if (LarisVMS.Node.ServerConnectionPolicy.ShouldRefuse(LarisVMS.Node.ServerConnectionPolicy.EncryptedOnly,
+            certHolder?.Current is not null, ctx.Connection.LocalPort, livePort, ctx.Connection.RemoteIpAddress, ctx.Request.Path.Value))
+    {
+        ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+        await ctx.Response.WriteAsync("This node only accepts encrypted connections from the server.");
+        return;
+    }
+    await next();
+});
 
 var liveLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("LiveView");
 var playbackLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Playback");
@@ -306,18 +337,22 @@ app.Map("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, NodeWork
     // LarisVMS.Web's own proxy ClientWebSocket does not — so this distinguishes a real client from a
     // relayed one without a second signal.
     var origin = ctx.Request.Headers.Origin.ToString();
-    var via = string.IsNullOrEmpty(origin) ? "proxy" : $"direct from {origin}";
+    // Only LarisVMS.Web's own relay carries a relay token; it ends its sessions itself. Everything
+    // else holds a browser ticket (directly, through a media proxy, or a script) and is capped.
+    var relayed = MediaToken.TryValidateFor(ctx.Request.Headers[MediaToken.RelayHeader].ToString(),
+        MediaToken.Purposes.Relay, cameraId, currentKey, out _);
+    var via = relayed ? "relayed by the web server" : string.IsNullOrEmpty(origin) ? "ticket, no origin" : $"direct from {origin}";
     var roleLabel = servingSub ? "Sub" : "Main";
     var clientIp = ctx.Connection.RemoteIpAddress?.ToString() ?? "?";
     var cameraName = worker.CameraDisplayName(cameraId);
     var startedAt = DateTime.UtcNow;
     liveLogger.LogInformation("Live stream started: {CameraName} ({Role}) -> client {ClientIp} ({Via}).",
         cameraName, roleLabel, clientIp, via);
-    // A browser connected directly holds its own ticket and never passes the web server again, so
-    // its session is capped: the player reconnects with a fresh ticket, which needs a signed-in,
-    // enabled account. Relayed sessions are the web server's to end.
+    // A browser ticket never passes the web server again, so its session is capped: the player
+    // reconnects with a fresh ticket, which needs a signed-in, enabled account that can still see
+    // this camera. Relayed sessions are the web server's to end.
     using var sessionLimit = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
-    if (!string.IsNullOrEmpty(origin)) sessionLimit.CancelAfter(MaxDirectLiveSession);
+    if (!relayed) sessionLimit.CancelAfter(MaxDirectLiveSession);
     try
     {
         await LiveViewerHandler.RunAsync(socket, session, liveLogger, sessionLimit.Token);
@@ -1138,6 +1173,14 @@ app.MapPost("/export/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, Ex
     {
         foreach (var p in request.SegmentFilePaths)
         {
+            // Control characters (a line break, above all) would add lines to ffmpeg's concat list;
+            // a real segment path never has one, and it must be a file that's there.
+            if (p.Any(char.IsControl) || !File.Exists(p))
+            {
+                ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await ctx.Response.WriteAsync("invalid segment path");
+                return;
+            }
             var fullPath = Path.GetFullPath(p);
             // A range that spans an archived segment carries the archive path — allowed the same way.
             if (!MediaPathResolver.IsAllowed(fullPath, cameraId, storageRoot, worker.ArchiveRoot))
@@ -1344,14 +1387,17 @@ app.MapGet("/snapshot/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, N
         await ctx.Response.WriteAsync("Node hasn't completed its first reconcile cycle yet — try again shortly.");
         return;
     }
-    if (!MediaToken.TryValidateFor(token, MediaToken.Purposes.Snapshot, cameraId, currentKey, out var tokenError))
+    // A snapshot token gets the masked picture; only a raw-snapshot token (the zone editor) gets
+    // the camera's whole picture.
+    var raw = MediaToken.TryValidateFor(token, MediaToken.Purposes.SnapshotRaw, cameraId, currentKey, out _);
+    if (!raw && !MediaToken.TryValidateFor(token, MediaToken.Purposes.Snapshot, cameraId, currentKey, out var tokenError))
     {
         ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
         await ctx.Response.WriteAsync(tokenError);
         return;
     }
 
-    var bytes = await worker.CaptureSnapshotAsync(cameraId, ctx.RequestAborted);
+    var bytes = await worker.CaptureSnapshotAsync(cameraId, raw, ctx.RequestAborted);
     if (bytes is null)
     {
         ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
@@ -1368,13 +1414,15 @@ app.MapGet("/snapshot/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, N
 // every other route on this port uses — Vision Service is a sibling process on the same machine,
 // not something LarisVMS.Web ever calls. The trust boundary is the OS's own loopback isolation
 // instead: the caller must be reaching this from 127.0.0.1/::1, checked explicitly since this
-// Kestrel host also listens on every interface (ListenAnyIP) for the LAN-facing routes above it.
+// Kestrel host also listens on every interface (ListenAnyIP) for the LAN-facing routes above it, and
+// must carry the secret this node gave the Vision Service it launched (LocalControlSecret), since
+// loopback alone lets in anyone else signed in to this machine.
 app.MapPost("/detections", async (HttpContext ctx, VisionDetectionReportItem item, NodeWorker worker) =>
 {
-    if (!IPAddress.IsLoopback(ctx.Connection.RemoteIpAddress ?? IPAddress.None))
+    if (!VisionServiceSupervisor.IsFromVision(ctx))
     {
         ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
-        await ctx.Response.WriteAsync("This endpoint only accepts connections from the local machine.");
+        await ctx.Response.WriteAsync("This endpoint only accepts the node's own Vision Service.");
         return;
     }
 
@@ -1387,10 +1435,10 @@ app.MapPost("/detections", async (HttpContext ctx, VisionDetectionReportItem ite
 // /snapshot-image route promotes it into the span-keyed cache (retention-governed) on first view.
 app.MapPost("/detections/crop", async (HttpContext ctx, VisionDetectionCropItem item, NodeWorker worker, ILogger<Program> logger) =>
 {
-    if (!IPAddress.IsLoopback(ctx.Connection.RemoteIpAddress ?? IPAddress.None))
+    if (!VisionServiceSupervisor.IsFromVision(ctx))
     {
         ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
-        await ctx.Response.WriteAsync("This endpoint only accepts connections from the local machine.");
+        await ctx.Response.WriteAsync("This endpoint only accepts the node's own Vision Service.");
         return;
     }
 
@@ -1424,10 +1472,10 @@ app.MapPost("/detections/crop", async (HttpContext ctx, VisionDetectionCropItem 
 // request through on its authenticated channel. Only YOLOX models go this way (D-FINE is bundled).
 app.MapGet("/internal/detection-model/{family}/{variant}", async (HttpContext ctx, string family, string variant, NodeApiClient api) =>
 {
-    if (!IPAddress.IsLoopback(ctx.Connection.RemoteIpAddress ?? IPAddress.None))
+    if (!VisionServiceSupervisor.IsFromVision(ctx))
     {
         ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
-        await ctx.Response.WriteAsync("This endpoint only accepts connections from the local machine.");
+        await ctx.Response.WriteAsync("This endpoint only accepts the node's own Vision Service.");
         return;
     }
 

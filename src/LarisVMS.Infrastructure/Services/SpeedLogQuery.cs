@@ -1,3 +1,4 @@
+using LarisVMS.Core.Localization;
 using LarisVMS.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -68,6 +69,6 @@ public static class SpeedLogQuery
 
         var rows = await q.Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(ct);
         return (rows.Select(r => new SpeedLogEntry(r.Id, r.At, r.CameraId, r.CameraName, r.TrapId,
-            r.TrapName ?? (r.TrapId is null ? "" : "(deleted trap)"), r.Label, r.Color, r.Kph, r.Limit)).ToList(), total);
+            r.TrapName ?? (r.TrapId is null ? "" : Loc.T("common.deletedTrap")), r.Label, r.Color, r.Kph, r.Limit)).ToList(), total);
     }
 }

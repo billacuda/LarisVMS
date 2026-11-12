@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core.Interfaces;
 using LarisVMS.Infrastructure.Data;
+using LarisVMS.Infrastructure.Services;
 
 namespace LarisVMS.Web.Services;
 
@@ -34,6 +35,7 @@ public class AuditLogRetentionService(IServiceScopeFactory scopeFactory, ILogger
                 var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
                 var days = await settings.GetAsync(RetentionDaysKey, DefaultRetentionDays, ct: stoppingToken);
                 await SweepAsync(db, days, stoppingToken);
+                await AuditIntegrity.CheckAsync(scope.ServiceProvider, logger, stoppingToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -48,22 +50,18 @@ public class AuditLogRetentionService(IServiceScopeFactory scopeFactory, ILogger
     /// <summary>0-means-forever is the same rule LogsRetentionService.ShouldDelete already applies
     /// and already has dedicated tests for (LogsRetentionTests) — not duplicated here. What this
     /// method adds beyond that shared rule (deleting real rows against a real DbContext) is what
-    /// AuditLogRetentionServiceTests covers instead.
-    ///
-    /// RemoveRange + SaveChangesAsync rather than ExecuteDeleteAsync: the latter would be the more
-    /// efficient server-side DELETE for SQL Server, but EF Core's InMemory provider — what this
-    /// method's own tests run against — doesn't support it at all (throws InvalidOperationException
-    /// unconditionally). A sweep every six hours over this app's audit-log volume has no real need
-    /// for a set-based DELETE, so portability and testability win here.</summary>
+    /// AuditLogRetentionServiceTests covers instead. AuditChainStore.PruneAsync deletes with one
+    /// DELETE on a real database and falls back to RemoveRange on the InMemory provider the tests use.</summary>
     internal static async Task SweepAsync(ApplicationDbContext db, int retentionDays, CancellationToken ct)
     {
         if (retentionDays <= 0) return; // keep forever
 
-        var cutoff = DateTime.UtcNow.AddDays(-retentionDays);
-        var expired = await db.AuditLogs.Where(l => l.OccurredAt < cutoff).ToListAsync(ct);
-        if (expired.Count == 0) return;
-
-        db.AuditLogs.RemoveRange(expired);
-        await db.SaveChangesAsync(ct);
+        // Through AuditChainStore, which records where the hash chain now starts: entries removed
+        // here are expected, ones removed any other way show up when the log is checked.
+        var removed = await AuditChainStore.PruneAsync(db, DateTime.UtcNow.AddDays(-retentionDays), ct);
+        // Recorded in the log itself, so the syslog copy shows that entries were removed, and when.
+        if (removed > 0)
+            await new LarisVMS.Infrastructure.Services.AuditService(db).LogAsync("AuditLog.Pruned", null, "System", null,
+                $"Removed {removed} entries older than {retentionDays} days (audit log retention).", ct);
     }
 }

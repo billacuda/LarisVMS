@@ -74,11 +74,19 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     // _activeVision entry, and got re-sent on the next 30s reconcile — which tore down the in-progress
     // build and started another. The Vision Service now builds its engines off the request path, so a
     // call that takes even 15s here means something is genuinely wrong and should say so quickly.
-    private readonly HttpClient _visionHttp = new()
+    private readonly HttpClient _visionHttp = NewVisionHttpClient();
+
+    private static HttpClient NewVisionHttpClient()
     {
-        BaseAddress = new Uri($"http://127.0.0.1:{VisionServiceSupervisor.Port}/"),
-        Timeout = TimeSpan.FromSeconds(15),
-    };
+        var client = new HttpClient
+        {
+            BaseAddress = new Uri($"http://127.0.0.1:{VisionServiceSupervisor.Port}/"),
+            Timeout = TimeSpan.FromSeconds(15),
+        };
+        // The Vision Service refuses any request without it (LocalControlSecret).
+        client.DefaultRequestHeaders.Add(LarisVMS.Core.Security.LocalControlSecret.HeaderName, VisionServiceSupervisor.ControlSecret);
+        return client;
+    }
 
     // Cameras with a /start POST in flight right now. Without this, a start that outlives a reconcile
     // tick gets issued again by the next one (the _activeVision entry is removed on failure, and a
@@ -285,10 +293,16 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// <summary>Opens a short-lived RTSP session against the camera's Main stream and grabs one
     /// frame — null if the camera isn't assigned to this node (nothing to grab from) or the grab
     /// itself fails (camera unreachable, auth failure, timeout — see SnapshotCapture).</summary>
-    public Task<byte[]?> CaptureSnapshotAsync(Guid cameraId, CancellationToken ct) =>
-        _active.TryGetValue(cameraId, out var recorder)
-            ? SnapshotCapture.CaptureAsync(ffmpegPath, recorder.RtspUri, ct)
-            : Task.FromResult<byte[]?>(null);
+    /// <summary>One frame from the live camera, with its privacy areas blacked out as in its
+    /// recordings — unless <paramref name="raw"/> (the zone editor, which needs the whole picture
+    /// to draw them). Null, never unmasked, when the camera's zones aren't known yet.</summary>
+    public Task<byte[]?> CaptureSnapshotAsync(Guid cameraId, bool raw, CancellationToken ct)
+    {
+        if (!_active.TryGetValue(cameraId, out var recorder)) return Task.FromResult<byte[]?>(null);
+        if (raw) return SnapshotCapture.CaptureAsync(ffmpegPath, recorder.RtspUri, ct);
+        if (!_latestCameraConfig.TryGetValue(cameraId, out var camera)) return Task.FromResult<byte[]?>(null);
+        return SnapshotCapture.CaptureAsync(ffmpegPath, recorder.RtspUri, ct, privacyMaskFilters: BuildPrivacyMaskFilters(camera.Zones));
+    }
 
     // Concurrency caps for M7 pass 2 hover-thumbnail extraction — a real, confirmed risk without
     // this: each cache-miss spawns its own ffmpeg process, and a fast sweep across an uncached
@@ -555,6 +569,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             {
                 var config = await api.GetConfigAsync(ct);
                 MediaSigningKey = config.MediaSigningKey;
+                ApplyCameraCertificatePins(config);
                 // Failover plan phase 3: hand PartnerProbeService the current list of nodes this one
                 // backs up (it probes their /health on its own cadence; the results ride the next
                 // heartbeat below).
@@ -570,7 +585,11 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 var storagePressure = usage is { TotalBytes: > 0 } u
                     && 100.0 * (u.TotalBytes - u.FreeBytes) / u.TotalBytes > config.WatermarkPercent;
                 var visionBackend = await _visionSupervisor.TryGetBackendAsync(ct);
-                var heartbeat = await api.HeartbeatAsync(new NodeHeartbeatRequest(NodeVersion.Current, usage?.FreeBytes, usage?.TotalBytes, livePort,
+                var refusals = CameraCertificateRefusals.Drain();
+                NodeHeartbeatResponse heartbeat;
+                try
+                {
+                heartbeat = await api.HeartbeatAsync(new NodeHeartbeatRequest(NodeVersion.Current, usage?.FreeBytes, usage?.TotalBytes, livePort,
                     DateTime.UtcNow, _detectedEncoders?.ToList(), _detectedAccelerators.Select(a => a.ToString()).ToList(),
                     archiveUsage?.FreeBytes, archiveUsage?.TotalBytes, storagePressure,
                     // Failover plan phase 5a: echo the rolling nonce central issued last time.
@@ -586,7 +605,18 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                     HostStats: _hostStats.Sample(),
                     StorageBlockedByEvidenceLocks: EvidenceLockStorageState.BlockedByEvidenceLocks,
                     // What AI detection is actually running on, so a slow fallback shows on the Nodes page.
-                    VisionBackend: visionBackend), ct);
+                    VisionBackend: visionBackend,
+                    // What the server pins for encrypted connections to this node.
+                    ClientEndpointCertSha256: clientEndpoint.Enabled && certHolder?.Current is { } served
+                        ? CameraCertificatePins.Thumbprint(served) : null,
+                    // Camera certificates refused under pinning, for the server's audit log.
+                    CameraCertificateRefusals: refusals), ct);
+                }
+                catch
+                {
+                    CameraCertificateRefusals.Requeue(refusals); // sent with the next heartbeat instead
+                    throw;
+                }
 
                 // Failover plan phase 5a/5b: fold in the next nonce, and a rotated secret if central
                 // sent one, persisting node.config before switching so a mid-rotation restart can't
@@ -625,8 +655,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     private bool TrustUpdate(NodeUpdateInfoDto update)
     {
         // A signed offer for an older build (a replayed one) would roll the node back to it.
-        if (Version.TryParse(update.Version, out var offered) && Version.TryParse(NodeVersion.Current, out var running)
-            && offered <= running)
+        if (!UpdateDownload.IsNewer(update.Version, NodeVersion.Current))
         {
             _logger.LogError("Not installing update {Version}: this node already runs {Running}.", update.Version, NodeVersion.Current);
             return false;
@@ -636,6 +665,12 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
                 out var keyToPin, out var error))
         {
             _logger.LogError("Not installing update {Version}: {Reason}.", update.Version, error);
+            return false;
+        }
+        // Built with the publisher's key: the publisher has to have signed it too.
+        if (!PublisherKey.Check(payload, update.PublisherSignature, out var publisherError))
+        {
+            _logger.LogError("Not installing update {Version}: {Reason}.", update.Version, publisherError);
             return false;
         }
         if (keyToPin is not null)
@@ -662,6 +697,7 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
             "Server unreachable and no cameras are recording yet — starting from the last config " +
             "cached locally so this node doesn't sit idle for the rest of the outage.");
         MediaSigningKey = _cachedConfig.MediaSigningKey;
+        ApplyCameraCertificatePins(_cachedConfig);
         ApplyFootageRanges(_cachedConfig);
         Reconcile(_cachedConfig, ct);
     }
@@ -670,6 +706,18 @@ public class NodeWorker(NodeApiClient api, string ffmpegPath, string fallbackSto
     /// the registration secret it travels with — it carries camera credentials) so a future cold
     /// start has something to fall back on if the server is unreachable at that moment. Best
     /// effort: a failure to write it shouldn't take recording down.</summary>
+    /// <summary>Camera certificate pinning (Settings → Security): the server's pins, enforced by this
+    /// node's camera clients (CameraCertificatePins).</summary>
+    private static void ApplyCameraCertificatePins(NodeConfigResponse config)
+    {
+        CameraCertificatePins.Shared.Replace(config.CameraCertificatePinning,
+            config.CameraCertificatePins ?? new Dictionary<string, string>());
+        // Encrypted connections from the server: applied with every config, so turning it off opens
+        // the plain port again at once. Turning it on needs the HTTPS endpoint, which starts with
+        // the service (restart it once).
+        ServerConnectionPolicy.EncryptedOnly = config.EncryptServerConnection;
+    }
+
     private void PersistConfigCache(NodeConfigResponse config)
     {
         _cachedConfig = config;

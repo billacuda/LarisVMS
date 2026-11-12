@@ -50,6 +50,12 @@
     a recorder machine can reach directly) so a node install/upgrade doesn't depend on manually
     copying the folder over each time.
 
+.PARAMETER PublisherKeyPath
+    Optional: the publisher's encrypted private key (tools\publisher-key.ps1 -New). The build then
+    carries the publisher's public key (src\LarisVMS.Core\Security\publisher-key.pem), is signed
+    into publisher.sig, and installs only updates the publisher signed. Without it, the build is
+    unsigned, as before. The password comes from LARISVMS_PUBLISHER_KEY_PASSWORD, or is asked for.
+
 .EXAMPLE
     .\build-node.ps1
 
@@ -67,7 +73,8 @@ param(
     [string]$OutputRoot         = (Join-Path $PSScriptRoot 'publish\LarisVMS.Node'),
     [string]$Configuration      = 'Release',
     [switch]$SkipVision,
-    [string]$ExtraPublishPath
+    [string]$ExtraPublishPath,
+    [string]$PublisherKeyPath
 )
 
 Set-StrictMode -Version Latest
@@ -77,6 +84,26 @@ function Write-Step([string]$msg) { Write-Host "`n==> $msg" -ForegroundColor Cya
 function Write-Ok([string]$msg)   { Write-Host "    $msg"  -ForegroundColor Green }
 
 $winOut = Join-Path $OutputRoot 'win'
+
+# ── Publisher key (tools\publisher-key.ps1) ──────────────────────────────────
+# Opt-in. Only a build signed with -PublisherKeyPath carries the publisher's public key, and then
+# refuses any update the publisher didn't sign. Without it the build is unsigned and has no key, so
+# building from source never needs the publisher's private key.
+$publisherPublicKey = Join-Path $PSScriptRoot 'src\LarisVMS.Core\Security\publisher-key.pem'
+if ($PublisherKeyPath -and -not (Test-Path $PublisherKeyPath)) { throw "Publisher key not found: $PublisherKeyPath" }
+if ($PublisherKeyPath -and -not (Test-Path $publisherPublicKey)) {
+    throw "No publisher public key at $publisherPublicKey. Make one with tools\publisher-key.ps1 -New first."
+}
+# Passed to every publish: embeds the public key in LarisVMS.Core (see its .csproj).
+$publisherProps = if ($PublisherKeyPath) { @('-p:LarisVMSPublisherSigned=true') } else { @() }
+
+function Write-PublisherSignature([string]$payload, [string]$path) {
+    Write-Step "Signing with the publisher key"
+    $sig = & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'tools\publisher-key.ps1') -Sign -PrivateKeyPath $PublisherKeyPath -Payload $payload
+    if ($LASTEXITCODE -ne 0 -or -not $sig) { throw 'Signing with the publisher key failed.' }
+    Set-Content -Path $path -Value ($sig | Select-Object -Last 1) -NoNewline
+    Write-Ok "Signed ($path)"
+}
 
 # ── Build number ─────────────────────────────────────────────────────────────
 # Every node package this script produces gets a monotonically increasing 4th version component
@@ -100,6 +127,9 @@ Write-Step "Build $fullVersion (build number $buildNumber)"
 # Read back by deploy.ps1's node-build registration so it registers exactly this version.
 New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null
 Set-Content -Path (Join-Path $OutputRoot 'node-build-version.txt') -Value $fullVersion -NoNewline
+# A signature left from an earlier build would be registered with this one.
+$publisherSignaturePath = Join-Path $OutputRoot 'publisher.sig'
+Remove-Item $publisherSignaturePath -ErrorAction SilentlyContinue
 
 Write-Step "Publishing LarisVMS.Node (win-x64, self-contained, single-file)"
 if (Test-Path $winOut) { Remove-Item $winOut -Recurse -Force }
@@ -111,6 +141,7 @@ dotnet publish $NodeProject `
     -p:EnableCompressionInSingleFile=true `
     -p:NoWarn=CA1416 `
     "-p:Version=$fullVersion" `
+    @publisherProps `
     -o $winOut
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed (exit $LASTEXITCODE)." }
 Write-Ok "Published"
@@ -131,6 +162,7 @@ dotnet publish $NodeUpdaterProject `
     -p:EnableCompressionInSingleFile=true `
     -p:NoWarn=CA1416 `
     "-p:Version=$fullVersion" `
+    @publisherProps `
     -o $updaterTmp
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed (exit $LASTEXITCODE)." }
 Copy-Item (Join-Path $updaterTmp 'LarisVMS.NodeUpdater.exe') $winOut -Force
@@ -152,6 +184,7 @@ if (-not $SkipVision) {
         -p:EnableCompressionInSingleFile=true `
         -p:NoWarn=CA1416 `
         "-p:Version=$fullVersion" `
+        @publisherProps `
         -o $visionTmp
     if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed (exit $LASTEXITCODE)." }
     # Everything from this publish, not just the .exe — the managed ONNX Runtime assembly plus the
@@ -178,6 +211,12 @@ if (-not $SkipVision) {
         Move-Item $cudaProviderDll (Join-Path $cudaProviderOut 'onnxruntime_providers_cuda.dll') -Force
         $sizeMb = [math]::Round((Get-Item (Join-Path $cudaProviderOut 'onnxruntime_providers_cuda.dll')).Length / 1MB)
         Write-Ok "CUDA provider ($sizeMb MB) split out to $cudaProviderOut (not shipped in the package — deploy.ps1 seeds it to the server)"
+        if ($PublisherKeyPath) {
+            # Exactly UpdateSignature.NativePayload: nodes built with the publisher key install it only
+            # with this signature too (CudaProviderProvisioner).
+            $cudaHash = (Get-FileHash (Join-Path $cudaProviderOut 'onnxruntime_providers_cuda.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
+            Write-PublisherSignature "larisvms-native:v1|cuda-provider|$cudaHash" (Join-Path $cudaProviderOut 'onnxruntime_providers_cuda.dll.publisher.sig')
+        }
     } else {
         Write-Host "    onnxruntime_providers_cuda.dll not found in the CUDA backend — CUDA acceleration won't be available on any node." -ForegroundColor Yellow
     }
@@ -185,6 +224,15 @@ if (-not $SkipVision) {
     Write-Host "    Models are not bundled into the package — drop .onnx files (with an optional same-basename .json sidecar) into C:\ProgramData\LarisVMS\models on the node itself. See tools/export-models/ for how to obtain one." -ForegroundColor Yellow
 } else {
     Write-Step "Skipping LarisVMS.Vision.Service (-SkipVision) — this package will be recording-only, no AI detection."
+}
+
+if ($PublisherKeyPath) {
+    # Exactly UpdateSignature.UpdatePayload: platform, version, and both binaries' SHA-256 (the
+    # Vision Service's empty when this build has none), as the server will offer them.
+    $nodeHash = (Get-FileHash (Join-Path $winOut 'LarisVMS.Node.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
+    $visionExe = Join-Path $winOut 'LarisVMS.Vision.Service.exe'
+    $visionHash = if (Test-Path $visionExe) { (Get-FileHash $visionExe -Algorithm SHA256).Hash.ToLowerInvariant() } else { '' }
+    Write-PublisherSignature "larisvms-update:v1|win-x64|$fullVersion|$nodeHash|$visionHash" $publisherSignaturePath
 }
 
 Copy-Item (Join-Path $PSScriptRoot 'install-node.ps1') $winOut -Force

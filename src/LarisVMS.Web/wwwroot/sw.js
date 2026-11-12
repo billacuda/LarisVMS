@@ -30,7 +30,9 @@ self.addEventListener('push', function (event) {
 // opens one.
 self.addEventListener('notificationclick', function (event) {
     event.notification.close();
-    var url = new URL((event.notification.data && event.notification.data.url) || '/', self.location.origin).href;
+    var url = new URL((event.notification.data && event.notification.data.url) || '/', self.location.origin);
+    // Only pages of this site: a notification can't send someone elsewhere.
+    url = url.origin === self.location.origin ? url.href : self.location.origin + '/';
     event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (clients) {
         for (var i = 0; i < clients.length; i++) {
             var client = clients[i];

@@ -1,0 +1,109 @@
+@page
+@model LarisVMS.Web.Areas.Identity.Pages.Account.TwoFactorModel
+@{
+    ViewData["Title"] = L["account.twoFactor.title"].Value;
+}
+<div class="row justify-content-center">
+    <div class="col-md-6">
+        <h1 class="h3 mb-3">@L["account.twoFactor.title"]</h1>
+
+        @if (Model.NotHere is not null)
+        {
+            <div class="alert alert-info">@Model.NotHere</div>
+        }
+        else
+        {
+            @if (Model.Required && !Model.Enabled)
+            {
+                <div class="alert alert-warning">@L["account.twoFactor.requiredByAdmin"]</div>
+            }
+            @if (Model.Message is not null)
+            {
+                <div class="alert alert-success" role="status">@Model.Message</div>
+            }
+            @if (!ViewData.ModelState.IsValid)
+            {
+                <div class="alert alert-danger" role="alert">
+                    <div asp-validation-summary="All" class="mb-0"></div>
+                </div>
+            }
+
+            @if (Model.NewRecoveryCodes.Count > 0)
+            {
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <p class="mb-2">@L["account.twoFactor.saveRecoveryCodes"]</p>
+                        <ul class="list-unstyled row row-cols-2 font-monospace mb-0 user-select-all">
+                            @foreach (var code in Model.NewRecoveryCodes)
+                            {
+                                <li class="col">@code</li>
+                            }
+                        </ul>
+                    </div>
+                </div>
+                <a href="@Model.ReturnUrl" class="btn btn-primary mb-4">@L["account.twoFactor.continue"]</a>
+            }
+
+            <p>@L["account.twoFactor.intro"]</p>
+
+            @if (Model.Enabled)
+            {
+                <p>
+                    <span class="badge text-bg-success">@L["account.twoFactor.on"]</span>
+                    <span class="small text-muted ms-2">@L["account.twoFactor.recoveryCodesLeft", new { count = Model.RecoveryCodesLeft }]</span>
+                </p>
+                <form method="post" class="mb-2">
+                    <input type="hidden" name="returnUrl" value="@Model.ReturnUrl" />
+                    <div class="mb-3">
+                        <label asp-for="Input.Code" class="form-label"></label>
+                        <input asp-for="Input.Code" class="form-control font-monospace" autocomplete="one-time-code" />
+                        <div class="form-text">@L["account.twoFactor.codeToChange"]</div>
+                    </div>
+                    <button type="submit" asp-page-handler="NewCodes" class="btn btn-outline-secondary">@L["account.twoFactor.newRecoveryCodes"]</button>
+                    @if (!Model.Required)
+                    {
+                        <button type="submit" asp-page-handler="Disable" class="btn btn-outline-danger">@L["account.twoFactor.turnOff"]</button>
+                    }
+                </form>
+            }
+            else if (Model.QrSvg is not null)
+            {
+                <ol class="ps-3">
+                    <li class="mb-2">
+                        @L["account.twoFactor.scan"]
+                        <div class="my-2">@Html.Raw(Model.QrSvg)</div>
+                        <div class="small">@L["account.twoFactor.key"] <code class="user-select-all">@Model.FormattedKey</code></div>
+                    </li>
+                    <li>@L["account.twoFactor.enterToFinish"]</li>
+                </ol>
+                <form method="post" asp-page-handler="Verify">
+                    <input type="hidden" name="returnUrl" value="@Model.ReturnUrl" />
+                    <div class="mb-3">
+                        <label asp-for="Input.Code" class="form-label"></label>
+                        <input asp-for="Input.Code" class="form-control font-monospace" autocomplete="one-time-code" inputmode="numeric" autofocus />
+                    </div>
+                    <button type="submit" class="btn btn-primary">@L["account.twoFactor.turnOn"]</button>
+                </form>
+            }
+            else
+            {
+                <form method="post" asp-page-handler="Start">
+                    <input type="hidden" name="returnUrl" value="@Model.ReturnUrl" />
+                    <button type="submit" class="btn btn-primary">@L["account.twoFactor.setUp"]</button>
+                </form>
+            }
+        }
+
+        @if (Model.Required && !Model.Enabled)
+        {
+            <form action="/Identity/Account/Logout?returnUrl=%2F" method="post" class="mt-4 small">
+                @Html.AntiForgeryToken()
+                <button type="submit" class="btn btn-link btn-sm p-0">@L["layout.logout"]</button>
+            </form>
+        }
+        else
+        {
+            <partial name="_AccountLinks" model="@("twoFactor")" />
+        }
+    </div>
+</div>

@@ -27,6 +27,15 @@ public sealed class VisionServiceSupervisor(string nodeInstallDirectory, string 
     // rather than negotiated, since exactly one instance ever runs per node.
     public const int Port = 5990;
 
+    /// <summary>Made fresh each time the node starts and handed to the Vision Service it launches;
+    /// see <see cref="LarisVMS.Core.Security.LocalControlSecret"/>.</summary>
+    public static readonly string ControlSecret = LarisVMS.Core.Security.LocalControlSecret.New();
+
+    /// <summary>A request from this node's own Vision Service: from this machine, with the secret.</summary>
+    public static bool IsFromVision(Microsoft.AspNetCore.Http.HttpContext ctx) =>
+        System.Net.IPAddress.IsLoopback(ctx.Connection.RemoteIpAddress ?? System.Net.IPAddress.None)
+        && LarisVMS.Core.Security.LocalControlSecret.Matches(ControlSecret, ctx.Request.Headers[LarisVMS.Core.Security.LocalControlSecret.HeaderName].ToString());
+
     private Process? _process;
     private bool _warnedMissingExe;
 
@@ -110,6 +119,7 @@ public sealed class VisionServiceSupervisor(string nodeInstallDirectory, string 
         // ASP.NET Core's own configuration-from-environment-variables convention (double underscore
         // = section separator) — no shared config file between the two processes needed.
         psi.EnvironmentVariables["Vision__Port"] = Port.ToString();
+        psi.EnvironmentVariables[LarisVMS.Core.Security.LocalControlSecret.VisionEnvironmentVariable] = ControlSecret;
         // Without this, VisionServiceOptions.FfmpegPath is unset and FfmpegPathResolver falls back to
         // a bare "ffmpeg", relying on PATH — which this service, normally running as LocalSystem,
         // does not have (confirmed live: "Win32Exception: cannot find the file specified" starting

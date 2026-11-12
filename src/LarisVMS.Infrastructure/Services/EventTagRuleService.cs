@@ -25,7 +25,7 @@ public class EventTagRuleService(ApplicationDbContext db) : IEventTagRuleService
             Name = name,
             StartTopic = startTopic,
             StopTopic = string.IsNullOrWhiteSpace(stopTopic) ? null : stopTopic,
-            ColorHex = colorHex,
+            ColorHex = SafeColor(colorHex),
             DrivesRecording = drivesRecording,
             IsEnabled = true
         };
@@ -33,6 +33,11 @@ public class EventTagRuleService(ApplicationDbContext db) : IEventTagRuleService
         await db.SaveChangesAsync(ct);
         return rule;
     }
+
+    /// <summary>A tag's color goes into a style attribute on the page: anything but #rrggbb becomes
+    /// the default grey.</summary>
+    internal static string SafeColor(string? colorHex) =>
+        colorHex is { Length: 7 } c && c[0] == '#' && c.Skip(1).All(char.IsAsciiHexDigit) ? c : "#6c757d";
 
     public async Task UpdateAsync(Guid id, string name, string startTopic, string? stopTopic,
         string colorHex, bool drivesRecording, bool isEnabled, CancellationToken ct = default)
@@ -42,7 +47,7 @@ public class EventTagRuleService(ApplicationDbContext db) : IEventTagRuleService
         rule.Name = name;
         rule.StartTopic = startTopic;
         rule.StopTopic = string.IsNullOrWhiteSpace(stopTopic) ? null : stopTopic;
-        rule.ColorHex = colorHex;
+        rule.ColorHex = SafeColor(colorHex);
         rule.DrivesRecording = drivesRecording;
         rule.IsEnabled = isEnabled;
         await db.SaveChangesAsync(ct);

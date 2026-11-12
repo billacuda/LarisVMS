@@ -125,7 +125,7 @@ window.larisvmsDashboardReport = (function () {
         lastPage = data;
         if (data.columns && headEl) {
             renderColumns(data);
-            countEl.textContent = data.total >= 0 ? data.total.toLocaleString(larisvmsI18n.locale) + ' total' : '';
+            countEl.textContent = data.total >= 0 ? larisvmsI18n.t('js.dashboardReport.total', { count: data.total }) : '';
             pageEl.textContent = larisvmsI18n.t('js.dashboardReport.pageOf', { page: data.page, pages: data.totalPages });
             prevEl.disabled = data.page <= 1;
             nextEl.disabled = data.page >= data.totalPages;
@@ -152,7 +152,7 @@ window.larisvmsDashboardReport = (function () {
                     '</tr>';
             }).join('');
 
-        countEl.textContent = data.total >= 0 ? data.total.toLocaleString(larisvmsI18n.locale) + ' total' : '';
+        countEl.textContent = data.total >= 0 ? larisvmsI18n.t('js.dashboardReport.total', { count: data.total }) : '';
         pageEl.textContent = larisvmsI18n.t('js.dashboardReport.pageOf', { page: data.page, pages: data.totalPages });
         prevEl.disabled = data.page <= 1;
         nextEl.disabled = data.page >= data.totalPages;

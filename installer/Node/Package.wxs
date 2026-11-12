@@ -26,6 +26,8 @@
          blocks separated by commas. Blank allows any address. -->
     <Property Id="LIVEALLOWFROM" Secure="yes" />
     <Property Id="INSECURETLS" Secure="yes" />
+    <!-- Optional: the server certificate's SHA-256 thumbprint (Settings > Nodes), pinned before registering. -->
+    <Property Id="SERVERCERTTHUMBPRINT" Secure="yes" />
     <Property Id="CLIENTPORT" Secure="yes" />
     <Property Id="CLIENTPFXPATH" Secure="yes" />
     <Property Id="CLIENTPFXPASSWORD" Secure="yes" Hidden="yes" />

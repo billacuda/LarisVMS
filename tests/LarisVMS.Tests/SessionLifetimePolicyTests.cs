@@ -30,9 +30,18 @@ public class SessionLifetimePolicyTests
     }
 
     [Fact]
-    public void NoRolesAtAllNeverExpires()
+    public void NoRolesAtAllGetsTheCeiling()
     {
-        Assert.Null(SessionLifetimePolicy.EffectiveWindow([]));
+        Assert.Equal(TimeSpan.FromHours(SessionLifetimePolicy.MaxHours), SessionLifetimePolicy.EffectiveWindow([]));
+    }
+
+    [Fact]
+    public void AValueAboveTheCeilingIsCapped()
+    {
+        Assert.Equal(TimeSpan.FromHours(SessionLifetimePolicy.MaxHours), SessionLifetimePolicy.EffectiveWindow([100_000]));
+        Assert.Equal(0, SessionLifetimePolicy.Clamp(-5));
+        Assert.Equal(0, SessionLifetimePolicy.Clamp(0));
+        Assert.Equal(12, SessionLifetimePolicy.Clamp(12));
     }
 
     [Fact]
@@ -52,7 +61,7 @@ public class SessionLifetimePolicyTests
     }
 
     [Fact]
-    public void OnlyEveryRoleBeingZeroMeansTrulyUnlimited()
+    public void EveryRoleBeingZeroNeverExpires()
     {
         Assert.Null(SessionLifetimePolicy.EffectiveWindow([0, 0, 0]));
     }

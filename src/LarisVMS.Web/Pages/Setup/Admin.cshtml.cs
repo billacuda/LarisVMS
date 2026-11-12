@@ -33,7 +33,7 @@ public class AdminModel(ISetupService setupService, IRoleSeedService roleSeed, I
         }
         catch (Exception ex)
         {
-            ErrorMessage = ex.Message;
+            ErrorMessage = LarisVMS.Web.Helpers.UserFacingError.Message(ex);
             return Page();
         }
     }

@@ -175,7 +175,7 @@ window.larisvmsZonesEditor = (function () {
                 ctx.fillStyle = '#2b2b2b';
                 ctx.fillRect(0, 0, w, h);
                 ctx.fillStyle = '#aaa';
-                ctx.font = '13px sans-serif';
+                ctx.font = larisvmsI18n.font('13px');
                 ctx.textAlign = 'center';
                 ctx.fillText(snapshotFailed
                     ? larisvmsI18n.t('js.zonesEditor.couldNotLoadASnapshot')
@@ -214,7 +214,7 @@ window.larisvmsZonesEditor = (function () {
                 if (points.length) {
                     var labelPos = fracToPixel(points[0]);
                     ctx.fillStyle = '#fff';
-                    ctx.font = 'bold 11px sans-serif';
+                    ctx.font = larisvmsI18n.font('bold 11px');
                     ctx.fillText(z.name, labelPos.x + 4, labelPos.y - 4);
                 }
             });

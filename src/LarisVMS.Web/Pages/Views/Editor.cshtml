@@ -26,6 +26,10 @@
     <div class="alert alert-danger" role="alert">@Model.ErrorMessage</div>
 }
 
+@if (Model.ReadOnly)
+{
+    <div class="alert alert-info" role="status">@L["views.sharedReadOnly"]</div>
+}
 <form method="post" id="viewEditorForm">
     <input type="hidden" name="id" value="@Model.Id" />
     <input type="hidden" name="layoutJson" id="layoutJsonInput" value="@Model.LayoutJson" />
@@ -52,7 +56,7 @@
             </div>
         </div>
         <div class="col-sm-1 text-end">
-            <button type="submit" class="btn btn-primary"><span aria-hidden="true">💾</span> @L["common.save"]</button>
+            <button type="submit" class="btn btn-primary" disabled="@Model.ReadOnly"><span aria-hidden="true">💾</span> @L["common.save"]</button>
         </div>
     </div>
 </form>

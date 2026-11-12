@@ -6,11 +6,11 @@ namespace LarisVMS.Core.Localization;
 
 /// <summary>
 /// One language file: a JSON object of key → text, with an optional "_meta" object (name, author,
-/// baseVersion). Nested objects are flattened with dots, so <c>{"nav": {"live": "Live"}}</c> and
+/// baseVersion, machineTranslated). Nested objects are flattened with dots, so <c>{"nav": {"live": "Live"}}</c> and
 /// <c>{"nav.live": "Live"}</c> mean the same thing.
 /// </summary>
 public sealed partial record LocaleFile(string Culture, IReadOnlyDictionary<string, string> Entries,
-    string? Name, string? Author, string? BaseVersion)
+    string? Name, string? Author, string? BaseVersion, bool MachineTranslated = false)
 {
     /// <summary>Upper bound for an uploaded or dropped-in file: English is a few hundred KB.</summary>
     public const int MaxBytes = 2 * 1024 * 1024;
@@ -45,6 +45,7 @@ public sealed partial record LocaleFile(string Culture, IReadOnlyDictionary<stri
 
             var entries = new Dictionary<string, string>(StringComparer.Ordinal);
             string? name = null, author = null, baseVersion = null;
+            var machineTranslated = false;
             foreach (var prop in doc.RootElement.EnumerateObject())
             {
                 if (prop.Name == "_meta")
@@ -53,13 +54,23 @@ public sealed partial record LocaleFile(string Culture, IReadOnlyDictionary<stri
                     name = ReadString(prop.Value, "name");
                     author = ReadString(prop.Value, "author");
                     baseVersion = ReadString(prop.Value, "baseVersion");
+                    machineTranslated = prop.Value.TryGetProperty("machineTranslated", out var mt) && mt.ValueKind == JsonValueKind.True;
                     continue;
                 }
                 Flatten(prop.Name, prop.Value, entries);
             }
-            return new LocaleFile(CanonicalName(culture), entries, name, author, baseVersion);
+            // Text for the page scripts (js.*) is plain text, and some scripts build markup with it.
+            // One containing markup or a double quote is dropped (that text shows in English), so a
+            // language file can't add script or attributes to a page.
+            foreach (var key in entries.Keys.Where(k => k.StartsWith("js.", StringComparison.Ordinal) && !IsPlainScriptText(entries[k])).ToList())
+                entries.Remove(key);
+            return new LocaleFile(CanonicalName(culture), entries, name, author, baseVersion, machineTranslated);
         }
     }
+
+    /// <summary>Page-script text (js.* keys) may not contain &lt;, &gt;, or a double quote: use “curly”
+    /// quotes instead.</summary>
+    public static bool IsPlainScriptText(string text) => text.IndexOfAny(['<', '>', '"']) < 0;
 
     /// <summary>The {placeholders} in a text, by name.</summary>
     public static IReadOnlySet<string> Placeholders(string text)

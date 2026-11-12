@@ -51,7 +51,9 @@ public record ActivityHourCount(DateTime HourUtc, string Group, string? Label, i
 /// <paramref name="CanChangeBackground"/>: this viewer may upload or remove one.</summary>
 public record SceneHeatDto(Guid CameraId, string CameraName, string Source, string Range, int Cols, int Rows,
     double[] Cells, long MaxCount, bool MotionAvailable, bool HasCustomBackground = false, bool CanChangeBackground = false,
-    long BackgroundVersion = 0);
+    long BackgroundVersion = 0,
+    /// <summary>When the heatmap was last reset (only activity after it is counted), or null.</summary>
+    DateTime? ResetUtc = null);
 
 /// <summary>An uploaded scene heatmap background: the image as Base64 and its pixel size.</summary>
 public record SceneBackgroundUpload(string ImageBase64, int Width, int Height);

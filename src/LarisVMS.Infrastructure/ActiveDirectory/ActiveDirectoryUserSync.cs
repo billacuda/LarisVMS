@@ -198,7 +198,11 @@ public sealed class ActiveDirectoryUserSync(
         var toAdd = target.Except(current).ToList();
         var toRemove = current.Except(target).ToList();
         if (toAdd.Count > 0) await userManager.AddToRolesAsync(user, toAdd);
-        if (toRemove.Count > 0) await userManager.RemoveFromRolesAsync(user, toRemove);
+        if (toRemove.Count > 0)
+        {
+            await userManager.RemoveFromRolesAsync(user, toRemove);
+            await disabler.EndSessionsAsync(user);
+        }
 
         var expiries = await db.RoleAssignmentExpiries.Where(e => e.UserId == user.Id).ToListAsync(ct);
         if (expiries.Count > 0)

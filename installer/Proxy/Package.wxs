@@ -17,6 +17,8 @@
     <Property Id="SERVERURL" Secure="yes" />
     <Property Id="REGISTRATIONKEY" Secure="yes" Hidden="yes" />
     <Property Id="INSECURETLS" Secure="yes" />
+    <!-- Optional: the server certificate's SHA-256 thumbprint (Settings > Nodes), pinned before registering. -->
+    <Property Id="SERVERCERTTHUMBPRINT" Secure="yes" />
     <Property Id="CLIENTPORT" Secure="yes" />
     <Property Id="CLIENTPFXPATH" Secure="yes" />
     <Property Id="CLIENTPFXPASSWORD" Secure="yes" Hidden="yes" />

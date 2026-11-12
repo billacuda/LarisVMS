@@ -7,6 +7,221 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.221.0] - 2026-11-11
+
+LarisVMS in nine more languages, Help included, and a big round of security work: two-factor sign-in,
+sessions you can see and end, signed updates, and a tamper-evident audit log.
+
+### ➕ Added
+
+- **Help translations in the source.** Translated Help pages can be contributed in
+  `src/LarisVMS.Web/Help/<language>/`, next to the English pages (now in `Help/en/`), and ship with
+  LarisVMS. A regional language uses its own pages, then the general language's, then English.
+  The website's docs offer each translation too, with a language menu. ([#11](https://github.com/billacuda/LarisVMS/issues/11))
+- **Help coverage per language.** Settings → Language shows how many Help pages each language has
+  translated, and `tools\locale-check.ps1 -Help <folder>` checks translated Help pages: pages not
+  translated yet, file names LarisVMS doesn't use, HTML, and headings that don't line up with the
+  English page. ([#11](https://github.com/billacuda/LarisVMS/issues/11))
+- **More languages.** The interface and every Help page are available in German, French, Italian,
+  Portuguese (Brazil), Japanese, Korean, and Chinese (Simplified and Traditional). They are
+  machine-translated, so native-speaker review is welcome; Settings → Language marks them.
+- **Spanish (Argentina).** The interface and every Help page are available in Spanish (Argentina),
+  translated by Luis A. Uriarte ([@luisuriarte](https://github.com/luisuriarte)). ([#11](https://github.com/billacuda/LarisVMS/issues/11))
+- **Reset a scene heatmap.** After a camera is moved or re-aimed, **Reset heatmap** on the Activity
+  page's Scene view clears its heat and counts only what happens from then on.
+- **Encryption on the Nodes page.** A new **Encrypted** column shows 🔒 for nodes with encrypted
+  connections from the server, and ⏳ for ones that still need a restart.
+
+### ⚙️ Changed
+
+- **Help in alphabetical order.** Help pages, in the app and on the website, are listed alphabetically
+  in your language, after Overview and Installation.
+- **Minimum .NET SDK.** Building from source needs the SDK the releases are built with (10.0.402) or
+  any newer .NET 10 SDK, set in `global.json`; a newer major version isn't used on its own.
+
+### 🛠️ Fixed
+
+- **Help links in translations.** Links to a section of a Help page ("Learn more" across the app, and
+  links between pages) now land on that section when the page is translated, and on the website.
+- **Troubleshooting Help names the right tab.** Log level and retention are under Settings → Logs,
+  not "Settings → Logging".
+- **Activity page translated.** The range buttons, object types, hours, legend, and label counts on
+  the Activity page were always in English. They now follow your language.
+- **Object names and colors in your language.** Speed badges in Playback ("car (gray) 25 mph") and
+  the labels on live-view boxes show the object, its category, and its color in your language.
+- **Decimals follow your language.** Sizes and rates on the dashboard, node cards, and exports use
+  your language's decimal separator, such as 1,2 GB in German.
+- **Old exports disappear with their files.** A node deletes a finished export 7 days after writing it,
+  but the Exports page kept offering its Download, which then failed with "not found". Exports are now
+  removed from the list once their files are gone. The Download button is also translated.
+- **Timeline gestures stay on the timeline.** On a phone or tablet, pinching or dragging a playback
+  timeline no longer also zooms or pans the video behind it, or the page.
+- **Space before "Learn more".** A setting's hint ran straight into its "Learn more" link.
+- **Bundled build note translated.** "Bundled with the web install" on the Nodes page builds list
+  now shows in your language.
+
+### 🔒 Security
+
+- **Help pages show HTML as text.** HTML in a Help page, translated or not, is no longer rendered.
+- **Snapshots keep privacy masks.** A live snapshot, including the API's, now blacks out the camera's
+  privacy areas like its recordings. Only the zone editor gets the whole picture, to draw them, and
+  every snapshot is in the audit log. Upgrade nodes too: an older node still sends it unmasked.
+- **Live video ends when access does.** Removing someone's role, or their access to a camera, ends
+  their relayed live video within a minute. Video through a media proxy, or straight from a node,
+  reconnects at least every 20 minutes, which needs access that's still valid.
+- **Role changes sign people out.** Someone who loses a role is signed out on their next request,
+  instead of keeping it for up to half an hour.
+- **Session lifetime limits.** A role's session lifetime is at most 30 days, or 0 to never expire,
+  and only a Super Admin can change the Super Admin role's.
+- **Strict script policy by default.** The strict script policy is on unless it's turned off, and
+  upgrading turns it on, including on a server that had it off. If something stops working, turn it
+  off under Settings → Security and check the reports listed there.
+- **Pin the server certificate at install.** Settings → Nodes shows the server certificate's
+  thumbprint, and the node and proxy installers take it as `-ServerCertThumbprint` (MSI:
+  `SERVERCERTTHUMBPRINT`), so a new node checks the server from its first connection instead of
+  trusting the first certificate it sees. The Setup and Media proxies install commands include it.
+- **Change your own password.** Select your name at the top of the page to change your password. It
+  needs the current one, wrong guesses count toward lockout, and your other sessions are signed out.
+- **Temporary passwords.** When you create an account or reset a password under Settings → Users,
+  **Must change it at next sign-in** makes the person choose their own password before doing
+  anything else. Settings → Security → **Temporary admin-set passwords** checks it by default.
+- **Easy passwords refused.** Common passwords, runs like `123456789012`, and ones containing the
+  person's name or email address are refused. Add more in
+  `%ProgramData%\LarisVMS\password-blocklist.txt`, one per line.
+- **Two-factor sign-in.** Local and Active Directory accounts can turn on codes from an authenticator
+  app (select your name, then Two-factor sign-in), with ten one-time recovery codes. Wrong codes
+  count toward lockout, and changing it later takes a current code. Admins can turn it off for
+  someone who lost their phone under Settings → Users.
+- **Require two-factor sign-in.** Settings → Security can make everyone who signs in with a password
+  set it up before doing anything else. Microsoft sign-ins are left to Entra.
+- **Sessions.** Select your name, then Sessions, to see every browser you're signed in on and sign
+  any of them out. Under Settings → Users, **Sign out** signs someone out everywhere. Changing your
+  password, turning on two-factor sign-in, and an admin's password or two-factor reset sign out
+  other sessions at once instead of up to 30 minutes later.
+- **Confirm your password for admin pages.** With Settings → Security → **Confirm password for
+  admin pages** on (off by default), admin pages, and changes through the admin and encryption
+  APIs, ask for the password again (and a code, with two-factor sign-in on) unless it was given in
+  the last 15 minutes; using them keeps that going. Microsoft sign-ins sign in again.
+- **Admins can't hand out more than they have.** Assigning a role (to a person, an API key, or an
+  AD group) needs every permission the role grants, not only a wide enough tier. Resetting the
+  password of, disabling, or signing out an account that has permissions you don't is refused.
+- **Wrong passwords slow the guesser, not the person.** Five wrong passwords for one account from
+  one address turn that address away for 15 minutes; the account itself locks only after 20 from
+  anywhere, and Super Admins are never locked out at sign-in. A locked account gets the same
+  message as a wrong password, so the sign-in page no longer confirms which accounts exist.
+  Two-factor codes are limited the same way.
+- **Setup token.** From outside the local network, the setup wizard first asks for the token the
+  server writes to `%ProgramData%\LarisVMS\setup-token.txt` (administrators only), so nobody on the
+  internet can claim a new install. A browser on the server itself or on the local network doesn't
+  need it, unless the request came through a proxy; `"Setup": { "AlwaysRequireToken": true }` in
+  `appsettings.Production.json` asks every other computer for it.
+- **Node and Vision Service check each other.** Their control channel on the node (start and stop
+  detection, log level, detection reports) now needs a secret the node makes at start and gives
+  only to the Vision Service it launches, not just a connection from the same machine.
+- **Idle timeout.** Each role can sign its users out after a number of minutes without opening a
+  page (Settings → Roles; off by default).
+- **Code scanning fixes.** Live view's object paths can't be fed a track id that changes built-in
+  object behavior; saved list filters and the view picker only ever navigate within this site; a
+  form field's name can't break the lookup of its error message; an inference service address
+  can't add lines to the log; and Active Directory group ids are checked without a regular
+  expression that a long value could slow down.
+- **Tamper-evident audit log.** Each audit log entry is sealed together with the one before it, using
+  a key the database alone doesn't hold. The log is checked every 6 hours and on request (**Check
+  now** on the audit log page). An entry changed, removed, or added directly in the database is
+  named on the page, and Super Admins are notified. A record kept outside the database
+  (`%ProgramData%\LarisVMS\audit-chain.dat`) catches the log being resealed with another key or
+  wiped and restarted, and each retention removal is itself an entry. Entries from before this
+  update aren't covered.
+- **Forward the audit log to syslog.** Settings → Logs can send every new audit log entry to a
+  syslog server over UDP, TCP, or TLS, so a copy is kept off the server. Entries wait and are sent
+  once an unreachable syslog server is back. Only a Super Admin can change or turn off forwarding,
+  and the change itself still goes to the old destination.
+- **One-time registration codes.** Nodes → Updates and registration can create a code that
+  registers a single node or proxy, then stops working, and expires if unused (after 1 hour, 24
+  hours, or 7 days). Installers take it in place of the registration key. Once you use codes, the
+  shared key can be turned off.
+- **Publisher-signed updates.** Builds can be signed with an offline publisher key
+  (`tools\publisher-key.ps1`, then `-PublisherKeyPath`). Nodes and proxies built that way install an
+  update only if the publisher signed it as well as the server, so a server that's been broken into
+  can't push its own code to them; that includes the CUDA library nodes download. Optional: other
+  builds, from source included, are unsigned as before.
+- **Pin camera certificates.** Settings → Security can remember each HTTPS camera's certificate the
+  first time the server connects, and refuse a different one from then on, on the server and on the
+  nodes. Off by default; **Forget** lets a camera present a new certificate.
+- **Encrypted connections to nodes.** **Encrypt connections from the server** on a node's page sends
+  the server's and media proxies' video and control traffic to that node over HTTPS, accepting only
+  the node's own certificate (self-signed is fine), with the media token out of the address. The
+  node's plain port then answers only `/health`. Off by default; restart the node once after
+  turning it on.
+- **Extra protection for businesses.** Protections that add a step are off by default, so a home
+  install just works. Settings → Security groups them under **Extra protection**, and the Security
+  Help page lists every one, with where to turn it on.
+- **Keys stored encrypted stay that way.** The audit log's seal key, the tamper-evidence signing key,
+  and the footage master key are refused if found unencrypted in the database, so one planted there
+  directly isn't used.
+- **Data folder for LarisVMS only.** Each service, at startup, limits `%ProgramData%\LarisVMS` to
+  SYSTEM, Administrators, and the accounts the LarisVMS services run as, and makes Administrators its
+  owner. Any other access is removed, not just broad groups such as Users, so a local user who created
+  the folder before installing, or added themselves to it, can't read the server's keys. The web
+  server locks down its key folder before first writing to it.
+- **Two-way audio size limit.** One message from the browser is limited to 64 KB, so someone with
+  Talk access can't make a node run out of memory.
+- **Failover votes from assigned voters only.** A node's health vote counts only from its backup node
+  (approved and not disabled) or an enabled proxy assigned to it, and a vote dated in the future is
+  ignored, so a newly registered node can't fail other nodes over or keep a dead one up.
+- **Active Directory connection for Super Admins.** Changing the domain, how LarisVMS connects to it,
+  the lookup account, or local sign-in needs a Super Admin.
+- **Password guessing from many networks.** Super Admins are told when one account fails 10 times
+  from 3 or more networks, or the server sees 50 failures from 10 or more networks, within 15
+  minutes: guessing spread out so no single address reaches the per-address limits.
+- **Two-factor codes work once.** A code from an authenticator app can't be used a second time, so
+  one someone sees being typed is no use to them.
+- **Shared views stay their owner's.** Anyone who sees views can use a shared one, but only its owner
+  or an administrator can change, un-share, or delete it.
+- **Export size limit.** One export covers up to 64 cameras, 31 days, and 1,000 camera-hours, so a
+  single request can't tie up the recorders.
+- **Refused camera certificates are reported.** With camera certificate pinning on, a refused
+  certificate, on the server or a node, is recorded in the audit log and Super Admins are told.
+- **Sign-in guessing limits hold.** Wrong passwords are counted per account however the domain is
+  written (`CORP\bob`, `bob`), and per IPv6 network (/64) rather than per address.
+- **Language files and Help pages can't add script.** Page-script text with `<`, `>`, or `"` is
+  ignored (it shows in English), Help pages keep only web, mail, and in-app links, with no
+  `{attribute}` blocks, and links in interface text can't lead to another site.
+- **Updates come from your server.** Nodes and proxies download an update only from the server
+  they're registered with, and an offer whose version can't be read is refused.
+- **Camera stream addresses.** The RTSP address a camera reports is used on the camera's own host
+  (keeping its port and path), so a spoofed camera can't send the recorder, with its password,
+  somewhere else.
+- **Outbound checks behind a proxy.** With a system web proxy, alert, push, and camera requests are
+  still checked against where they're really going, and IPv6 addresses that carry an IPv4 one are
+  judged by that address.
+- **Smaller hardening.**
+  - Admins change their own password on the Change password page, not under Settings → Users.
+  - Editing or deleting a map needs access to every camera on it.
+  - The street map tile server needs the Settings edit permission too.
+  - API responses and downloads aren't kept in the browser's cache.
+  - Exporting the audit log is recorded.
+  - Installers lock the registration key file before writing the key.
+  - Unexpected errors show a general message, with details in the server log.
+  - Event tag colors must be `#rrggbb`.
+  - Notification links stay on this site.
+  - Export segment paths with control characters are refused.
+  - An `ffmpeg.exe` on PATH in a folder ordinary users can write to isn't used.
+  - The MariaDB dump tool for backups must be on this server, in a folder only administrators can
+    change; a bare `mariadb-dump.exe` from any PATH folder is no longer run.
+  - Someone who must change their password or set up two-factor sign-in first can only load the
+    site's own scripts and styles until then, not other files.
+  - `tools\export-models\fetch_yolox.py` and `fetch_dfine.py` check each model's SHA-256 before saving it.
+  - Signing in takes as long for a name with no account as for a wrong password, so timing doesn't
+    reveal which accounts exist.
+  - A sign-in link that points off the site (or is malformed) goes to the start page instead of an
+    error.
+- **Locked package restore.** Release builds restore exactly the packages, and package checksums,
+  recorded in the lock files, and stop if anything differs. The lock files no longer change
+  depending on how a project was last built.
+- **Firebase 13.1.0.** The Firebase files behind browser push notifications are updated from 10.12.2
+  to 13.1.0.
+
 ## [0.220.0] - 2026-11-06
 
 Record on demand from a live tile or the API, control LarisVMS from your own tools, and use it in your
@@ -21,9 +236,9 @@ language, from the keyboard, or with a screen reader.
   that camera or all of them. It shows as a band on the timeline, and the color can be changed under
   Settings → Events. A new permission and Record camera access control who can use it, and roles with
   PTZ access get both automatically. Upgrade nodes along with the server: an older node doesn't know
-  about manual recordings and can discard that footage.
+  about manual recordings and can discard that footage. ([#13](https://github.com/billacuda/LarisVMS/issues/13))
 - **Manual only recording mode.** A camera can be live view only, keeping footage only during a manual
-  recording.
+  recording. ([#13](https://github.com/billacuda/LarisVMS/issues/13))
 - **Recording indicators on live tiles.** 🔴 shows when a camera's footage is being kept, for any
   reason, and Ⓜ️ shows when a manual recording is on.
 - **More of the API.** API keys can now start and stop recording, move PTZ cameras, read timelines and
@@ -1646,5 +1861,6 @@ Only the 10 most recent versions are kept in this file. Older entries are archiv
 - [v0.21.1 – v0.40.0](changelog-archive/v0.21.1-to-v0.40.0.md) (2026-08-09 – 2026-08-11)
 - [v0.1.0 – v0.21.0](changelog-archive/v0.1.0-to-v0.21.0.md) (2026-08-08 – 2026-08-09)
 
-[Unreleased]: https://github.com/billacuda/LarisVMS/compare/v0.220.0-beta...HEAD
+[Unreleased]: https://github.com/billacuda/LarisVMS/compare/v0.221.0-beta...HEAD
+[0.221.0]: https://github.com/billacuda/LarisVMS/compare/v0.220.0-beta...v0.221.0-beta
 [0.220.0]: https://github.com/billacuda/LarisVMS/compare/v0.219.0-beta...v0.220.0-beta

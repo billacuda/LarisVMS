@@ -11,7 +11,7 @@ Each part has its own installer: `LarisVMS-Web`, `LarisVMS-Node`, and `LarisVMS-
    - `HTTPSPORT`: the HTTPS port (default 8444). The installer opens it in the firewall, for TCP and for UDP ([HTTP/3](/Help/security#http3)).
    - `CERTPATH`, `CERTPASSWORD`: the server certificate (`.pfx`). Leave blank to use a self-signed certificate until you have one. The installer checks that the file opens with the password before continuing; a file share must also be readable by the service account.
    - `SERVICEACCOUNT`, `SERVICEPASSWORD`: run the service as a specific account, for example one with SQL Integrated Security rights. Blank runs it as LocalSystem. Not needed for MariaDB.
-3. Browse to `https://<host>:8444/`. The setup wizard walks through the database, the first admin account, storage, and node registration.
+3. Browse to `https://<host>:8444/`. The setup wizard walks through the database, the first admin account, storage, and node registration. A browser on the server itself or on the local network goes straight in. From anywhere else it first asks for the setup token in `%ProgramData%\LarisVMS\setup-token.txt` on the server (readable by administrators only), so nobody on the internet can set it up first. To ask for the token from every other computer, local network included, set `"Setup": { "AlwaysRequireToken": true }` in `appsettings.Production.json` before you open the wizard. The file is deleted once the admin account exists.
 
 A SQL login's password, or a MariaDB password, is stored encrypted on the server (DPAPI, this machine only), so `setup-generated.json` can't be copied to another machine with the password still working. Run the wizard again there instead.
 

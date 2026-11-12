@@ -66,21 +66,13 @@ public static class FfmpegPathResolver
         }
     }
 
-    private static string? FindOnPath()
-    {
-        var exe = OperatingSystem.IsWindows() ? "ffmpeg.exe" : "ffmpeg";
-        var path = Environment.GetEnvironmentVariable("PATH") ?? "";
-        foreach (var dir in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            try
-            {
-                var candidate = Path.Combine(dir, exe);
-                if (File.Exists(candidate)) return candidate;
-            }
-            catch { /* malformed PATH entry — skip it */ }
-        }
-        return null;
-    }
+    // The services run ffmpeg as SYSTEM: one in a folder ordinary users can write to (a per-user tool
+    // folder someone added to the machine PATH) could be swapped for anything, so it's passed over.
+    private static string? FindOnPath() =>
+        LarisVMS.Core.Security.ExecutableLocation.FindOnPath(OperatingSystem.IsWindows() ? "ffmpeg.exe" : "ffmpeg");
+
+    /// <summary>See <see cref="LarisVMS.Core.Security.ExecutableLocation.WritableByNonAdmins"/>.</summary>
+    internal static bool WritableByNonAdmins(string dir) => LarisVMS.Core.Security.ExecutableLocation.WritableByNonAdmins(dir);
 
     private static IEnumerable<string> WingetPackageRoots()
     {

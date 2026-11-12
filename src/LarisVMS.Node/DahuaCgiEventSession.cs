@@ -86,7 +86,9 @@ public sealed class DahuaCgiEventSession(
         {
             Credentials = new NetworkCredential(username ?? string.Empty, password ?? string.Empty),
             PreAuthenticate = true,
-            ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+            // Unless camera certificate pinning is on (CameraCertificatePins).
+            ServerCertificateCustomValidationCallback = (request, certificate, _, _) =>
+                LarisVMS.Core.Security.CameraCertificatePins.Shared.Check(request.RequestUri?.DnsSafeHost, certificate)
         };
         // No overall client Timeout: the response body never completes by design, and HttpClient's
         // Timeout applies to the whole operation including body reads, so any finite value would

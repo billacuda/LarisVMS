@@ -58,7 +58,7 @@
                                     @L.Markup("admin.nodeBuildsPanel.versionWaiting", new { version = b.Version })
                                     <span class="text-muted">· @L.Markup(b.VisionFilePath is null ? "admin.nodeBuildsPanel.registeredAt" : "admin.nodeBuildsPanel.registeredWithAi",
                                         new { time = b.UploadedAt.ToTimeTag(), size = ByteFormat.Format(b.SizeBytes) })</span>
-                                    @if (!string.IsNullOrWhiteSpace(b.Notes)) { <div class="text-muted">@b.Notes</div> }
+                                    @if (!string.IsNullOrWhiteSpace(b.Notes)) { <div class="text-muted">@NoteText(b.Notes)</div> }
                                 </div>
                                 <EditForm Model="this" FormName="@($"approve-build-{b.Id}")" OnValidSubmit="HandleApproveAsync" class="d-inline">
                                     <input type="hidden" name="BuildId" value="@b.Id" />
@@ -135,7 +135,7 @@
                                         <td data-sort-value="@b.SizeBytes">@ByteFormat.Format(b.SizeBytes)</td>
                                         <td class="font-monospace small" title="@b.Sha256">@b.Sha256[..12]&hellip;</td>
                                         <td>@(b.VisionFilePath is not null ? "✅" : "—")</td>
-                                        <td class="small">@b.Notes</td>
+                                        <td class="small">@NoteText(b.Notes)</td>
                                     </tr>
                                 }
                             </tbody>
@@ -148,6 +148,9 @@
 </div>
 
 @code {
+    // The registrar stores this note in English; show it in the viewer's language.
+    private string? NoteText(string? note) => note == "Bundled with the web install" ? L["admin.nodeBuildsPanel.bundledNote"] : note;
+
     [CascadingParameter] private HttpContext? HttpContext { get; set; }
 
     // Loaded by Nodes.razor, not here: sibling components initialize concurrently and would share the

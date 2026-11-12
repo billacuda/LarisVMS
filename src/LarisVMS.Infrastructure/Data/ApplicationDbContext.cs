@@ -39,6 +39,9 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<RoleAssignmentExpiry> RoleAssignmentExpiries => Set<RoleAssignmentExpiry>();
     public DbSet<AppVersion> AppVersions => Set<AppVersion>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<AuditChainState> AuditChainStates => Set<AuditChainState>();
+    public DbSet<RegistrationCode> RegistrationCodes => Set<RegistrationCode>();
+    public DbSet<CameraCertificatePin> CameraCertificatePins => Set<CameraCertificatePin>();
     public DbSet<BackupHistoryEntry> BackupHistoryEntries => Set<BackupHistoryEntry>();
     public DbSet<EmailSettings> EmailSettings => Set<EmailSettings>();
     public DbSet<EntraSsoSettings> EntraSsoSettings => Set<EntraSsoSettings>();
@@ -69,6 +72,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<TalkRecording> TalkRecordings => Set<TalkRecording>();
     public DbSet<ManualRecording> ManualRecordings => Set<ManualRecording>();
     public DbSet<ApiKeyPermission> ApiKeyPermissions => Set<ApiKeyPermission>();
+    public DbSet<UserSession> UserSessions => Set<UserSession>();
     public DbSet<ActivityHourlyCount> ActivityHourlyCounts => Set<ActivityHourlyCount>();
     public DbSet<SiteMap> SiteMaps => Set<SiteMap>();
     public DbSet<CameraPlacement> CameraPlacements => Set<CameraPlacement>();
@@ -190,7 +194,39 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.Action).HasMaxLength(100).IsRequired();
             e.Property(x => x.UserName).HasMaxLength(256);
             e.Property(x => x.IpAddress).HasMaxLength(45);
+            e.Property(x => x.PreviousHash).HasMaxLength(64).IsUnicode(false);
+            e.Property(x => x.Hash).HasMaxLength(64).IsUnicode(false);
             e.HasIndex(x => x.OccurredAt);
+        });
+
+        builder.Entity<NodeBuildVersion>().Property(x => x.PublisherSignature).HasMaxLength(200).IsUnicode(false);
+
+        // ── CameraCertificatePin ─────────────────────────────────────────────
+        builder.Entity<CameraCertificatePin>(e =>
+        {
+            e.HasKey(x => x.Host);
+            e.Property(x => x.Host).HasMaxLength(255).IsUnicode(false);
+            e.Property(x => x.Thumbprint).HasMaxLength(64).IsUnicode(false).IsRequired();
+        });
+
+        // ── RegistrationCode ─────────────────────────────────────────────────
+        builder.Entity<RegistrationCode>(e =>
+        {
+            e.Property(x => x.CodeHash).HasMaxLength(64).IsUnicode(false).IsRequired();
+            e.HasIndex(x => x.CodeHash).IsUnique();
+            e.Property(x => x.CreatedBy).HasMaxLength(256);
+            e.Property(x => x.UsedBy).HasMaxLength(256);
+            e.Property(x => x.UsedUtc).IsConcurrencyToken();
+        });
+
+        // ── AuditChainState (single row) ─────────────────────────────────────
+        builder.Entity<AuditChainState>(e =>
+        {
+            e.Property(x => x.Id).ValueGeneratedNever();
+            e.Property(x => x.Key).HasConversion(new StrictEncryptedStringConverter()).HasMaxLength(1000).IsRequired();
+            e.Property(x => x.LastHash).HasMaxLength(64).IsUnicode(false).IsRequired();
+            e.Property(x => x.PrunedThroughHash).HasMaxLength(64).IsUnicode(false);
+            e.Property(x => x.Seal).HasMaxLength(64).IsUnicode(false).IsRequired();
         });
 
         // ── BackupHistoryEntry ───────────────────────────────────────────────
@@ -414,6 +450,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.Property(x => x.ClientCertPfxPath).HasMaxLength(500);
             e.Property(x => x.ClientCertPfxPassword).HasConversion(new EncryptedNullableStringConverter()).HasMaxLength(500);
             e.Property(x => x.ClientEndpointLastError).HasMaxLength(500);
+            e.Property(x => x.ClientEndpointCertSha256).HasMaxLength(64);
 
             // Failover plan phase 2: primary/backup media proxy. NoAction — two nullable FKs from one
             // table to another trip SQL Server's "multiple cascade paths" check; ProxyService.DeleteAsync
@@ -583,6 +620,16 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.HasOne<ApiKey>().WithMany().HasForeignKey(x => x.ApiKeyId).OnDelete(DeleteBehavior.Cascade);
         });
 
+        // ── UserSession ──────────────────────────────────────────────────────
+        builder.Entity<UserSession>(e =>
+        {
+            e.Property(x => x.UserId).HasMaxLength(450).IsRequired();
+            e.Property(x => x.IpAddress).HasMaxLength(64);
+            e.Property(x => x.UserAgent).HasMaxLength(256);
+            e.HasIndex(x => x.UserId);
+            e.HasOne<ApplicationUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
         // ── ManualRecording ──────────────────────────────────────────────────
         // Read as "who's recording now" (EndUtc null) and "this camera, this time range" (timeline).
         builder.Entity<ManualRecording>(e =>
@@ -670,7 +717,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
         {
             e.Property(x => x.Algorithm).HasMaxLength(50).IsRequired();
             e.Property(x => x.PublicKeyPem).HasMaxLength(1000).IsRequired();
-            e.Property(x => x.PrivateKey).HasConversion(new EncryptedStringConverter()).HasMaxLength(2000).IsRequired();
+            e.Property(x => x.PrivateKey).HasConversion(new StrictEncryptedStringConverter()).HasMaxLength(2000).IsRequired();
         });
         builder.Entity<SegmentChainHead>(e =>
         {
@@ -693,7 +740,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
         builder.Entity<FootageMasterKey>(e =>
         {
             e.HasKey(x => x.Id);
-            e.Property(x => x.Key).HasConversion(new EncryptedStringConverter()).HasMaxLength(1000).IsRequired();
+            e.Property(x => x.Key).HasConversion(new StrictEncryptedStringConverter()).HasMaxLength(1000).IsRequired();
         });
         builder.Entity<FootageKey>(e =>
         {

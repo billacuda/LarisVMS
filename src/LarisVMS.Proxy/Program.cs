@@ -46,6 +46,17 @@ if (config is null)
         return;
     }
 
+    // A thumbprint from the installer (Settings → Nodes shows it) is pinned before the first
+    // connection, so even registration only talks to that server.
+    var (pinThumbprint, pinError) = LarisVMS.Core.Security.ServerCertificateTrust.FromArgs(GetArg(args, "--server-cert-thumbprint"));
+    if (pinError is not null)
+    {
+        Console.Error.WriteLine(pinError);
+        Environment.Exit(1);
+        return;
+    }
+    if (pinThumbprint is not null) trust.Pin(pinThumbprint);
+
     var registerClient = new ProxyApiClient(serverUrl, trust);
     var response = await registerClient.RegisterAsync(
         new ProxyRegisterRequest(registrationKey, Environment.MachineName, ProxyVersion.Current, "win-x64"),
@@ -141,7 +152,10 @@ app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, Proxy
         $"?token={Uri.EscapeDataString(token)}" +
         (string.Equals(role, "sub", StringComparison.OrdinalIgnoreCase) ? "&role=sub" : ""));
 
+    // A node with encrypted connections on is reached over wss with its certificate pinned.
+    nodeUri = LarisVMS.Core.Security.NodeTlsTargets.Shared.Rewrite(nodeUri);
     using var nodeSocket = new ClientWebSocket();
+    nodeSocket.Options.RemoteCertificateValidationCallback = LarisVMS.Core.Security.NodeTlsTargets.Shared.Check;
     if (!string.IsNullOrEmpty(token))
         nodeSocket.Options.SetRequestHeader("Authorization", $"Bearer {token}");
     try
@@ -174,7 +188,8 @@ app.MapGet("/live/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, Proxy
 // Playback segment — a dumb HTTP stream pass-through. LarisVMS.Web 302-redirects the browser here;
 // the request arrives cross-origin, so CORS headers (and exposing X-Fragment-Start-Seconds) match
 // what the node itself sends for a direct connection.
-var playbackHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(25) };
+// Its handler moves requests to a node with encrypted connections on to HTTPS (NodeTlsTargets).
+var playbackHttp = new HttpClient(LarisVMS.Core.Security.NodeTlsTargets.Shared.CreateHandler()) { Timeout = TimeSpan.FromSeconds(25) };
 app.MapGet("/playback-segment/{cameraId:guid}", async (HttpContext ctx, Guid cameraId, ProxyWorker worker) =>
 {
     var origin = ctx.Request.Headers.Origin.ToString();

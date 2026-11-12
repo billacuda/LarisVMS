@@ -51,7 +51,11 @@
             // The '?' guard is what stops a redirect loop: restoring an empty (or bare-'?') query
             // would land back on this same branch and try again forever.
             if (!saved || saved === '?') return;
-            window.location.replace(window.location.pathname + saved);
+            // Only ever a query string on this same page: anything else saved here is ignored.
+            if (typeof saved !== 'string' || saved.charAt(0) !== '?') return;
+            var target = new URL(window.location.pathname + saved, window.location.origin);
+            if (target.origin !== window.location.origin || target.pathname !== window.location.pathname) return;
+            window.location.replace(target.pathname + target.search);
         });
     }
 

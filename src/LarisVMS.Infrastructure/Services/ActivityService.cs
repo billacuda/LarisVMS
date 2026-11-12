@@ -80,14 +80,19 @@ public class ActivityService(ApplicationDbContext db, ActivityRollupService roll
         var zone = ResolveZone(camera.TimeZoneId);
         var wanted = categories is { Count: > 0 } ? new HashSet<string>(categories, StringComparer.OrdinalIgnoreCase) : null;
 
+        // After a reset (the camera was moved), only what came after it: stored hours from the next
+        // full hour, and the not-yet-rolled-up tail from the moment of the reset.
+        var resetUtc = await ResetTimeAsync(cameraId, ct);
+        var storedFrom = resetUtc is { } r && CeilHour(r) > from ? CeilHour(r) : from;
         var rows = await db.SceneHeatHourlies.AsNoTracking()
-            .Where(s => s.CameraId == cameraId && s.Source == heatSource && s.HourUtc >= from)
+            .Where(s => s.CameraId == cameraId && s.Source == heatSource && s.HourUtc >= storedFrom)
             .ToListAsync(ct);
         if (!motion)
         {
             // The hours since the last rollup, straight from the objects' paths.
             var watermark = await new SceneHeatRollupService(db).GetWatermarkAsync(ct) ?? from;
             var tailFrom = watermark > from ? watermark : from;
+            if (resetUtc is { } reset && reset > tailFrom) tailFrom = reset;
             rows.RemoveAll(r => r.HourUtc >= tailFrom);
             rows.AddRange(await SceneHeatRollupService.AggregateAsync(db, [cameraId], tailFrom, now, ct));
         }
@@ -106,7 +111,23 @@ public class ActivityService(ApplicationDbContext db, ActivityRollupService roll
         var max = sums.Length == 0 ? 0 : sums.Max();
         var cells = sums.Select(c => max == 0 ? 0 : (double)c / max).ToArray();
         var motionAvailable = camera.ServerMotionEnabled && camera.MotionRegionMode == MotionRegionMode.Grid;
-        return new SceneHeatDto(cameraId, camera.Name, motion ? "motion" : "objects", range, cols, gridRows, cells, max, motionAvailable);
+        return new SceneHeatDto(cameraId, camera.Name, motion ? "motion" : "objects", range, cols, gridRows, cells, max, motionAvailable,
+            ResetUtc: resetUtc);
+    }
+
+    private async Task<DateTime?> ResetTimeAsync(Guid cameraId, CancellationToken ct)
+    {
+        var raw = await db.SettingOverrides.AsNoTracking()
+            .Where(o => o.Scope == SettingScope.Camera && o.ScopeId == cameraId && o.Key == SceneHeat.ResetSettingKey)
+            .Select(o => o.Value).FirstOrDefaultAsync(ct);
+        return DateTime.TryParse(raw, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var at)
+            ? DateTime.SpecifyKind(at, DateTimeKind.Utc) : null;
+    }
+
+    private static DateTime CeilHour(DateTime utc)
+    {
+        var floor = ActivityRollupService.FloorHour(utc);
+        return floor == utc ? floor : floor.AddHours(1);
     }
 
     /// <summary>Whether a local hour is in [from, to) — wrapping past midnight when from is after to

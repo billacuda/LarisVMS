@@ -21,6 +21,12 @@
     older downloads, verifies and applies it on its own next check-in. Run this script standalone and
     nothing gets registered — only deploy.ps1's own run does that.
 
+.PARAMETER PublisherKeyPath
+    Optional: the publisher's encrypted private key (tools\publisher-key.ps1 -New). The build then
+    carries the publisher's public key (src\LarisVMS.Core\Security\publisher-key.pem), is signed
+    into publisher.sig, and installs only updates the publisher signed. Without it, the build is
+    unsigned, as before. The password comes from LARISVMS_PUBLISHER_KEY_PASSWORD, or is asked for.
+
 .EXAMPLE
     .\build-proxy.ps1
 
@@ -33,7 +39,8 @@ param(
     [string]$NodeUpdaterProject  = (Join-Path $PSScriptRoot 'src\LarisVMS.NodeUpdater\LarisVMS.NodeUpdater.csproj'),
     [string]$OutputRoot          = (Join-Path $PSScriptRoot 'publish\LarisVMS.Proxy'),
     [string]$Configuration       = 'Release',
-    [string]$ExtraPublishPath
+    [string]$ExtraPublishPath,
+    [string]$PublisherKeyPath
 )
 
 Set-StrictMode -Version Latest
@@ -43,6 +50,26 @@ function Write-Step([string]$msg) { Write-Host "`n==> $msg" -ForegroundColor Cya
 function Write-Ok([string]$msg)   { Write-Host "    $msg"  -ForegroundColor Green }
 
 $winOut = Join-Path $OutputRoot 'win'
+
+# ── Publisher key (tools\publisher-key.ps1) ──────────────────────────────────
+# Opt-in. Only a build signed with -PublisherKeyPath carries the publisher's public key, and then
+# refuses any update the publisher didn't sign. Without it the build is unsigned and has no key, so
+# building from source never needs the publisher's private key.
+$publisherPublicKey = Join-Path $PSScriptRoot 'src\LarisVMS.Core\Security\publisher-key.pem'
+if ($PublisherKeyPath -and -not (Test-Path $PublisherKeyPath)) { throw "Publisher key not found: $PublisherKeyPath" }
+if ($PublisherKeyPath -and -not (Test-Path $publisherPublicKey)) {
+    throw "No publisher public key at $publisherPublicKey. Make one with tools\publisher-key.ps1 -New first."
+}
+# Passed to every publish: embeds the public key in LarisVMS.Core (see its .csproj).
+$publisherProps = if ($PublisherKeyPath) { @('-p:LarisVMSPublisherSigned=true') } else { @() }
+
+function Write-PublisherSignature([string]$payload, [string]$path) {
+    Write-Step "Signing with the publisher key"
+    $sig = & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'tools\publisher-key.ps1') -Sign -PrivateKeyPath $PublisherKeyPath -Payload $payload
+    if ($LASTEXITCODE -ne 0 -or -not $sig) { throw 'Signing with the publisher key failed.' }
+    Set-Content -Path $path -Value ($sig | Select-Object -Last 1) -NoNewline
+    Write-Ok "Signed ($path)"
+}
 
 # ── Build number ─────────────────────────────────────────────────────────────
 # Same shared, monotonic 4th version component as build-node.ps1 (0.192.0 -> 0.192.0.256), so a
@@ -65,6 +92,8 @@ Write-Step "Build LarisVMS.Proxy $fullVersion (build number $buildNumber)"
 New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null
 # Read back by deploy.ps1's proxy-build registration so it registers exactly this version.
 Set-Content -Path (Join-Path $OutputRoot 'proxy-build-version.txt') -Value $fullVersion -NoNewline
+$publisherSignaturePath = Join-Path $OutputRoot 'publisher.sig'
+Remove-Item $publisherSignaturePath -ErrorAction SilentlyContinue
 
 Write-Step "Publishing LarisVMS.Proxy (win-x64, self-contained, single-file)"
 if (Test-Path $winOut) { Remove-Item $winOut -Recurse -Force }
@@ -76,6 +105,7 @@ dotnet publish $ProxyProject `
     -p:EnableCompressionInSingleFile=true `
     -p:NoWarn=CA1416 `
     "-p:Version=$fullVersion" `
+    @publisherProps `
     -o $winOut
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed (exit $LASTEXITCODE)." }
 Write-Ok "Published"
@@ -94,11 +124,17 @@ dotnet publish $NodeUpdaterProject `
     -p:EnableCompressionInSingleFile=true `
     -p:NoWarn=CA1416 `
     "-p:Version=$fullVersion" `
+    @publisherProps `
     -o $updaterTmp
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed (exit $LASTEXITCODE)." }
 Copy-Item (Join-Path $updaterTmp 'LarisVMS.NodeUpdater.exe') $winOut -Force
 Remove-Item $updaterTmp -Recurse -Force
 Write-Ok "Published"
+
+if ($PublisherKeyPath) {
+    $proxyHash = (Get-FileHash (Join-Path $winOut 'LarisVMS.Proxy.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
+    Write-PublisherSignature "larisvms-update:v1|proxy-win-x64|$fullVersion|$proxyHash|" $publisherSignaturePath
+}
 
 Copy-Item (Join-Path $PSScriptRoot 'install-proxy.ps1') $winOut -Force
 Write-Ok "install-proxy.ps1 bundled"

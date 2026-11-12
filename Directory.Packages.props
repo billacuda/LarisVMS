@@ -4,6 +4,18 @@
     <!-- packages.lock.json beside each project pins every transitive package version too, so two
          builds of the same commit restore the same packages. -->
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <!-- Every project restores for win-x64 too, libraries included. Without this a library's lock
+         file depended on how it was last restored: a node publish (-r win-x64) added the win-x64
+         section and a plain build took it out again. -->
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <!-- The node, proxy, updater, and Vision Service publish as single files, which turns this on in
+         every project they build and adds the ILLink package to its restore. On for every build, a
+         plain restore and a publish restore agree (and single-file problems show up while building). -->
+    <EnableSingleFileAnalyzer>true</EnableSingleFileAnalyzer>
+    <!-- Release builds (and so every release script) restore exactly what the lock files say and
+         fail if a package or its checksum doesn't match. After changing a package version, build
+         once in Debug to update the lock files and commit them with the change. -->
+    <RestoreLockedMode Condition="'$(Configuration)' == 'Release'">true</RestoreLockedMode>
   </PropertyGroup>
   <ItemGroup>
     <!-- ASP.NET Core / Identity / EF Core -->

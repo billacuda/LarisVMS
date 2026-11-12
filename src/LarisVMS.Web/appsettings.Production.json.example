@@ -10,5 +10,8 @@
       }
     },
     "HttpsPort": 8444
+  },
+  "Setup": {
+    "AlwaysRequireToken": false
   }
 }

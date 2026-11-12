@@ -82,11 +82,29 @@ public sealed class RecordingFailoverService(
             nodes.Where(n => n.BackupNodeId is { } b && b != n.Id).Select(n => n.Id));
         foreach (var cb in camBackups) if (cb.Backup != cb.Primary) hasBackup.Add(cb.Primary);
 
-        // Gather this cycle's votes for every subject up-front (central probes in parallel).
-        var partnerReports = CollectReports(nodes.Select(n => (n.Id, n.PartnerHealthReportsJson)));
+        // Gather this cycle's votes for every subject up-front (central probes in parallel). A vote
+        // only counts from a voter that was given that subject: its backup node (approved, not
+        // disabled) or a proxy assigned to it (enabled). Anyone else holding a registration key could
+        // otherwise vote any node down, or keep a dead one up.
+        var backupsOf = new Dictionary<Guid, HashSet<Guid>>();
+        void AddBackup(Guid subject, Guid backup)
+        {
+            if (subject == backup) return;
+            if (!backupsOf.TryGetValue(subject, out var set)) backupsOf[subject] = set = [];
+            set.Add(backup);
+        }
+        foreach (var n in nodes) if (n.BackupNodeId is { } b) AddBackup(n.Id, b);
+        foreach (var cb in camBackups) AddBackup(cb.Primary, cb.Backup);
+        var votingNodes = nodes.Where(n => n.Status is NodeStatus.Active or NodeStatus.Offline).Select(n => n.Id).ToHashSet();
+        var partnerReports = CollectReports(nodes.Select(n => (n.Id, n.PartnerHealthReportsJson)),
+            (voter, subject) => votingNodes.Contains(voter) && backupsOf.TryGetValue(subject, out var set) && set.Contains(voter), now);
+
         var proxyNodes = await db.MediaProxies.AsNoTracking()
-            .Select(p => new { p.Id, p.NodeHealthReportsJson }).ToListAsync(ct);
-        var proxyReports = CollectReports(proxyNodes.Select(p => (p.Id, p.NodeHealthReportsJson)));
+            .Select(p => new { p.Id, p.Enabled, p.NodeHealthReportsJson }).ToListAsync(ct);
+        var enabledProxies = proxyNodes.Where(p => p.Enabled).Select(p => p.Id).ToHashSet();
+        var proxiesOf = nodes.ToDictionary(n => n.Id, n => new[] { n.PrimaryProxyId, n.BackupProxyId });
+        var proxyReports = CollectReports(proxyNodes.Select(p => (p.Id, p.NodeHealthReportsJson)),
+            (voter, subject) => enabledProxies.Contains(voter) && proxiesOf.TryGetValue(subject, out var assigned) && assigned.Contains(voter), now);
 
         var dirty = false;
 
@@ -270,13 +288,18 @@ public sealed class RecordingFailoverService(
         }
     }
 
+    /// <summary>A report's own time can be this far ahead of the server's (clock skew); anything
+    /// further is ignored, so a voter can't post a verdict that never goes stale.</summary>
+    internal static readonly TimeSpan MaxClockAhead = TimeSpan.FromMinutes(2);
+
     /// <summary>Flattens a set of voters' stored <see cref="NodePartnerHealthReport"/> JSON blobs into
-    /// <c>subjectNodeId -&gt; [(running, checkedAt)]</c>.</summary>
-    private static Dictionary<Guid, List<(bool running, DateTime at)>> CollectReports(
-        IEnumerable<(Guid voterId, string? json)> voters)
+    /// <c>subjectNodeId -&gt; [(running, checkedAt)]</c>, keeping only reports <paramref name="mayVote"/>
+    /// allows (voter, subject) and not dated in the future.</summary>
+    internal static Dictionary<Guid, List<(bool running, DateTime at)>> CollectReports(
+        IEnumerable<(Guid voterId, string? json)> voters, Func<Guid, Guid, bool> mayVote, DateTime now)
     {
         var map = new Dictionary<Guid, List<(bool, DateTime)>>();
-        foreach (var (_, json) in voters)
+        foreach (var (voterId, json) in voters)
         {
             if (string.IsNullOrWhiteSpace(json)) continue;
             List<NodePartnerHealthReport>? reports;
@@ -286,8 +309,10 @@ public sealed class RecordingFailoverService(
 
             foreach (var r in reports)
             {
+                if (!mayVote(voterId, r.NodeId)) continue;
+                if (r.CheckedAtUtc > now + MaxClockAhead) continue;
                 if (!map.TryGetValue(r.NodeId, out var list)) map[r.NodeId] = list = [];
-                list.Add((r.ServiceRunning, r.CheckedAtUtc));
+                list.Add((r.ServiceRunning, r.CheckedAtUtc > now ? now : r.CheckedAtUtc));
             }
         }
         return map;

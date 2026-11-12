@@ -82,6 +82,35 @@ public sealed class ServerCertificateTrust(ServerCertificateCheck mode, string? 
         onChanged?.Invoke();
     }
 
+    /// <summary>Pins a thumbprint given at install (--server-cert-thumbprint), so the first connection
+    /// is checked as well instead of trusted on first use.</summary>
+    public void Pin(string thumbprint)
+    {
+        lock (_gate) PinnedThumbprint = thumbprint;
+        onChanged?.Invoke();
+    }
+
+    /// <summary>A SHA-256 thumbprint as typed or pasted ("AB:CD …", any case) → 64 upper-case hex
+    /// characters; null when it isn't one.</summary>
+    public static string? NormalizeThumbprint(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var hex = new string(value.Where(c => c is not (' ' or ':' or '-')).ToArray()).ToUpperInvariant();
+        return hex.Length == 64 && hex.All(Uri.IsHexDigit) ? hex : null;
+    }
+
+    /// <summary>The thumbprint to pin before a first registration, from --server-cert-thumbprint or
+    /// LARISVMS_SERVER_CERT_THUMBPRINT. Null when none was given; an error when one was given but
+    /// isn't a SHA-256 thumbprint.</summary>
+    public static (string? Thumbprint, string? Error) FromArgs(string? argValue)
+    {
+        var given = argValue ?? Environment.GetEnvironmentVariable("LARISVMS_SERVER_CERT_THUMBPRINT");
+        if (string.IsNullOrWhiteSpace(given)) return (null, null);
+        return NormalizeThumbprint(given) is { } thumbprint
+            ? (thumbprint, null)
+            : (null, "--server-cert-thumbprint must be the server certificate's SHA-256 thumbprint (64 hex characters), as shown on Settings → Nodes.");
+    }
+
     /// <summary>Forgets the pin: the next certificate seen is trusted (--reset-server-pin).</summary>
     public void ResetPin()
     {

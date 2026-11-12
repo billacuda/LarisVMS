@@ -9,7 +9,9 @@ public class AuditService(ApplicationDbContext db) : IAuditService
     public async Task LogAsync(string action, string? userId, string? userName, string? ipAddress,
         string? details = null, CancellationToken ct = default)
     {
-        db.AuditLogs.Add(new AuditLog
+        // Chained onto the entry before it (AuditChainStore); saves anything else pending in this
+        // context too, as it always has.
+        await AuditChainStore.AppendAsync(db, new AuditLog
         {
             Action = action,
             UserId = userId,
@@ -17,7 +19,6 @@ public class AuditService(ApplicationDbContext db) : IAuditService
             IpAddress = ipAddress,
             Details = details,
             OccurredAt = DateTime.UtcNow
-        });
-        await db.SaveChangesAsync(ct);
+        }, ct);
     }
 }

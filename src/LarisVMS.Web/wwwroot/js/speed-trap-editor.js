@@ -93,7 +93,7 @@
                     ctx.drawImage(snapshot, r.x, r.y, r.w, r.h);
                 } else {
                     ctx.fillStyle = '#6c757d';
-                    ctx.font = '14px sans-serif';
+                    ctx.font = larisvmsI18n.font('14px');
                     ctx.fillText(larisvmsI18n.t('js.speedTrapEditor.loadingPicture'), 12, 24);
                 }
             }
@@ -125,7 +125,7 @@
             drawGate(g.b, 'B', GATE_COLORS.b, active);
             if (g.a.length >= 1) {
                 var p = toCanvas(g.a[0]);
-                ctx.font = '12px sans-serif';
+                ctx.font = larisvmsI18n.font('12px');
                 ctx.fillStyle = '#fff';
                 ctx.strokeStyle = 'rgba(0,0,0,0.7)';
                 ctx.lineWidth = 3;
@@ -147,7 +147,7 @@
                 var mx = (p0.x + p1.x) / 2, my = (p0.y + p1.y) / 2;
                 ctx.beginPath(); ctx.arc(mx, my, 10, 0, Math.PI * 2); ctx.fill();
                 ctx.fillStyle = '#111';
-                ctx.font = 'bold 12px sans-serif';
+                ctx.font = larisvmsI18n.font('bold 12px');
                 ctx.fillText(letter, mx - 4, my + 4);
                 ctx.fillStyle = color;
             }
@@ -261,7 +261,7 @@
                 item.className = 'list-group-item list-group-item-action d-flex justify-content-between align-items-center'
                     + (draft && draft.id === t.id ? ' active' : '');
                 var name = document.createElement('span');
-                name.textContent = t.name + (t.isEnabled ? '' : ' (off)');
+                name.textContent = t.isEnabled ? t.name : larisvmsI18n.t('js.speedTrapEditor.nameOff', { name: t.name });
                 var meta = document.createElement('span');
                 meta.className = 'small' + (draft && draft.id === t.id ? '' : ' text-muted');
                 meta.textContent = distanceText(t.distanceMeters)

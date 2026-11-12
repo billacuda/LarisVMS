@@ -10,7 +10,8 @@ namespace LarisVMS.Core.Localization;
 public enum LocaleSource { BuiltIn, Shipped, DropIn, Pseudo }
 
 /// <summary>One language the server can show, for the picker and the admin Language page.</summary>
-public sealed record LocaleInfo(string Culture, string Name, LocaleSource Source, int Coverage, string? Author, string? BaseVersion);
+public sealed record LocaleInfo(string Culture, string Name, LocaleSource Source, int Coverage, string? Author, string? BaseVersion,
+    bool MachineTranslated = false);
 
 /// <summary>A language file that was found but couldn't be used, with why.</summary>
 public sealed record LocaleProblem(string File, string Error);
@@ -90,21 +91,50 @@ public sealed class LocaleCatalog : IDisposable
     public event Action? Changed;
 
     /// <summary>The best available language for a requested culture name ("fr-CA" → "fr" when only
-    /// French is installed), or null when neither it nor its parent is available.</summary>
+    /// French is installed; "zh-TW" → "zh-Hant"; "pt-PT" → "pt-BR" when that's the only Portuguese),
+    /// or null when no language of that family is available.</summary>
     public string? Match(string? requested)
     {
         if (string.IsNullOrWhiteSpace(requested)) return null;
         var languages = _snapshot.Languages;
-        var name = requested.Trim();
-        while (name.Length > 0)
+        foreach (var name in MatchCandidates(requested.Trim()))
         {
             var found = languages.Keys.FirstOrDefault(k => string.Equals(k, name, StringComparison.OrdinalIgnoreCase));
             if (found is not null) return found;
+        }
+        // Another region of the same language beats English: es-ES → es-AR, pt-PT → pt-BR.
+        var language = requested.Trim().Split('-')[0];
+        if (language.Length == 0 || language.StartsWith("qps", StringComparison.OrdinalIgnoreCase)) return null;
+        return languages.Keys
+            .Where(k => k.StartsWith(language + "-", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(k, Pseudo, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(k => k, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
+    }
+
+    /// <summary>The names <see cref="Match"/> tries, most specific first: the culture, then its
+    /// parents. Chinese without a script gets one from its region (TW, HK, and MO are Traditional,
+    /// everything else Simplified), since browsers send "zh-TW" but translations are per script.</summary>
+    internal static List<string> MatchCandidates(string culture)
+    {
+        var chain = new List<string>();
+        for (var name = culture; name.Length > 0;)
+        {
+            chain.Add(name);
             var dash = name.LastIndexOf('-');
             if (dash < 0) break;
             name = name[..dash];
         }
-        return null;
+        var parts = culture.Split('-');
+        if (string.Equals(parts[0], "zh", StringComparison.OrdinalIgnoreCase)
+            && !parts.Skip(1).Any(p => p.Equals("Hans", StringComparison.OrdinalIgnoreCase) || p.Equals("Hant", StringComparison.OrdinalIgnoreCase)))
+        {
+            var traditional = parts.Skip(1).Any(p => p.Equals("TW", StringComparison.OrdinalIgnoreCase)
+                                                     || p.Equals("HK", StringComparison.OrdinalIgnoreCase)
+                                                     || p.Equals("MO", StringComparison.OrdinalIgnoreCase));
+            chain.Insert(chain.Count - 1, traditional ? "zh-Hant" : "zh-Hans");
+        }
+        return chain;
     }
 
     /// <summary>The text for <paramref name="key"/> in <paramref name="culture"/>, falling back
@@ -259,7 +289,7 @@ public sealed class LocaleCatalog : IDisposable
             var name = top.Name ?? NativeName(top.Culture);
             languages[top.Culture] = merged;
             infos.Add(new LocaleInfo(top.Culture, name, d is not null ? LocaleSource.DropIn : LocaleSource.Shipped,
-                coverage, top.Author, top.BaseVersion));
+                coverage, top.Author, top.BaseVersion, top.MachineTranslated));
         }
 
         var ordered = infos.Take(1).Concat(infos.Skip(1).OrderBy(i => i.Name, StringComparer.CurrentCultureIgnoreCase)).ToList();

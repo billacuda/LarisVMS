@@ -222,7 +222,9 @@ namespace LarisVMS.Installer
 
             Directory.CreateDirectory(Util.ProgramDataLaris);
             var path = Path.Combine(Util.ProgramDataLaris, "registration.key");
-            File.WriteAllText(path, key, new UTF8Encoding(false));
+            // Locked down while still empty, then written, so the key is never readable with the
+            // folder's own permissions, even briefly.
+            File.WriteAllText(path, "", new UTF8Encoding(false));
 
             var security = new System.Security.AccessControl.FileSecurity();
             security.SetAccessRuleProtection(true, false);
@@ -231,17 +233,29 @@ namespace LarisVMS.Installer
             Allow(new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.LocalSystemSid, null));
             Allow(new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.BuiltinAdministratorsSid, null));
             var account = data["ServiceAccount"];
+            if (!string.IsNullOrWhiteSpace(account))
+            {
+                try
+                {
+                    Allow(new System.Security.Principal.NTAccount(account).Translate(typeof(System.Security.Principal.SecurityIdentifier)));
+                }
+                catch (System.Security.Principal.IdentityNotMappedException ex)
+                {
+                    session.Log("Could not find the service account for registration.key: " + ex.Message);
+                }
+            }
             try
             {
-                if (!string.IsNullOrWhiteSpace(account))
-                    Allow(new System.Security.Principal.NTAccount(account).Translate(typeof(System.Security.Principal.SecurityIdentifier)));
                 File.SetAccessControl(path, security);
             }
-            catch (Exception ex) when (ex is System.Security.Principal.IdentityNotMappedException or SystemException)
+            catch (Exception ex) when (ex is UnauthorizedAccessException or SystemException)
             {
-                // The service still has to be able to read it; keep the folder's own permissions.
-                session.Log("Could not restrict registration.key to the service account: " + ex.Message);
+                // Never write the key into a file anyone else can read.
+                session.Log("Could not restrict access to registration.key: " + ex.Message);
+                try { File.Delete(path); } catch (IOException) { }
+                return ActionResult.Failure;
             }
+            File.WriteAllText(path, key, new UTF8Encoding(false));
             return ActionResult.Success;
         }
 

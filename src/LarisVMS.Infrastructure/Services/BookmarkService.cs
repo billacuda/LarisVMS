@@ -1,3 +1,4 @@
+using LarisVMS.Core.Localization;
 using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core.Dtos;
 using LarisVMS.Core.Entities;
@@ -31,7 +32,7 @@ public class BookmarkService(ApplicationDbContext db) : IBookmarkService
             join camera in db.Cameras.AsNoTracking() on b.CameraId equals camera.Id into cameraJoin
             from camera in cameraJoin.DefaultIfEmpty()
             orderby b.TimestampUtc descending
-            select new BookmarkDto(b.Id, b.CameraId, camera != null ? camera.Name : "(deleted camera)",
+            select new BookmarkDto(b.Id, b.CameraId, camera != null ? camera.Name : Loc.T("common.deletedCamera"),
                 b.TimestampUtc, b.Note, b.CreatedByUserName, b.CreatedAt)
         ).ToListAsync(ct);
 

@@ -7,6 +7,7 @@
 @inject ISettingsResolver Settings
 @inject IAuditService AuditService
 @inject LocaleCatalog Catalog
+@inject LarisVMS.Web.Services.HelpContentService HelpContent
 
 <PageTitle>@L["settings.language.pageTitle"] - @AppName</PageTitle>
 
@@ -56,6 +57,7 @@
                         <th scope="col">@L["settings.language.colCode"]</th>
                         <th scope="col">@L["settings.language.colSource"]</th>
                         <th scope="col">@L["settings.language.colCoverage"]</th>
+                        <th scope="col">@L["settings.language.colHelp"]</th>
                         <th scope="col"><span class="visually-hidden">@L["common.actions"]</span></th>
                     </tr>
                 </thead>
@@ -69,10 +71,20 @@
                                 {
                                     <div class="small text-muted">@L["settings.language.by", new { author = locale.Author }]</div>
                                 }
+                                @if (locale.MachineTranslated)
+                                {
+                                    <div class="small text-muted">@L["settings.language.machineTranslated"]</div>
+                                }
                             </td>
                             <td><code>@locale.Culture</code></td>
                             <td>@SourceLabel(locale.Source)</td>
                             <td>@L["settings.language.percent", new { percent = locale.Coverage }]</td>
+                            <td>
+                                @if (locale.Source != LocaleSource.Pseudo)
+                                {
+                                    @L["settings.language.helpPages", new { translated = HelpPagesFor(locale), total = HelpContent.PageCount }]
+                                }
+                            </td>
                             <td class="text-end text-nowrap">
                                 @if (locale.Source is LocaleSource.Shipped or LocaleSource.DropIn)
                                 {
@@ -200,6 +212,11 @@
 
         SavedMessage = L["common.saved"];
     }
+
+    /// <summary>Help pages with this language's own text: every page for English, otherwise those
+    /// translated for it or its parent language (the rest show in English).</summary>
+    private int HelpPagesFor(LocaleInfo locale) =>
+        locale.Source == LocaleSource.BuiltIn ? HelpContent.PageCount : HelpContent.TranslatedPageCount(locale.Culture);
 
     private string SourceLabel(LocaleSource source) => source switch
     {

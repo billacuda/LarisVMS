@@ -24,12 +24,11 @@ public class ProxyService(ApplicationDbContext db, ISettingsResolver settings) :
 
     public async Task<ProxyRegisterResponse> RegisterAsync(ProxyRegisterRequest request, CancellationToken ct = default)
     {
-        // Reuses the node registration key — one shared secret for adding recorders or proxies.
-        var expectedKey = LarisVMS.Infrastructure.Security.SecretProtection.Unprotect(await settings.GetRawAsync("Node.RegistrationKey", ct: ct));
-        if (string.IsNullOrEmpty(expectedKey) || !SecretHash.FixedTimeEquals(request.RegistrationKey ?? "", expectedKey))
-            throw new UnauthorizedAccessException(Loc.T("server.proxy.invalidRegistrationKey"));
         if (!HostNames.IsValid(request.Hostname))
             throw new ArgumentException(Loc.T("server.proxy.theHostnameMustBeLetters"));
+        // Same as nodes: the shared registration key or a one-time code, spent by the save below.
+        if (!await RegistrationKeys.AcceptAsync(db, settings, request.RegistrationKey, request.Hostname, ct))
+            throw new UnauthorizedAccessException(Loc.T("server.proxy.invalidRegistrationKey"));
 
         var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         var proxy = new MediaProxy
@@ -46,7 +45,14 @@ public class ProxyService(ApplicationDbContext db, ISettingsResolver settings) :
             CreatedAt = DateTime.UtcNow,
         };
         db.MediaProxies.Add(proxy);
-        await db.SaveChangesAsync(ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw new UnauthorizedAccessException(Loc.T("server.proxy.invalidRegistrationKey"));
+        }
         return new ProxyRegisterResponse(proxy.Id, secret);
     }
 
@@ -125,7 +131,7 @@ public class ProxyService(ApplicationDbContext db, ISettingsResolver settings) :
         var assignedNodes = await db.Nodes.AsNoTracking()
             .Where(n => n.PrimaryProxyId == proxyId || n.BackupProxyId == proxyId)
             .Where(n => n.LastIpAddress != null && n.LivePort != null)
-            .Select(n => new { n.Id, n.LastIpAddress, n.LivePort })
+            .Select(n => new { n.Id, n.LastIpAddress, n.LivePort, n.EncryptServerConnection, n.ClientEndpointReportedPort, n.ClientEndpointCertSha256 })
             .ToListAsync(ct);
 
         var nodeIds = assignedNodes.Select(n => n.Id).ToList();
@@ -138,7 +144,10 @@ public class ProxyService(ApplicationDbContext db, ISettingsResolver settings) :
 
         var nodeDtos = assignedNodes.Select(n => new ProxyConfigNodeDto(
             n.Id, n.LastIpAddress!, n.LivePort!.Value,
-            camerasByNode.TryGetValue(n.Id, out var cams) ? cams : [])).ToList();
+            camerasByNode.TryGetValue(n.Id, out var cams) ? cams : [],
+            // Encrypted connections (opt-in per node): only once the node reports its certificate.
+            n.EncryptServerConnection && n.ClientEndpointCertSha256 != null ? n.ClientEndpointReportedPort : null,
+            n.EncryptServerConnection && n.ClientEndpointReportedPort != null ? n.ClientEndpointCertSha256 : null)).ToList();
 
         // Failover plan phase 3: the same assigned nodes, as quorum-probe targets — this proxy is a
         // third voter (behind the partner node and central) for any node it serves.

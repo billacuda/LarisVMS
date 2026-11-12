@@ -246,4 +246,15 @@ public class ActivityHeatmapTests
         Assert.Equal(["Motion"], partial.Selection);
         Assert.Equal(0, none.Total);
     }
+
+    [Theory]
+    [InlineData("en-US", "Fri, Oct 2")]
+    [InlineData("", "Fri, Oct 2")]
+    [InlineData("ja", "10月2日 (金)")]
+    [InlineData("de", "Fr, 2. Okt.")]
+    public void ShortDay_FollowsTheLanguagesOwnFieldOrder(string culture, string expected)
+    {
+        var text = ActivityHeatmapBuilder.ShortDay(new DateOnly(2026, 10, 2), System.Globalization.CultureInfo.GetCultureInfo(culture));
+        Assert.Equal(expected, text);
+    }
 }

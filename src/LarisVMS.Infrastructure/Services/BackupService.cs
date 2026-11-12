@@ -131,8 +131,9 @@ public class BackupService(ApplicationDbContext db, ISettingsResolver settings, 
     public const string MariaDbDumpPathKey = "Backup.MariaDbDumpPath";
 
     /// <summary>Null when <paramref name="path"/> is acceptable as the dump tool: blank (find it), or
-    /// an existing mariadb-dump/mysqldump executable given by its full path. The service runs it
-    /// under its own account, so nothing else is accepted.</summary>
+    /// an existing mariadb-dump/mysqldump executable given by its full path, on this machine, in a
+    /// folder ordinary users can't write to. The service runs it under its own account, so nothing
+    /// else is accepted.</summary>
     public static string? ValidateMariaDbDumpPath(string? path)
     {
         if (string.IsNullOrWhiteSpace(path)) return null;
@@ -142,7 +143,8 @@ public class BackupService(ApplicationDbContext db, ISettingsResolver settings, 
         var name = Path.GetFileNameWithoutExtension(path);
         if (!name.Equals("mariadb-dump", StringComparison.OrdinalIgnoreCase) && !name.Equals("mysqldump", StringComparison.OrdinalIgnoreCase))
             return Loc.T("server.backup.theDumpToolMustBe");
-        return File.Exists(path) ? null : Loc.T("server.backup.fileDoesntExist");
+        if (!File.Exists(path)) return Loc.T("server.backup.fileDoesntExist");
+        return LarisVMS.Core.Security.ExecutableLocation.IsTrusted(path) ? null : Loc.T("server.backup.dumpToolNotTrusted");
     }
 
     /// <summary>MariaDB has no BACKUP DATABASE: runs mariadb-dump on this machine and gzips its output.
@@ -249,8 +251,9 @@ public class BackupService(ApplicationDbContext db, ISettingsResolver settings, 
     /// under Program Files, else whatever is on PATH.</summary>
     public static string? FindMariaDbDump(string? configured)
     {
+        // Checked again each run: the folder's permissions could have changed since it was saved.
         if (!string.IsNullOrWhiteSpace(configured))
-            return File.Exists(configured.Trim()) ? configured.Trim() : null;
+            return ValidateMariaDbDumpPath(configured) is null ? configured.Trim() : null;
 
         foreach (var programFiles in new[] { Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
                      Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) }.Where(p => p.Length > 0).Distinct())
@@ -262,7 +265,9 @@ public class BackupService(ApplicationDbContext db, ISettingsResolver settings, 
                 .FirstOrDefault(File.Exists);
             if (found is not null) return found;
         }
-        return OperatingSystem.IsWindows() ? "mariadb-dump.exe" : "mariadb-dump";
+        // On PATH, only from a folder ordinary users can't write to (never a bare name, which Windows
+        // would look up in any PATH folder, run with the service's rights).
+        return LarisVMS.Core.Security.ExecutableLocation.FindOnPath(OperatingSystem.IsWindows() ? "mariadb-dump.exe" : "mariadb-dump");
     }
 
     private async Task ApplyRetentionAsync(string directory, string pattern, CancellationToken ct)

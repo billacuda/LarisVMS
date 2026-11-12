@@ -28,6 +28,9 @@ public sealed class ClientEndpointConfig
     public string? PfxPath { get; init; }
     public string? PfxPassword { get; init; }
     public bool AllowInsecure { get; init; }
+    /// <summary>The server asked for encrypted connections to this node: the endpoint runs for that
+    /// even when browsers don't use it, and may use the self-signed certificate, which the server pins.</summary>
+    public bool ServerTls { get; init; }
     /// <summary>Host name to put in the self-signed cert's CN/SAN — the FQDN a browser dials. From the
     /// local json's <c>Host</c>, else the machine name.</summary>
     public string Host { get; init; } = Environment.MachineName;
@@ -55,7 +58,8 @@ public sealed class ClientEndpointConfig
     {
         var local = ReadLocal();
 
-        var enabled = local?.Enabled == true || serverCached?.ClientEndpointEnabled == true;
+        var serverTls = serverCached?.EncryptServerConnection == true;
+        var enabled = local?.Enabled == true || serverCached?.ClientEndpointEnabled == true || serverTls;
         var port = local is { Port: > 0 } ? local.Port
             : serverCached is { ClientEndpointPort: > 0 } ? serverCached.ClientEndpointPort
             : DefaultPort;
@@ -70,6 +74,7 @@ public sealed class ClientEndpointConfig
             PfxPath = string.IsNullOrWhiteSpace(pfxPath) ? null : pfxPath,
             PfxPassword = pfxPassword,
             AllowInsecure = allowInsecure,
+            ServerTls = serverTls,
             Host = string.IsNullOrWhiteSpace(local?.Host) ? Environment.MachineName : local!.Host!,
         };
     }

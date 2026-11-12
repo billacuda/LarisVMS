@@ -1,0 +1,16 @@
+@model string
+@* The account pages link to each other; the model names the page showing it. *@
+<nav class="mt-4 small d-flex flex-wrap gap-3">
+    @if (Model != "password")
+    {
+        <a href="/Identity/Account/ChangePassword">@L["account.password.title"]</a>
+    }
+    @if (Model != "twoFactor")
+    {
+        <a href="/Identity/Account/TwoFactor">@L["account.twoFactor.title"]</a>
+    }
+    @if (Model != "sessions")
+    {
+        <a href="/Identity/Account/Sessions">@L["account.sessions.title"]</a>
+    }
+</nav>

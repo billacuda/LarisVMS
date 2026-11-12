@@ -130,8 +130,10 @@ $bundles = @(
     @{ Src = 'publish\LarisVMS.Node\win\LarisVMS.Node.exe';                       Dest = 'node' },
     @{ Src = 'publish\LarisVMS.Node\win\LarisVMS.Vision.Service.exe';             Dest = 'node' },
     @{ Src = 'publish\LarisVMS.Node\node-build-version.txt';                      Dest = 'node' },
+    @{ Src = 'publish\LarisVMS.Node\publisher.sig';                               Dest = 'node' },
     @{ Src = 'publish\LarisVMS.Proxy\win\LarisVMS.Proxy.exe';                     Dest = 'proxy' },
     @{ Src = 'publish\LarisVMS.Proxy\proxy-build-version.txt';                    Dest = 'proxy' },
+    @{ Src = 'publish\LarisVMS.Proxy\publisher.sig';                              Dest = 'proxy' },
     @{ Src = 'publish\LarisVMS.Node\cuda-provider\onnxruntime_providers_cuda.dll'; Dest = 'cuda-provider' }
 )
 foreach ($b in $bundles) {

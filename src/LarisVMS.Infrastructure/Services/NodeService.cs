@@ -36,15 +36,11 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
 
     public async Task<NodeRegisterResponse> RegisterAsync(NodeRegisterRequest request, CancellationToken ct = default)
     {
-        var expectedKey = LarisVMS.Infrastructure.Security.SecretProtection.Unprotect(await settings.GetRawAsync("Node.RegistrationKey", ct: ct));
-        // FixedTimeEquals, not !=, matching this class's own AuthenticateAsync below (see this
-        // class's doc comment) — a plain string comparison short-circuits on the first differing
-        // byte, which leaks how many leading characters of the registration key a guess got right
-        // through the response timing.
-        if (string.IsNullOrEmpty(expectedKey) || !SecretHash.FixedTimeEquals(request.RegistrationKey ?? "", expectedKey))
-            throw new UnauthorizedAccessException(Loc.T("server.node.invalidRegistrationKey"));
         if (!HostNames.IsValid(request.Hostname))
             throw new ArgumentException(Loc.T("server.node.theHostnameMustBeLetters"));
+        // The shared key (compared in fixed time) or a one-time code, which is spent by the save below.
+        if (!await RegistrationKeys.AcceptAsync(db, settings, request.RegistrationKey, request.Hostname, ct))
+            throw new UnauthorizedAccessException(Loc.T("server.node.invalidRegistrationKey"));
 
         var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         var node = new Node
@@ -72,7 +68,15 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             CreatedAt = DateTime.UtcNow
         };
         db.Nodes.Add(node);
-        await db.SaveChangesAsync(ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // Another registration used the same one-time code first.
+            throw new UnauthorizedAccessException(Loc.T("server.node.invalidRegistrationKey"));
+        }
 
         return new NodeRegisterResponse(node.Id, secret, node.MediaSigningKey);
     }
@@ -218,7 +222,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
                 n.StorageRootPath, n.ArchiveRootPath,
                 n.DirectStreamingMode, n.AllowInsecureClientEndpoint,
                 n.ClientCertPfxPath, n.ClientCertPfxPassword,
-                n.DisableAiObjectDetection,
+                n.DisableAiObjectDetection, n.EncryptServerConnection,
             }).FirstOrDefaultAsync(ct);
         var storageRoot = string.IsNullOrWhiteSpace(nodeRoots?.StorageRootPath) ? null : nodeRoots.StorageRootPath;
         var archiveRoot = string.IsNullOrWhiteSpace(nodeRoots?.ArchiveRootPath) ? null : nodeRoots.ArchiveRootPath;
@@ -572,6 +576,9 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             ClientEndpointAllowInsecure = clientEndpointAllowInsecure,
             WebOrigin = string.IsNullOrWhiteSpace(publicOrigin) ? null : publicOrigin,
             PartnersToProbe = partnersToProbe,
+            CameraCertificatePinning = await settings.GetAsync(LarisVMS.Core.Security.CameraPinningSettings.EnabledKey, false, ct: ct),
+            CameraCertificatePins = await db.CameraCertificatePins.AsNoTracking().ToDictionaryAsync(p => p.Host, p => p.Thumbprint, ct),
+            EncryptServerConnection = nodeRoots?.EncryptServerConnection == true,
         };
     }
 
@@ -725,9 +732,13 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
         bool storagePressureActive = false, int? clientEndpointReportedPort = null,
         DateTime? clientEndpointCertNotAfter = null, bool? clientEndpointCertIsSelfSigned = null,
         string? clientEndpointLastError = null, List<NodePartnerHealthReport>? partnerHealthReports = null,
-        NodeHostStats? hostStats = null, CancellationToken ct = default, bool storageBlockedByEvidenceLocks = false)
+        NodeHostStats? hostStats = null, CancellationToken ct = default, bool storageBlockedByEvidenceLocks = false,
+        string? clientEndpointCertSha256 = null)
     {
         var skew = ComputeClockSkewSeconds(nodeSentAtUtc, serverReceivedUtc);
+        // Only a well-formed SHA-256 is kept: it's what the server pins for encrypted connections.
+        var clientEndpointCertSha = clientEndpointCertSha256 is { Length: 64 } sha && sha.All(char.IsAsciiHexDigit)
+            ? sha.ToUpperInvariant() : null;
         var encodersJson = detectedEncoders is not null ? System.Text.Json.JsonSerializer.Serialize(detectedEncoders) : null;
         // Object detection plan decision 2: same coalesce-preserve shape as encodersJson above.
         var acceleratorsJson = detectedAccelerators is not null ? System.Text.Json.JsonSerializer.Serialize(detectedAccelerators) : null;
@@ -772,6 +783,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             .SetProperty(n => n.ClientEndpointCertNotAfter, clientEndpointCertNotAfter)
             .SetProperty(n => n.ClientEndpointCertIsSelfSigned, clientEndpointCertIsSelfSigned)
             .SetProperty(n => n.ClientEndpointLastError, clientEndpointLastError)
+            .SetProperty(n => n.ClientEndpointCertSha256, clientEndpointCertSha)
             .SetProperty(n => n.PartnerHealthReportsJson, n => partnerHealthJson ?? n.PartnerHealthReportsJson)
             // Dashboard host load: the full current reading every heartbeat (all null from a node that
             // can't measure it), so a blind overwrite; HostStatsUpdatedAt lets the dashboard grey out
@@ -1502,6 +1514,7 @@ public class NodeService(ApplicationDbContext db, ISettingsResolver settings, IL
             // empty string = clear, a value = set.
             if (ce.ClientCertPfxPassword is not null)
                 node.ClientCertPfxPassword = ce.ClientCertPfxPassword.Length == 0 ? null : ce.ClientCertPfxPassword;
+            if (ce.EncryptServerConnection is { } encrypt) node.EncryptServerConnection = encrypt;
 
             // Failover plan phase 2: proxy assignment. The form always submits both dropdowns, so a
             // null/Guid.Empty value means "no proxy" — a distinct backup that matches the primary is

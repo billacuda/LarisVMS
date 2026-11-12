@@ -5,7 +5,8 @@
 @if (_isSignedIn)
 {
     <a class="btn btn-link btn-sm p-0 text-decoration-none" href="/Notifications" title="@L["layout.myNotifications"]" aria-label="@L["layout.myNotifications"]">🔔</a>
-    <span class="text-muted small d-none d-sm-inline text-truncate lv-username" title="@_userName">@_userName</span>
+    <a class="text-muted small d-none d-sm-inline text-truncate lv-username text-decoration-none" href="/Identity/Account/ChangePassword"
+       title="@L["layout.changePasswordFor", new { user = _userName }]">@_userName</a>
     <form action="/Identity/Account/Logout?returnUrl=%2F" method="post" class="d-inline">
         <AntiforgeryToken />
         <button type="submit" class="btn btn-link btn-sm p-0">@L["layout.logout"]</button>

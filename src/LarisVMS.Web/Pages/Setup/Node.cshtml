@@ -1,6 +1,9 @@
 @page
 @model LarisVMS.Web.Pages.Setup.NodeModel
+@inject LarisVMS.Relay.CertHolder Certificates
 @{
+    var thumbprint = LarisVMS.Web.Services.ServerCertificateSettings.Thumbprint(Certificates);
+    var pinArg = thumbprint is null ? "" : $" -ServerCertThumbprint \"{thumbprint}\"";
     Layout = "_SetupLayout";
     ViewData["Title"] = L["setup.node.recorderNode"].Value;
 }
@@ -16,7 +19,7 @@
 </div>
 <div class="mb-3">
     <label class="form-label" for="installCommand">@L["setup.node.installCommandRunOnThe"]</label>
-    <textarea id="installCommand" class="form-control font-monospace" rows="2" readonly>.\install-node.ps1 -ServerUrl "@Model.ServerUrl" -RegistrationKey "@Model.RegistrationKey"</textarea>
+    <textarea id="installCommand" class="form-control font-monospace" rows="2" readonly>.\install-node.ps1 -ServerUrl "@Model.ServerUrl" -RegistrationKey "@Model.RegistrationKey"@pinArg</textarea>
 </div>
 <form method="post">
     <button type="submit" class="btn btn-primary">@L["setup.node.continue"]</button>

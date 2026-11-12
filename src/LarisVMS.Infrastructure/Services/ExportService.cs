@@ -63,7 +63,7 @@ public class ExportService(ApplicationDbContext db, ExportManifestBuilder? manif
             join camera in db.Cameras.AsNoTracking() on item.CameraId equals camera.Id into cameraJoin
             from camera in cameraJoin.DefaultIfEmpty()
             select new ExportDispatchCandidate(
-                item.Id, item.CameraId, camera != null ? camera.Name : "(deleted camera)",
+                item.Id, item.CameraId, camera != null ? camera.Name : Loc.T("common.deletedCamera"),
                 item.NodeId ?? (camera != null ? camera.NodeId : null), item.NodeId != null,
                 job.FromUtc, job.ToUtc, item.RedactionJson)
         ).ToListAsync(ct);

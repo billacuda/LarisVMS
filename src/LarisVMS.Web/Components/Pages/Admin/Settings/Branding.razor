@@ -82,7 +82,13 @@
                 <option value="" selected="@string.IsNullOrEmpty(FontKey)">@L["common.default"]</option>
                 @foreach (var (key, label) in FontChoices)
                 {
-                    <option value="@key" selected="@(key == FontKey)">@label</option>
+                    <option value="@key" selected="@(key == FontKey)">@(key switch
+                    {
+                        "system" => L["settings.branding.fontSystem"].Value,
+                        "georgia" => L["settings.branding.fontSerif", new { font = "Georgia" }].Value,
+                        "mono" => L["settings.branding.fontMonospace", new { font = "Consolas" }].Value,
+                        _ => label
+                    })</option>
                 }
             </select>
         </SettingField>

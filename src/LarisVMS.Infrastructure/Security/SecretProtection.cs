@@ -44,6 +44,22 @@ public static class SecretProtection
         return Prefix + _protector.Protect(plaintext);
     }
 
+    /// <summary>Like <see cref="Unprotect"/>, but a value that isn't encrypted is refused rather than
+    /// passed through as legacy plaintext: for columns that have only ever been written encrypted (keys
+    /// made after encryption existed), where a plain value can only have been put there directly in the
+    /// database to plant a key of someone else's choosing.</summary>
+    public static string? UnprotectStrict(string? stored) => UnprotectStrict(stored, _protector);
+
+    internal static string? UnprotectStrict(string? stored, IDataProtector? protector)
+    {
+        if (string.IsNullOrEmpty(stored)) return stored;
+        if (protector is null) return stored;                  // not configured (design time, tests)
+        if (!stored.StartsWith(Prefix, StringComparison.Ordinal))
+            throw new System.Security.Cryptography.CryptographicException(
+                "A key stored in the database isn't encrypted, so it was changed outside LarisVMS; it isn't used.");
+        return protector.Unprotect(stored[Prefix.Length..]);
+    }
+
     public static string? Unprotect(string? stored)
     {
         if (string.IsNullOrEmpty(stored)) return stored;
@@ -60,6 +76,12 @@ public static class SecretProtection
 public sealed class EncryptedStringConverter() : ValueConverter<string, string>(
     v => SecretProtection.Protect(v)!,
     v => SecretProtection.Unprotect(v)!);
+
+/// <summary><see cref="EncryptedStringConverter"/> for columns that have only ever held encrypted
+/// values (keys): a plain value read back is refused (<see cref="SecretProtection.UnprotectStrict"/>).</summary>
+public sealed class StrictEncryptedStringConverter() : ValueConverter<string, string>(
+    v => SecretProtection.Protect(v)!,
+    v => SecretProtection.UnprotectStrict(v)!);
 
 /// <summary>Nullable counterpart of <see cref="EncryptedStringConverter"/> for optional columns.</summary>
 public sealed class EncryptedNullableStringConverter() : ValueConverter<string?, string?>(

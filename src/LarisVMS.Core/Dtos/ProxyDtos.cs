@@ -40,12 +40,15 @@ public record ProxyHeartbeatResponse(int IntervalSeconds, string? NextNonce = nu
 /// Vision component here (that is recorder-node-only) — this is the plain shape of
 /// <c>NodeUpdateInfoDto</c> minus those fields.</summary>
 public record ProxyUpdateInfoDto(string Version, string DownloadUrl, string Sha256, long SizeBytes,
-    string? Signature = null, string? SigningKeyPem = null);
+    string? Signature = null, string? SigningKeyPem = null, string? PublisherSignature = null);
 
 /// <summary>One recorder node this proxy may forward to — its plain-HTTP LAN address, plus every
 /// camera currently recording on that node (so the proxy maps an incoming <c>/live/{cameraId}</c> to
 /// a target without ever trusting a client-supplied address).</summary>
-public record ProxyConfigNodeDto(Guid NodeId, string NodeHost, int NodeLivePort, List<Guid> CameraIds);
+public record ProxyConfigNodeDto(Guid NodeId, string NodeHost, int NodeLivePort, List<Guid> CameraIds,
+    /// <summary>For a node with encrypted connections on: its HTTPS port and the SHA-256 of its
+    /// certificate, which the proxy pins (NodeTlsTargets). Null otherwise, or from an older server.</summary>
+    int? NodeTlsPort = null, string? NodeCertSha256 = null);
 
 /// <summary>Everything the proxy needs to run: the camera→node address map, the certificate to serve
 /// (path + password, password sent decrypted over this HTTPS channel like a node's client cert),

@@ -27,6 +27,12 @@
           "Microsoft.ML.OnnxRuntime.Managed": "1.23.2"
         }
       },
+      "Microsoft.NET.ILLink.Tasks": {
+        "type": "Direct",
+        "requested": "[10.0.14, )",
+        "resolved": "10.0.14",
+        "contentHash": "YlTamXppEQls6DYWt7RdUuwWDb0lyw/vXCaGeQpLCpsLmfwGuCkOz/vIGgMTV7ECsJcavkCOkxZXv9s8rdAHkQ=="
+      },
       "SkiaSharp": {
         "type": "Transitive",
         "resolved": "3.119.1",
@@ -57,7 +63,7 @@
       "larisvms.media": {
         "type": "Project",
         "dependencies": {
-          "LarisVMS.Core": "[0.220.0, )"
+          "LarisVMS.Core": "[0.221.0, )"
         }
       },
       "larisvms.vision": {

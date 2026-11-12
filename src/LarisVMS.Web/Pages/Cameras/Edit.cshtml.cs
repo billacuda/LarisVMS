@@ -377,7 +377,7 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
         }
         catch (Exception ex)
         {
-            ErrorMessage = ex.Message;
+            ErrorMessage = LarisVMS.Web.Helpers.UserFacingError.Message(ex);
             return Page();
         }
     }
@@ -396,7 +396,7 @@ public class EditModel(ICameraService cameraService, INodeService nodeService,
         }
         catch (Exception ex)
         {
-            ErrorMessage = ex.Message;
+            ErrorMessage = LarisVMS.Web.Helpers.UserFacingError.Message(ex);
         }
         return RedirectToPage("Edit", new { id = Id });
     }

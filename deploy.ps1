@@ -80,7 +80,10 @@ param(
     # Failover plan phase 2: also build the standalone media proxy package (publish\LarisVMS.Proxy\win)
     # and register it for approval so existing proxies auto-update to it (Platform "proxy-win-x64" on
     # Admin -> Node Builds). Off by default — most deployments have no proxy tier.
-    [switch]$BuildProxy
+    [switch]$BuildProxy,
+    # The publisher's offline update-signing key (tools\publisher-key.ps1), passed to build-node.ps1
+    # and build-proxy.ps1. Required once the source has a publisher key.
+    [string]$PublisherKeyPath = ''
 )
 
 Set-StrictMode -Version Latest
@@ -366,6 +369,7 @@ if (-not $SkipNodeBuild) {
     if ($SkipNodeVision) {
         $buildNodeArgs['SkipVision'] = $true
     }
+    if ($PublisherKeyPath) { $buildNodeArgs['PublisherKeyPath'] = $PublisherKeyPath }
     # No $LASTEXITCODE check needed here: build-node.ps1 (Set-StrictMode + $ErrorActionPreference
     # = 'Stop') already throws on every failure path it has, including a non-zero exit from the
     # native commands it runs itself — that propagates as a terminating error through this call on
@@ -391,6 +395,7 @@ if ($BuildProxy) {
     if (-not [string]::IsNullOrWhiteSpace($ExtraNodePublishPath)) {
         $buildProxyArgs['ExtraPublishPath'] = ($ExtraNodePublishPath.TrimEnd('\') + '-proxy')
     }
+    if ($PublisherKeyPath) { $buildProxyArgs['PublisherKeyPath'] = $PublisherKeyPath }
     & $buildProxyScript @buildProxyArgs
     Write-Ok "Media proxy package built (publish\LarisVMS.Proxy\win)."
 }
@@ -531,8 +536,8 @@ try {
 
                     $insertCmd = $conn.CreateCommand()
                     $insertCmd.CommandText = @'
-INSERT INTO NodeBuildVersions (Id, Version, Platform, FilePath, SizeBytes, Sha256, VisionFilePath, VisionSizeBytes, VisionSha256, UploadedAt, Notes, Status, ApprovedAt, ApprovedBy)
-VALUES (@Id, @Version, @Platform, @FilePath, @SizeBytes, @Sha256, @VisionFilePath, @VisionSizeBytes, @VisionSha256, GETUTCDATE(), @Notes, 0, NULL, NULL)
+INSERT INTO NodeBuildVersions (Id, Version, Platform, FilePath, SizeBytes, Sha256, VisionFilePath, VisionSizeBytes, VisionSha256, PublisherSignature, UploadedAt, Notes, Status, ApprovedAt, ApprovedBy)
+VALUES (@Id, @Version, @Platform, @FilePath, @SizeBytes, @Sha256, @VisionFilePath, @VisionSizeBytes, @VisionSha256, @PublisherSignature, GETUTCDATE(), @Notes, 0, NULL, NULL)
 '@
                     $insertCmd.Parameters.AddWithValue('@Id', $buildId) | Out-Null
                     $insertCmd.Parameters.AddWithValue('@Version', $nodeVersion) | Out-Null
@@ -545,6 +550,9 @@ VALUES (@Id, @Version, @Platform, @FilePath, @SizeBytes, @Sha256, @VisionFilePat
                     $insertCmd.Parameters.AddWithValue('@VisionFilePath', $(if ($visionStoredPath) { $visionStoredPath } else { [DBNull]::Value })) | Out-Null
                     $insertCmd.Parameters.AddWithValue('@VisionSizeBytes', $(if ($null -ne $visionSizeBytes) { $visionSizeBytes } else { [DBNull]::Value })) | Out-Null
                     $insertCmd.Parameters.AddWithValue('@VisionSha256', $(if ($visionHash) { $visionHash } else { [DBNull]::Value })) | Out-Null
+                    # build-node.ps1's publisher signature (tools\publisher-key.ps1), if it had the key.
+                    $nodeSigPath = Join-Path $PSScriptRoot 'publish\LarisVMS.Node\publisher.sig'
+                    $insertCmd.Parameters.AddWithValue('@PublisherSignature', $(if (Test-Path $nodeSigPath) { (Get-Content $nodeSigPath -Raw).Trim() } else { [DBNull]::Value })) | Out-Null
                     $insertCmd.Parameters.AddWithValue('@Notes', "Registered by deploy.ps1 on $(Get-Date -Format 'yyyy-MM-dd HH:mm')") | Out-Null
                     $insertCmd.ExecuteNonQuery() | Out-Null
 
@@ -604,8 +612,8 @@ VALUES (@Id, @Version, @Platform, @FilePath, @SizeBytes, @Sha256, @VisionFilePat
 
                     $insertCmd = $conn.CreateCommand()
                     $insertCmd.CommandText = @'
-INSERT INTO NodeBuildVersions (Id, Version, Platform, FilePath, SizeBytes, Sha256, VisionFilePath, VisionSizeBytes, VisionSha256, UploadedAt, Notes, Status, ApprovedAt, ApprovedBy)
-VALUES (@Id, @Version, @Platform, @FilePath, @SizeBytes, @Sha256, NULL, NULL, NULL, GETUTCDATE(), @Notes, 0, NULL, NULL)
+INSERT INTO NodeBuildVersions (Id, Version, Platform, FilePath, SizeBytes, Sha256, VisionFilePath, VisionSizeBytes, VisionSha256, PublisherSignature, UploadedAt, Notes, Status, ApprovedAt, ApprovedBy)
+VALUES (@Id, @Version, @Platform, @FilePath, @SizeBytes, @Sha256, NULL, NULL, NULL, @PublisherSignature, GETUTCDATE(), @Notes, 0, NULL, NULL)
 '@
                     $insertCmd.Parameters.AddWithValue('@Id', $buildId) | Out-Null
                     $insertCmd.Parameters.AddWithValue('@Version', $proxyVersion) | Out-Null
@@ -614,6 +622,8 @@ VALUES (@Id, @Version, @Platform, @FilePath, @SizeBytes, @Sha256, NULL, NULL, NU
                     $insertCmd.Parameters.AddWithValue('@SizeBytes', $sizeBytes) | Out-Null
                     $insertCmd.Parameters.AddWithValue('@Sha256', $hash) | Out-Null
                     $insertCmd.Parameters.AddWithValue('@Notes', "Media proxy build, registered by deploy.ps1 on $(Get-Date -Format 'yyyy-MM-dd HH:mm')") | Out-Null
+                    $proxySigPath = Join-Path $PSScriptRoot 'publish\LarisVMS.Proxy\publisher.sig'
+                    $insertCmd.Parameters.AddWithValue('@PublisherSignature', $(if (Test-Path $proxySigPath) { (Get-Content $proxySigPath -Raw).Trim() } else { [DBNull]::Value })) | Out-Null
                     $insertCmd.ExecuteNonQuery() | Out-Null
 
                     Write-Ok "Proxy build $proxyVersion ($proxyPlatform) registered as Pending - approve it on Admin -> Node Builds."
@@ -645,6 +655,11 @@ VALUES (@Id, @Version, @Platform, @FilePath, @SizeBytes, @Sha256, NULL, NULL, NU
                 Copy-Item $cudaProviderSrc $cudaProviderDest -Force
                 Write-Ok "Seeded to $cudaProviderDest"
             }
+            # The publisher's signature for it, from a publisher-signed build; a stale one is removed.
+            $cudaSignatureSrc = "$cudaProviderSrc.publisher.sig"
+            $cudaSignatureDest = "$cudaProviderDest.publisher.sig"
+            if (Test-Path $cudaSignatureSrc) { Copy-Item $cudaSignatureSrc $cudaSignatureDest -Force }
+            elseif (Test-Path $cudaSignatureDest) { Remove-Item $cudaSignatureDest -Force }
         } catch {
             Write-Host "Could not seed the CUDA provider library (NVIDIA nodes will keep running DirectML): $_" -ForegroundColor Yellow
         }

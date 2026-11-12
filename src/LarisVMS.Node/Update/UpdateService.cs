@@ -115,7 +115,7 @@ public class UpdateService(NodeConfig config, ILogger log, IHostApplicationLifet
             http.DefaultRequestHeaders.Authorization =
                 new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", $"{config.NodeId}:{config.Secret}");
 
-            using var response = await http.GetAsync(update.DownloadUrl, HttpCompletionOption.ResponseHeadersRead, ct);
+            using var response = await http.GetAsync(LarisVMS.Core.Security.UpdateDownload.Resolve(config.ServerUrl, update.DownloadUrl), HttpCompletionOption.ResponseHeadersRead, ct);
             response.EnsureSuccessStatusCode();
 
             await using (var fileStream = File.Create(StagedPath))

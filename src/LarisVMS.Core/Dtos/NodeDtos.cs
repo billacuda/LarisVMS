@@ -59,7 +59,18 @@ public record NodeHeartbeatRequest(string? Version, long? FreeBytes = null, long
     bool StorageBlockedByEvidenceLocks = false,
     /// <summary>What AI detection is actually running on (the Vision Service's own report). Null
     /// from an older node, or while its Vision Service isn't running.</summary>
-    NodeVisionBackendDto? VisionBackend = null);
+    NodeVisionBackendDto? VisionBackend = null,
+    /// <summary>SHA-256 (hex) of the certificate the client HTTPS endpoint is serving, which the server
+    /// pins for encrypted connections (Node.EncryptServerConnection). Null when it isn't running
+    /// one, or from an older node.</summary>
+    string? ClientEndpointCertSha256 = null,
+    /// <summary>Camera certificates this node refused under pinning since the last heartbeat (at
+    /// most one per address an hour). Null when there were none, or from an older node.</summary>
+    List<NodeCameraCertificateRefusal>? CameraCertificateRefusals = null);
+
+/// <summary>A camera certificate a node refused: the camera's address, the SHA-256 of the
+/// certificate it presented, and when.</summary>
+public record NodeCameraCertificateRefusal(string Host, string Presented, DateTime AtUtc);
 
 /// <summary>Node -&gt; server (POST /api/nodes/motion-heat): grid-mode motion heat for one camera and
 /// UTC hour — how many analysed frames had motion in each cell of the camera's N x N grid, as
@@ -104,7 +115,9 @@ public record NodePartnerHealthReport(Guid NodeId, bool ServiceRunning, DateTime
 public record NodeUpdateInfoDto(string Version, string DownloadUrl, string Sha256, long SizeBytes,
     string? VisionDownloadUrl = null, string? VisionSha256 = null, long? VisionSizeBytes = null,
     // UpdateSignature.UpdatePayload signed with the server's key, and that key's public half.
-    string? Signature = null, string? SigningKeyPem = null);
+    string? Signature = null, string? SigningKeyPem = null,
+    // The same payload signed with the publisher's offline key (PublisherKey), when the build has one.
+    string? PublisherSignature = null);
 
 /// <summary>NextNonce (failover plan phase 5a): the single-use value the node must echo on its next
 /// heartbeat (NodeHeartbeatRequest.Nonce). Issued fresh every heartbeat that passes validation. Null
@@ -126,7 +139,11 @@ public record NodeHeartbeatResponse(int IntervalSeconds, NodeUpdateInfoDto? Upda
 /// serves the file from a cache directory seeded by <c>deploy.ps1</c>; <see cref="Sha256"/> is
 /// verified by the node before the file is put in place. Null from the endpoint means the server has
 /// no copy seeded.</summary>
-public record VisionNativeInfo(string Name, string Sha256, long SizeBytes, string? Signature = null, string? SigningKeyPem = null);
+public record VisionNativeInfo(string Name, string Sha256, long SizeBytes, string? Signature = null, string? SigningKeyPem = null,
+    /// <summary>The publisher's signature over the same payload (UpdateSignature.NativePayload), from
+    /// the build; required by nodes built with the publisher key (PublisherKey). Null when the build
+    /// wasn't publisher-signed, or from an older server.</summary>
+    string? PublisherSignature = null);
 
 /// <summary>Failover plan phase 3: the body of the recorder node's unauthenticated
 /// <c>GET /health</c> on its plain-HTTP LAN Kestrel port. A quorum voter (the partner node, central,
@@ -531,7 +548,17 @@ public record NodeConfigResponse(List<NodeConfigCameraDto> Cameras, string? Stor
     /// <summary>Manual recordings: footage to keep whatever the camera's recording mode says. Every
     /// running recording plus those stopped in the last hour, system-wide so reassignment and failover
     /// need nothing extra. A running one has a far-future end. Null from an older server.</summary>
-    List<NodeConfigProtectedRangeDto>? ManualRecordingRanges = null);
+    List<NodeConfigProtectedRangeDto>? ManualRecordingRanges = null,
+    /// <summary>Settings → Security → camera certificate pinning, and the server's remembered camera
+    /// certificates (host → SHA-256), which the node's camera clients enforce
+    /// (CameraCertificatePins). Appended last; an older server sends neither and nothing is pinned.</summary>
+    bool CameraCertificatePinning = false,
+    Dictionary<string, string>? CameraCertificatePins = null,
+    /// <summary>Nodes → Encrypt connections from the server: the node runs its HTTPS endpoint (a
+    /// self-signed certificate is allowed for this; the server pins it) and, once it does, refuses
+    /// media and control requests on the plain port from anywhere but this machine. Appended last; an
+    /// older server sends false.</summary>
+    bool EncryptServerConnection = false);
 
 /// <summary>One evidence lock's footage range, as the node needs it.</summary>
 public record NodeConfigProtectedRangeDto(Guid CameraId, DateTime FromUtc, DateTime ToUtc);

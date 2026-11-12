@@ -196,6 +196,15 @@ public class Node
     /// path, wrong password, bind failure), or null when it is healthy.</summary>
     public string? ClientEndpointLastError { get; set; }
 
+    /// <summary>Opt-in: the server and media proxies reach this node over HTTPS (its client endpoint,
+    /// self-signed is fine) with its certificate pinned, instead of plain HTTP on LivePort, and the
+    /// node then refuses media on the plain port. See NodeTlsTargets.</summary>
+    public bool EncryptServerConnection { get; set; }
+
+    /// <summary>SHA-256 of the certificate the node's HTTPS endpoint is serving, from its heartbeat;
+    /// what the server pins. Null when it isn't running one, or from an older node.</summary>
+    public string? ClientEndpointCertSha256 { get; set; }
+
     // ── Failover plan phase 2: media proxy assignment ────────────────────────────
     /// <summary>The media proxy browsers are routed through for this node's cameras, and a backup
     /// used when the primary is unhealthy. Null = no proxy (go direct to the node's client endpoint,

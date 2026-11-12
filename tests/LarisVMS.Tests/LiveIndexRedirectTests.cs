@@ -29,7 +29,7 @@ public class LiveIndexRedirectTests
             return Task.FromResult<View?>(null);
         }
         public Task<View> CreateAsync(string name, string ownerId, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task UpdateAsync(Guid id, string userId, string name, bool isShared, string layoutJson, int sequenceIntervalSeconds, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateAsync(Guid id, string userId, string name, bool isShared, string layoutJson, int sequenceIntervalSeconds, bool canManageAll = false, CancellationToken ct = default) => throw new NotImplementedException();
         public Task DeleteAsync(Guid id, string userId, bool canEditShared, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<List<View>> GetTourViewsAsync(CancellationToken ct = default) => throw new NotImplementedException();
     }

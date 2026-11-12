@@ -19,6 +19,8 @@ Run:
 from __future__ import annotations
 
 import argparse
+import hashlib
+import sys
 from pathlib import Path
 
 from huggingface_hub import hf_hub_download
@@ -26,6 +28,8 @@ from huggingface_hub import hf_hub_download
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MODELS_DIR = REPO_ROOT / "models"
 
+# Each variant is pinned to a repository commit and to the file's SHA-256 (the one Hugging Face
+# lists for that commit), so a changed or tampered file is refused instead of reaching the nodes.
 # Every onnx-community D-FINE repo names its own export "onnx/model.onnx" — DetectionModelCatalog
 # (LarisVMS.Vision/Inference/DetectionModelCatalog.cs) expects these exact renamed filenames
 # instead; downloading both variants unrenamed would collide when build-node.ps1 flattens them.
@@ -33,6 +37,7 @@ VARIANTS = {
     "obj2coco": {
         "repo_id": "onnx-community/dfine_s_obj2coco-ONNX",
         "revision": "f69c4ca98cba7ca58aa15b3d4600867808fecf1b",
+        "sha256": "b9e2e76610053aeeac3b2f1f685d8f9a1182a93a338f624b6c8cb7fb390cb532",
         "filename": "dfine_s_obj2coco.onnx",
         "license": "Apache-2.0",
         "upstream": "ustc-community/dfine-small-obj2coco (Peterande/D-FINE)",
@@ -44,6 +49,7 @@ VARIANTS = {
     "obj365": {
         "repo_id": "onnx-community/dfine_s_obj365-ONNX",
         "revision": "a61e4cdfe4f9d3188a305d91e37dbf38688ffbb8",
+        "sha256": "372feaa33ac6ba67d7df8589628f6abc395b3c6981c4edc70dfcfe2949751120",
         "filename": "dfine_s_obj365.onnx",
         "license": "Apache-2.0",
         "upstream": "ustc-community/dfine-small-obj365 (Peterande/D-FINE)",
@@ -57,6 +63,7 @@ VARIANTS = {
     "medium-obj2coco": {
         "repo_id": "onnx-community/dfine_m_obj2coco-ONNX",
         "revision": "a2e1133c83887da7d5a000a025594b9d69fef5c2",
+        "sha256": "347f2faba93248c2e7500c9e604317fb391706c58a04802dd908573376dc1323",
         "filename": "dfine_m_obj2coco.onnx",
         "license": "Apache-2.0",
         "upstream": "ustc-community/dfine-medium-obj2coco (Peterande/D-FINE)",
@@ -95,9 +102,16 @@ def fetch_one(name: str, variant: dict) -> Path:
         revision=variant["revision"],
     )
 
+    data = Path(downloaded).read_bytes()
+    actual = hashlib.sha256(data).hexdigest()
+    if actual != variant["sha256"]:
+        # Nothing is written: a file that isn't the pinned one never reaches the models folder.
+        sys.exit(f"{variant['repo_id']}@{variant['revision']} isn't the expected file "
+                 f"(SHA-256 {actual}, expected {variant['sha256']}).")
+
     dest = MODELS_DIR / variant["filename"]
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(Path(downloaded).read_bytes())
+    dest.write_bytes(data)
     write_license(dest, variant)
     return dest
 

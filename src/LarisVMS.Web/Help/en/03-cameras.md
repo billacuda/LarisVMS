@@ -22,7 +22,7 @@ Tick cameras to act on several at once: **Reassign selected to node**, or **Devi
 
 ## Streams
 
-Each camera usually has a **Main** stream (full resolution, used for recording) and a **Sub** stream (lower resolution, used for small live tiles and AI detection). Expand **Device** on the camera's page to rename or disable a stream. Hover a stream to see its RTSP URL.
+Each camera usually has a **Main** stream (full resolution, used for recording) and a **Sub** stream (lower resolution, used for small live tiles and AI detection). Expand **Device** on the camera's page to rename or disable a stream. Hover a stream to see its RTSP URL. LarisVMS uses the address the camera was added with, keeping the port and path the camera reports, so a camera that reports an internal address (or someone posing as it) can't send the recorder elsewhere with its password.
 
 ## Device settings
 

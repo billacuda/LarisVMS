@@ -55,7 +55,7 @@ public class IndexModel(ApplicationDbContext db, ICameraService cameraService, I
             r.LastFiredAt,
             r.Deliveries.Where(d => d.IsEnabled).Select(d => d.Channel.ToString()).OrderBy(s => s).ToList(),
             r.Subscriptions.Count, r.AllowSubscribe, typesOff.Contains(r.ConditionType),
-            r.OwnerUserId is { } owner ? ownerNames.GetValueOrDefault(owner, "(deleted user)") : null
+            r.OwnerUserId is { } owner ? ownerNames.GetValueOrDefault(owner) ?? Loc.T("common.deletedUser") : null
         )).ToList();
         return Page();
     }

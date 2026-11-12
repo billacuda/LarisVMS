@@ -505,6 +505,44 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.ToTable("AspNetUsers", (string)null);
                 });
 
+            modelBuilder.Entity("LarisVMS.Core.Entities.AuditChainState", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("int");
+
+                    b.Property<long?>("ForwardedThroughId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<string>("LastHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<long>("LockVersion")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("PrunedThroughHash")
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<string>("Seal")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("AuditChainStates");
+                });
+
             modelBuilder.Entity("LarisVMS.Core.Entities.AuditLog", b =>
                 {
                     b.Property<long>("Id")
@@ -521,12 +559,22 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.Property<string>("Details")
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<string>("Hash")
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
                     b.Property<string>("IpAddress")
                         .HasMaxLength(45)
                         .HasColumnType("nvarchar(45)");
 
                     b.Property<DateTime>("OccurredAt")
                         .HasColumnType("datetime2");
+
+                    b.Property<string>("PreviousHash")
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
 
                     b.Property<string>("UserId")
                         .HasColumnType("nvarchar(max)");
@@ -815,6 +863,27 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.HasKey("CameraId");
 
                     b.ToTable("CameraCapabilities");
+                });
+
+            modelBuilder.Entity("LarisVMS.Core.Entities.CameraCertificatePin", b =>
+                {
+                    b.Property<string>("Host")
+                        .HasMaxLength(255)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(255)");
+
+                    b.Property<DateTime>("FirstSeenUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Thumbprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.HasKey("Host");
+
+                    b.ToTable("CameraCertificatePins");
                 });
 
             modelBuilder.Entity("LarisVMS.Core.Entities.CameraEvent", b =>
@@ -1834,6 +1903,10 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.Property<DateTime?>("ClientEndpointCertNotAfter")
                         .HasColumnType("datetime2");
 
+                    b.Property<string>("ClientEndpointCertSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
                     b.Property<string>("ClientEndpointHost")
                         .HasMaxLength(253)
                         .HasColumnType("nvarchar(253)");
@@ -1870,6 +1943,9 @@ namespace LarisVMS.Infrastructure.Migrations
                         .HasColumnType("nvarchar(20)");
 
                     b.Property<bool>("DisableAiObjectDetection")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("EncryptServerConnection")
                         .HasColumnType("bit");
 
                     b.Property<int?>("FailoverReason")
@@ -2016,6 +2092,11 @@ namespace LarisVMS.Infrastructure.Migrations
                         .HasMaxLength(50)
                         .HasColumnType("nvarchar(50)");
 
+                    b.Property<string>("PublisherSignature")
+                        .HasMaxLength(200)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(200)");
+
                     b.Property<string>("Sha256")
                         .IsRequired()
                         .HasMaxLength(64)
@@ -2129,6 +2210,44 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.HasIndex("UserId");
 
                     b.ToTable("PushSubscriptions");
+                });
+
+            modelBuilder.Entity("LarisVMS.Core.Entities.RegistrationCode", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("CodeHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<string>("CreatedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("ExpiresUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("UsedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<DateTime?>("UsedUtc")
+                        .IsConcurrencyToken()
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CodeHash")
+                        .IsUnique();
+
+                    b.ToTable("RegistrationCodes");
                 });
 
             modelBuilder.Entity("LarisVMS.Core.Entities.RoleAssignmentExpiry", b =>
@@ -2718,6 +2837,41 @@ namespace LarisVMS.Infrastructure.Migrations
                     b.ToTable("UserPreferences");
                 });
 
+            modelBuilder.Entity("LarisVMS.Core.Entities.UserSession", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ConfirmedUntilUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("IpAddress")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTime>("LastSeenUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("UserAgent")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("nvarchar(450)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("UserSessions");
+                });
+
             modelBuilder.Entity("LarisVMS.Core.Entities.View", b =>
                 {
                     b.Property<Guid>("Id")
@@ -3230,6 +3384,15 @@ namespace LarisVMS.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("Camera");
+                });
+
+            modelBuilder.Entity("LarisVMS.Core.Entities.UserSession", b =>
+                {
+                    b.HasOne("LarisVMS.Core.Entities.ApplicationUser", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("LarisVMS.Core.Entities.Zone", b =>

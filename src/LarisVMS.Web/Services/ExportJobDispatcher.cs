@@ -154,7 +154,7 @@ public class ExportJobDispatcher(IServiceScopeFactory scopeFactory, IHttpClientF
         var token = MediaToken.IssueForExport(candidate.CameraId, candidate.ExportItemId, key, TimeSpan.FromSeconds(30));
         var nodeUri = $"http://{ip}:{port}/export/{candidate.CameraId}?token={Uri.EscapeDataString(token)}";
 
-        var client = httpFactory.CreateClient();
+        var client = httpFactory.CreateClient(LarisVMS.Core.Security.NodeTlsTargets.HttpClientName);
         client.Timeout = TimeSpan.FromSeconds(25);
         try
         {

@@ -14,15 +14,15 @@ public interface IViewService
 
     Task<View> CreateAsync(string name, string ownerId, CancellationToken ct = default);
 
-    /// <summary>Throws UnauthorizedAccessException unless userId owns the view or the view is
-    /// shared (a shared view is editable by anyone with Views.Edit, enforced at the page level;
-    /// this only blocks editing someone else's *personal* view).</summary>
+    /// <summary>The owner may change their view; someone else's shared view only when
+    /// <paramref name="canManageAll"/> (an administrator). Others can use a shared view but not change
+    /// it or stop sharing it. Throws UnauthorizedAccessException otherwise.</summary>
     Task UpdateAsync(Guid id, string userId, string name, bool isShared, string layoutJson,
-        int sequenceIntervalSeconds, CancellationToken ct = default);
+        int sequenceIntervalSeconds, bool canManageAll = false, CancellationToken ct = default);
 
     /// <summary>The owner may always delete their view; someone else's shared view only when
-    /// <paramref name="canEditShared"/> (the caller holds Views.Edit). Throws UnauthorizedAccessException otherwise.</summary>
-    Task DeleteAsync(Guid id, string userId, bool canEditShared, CancellationToken ct = default);
+    /// <paramref name="canManageAll"/> (an administrator). Throws UnauthorizedAccessException otherwise.</summary>
+    Task DeleteAsync(Guid id, string userId, bool canManageAll, CancellationToken ct = default);
 
     /// <summary>Shared views with a tour interval set, ordered by name — what "Start tour" on
     /// Views/Index cycles through.</summary>

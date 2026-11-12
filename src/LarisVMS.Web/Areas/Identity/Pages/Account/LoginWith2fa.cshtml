@@ -1,0 +1,52 @@
+@page
+@model LarisVMS.Web.Areas.Identity.Pages.Account.LoginWith2faModel
+@{
+    ViewData["Title"] = L["account.twoFactor.title"].Value;
+}
+<div class="row justify-content-center">
+    <div class="col-md-5">
+        <h1 class="h3 mb-3">@L["account.twoFactor.title"]</h1>
+        <p>@(Model.Recovery ? L["account.twoFactor.enterRecoveryCode"] : L["account.twoFactor.enterAppCode"])</p>
+
+        @if (!ViewData.ModelState.IsValid)
+        {
+            <div class="alert alert-danger" role="alert">
+                <div asp-validation-summary="All" class="mb-0"></div>
+            </div>
+        }
+
+        <form method="post" asp-route-returnUrl="@Model.ReturnUrl" asp-route-rememberMe="@Model.RememberMe" asp-route-recovery="@Model.Recovery">
+            <div class="mb-3">
+                @if (Model.Recovery)
+                {
+                    <label asp-for="Input.Code" class="form-label">@L["account.twoFactor.recoveryCode"]</label>
+                    <input asp-for="Input.Code" class="form-control font-monospace" autocomplete="off" autofocus />
+                }
+                else
+                {
+                    <label asp-for="Input.Code" class="form-label"></label>
+                    <input asp-for="Input.Code" class="form-control font-monospace" autocomplete="one-time-code" inputmode="numeric" autofocus />
+                }
+            </div>
+            @if (!Model.Recovery)
+            {
+                <div class="form-check mb-3">
+                    <input class="form-check-input" asp-for="Input.RememberBrowser" />
+                    <label class="form-check-label" asp-for="Input.RememberBrowser"></label>
+                </div>
+            }
+            <button type="submit" class="btn btn-primary w-100">@L["account.login.logIn"]</button>
+        </form>
+
+        <div class="mt-3 text-center small">
+            @if (Model.Recovery)
+            {
+                <a asp-page="./LoginWith2fa" asp-route-returnUrl="@Model.ReturnUrl" asp-route-rememberMe="@Model.RememberMe">@L["account.twoFactor.useApp"]</a>
+            }
+            else
+            {
+                <a asp-page="./LoginWith2fa" asp-route-returnUrl="@Model.ReturnUrl" asp-route-rememberMe="@Model.RememberMe" asp-route-recovery="true">@L["account.twoFactor.useRecoveryCode"]</a>
+            }
+        </div>
+    </div>
+</div>

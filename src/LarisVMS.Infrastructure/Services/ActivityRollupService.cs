@@ -1,3 +1,4 @@
+using LarisVMS.Core.Localization;
 using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core.Entities;
@@ -134,7 +135,7 @@ public class ActivityRollupService(ApplicationDbContext db)
             ActivityHourlyCount Row(ActivitySource source, string group, string? label) =>
                 new() { CameraId = r.CameraId, HourUtc = hourUtc, Source = source, Group = group, Label = label, Count = r.Count };
 
-            if (r.IsTag) result.Add(Row(ActivitySource.Tag, ActivityHeatmapBuilder.TagsGroup, r.Rule ?? "(deleted tag)"));
+            if (r.IsTag) result.Add(Row(ActivitySource.Tag, ActivityHeatmapBuilder.TagsGroup, r.Rule ?? Loc.T("common.deletedTag")));
             else if (r.Category is not null) result.Add(Row(ActivitySource.Ai, r.Category, r.DetectedObjectLabel));
             else if (r.DetectionKind is { } kind)
             {

@@ -45,12 +45,14 @@ public static class Branding
     /// null (Bootstrap's default) instead of reaching the page.</summary>
     public static IReadOnlyDictionary<string, string> FontStacks { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
-        ["system"] = "system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
-        ["inter"] = "Inter, 'Segoe UI', system-ui, sans-serif",
-        ["helvetica"] = "'Helvetica Neue', Helvetica, Arial, sans-serif",
-        ["verdana"] = "Verdana, Geneva, sans-serif",
-        ["georgia"] = "Georgia, 'Times New Roman', serif",
-        ["mono"] = "Consolas, 'Courier New', monospace"
+        // var(--larisvms-cjk-fonts) (theme.css) adds the right Chinese, Japanese, or Korean system
+        // font for the page's language before the generic family.
+        ["system"] = "system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, var(--larisvms-cjk-fonts), sans-serif",
+        ["inter"] = "Inter, 'Segoe UI', system-ui, var(--larisvms-cjk-fonts), sans-serif",
+        ["helvetica"] = "'Helvetica Neue', Helvetica, Arial, var(--larisvms-cjk-fonts), sans-serif",
+        ["verdana"] = "Verdana, Geneva, var(--larisvms-cjk-fonts), sans-serif",
+        ["georgia"] = "Georgia, 'Times New Roman', var(--larisvms-cjk-fonts), serif",
+        ["mono"] = "Consolas, 'Courier New', var(--larisvms-cjk-fonts), monospace"
     };
 
     /// <summary>Human labels for the admin page's font picker, in display order.</summary>

@@ -138,9 +138,15 @@
                         <label for="field-saveSessionLifetimeHours" class="form-label">
                             @L["settings.permissions.roles.sessionLifetimeHours"]
                         </label>
-                        <input id="field-saveSessionLifetimeHours" type="number" min="0" name="SaveSessionLifetimeHours" class="form-control"
-                               value="@role.SessionLifetimeHours" />
-                        <div class="lv-hint">@L["settings.permissions.roles.0NeverExpire"]</div>
+                        <input id="field-saveSessionLifetimeHours" type="number" min="0" max="@SessionLifetimePolicy.MaxHours" name="SaveSessionLifetimeHours" class="form-control"
+                               value="@SessionLifetimePolicy.Clamp(role.SessionLifetimeHours)" />
+                        <div class="lv-hint">@L["settings.permissions.roles.sessionLifetimeRange", new { max = SessionLifetimePolicy.MaxHours }]</div>
+                    </div>
+                    <div class="col-sm-4">
+                        <label for="field-saveIdleMinutes-@role.Id" class="form-label">@L["settings.permissions.roles.idleTimeoutMinutes"]</label>
+                        <input id="field-saveIdleMinutes-@role.Id" type="number" min="0" max="@SessionIdlePolicy.MaxMinutes" name="SaveIdleMinutes" class="form-control"
+                               value="@role.IdleMinutes" />
+                        <div class="lv-hint">@L["settings.permissions.roles.idleTimeoutHint"]</div>
                     </div>
                 </div>
 
@@ -181,7 +187,7 @@
     private sealed record RoleRow(
         string Id, string Name, string? Tag, bool IsProtected, bool IsSystemRole, int UserCount,
         RoleScopeTier MaxScopeTier, bool AutoExpires, int? DefaultExpiryMinutes,
-        int? PtzPriorityLevel, int? PtzLockoutSeconds, int SessionLifetimeHours);
+        int? PtzPriorityLevel, int? PtzLockoutSeconds, int SessionLifetimeHours, int IdleMinutes);
 
     [CascadingParameter(Name = "AppName")] private string? AppName { get; set; }
     [CascadingParameter] private HttpContext? HttpContext { get; set; }
@@ -204,6 +210,7 @@
     private int? SavePtzPriorityLevel { get; set; }
     private int? SavePtzLockoutSeconds { get; set; }
     private int SaveSessionLifetimeHours { get; set; }
+    private int SaveIdleMinutes { get; set; }
 
     private string? DeleteRoleId { get; set; }
 
@@ -239,7 +246,8 @@
                 profile?.DefaultExpiryMinutes,
                 profile?.PtzPriorityLevel,
                 profile?.PtzLockoutSeconds,
-                hours));
+                hours,
+                await Settings.GetAsync(SessionIdlePolicy.SettingKey(r.Id), 0)));
         }
     }
 
@@ -283,6 +291,7 @@
         SavePtzPriorityLevel = int.TryParse(saveForm?["SavePtzPriorityLevel"].ToString(), out var ppl) ? ppl : null;
         SavePtzLockoutSeconds = int.TryParse(saveForm?["SavePtzLockoutSeconds"].ToString(), out var pls) ? pls : null;
         SaveSessionLifetimeHours = int.TryParse(saveForm?["SaveSessionLifetimeHours"].ToString(), out var slh) ? slh : 0;
+        SaveIdleMinutes = int.TryParse(saveForm?["SaveIdleMinutes"].ToString(), out var sim) ? sim : 0;
 
         var roleId = SaveRoleId ?? "";
         var role = await RoleManagerService.FindByIdAsync(roleId);
@@ -376,11 +385,33 @@
         }
 
         var oldHours = await Settings.GetAsync(SessionLifetimePolicy.SettingKey(role.Id), SessionLifetimePolicy.DefaultHours);
-        var clampedHours = Math.Max(0, SaveSessionLifetimeHours);
+        var clampedHours = SessionLifetimePolicy.Clamp(SaveSessionLifetimeHours);
+        // The protected role's other fields are fixed, but its session lifetime is editable — only
+        // by a Super Admin, or anyone with Settings.Edit could keep Super Admin sessions open longer.
+        if (clampedHours != oldHours && isProtected && !scope.IsSuperAdmin)
+        {
+            ErrorMessage = Loc.T("settings.permissions.roles.onlySuperAdminSessionLifetime");
+            await LoadAsync();
+            return;
+        }
         if (clampedHours != oldHours)
         {
             await Settings.SetGlobalAsync(SessionLifetimePolicy.SettingKey(role.Id), clampedHours.ToString(), User.Identity?.Name);
             fields.Add(AuditDiff.Of("Session lifetime (hours)", oldHours.ToString(), clampedHours.ToString()));
+        }
+
+        var oldIdle = await Settings.GetAsync(SessionIdlePolicy.SettingKey(role.Id), 0);
+        var clampedIdle = SessionIdlePolicy.Clamp(SaveIdleMinutes);
+        if (clampedIdle != oldIdle && isProtected && !scope.IsSuperAdmin)
+        {
+            ErrorMessage = Loc.T("settings.permissions.roles.onlySuperAdminSessionLifetime");
+            await LoadAsync();
+            return;
+        }
+        if (clampedIdle != oldIdle)
+        {
+            await Settings.SetGlobalAsync(SessionIdlePolicy.SettingKey(role.Id), clampedIdle.ToString(), User.Identity?.Name);
+            fields.Add(AuditDiff.Of("Idle timeout (minutes)", oldIdle.ToString(), clampedIdle.ToString()));
         }
 
         var details = AuditDiff.Build([.. fields]);

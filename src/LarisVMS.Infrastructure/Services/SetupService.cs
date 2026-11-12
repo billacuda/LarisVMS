@@ -182,6 +182,10 @@ public class SetupService(
             throw new InvalidOperationException(Loc.T("server.setup.unableToMakeTheAdministrator", new { message = ex.Message }), ex);
         }
 
+        // A new install enforces the strict script policy from the start (Settings → Security); an
+        // upgraded one keeps its own choice. Key matches LarisVMS.Web.Security.CspNonce.StrictSettingKey.
+        await UpsertSettingAsync("Security.StrictScriptPolicy", "True", "Enforce the nonce-only script Content-Security-Policy.", ct);
+
         await AppRelease.EnsureRecordedAsync(db, ct);
     }
 

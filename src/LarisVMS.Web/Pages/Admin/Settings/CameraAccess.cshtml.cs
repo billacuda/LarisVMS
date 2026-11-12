@@ -218,8 +218,8 @@ public class CameraAccessModel(ApplicationDbContext db, IAuditService auditServi
     private string ScopeText(CameraAccessScopeType scopeType, Guid? scopeId) => scopeType switch
     {
         CameraAccessScopeType.All => "every camera",
-        CameraAccessScopeType.Group => Groups.FirstOrDefault(g => g.Id == scopeId)?.Name ?? "(deleted group)",
-        _ => Cameras.FirstOrDefault(c => c.Id == scopeId)?.Name ?? "(deleted camera)"
+        CameraAccessScopeType.Group => Groups.FirstOrDefault(g => g.Id == scopeId)?.Name ?? Loc.T("common.deletedGroup"),
+        _ => Cameras.FirstOrDefault(c => c.Id == scopeId)?.Name ?? Loc.T("common.deletedCamera")
     };
 
     private async Task LoadAsync(CancellationToken ct)

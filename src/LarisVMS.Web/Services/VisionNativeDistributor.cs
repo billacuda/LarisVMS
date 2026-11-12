@@ -43,10 +43,25 @@ public sealed class VisionNativeDistributor(ILogger<VisionNativeDistributor> log
         return File.Exists(path) && new FileInfo(path).Length > 0 ? path : null;
     }
 
-    /// <summary>Size + SHA-256 of the seeded file, or null if the server has no copy.</summary>
+    /// <summary>The publisher's signature for a seeded file, written next to it by deploy.ps1 from a
+    /// publisher-signed build (build-node.ps1 -PublisherKeyPath).</summary>
+    public static string SignaturePath(string filePath) => filePath + ".publisher.sig";
+
+    /// <summary>Size + SHA-256 of the seeded file (and the publisher's signature, when the build was
+    /// signed), or null if the server has no copy.</summary>
     public VisionNativeInfo? GetInfo(string name)
     {
         if (ResolvePath(name) is not { } path) return null;
+        var info = GetHashedInfo(name, path);
+        var signaturePath = SignaturePath(path);
+        string? publisherSignature = null;
+        try { if (File.Exists(signaturePath)) publisherSignature = File.ReadAllText(signaturePath).Trim(); }
+        catch (IOException) { /* being replaced by a deploy; the next request reads it */ }
+        return string.IsNullOrEmpty(publisherSignature) ? info : info with { PublisherSignature = publisherSignature };
+    }
+
+    private VisionNativeInfo GetHashedInfo(string name, string path)
+    {
 
         var writeUtc = File.GetLastWriteTimeUtc(path);
         lock (_hashLock)

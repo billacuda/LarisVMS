@@ -94,6 +94,11 @@ public class BundledBuildRegistrar(ApplicationDbContext db, ILogger<BundledBuild
                 build.VisionSizeBytes = visionSize;
             }
 
+            // The publisher's signature, if the build script had the publisher's key (PublisherKey).
+            var signaturePath = Path.Combine(dir, LarisVMS.Core.Security.PublisherKey.SignatureFileName);
+            if (File.Exists(signaturePath))
+                build.PublisherSignature = (await File.ReadAllTextAsync(signaturePath, ct)).Trim();
+
             db.NodeBuildVersions.Add(build);
             await db.SaveChangesAsync(ct);
             logger.LogInformation("Registered bundled {Platform} build {Version} as Pending", platform, version);

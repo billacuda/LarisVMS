@@ -89,6 +89,7 @@ else
                     <th>@L["common.name"]</th>
                     <th>@L["common.status"]</th>
                     <th>@L["admin.nodes.ip"]</th>
+                    <th title="@L["admin.nodes.encryptedHint"]">@L["admin.nodes.encrypted"]</th>
                     <th>@L["common.version"]</th>
                     <th data-sort-numeric>@L["nav.cameras"]</th>
                     <th data-sort-numeric style="min-width: 12rem;">@L["admin.nodes.storage"]</th>
@@ -155,6 +156,18 @@ else
                             }
                         </td>
                         <td class="font-monospace">@(n.LastIpAddress ?? "—")</td>
+                        @* Encrypted connections from the server (opt-in per node): 🔒 once the node serves its
+                           pinned certificate, ⏳ while it's turned on but the node hasn't been restarted yet. *@
+                        <td data-sort-value="@(n.EncryptServerConnection ? (n.ClientEndpointCertSha256 is not null && n.ClientEndpointReportedPort is not null ? 2 : 1) : 0)">
+                            @if (n.EncryptServerConnection && n.ClientEndpointCertSha256 is not null && n.ClientEndpointReportedPort is not null)
+                            {
+                                <span role="img" title="@L["admin.nodes.encryptedOn"]" aria-label="@L["admin.nodes.encryptedOn"]">🔒</span>
+                            }
+                            else if (n.EncryptServerConnection)
+                            {
+                                <span role="img" title="@L["admin.nodes.encryptedWaiting"]" aria-label="@L["admin.nodes.encryptedWaiting"]">⏳</span>
+                            }
+                        </td>
                         <td>@n.Version</td>
                         <td>@cams</td>
                         <td data-sort-value="@((n.StorageTotalBytes is { } t && n.StorageFreeBytes is { } f) ? t - f : -1)">

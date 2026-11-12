@@ -234,6 +234,9 @@ window.larisvmsViewPlay = (function () {
         var playbackToggleBtn = el.querySelector('.view-cell-playback');
         var miniTimelineArea = el.querySelector('.view-cell-mini-timeline-area');
         var miniTimelineCanvas = el.querySelector('.view-cell-mini-timeline');
+        // The mini timeline and its buttons sit over the video: a pinch or drag there is the timeline's,
+        // never the picture's zoom and pan.
+        if (miniTimelineArea) window.larisvmsTimeline.isolateGestures(miniTimelineArea);
         var miniPlayPauseBtn = el.querySelector('.view-cell-mini-playpause');
         var ptzToggleBtn = el.querySelector('.view-cell-ptz-toggle');
         var ptzArea = el.querySelector('.view-cell-ptz-area');

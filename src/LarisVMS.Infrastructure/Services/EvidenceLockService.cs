@@ -161,7 +161,7 @@ public class EvidenceLockService(ApplicationDbContext db, IAuditService audit) :
             var size = await db.Segments.AsNoTracking()
                 .Where(s => s.CameraId == l.CameraId && s.StartUtc <= l.ToUtc && s.EndUtc >= l.FromUtc)
                 .SumAsync(s => (long?)s.SizeBytes, ct) ?? 0;
-            result.Add(new EvidenceLockDto(l.Id, l.CameraId, names.GetValueOrDefault(l.CameraId) ?? "(deleted camera)",
+            result.Add(new EvidenceLockDto(l.Id, l.CameraId, names.GetValueOrDefault(l.CameraId) ?? Loc.T("common.deletedCamera"),
                 l.FromUtc, l.ToUtc, l.Reason, l.ExpiresAtUtc, l.CreatedByUserId, l.CreatedByUserName, l.CreatedAtUtc,
                 l.RemovedAtUtc, l.RemovedByUserName, l.RemovalReason,
                 EvidenceLockRules.StatusOf(l, now).ToString(), EvidenceLockRules.ProtectedUntil(l), size, CanManage(l, viewer)));

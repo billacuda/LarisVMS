@@ -44,8 +44,22 @@ window.larisvmsTimeline = (function () {
         86400000, 2 * 86400000, 7 * 86400000, 14 * 86400000, 30 * 86400000, 90 * 86400000
     ];
 
+    // Stops pointer, touch, wheel, and double-click events at el, so a gesture that starts on it is
+    // handled only by it and never by a zoomable element underneath (fullscreen-tile.js).
+    function isolateGestures(el) {
+        el.style.touchAction = 'none';
+        ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'touchstart', 'touchmove', 'touchend',
+            'wheel', 'dblclick', 'contextmenu'].forEach(function (type) {
+            el.addEventListener(type, function (e) { e.stopPropagation(); });
+        });
+    }
+
     function create(canvas, options) {
         var ctx = canvas.getContext('2d');
+        // The timeline is its own touch zone. Where it sits over a video (a tile's mini timeline, or a
+        // fullscreen tile), a pinch or drag here must not also zoom or pan the picture behind it, and
+        // the browser mustn't scroll or zoom the page either.
+        isolateGestures(canvas);
         // Clamped like setRange does, not trusted raw: initialRangeMs now comes from a persisted user
         // preference (playback.position's rangeMs), and a corrupted or out-of-date stored value would
         // otherwise install a range the zoom controls themselves would never permit — leaving the
@@ -115,7 +129,7 @@ window.larisvmsTimeline = (function () {
         function drawDayMarkers(r, span, w, h, barTop, tickInterval) {
             if (tickInterval >= 86400000) return;
 
-            ctx.font = '9px sans-serif';
+            ctx.font = larisvmsI18n.font('9px');
             ctx.textBaseline = 'top';
             ctx.textAlign = 'left';
 
@@ -436,7 +450,7 @@ window.larisvmsTimeline = (function () {
             var tickInterval = pickTickInterval(span, w);
             var firstTick = Math.ceil(r.from / tickInterval) * tickInterval;
             ctx.fillStyle = '#aaa';
-            ctx.font = '9px sans-serif';
+            ctx.font = larisvmsI18n.font('9px');
             ctx.textBaseline = 'top';
             for (var t = firstTick; t <= r.to; t += tickInterval) {
                 var x = ((t - r.from) / span) * w;
@@ -998,5 +1012,5 @@ window.larisvmsTimeline = (function () {
         };
     }
 
-    return { create: create };
+    return { create: create, isolateGestures: isolateGestures };
 })();

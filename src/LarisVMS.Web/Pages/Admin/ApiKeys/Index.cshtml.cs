@@ -1,3 +1,4 @@
+using LarisVMS.Core.Localization;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -36,7 +37,7 @@ public class IndexModel(ApplicationDbContext db, IApiKeyService apiKeyService, I
         var roleNames = await db.Roles.ToDictionaryAsync(r => r.Id, r => r.Name ?? "(unknown role)", ct);
 
         Keys = keys.Select(k => new KeyRow(k.Id, k.Name,
-            roleNames.GetValueOrDefault(k.RoleId, "(deleted role)"), k.KeyPrefix,
+            roleNames.GetValueOrDefault(k.RoleId) ?? Loc.T("common.deletedRole"), k.KeyPrefix,
             k.CreatedAtUtc, k.LastUsedAtUtc, k.RevokedAtUtc is not null, k.ExpiresAtUtc, k.PermissionsLimited)).ToList();
     }
 

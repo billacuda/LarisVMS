@@ -72,6 +72,10 @@ param(
     # not baked into the command line (archive root comes from server config at runtime).
     [string]$ArchiveRoot       = '',
     [switch]$InsecureTls,
+    # Optional: the server certificate's SHA-256 thumbprint, from Settings -> Nodes. Pinned before the
+    # first connection, so registration only talks to that server instead of trusting the first
+    # certificate it sees.
+    [string]$ServerCertThumbprint = '',
     [pscredential]$ServiceCredential,
     # M5 live view: the node's own Kestrel port, reached only by LarisVMS.Web's server-side proxy over
     # the LAN (plain HTTP, never by a browser directly — see the plan's "Media path" section). Needs
@@ -104,6 +108,13 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+if ($ServerCertThumbprint) {
+    $ServerCertThumbprint = ($ServerCertThumbprint -replace '[\s:-]', '').ToUpperInvariant()
+    if ($ServerCertThumbprint -notmatch '^[0-9A-F]{64}$') {
+        throw "-ServerCertThumbprint must be the server certificate's SHA-256 thumbprint (64 hex characters), as shown on Settings -> Nodes."
+    }
+}
 
 function Write-Step([string]$msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
 function Write-Ok([string]$msg)   { Write-Host "    $msg"  -ForegroundColor Green }
@@ -501,10 +512,14 @@ $exePath = Join-Path $InstallDir 'LarisVMS.Node.exe'
 # not on its command line, which every local user can read from the registry.
 $regKeyPath = Join-Path $env:ProgramData 'LarisVMS\registration.key'
 New-Item -ItemType Directory -Force -Path (Split-Path $regKeyPath) | Out-Null
-Set-Content -Path $regKeyPath -Value $RegistrationKey -NoNewline -Encoding UTF8
+# Locked down while still empty, then written, so the key is never readable with the folder's own
+# permissions, even briefly.
+Set-Content -Path $regKeyPath -Value '' -NoNewline -Encoding UTF8
 $regKeyGrants = @('/grant:r', '*S-1-5-18:(F)', '/grant:r', '*S-1-5-32-544:(F)')
 if ($ServiceCredential) { $regKeyGrants += @('/grant:r', "$($ServiceCredential.UserName):(R)") }
 & icacls $regKeyPath /inheritance:r @regKeyGrants | Out-Null
+if ($LASTEXITCODE -ne 0) { Remove-Item $regKeyPath -Force -ErrorAction SilentlyContinue; throw "Couldn't restrict access to $regKeyPath." }
+Set-Content -Path $regKeyPath -Value $RegistrationKey -NoNewline -Encoding UTF8
 $argParts = @('--server-url', $ServerUrl, '--live-port', $LivePort)
 if (-not [string]::IsNullOrWhiteSpace($FfmpegPath)) { $argParts += @('--ffmpeg-path', $resolvedFfmpeg) }
 if ($StorageRoot) { $argParts += @('--storage-root', $StorageRoot) }
@@ -512,6 +527,7 @@ if ($StorageRoot) { $argParts += @('--storage-root', $StorageRoot) }
 # that the archive root comes from server config, so it's still safe to bake in but not required.
 if ($ArchiveRoot) { $argParts += @('--archive-root', $ArchiveRoot) }
 if ($InsecureTls) { $argParts += '--insecure-tls' }
+if ($ServerCertThumbprint) { $argParts += @('--server-cert-thumbprint', $ServerCertThumbprint) }
 
 $binPath = (Format-ServiceArg $exePath) + ' ' + (($argParts | ForEach-Object { Format-ServiceArg $_ }) -join ' ')
 

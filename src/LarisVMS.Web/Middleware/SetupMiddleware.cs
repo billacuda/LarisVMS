@@ -10,12 +10,13 @@ namespace LarisVMS.Web.Middleware;
 /// volatile bool (frcastr's pattern) so the check stops hitting the database once setup is
 /// done, rather than querying on every request forever (rsolva's version).
 /// </summary>
-public class SetupMiddleware(RequestDelegate next, IServiceScopeFactory scopeFactory)
+public class SetupMiddleware(RequestDelegate next, IServiceScopeFactory scopeFactory, LarisVMS.Web.Services.SetupToken setupToken)
 {
     // Instance fields are enough: conventional middleware is constructed once per app.
     private volatile bool _setupComplete;
     private volatile bool _setupFinalized;
     private const string SetupPendingItem = "LarisVMS.SetupPending";
+    private const string TokenPath = "/Setup/Token";
 
     private static readonly string[] ExemptPrefixes =
     [
@@ -59,6 +60,16 @@ public class SetupMiddleware(RequestDelegate next, IServiceScopeFactory scopeFac
                 return;
             }
 
+            // Before the admin account exists, the wizard is only for someone who can read the setup
+            // token on the server (or is using a browser on it).
+            if (!_setupComplete && !await IsSetupCompleteAsync()
+                && !path.StartsWith(TokenPath, StringComparison.OrdinalIgnoreCase) && !setupToken.IsAuthorized(context))
+            {
+                setupToken.Ensure();
+                context.Response.Redirect(TokenPath);
+                return;
+            }
+
             // Once the admin account exists the rest of the wizard (storage, node key, branding) is
             // only for a signed-in Super Admin. Before this, a wizard abandoned after the Admin step
             // stayed open to anyone: the node registration key, or repointing the database.
@@ -74,6 +85,7 @@ public class SetupMiddleware(RequestDelegate next, IServiceScopeFactory scopeFac
         if (await IsSetupCompleteAsync())
         {
             _setupComplete = true;
+            setupToken.Delete();
             await next(context);
             return;
         }

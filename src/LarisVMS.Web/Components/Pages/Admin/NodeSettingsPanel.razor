@@ -5,11 +5,13 @@
 @using LarisVMS.Core
 @using LarisVMS.Core.Interfaces
 @using LarisVMS.Web.Services
+@using RK = LarisVMS.Infrastructure.Services.RegistrationKeys
 @inject ISettingsResolver Settings
 @inject IAuditService AuditService
 @inject IPermissionService PermissionService
 @inject ReleaseCheckState ReleaseCheckState
 @inject LarisVMS.Relay.CertHolder Certificates
+@inject LarisVMS.Infrastructure.Data.ApplicationDbContext Db
 
 <section class="card mb-4" id="settings" aria-labelledby="nodeSettingsTitle">
     <div class="card-header"><h2 class="h6 mb-0" id="nodeSettingsTitle">@L["admin.nodeSettingsPanel.updatesAndRegistration"]</h2></div>
@@ -48,6 +50,12 @@
                         <button type="button" class="btn btn-outline-secondary" id="regenerateKeyBtn">@L["admin.nodeSettingsPanel.generate"]</button>
                     </div>
                 </SettingField>
+                <SettingField Label="@L["admin.nodeSettingsPanel.sharedKey"]" Hint="@L["admin.nodeSettingsPanel.sharedKeyHint"]" HelpLink="/Help/nodes#one-time-registration-codes">
+                    <div class="form-check mt-1">
+                        <InputCheckbox @bind-Value="SharedKeyEnabled" class="form-check-input" id="SharedKeyEnabled" />
+                        <label class="form-check-label" for="SharedKeyEnabled">@L["admin.nodeSettingsPanel.acceptTheSharedKey"]</label>
+                    </div>
+                </SettingField>
             </SettingSection>
             <SettingSection Title="@L["admin.nodeSettingsPanel.serverCertificate"]">
                 <SettingField For="field-certificateCheck" Label="@L["admin.nodeSettingsPanel.serverCertificateCheck"]" Wide HelpLink="/Help/nodes#server-certificate"
@@ -58,6 +66,13 @@
                             <option value="@option" selected="@(option == CertificateCheck)">@ServerCertificateSettings.Label(option)</option>
                         }
                     </select>
+                    @if (ServerCertificateSettings.Thumbprint(Certificates) is { } thumbprint)
+                    {
+                        <div class="small mt-2">
+                            @L["admin.nodeSettingsPanel.serverThumbprint"]
+                            <code class="d-block user-select-all text-break">@thumbprint</code>
+                        </div>
+                    }
                     @if (Certificates.IsSelfSigned)
                     {
                         <div class="alert alert-warning small mt-2 mb-0">
@@ -78,6 +93,61 @@
                 <button type="submit" class="btn btn-primary">@L["common.save"]</button>
             </div>
         </EditForm>
+        <h3 class="h6 mt-4" id="registration-codes">@L["admin.nodeSettingsPanel.oneTimeCodes"]</h3>
+        <p class="small text-muted">@L["admin.nodeSettingsPanel.oneTimeCodesIntro"]</p>
+        @if (NewCode is not null)
+        {
+            <div class="alert alert-success" role="status">
+                @L["admin.nodeSettingsPanel.newCodeShownOnce"]
+                <code class="d-block fs-6 user-select-all text-break mt-1">@NewCode</code>
+            </div>
+        }
+        <EditForm Model="this" FormName="create-registration-code" OnSubmit="HandleCreateCodeAsync" class="d-flex flex-wrap gap-2 align-items-center mb-2">
+            <label for="CodeLifetimeHours" class="form-label mb-0 small">@L["admin.nodeSettingsPanel.codeValidFor"]</label>
+            <select id="CodeLifetimeHours" name="CodeLifetimeHours" class="form-select form-select-sm w-auto">
+                <option value="1">@L["admin.nodeSettingsPanel.oneHour"]</option>
+                <option value="24" selected>@L["admin.nodeSettingsPanel.twentyFourHours"]</option>
+                <option value="168">@L["admin.nodeSettingsPanel.sevenDays"]</option>
+            </select>
+            <button type="submit" class="btn btn-sm btn-outline-primary">@L["admin.nodeSettingsPanel.createCode"]</button>
+        </EditForm>
+        @if (Codes.Count > 0)
+        {
+            <table class="table table-sm small mb-0">
+                <thead><tr><th>@L["admin.nodeSettingsPanel.codeCreated"]</th><th>@L["admin.nodeSettingsPanel.codeStatus"]</th><th><span class="visually-hidden">@L["common.actions"]</span></th></tr></thead>
+                <tbody>
+                    @foreach (var rc in Codes)
+                    {
+                        <tr>
+                            <td>@rc.CreatedUtc.ToTimeTag("g") · @rc.CreatedBy</td>
+                            <td>
+                                @if (rc.UsedUtc is { } usedUtc)
+                                {
+                                    @L.Markup("admin.nodeSettingsPanel.codeUsed", new { name = rc.UsedBy, time = usedUtc.ToTimeTag("g") })
+                                }
+                                else if (rc.ExpiresUtc <= DateTime.UtcNow)
+                                {
+                                    @L["admin.nodeSettingsPanel.codeExpired"]
+                                }
+                                else
+                                {
+                                    @L.Markup("admin.nodeSettingsPanel.codeValidUntil", new { time = rc.ExpiresUtc.ToTimeTag("g") })
+                                }
+                            </td>
+                            <td class="text-end">
+                                @if (rc.UsedUtc is null && rc.ExpiresUtc > DateTime.UtcNow)
+                                {
+                                    <form method="post" @formname="@($"revoke-code-{rc.Id}")" @onsubmit="() => HandleRevokeCodeAsync(rc.Id)">
+                                        <AntiforgeryToken />
+                                        <button type="submit" class="btn btn-sm btn-outline-danger">@L["admin.nodeSettingsPanel.revokeCode"]</button>
+                                    </form>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
         @if (Certificates.IsSelfSigned)
         {
             <EditForm Model="this" FormName="regenerate-server-certificate" OnSubmit="HandleRegenerateAsync" class="mt-2">
@@ -116,6 +186,11 @@
     [SupplyParameterFromForm(FormName = "node-settings")] private bool NodeAutoUpdateEnabled { get; set; }
     [SupplyParameterFromForm(FormName = "node-settings")] private bool ReleaseCheckEnabled { get; set; }
     [SupplyParameterFromForm(FormName = "node-settings")] private LarisVMS.Core.Security.ServerCertificateCheck CertificateCheck { get; set; }
+    [SupplyParameterFromForm(FormName = "node-settings")] private bool SharedKeyEnabled { get; set; }
+    [SupplyParameterFromForm(FormName = "create-registration-code")] private int CodeLifetimeHours { get; set; }
+
+    private List<LarisVMS.Core.Entities.RegistrationCode> Codes = [];
+    private string? NewCode;
 
     // Loaded by Nodes.razor (see NodeBuildsPanel's Builds for why).
     [Parameter] public string? InitialRegistrationKey { get; set; }
@@ -139,9 +214,44 @@
 
     protected override async Task OnInitializedAsync()
     {
+        await LoadCodesAsync();
         if (HttpContext?.Request.HasFormContentType == true && HttpContext.Request.Form["_handler"] == "node-settings") return;
         CertificateCheck = LarisVMS.Core.Security.ServerCertificateTrust.Parse(
             await Settings.GetRawAsync(ServerCertificateSettings.CheckKey));
+        SharedKeyEnabled = await Settings.GetAsync(RK.SharedKeyEnabledKey, true);
+    }
+
+    /// <summary>Codes still usable, then the ten most recently used or expired.</summary>
+    private async Task LoadCodesAsync()
+    {
+        var now = DateTime.UtcNow;
+        var all = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.ToListAsync(
+            Db.RegistrationCodes.OrderByDescending(c => c.CreatedUtc).Take(50));
+        Codes = all.Where(c => c.UsedUtc is null && c.ExpiresUtc > now)
+            .Concat(all.Where(c => c.UsedUtc is not null || c.ExpiresUtc <= now).Take(10)).ToList();
+    }
+
+    private async Task HandleCreateCodeAsync()
+    {
+        if (!(await PermissionService.GetGrantedAsync(User)).Has("Settings", "Edit")) return;
+        var lifetime = RK.Lifetimes.FirstOrDefault(t => t.TotalHours == CodeLifetimeHours, TimeSpan.FromHours(24));
+        var (code, row) = await RK.CreateAsync(Db, lifetime, User.Identity?.Name, CancellationToken.None);
+        NewCode = code;
+        await AuditService.LogAsync("Node.RegistrationCodeCreated", User.FindFirst(ClaimTypes.NameIdentifier)?.Value, User.Identity?.Name,
+            HttpContext?.Connection.RemoteIpAddress?.ToString(), $"One-time registration code {row.Id}, valid until {row.ExpiresUtc:u}");
+        await LoadCodesAsync();
+    }
+
+    private async Task HandleRevokeCodeAsync(Guid id)
+    {
+        if (!(await PermissionService.GetGrantedAsync(User)).Has("Settings", "Edit")) return;
+        var row = await Db.RegistrationCodes.FindAsync(id);
+        if (row is null || row.UsedUtc is not null) return;
+        Db.RegistrationCodes.Remove(row);
+        await Db.SaveChangesAsync();
+        await AuditService.LogAsync("Node.RegistrationCodeRevoked", User.FindFirst(ClaimTypes.NameIdentifier)?.Value, User.Identity?.Name,
+            HttpContext?.Connection.RemoteIpAddress?.ToString(), $"One-time registration code {row.Id}");
+        await LoadCodesAsync();
     }
 
     private async Task HandleRegenerateAsync()
@@ -177,6 +287,8 @@
         var oldRegistrationKey = LarisVMS.Infrastructure.Security.SecretProtection.Unprotect(await Settings.GetRawAsync("Node.RegistrationKey"));
         var oldAutoUpdate = await Settings.GetAsync("NodeAutoUpdate.Enabled", true);
         var oldReleaseCheck = await Settings.GetAsync(ReleaseCheckService.EnabledKey, ReleaseCheckService.DefaultEnabled);
+        var oldSharedKeyEnabled = await Settings.GetAsync(RK.SharedKeyEnabledKey, true);
+        await Settings.SetGlobalAsync(RK.SharedKeyEnabledKey, SharedKeyEnabled.ToString(), by);
 
         // Blank means "leave unchanged" — the form always submits the current key.
         if (!string.IsNullOrWhiteSpace(RegistrationKey))
@@ -192,6 +304,7 @@
                 string.IsNullOrWhiteSpace(RegistrationKey) ? oldRegistrationKey : RegistrationKey),
             AuditDiff.Of("NodeAutoUpdate.Enabled", oldAutoUpdate.ToString(), NodeAutoUpdateEnabled.ToString()),
             AuditDiff.Of(ReleaseCheckService.EnabledKey, oldReleaseCheck.ToString(), ReleaseCheckEnabled.ToString()),
+            AuditDiff.Of(RK.SharedKeyEnabledKey, oldSharedKeyEnabled.ToString(), SharedKeyEnabled.ToString()),
             AuditDiff.Of("Server certificate check", oldCertificateCheck.ToString(), CertificateCheck.ToString()));
         await AuditService.LogAsync("Settings.Update", User.FindFirst(ClaimTypes.NameIdentifier)?.Value, by,
             HttpContext?.Connection.RemoteIpAddress?.ToString(), details);

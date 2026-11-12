@@ -132,6 +132,10 @@ public sealed class ProxyWorker(ProxyApiClient api, ProxyConfig registration, Pr
         foreach (var n in nodes)
             foreach (var camId in n.CameraIds)
                 map[camId] = new NodeTarget(n.NodeId, n.NodeHost, n.NodeLivePort);
+        // Nodes with encrypted connections on: reached over HTTPS with their certificate pinned.
+        LarisVMS.Core.Security.NodeTlsTargets.Shared.Replace(nodes
+            .Where(n => n.NodeTlsPort is > 0 && !string.IsNullOrEmpty(n.NodeCertSha256))
+            .Select(n => new LarisVMS.Core.Security.NodeTlsTargets.Target(n.NodeHost, n.NodeLivePort, n.NodeTlsPort!.Value, n.NodeCertSha256!)));
         return map;
     }
 
@@ -139,8 +143,7 @@ public sealed class ProxyWorker(ProxyApiClient api, ProxyConfig registration, Pr
     private bool TrustUpdate(ProxyUpdateInfoDto update)
     {
         // A signed offer for an older build (a replayed one) would roll the proxy back to it.
-        if (Version.TryParse(update.Version, out var offered) && Version.TryParse(ProxyVersion.Current, out var running)
-            && offered <= running)
+        if (!LarisVMS.Core.Security.UpdateDownload.IsNewer(update.Version, ProxyVersion.Current))
         {
             logger.LogError("Not installing update {Version}: this proxy already runs {Running}.", update.Version, ProxyVersion.Current);
             return false;
@@ -150,6 +153,11 @@ public sealed class ProxyWorker(ProxyApiClient api, ProxyConfig registration, Pr
                 payload, out var keyToPin, out var error))
         {
             logger.LogError("Not installing update {Version}: {Reason}.", update.Version, error);
+            return false;
+        }
+        if (!LarisVMS.Core.Security.PublisherKey.Check(payload, update.PublisherSignature, out var publisherError))
+        {
+            logger.LogError("Not installing update {Version}: {Reason}.", update.Version, publisherError);
             return false;
         }
         if (keyToPin is not null)

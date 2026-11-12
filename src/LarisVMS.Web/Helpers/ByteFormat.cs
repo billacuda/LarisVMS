@@ -16,6 +16,7 @@ public static class ByteFormat
             unit++;
         }
 
-        return unit == 0 ? $"{value:0} {Units[unit]}" : $"{value:0.0} {Units[unit]}";
+        var culture = System.Globalization.CultureInfo.CurrentUICulture;
+        return unit == 0 ? $"{value.ToString("0", culture)} {Units[unit]}" : $"{value.ToString("0.0", culture)} {Units[unit]}";
     }
 }

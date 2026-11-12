@@ -1,0 +1,22 @@
+@page
+@model LarisVMS.Web.Pages.Setup.TokenModel
+@{
+    Layout = "_SetupLayout";
+    ViewData["Title"] = L["setup.token.title"].Value;
+}
+<p>@L["setup.token.intro"]</p>
+<p><code class="user-select-all text-break">@Model.FilePath</code></p>
+<p class="small text-muted">@L["setup.token.howToRead"]</p>
+
+@if (Model.ErrorMessage is not null)
+{
+    <div class="alert alert-danger" role="alert">@Model.ErrorMessage</div>
+}
+
+<form method="post" class="mb-3">
+    <div class="mb-3">
+        <label for="Token" class="form-label">@L["setup.token.label"]</label>
+        <input asp-for="Token" class="form-control font-monospace" autocomplete="off" autofocus required placeholder="XXXXX-XXXXX-XXXXX-XXXXX" />
+    </div>
+    <button type="submit" class="btn btn-primary">@L["setup.token.submit"]</button>
+</form>

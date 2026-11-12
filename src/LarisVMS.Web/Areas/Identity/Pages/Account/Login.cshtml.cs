@@ -18,20 +18,21 @@ namespace LarisVMS.Web.Areas.Identity.Pages.Account;
 /// "Sign in with {scheme}" button for every *registered* external authentication scheme
 /// unconditionally, but Entra should only be offered once an admin has actually configured and
 /// enabled it (EntraSsoSettings.IsEnabled); and sign-in names are routed by shape — an email address
-/// is a local account, anything without "@" is an Active Directory sAMAccountName. Otherwise
-/// deliberately smaller than the full default template: no 2FA, no separate Lockout page — this app
-/// has neither.
+/// is a local account, anything without "@" is an Active Directory sAMAccountName. An account with
+/// two-factor sign-in on goes on to LoginWith2fa (Active Directory ones too). Otherwise deliberately
+/// smaller than the full default template: no separate Lockout page.
 /// </summary>
 [AllowAnonymous]
 [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("sign-in")]
 public class LoginModel(
-    SignInManager<ApplicationUser> signInManager,
+    LarisSignInManager signInManager,
     UserManager<ApplicationUser> userManager,
     ApplicationDbContext db,
     IActiveDirectoryService directory,
     ActiveDirectoryUserSync adSync,
     LarisVMS.Core.Interfaces.IAuditService audit,
     LarisVMS.Web.Services.INotificationService notifications,
+    LarisVMS.Web.Services.SignInThrottle throttle,
     ILogger<LoginModel> logger) : PageModel
 {
     // Failed sign-ins from one address within a minute before Super Admins hear about it; the
@@ -49,6 +50,9 @@ public class LoginModel(
     [TempData] public string? ErrorMessage { get; set; }
 
     public bool ShowEntraButton { get; set; }
+
+    // The password was right and the account has two-factor sign-in on: the code comes next.
+    private bool _needsCode;
     public bool AdEnabled { get; set; }
     public static string EntraSchemeName => EntraOidcOptionsConfigurator.SchemeName;
 
@@ -66,7 +70,8 @@ public class LoginModel(
     {
         if (!string.IsNullOrEmpty(ErrorMessage)) ModelState.AddModelError(string.Empty, ErrorMessage);
 
-        ReturnUrl = returnUrl ?? Url.Content("~/");
+        // Only a page of this site: anything else (or a malformed address) goes to the start page.
+        ReturnUrl = Url.IsLocalUrl(returnUrl) ? returnUrl! : Url.Content("~/");
         // Clears any half-finished external sign-in attempt (e.g. the user navigated back mid-flow)
         // — same cleanup the default page does before showing the form fresh.
         await HttpContext.SignOutAsync(IdentityConstants.ExternalScheme);
@@ -75,13 +80,29 @@ public class LoginModel(
 
     public async Task<IActionResult> OnPostAsync(string? returnUrl = null)
     {
-        ReturnUrl = returnUrl ?? Url.Content("~/");
+        // Only a page of this site: anything else (or a malformed address) goes to the start page.
+        ReturnUrl = Url.IsLocalUrl(returnUrl) ? returnUrl! : Url.Content("~/");
         var adSettings = await LoadPageStateAsync();
         if (!ModelState.IsValid) return Page();
 
-        var error = AdUsername.IsLocal(Input.Username)
-            ? await SignInLocalAsync(adSettings)
-            : await SignInActiveDirectoryAsync(adSettings);
+        // Too many wrong tries at this name from this address: turned away before the password is
+        // even checked (so Active Directory's own lockout isn't run up either).
+        var address = HttpContext.Connection.RemoteIpAddress;
+        string? error;
+        if (throttle.BlockedFor(Input.Username, address) is { } wait)
+        {
+            await AuditFailureAsync("Login.Throttled", "Too many wrong tries from this address");
+            error = Loc.T("account.login.tooManyTries", new { minutes = Math.Max(1, (int)Math.Ceiling(wait.TotalMinutes)) });
+        }
+        else
+        {
+            error = AdUsername.IsLocal(Input.Username)
+                ? await SignInLocalAsync(adSettings)
+                : await SignInActiveDirectoryAsync(adSettings);
+            if (error is null) throttle.RecordSuccess(Input.Username, address);
+        }
+        if (error is null && _needsCode)
+            return RedirectToPage("./LoginWith2fa", new { returnUrl = ReturnUrl, rememberMe = Input.RememberMe });
         if (error is null) return LocalRedirect(ReturnUrl);
 
         ModelState.AddModelError(string.Empty, error);
@@ -93,15 +114,41 @@ public class LoginModel(
         if (!ActiveDirectorySettings.LocalLoginsAllowed(adSettings))
             return Loc.T("account.login.localSignInIsTurned");
 
-        var result = await signInManager.PasswordSignInAsync(Input.Username.Trim(), Input.Password, Input.RememberMe, lockoutOnFailure: true);
+        // Super Admins are never locked out by failed sign-ins (anyone could otherwise lock every
+        // admin out); the per-address throttle still applies to them.
+        var target = await userManager.FindByNameAsync(Input.Username.Trim());
+        // A name with no account still takes as long as a wrong password for a real one, so the time
+        // the answer takes doesn't say which accounts exist.
+        if (target is null)
+            userManager.PasswordHasher.VerifyHashedPassword(TimingDummy.User, TimingDummy.Hash(userManager), Input.Password);
+        var lockoutOnFailure = target is null || !await IsSuperAdminAsync(target);
+        var result = await signInManager.PasswordSignInAsync(Input.Username.Trim(), Input.Password, Input.RememberMe, lockoutOnFailure);
         if (result.Succeeded) return null;
+        if (result.RequiresTwoFactor)
+        {
+            _needsCode = true;
+            return null;
+        }
+        // A locked account gets the same answer as a wrong password, so this page doesn't say which
+        // accounts exist.
         if (result.IsLockedOut)
         {
             await AuditFailureAsync("Login.LockedOut", "Local account");
-            return Loc.T("account.login.thisAccountIsLockedOut");
+            return Loc.T("account.login.invalidEmailOrPassword");
         }
+        throttle.RecordFailure(Input.Username, HttpContext.Connection.RemoteIpAddress);
         await AuditFailureAsync("Login.Failure", "Local account");
         return Loc.T("account.login.invalidEmailOrPassword");
+    }
+
+    /// <summary>A password hash made once with the same hasher (and work factor) as real accounts, for
+    /// checking a password against when the name has no account.</summary>
+    private static class TimingDummy
+    {
+        public static readonly ApplicationUser User = new() { UserName = "timing-dummy" };
+        private static string? _hash;
+        public static string Hash(UserManager<ApplicationUser> users) =>
+            _hash ??= users.PasswordHasher.HashPassword(User, Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(24)));
     }
 
     // The username is typed by an anonymous visitor: one line, bounded, before it reaches the log
@@ -114,6 +161,9 @@ public class LoginModel(
         var username = Safe(Input.Username);
         var ip = HttpContext.Connection.RemoteIpAddress;
         await audit.LogAsync(action, null, username, ip?.ToString(), details, HttpContext.RequestAborted);
+
+        // Every failure counts toward spotting guessing spread over many addresses.
+        var spread = action == "Login.Failure" ? LarisVMS.Web.Services.SignInSprayMonitor.Shared.RecordFailure(username, ip) : null;
 
         // Built per admin, in their language.
         Func<string>? title = null, message = null;
@@ -132,6 +182,16 @@ public class LoginModel(
         {
             title = () => Loc.T("account.login.noticeRepeatedTitle");
             message = () => Loc.T("account.login.noticeRepeated", new { count = FailureAlertThreshold, ip = ip?.ToString(), username });
+        }
+        // Guessing spread over many addresses, which the per-address limits above don't see.
+        else if (spread is not null)
+        {
+            var minutes = (int)LarisVMS.Web.Services.SignInSprayMonitor.Window.TotalMinutes;
+            title = () => Loc.T("account.login.noticeSpreadTitle");
+            message = spread is LarisVMS.Web.Services.SignInSprayMonitor.AccountNotice a
+                ? () => Loc.T("account.login.noticeSpreadAccount", new { count = a.Failures, networks = a.Networks, username = a.Account, minutes })
+                : () => Loc.T("account.login.noticeSpreadServer", new { count = spread.Failures, networks = spread.Networks,
+                    accounts = ((LarisVMS.Web.Services.SignInSprayMonitor.ServerNotice)spread).Accounts, minutes });
         }
         if (title is null) return;
 
@@ -153,7 +213,7 @@ public class LoginModel(
         if (linked is not null && await userManager.IsLockedOutAsync(linked))
         {
             await AuditFailureAsync("Login.LockedOut", "Active Directory");
-            return Loc.T("account.login.thisAccountIsLockedOut");
+            return Loc.T("account.login.invalidUsernameOrPasswordOr");
         }
 
         AdUserEntry entry;
@@ -164,7 +224,8 @@ public class LoginModel(
         }
         catch (AdInvalidCredentialsException)
         {
-            if (linked is not null) await userManager.AccessFailedAsync(linked);
+            throttle.RecordFailure(Input.Username, HttpContext.Connection.RemoteIpAddress);
+            if (linked is not null && !await IsSuperAdminAsync(linked)) await userManager.AccessFailedAsync(linked);
             await AuditFailureAsync("Login.Failure", "Active Directory: wrong username or password");
             return Loc.T("account.login.invalidUsernameOrPasswordOr");
         }
@@ -186,8 +247,15 @@ public class LoginModel(
         }
 
         await userManager.ResetAccessFailedCountAsync(user);
-        await signInManager.SignInAsync(user, Input.RememberMe);
+        var result = await signInManager.SignInCheckingTwoFactorAsync(user, Input.RememberMe);
+        _needsCode = result.RequiresTwoFactor;
         return null;
+    }
+
+    private async Task<bool> IsSuperAdminAsync(ApplicationUser user)
+    {
+        var roleIds = await db.UserRoles.Where(ur => ur.UserId == user.Id).Select(ur => ur.RoleId).ToListAsync();
+        return roleIds.Count > 0 && await db.RoleProfiles.AnyAsync(p => roleIds.Contains(p.RoleId) && p.Tag == LarisVMS.Core.Auth.RoleTags.SuperAdmin);
     }
 
     private async Task<ApplicationUser?> FindLinkedUserByNameAsync(string username)

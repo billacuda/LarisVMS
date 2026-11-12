@@ -13,8 +13,10 @@ public static class SnapshotCapture
 {
     /// <summary>Returns JPEG bytes, or null if ffmpeg produced nothing (camera unreachable, RTSP
     /// auth failure, timeout) — callers turn that into a 502/504 rather than this class deciding
-    /// what an HTTP failure should look like.</summary>
-    public static async Task<byte[]?> CaptureAsync(string ffmpegPath, string rtspUri, CancellationToken ct, TimeSpan? timeout = null)
+    /// what an HTTP failure should look like. <paramref name="privacyMaskFilters"/> (from
+    /// PrivacyMaskFilterBuilder) black out the camera's privacy areas, as in its recordings.</summary>
+    public static async Task<byte[]?> CaptureAsync(string ffmpegPath, string rtspUri, CancellationToken ct, TimeSpan? timeout = null,
+        IReadOnlyList<string>? privacyMaskFilters = null)
     {
         var psi = new ProcessStartInfo
         {
@@ -26,18 +28,7 @@ public static class SnapshotCapture
             CreateNoWindow = true
         };
 
-        string[] args =
-        [
-            "-nostdin",
-            "-rtsp_transport", "tcp",
-            "-timeout", "5000000",
-            "-i", rtspUri,
-            "-frames:v", "1",
-            "-q:v", "3",
-            "-f", "image2",
-            "pipe:1"
-        ];
-        foreach (var a in args) psi.ArgumentList.Add(a);
+        foreach (var a in BuildArgs(rtspUri, privacyMaskFilters)) psi.ArgumentList.Add(a);
 
         using var process = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null.");
 
@@ -81,5 +72,13 @@ public static class SnapshotCapture
     {
         try { process.Kill(entireProcessTree: true); }
         catch { /* already exited */ }
+    }
+
+    internal static IReadOnlyList<string> BuildArgs(string rtspUri, IReadOnlyList<string>? privacyMaskFilters)
+    {
+        var args = new List<string> { "-nostdin", "-rtsp_transport", "tcp", "-timeout", "5000000", "-i", rtspUri };
+        if (privacyMaskFilters is { Count: > 0 }) args.AddRange(["-vf", string.Join(',', privacyMaskFilters)]);
+        args.AddRange(["-frames:v", "1", "-q:v", "3", "-f", "image2", "pipe:1"]);
+        return args;
     }
 }

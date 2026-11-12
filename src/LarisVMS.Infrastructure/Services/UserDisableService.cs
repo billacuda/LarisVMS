@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core.Entities;
 using LarisVMS.Core.Interfaces;
+using LarisVMS.Infrastructure.Data;
 
 namespace LarisVMS.Infrastructure.Services;
 
@@ -13,7 +15,8 @@ namespace LarisVMS.Infrastructure.Services;
 public sealed class UserDisableService(
     UserManager<ApplicationUser> userManager,
     UserConnectionRegistry connections,
-    IAuditService auditService)
+    IAuditService auditService,
+    ApplicationDbContext db)
 {
     public async Task DisableAsync(ApplicationUser user, bool byDirectorySync,
         string? actorUserId, string? actorName, string? ip, string? details, CancellationToken ct = default)
@@ -25,6 +28,23 @@ public sealed class UserDisableService(
         await userManager.UpdateSecurityStampAsync(user);
         connections.RevokeAll(user.Id);
         await auditService.LogAsync("User.Disable", actorUserId, actorName, ip, details ?? user.Email ?? user.UserName, ct);
+    }
+
+    /// <summary>After access was taken away (a role removed): signs the user out everywhere on their
+    /// next request, instead of when the cookie next refreshes its role claims, and closes their
+    /// relayed live video and talk now. Removing their sessions is what makes it the next request:
+    /// the security stamp alone is only re-checked every 30 minutes.</summary>
+    public async Task EndSessionsAsync(ApplicationUser user)
+    {
+        await userManager.UpdateSecurityStampAsync(user);
+        if (db.Database.IsRelational())
+            await db.UserSessions.Where(s => s.UserId == user.Id).ExecuteDeleteAsync();
+        else
+        {
+            db.UserSessions.RemoveRange(await db.UserSessions.Where(s => s.UserId == user.Id).ToListAsync());
+            await db.SaveChangesAsync();
+        }
+        connections.RevokeAll(user.Id);
     }
 
     public async Task EnableAsync(ApplicationUser user,

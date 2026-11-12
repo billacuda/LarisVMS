@@ -25,7 +25,7 @@ public sealed class NodeControlClient(IHttpClientFactory httpClientFactory, ILog
             return [];
 
         var token = MediaToken.IssueForNodeControl("vision-models", key, TimeSpan.FromSeconds(30));
-        var client = httpClientFactory.CreateClient();
+        var client = httpClientFactory.CreateClient(LarisVMS.Core.Security.NodeTlsTargets.HttpClientName);
         client.Timeout = TimeSpan.FromSeconds(10);
 
         try
@@ -55,7 +55,7 @@ public sealed class NodeControlClient(IHttpClientFactory httpClientFactory, ILog
             return false;
 
         var token = MediaToken.IssueForNodeControl("reconcile-now", key, TimeSpan.FromSeconds(30));
-        var client = httpClientFactory.CreateClient();
+        var client = httpClientFactory.CreateClient(LarisVMS.Core.Security.NodeTlsTargets.HttpClientName);
         client.Timeout = TimeSpan.FromSeconds(10);
 
         try

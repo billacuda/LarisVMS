@@ -22,6 +22,12 @@
           "Newtonsoft.Json": "13.0.4"
         }
       },
+      "Microsoft.NET.ILLink.Tasks": {
+        "type": "Direct",
+        "requested": "[10.0.14, )",
+        "resolved": "10.0.14",
+        "contentHash": "YlTamXppEQls6DYWt7RdUuwWDb0lyw/vXCaGeQpLCpsLmfwGuCkOz/vIGgMTV7ECsJcavkCOkxZXv9s8rdAHkQ=="
+      },
       "Azure.Core": {
         "type": "Transitive",
         "resolved": "1.53.0",
@@ -667,7 +673,7 @@
         "type": "Project",
         "dependencies": {
           "Azure.Identity": "[1.21.0, )",
-          "LarisVMS.Core": "[0.220.0, )",
+          "LarisVMS.Core": "[0.221.0, )",
           "LarisVMS.Onvif": "[1.0.0, )",
           "MailKit": "[4.17.0, )",
           "Microsoft.AspNetCore.DataProtection.Abstractions": "[10.0.13, )",
@@ -683,7 +689,7 @@
       "larisvms.onvif": {
         "type": "Project",
         "dependencies": {
-          "LarisVMS.Core": "[0.220.0, )"
+          "LarisVMS.Core": "[0.221.0, )"
         }
       },
       "Azure.Identity": {

@@ -72,7 +72,7 @@ public class ProxiesModel(IProxyService proxyService, INodeService nodeService, 
         }
         catch (System.Exception ex)
         {
-            ErrorMessage = ex.Message;
+            ErrorMessage = LarisVMS.Web.Helpers.UserFacingError.Message(ex);
             await OnGetAsync();
             return Page();
         }

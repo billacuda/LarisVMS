@@ -96,7 +96,7 @@ public static class DashboardWidgetRanker
 
     private static List<DashboardWidgetRow> CameraFps(DashboardWidgetData d, bool ascending) =>
         OrderByValue(d.Cameras.Where(c => c.Enabled && HealthFresh(c, d.NowUtc) && c.Fps is not null), c => c.Fps!.Value, ascending)
-            .Select(c => CameraRow(c, c.Fps, c.Fps!.Value.ToString(CultureInfo.InvariantCulture)))
+            .Select(c => CameraRow(c, c.Fps, c.Fps!.Value.ToString(CultureInfo.CurrentUICulture)))
             .ToList();
 
     private static List<DashboardWidgetRow> CameraBitrate(DashboardWidgetData d, bool ascending) =>
@@ -160,7 +160,7 @@ public static class DashboardWidgetRanker
     private static List<DashboardWidgetRow> CameraReconnects(DashboardWidgetData d) =>
         d.Cameras.Where(c => c.ReconnectCount is > 0)
             .OrderByDescending(c => c.ReconnectCount).ThenBy(c => c.Name)
-            .Select(c => CameraRow(c, c.ReconnectCount, c.ReconnectCount!.Value.ToString("N0", CultureInfo.InvariantCulture)))
+            .Select(c => CameraRow(c, c.ReconnectCount, c.ReconnectCount!.Value.ToString("N0", CultureInfo.CurrentUICulture)))
             .ToList();
 
     /// <summary>Cameras with a quota set, by how full it is. Badged from 90%.</summary>
@@ -168,7 +168,7 @@ public static class DashboardWidgetRanker
         d.Cameras.Where(c => c.QuotaBytes is > 0)
             .Select(c => (Camera: c, Percent: 100.0 * c.StorageBytes / c.QuotaBytes!.Value))
             .OrderByDescending(x => x.Percent).ThenBy(x => x.Camera.Name)
-            .Select(x => CameraRow(x.Camera, x.Percent, x.Percent.ToString("0", CultureInfo.InvariantCulture) + "%",
+            .Select(x => CameraRow(x.Camera, x.Percent, x.Percent.ToString("0", CultureInfo.CurrentUICulture) + "%",
                 note: Loc.T("server.dashboardWidget.sizeOf", new { used = FormatBytes(x.Camera.StorageBytes), total = FormatBytes(x.Camera.QuotaBytes!.Value) }),
                 badge: x.Percent >= 100 ? Loc.T("server.dashboardWidget.full") : x.Percent >= 90 ? Loc.T("server.dashboardWidget.nearlyFull") : null,
                 badgeClass: x.Percent >= 100 ? "text-bg-danger" : x.Percent >= 90 ? "text-bg-warning" : null))
@@ -205,7 +205,7 @@ public static class DashboardWidgetRanker
             })
             .Where(x => x.Count > 0)
             .OrderByDescending(x => x.Count).ThenBy(x => x.Camera.Name)
-            .Select(x => CameraRow(x.Camera, x.Count, x.Count.ToString("N0", CultureInfo.InvariantCulture), note: Loc.T("server.dashboardWidget.last", new { window = label })))
+            .Select(x => CameraRow(x.Camera, x.Count, x.Count.ToString("N0", CultureInfo.CurrentUICulture), note: Loc.T("server.dashboardWidget.last", new { window = label })))
             .ToList();
     }
 
@@ -231,7 +231,7 @@ public static class DashboardWidgetRanker
     private static List<DashboardWidgetRow> NodeCameras(DashboardWidgetData d) =>
         NodesWithCameras(d)
             .OrderByDescending(x => x.Cameras.Count).ThenBy(x => x.Node.Name)
-            .Select(x => NodeRow(d, x.Node, x.Cameras.Count, x.Cameras.Count.ToString(CultureInfo.InvariantCulture),
+            .Select(x => NodeRow(d, x.Node, x.Cameras.Count, x.Cameras.Count.ToString(CultureInfo.CurrentUICulture),
                 note: $"{x.Cameras.Count(c => c.Enabled)} enabled"))
             .ToList();
 
@@ -240,7 +240,7 @@ public static class DashboardWidgetRanker
             .Select(x => (x.Node, Offline: x.Cameras.Count(c => c.Enabled && !HealthFresh(c, d.NowUtc)), Total: x.Cameras.Count(c => c.Enabled)))
             .Where(x => x.Offline > 0)
             .OrderByDescending(x => x.Offline).ThenBy(x => x.Node.Name)
-            .Select(x => NodeRow(d, x.Node, x.Offline, x.Offline.ToString(CultureInfo.InvariantCulture), note: $"of {x.Total} enabled"))
+            .Select(x => NodeRow(d, x.Node, x.Offline, x.Offline.ToString(CultureInfo.CurrentUICulture), note: $"of {x.Total} enabled"))
             .ToList();
 
     /// <summary>Disk use is reported for every node, cameras or not — a full disk matters either way.</summary>
@@ -262,7 +262,7 @@ public static class DashboardWidgetRanker
             })
             .Where(x => x.Reporting > 0)
             .OrderByDescending(x => x.Fps).ThenBy(x => x.Node.Name)
-            .Select(x => NodeRow(d, x.Node, x.Fps, x.Fps.ToString("N0", CultureInfo.InvariantCulture), note: Loc.Plural("server.dashboardWidget.fromCameras", x.Reporting)))
+            .Select(x => NodeRow(d, x.Node, x.Fps, x.Fps.ToString("N0", CultureInfo.CurrentUICulture), note: Loc.Plural("server.dashboardWidget.fromCameras", x.Reporting)))
             .ToList();
 
     /// <summary>The node's own network load (receive + send) from its last heartbeat.</summary>
@@ -277,7 +277,7 @@ public static class DashboardWidgetRanker
     private static List<DashboardWidgetRow> NodeCpu(DashboardWidgetData d) =>
         d.Nodes.Where(n => HostFresh(n, d.NowUtc) && n.CpuPercent is not null)
             .OrderByDescending(n => n.CpuPercent).ThenBy(n => n.Name)
-            .Select(n => NodeRow(d, n, n.CpuPercent, n.CpuPercent!.Value.ToString("0", CultureInfo.InvariantCulture) + "%",
+            .Select(n => NodeRow(d, n, n.CpuPercent, n.CpuPercent!.Value.ToString("0", CultureInfo.CurrentUICulture) + "%",
                 badge: n.CpuPercent >= 90 ? Loc.T("server.dashboardWidget.high") : null, badgeClass: n.CpuPercent >= 90 ? "text-bg-danger" : null))
             .ToList();
 
@@ -362,20 +362,20 @@ public static class DashboardWidgetRanker
     internal static string FormatBytes(long bytes)
     {
         const double Gb = 1073741824d, Tb = Gb * 1024, Mb = 1048576d;
-        if (bytes >= Tb) return (bytes / Tb).ToString("0.0", CultureInfo.InvariantCulture) + " TB";
-        if (bytes >= Gb) return (bytes / Gb).ToString("0.0", CultureInfo.InvariantCulture) + " GB";
-        return (bytes / Mb).ToString("0", CultureInfo.InvariantCulture) + " MB";
+        if (bytes >= Tb) return (bytes / Tb).ToString("0.0", CultureInfo.CurrentUICulture) + " TB";
+        if (bytes >= Gb) return (bytes / Gb).ToString("0.0", CultureInfo.CurrentUICulture) + " GB";
+        return (bytes / Mb).ToString("0", CultureInfo.CurrentUICulture) + " MB";
     }
 
     private static string FormatKbps(int kbps) =>
-        kbps >= 1000 ? (kbps / 1000.0).ToString("0.0", CultureInfo.InvariantCulture) + " Mbit/s"
-        : kbps.ToString(CultureInfo.InvariantCulture) + " kbit/s";
+        kbps >= 1000 ? (kbps / 1000.0).ToString("0.0", CultureInfo.CurrentUICulture) + " Mbit/s"
+        : kbps.ToString(CultureInfo.CurrentUICulture) + " kbit/s";
 
     private static string Mbits(long bytesPerSec) =>
-        (bytesPerSec * 8 / 1_000_000.0).ToString("0.0", CultureInfo.InvariantCulture) + " Mbit/s";
+        (bytesPerSec * 8 / 1_000_000.0).ToString("0.0", CultureInfo.CurrentUICulture) + " Mbit/s";
 
     private static string FormatMegapixels(long pixels) =>
-        (pixels / 1_000_000.0).ToString("0.#", CultureInfo.InvariantCulture) + " MP";
+        (pixels / 1_000_000.0).ToString("0.#", CultureInfo.CurrentUICulture) + " MP";
 
     /// <summary>Stands in for a time in a row's Note; the browser replaces it with NoteTimeUtc in the
     /// viewer's local time (dashboard-widgets.js / dashboard-report.js).</summary>

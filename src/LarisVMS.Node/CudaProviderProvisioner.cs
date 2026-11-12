@@ -112,10 +112,17 @@ public sealed class CudaProviderProvisioner(string installDirectory, NodeApiClie
                 }
                 return;
             }
-            if (!UpdateSignature.Check(pinnedKey, info.SigningKeyPem, info.Signature,
-                    UpdateSignature.NativePayload(info.Name, info.Sha256), out _, out var signatureError))
+            var payload = UpdateSignature.NativePayload(info.Name, info.Sha256);
+            if (!UpdateSignature.Check(pinnedKey, info.SigningKeyPem, info.Signature, payload, out _, out var signatureError))
             {
                 logger.LogError("Not installing the CUDA provider library: {Reason}.", signatureError);
+                return;
+            }
+            // Built with the publisher's key: like an update, the publisher has to have signed it too,
+            // so a server that's been broken into can't push its own native code.
+            if (!LarisVMS.Core.Security.PublisherKey.Check(payload, info.PublisherSignature, out var publisherError))
+            {
+                logger.LogError("Not installing the CUDA provider library: {Reason}.", publisherError);
                 return;
             }
 

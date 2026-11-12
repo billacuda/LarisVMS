@@ -28,7 +28,9 @@ public sealed class ClientEndpointCspCache(IServiceScopeFactory scopeFactory)
     /// <summary>The map tile server, the only outside place pages load images from (img-src).</summary>
     public string ImageSources => _imageSources;
 
-    private volatile bool _strictScripts;
+    // Strict until the setting says otherwise: a database that can't be read at startup mustn't
+    // leave the relaxed policy in force.
+    private volatile bool _strictScripts = true;
 
     /// <summary>Settings → Security: enforce the nonce-only script policy (otherwise report-only).</summary>
     public bool StrictScripts => _strictScripts;
@@ -84,8 +86,9 @@ public sealed class ClientEndpointCspCache(IServiceScopeFactory scopeFactory)
                 .Select(s => s.Value).FirstOrDefaultAsync(ct);
             _imageSources = TileSource(string.IsNullOrWhiteSpace(tileUrl) ? LarisVMS.Infrastructure.Services.MapService.DefaultTileUrl : tileUrl);
 
-            _strictScripts = await db.Settings.AsNoTracking()
-                .AnyAsync(s => s.Key == LarisVMS.Web.Security.CspNonce.StrictSettingKey && (s.Value == "True" || s.Value == "true"), ct);
+            // On unless an admin turned it off.
+            _strictScripts = !await db.Settings.AsNoTracking()
+                .AnyAsync(s => s.Key == LarisVMS.Web.Security.CspNonce.StrictSettingKey && (s.Value == "False" || s.Value == "false"), ct);
 
             var firebaseOn = await db.Settings.AsNoTracking()
                 .AnyAsync(s => s.Key == "Notifications.Fcm.Enabled" && (s.Value == "True" || s.Value == "true"), ct);

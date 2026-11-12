@@ -85,7 +85,7 @@ public static class ActivityHeatmapBuilder
         if (dayTotals.Count > 0)
         {
             var b = dayTotals.OrderByDescending(d => d.Value).ThenBy(d => d.Key).First();
-            if (b.Value > 0) busiestText = Loc.T("server.activityHeatmap.busiestDay", new { day = b.Key.ToString("ddd, MMM d", CultureInfo.CurrentUICulture), count = b.Value.ToString("N0", CultureInfo.CurrentUICulture) });
+            if (b.Value > 0) busiestText = Loc.T("server.activityHeatmap.busiestDay", new { day = ShortDay(b.Key), count = b.Value.ToString("N0", CultureInfo.CurrentUICulture) });
         }
 
         return IsCalendar(range, view)
@@ -155,7 +155,7 @@ public static class ActivityHeatmapBuilder
         {
             var (hour, col) = Enumerable.Range(0, 24).SelectMany(h => Enumerable.Range(0, dates.Count).Select(c => (h, c)))
                 .First(p => cells[p.h][p.c] == max);
-            peak = Loc.T("server.activityHeatmap.busiestHourOn", new { day = dates[col].ToString("ddd, MMM d", CultureInfo.CurrentUICulture), hours = HourRange(hour), count = max.ToString("N0", CultureInfo.CurrentUICulture) });
+            peak = Loc.T("server.activityHeatmap.busiestHourOn", new { day = ShortDay(dates[col]), hours = HourRange(hour), count = max.ToString("N0", CultureInfo.CurrentUICulture) });
         }
 
         return new ActivityHeatmapDto(cameraId, cameraName, ZoneName(zone), range, "calendar",
@@ -221,6 +221,21 @@ public static class ActivityHeatmapBuilder
     internal static string HourLabel(int hour) =>
         Loc.T(hour < 12 ? "server.activityHeatmap.hourShortAm" : "server.activityHeatmap.hourShortPm",
             new { hour12 = hour % 12 == 0 ? 12 : hour % 12, hour24 = hour.ToString("00", CultureInfo.InvariantCulture) });
+
+    /// <summary>A short weekday and date in the page's language: "Sun, Nov 8", "dim., 8 nov.",
+    /// "11月8日 (日)". Built from the culture's own month-day pattern, so the fields come in that
+    /// language's order.</summary>
+    internal static string ShortDay(DateOnly date) => ShortDay(date, CultureInfo.CurrentUICulture);
+
+    internal static string ShortDay(DateOnly date, CultureInfo culture)
+    {
+        var format = culture.DateTimeFormat;
+        // The invariant culture's pattern is "MMMM dd" (Oct 02); read it as English.
+        var pattern = culture.Name.Length == 0 ? "MMM d" : format.MonthDayPattern.Replace("MMMM", "MMM");
+        var monthDay = date.ToString(pattern, culture);
+        var day = format.GetAbbreviatedDayName(date.DayOfWeek);
+        return culture.TwoLetterISOLanguageName is "ja" or "zh" or "ko" ? $"{monthDay} ({day})" : $"{day}, {monthDay}";
+    }
 
     internal static string HourRange(int hour) => $"{Clock(hour)}–{Clock((hour + 1) % 24)}";
 

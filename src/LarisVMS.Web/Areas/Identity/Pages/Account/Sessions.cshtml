@@ -1,0 +1,66 @@
+@page
+@model LarisVMS.Web.Areas.Identity.Pages.Account.SessionsModel
+@using LarisVMS.Web.Services
+@{
+    ViewData["Title"] = L["account.sessions.title"].Value;
+}
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+        <h1 class="h3 mb-3">@L["account.sessions.title"]</h1>
+        <p>@L["account.sessions.intro"]</p>
+
+        @if (Model.Message is not null)
+        {
+            <div class="alert alert-success" role="status">@Model.Message</div>
+        }
+
+        <div class="table-responsive">
+            <table class="table table-sm align-middle">
+                <thead>
+                    <tr>
+                        <th>@L["account.sessions.browser"]</th>
+                        <th>@L["account.sessions.address"]</th>
+                        <th>@L["account.sessions.signedIn"]</th>
+                        <th>@L["account.sessions.lastActive"]</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var s in Model.Sessions)
+                    {
+                        var browser = SessionIdlePolicy.DescribeBrowser(s.UserAgent);
+                        <tr>
+                            <td>
+                                <span title="@s.UserAgent">@(browser.Length > 0 ? browser : L["account.sessions.unknownBrowser"].Value)</span>
+                                @if (s.Id == Model.Current)
+                                {
+                                    <span class="badge text-bg-primary ms-1">@L["account.sessions.thisOne"]</span>
+                                }
+                            </td>
+                            <td class="font-monospace small">@s.IpAddress</td>
+                            <td class="text-nowrap"><time datetime="@s.CreatedUtc.ToUtcIso()" data-local="g">@s.CreatedUtc.ToLocalTime().ToString("g")</time></td>
+                            <td class="text-nowrap"><time datetime="@s.LastSeenUtc.ToUtcIso()" data-local="g">@s.LastSeenUtc.ToLocalTime().ToString("g")</time></td>
+                            <td class="text-end">
+                                @if (s.Id != Model.Current)
+                                {
+                                    <form method="post" asp-page-handler="End" asp-route-id="@s.Id" class="d-inline">
+                                        <button type="submit" class="btn btn-sm btn-outline-secondary">@L["account.sessions.signOut"]</button>
+                                    </form>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        @if (Model.Sessions.Any(s => s.Id != Model.Current))
+        {
+            <form method="post" asp-page-handler="EndOthers">
+                <button type="submit" class="btn btn-outline-danger">@L["account.sessions.signOutOthers"]</button>
+            </form>
+        }
+
+        <partial name="_AccountLinks" model="@("sessions")" />
+    </div>
+</div>

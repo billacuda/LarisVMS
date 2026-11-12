@@ -231,6 +231,29 @@ public class MariaDbModelTests
         Assert.Equal(ok, BackupService.ValidateMariaDbDumpPath(path) is null);
 
     [Fact]
+    public void ADumpToolInAFolderUsersCanChangeOrOnAShareIsRefused()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        Assert.NotNull(BackupService.ValidateMariaDbDumpPath(@"\\server\share\mariadb-dump.exe"));
+        Assert.False(LarisVMS.Core.Security.ExecutableLocation.IsTrusted(@"\\server\share\mariadb-dump.exe"));
+
+        // A new folder under ProgramData lets ordinary users write to it.
+        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "larisvms-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var tool = Path.Combine(dir, "mariadb-dump.exe");
+            File.WriteAllText(tool, "");
+            Assert.Equal(LarisVMS.Core.Localization.Loc.T("server.backup.dumpToolNotTrusted"), BackupService.ValidateMariaDbDumpPath(tool));
+            Assert.Null(BackupService.FindMariaDbDump(tool));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void BothServersUniqueViolationsAreRecognized()
     {
         Assert.False(DatabaseProviderOps.IsUniqueViolation(new InvalidOperationException()));

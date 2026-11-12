@@ -3,9 +3,12 @@
 @using LarisVMS.Core.Entities
 @using LarisVMS.Infrastructure.Data
 @using LarisVMS.Web.Helpers
+@using LarisVMS.Web.Services
 @using Microsoft.EntityFrameworkCore
 @inject ApplicationDbContext Db
 @inject IAuthorizationService AuthorizationService
+@inject IServiceProvider Services
+@inject ILogger<AuditLogs> Logger
 
 <PageTitle>@L["logs.auditLogs.auditLogs"] - @AppName</PageTitle>
 
@@ -15,6 +18,32 @@
 <p class="text-muted">
     @L.Markup("logs.auditLogs.intro")
 </p>
+
+@* The hash chain check (AuditIntegrity): the latest result, automatic or not, and a button to run it now. *@
+<div class="d-flex flex-wrap align-items-center gap-2 mb-3" role="status">
+    @if (Integrity is { } report)
+    {
+        <span class="@(report.Ok ? "text-success" : "text-danger fw-semibold")">
+            <i class="bi @(report.Ok ? "bi-shield-check" : "bi-shield-exclamation")" aria-hidden="true"></i>
+            @AuditIntegrity.Describe(report)
+        </span>
+        <span class="small text-muted">
+            @L["logs.auditLogs.integrityChecked"] <time datetime="@report.CheckedUtc.ToUtcIso()" data-local="g">@report.CheckedUtc.ToLocalTime().ToString("g")</time>
+            @if (report.Unsealed > 0)
+            {
+                <text> · @L["logs.auditLogs.integrityOlderEntries", new { count = report.Unsealed }]</text>
+            }
+        </span>
+    }
+    else
+    {
+        <span class="small text-muted">@L["logs.auditLogs.integrityNotChecked"]</span>
+    }
+    <form method="post" @formname="audit-verify" @onsubmit="CheckIntegrityAsync" class="ms-auto">
+        <AntiforgeryToken />
+        <button type="submit" class="btn btn-sm btn-outline-secondary">@L["logs.auditLogs.integrityCheckNow"]</button>
+    </form>
+</div>
 
 @* Selections survive navigating away and refreshing — see remember-filters.js. *@
 <form method="get" class="row g-2 mb-3" data-remember-filters="auditlogs">
@@ -97,6 +126,10 @@
     private int CurrentPage { get; set; } = 1;
     private int TotalPages { get; set; }
     private bool CanExport { get; set; }
+    private LarisVMS.Core.Security.AuditChainReport? Integrity => AuditIntegrity.Last;
+
+    private async Task CheckIntegrityAsync() =>
+        await AuditIntegrity.CheckAsync(Services, Logger, CancellationToken.None);
 
     // Absolute path, not a bare "?query" — see Snapshots/Index.razor's SnapshotPageUrl for why
     // (App.razor's <base href="/"> resolves a relative query-only href against "/", not this page).

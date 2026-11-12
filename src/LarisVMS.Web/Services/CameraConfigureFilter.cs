@@ -36,6 +36,28 @@ public static class CameraConfigureFilter
     public static RouteHandlerBuilder RequireCameraAccess(this RouteHandlerBuilder builder, CameraAccessActions action) =>
         builder.AddEndpointFilter((ctx, next) => CheckAsync(ctx, next, FromRoute, action));
 
+    /// <summary>Changing or deleting a whole map (its {id} route value) needs configuration access to
+    /// every camera placed on it, so someone limited to some cameras can't remove others' placements.</summary>
+    public static RouteHandlerBuilder RequireConfigureEveryCameraOnMap(this RouteHandlerBuilder builder) =>
+        builder.AddEndpointFilter(async (ctx, next) =>
+        {
+            var http = ctx.HttpContext;
+            if (Guid.TryParse(http.Request.RouteValues["id"]?.ToString(), out var mapId))
+            {
+                var access = http.RequestServices.GetRequiredService<ICameraAccessService>();
+                var allowed = await access.GetAccessibleCameraIdsAsync(http.User, CameraAccessActions.Configure, http.RequestAborted);
+                if (allowed is not null)
+                {
+                    var db = http.RequestServices.GetRequiredService<ApplicationDbContext>();
+                    var onMap = await db.CameraPlacements.AsNoTracking().Where(p => p.MapId == mapId)
+                        .Select(p => p.CameraId).ToListAsync(http.RequestAborted);
+                    if (onMap.Any(c => !allowed.Contains(c)))
+                        return Results.Problem(Loc.T("server.cameraConfigureFilter.youDontHaveConfigurationAccess"), statusCode: StatusCodes.Status403Forbidden);
+                }
+            }
+            return await next(ctx);
+        });
+
     public static Task<Guid?> ZoneOwner(ApplicationDbContext db, Guid id, CancellationToken ct) =>
         db.Zones.AsNoTracking().Where(z => z.Id == id).Select(z => (Guid?)z.CameraId).FirstOrDefaultAsync(ct);
 

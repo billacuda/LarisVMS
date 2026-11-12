@@ -73,5 +73,20 @@
         });
     }
 
-    window.larisvmsI18n = { lang: lang, locale: locale, t: t, html: html, plural: plural, formatNumber: formatNumber };
+    // A canvas font in the page's own font stack: ctx.font = larisvmsI18n.font('bold 12px'). A bare
+    // 'sans-serif' leaves Chinese, Japanese, and Korean labels to whatever the browser picks, which
+    // can be the wrong regional glyphs or missing characters; the page stack has per-language
+    // fallbacks (theme.css --larisvms-cjk-fonts).
+    var fontFamily = null;
+    function font(sizeAndWeight) {
+        if (!fontFamily) {
+            try {
+                fontFamily = document.body ? getComputedStyle(document.body).fontFamily : '';
+            } catch (e) { fontFamily = ''; }
+            if (!fontFamily) return sizeAndWeight + ' sans-serif';
+        }
+        return sizeAndWeight + ' ' + fontFamily;
+    }
+
+    window.larisvmsI18n = { lang: lang, locale: locale, t: t, html: html, plural: plural, formatNumber: formatNumber, font: font };
 })();

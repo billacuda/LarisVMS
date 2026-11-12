@@ -48,7 +48,7 @@ else
         <div class="btn-group btn-group-sm" role="group" aria-label="@L["activity.timeRange"]" id="activityRange">
             @foreach (var (value, label) in RangeOptions)
             {
-                <button type="button" class="btn btn-outline-secondary" data-range="@value">@label</button>
+                <button type="button" class="btn btn-outline-secondary" data-range="@value">@L[label]</button>
             }
         </div>
         @* Only for 30 days and up — see activity.js. *@
@@ -105,7 +105,7 @@ else
                         {
                             <div class="form-check">
                                 <input class="form-check-input" type="checkbox" id="activityScene@(key)" data-scene-cat="@key" checked>
-                                <label class="form-check-label" for="activityScene@(key)">@text</label>
+                                <label class="form-check-label" for="activityScene@(key)">@L[text]</label>
                             </div>
                         }
                     </div>
@@ -130,6 +130,10 @@ else
                         </div>
                         <div class="text-danger" data-bg-error role="status"></div>
                         <input type="file" class="d-none" id="activitySceneBackgroundFile" accept="image/png,image/jpeg,image/gif,image/webp" />
+                        <div class="fw-semibold small mt-3 mb-1">@L["activity.resetHeatmap"]</div>
+                        <div class="small text-muted" data-heat-reset-status></div>
+                        <button type="button" class="btn btn-outline-danger btn-sm mt-1" data-heat-reset>@L["activity.resetHeatmap"]</button>
+                        <div class="lv-hint">@L["activity.resetHeatmapHint"]</div>
                     </div>
                 </div>
             </div>
@@ -165,16 +169,13 @@ else
     [SupplyParameterFromQuery(Name = "metric")] private string? MetricParam { get; set; }
 
     private static readonly (string Key, string Text)[] SceneCategories =
-        [("Human", "People"), ("Vehicle", "Vehicles"), ("Animal", "Animals"), ("Object", "Other")];
+        [("Human", "settings.detection.categoryPeople"), ("Vehicle", "settings.detection.categoryVehicles"), ("Animal", "settings.detection.categoryAnimals"), ("Object", "activity.categoryOther")];
 
-    private static string HourText(int h)
-    {
-        var twelveHour = h % 12 == 0 ? 12 : h % 12;
-        return $"{twelveHour} {(h < 12 ? "AM" : "PM")}";
-    }
+    private string HourText(int h)
+        => L[h < 12 ? "js.activity.hourAm" : "js.activity.hourPm", new { hour = h % 12 == 0 ? 12 : h % 12 }];
 
     private static readonly (string Value, string Label)[] RangeOptions =
-        [("24h", "24 hours"), ("7d", "7 days"), ("30d", "30 days"), ("90d", "90 days"), ("1y", "1 year")];
+        [("24h", "activity.rangeOption24h"), ("7d", "activity.rangeOption7d"), ("30d", "activity.rangeOption30d"), ("90d", "activity.rangeOption90d"), ("1y", "activity.rangeOption1y")];
 
     private List<Camera> Cameras { get; set; } = [];
     private List<View> Views { get; set; } = [];

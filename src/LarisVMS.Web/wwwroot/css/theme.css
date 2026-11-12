@@ -13,8 +13,20 @@
 /* No web-font import: LarisVMS makes no third-party requests (see the README's Privacy section).
    Archivo is used if it's installed locally; otherwise the system font stack below. */
 
+/* Chinese, Japanese, and Korean system fonts, per page language: the same characters are drawn
+   differently in each, so a Japanese page must not pick a Chinese font first. Pages in other
+   languages still get a Simplified Chinese fallback for CJK camera names and the like. */
+:root { --larisvms-cjk-fonts: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Noto Sans SC"; }
+:root:lang(ja) { --larisvms-cjk-fonts: "Yu Gothic UI", "Meiryo UI", Meiryo, "Hiragino Sans", "Noto Sans CJK JP", "Noto Sans JP"; }
+:root:lang(ko) { --larisvms-cjk-fonts: "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans CJK KR", "Noto Sans KR"; }
+:root:lang(zh-Hant) { --larisvms-cjk-fonts: "Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", "Noto Sans CJK TC", "Noto Sans TC"; }
+
+/* Break CJK text between characters (it has no spaces) but never before closing punctuation. */
+:lang(ja), :lang(zh), :lang(ko) { line-break: strict; overflow-wrap: anywhere; }
+:lang(ko) { word-break: keep-all; }
+
 :root {
-    --bs-font-sans-serif: "Archivo", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --bs-font-sans-serif: "Archivo", system-ui, -apple-system, "Segoe UI", Roboto, var(--larisvms-cjk-fonts), sans-serif;
     --bs-body-font-family: var(--bs-font-sans-serif);
 
     --bs-body-bg: #f3f2f2;

@@ -28,11 +28,12 @@ public class ViewService(ApplicationDbContext db) : IViewService
     }
 
     public async Task UpdateAsync(Guid id, string userId, string name, bool isShared, string layoutJson,
-        int sequenceIntervalSeconds, CancellationToken ct = default)
+        int sequenceIntervalSeconds, bool canManageAll = false, CancellationToken ct = default)
     {
         var view = await db.Views.FirstOrDefaultAsync(v => v.Id == id, ct)
             ?? throw new InvalidOperationException(Loc.T("server.view.viewNotFound"));
-        if (view.OwnerId != userId && !view.IsShared)
+        // Someone else's view: only an administrator may change a shared one (anyone can use it).
+        if (view.OwnerId != userId && !(view.IsShared && canManageAll))
             throw new UnauthorizedAccessException(Loc.T("server.view.onlyTheOwnerCanEdit"));
 
         view.Name = name;
@@ -43,14 +44,12 @@ public class ViewService(ApplicationDbContext db) : IViewService
         await db.SaveChangesAsync(ct);
     }
 
-    public async Task DeleteAsync(Guid id, string userId, bool canEditShared, CancellationToken ct = default)
+    public async Task DeleteAsync(Guid id, string userId, bool canManageAll, CancellationToken ct = default)
     {
         var view = await db.Views.FirstOrDefaultAsync(v => v.Id == id, ct);
         if (view is null) return;
-        if (view.OwnerId != userId && !view.IsShared)
+        if (view.OwnerId != userId && !(view.IsShared && canManageAll))
             throw new UnauthorizedAccessException(Loc.T("server.view.onlyTheOwnerCanDelete"));
-        if (view.OwnerId != userId && !canEditShared)
-            throw new UnauthorizedAccessException(Loc.T("server.view.youNeedPermissionToEdit"));
         db.Views.Remove(view);
         await db.SaveChangesAsync(ct);
     }

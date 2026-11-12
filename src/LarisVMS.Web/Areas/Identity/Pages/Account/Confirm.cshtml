@@ -1,0 +1,47 @@
+@page
+@model LarisVMS.Web.Areas.Identity.Pages.Account.ConfirmModel
+@{
+    ViewData["Title"] = L["account.confirm.title"].Value;
+}
+<div class="row justify-content-center">
+    <div class="col-md-5">
+        <h1 class="h3 mb-3">@L["account.confirm.title"]</h1>
+
+        @if (!ViewData.ModelState.IsValid)
+        {
+            <div class="alert alert-danger" role="alert">
+                <div asp-validation-summary="All" class="mb-0"></div>
+            </div>
+        }
+
+        @if (Model.HasPassword)
+        {
+            <p>@L["account.confirm.intro"]</p>
+            <form method="post">
+                <input type="hidden" name="returnUrl" value="@Model.ReturnUrl" />
+                <input type="text" name="username" value="@User.Identity?.Name" autocomplete="username" hidden />
+                <div class="mb-3">
+                    <label asp-for="Input.Password" class="form-label"></label>
+                    <input asp-for="Input.Password" class="form-control" autocomplete="current-password" autofocus required />
+                </div>
+                @if (Model.NeedsCode)
+                {
+                    <div class="mb-3">
+                        <label asp-for="Input.Code" class="form-label"></label>
+                        <input asp-for="Input.Code" class="form-control font-monospace" autocomplete="one-time-code" inputmode="numeric" required />
+                    </div>
+                }
+                <button type="submit" class="btn btn-primary w-100">@L["account.confirm.submit"]</button>
+            </form>
+        }
+        else
+        {
+            <p>@L["account.confirm.signInAgainIntro"]</p>
+            <form method="post" asp-page-handler="SignInAgain">
+                <input type="hidden" name="returnUrl" value="@Model.ReturnUrl" />
+                <button type="submit" class="btn btn-primary w-100">@L["account.confirm.signInAgain"]</button>
+            </form>
+        }
+        <div class="mt-3 text-center small"><a href="/">@L["account.confirm.notNow"]</a></div>
+    </div>
+</div>

@@ -8,7 +8,8 @@ using LarisVMS.Core.Interfaces;
 namespace LarisVMS.Web.Pages.Views;
 
 [Authorize("Views.Edit")]
-public class EditorModel(IViewService viewService, ICameraService cameraService, ICameraAccessService cameraAccess) : PageModel
+public class EditorModel(IViewService viewService, ICameraService cameraService, ICameraAccessService cameraAccess,
+    IPermissionService permissions) : PageModel
 {
     public Guid Id { get; set; }
     public string Name { get; set; } = string.Empty;
@@ -16,6 +17,8 @@ public class EditorModel(IViewService viewService, ICameraService cameraService,
     public string LayoutJson { get; set; } = "{\"cells\":[],\"mobileTwoColumn\":false}";
     public int SequenceIntervalSeconds { get; set; }
     public string? ErrorMessage { get; set; }
+    /// <summary>Someone else's shared view, for someone who isn't an administrator: shown, not saved.</summary>
+    public bool ReadOnly { get; set; }
 
     /// <summary>Only cameras that could actually answer a /live request — same filter as
     /// Pages/Live/Index, since a cell for a camera that can't stream is dead weight in the palette.</summary>
@@ -32,6 +35,7 @@ public class EditorModel(IViewService viewService, ICameraService cameraService,
         IsShared = view.IsShared;
         LayoutJson = view.LayoutJson;
         SequenceIntervalSeconds = view.SequenceIntervalSeconds;
+        ReadOnly = view.OwnerId != userId && !await CanManageAllAsync();
 
         await LoadCamerasAsync();
         return Page();
@@ -42,7 +46,7 @@ public class EditorModel(IViewService viewService, ICameraService cameraService,
         var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
         try
         {
-            await viewService.UpdateAsync(id, userId, name, isShared, layoutJson, sequenceIntervalSeconds);
+            await viewService.UpdateAsync(id, userId, name, isShared, layoutJson, sequenceIntervalSeconds, await CanManageAllAsync());
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or InvalidOperationException)
         {
@@ -57,6 +61,8 @@ public class EditorModel(IViewService viewService, ICameraService cameraService,
         }
         return RedirectToPage("Editor", new { id });
     }
+
+    private async Task<bool> CanManageAllAsync() => (await permissions.GetGrantedAsync(User)).IsAdministrator;
 
     private async Task LoadCamerasAsync()
     {

@@ -9,6 +9,8 @@
 @inject ISettingsResolver Settings
 @inject IAuditService AuditService
 @inject IConfiguration Configuration
+@inject LarisVMS.Infrastructure.Data.ApplicationDbContext Db
+@inject IPermissionService PermissionService
 
 <PageTitle>@L["settings.logs.logSettings"] - @AppName</PageTitle>
 
@@ -18,6 +20,10 @@
 @if (!string.IsNullOrEmpty(SavedMessage))
 {
     <div class="alert alert-success">@SavedMessage</div>
+}
+@if (!string.IsNullOrEmpty(ErrorMessage))
+{
+    <div class="alert alert-danger" role="alert">@ErrorMessage</div>
 }
 
 <div class="lv-page-narrow">
@@ -47,6 +53,39 @@
             <InputNumber id="field-cameraEventRetentionDays" @bind-Value="CameraEventRetentionDays" min="0" class="form-control" />
         </SettingField>
     </SettingSection>
+    <SettingSection Title="@L["settings.logs.syslog"]">
+        <p class="small text-muted">@L["settings.logs.syslogIntro"]</p>
+        <SettingField For="field-syslogHost" Label="@L["settings.logs.syslogHost"]" Hint="@L["settings.logs.syslogHostHint"]">
+            <InputText id="field-syslogHost" @bind-Value="SyslogHost" class="form-control font-monospace" autocomplete="off" />
+        </SettingField>
+        <SettingField For="field-syslogProtocol" Label="@L["settings.logs.syslogProtocol"]" Hint="@L["settings.logs.syslogProtocolHint"]">
+            <select id="field-syslogProtocol" name="SyslogProtocol" class="form-select">
+                <option value="udp" selected="@(SyslogProtocol == "udp")">UDP</option>
+                <option value="tcp" selected="@(SyslogProtocol == "tcp")">TCP</option>
+                <option value="tls" selected="@(SyslogProtocol == "tls")">TLS</option>
+            </select>
+        </SettingField>
+        <SettingField For="field-syslogPort" Label="@L["settings.logs.syslogPort"]" Hint="@L["settings.logs.syslogPortHint"]">
+            <InputNumber id="field-syslogPort" @bind-Value="SyslogPort" min="0" max="65535" class="form-control" />
+        </SettingField>
+        @if (!string.IsNullOrEmpty(SyslogHost))
+        {
+            <p class="small mb-0" role="status">
+                @if (AuditSyslogForwarder.LastError is { } syslogError)
+                {
+                    <span class="text-danger">@L["settings.logs.syslogFailing", new { error = syslogError }]</span>
+                }
+                else if (AuditSyslogForwarder.LastSentUtc is { } sentUtc)
+                {
+                    @L["settings.logs.syslogLastSent"] <time datetime="@sentUtc.ToUtcIso()" data-local="g">@sentUtc.ToLocalTime().ToString("g")</time>
+                }
+                else
+                {
+                    @L["settings.logs.syslogNothingSentYet"]
+                }
+            </p>
+        }
+    </SettingSection>
     <div class="lv-savebar">
         <button type="submit" class="btn btn-primary">@L["common.save"]</button>
     </div>
@@ -62,6 +101,9 @@
     [SupplyParameterFromForm(FormName = "log-settings")] private int AuditLogRetentionDays { get; set; }
     [SupplyParameterFromForm(FormName = "log-settings")] private int CameraEventRetentionDays { get; set; }
     [SupplyParameterFromForm(FormName = "log-settings")] private string? LogLevel { get; set; }
+    [SupplyParameterFromForm(FormName = "log-settings")] private string? SyslogHost { get; set; }
+    [SupplyParameterFromForm(FormName = "log-settings")] private string? SyslogProtocol { get; set; }
+    [SupplyParameterFromForm(FormName = "log-settings")] private int SyslogPort { get; set; }
 
     private static string[] LogLevelOptions => LogLevels.Selectable;
 
@@ -69,6 +111,7 @@
     private string? ConfiguredLogPathOverride { get; set; }
 
     private string? SavedMessage;
+    private string? ErrorMessage;
 
     protected override async Task OnInitializedAsync()
     {
@@ -82,6 +125,9 @@
         AuditLogRetentionDays = await Settings.GetAsync(AuditLogRetentionService.RetentionDaysKey, AuditLogRetentionService.DefaultRetentionDays);
         CameraEventRetentionDays = await Settings.GetAsync(MotionSpanRetentionService.CameraEventRetentionDaysKey, MotionSpanRetentionService.DefaultCameraEventRetentionDays);
         LogLevel = await Settings.GetAsync("Logging.Level", "Information");
+        SyslogHost = await Settings.GetRawAsync(AuditSyslogForwarder.HostKey);
+        SyslogProtocol = await Settings.GetAsync(AuditSyslogForwarder.ProtocolKey, "udp");
+        SyslogPort = await Settings.GetAsync(AuditSyslogForwarder.PortKey, 0);
     }
 
     private async Task HandleSaveAsync()
@@ -95,6 +141,30 @@
         var oldAuditRetention = await Settings.GetAsync(AuditLogRetentionService.RetentionDaysKey, AuditLogRetentionService.DefaultRetentionDays);
         var oldLogLevel = await Settings.GetAsync("Logging.Level", "Information");
         var oldEventRetention = await Settings.GetAsync(MotionSpanRetentionService.CameraEventRetentionDaysKey, MotionSpanRetentionService.DefaultCameraEventRetentionDays);
+        var oldSyslogHost = await Settings.GetRawAsync(AuditSyslogForwarder.HostKey) ?? "";
+        var oldSyslogProtocol = await Settings.GetAsync(AuditSyslogForwarder.ProtocolKey, "udp");
+        var oldSyslogPort = await Settings.GetAsync(AuditSyslogForwarder.PortKey, 0);
+
+        var newSyslogHost = SyslogHost?.Trim() ?? "";
+        var newSyslogProtocol = SyslogProtocol is not null && AuditSyslogForwarder.Protocols.Contains(SyslogProtocol) ? SyslogProtocol : "udp";
+        if (newSyslogHost.Length > 0 && !AuditSyslogForwarder.IsValidHost(newSyslogHost))
+        {
+            ErrorMessage = Loc.T("settings.logs.syslogHostInvalid");
+            return;
+        }
+        if (SyslogPort is < 0 or > 65535)
+        {
+            ErrorMessage = Loc.T("settings.logs.syslogPortInvalid");
+            return;
+        }
+        // Where the off-server copy of the audit log goes is a Super Admin's call: anyone else with
+        // Settings.Edit could otherwise stop it, or send it somewhere of their choosing.
+        var syslogChanged = newSyslogHost != oldSyslogHost || newSyslogProtocol != oldSyslogProtocol || SyslogPort != oldSyslogPort;
+        if (syslogChanged && !(await AdminScope.ForAsync(Db, PermissionService, user)).IsSuperAdmin)
+        {
+            ErrorMessage = Loc.T("settings.logs.syslogSuperAdminOnly");
+            return;
+        }
 
         var newLogRetention = Math.Max(0, LogRetentionDays);
         var newAuditRetention = Math.Max(0, AuditLogRetentionDays);
@@ -117,11 +187,22 @@
             AuditDiff.Of(LogsRetentionService.RetentionDaysKey, oldLogRetention.ToString(), newLogRetention.ToString()),
             AuditDiff.Of(AuditLogRetentionService.RetentionDaysKey, oldAuditRetention.ToString(), newAuditRetention.ToString()),
             AuditDiff.Of("Logging.Level", oldLogLevel, newLogLevel),
-            AuditDiff.Of(MotionSpanRetentionService.CameraEventRetentionDaysKey, oldEventRetention.ToString(), newEventRetention.ToString()));
+            AuditDiff.Of(MotionSpanRetentionService.CameraEventRetentionDaysKey, oldEventRetention.ToString(), newEventRetention.ToString()),
+            AuditDiff.Of(AuditSyslogForwarder.HostKey, oldSyslogHost, newSyslogHost),
+            AuditDiff.Of(AuditSyslogForwarder.ProtocolKey, oldSyslogProtocol, newSyslogProtocol),
+            AuditDiff.Of(AuditSyslogForwarder.PortKey, oldSyslogPort.ToString(), SyslogPort.ToString()));
 
         await AuditService.LogAsync("Settings.Update",
             user.FindFirst(ClaimTypes.NameIdentifier)?.Value, by,
             HttpContext?.Connection.RemoteIpAddress?.ToString(), details);
+
+        // After the entry above, so a change to where the log goes (or turning it off) is itself sent
+        // to the old destination before the forwarder moves on.
+        await Settings.SetGlobalAsync(AuditSyslogForwarder.HostKey, newSyslogHost, by);
+        await Settings.SetGlobalAsync(AuditSyslogForwarder.ProtocolKey, newSyslogProtocol, by);
+        await Settings.SetGlobalAsync(AuditSyslogForwarder.PortKey, SyslogPort.ToString(), by);
+        SyslogHost = newSyslogHost;
+        SyslogProtocol = newSyslogProtocol;
 
         SavedMessage = Loc.T("common.saved");
         LogPath = LogPaths.AppLogsDirectory(Configuration);

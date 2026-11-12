@@ -8,18 +8,21 @@ using LarisVMS.Core.Interfaces;
 namespace LarisVMS.Web.Pages.Views;
 
 [Authorize("Views.View")]
-public class IndexModel(IViewService viewService, IAuthorizationService authorization) : PageModel
+public class IndexModel(IViewService viewService, IAuthorizationService authorization, IPermissionService permissions) : PageModel
 {
     public List<View> Views { get; set; } = [];
     public List<View> TourViews { get; set; } = [];
     public string? CurrentUserId { get; set; }
     public string? ErrorMessage { get; set; }
     public bool CanEditViews { get; set; }
+    /// <summary>An administrator: may change and delete other people's shared views.</summary>
+    public bool CanManageAll { get; set; }
 
     public async Task OnGetAsync()
     {
         CurrentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         CanEditViews = await CanEditViewsAsync();
+        CanManageAll = (await permissions.GetGrantedAsync(User)).IsAdministrator;
         Views = await viewService.ListVisibleToAsync(CurrentUserId ?? string.Empty);
         TourViews = await viewService.GetTourViewsAsync();
     }
@@ -40,7 +43,7 @@ public class IndexModel(IViewService viewService, IAuthorizationService authoriz
         var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
         try
         {
-            await viewService.DeleteAsync(id, userId, await CanEditViewsAsync());
+            await viewService.DeleteAsync(id, userId, (await permissions.GetGrantedAsync(User)).IsAdministrator);
         }
         catch (UnauthorizedAccessException ex)
         {

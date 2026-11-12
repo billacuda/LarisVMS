@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <!-- Version drives the footer via AppVersions, but this is the assembly's own version marker,
          bumped alongside CHANGELOG.md as described in the README. -->
-    <Version>0.220.0</Version>
+    <Version>0.221.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
@@ -19,6 +19,17 @@
     <!-- The built-in English UI text, embedded so a deploy can never ship without it; every other
          language is a file in a locales folder (see Localization/LocaleCatalog.cs). -->
     <EmbeddedResource Include="Localization\en.json" LogicalName="Locales/en.json" />
+    <!-- The publisher's update-signing public key (Security/PublisherKey.cs): only in a build signed
+         with the publisher key (build-node.ps1 / build-proxy.ps1 -PublisherKeyPath, which pass
+         LarisVMSPublisherSigned=true). Any other build, from source included, has no key, and its
+         nodes and proxies skip the publisher check. -->
+    <EmbeddedResource Include="Security\publisher-key.pem" LogicalName="LarisVMS.PublisherKey.pem"
+                      Condition="'$(LarisVMSPublisherSigned)' == 'true' And Exists('Security\publisher-key.pem')" />
   </ItemGroup>
+  <!-- A defined constant changes the compile inputs, so switching between signed and unsigned
+       builds recompiles LarisVMS.Core instead of reusing a DLL with (or without) the key. -->
+  <PropertyGroup Condition="'$(LarisVMSPublisherSigned)' == 'true'">
+    <DefineConstants>$(DefineConstants);LARISVMS_PUBLISHER_SIGNED</DefineConstants>
+  </PropertyGroup>
 
 </Project>

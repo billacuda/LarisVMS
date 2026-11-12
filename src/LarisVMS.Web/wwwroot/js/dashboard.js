@@ -58,8 +58,8 @@
     var nodesContainer = document.getElementById('dashboardNodes');
 
     function percent(p) { return p === null || p === undefined ? '—' : Math.round(p) + '%'; }
-    function gigabytes(b) { return b === null || b === undefined ? '—' : (b / 1073741824).toFixed(1); }
-    function mbits(b) { return b === null || b === undefined ? '—' : (b * 8 / 1000000).toFixed(1); }
+    function gigabytes(b) { return b === null || b === undefined ? '—' : (b / 1073741824).toLocaleString(larisvmsI18n.locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 }); }
+    function mbits(b) { return b === null || b === undefined ? '—' : (b * 8 / 1000000).toLocaleString(larisvmsI18n.locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 }); }
     function barClass(p) { return p >= 90 ? 'bg-danger' : p >= 75 ? 'bg-warning' : 'bg-success'; }
     function barWidth(p) { return Math.round(Math.max(0, Math.min(100, p || 0))); }
     function memoryPercent(n) {
@@ -143,7 +143,7 @@
     function audioCell(r) {
         if (!r.audioCodec) return '—';
         if (r.audioSampleRateHz === null || r.audioSampleRateHz === undefined) return escapeHtml(r.audioCodec);
-        var khz = (r.audioSampleRateHz / 1000).toFixed(1).replace(/\.0$/, '');
+        var khz = (r.audioSampleRateHz / 1000).toLocaleString(larisvmsI18n.locale, { maximumFractionDigits: 1 });
         return escapeHtml(r.audioCodec) + ' ' + khz + ' kHz';
     }
 
@@ -169,7 +169,7 @@
             '<td class="text-end" data-sort-value="' + (r.reconnectCount !== null && r.reconnectCount !== undefined ? r.reconnectCount : '') + '">' +
                 (r.reconnectCount !== null && r.reconnectCount !== undefined ? r.reconnectCount : '—') + '</td>' +
             '<td class="small text-muted" data-sort-value="' + (reported ? reported.getTime() : 0) + '">' +
-                (reported ? '<span title="' + reported.toISOString() + '">' + reported.toLocaleString(larisvmsI18n.locale) + '</span>' : '<span>never</span>') +
+                (reported ? '<span title="' + reported.toISOString() + '">' + reported.toLocaleString(larisvmsI18n.locale) + '</span>' : '<span>' + larisvmsI18n.html('js.dashboard.never') + '</span>') +
             '</td>' +
             '</tr>';
     }

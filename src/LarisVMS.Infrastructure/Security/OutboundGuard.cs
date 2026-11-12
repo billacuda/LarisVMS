@@ -38,12 +38,15 @@ public static class OutboundGuard
 
     /// <summary>For cameras (ONVIF): anything on the network, link-local too, since a camera with no
     /// DHCP lease falls back to 169.254.x.x. Only cloud metadata services, and addresses no camera
-    /// can have, are refused. Accepts the self-signed certificate every HTTPS camera has.</summary>
+    /// can have, are refused. Accepts the self-signed certificate every HTTPS camera has, unless
+    /// camera certificate pinning is on (CameraCertificatePins), when a camera's certificate must
+    /// match the one first seen at its address.</summary>
     public static SocketsHttpHandler CameraHandler()
     {
         var handler = GuardedHandler(IsCameraAddress, "isn't an address a camera can have");
 #pragma warning disable S4830 // Deliberate: camera certificates are self-signed and can't chain to anything.
-        handler.SslOptions.RemoteCertificateValidationCallback = (_, _, _, _) => true;
+        handler.SslOptions.RemoteCertificateValidationCallback = (sender, certificate, _, _) =>
+            LarisVMS.Core.Security.CameraCertificatePins.Shared.Check(sender, certificate);
 #pragma warning restore S4830
         return handler;
     }
@@ -52,7 +55,7 @@ public static class OutboundGuard
 
     public static bool IsCameraAddress(IPAddress address)
     {
-        if (address.IsIPv4MappedToIPv6) address = address.MapToIPv4();
+        address = Unwrap(address);
         if (address.Equals(CloudMetadataV4) || address.Equals(Ec2MetadataV6)) return false;
         if (address.Equals(IPAddress.Any) || address.Equals(IPAddress.IPv6Any)
             || address.Equals(IPAddress.Broadcast) || address.Equals(IPAddress.IPv6None))
@@ -74,6 +77,10 @@ public static class OutboundGuard
             var isConfiguredProxy = context.InitialRequestMessage.RequestUri is { } requestUri
                 && HttpClient.DefaultProxy.GetProxy(requestUri) is { } proxyUri
                 && string.Equals(proxyUri.Host, context.DnsEndPoint.Host, StringComparison.OrdinalIgnoreCase);
+            // Through the proxy, the proxy reaches the real destination, so check that instead.
+            if (isConfiguredProxy && context.InitialRequestMessage.RequestUri is { } destination
+                && !await DestinationAllowedAsync(destination.IdnHost, allowed, ct))
+                throw new HttpRequestException($"{destination.Host} {refusal}.");
             var target = addresses.FirstOrDefault(a => isConfiguredProxy || allowed(a))
                 ?? throw new HttpRequestException($"{context.DnsEndPoint.Host} {refusal}.");
             var socket = new Socket(target.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
@@ -90,6 +97,36 @@ public static class OutboundGuard
         },
     };
 
+    /// <summary>The real destination of a request sent through a proxy: an address must be allowed,
+    /// and a name must resolve only to allowed addresses. A name this machine can't resolve is left
+    /// to the proxy (some networks only resolve outside names there).</summary>
+    internal static async Task<bool> DestinationAllowedAsync(string host, Func<IPAddress, bool> allowed, CancellationToken ct)
+    {
+        var bare = host.Trim('[', ']');
+        if (IPAddress.TryParse(bare, out var literal)) return allowed(literal);
+        IPAddress[] resolved;
+        try { resolved = await Dns.GetHostAddressesAsync(bare, ct); }
+        catch (SocketException) { return true; }
+        return resolved.All(allowed);
+    }
+
+    /// <summary>An IPv6 address that carries an IPv4 one (mapped ::ffff:a.b.c.d, NAT64 64:ff9b::/96,
+    /// 6to4 2002::/16, or the old IPv4-compatible ::a.b.c.d) as that IPv4 address, so it's judged by
+    /// where it really goes.</summary>
+    internal static IPAddress Unwrap(IPAddress address)
+    {
+        if (address.IsIPv4MappedToIPv6) return address.MapToIPv4();
+        if (address.AddressFamily != AddressFamily.InterNetworkV6) return address;
+        var b = address.GetAddressBytes();
+        if (b[0] == 0x00 && b[1] == 0x64 && b[2] == 0xff && b[3] == 0x9b && b.Skip(4).Take(8).All(x => x == 0))
+            return new IPAddress(b[12..16]);
+        if (b[0] == 0x20 && b[1] == 0x02)
+            return new IPAddress(b[2..6]);
+        if (b.Take(12).All(x => x == 0) && !(b[12] == 0 && b[13] == 0 && b[14] == 0 && b[15] <= 1))
+            return new IPAddress(b[12..16]);
+        return address;
+    }
+
     // AWS's IPv6 instance metadata address; the IPv4 one (169.254.169.254) is link-local.
     private static readonly IPAddress Ec2MetadataV6 = IPAddress.Parse("fd00:ec2::254");
 
@@ -97,7 +134,7 @@ public static class OutboundGuard
     /// link-local, or multicast — never a reasonable target for an admin-entered service URL.</summary>
     public static bool IsHostOrLinkLocal(IPAddress address, bool allowLoopback)
     {
-        if (address.IsIPv4MappedToIPv6) address = address.MapToIPv4();
+        address = Unwrap(address);
         if (IPAddress.IsLoopback(address)) return !allowLoopback;
         if (address.Equals(IPAddress.Any) || address.Equals(IPAddress.IPv6Any)
             || address.Equals(IPAddress.Broadcast) || address.Equals(IPAddress.IPv6None))
@@ -114,7 +151,7 @@ public static class OutboundGuard
 
     public static bool IsPublic(IPAddress address)
     {
-        if (address.IsIPv4MappedToIPv6) address = address.MapToIPv4();
+        address = Unwrap(address);
         if (IPAddress.IsLoopback(address) || address.Equals(IPAddress.Any) || address.Equals(IPAddress.IPv6Any)
             || address.Equals(IPAddress.Broadcast) || address.Equals(IPAddress.IPv6None))
             return false;

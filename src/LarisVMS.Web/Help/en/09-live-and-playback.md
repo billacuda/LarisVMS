@@ -4,7 +4,7 @@ Views, live tiles, the playback timeline, exports, bookmarks, evidence locks, sn
 
 ## Views
 
-A **view** is a saved camera layout. Build views under **Views** by dragging and resizing tiles. **Live** and **Playback** both show a view. On phones, the layout collapses to one or two columns. Views can run fullscreen in kiosk mode, or rotate through several views on a timer.
+A **view** is a saved camera layout. Build views under **Views** by dragging and resizing tiles. **Live** and **Playback** both show a view. On phones, the layout collapses to one or two columns. Views can run fullscreen in kiosk mode, or rotate through several views on a timer. A shared view can be used by everyone who sees views, but only its owner or an administrator can change or delete it.
 
 ## Live tiles
 
@@ -45,7 +45,7 @@ Your position and zoom are remembered between visits.
 
 ## Exports
 
-**Export…** in Playback creates a video file for each selected camera over a time range. Exports run in the background and appear on the **Exports** page, where they can be downloaded, retried, or deleted.
+**Export…** in Playback creates a video file for each selected camera over a time range. Exports run in the background and appear on the **Exports** page, where they can be downloaded, retried, or deleted. One export covers up to 64 cameras, 31 days, and 1,000 camera-hours in all (4 cameras for a week is 672); for more, make several. Finished exports are kept for 7 days, then removed along with their files.
 
 - **✏ Redact** next to a camera blacks out areas in that camera's export only, such as a neighbour's window or a passer-by. Draw rectangles (drag) or polygons (click each corner; click the first point, double-click, or press Enter to finish; right-click removes the last point) over a frame from the export's start time. The footage itself is unchanged.
 - A redacted export is re-encoded, so it takes longer than a plain one. It's marked **Redacted** on the Exports page, and the audit log records that areas were blacked out.
@@ -111,6 +111,7 @@ A camera with footage still under a lock can't be deleted. Placing locks needs t
 - The heat is added up once an hour (motion every 10 minutes) and kept as long as the rest of the activity history. The paths behind it are kept with their events, so they go when the footage does.
 - Pick a camera, or a **view** (listed under **Views** in the camera list) to see a heatmap for each camera in it side by side. Each camera has its own scale, so a quiet camera still shows where its activity is. It can't be shown for all cameras at once.
 - **Background**: if you can configure the camera, you can replace its frame with your own picture (a clear daytime shot, say) with **Use my own picture…**. It has to be from the same camera with the same framing, at its full width or the same shape, so the heat lines up. **Use the camera's picture** goes back to the automatic frame.
+- **Reset heatmap**: after a camera is moved or re-aimed, its old heat no longer lines up with the picture. If you can configure the camera, **Reset heatmap** clears it and counts only what happens from then on; the card shows when counting started.
 
 ## Map
 
@@ -129,4 +130,4 @@ People who can edit cameras can set maps up:
 
 A camera can be on several maps, such as a street map and its building's floorplan. People only see the cameras they're allowed to view.
 
-Street map pictures are loaded by your browser from the tile server, so a street map needs internet access from the browser. For an offline site, or another map style, set your own https tile server under **Manage → Street map tiles**, and its attribution (most tile servers' terms require it to be shown on the map).
+Street map pictures are loaded by your browser from the tile server, so a street map needs internet access from the browser. For an offline site, or another map style, set your own https tile server under **Manage → Street map tiles**, and its attribution (most tile servers' terms require it to be shown on the map). Changing it needs the Settings edit permission as well, since it applies to the whole server.

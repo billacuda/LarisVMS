@@ -64,7 +64,7 @@ else
                             {
                                 <a class="btn btn-sm btn-outline-secondary" asp-page="Editor" asp-route-id="@v.Id">@L["common.edit"]</a>
                             }
-                            @if (isOwner || Model.CanEditViews)
+                            @if (isOwner || Model.CanManageAll)
                             {
                                 <form method="post" asp-page-handler="Delete" asp-route-id="@v.Id" class="d-inline"
                                       data-confirm="@L["views.deleteConfirm", new { name = v.Name }]">

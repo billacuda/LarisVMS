@@ -7,7 +7,17 @@ using LarisVMS.Vision.Service;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.Configure<VisionServiceOptions>(builder.Configuration.GetSection("Vision"));
-builder.Services.AddHttpClient(nameof(CameraDetectionPipeline));
+// Only the node launched this process, and only it knows this secret: every request here must carry
+// it, and every request back to the node does (LocalControlSecret). Started some other way, with no
+// secret, nothing is accepted.
+var controlSecret = builder.Configuration[LarisVMS.Core.Security.LocalControlSecret.VisionConfigKey];
+var hasControlSecret = !string.IsNullOrEmpty(controlSecret);
+if (!hasControlSecret) controlSecret = LarisVMS.Core.Security.LocalControlSecret.New();
+
+// The node callbacks (/detections, /detections/crop, the model fetch) carry the secret; the external
+// inference client below must never get it.
+builder.Services.AddHttpClient(nameof(CameraDetectionPipeline))
+    .ConfigureHttpClient(c => c.DefaultRequestHeaders.Add(LarisVMS.Core.Security.LocalControlSecret.HeaderName, controlSecret));
 // Detection.Backend = "ExternalHttp" traffic (one POST per frame, per camera, at up to MaxFps) gets
 // its own named client rather than sharing nameof(CameraDetectionPipeline)'s connection pool with
 // the Node callbacks (POST /detections, /detections/crop) — a 5s-timeout detect request piling up
@@ -63,6 +73,19 @@ var app = builder.Build();
 // list when a backend's prerequisites (CUDA Toolkit, cuDNN) are missing. The chosen backend and any
 // operator action needed are logged here and reported back to the control plane on the heartbeat.
 VisionBackendResolver.Initialize(key => builder.Configuration[key], app.Logger);
+
+if (!hasControlSecret)
+    app.Logger.LogWarning("No control secret was given (the node normally passes one); every request but /healthz will be refused.");
+app.Use(async (ctx, next) =>
+{
+    if (ctx.Request.Path.StartsWithSegments("/healthz")
+        || LarisVMS.Core.Security.LocalControlSecret.Matches(controlSecret, ctx.Request.Headers[LarisVMS.Core.Security.LocalControlSecret.HeaderName].ToString()))
+    {
+        await next(ctx);
+        return;
+    }
+    ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+});
 
 app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
 

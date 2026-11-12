@@ -1152,7 +1152,7 @@
         // turned off on the toolbar.
         var showSpeed = true;
         var showColor = true;
-        var trails = {};
+        var trails = Object.create(null); // keyed by track id from the node: no prototype
         var pathLingerMs = 5000;
         var pathDissolveMs = 3000;
         var stopped = false;
@@ -1201,7 +1201,7 @@
             var offsetX = (w - dw) / 2, offsetY = (h - dh) / 2;
 
             ctx.clearRect(0, 0, w, h);
-            ctx.font = '12px sans-serif';
+            ctx.font = larisvmsI18n.font('12px');
 
             // Paths under the boxes and labels.
             if (showPath && showMoving) {
@@ -1241,13 +1241,13 @@
                 // adds nothing beyond the category. Today that's only Human (sole class "person") —
                 // "Vehicle — truck" is kept in full.
                 var label = (!box.label || box.category === 'Human' || box.label.toLowerCase() === box.category.toLowerCase())
-                    ? box.category
-                    : box.category + ' — ' + box.label;
+                    ? (box.categoryText || box.category)
+                    : (box.categoryText || box.category) + ' — ' + (box.labelText || box.label);
                 if (showConfidence && typeof box.confidence === 'number' && isFinite(box.confidence)) {
                     label += ' ' + Math.round(box.confidence * 100) + '%';
                 }
                 // Object color (once classified) and speed (once it has crossed a speed trap).
-                if (showColor && box.color) label += ' · ' + box.color;
+                if (showColor && box.color) label += ' · ' + (box.colorText || box.color);
                 if (showSpeed && box.speedText) label += ' · ' + box.speedText;
                 labels.push({
                     text: label, color: color, idle: idle, w: ctx.measureText(label).width + 8, h: BOX_LABEL_HEIGHT,
@@ -1276,7 +1276,7 @@
         // Extends each moving track's path from this frame's (interpolated) boxes, and starts
         // dissolving the path of a track that has stopped, gone Idle, or left.
         function updateTrails(nowMs, dw, dh) {
-            var moving = {};
+            var moving = Object.create(null);
             latestBoxes.forEach(function (box) {
                 if (box.movementState !== 'Moving' || box.trackId === undefined || box.trackId === null) return;
                 moving[box.trackId] = true;
@@ -1428,6 +1428,7 @@
                 if (!b) { out.push(a); continue; }
                 out.push({
                     trackId: b.trackId, category: b.category, label: b.label,
+                    categoryText: b.categoryText, labelText: b.labelText, colorText: b.colorText,
                     movementState: b.movementState, confidence: b.confidence, colorHex: b.colorHex,
                     color: b.color, speedText: b.speedText,
                     x: lerp(a.x, b.x, f), y: lerp(a.y, b.y, f),
@@ -1554,7 +1555,7 @@
             socket.onclose = function () {
                 socket = null;
                 pendingTicks = [];
-                trails = {};
+                trails = Object.create(null);
                 if (stopped || !(showMoving || showIdle)) return;
                 // Routine reconnect, same fixed-delay spirit as the freeze-overlay/retry story the
                 // video socket already has — this feed is lower-stakes (a missed box or two is not
@@ -1575,7 +1576,7 @@
                 if (socket) { try { socket.close(); } catch (e) {} socket = null; }
                 pendingTicks = [];
                 latestBoxes = [];
-                trails = {};
+                trails = Object.create(null);
                 draw();
                 clearAiBadgeState();
             }
@@ -1589,7 +1590,7 @@
             setShowConfidence: function (on) { showConfidence = !!on; draw(); },
             // Travel paths for moving boxes. Same as Confidence: decoration only, so the socket is
             // left alone. Turning it off forgets every path.
-            setShowPath: function (on) { showPath = !!on; if (!showPath) trails = {}; draw(); },
+            setShowPath: function (on) { showPath = !!on; if (!showPath) trails = Object.create(null); draw(); },
             // Speed and color in each box's label. Decoration only, like Confidence.
             setShowSpeed: function (on) { showSpeed = !!on; draw(); },
             setShowColor: function (on) { showColor = !!on; draw(); },
@@ -1602,7 +1603,7 @@
                 if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
                 if (rafHandle !== null) { window.cancelAnimationFrame(rafHandle); rafHandle = null; }
                 pendingTicks = [];
-                trails = {};
+                trails = Object.create(null);
                 if (socket) { try { socket.close(); } catch (e) {} }
                 if (canvas.parentElement) canvas.parentElement.removeChild(canvas);
                 clearAiBadgeState();

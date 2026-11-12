@@ -23,7 +23,9 @@ public record NodeClientEndpointUpdate(
     string? DirectStreamingMode, bool? AllowInsecureClientEndpoint, string? ClientEndpointHost,
     string? ClientCertPfxPath, string? ClientCertPfxPassword,
     Guid? PrimaryProxyId = null, Guid? BackupProxyId = null,
-    Guid? BackupNodeId = null, bool DisableAiObjectDetection = false);
+    Guid? BackupNodeId = null, bool DisableAiObjectDetection = false,
+    /// <summary>Encrypted connections from the server (opt-in); null leaves it as it is.</summary>
+    bool? EncryptServerConnection = null);
 
 /// <summary>Server-side (LarisVMS.Web) node control plane: registration, auth, config snapshot, and
 /// ingest of segment/status reports from nodes.</summary>
@@ -111,7 +113,8 @@ public interface INodeService
         bool storagePressureActive = false, int? clientEndpointReportedPort = null,
         DateTime? clientEndpointCertNotAfter = null, bool? clientEndpointCertIsSelfSigned = null,
         string? clientEndpointLastError = null, List<NodePartnerHealthReport>? partnerHealthReports = null,
-        NodeHostStats? hostStats = null, CancellationToken ct = default, bool storageBlockedByEvidenceLocks = false);
+        NodeHostStats? hostStats = null, CancellationToken ct = default, bool storageBlockedByEvidenceLocks = false,
+        string? clientEndpointCertSha256 = null);
 
     /// <summary>Stores the node's reported AI detection backend. Returns true when it has just become
     /// degraded (or degraded for a different reason) — the moment to tell an admin. Null leaves the

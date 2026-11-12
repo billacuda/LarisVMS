@@ -546,6 +546,7 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
 
         var ranked = CameraProfileRanker.Rank(candidateProfiles);
         var roles = new[] { CameraStreamRole.Main, CameraStreamRole.Sub, CameraStreamRole.Third };
+        var cameraHost = await db.Cameras.Where(c => c.Id == cameraId).Select(c => c.Host).FirstOrDefaultAsync(ct);
         var byToken = existing.ToDictionary(s => s.ProfileToken);
         var byRole = existing.ToDictionary(s => s.Role);
         var matched = new HashSet<Guid>();
@@ -572,7 +573,7 @@ public class CameraService(ApplicationDbContext db, Func<HttpClient> httpClientF
             }
 
             current.Role = role;
-            current.RtspUri = streamUri.ToString();
+            current.RtspUri = LarisVMS.Core.Security.StreamUris.OnCameraHost(streamUri, cameraHost).ToString();
             current.ProfileToken = profile.Token;
             // ?? current.*, not a flat overwrite: ONVIF omits VideoEncoderConfiguration entirely for
             // some cameras/profiles (confirmed: Amcrest, H.265), so a re-probe reporting null here

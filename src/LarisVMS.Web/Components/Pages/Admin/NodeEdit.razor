@@ -239,6 +239,25 @@ else
                     }
                 </div>
             </SettingField>
+            <SettingField Label="@L["admin.nodeEdit.encryptServerConnection"]" Wide Hint="@L["admin.nodeEdit.encryptServerConnectionHint"]" HelpLink="/Help/nodes#encrypted-connections-from-the-server">
+                <div class="form-check form-switch mt-1">
+                    <input class="form-check-input" type="checkbox" name="EncryptServerConnection" value="true" id="encryptServerConnection" checked="@n.EncryptServerConnection" />
+                    <label class="form-check-label" for="encryptServerConnection">@L["admin.nodeEdit.encrypt"]</label>
+                </div>
+                @if (n.EncryptServerConnection)
+                {
+                    <div class="small">
+                        @if (n.ClientEndpointReportedPort is not null && n.ClientEndpointCertSha256 is { } sha)
+                        {
+                            <span class="text-success">@L["admin.nodeEdit.encryptedWith"]</span> <span class="font-monospace text-break">@sha</span>
+                        }
+                        else
+                        {
+                            <span class="text-warning-emphasis">@L["admin.nodeEdit.encryptWaiting"]</span>
+                        }
+                    </div>
+                }
+            </SettingField>
         </SettingSection>
 
         <SettingSection Title="@L["admin.nodeEdit.failover"]">
@@ -539,6 +558,7 @@ else
         var backupProxyId = FormStringOrNull(form["BackupProxyId"]);
         var backupNodeId = FormStringOrNull(form["BackupNodeId"]);
         var disableAi = form["DisableAiObjectDetection"].ToString() == "true";
+        var encryptServerConnection = form["EncryptServerConnection"].ToString() == "true";
         var snapshotField = FormStringOrNull(form["Snapshot"]);
         var localModelName = FormStringOrNull(form["LocalModelNameOverride"]);
         var id = NodeId;
@@ -609,7 +629,7 @@ else
                 string.IsNullOrWhiteSpace(directStreamingMode) ? null : directStreamingMode,
                 insecureOverride, clientEndpointHost, clientCertPfxPath,
                 string.IsNullOrEmpty(clientCertPfxPassword) ? null : clientCertPfxPassword,
-                primaryProxy, backupProxy, backupNode, disableAi);
+                primaryProxy, backupProxy, backupNode, disableAi, encryptServerConnection);
 
             var by = User.Identity?.Name;
             static string? Blank(string? v) => string.IsNullOrEmpty(v) ? null : v;
@@ -661,7 +681,8 @@ else
                 AuditDiff.Of("Primary proxy", before.PrimaryProxyId?.ToString(), primaryProxy?.ToString()),
                 AuditDiff.Of("Backup proxy", before.BackupProxyId?.ToString(), backupProxy?.ToString()),
                 AuditDiff.Of("Backup node", before.BackupNodeId?.ToString(), backupNode?.ToString()),
-                AuditDiff.Of("Recording only (AI off)", before.DisableAiObjectDetection.ToString(), disableAi.ToString()));
+                AuditDiff.Of("Recording only (AI off)", before.DisableAiObjectDetection.ToString(), disableAi.ToString()),
+                AuditDiff.Of("Encrypt connections from the server", before.EncryptServerConnection.ToString(), encryptServerConnection.ToString()));
 
             await AuditService.LogAsync("Node.Update", User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
                 User.Identity?.Name, HttpContext?.Connection.RemoteIpAddress?.ToString(),
@@ -669,10 +690,11 @@ else
 
             // Fire-and-forget, deliberately not awaited — see Admin/Settings/Detection's own reconcile trigger.
             _ = NodeControlClient.TriggerReconcileAsync(before);
+            LarisVMS.Web.Services.NodeTlsService.RequestReload();
         }
         catch (Exception ex)
         {
-            await Fail(ex.Message);
+            await Fail(LarisVMS.Web.Helpers.UserFacingError.Message(ex));
             return;
         }
 

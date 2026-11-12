@@ -89,6 +89,10 @@
                 <InputCheckbox @bind-Value="StrictScripts" class="form-check-input" id="strictScripts" />
                 <label class="form-check-label" for="strictScripts">@L["settings.security.enforce"]</label>
             </div>
+            @if (!StrictScripts)
+            {
+                <div class="small text-warning-emphasis">@L["settings.security.strictRecommended"]</div>
+            }
             <div class="small text-muted">
                 @if (CspReports.Total == 0)
                 {
@@ -120,10 +124,63 @@
             }
         </SettingField>
     </SettingSection>
+    <SettingSection Title="@L["settings.security.extraProtection"]" Subtitle="@L["settings.security.extraProtectionSubtitle"]">
+        <SettingField Label="@L["settings.security.requireTwoFactor"]" Wide Hint="@L["settings.security.requireTwoFactorHint"]" HelpLink="/Help/users#two-factor-sign-in">
+            <div class="form-check form-switch mt-1">
+                <InputCheckbox @bind-Value="RequireTwoFactor" class="form-check-input" id="requireTwoFactor" />
+                <label class="form-check-label" for="requireTwoFactor">@L["settings.security.require"]</label>
+            </div>
+        </SettingField>
+        <SettingField Label="@L["settings.security.confirmPasswordForAdmin"]" Wide Hint="@L["settings.security.confirmPasswordForAdminHint"]" HelpLink="/Help/users#sessions">
+            <div class="form-check form-switch mt-1">
+                <InputCheckbox @bind-Value="ConfirmPasswordForAdmin" class="form-check-input" id="confirmPasswordForAdmin" />
+                <label class="form-check-label" for="confirmPasswordForAdmin">@L["settings.security.askAgain"]</label>
+            </div>
+        </SettingField>
+        <SettingField Label="@L["settings.security.temporaryAdminPasswords"]" Wide Hint="@L["settings.security.temporaryAdminPasswordsHint"]" HelpLink="/Help/users#passwords">
+            <div class="form-check form-switch mt-1">
+                <InputCheckbox @bind-Value="TemporaryAdminPasswords" class="form-check-input" id="temporaryAdminPasswords" />
+                <label class="form-check-label" for="temporaryAdminPasswords">@L["settings.security.checkMustChangeByDefault"]</label>
+            </div>
+        </SettingField>
+        <SettingField Label="@L["settings.security.pinCameraCertificates"]" Wide Hint="@L["settings.security.pinCameraCertificatesHint"]" HelpLink="/Help/security#camera-certificates">
+            <div class="form-check form-switch mt-1">
+                <InputCheckbox @bind-Value="PinCameraCertificates" class="form-check-input" id="pinCameraCertificates" />
+                <label class="form-check-label" for="pinCameraCertificates">@L["settings.security.rememberEachCamerasCertificate"]</label>
+            </div>
+        </SettingField>
+    </SettingSection>
     <div class="lv-savebar">
         <button type="submit" class="btn btn-primary">@L["common.save"]</button>
     </div>
 </EditForm>
+
+@if (CameraPins.Count > 0)
+{
+    <h2 class="h6 mt-4">@L["settings.security.rememberedCameraCertificates"]</h2>
+    <div class="table-responsive">
+        <table class="table table-sm small">
+            <thead><tr><th>@L["settings.security.cameraAddress"]</th><th>@L["settings.security.certificateSha256"]</th><th>@L["settings.security.firstSeen"]</th><th><span class="visually-hidden">@L["common.actions"]</span></th></tr></thead>
+            <tbody>
+                @foreach (var pin in CameraPins)
+                {
+                    <tr>
+                        <td class="font-monospace">@pin.Host</td>
+                        <td class="font-monospace text-break">@pin.Thumbprint</td>
+                        <td class="text-nowrap">@pin.FirstSeenUtc.ToTimeTag("g")</td>
+                        <td class="text-end">
+                            <form method="post" @formname="@($"forget-pin-{pin.Host}")" @onsubmit="() => HandleForgetPinAsync(pin.Host)">
+                                <AntiforgeryToken />
+                                <button type="submit" class="btn btn-sm btn-outline-danger"
+                                        data-confirm="@L["settings.security.forgetCertificateConfirm", new { host = pin.Host }]">@L["settings.security.forget"]</button>
+                            </form>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
 </div>
 
 @code {
@@ -142,6 +199,12 @@
     private bool HasStoredEntraClientSecret { get; set; }
     [SupplyParameterFromForm(FormName = "security-settings")] private bool Http3Enabled { get; set; }
     [SupplyParameterFromForm(FormName = "security-settings")] private bool StrictScripts { get; set; }
+    [SupplyParameterFromForm(FormName = "security-settings")] private bool RequireTwoFactor { get; set; }
+    [SupplyParameterFromForm(FormName = "security-settings")] private bool PinCameraCertificates { get; set; }
+    [SupplyParameterFromForm(FormName = "security-settings")] private bool ConfirmPasswordForAdmin { get; set; }
+    [SupplyParameterFromForm(FormName = "security-settings")] private bool TemporaryAdminPasswords { get; set; }
+
+    private List<LarisVMS.Core.Entities.CameraCertificatePin> CameraPins = [];
 
     private IReadOnlyList<LarisVMS.Web.Security.CspReports.Entry> RecentReports = [];
 
@@ -153,6 +216,7 @@
         var entra = await Db.EntraSsoSettings.AsNoTracking().FirstOrDefaultAsync();
         HasStoredEntraClientSecret = !string.IsNullOrEmpty(entra?.ClientSecret);
         RecentReports = CspReports.Recent();
+        CameraPins = await Db.CameraCertificatePins.AsNoTracking().OrderBy(p => p.Host).ToListAsync();
 
         // Skip the form fields on a POST: the submitted values are already bound, and reloading here
         // would save the old ones back (see Detection.razor's OnInitializedAsync).
@@ -163,7 +227,25 @@
         EntraTenantId = entra?.TenantId;
         EntraClientId = entra?.ClientId;
         Http3Enabled = await Settings.GetAsync(WebServerProtocols.Http3SettingKey, true);
-        StrictScripts = await Settings.GetAsync(LarisVMS.Web.Security.CspNonce.StrictSettingKey, false);
+        StrictScripts = await Settings.GetAsync(LarisVMS.Web.Security.CspNonce.StrictSettingKey, true);
+        RequireTwoFactor = await Settings.GetAsync(TwoFactorSignIn.RequireSettingKey, false);
+        PinCameraCertificates = await Settings.GetAsync(LarisVMS.Core.Security.CameraPinningSettings.EnabledKey, false);
+        ConfirmPasswordForAdmin = await Settings.GetAsync(StepUpPolicy.SettingKey, false);
+        TemporaryAdminPasswords = await Settings.GetAsync(PasswordChangeRequirement.TemporaryAdminPasswordsKey, false);
+    }
+
+    private async Task HandleForgetPinAsync(string host)
+    {
+        var user = AuthenticationStateTask is not null ? (await AuthenticationStateTask).User : new ClaimsPrincipal(new ClaimsIdentity());
+        var pin = await Db.CameraCertificatePins.FindAsync(host);
+        if (pin is null) return;
+        Db.CameraCertificatePins.Remove(pin);
+        await Db.SaveChangesAsync();
+        CameraCertificatePinService.RequestReload();
+        await AuditService.LogAsync("Camera.CertificateForgotten", user.FindFirst(ClaimTypes.NameIdentifier)?.Value, user.Identity?.Name,
+            HttpContext?.Connection.RemoteIpAddress?.ToString(), $"{host} ({pin.Thumbprint})");
+        CameraPins = await Db.CameraCertificatePins.AsNoTracking().OrderBy(p => p.Host).ToListAsync();
+        SavedMessage = Loc.T("settings.security.certificateForgotten", new { host });
     }
 
     private async Task HandleSaveAsync()
@@ -217,7 +299,11 @@
         var oldLiveView = await Settings.GetRawAsync(IpAllowListMiddleware.LiveViewSettingKey) ?? string.Empty;
         var oldEntraEnabled = entra?.IsEnabled ?? false;
         var oldHttp3 = await Settings.GetAsync(WebServerProtocols.Http3SettingKey, true);
-        var oldStrict = await Settings.GetAsync(LarisVMS.Web.Security.CspNonce.StrictSettingKey, false);
+        var oldStrict = await Settings.GetAsync(LarisVMS.Web.Security.CspNonce.StrictSettingKey, true);
+        var oldRequireTwoFactor = await Settings.GetAsync(TwoFactorSignIn.RequireSettingKey, false);
+        var oldPinCameras = await Settings.GetAsync(LarisVMS.Core.Security.CameraPinningSettings.EnabledKey, false);
+        var oldConfirmPassword = await Settings.GetAsync(StepUpPolicy.SettingKey, false);
+        var oldTemporaryPasswords = await Settings.GetAsync(PasswordChangeRequirement.TemporaryAdminPasswordsKey, false);
         // A disabled switch posts nothing; keep the saved value rather than turning it off.
         if (!ServerProtocols.Http3Supported) Http3Enabled = oldHttp3;
 
@@ -225,6 +311,11 @@
         await Settings.SetGlobalAsync(IpAllowListMiddleware.LiveViewSettingKey, LiveViewAllowList, by);
         await Settings.SetGlobalAsync(WebServerProtocols.Http3SettingKey, Http3Enabled.ToString(), by);
         await Settings.SetGlobalAsync(LarisVMS.Web.Security.CspNonce.StrictSettingKey, StrictScripts.ToString(), by);
+        await Settings.SetGlobalAsync(TwoFactorSignIn.RequireSettingKey, RequireTwoFactor.ToString(), by);
+        await Settings.SetGlobalAsync(LarisVMS.Core.Security.CameraPinningSettings.EnabledKey, PinCameraCertificates.ToString(), by);
+        await Settings.SetGlobalAsync(StepUpPolicy.SettingKey, ConfirmPasswordForAdmin.ToString(), by);
+        await Settings.SetGlobalAsync(PasswordChangeRequirement.TemporaryAdminPasswordsKey, TemporaryAdminPasswords.ToString(), by);
+        CameraCertificatePinService.RequestReload();
         CspCache.Invalidate();
 
         var isNewEntraRow = entra is null;
@@ -249,6 +340,10 @@
             AuditDiff.Of("Entra sign-in enabled", oldEntraEnabled.ToString(), EntraEnabled.ToString()),
             AuditDiff.Of("HTTP/3 enabled", oldHttp3.ToString(), Http3Enabled.ToString()),
             AuditDiff.Of("Strict script policy", oldStrict.ToString(), StrictScripts.ToString()),
+            AuditDiff.Of("Require two-factor sign-in", oldRequireTwoFactor.ToString(), RequireTwoFactor.ToString()),
+            AuditDiff.Of("Camera certificate pinning", oldPinCameras.ToString(), PinCameraCertificates.ToString()),
+            AuditDiff.Of("Confirm password for admin pages", oldConfirmPassword.ToString(), ConfirmPasswordForAdmin.ToString()),
+            AuditDiff.Of("Temporary admin-set passwords", oldTemporaryPasswords.ToString(), TemporaryAdminPasswords.ToString()),
             AuditDiff.SecretChanged("Entra client secret", !string.IsNullOrWhiteSpace(EntraClientSecret)));
 
         await AuditService.LogAsync("Settings.Update",

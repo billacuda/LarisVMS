@@ -11,7 +11,7 @@ Restoring is done outside LarisVMS, with SSMS or `sqlcmd`. Backups are full back
 
 ## MariaDB
 
-On MariaDB, backups are made with `mariadb-dump` and saved as compressed `.sql.gz` files. `mariadb-dump` runs on the LarisVMS server, so the MariaDB client tools must be installed there, even when MariaDB itself runs on another machine. LarisVMS finds them under `C:\Program Files\MariaDB …`, or a Super Admin can set the path to `mariadb-dump.exe` on the Backups page.
+On MariaDB, backups are made with `mariadb-dump` and saved as compressed `.sql.gz` files. `mariadb-dump` runs on the LarisVMS server, so the MariaDB client tools must be installed there, even when MariaDB itself runs on another machine. LarisVMS finds them under `C:\Program Files\MariaDB …`, or a Super Admin can set the path to `mariadb-dump.exe` on the Backups page. That path has to be on this server, in a folder only administrators can change (such as under Program Files), since LarisVMS runs it with the service's own rights.
 
 - **Backup directory**: a folder on the LarisVMS server (or a share) that the *LarisVMS service* can write to, outside the install folder. Old backups are always cleaned up, wherever MariaDB runs.
 - The backup holds the whole database in one consistent snapshot, taken without stopping recording.

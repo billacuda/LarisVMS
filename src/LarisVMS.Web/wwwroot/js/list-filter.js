@@ -111,7 +111,7 @@
         if (!status) return;
         status.innerHTML = '';
         if (!filtered) return;
-        status.appendChild(document.createTextNode(shown + ' of ' + total + ' ' + (status.getAttribute('data-filter-noun') || 'rows') + ' '));
+        status.appendChild(document.createTextNode(larisvmsI18n.t('js.listFilter.shownOf', { shown: shown, total: total, noun: status.getAttribute('data-filter-noun') || larisvmsI18n.t('js.listFilter.rows') }) + ' '));
         var clear = document.createElement('button');
         clear.type = 'button';
         clear.className = 'btn btn-link btn-sm p-0 align-baseline';

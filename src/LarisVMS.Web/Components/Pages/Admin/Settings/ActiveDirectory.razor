@@ -347,6 +347,22 @@
             }
         }
 
+        // Which directory LarisVMS trusts, how it connects, and whether local sign-in stays on decide who
+        // can sign in as anyone, Super Admins included, so only a Super Admin can change them. Anyone
+        // else with Settings.Edit could point it at a directory of their own and sign in as anyone.
+        var connectionChanged = (entity?.IsEnabled ?? false) != AdEnabled
+            || !string.Equals(entity?.Domain ?? "", Domain?.Trim() ?? "", StringComparison.OrdinalIgnoreCase)
+            || (entity?.UseLdaps ?? true) != UseLdaps
+            || (entity?.UseServiceAccount ?? false) != useServiceAccount
+            || !string.Equals(entity?.ServiceAccountUsername ?? "", useServiceAccount ? ServiceAccountUsername?.Trim() ?? "" : entity?.ServiceAccountUsername ?? "", StringComparison.OrdinalIgnoreCase)
+            || !string.IsNullOrWhiteSpace(ServiceAccountPassword)
+            || (entity?.LocalLoginsEnabled ?? true) != LocalLoginsEnabled;
+        if (connectionChanged && !(await AdminScope.ForAsync(Db, PermissionService, User)).IsSuperAdmin)
+        {
+            ErrorMessage = Loc.T("settings.activeDirectory.superAdminOnly");
+            return;
+        }
+
         var old = entity is null ? null : new
         {
             entity.IsEnabled, entity.Domain, entity.UseLdaps, entity.UseServiceAccount,

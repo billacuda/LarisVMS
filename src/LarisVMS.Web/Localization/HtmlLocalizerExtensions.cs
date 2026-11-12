@@ -18,7 +18,7 @@ namespace LarisVMS.Web.Localization;
 /// </summary>
 public static partial class HtmlLocalizerExtensions
 {
-    [GeneratedRegex(@"</?(?:code|strong|em|b|i|kbd)>|<br\s*/?>|<a href=""(?:/(?!/)|#)[^""<>]*"">|</a>|\{([A-Za-z_][A-Za-z0-9_]*|\d+)\}", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"</?(?:code|strong|em|b|i|kbd)>|<br\s*/?>|<a href=""(?:/(?![/\\])|#)[^""<>]*"">|</a>|\{([A-Za-z_][A-Za-z0-9_]*|\d+)\}", RegexOptions.IgnoreCase)]
     private static partial Regex SafeTokenRegex();
 
     /// <summary>For Razor Pages (.cshtml).</summary>

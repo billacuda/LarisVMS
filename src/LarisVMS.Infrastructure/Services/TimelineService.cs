@@ -1,3 +1,4 @@
+using LarisVMS.Core.Localization;
 using Microsoft.EntityFrameworkCore;
 using LarisVMS.Core;
 using LarisVMS.Core.Dtos;
@@ -559,8 +560,9 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
         {
             var trap = r.SpeedTrapId is { } id ? traps.GetValueOrDefault(id) : null;
             var kph = r.SpeedKph!.Value;
-            return new SpeedMarkerDto(r.SpeedMeasuredAtUtc!.Value, r.FirstSeenUtc, r.LastSeenUtc, r.Label,
-                r.PrimaryColor ?? r.UpperColor, kph, SpeedUnits.Format(kph, units),
+            var color = r.PrimaryColor ?? r.UpperColor;
+            return new SpeedMarkerDto(r.SpeedMeasuredAtUtc!.Value, r.FirstSeenUtc, r.LastSeenUtc, CocoCategoryMap.LocalizedClassName(r.Label),
+                string.IsNullOrEmpty(color) ? color : ObjectColors.Display(color), kph, SpeedUnits.Format(kph, units),
                 trap?.SpeedLimitKph is { } limit && kph > limit, trap?.Name);
         }).ToList();
     }
@@ -883,7 +885,7 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
             string label, color, emoji;
             if (r.EventTagRuleId is not null)
             {
-                label = r.RuleName ?? "(deleted tag)";
+                label = r.RuleName ?? Loc.T("common.deletedTag");
                 color = r.RuleColorHex ?? EventColors.DefaultMotion;
                 emoji = "🏷️";
             }
@@ -992,7 +994,7 @@ public class TimelineService(ApplicationDbContext db, IEventColorService eventCo
             }
 
             return (SnapshotDto?)new SnapshotDto(r.Id, r.CameraId,
-                cameraNames.TryGetValue(r.CameraId, out var name) ? name : "(deleted camera)",
+                cameraNames.TryGetValue(r.CameraId, out var name) ? name : Loc.T("common.deletedCamera"),
                 atUtc, playFromUtc, duration, label, color, emoji, IsAiDetection: r.AiCategoryName is not null)
             {
                 Badges = badges,

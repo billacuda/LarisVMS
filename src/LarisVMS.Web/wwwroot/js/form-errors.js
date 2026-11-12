@@ -8,7 +8,7 @@
     function markInvalid(field) {
         field.setAttribute('aria-invalid', 'true');
         if (!field.name) return;
-        var message = document.querySelector('[data-valmsg-for="' + field.name.replace(/"/g, '\\"') + '"]');
+        var message = document.querySelector('[data-valmsg-for="' + CSS.escape(field.name) + '"]');
         if (!message) return;
         if (!message.id) message.id = (field.id || field.name) + '-error';
         field.setAttribute('aria-describedby', message.id);

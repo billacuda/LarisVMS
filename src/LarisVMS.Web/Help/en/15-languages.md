@@ -43,13 +43,18 @@ Add the forms your language needs, with these endings: `_zero`, `_one`, `_two`, 
 
 ### Help pages
 
-Help pages are translated one file at a time. Copy a page's Markdown into `locales\<code>\help\` with the same file name (for example `locales\fr\help\03-cameras.md`) and translate it. Pages you haven't translated stay in English.
+Help pages are translated one file at a time. Each page keeps the English file's name, so its address doesn't change, and pages you haven't translated stay in English. A regional language (`es-AR`) uses its own pages first, then the general one's (`es`), then English.
+
+- **For your own server:** copy a page's Markdown into `locales\<code>\help\` with the same file name (for example `locales\fr\help\03-cameras.md`) and translate it.
+- **To contribute it to LarisVMS:** see [CONTRIBUTING.md](https://github.com/billacuda/LarisVMS/blob/main/CONTRIBUTING.md) for how to send it. Translated pages are kept in `src/LarisVMS.Web/Help/<code>/` in the source (for example `Help/es-AR/03-cameras.md`), next to the English pages in `Help/en/`. Contributed pages ship with LarisVMS and also appear on [larisvms.com/docs](https://www.larisvms.com/docs/), where visitors can pick the language.
+
+The Help shows in a language once that language is installed (its `.json` file). HTML in a page is shown as plain text, so use Markdown for formatting.
 
 ### Updating a translation
 
-New versions of LarisVMS add text. The **Translated** column on the Language page shows how much of the current text each language covers. **Download** next to a language gives you its file with the missing text filled in from English, ready to translate.
+New versions of LarisVMS add text. The **Translated** column on the Language page shows how much of the current text each language covers, and **Help pages** how many of the Help pages it has its own text for. **Download** next to a language gives you its file with the missing text filled in from English, ready to translate.
 
-To check a file before uploading it, run `tools\locale-check.ps1 fr.json`. It lists missing keys, keys this version doesn't use, and {placeholders} that don't match the English text.
+To check a file before uploading it, run `tools\locale-check.ps1 fr.json`. It lists missing keys, keys this version doesn't use, and {placeholders} that don't match the English text. Add `-Help` with a folder of translated Help pages (for example `-Help locales\fr\help`) to check those too: pages not translated yet, file names LarisVMS doesn't use, HTML, and headings that don't line up with the English page.
 
 ### Testing a translation
 

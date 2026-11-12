@@ -63,13 +63,25 @@ public static class TalkRelay
         }
     }
 
+    /// <summary>Largest single message passed on to the node; the browser sends audio in chunks of a
+    /// few KB. Matches the node's own limit (TalkSessionHandler.MaxMessageBytes).</summary>
+    internal const int MaxMessageBytes = 64 * 1024;
+
     private static async Task BrowserToNodeAsync(WebSocket browser, WebSocket node, CancellationToken ct)
     {
         var buffer = new byte[16 * 1024];
+        var messageBytes = 0;
         while (browser.State == WebSocketState.Open && node.State == WebSocketState.Open)
         {
             var result = await browser.ReceiveAsync(buffer, ct);
             if (result.MessageType == WebSocketMessageType.Close) return;
+            messageBytes += result.Count;
+            if (messageBytes > MaxMessageBytes)
+            {
+                await browser.CloseOutputAsync(WebSocketCloseStatus.MessageTooBig, "Message too large.", CancellationToken.None);
+                return;
+            }
+            if (result.EndOfMessage) messageBytes = 0;
             await node.SendAsync(buffer.AsMemory(0, result.Count), result.MessageType, result.EndOfMessage, ct);
         }
     }

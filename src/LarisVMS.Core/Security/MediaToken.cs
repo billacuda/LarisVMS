@@ -51,9 +51,19 @@ public static class MediaToken
     public static class Purposes
     {
         public const string Talk = "talk";
+        /// <summary>A live frame with the camera's privacy areas blacked out.</summary>
         public const string Snapshot = "snapshot";
+        /// <summary>A live frame without privacy masking: only the zone editor, which draws them.</summary>
+        public const string SnapshotRaw = "snapshot-raw";
         public const string MotionZones = "motionzones";
+        /// <summary>LarisVMS.Web relaying live video it has authorized itself, sent in
+        /// <see cref="RelayHeader"/>. Never handed to a browser, so it's the only thing that lets a
+        /// node keep a live session open past its cap: the web server ends relayed sessions itself.</summary>
+        public const string Relay = "relay";
     }
+
+    /// <summary>Header carrying a <see cref="Purposes.Relay"/> token next to the live token.</summary>
+    public const string RelayHeader = "X-LarisVMS-Relay";
 
     /// <summary>Like <see cref="Issue"/>, but only valid for <paramref name="purpose"/>
     /// (<see cref="Purposes"/>). Its payload starts with "p:", so <see cref="TryValidate"/> rejects it.</summary>

@@ -207,7 +207,7 @@ window.larisvmsRedactionEditor = (function () {
             var cx = poly.reduce(function (a, p) { return a + p[0]; }, 0) / poly.length * w;
             var cy = poly.reduce(function (a, p) { return a + p[1]; }, 0) / poly.length * h;
             ctx.fillStyle = '#fff';
-            ctx.font = 'bold 14px system-ui, sans-serif';
+            ctx.font = larisvmsI18n.font('bold 14px');
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText(String(i + 1), cx, cy);

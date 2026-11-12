@@ -42,7 +42,7 @@ public static class SpeedHeatmapBuilder
         metric = NormalizeMetric(metric);
         unit = SpeedUnits.Normalize(unit);
 
-        string TrapName(Guid? id) => id is { } g && traps.TryGetValue(g, out var t) ? t.Name : "(deleted trap)";
+        string TrapName(Guid? id) => id is { } g && traps.TryGetValue(g, out var t) ? t.Name : Loc.T("common.deletedTrap");
         var options = traps.Keys.Select(id => (Guid?)id)
             .Concat(stats.Select(s => s.TrapId))
             .Distinct()
@@ -128,7 +128,7 @@ public static class SpeedHeatmapBuilder
                 rowLabels = Enumerable.Range(0, 24).Select(ActivityHeatmapBuilder.HourLabel).ToList();
                 columnLabels = dates.Select(d => d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)).ToList();
                 dayValues = perDay.Select(Value).ToList();
-                where = (r, c) => $"{dates[c].ToString("ddd, MMM d", CultureInfo.CurrentUICulture)}, {ActivityHeatmapBuilder.HourRange(r)}";
+                where = (r, c) => $"{ActivityHeatmapBuilder.ShortDay(dates[c])}, {ActivityHeatmapBuilder.HourRange(r)}";
             }
             else
             {

@@ -20,12 +20,22 @@
         });
     }
 
+    function statusLabel(status) {
+        switch (status) {
+            case 'Queued': return larisvmsI18n.html('js.exports.statusQueued');
+            case 'Running': return larisvmsI18n.html('js.exports.statusRunning');
+            case 'Done': return larisvmsI18n.html('js.exports.statusDone');
+            case 'Failed': return larisvmsI18n.html('js.exports.statusFailed');
+            default: return escapeHtml(status);
+        }
+    }
+
     function formatBytes(bytes) {
         if (bytes === null || bytes === undefined || bytes < 0) return '—';
         var units = ['B', 'KB', 'MB', 'GB', 'TB'];
         var value = bytes, unit = 0;
         while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++; }
-        return (unit === 0 ? Math.round(value) : value.toFixed(1)) + ' ' + units[unit];
+        return (unit === 0 ? Math.round(value) : value.toLocaleString(larisvmsI18n.locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })) + ' ' + units[unit];
     }
 
     var JOB_BADGE = { Queued: 'text-bg-secondary', Running: 'text-bg-primary', Done: 'text-bg-success', Failed: 'text-bg-danger' };
@@ -52,7 +62,7 @@
             var nodeSuffix = item.nodeName ? ' <span class="text-muted">(' + escapeHtml(item.nodeName) + ')</span>' : '';
             // A redacted export has had areas blacked out — it isn't the footage exactly as recorded.
             var redacted = item.redacted ? ' <span class="badge text-bg-dark" title="' + larisvmsI18n.html('js.exports.areasWereBlackedOutIn') + '">' + larisvmsI18n.html('js.exports.redacted') + '</span>' : '';
-            return '<li class="mb-1">' + escapeHtml(item.cameraName) + nodeSuffix + ' <span class="badge ' + itemBadge + '">' + item.status + '</span>' + redacted + extra + '</li>';
+            return '<li class="mb-1">' + escapeHtml(item.cameraName) + nodeSuffix + ' <span class="badge ' + itemBadge + '">' + statusLabel(item.status) + '</span>' + redacted + extra + '</li>';
         }).join('');
 
         var deleteBtn = inProgress ? '' :
@@ -60,9 +70,9 @@
 
         return '<tr data-job-id="' + job.id + '">' +
             '<td><span title="' + created.toISOString() + '">' + created.toLocaleString(larisvmsI18n.locale) + '</span>' +
-            '<div class="text-muted small">by ' + escapeHtml(job.requestedByUserName || 'unknown') + '</div></td>' +
+            '<div class="text-muted small">' + larisvmsI18n.html('js.exports.byUser', { user: job.requestedByUserName || larisvmsI18n.t('js.exports.unknownUser') }) + '</div></td>' +
             '<td class="small">' + from.toLocaleString(larisvmsI18n.locale) + ' &ndash; ' + to.toLocaleString(larisvmsI18n.locale) + '</td>' +
-            '<td><span class="badge ' + badge + '">' + job.status + '</span></td>' +
+            '<td><span class="badge ' + badge + '">' + statusLabel(job.status) + '</span></td>' +
             '<td><ul class="list-unstyled mb-0 small">' + itemsHtml + '</ul></td>' +
             '<td>' + deleteBtn + '</td>' +
             '</tr>';

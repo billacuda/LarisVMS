@@ -38,6 +38,7 @@ public class ExternalLoginModel(SignInManager<ApplicationUser> signInManager, Us
     /// <summary>Starts the challenge — posted from Login.cshtml's "Sign in with Microsoft" button.</summary>
     public async Task<IActionResult> OnPostAsync(string provider, string? returnUrl = null)
     {
+        returnUrl = Url.IsLocalUrl(returnUrl) ? returnUrl : Url.Content("~/");
         if (!await IsSsoEnabledAsync())
         {
             ErrorMessage = SsoOffMessage;
@@ -63,7 +64,8 @@ public class ExternalLoginModel(SignInManager<ApplicationUser> signInManager, Us
 
     public async Task<IActionResult> OnGetCallbackAsync(string? returnUrl = null, string? remoteError = null)
     {
-        returnUrl ??= Url.Content("~/");
+        // Only a page of this site: anything else (or a malformed address) goes to the start page.
+        returnUrl = Url.IsLocalUrl(returnUrl) ? returnUrl : Url.Content("~/");
 
         if (!await IsSsoEnabledAsync())
         {

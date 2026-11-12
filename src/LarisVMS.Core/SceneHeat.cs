@@ -15,6 +15,10 @@ public static class SceneHeat
     /// <summary>Objects heat grid width; rows follow the camera's aspect ratio.</summary>
     public const int ObjectColumns = 64;
 
+    /// <summary>Camera setting (a camera override): when its scene heatmap was last reset (UTC, round-trip
+    /// format), after the camera was moved or re-aimed. Only activity after it is shown.</summary>
+    public const string ResetSettingKey = "Activity.SceneHeatResetUtc";
+
     /// <summary>Rows for a <see cref="ObjectColumns"/>-wide grid on a <paramref name="width"/> x
     /// <paramref name="height"/> picture (16:9 when unknown), kept within 8-64.</summary>
     public static int RowsFor(int? width, int? height) =>

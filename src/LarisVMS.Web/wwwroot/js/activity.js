@@ -421,8 +421,8 @@
             window.larisvmsSceneHeatmap.reset();
             window.larisvmsSceneHeatmap.render(chartEl, data, backgroundUrl(data));
             legendEl.innerHTML = window.larisvmsSceneHeatmap.legend(motion
-                ? data.maxCount.toLocaleString(larisvmsI18n.locale) + ' frames'
-                : data.maxCount.toLocaleString(larisvmsI18n.locale) + (data.maxCount === 1 ? ' object' : ' objects'));
+                ? larisvmsI18n.plural('js.activity.legendFrames', data.maxCount)
+                : larisvmsI18n.plural('js.activity.legendObjects', data.maxCount));
         }
         var motionInput = document.getElementById('activitySceneMotion');
         motionInput.disabled = !data.motionAvailable;
@@ -442,6 +442,9 @@
         backgroundEl.querySelector('[data-bg-upload]').textContent = data.hasCustomBackground ? larisvmsI18n.t('js.activity.replace') : larisvmsI18n.t('js.activity.useMyOwnPicture');
         backgroundEl.querySelector('[data-bg-remove]').classList.toggle('d-none', !data.hasCustomBackground);
         backgroundEl.querySelector('[data-bg-error]').textContent = '';
+        backgroundEl.querySelector('[data-heat-reset-status]').textContent = data.resetUtc
+            ? larisvmsI18n.t('js.activity.heatmapSince', { time: new Date(data.resetUtc).toLocaleString(larisvmsI18n.locale) })
+            : '';
     }
 
     function backgroundError(text) {
@@ -458,6 +461,11 @@
             if (e.target.closest('[data-bg-upload]')) { backgroundFile.value = ''; backgroundFile.click(); }
             else if (e.target.closest('[data-bg-remove]') && last) {
                 fetch('/api/cameras/' + encodeURIComponent(last.cameraId) + '/scene-background', { method: 'DELETE' })
+                    .then(function (r) { if (r.ok) load(); else problemText(r).then(backgroundError); });
+            }
+            else if (e.target.closest('[data-heat-reset]') && last) {
+                if (!window.confirm(larisvmsI18n.t('js.activity.resetHeatmapConfirm', { camera: last.cameraName }))) return;
+                fetch('/api/cameras/' + encodeURIComponent(last.cameraId) + '/scene-heat/reset', { method: 'POST' })
                     .then(function (r) { if (r.ok) load(); else problemText(r).then(backgroundError); });
             }
         });
@@ -576,7 +584,7 @@
             var some = !whole && grp.labels.some(function (l) { return isSelected(l.key); });
             var id = 'activityGroup' + gi;
             var labels = grp.labels.length === 0 ? '' :
-                '<details class="ms-4"' + (some ? ' open' : '') + '><summary class="text-muted">' + grp.labels.length + ' label' + (grp.labels.length === 1 ? '' : 's') + '</summary>' +
+                '<details class="ms-4"' + (some ? ' open' : '') + '><summary class="text-muted">' + larisvmsI18n.plural('js.activity.labelCount', grp.labels.length) + '</summary>' +
                 grp.labels.map(function (l, li) {
                     var lid = id + '_' + li;
                     return '<div class="form-check"><input class="form-check-input" type="checkbox" id="' + lid + '" data-label="' + escapeHtml(l.key) + '" data-group="' + escapeHtml(grp.key) + '"' +

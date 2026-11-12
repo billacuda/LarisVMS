@@ -1,6 +1,9 @@
 @page
 @model LarisVMS.Web.Pages.Admin.ProxiesModel
+@inject LarisVMS.Relay.CertHolder Certificates
 @{
+    var thumbprint = LarisVMS.Web.Services.ServerCertificateSettings.Thumbprint(Certificates);
+    var pinArg = thumbprint is null ? "" : $" -ServerCertThumbprint {thumbprint}";
     ViewData["Title"] = L["admin.proxies.mediaProxies"].Value;
     var serverOrigin = $"{Request.Scheme}://{Request.Host}";
     var regKey = string.IsNullOrEmpty(Model.RegistrationKey) ? "<set one on Admin - Settings - Nodes>" : Model.RegistrationKey;
@@ -22,7 +25,7 @@
     <div class="card-body py-2 small">
         @L.Html("admin.proxies.installIntro")
         <div class="d-flex align-items-start gap-2 mb-0 mt-1">
-            <pre id="proxyInstallCmd" class="mb-0 flex-grow-1">.\install-proxy.ps1 -ServerUrl @serverOrigin -RegistrationKey @regKey -ClientPort 4443 [-ClientPfxPath C:\certs\proxy.pfx -ClientPfxPassword ...]</pre>
+            <pre id="proxyInstallCmd" class="mb-0 flex-grow-1">.\install-proxy.ps1 -ServerUrl @serverOrigin -RegistrationKey @regKey@pinArg -ClientPort 4443 [-ClientPfxPath C:\certs\proxy.pfx -ClientPfxPassword ...]</pre>
             <button type="button" class="btn btn-sm btn-outline-secondary flex-shrink-0" title="@L["admin.proxies.copyCommand"]"
                     data-copy-from="#proxyInstallCmd">📋</button>
         </div>

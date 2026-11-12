@@ -54,8 +54,14 @@ public static class AdSid
         return dash < 0 ? null : sddl[(dash + 1)..];
     }
 
-    public static bool LooksValid(string? sddl) =>
-        !string.IsNullOrEmpty(sddl) && Regex.IsMatch(sddl, @"^S-1-\d+(-\d+)+$");
+    /// <summary>"S-1-" then two or more dash-separated numbers. Parsed by hand rather than with a
+    /// regex, so a long crafted value can't cost backtracking time.</summary>
+    public static bool LooksValid(string? sddl)
+    {
+        if (string.IsNullOrEmpty(sddl) || !sddl.StartsWith("S-1-", StringComparison.Ordinal)) return false;
+        var parts = sddl[4..].Split('-');
+        return parts.Length >= 2 && parts.All(p => p.Length > 0 && p.All(char.IsAsciiDigit));
+    }
 }
 
 public static class AdAccount

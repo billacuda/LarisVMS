@@ -29,6 +29,8 @@ Run:
 from __future__ import annotations
 
 import argparse
+import hashlib
+import sys
 import urllib.request
 from pathlib import Path
 
@@ -36,15 +38,23 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 MODELS_DIR = REPO_ROOT / "models"
 
 # Pinned to a specific release tag — a rebuild months from now must produce the same files.
-# DetectionModelCatalog.GetYoloXFileName expects these exact names.
+# DetectionModelCatalog.GetYoloXFileName expects these exact names. Each file's SHA-256 is pinned
+# too (the same values DetectionModelDistributor checks on the server), so a changed or tampered
+# release asset is refused instead of being handed to every node.
 _BASE = "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0"
 SIZES = {
-    "nano": {"filename": "yolox_nano.onnx", "url": f"{_BASE}/yolox_nano.onnx", "input": 416},
-    "tiny": {"filename": "yolox_tiny.onnx", "url": f"{_BASE}/yolox_tiny.onnx", "input": 416},
-    "s": {"filename": "yolox_s.onnx", "url": f"{_BASE}/yolox_s.onnx", "input": 640},
-    "m": {"filename": "yolox_m.onnx", "url": f"{_BASE}/yolox_m.onnx", "input": 640},
-    "l": {"filename": "yolox_l.onnx", "url": f"{_BASE}/yolox_l.onnx", "input": 640},
-    "x": {"filename": "yolox_x.onnx", "url": f"{_BASE}/yolox_x.onnx", "input": 640},
+    "nano": {"filename": "yolox_nano.onnx", "url": f"{_BASE}/yolox_nano.onnx", "input": 416,
+             "sha256": "c789161ed43c8269fcd4e67c67eeeb4e80c622da2eb296a20bc6007bd18a0b7d"},
+    "tiny": {"filename": "yolox_tiny.onnx", "url": f"{_BASE}/yolox_tiny.onnx", "input": 416,
+             "sha256": "427cc366d34e27ff7a03e2899b5e3671425c262ea2291f88bb942bc1cc70b0f7"},
+    "s": {"filename": "yolox_s.onnx", "url": f"{_BASE}/yolox_s.onnx", "input": 640,
+          "sha256": "c5c2d13e59ae883e6af3b45daea64af4833a4951c92d116ec270d9ddbe998063"},
+    "m": {"filename": "yolox_m.onnx", "url": f"{_BASE}/yolox_m.onnx", "input": 640,
+          "sha256": "21ff6cfdeb53b013bac2249599e55f00bff3cfdfdab37ed7a4620818c1d15b3f"},
+    "l": {"filename": "yolox_l.onnx", "url": f"{_BASE}/yolox_l.onnx", "input": 640,
+          "sha256": "7860ae79de6c89a3c1eb72ae9a2756c0ccfbe04b7791bb5880afabd97855a411"},
+    "x": {"filename": "yolox_x.onnx", "url": f"{_BASE}/yolox_x.onnx", "input": 640,
+          "sha256": "c892d7aaf1c4746d8a4d675bec669a4db4f434b4ee1efb654bc9b353379c7c55"},
 }
 
 LICENSE_NOTE = (
@@ -60,7 +70,12 @@ def fetch_one(name: str, spec: dict) -> Path:
     dest = MODELS_DIR / spec["filename"]
     dest.parent.mkdir(parents=True, exist_ok=True)
     with urllib.request.urlopen(spec["url"]) as response:  # noqa: S310 - pinned github release URL
-        dest.write_bytes(response.read())
+        data = response.read()
+    actual = hashlib.sha256(data).hexdigest()
+    if actual != spec["sha256"]:
+        # Nothing is written: a file that isn't the pinned one never reaches the models folder.
+        sys.exit(f"{spec['url']} isn't the expected file (SHA-256 {actual}, expected {spec['sha256']}).")
+    dest.write_bytes(data)
     dest.with_suffix(".LICENSE.txt").write_text(
         f"Model: {dest.name}\nSource: {spec['url']}\n\n{LICENSE_NOTE}", encoding="utf-8"
     )

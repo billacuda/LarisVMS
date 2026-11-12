@@ -460,7 +460,7 @@ window.larisvmsDeviceSettings = (function () {
             var bulk = others.length > 0;
             var total = others.length + 1;
             var question = bulk
-                ? larisvmsI18n.t('js.cameraDeviceSettings.applyToCameras', { count: total }) + (confirmText ? ' ' + confirmText.replace(/^[^?]*\?\s*/, '') : '')
+                ? larisvmsI18n.t('js.cameraDeviceSettings.applyToCameras', { count: total }) + (confirmText ? ' ' + confirmText.replace(/^[^?？]*[?？]\s*/, '') : '')
                 : confirmText;
             if (question && !window.confirm(question)) return;
 
@@ -535,7 +535,7 @@ window.larisvmsDeviceSettings = (function () {
                 render();
             }).catch(function (err) {
                 btn.disabled = false;
-                btn.textContent = err.message + ' ' + larisvmsI18n.t('js.cameraDeviceSettings.tryAgain');
+                btn.textContent = larisvmsI18n.t('js.cameraDeviceSettings.errorTryAgain', { error: err.message });
             });
         }
 

@@ -19,8 +19,8 @@ namespace LarisVMS.Web.Middleware;
 ///
 /// The same goes for every other packaged Identity page this app doesn't use: forgot/reset password,
 /// RegisterConfirmation (which tells anyone whether an email has an account), and Manage/* (where a
-/// user could set up two-factor sign-in the login page doesn't support, or delete their own account).
-/// Only the pages LarisVMS uses are reachable under /Identity.
+/// user could delete their own account). Only the pages LarisVMS uses are reachable under /Identity,
+/// including its own Change password and Two-factor sign-in pages.
 /// </summary>
 public class RegistrationDisabledMiddleware(RequestDelegate next)
 {
@@ -29,7 +29,9 @@ public class RegistrationDisabledMiddleware(RequestDelegate next)
     private static readonly string[] AllowedIdentityPaths =
     [
         "/Identity/Account/Login", "/Identity/Account/Logout", "/Identity/Account/AccessDenied",
-        "/Identity/Account/ExternalLogin",
+        "/Identity/Account/ExternalLogin", "/Identity/Account/ChangePassword",
+        "/Identity/Account/LoginWith2fa", "/Identity/Account/TwoFactor", "/Identity/Account/Sessions",
+        "/Identity/Account/Confirm",
         // The Identity UI's static files.
         "/Identity/lib", "/Identity/css", "/Identity/js",
     ];

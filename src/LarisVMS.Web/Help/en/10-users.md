@@ -6,13 +6,42 @@ Accounts, roles, permissions, camera access, Active Directory, and Microsoft sig
 
 Self-registration is off. Accounts are created under **Settings → Users**, where you can also assign roles, disable an account, and reset a password. Local accounts sign in with their email address. Disabling an account signs it out everywhere straight away and closes its live video.
 
+## Passwords
+
+Passwords are at least 12 characters. Common ones, ones like `123456789012`, and ones containing the person's name or email address are refused. To refuse more, put them in `%ProgramData%\LarisVMS\password-blocklist.txt` on the web server, one per line (a published list of breached passwords works). It's picked up without a restart.
+
+Anyone with a local account changes their own password by selecting their name at the top of the page. The current password is required, and every other session of theirs is signed out. Admins change their own password the same way, not under **Settings → Users**. Active Directory accounts change theirs in Windows.
+
+When you create an account or reset a password under **Settings → Users**, you can check **Must change it at next sign-in**. The person then has to choose their own password before they can do anything else. With **Settings → Security → Temporary admin-set passwords** on, it starts checked.
+
+After 5 wrong passwords for one account from one address within 15 minutes, that address has to wait out the 15 minutes; the person can still sign in from anywhere else. An account is locked for 15 minutes only after 20 wrong tries from anywhere, and Super Admins are never locked by wrong passwords at sign-in. Super Admins hear about repeated failures and lockouts, and about guessing spread over many networks: one account failing 10 times from 3 or more networks, or 50 failures from 10 or more networks across the server, within 15 minutes.
+
+## Two-factor sign-in
+
+Anyone who signs in with a password, local or Active Directory, can also require a six-digit code from an authenticator app on their phone (Microsoft Authenticator, Google Authenticator, 1Password, and others). Each code works once, so one someone sees being typed can't be used again. To set it up, select your name at the top of the page, then **Two-factor sign-in**, scan the QR code, and enter the code the app shows. You get ten recovery codes; keep them somewhere safe, since each one signs you in once if you lose your phone. Changing anything later, such as new recovery codes or turning it off, takes a current code.
+
+At sign-in, **Don't ask again on this browser for 14 days** skips the code on that browser until the password or two-factor setup changes.
+
+If someone loses their phone and their recovery codes, **Turn off 2FA** next to them under **Settings → Users** lets them sign in with just their password and set it up again.
+
+**Settings → Security → Require two-factor sign-in** makes everyone who signs in with a password set it up before they can do anything else, and stops them turning it off. Microsoft sign-ins are left to Entra's own checks.
+
+## Sessions
+
+Select your name at the top of the page, then **Sessions**, to see every browser you're signed in on, with its address and when it was last used. Sign out any you don't recognize, or all but the one you're using, then change your password. Changing your password or turning on two-factor sign-in signs out your other sessions right away.
+
+With **Settings → Security → Confirm password for admin pages** on, admin pages ask for your password again (and a code, with two-factor sign-in on) unless you signed in or confirmed it in the last 15 minutes; using them keeps that going. Someone who finds your browser signed in can then use the system but not change its settings, users, or keys. Microsoft sign-ins sign in again instead. It's off by default.
+
+Under **Settings → Users**, **Sign out** next to someone signs them out on every browser. They can sign in again; disable the account to keep them out.
+
 ## Roles
 
 A role is a named set of permissions, managed under **Settings → Roles**. Each role also has:
 
 - a **scope tier**;
 - an **expiry** for time-limited access (for example, 480 minutes for an 8-hour shift);
-- a **session lifetime**: hours after signing in before the user has to sign in again, however active they are (0 never expires);
+- a **session lifetime**: hours after signing in before the user has to sign in again, however active they are (at most 30 days, or 0 to never expire);
+- an **idle timeout**: minutes without opening a page before the user is signed out (0 is off). A screen left showing live video counts as idle, so leave it off for roles that watch a video wall;
 - a **PTZ priority**, which decides who wins when two users move the same camera.
 
 ## Permissions
@@ -35,7 +64,7 @@ A role is a named set of permissions, managed under **Settings → Roles**. Each
 
 ## Active Directory
 
-**Settings → Active Directory** lets domain users sign in with their AD username and password, and gives them roles from their AD groups.
+**Settings → Active Directory** lets domain users sign in with their AD username and password, and gives them roles from their AD groups. Only a Super Admin can change the domain, how LarisVMS connects to it, or local sign-in, since those decide who can sign in as anyone; other admins can change the sync interval and group links.
 
 - **Domain:** just the domain name, like `corp.example.com`.
 - **Encryption:** LDAPS on port 636 is the default and needs a certificate on your domain controllers that this server trusts. Plain LDAP on port 389 works without one, but it's insecure and not recommended.
@@ -61,3 +90,9 @@ UPDATE `ActiveDirectorySettings` SET `LocalLoginsEnabled` = 1;
 ## Audit log
 
 Everything users do is recorded under **Logs → Audit logs**: changes (with old and new values; secrets are recorded only as “changed”), viewing cameras, starting playback, and exporting.
+
+**Tamper-evident.** Each entry is sealed together with the one before it, using a key the database alone doesn't hold. Every 6 hours (and when you select **Check now** on the audit log page) the whole log is checked. If an entry was changed, removed, or added directly in the database, the page says which one and Super Admins are notified. Entries removed by retention are expected and don't count, and each removal is itself recorded (**AuditLog.Pruned**). Entries from before this update aren't covered.
+
+The server also keeps a small record outside the database, in `%ProgramData%\LarisVMS\audit-chain.dat`, of the seal's key and where the log started, so the log can't be resealed with another key or wiped and restarted without that showing. If you deliberately start over with a new, empty database on the same server, delete that file once; a new one is made with the next entry.
+
+**Forward to syslog.** To keep a copy of the audit log off the server, enter a syslog server under **Settings → Logs**. Every new entry is sent as it's written (RFC 5424, facility *log audit*, with the entry as JSON). Choose UDP, TCP, or TLS. TLS needs the syslog server's certificate to be trusted by the web server. If the syslog server can't be reached, entries are kept and sent once it's back. Forwarding starts with the next entry, not the existing history. Only a Super Admin can change where the log is forwarded, or turn forwarding off; that change is itself sent to the old destination first.
