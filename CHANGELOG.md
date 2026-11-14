@@ -23,8 +23,8 @@ A maintenance update: a clean build and a working .NET 10 code scan.
 
 ### 🔒 Security
 
-- **Small hardening.** The Gmail sign-in callback only returns to a page of this site, and the Help
-  page's heading matcher has a time limit.
+- **Small hardening.** Connecting a Gmail account in Settings → Email only ever returns you to
+  LarisVMS, and preparing a translated Help page has a time limit.
 
 ### ⚙️ Changed
 
