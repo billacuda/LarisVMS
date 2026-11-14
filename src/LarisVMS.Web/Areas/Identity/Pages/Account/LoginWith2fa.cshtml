@@ -15,7 +15,7 @@
             </div>
         }
 
-        <form method="post" asp-route-returnUrl="@Model.ReturnUrl" asp-route-rememberMe="@Model.RememberMe" asp-route-recovery="@Model.Recovery">
+        <form method="post" asp-page-handler="@(Model.Recovery ? "Recovery" : null)" asp-route-returnUrl="@Model.ReturnUrl" asp-route-rememberMe="@Model.RememberMe" asp-route-recovery="@Model.Recovery">
             <div class="mb-3">
                 @if (Model.Recovery)
                 {

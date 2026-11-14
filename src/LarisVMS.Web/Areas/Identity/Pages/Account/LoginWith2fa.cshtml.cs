@@ -43,7 +43,18 @@ public class LoginWith2faModel(
         return Page();
     }
 
-    public async Task<IActionResult> OnPostAsync(bool rememberMe = false, string? returnUrl = null, bool recovery = false)
+    // One handler per second factor, so which code gets checked is never decided by a flag in the
+    // request: the app-code form posts here, the recovery-code form to ?handler=Recovery.
+    public Task<IActionResult> OnPostAsync(bool rememberMe = false, string? returnUrl = null) =>
+        SignInAsync(rememberMe, returnUrl, recovery: false,
+            code => signInManager.TwoFactorAuthenticatorSignInAsync(code, rememberMe, Input.RememberBrowser));
+
+    public Task<IActionResult> OnPostRecoveryAsync(bool rememberMe = false, string? returnUrl = null) =>
+        SignInAsync(rememberMe, returnUrl, recovery: true,
+            code => signInManager.TwoFactorRecoveryCodeSignInAsync(code));
+
+    private async Task<IActionResult> SignInAsync(bool rememberMe, string? returnUrl, bool recovery,
+        Func<string, Task<Microsoft.AspNetCore.Identity.SignInResult>> signIn)
     {
         Load(rememberMe, returnUrl, recovery);
         var user = await signInManager.GetTwoFactorAuthenticationUserAsync();
@@ -64,10 +75,7 @@ public class LoginWith2faModel(
             return Page();
         }
 
-        var code = TwoFactorSignIn.NormalizeCode(Input.Code);
-        var result = Recovery
-            ? await signInManager.TwoFactorRecoveryCodeSignInAsync(code)
-            : await signInManager.TwoFactorAuthenticatorSignInAsync(code, RememberMe, Input.RememberBrowser);
+        var result = await signIn(TwoFactorSignIn.NormalizeCode(Input.Code));
 
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
         if (result.Succeeded)

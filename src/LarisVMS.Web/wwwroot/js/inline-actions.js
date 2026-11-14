@@ -9,13 +9,17 @@
 //   data-action="select"          selects the field's text
 //   data-copy-from="#id"          copies that element's value (or text) to the clipboard, flashes ✅
 //   data-submit-on-change         submits the field's form when its value changes
-//   data-navigate-prefix="/x/"    <select>: goes to prefix + value when a value is chosen
+//   data-navigate="view-play"     <select>: goes to that target's page + value when a value is chosen
+//                                 (targets are listed in NAVIGATE_TARGETS below)
 //   data-stop-propagation         a click on it doesn't reach its ancestors (e.g. a <summary>)
 //   data-on-error="hide"          <img> that fails to load: hidden (display: none)
 //   data-on-error="invisible"     … keeps its space (visibility: hidden)
 //   data-on-error="hide-show-next" … hidden, and its next sibling's d-none removed
 (function () {
     'use strict';
+
+    // Where a data-navigate <select> may go: a fixed page per name, plus the chosen value.
+    var NAVIGATE_TARGETS = { 'view-play': '/Views/Play/' };
 
     // Blazor pages set <base href="/">, which makes a browser resolve href="#x" to /#x and leave the
     // page. That would send the skip link to the dashboard, so such links are followed here instead.
@@ -79,14 +83,11 @@
         var el = e.target;
         if (!el || !el.hasAttribute) return;
         if (el.hasAttribute('data-submit-on-change') && el.form) el.form.submit();
-        var prefix = el.getAttribute('data-navigate-prefix');
-        if (prefix && el.value) {
-            // Only a path on this site: the prefix and value come from the page, but a navigation
-            // never leaves it or runs a javascript: URL.
-            var target = new URL(prefix + encodeURIComponent(el.value), window.location.origin);
-            if (target.origin === window.location.origin && prefix.charAt(0) === '/' && prefix.charAt(1) !== '/')
-                window.location.href = target.pathname + target.search + target.hash;
-        }
+        // Only a known page on this site: the attribute names a target from the list above, never a
+        // path, and the value is encoded, so a navigation can't leave the site or run a javascript: URL.
+        var name = el.getAttribute('data-navigate');
+        if (name && el.value && Object.prototype.hasOwnProperty.call(NAVIGATE_TARGETS, name))
+            window.location.href = NAVIGATE_TARGETS[name] + encodeURIComponent(el.value);
     });
 
     // Load errors don't bubble, but they can be caught on the way down.

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.221.1] - 2026-11-13
+
+A small security update: three code scanning findings fixed.
+
+### 🔒 Security
+
+- **Code scanning fixes.** The view picker only goes to known pages, remembered filters are
+  re-encoded before they're restored, and app codes and recovery codes sign in through separate
+  handlers.
+
 ## [0.221.0] - 2026-11-11
 
 LarisVMS in nine more languages, Help included, and a big round of security work: two-factor sign-in,
@@ -1861,6 +1871,7 @@ Only the 10 most recent versions are kept in this file. Older entries are archiv
 - [v0.21.1 – v0.40.0](changelog-archive/v0.21.1-to-v0.40.0.md) (2026-08-09 – 2026-08-11)
 - [v0.1.0 – v0.21.0](changelog-archive/v0.1.0-to-v0.21.0.md) (2026-08-08 – 2026-08-09)
 
-[Unreleased]: https://github.com/billacuda/LarisVMS/compare/v0.221.0-beta...HEAD
-[0.221.0]: https://github.com/billacuda/LarisVMS/compare/v0.220.0-beta...v0.221.0-beta
-[0.220.0]: https://github.com/billacuda/LarisVMS/compare/v0.219.0-beta...v0.220.0-beta
+[Unreleased]: https://github.com/billacuda/LarisVMS/compare/v0.221.1...HEAD
+[0.221.1]: https://github.com/billacuda/LarisVMS/compare/v0.221.0...v0.221.1
+[0.221.0]: https://github.com/billacuda/LarisVMS/compare/v0.220.0...v0.221.0
+[0.220.0]: https://github.com/billacuda/LarisVMS/compare/v0.219.0-beta...v0.220.0

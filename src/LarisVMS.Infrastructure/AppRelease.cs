@@ -13,7 +13,7 @@ namespace LarisVMS.Infrastructure;
 /// </summary>
 public static class AppRelease
 {
-    public const string Version = "0.221.0";
+    public const string Version = "0.221.1";
 
     public const string Notes = "Added: manual recording, a Manual only mode, recording indicators on live tiles, a wider API with per-key limits, languages, and ignored objects. Changed: keyboard and screen reader support across the app, and stronger contrast. Security: many hardening fixes.";
 
