@@ -116,8 +116,10 @@ public class BackupService(ApplicationDbContext db, ISettingsResolver settings, 
             var encryption = IsValidCertificateName(certificate)
                 ? $", ENCRYPTION (ALGORITHM = AES_256, SERVER CERTIFICATE = [{certificate!.Replace("]", "]]")}])"
                 : "";
+#pragma warning disable SCS0002 // BACKUP takes no parameters: the name is bracket-escaped, the path validated and quote-escaped (above)
             cmd.CommandText = $"BACKUP DATABASE [{databaseName.Replace("]", "]]")}] " +
                               $"TO DISK = N'{fullPath.Replace("'", "''")}' WITH INIT{encryption}";
+#pragma warning restore SCS0002
             cmd.CommandTimeout = 600;
             await cmd.ExecuteNonQueryAsync(ct);
         }

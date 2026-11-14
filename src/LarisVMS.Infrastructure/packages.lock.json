@@ -771,7 +771,7 @@
       "larisvms.onvif": {
         "type": "Project",
         "dependencies": {
-          "LarisVMS.Core": "[0.221.2, )"
+          "LarisVMS.Core": "[0.221.3, )"
         }
       },
       "Microsoft.Extensions.Logging.Abstractions": {

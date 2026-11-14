@@ -1710,8 +1710,8 @@ apiRoutes.Get("/cameras/{cameraId:guid}/snapshot", async (HttpContext ctx, Guid 
             statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 
-    // The zone editor (/api, signed in) gets the whole picture, since it draws the privacy areas;
-    // the public API's copy gets it masked, like recordings.
+    // The zone editor, signed in under /api, gets the whole picture, since it draws the privacy
+    // areas. The public API's copy gets it masked, like recordings.
     var raw = !ctx.Request.Path.StartsWithSegments("/api/v1", StringComparison.OrdinalIgnoreCase);
     await auditService.LogAsync(raw ? "Camera.SnapshotUnmasked" : "Camera.Snapshot",
         ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, ctx.User.Identity?.Name,

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.221.3] - 2026-11-14
+
+A maintenance update: a clean build and a working .NET 10 code scan.
+
+### 🔒 Security
+
+- **Small hardening.** The Gmail sign-in callback only returns to a page of this site, and the Help
+  page's heading matcher has a time limit.
+
+### ⚙️ Changed
+
+- **Clean build.** Release builds finish without warnings; reviewed analyzer findings are marked
+  with their reasons in the code.
+- **.NET 10 code scan.** The scan builds again when GitHub's runner has a newer .NET SDK than the
+  one the release lock files were made with.
+
 ## [0.221.2] - 2026-11-14
 
 Another small security update: page text escaped everywhere, a few labels that stayed in English
@@ -1893,7 +1909,8 @@ Only the 10 most recent versions are kept in this file. Older entries are archiv
 - [v0.21.1 – v0.40.0](changelog-archive/v0.21.1-to-v0.40.0.md) (2026-08-09 – 2026-08-11)
 - [v0.1.0 – v0.21.0](changelog-archive/v0.1.0-to-v0.21.0.md) (2026-08-08 – 2026-08-09)
 
-[Unreleased]: https://github.com/billacuda/LarisVMS/compare/v0.221.2...HEAD
+[Unreleased]: https://github.com/billacuda/LarisVMS/compare/v0.221.3...HEAD
+[0.221.3]: https://github.com/billacuda/LarisVMS/compare/v0.221.2...v0.221.3
 [0.221.2]: https://github.com/billacuda/LarisVMS/compare/v0.221.1...v0.221.2
 [0.221.1]: https://github.com/billacuda/LarisVMS/compare/v0.221.0...v0.221.1
 [0.221.0]: https://github.com/billacuda/LarisVMS/compare/v0.220.0...v0.221.0

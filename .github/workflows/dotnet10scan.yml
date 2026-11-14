@@ -2,9 +2,10 @@ name: ".NET 10 Security Build"
 
 on:
   push:
-    paths: [ '**.cs', '**.csproj', '**.sln', '**.slnx' ]
+    paths: [ '**.cs', '**.csproj', '**.sln', '**.slnx', '**.props', '.github/workflows/dotnet10scan.yml' ]
   pull_request:
-    paths: [ '**.cs', '**.csproj', '**.sln', '**.slnx' ]
+    paths: [ '**.cs', '**.csproj', '**.sln', '**.slnx', '**.props', '.github/workflows/dotnet10scan.yml' ]
+  workflow_dispatch:
 
 jobs:
   build-and-scan:
@@ -18,14 +19,16 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Setup .NET 10
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
       - name: Build and generate SARIF
         # Outputs all C# compiler, .NET analyzer, and SCS warnings to SARIF, one file per project
-        # (see Directory.Build.props).
-        run: dotnet build LarisVMS.slnx --configuration Release -p:SarifDir=${{ github.workspace }}/sarif
+        # (see Directory.Build.props). Not locked restore: the runner's newest SDK can pull a newer
+        # ILLink than the lock files (made with the release machine's SDK) list, and this build
+        # ships nothing.
+        run: dotnet build LarisVMS.slnx --configuration Release -p:RestoreLockedMode=false -p:SarifDir=${{ github.workspace }}/sarif
 
       - name: Upload SARIF to GitHub Security
         if: always()

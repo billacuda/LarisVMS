@@ -126,7 +126,7 @@
     private int CurrentPage { get; set; } = 1;
     private int TotalPages { get; set; }
     private bool CanExport { get; set; }
-    private LarisVMS.Core.Security.AuditChainReport? Integrity => AuditIntegrity.Last;
+    private static LarisVMS.Core.Security.AuditChainReport? Integrity => AuditIntegrity.Last;
 
     private async Task CheckIntegrityAsync() =>
         await AuditIntegrity.CheckAsync(Services, Logger, CancellationToken.None);

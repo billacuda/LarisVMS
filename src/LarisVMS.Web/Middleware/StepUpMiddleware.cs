@@ -43,6 +43,8 @@ public sealed class StepUpMiddleware(RequestDelegate next)
         // A form sent after the window closed comes back to its page (unsaved) once confirmed.
         var returnUrl = context.Request.PathBase + context.Request.Path
             + (HttpMethods.IsGet(context.Request.Method) ? context.Request.QueryString.ToString() : "");
+#pragma warning disable SCS0027 // a fixed local page; the request's address is only an escaped returnUrl, checked where it's used
         context.Response.Redirect($"{StepUpPolicy.PagePath}?returnUrl={Uri.EscapeDataString(returnUrl)}");
+#pragma warning restore SCS0027
     }
 }

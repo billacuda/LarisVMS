@@ -78,7 +78,9 @@ public sealed class QrCode
             foreach (var b in data) Append(bits, b, 8);
             Append(bits, 0, Math.Min(4, capacityBits - bits.Count));
             Append(bits, 0, (8 - bits.Count % 8) % 8);
+#pragma warning disable S1994 // the spec's pad bytes alternate (0xEC, 0x11) until the capacity is filled
             for (var pad = 0xEC; bits.Count < capacityBits; pad ^= 0xEC ^ 0x11) Append(bits, pad, 8);
+#pragma warning restore S1994
 
             var codewords = new byte[bits.Count / 8];
             for (var i = 0; i < bits.Count; i++)
@@ -291,7 +293,9 @@ public sealed class QrCode
         var i = 0;
         for (var right = Size - 1; right >= 1; right -= 2)
         {
+#pragma warning disable S127 // the spec's column walk skips the vertical timing pattern (column 6)
             if (right == 6) right = 5;
+#pragma warning restore S127
             for (var vert = 0; vert < Size; vert++)
                 for (var j = 0; j < 2; j++)
                 {

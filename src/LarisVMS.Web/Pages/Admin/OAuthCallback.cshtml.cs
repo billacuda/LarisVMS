@@ -80,8 +80,8 @@ public class OAuthCallbackModel(ApplicationDbContext db, IDataProtectionProvider
     /// the query string instead — read there via [SupplyParameterFromQuery] StatusMessage/
     /// StatusIsError.</summary>
     private IActionResult SucceedRedirect(string message) =>
-        Redirect($"/Admin/Settings/Email?statusMessage={Uri.EscapeDataString(message)}&statusIsError=false");
+        LocalRedirect($"/Admin/Settings/Email?statusMessage={Uri.EscapeDataString(message)}&statusIsError=false");
 
     private IActionResult Fail(string message) =>
-        Redirect($"/Admin/Settings/Email?statusMessage={Uri.EscapeDataString(message)}&statusIsError=true");
+        LocalRedirect($"/Admin/Settings/Email?statusMessage={Uri.EscapeDataString(message)}&statusIsError=true");
 }

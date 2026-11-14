@@ -177,7 +177,7 @@
             "upload-invalid" => L["settings.language.uploadInvalid", new { error = ResultError ?? "" }],
             "upload-failed" => L["settings.language.uploadFailed", new { error = ResultError ?? "" }],
             "delete-failed" => L["settings.language.deleteFailed"],
-            _ => null
+            _ => (string?)null
         };
         ResultIsError = Result is not null && Result.Contains("-");
 

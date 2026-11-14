@@ -85,9 +85,8 @@ public sealed class CommonPasswordValidator : IPasswordValidator<ApplicationUser
         if (lower.Distinct().Count() <= 2) return "common";       // "aaaaaaaaaaaa", "abababababab"
         if (IsRun(lower)) return "common";                        // "123456789012", "abcdefghijkl"
 
-        foreach (var name in NameParts(userName, email, displayName))
-            if (lower.Contains(name, StringComparison.Ordinal)) return "containsName";
-        return null;
+        return NameParts(userName, email, displayName).Any(name => lower.Contains(name, StringComparison.Ordinal))
+            ? "containsName" : null;
     }
 
     private static bool IsRun(string value)

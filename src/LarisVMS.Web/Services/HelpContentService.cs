@@ -44,8 +44,8 @@ public sealed class HelpContentService
     internal static string Render(string markdown)
     {
         var document = Markdown.Parse(markdown, Pipeline);
-        foreach (var link in document.Descendants<Markdig.Syntax.Inlines.LinkInline>())
-            if (!IsSafeUrl(link.Url)) link.Url = "#";
+        foreach (var link in document.Descendants<Markdig.Syntax.Inlines.LinkInline>().Where(l => !IsSafeUrl(l.Url)))
+            link.Url = "#";
         foreach (var link in document.Descendants<Markdig.Syntax.Inlines.AutolinkInline>())
             if (!link.IsEmail && !IsSafeUrl(link.Url)) link.Url = "#";
         using var writer = new StringWriter();
@@ -189,7 +189,7 @@ public sealed class HelpContentService
     }
 
     private static readonly System.Text.RegularExpressions.Regex HeadingId =
-        new("<h([1-6]) id=\"([^\"]*)\"", System.Text.RegularExpressions.RegexOptions.Compiled);
+        new("<h([1-6]) id=\"([^\"]*)\"", System.Text.RegularExpressions.RegexOptions.Compiled, TimeSpan.FromSeconds(1));
 
     /// <summary>Gives a translated page's headings the English page's ids, in order, when both have
     /// the same headings at the same levels. A page that's been restructured keeps its own ids.

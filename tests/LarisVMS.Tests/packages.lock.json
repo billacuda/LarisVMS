@@ -795,7 +795,7 @@
         "type": "Project",
         "dependencies": {
           "Azure.Identity": "[1.21.0, )",
-          "LarisVMS.Core": "[0.221.2, )",
+          "LarisVMS.Core": "[0.221.3, )",
           "LarisVMS.Onvif": "[1.0.0, )",
           "MailKit": "[4.17.0, )",
           "Microsoft.AspNetCore.DataProtection.Abstractions": "[10.0.13, )",
@@ -817,14 +817,14 @@
       "larisvms.media": {
         "type": "Project",
         "dependencies": {
-          "LarisVMS.Core": "[0.221.2, )",
+          "LarisVMS.Core": "[0.221.3, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.13, )"
         }
       },
       "larisvms.node": {
         "type": "Project",
         "dependencies": {
-          "LarisVMS.Core": "[0.221.2, )",
+          "LarisVMS.Core": "[0.221.3, )",
           "LarisVMS.Media": "[1.0.0, )",
           "LarisVMS.Onvif": "[1.0.0, )",
           "LarisVMS.Relay": "[1.0.0, )",
@@ -839,13 +839,13 @@
       "larisvms.onvif": {
         "type": "Project",
         "dependencies": {
-          "LarisVMS.Core": "[0.221.2, )"
+          "LarisVMS.Core": "[0.221.3, )"
         }
       },
       "larisvms.proxy": {
         "type": "Project",
         "dependencies": {
-          "LarisVMS.Core": "[0.221.2, )",
+          "LarisVMS.Core": "[0.221.3, )",
           "LarisVMS.Relay": "[1.0.0, )",
           "Microsoft.Extensions.Hosting.WindowsServices": "[10.0.13, )",
           "System.Security.Cryptography.ProtectedData": "[10.0.13, )"
@@ -871,7 +871,7 @@
       "larisvms.vision.service": {
         "type": "Project",
         "dependencies": {
-          "LarisVMS.Core": "[0.221.2, )",
+          "LarisVMS.Core": "[0.221.3, )",
           "LarisVMS.Vision": "[1.0.0, )",
           "Microsoft.AI.DirectML": "[1.15.4, )",
           "Microsoft.ML.OnnxRuntime.DirectML": "[1.23.0, )",

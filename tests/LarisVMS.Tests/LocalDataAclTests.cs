@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using LarisVMS.Core.Security;
@@ -9,6 +10,7 @@ namespace LarisVMS.Tests;
 /// local user who created the folder first, or added themselves, would) is removed, not just the broad
 /// groups, while a Windows service's own virtual account keeps its grant.
 /// </summary>
+[SupportedOSPlatform("windows")] // each test returns early off Windows
 public class LocalDataAclTests
 {
     private static readonly SecurityIdentifier Guests = new(WellKnownSidType.BuiltinGuestsSid, null);

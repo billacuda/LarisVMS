@@ -11,7 +11,9 @@ public class TokenModel(SetupToken setupToken, ILogger<TokenModel> logger) : Pag
 {
     [BindProperty] public string? Token { get; set; }
 
+#pragma warning disable S2325 // the page reads it as Model.FilePath
     public string FilePath => SetupToken.FilePath;
+#pragma warning restore S2325
     public string? ErrorMessage { get; private set; }
 
     public IActionResult OnGet()

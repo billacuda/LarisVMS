@@ -36,7 +36,7 @@ public sealed class UserSessionService(ApplicationDbContext db)
         // for a role whose sessions never expire) are long dead; tidy them up here rather than in a
         // sweep.
         var oldest = now.AddDays(-397);
-        await db.UserSessions.Where(s => s.UserId == userId && s.LastSeenUtc < oldest).ExecuteDeleteAsync();
+        await db.UserSessions.Where(s => s.UserId == userId && s.LastSeenUtc < oldest).ExecuteDeleteAsync(context.RequestAborted);
 
         var session = new UserSession
         {
@@ -49,7 +49,7 @@ public sealed class UserSessionService(ApplicationDbContext db)
             UserAgent = Truncate(context.Request.Headers.UserAgent.ToString(), 256),
         };
         db.UserSessions.Add(session);
-        await db.SaveChangesAsync();
+        await db.SaveChangesAsync(context.RequestAborted);
         return session;
     }
 
@@ -132,8 +132,8 @@ public static class SessionIdlePolicy
         return (browser, os) switch
         {
             (null, null) => "",
-            (null, _) => os!,
-            (_, null) => browser!,
+            (null, _) => os,
+            (_, null) => browser,
             _ => $"{browser} · {os}",
         };
     }

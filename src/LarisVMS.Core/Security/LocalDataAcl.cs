@@ -162,6 +162,7 @@ public static class LocalDataAcl
 
     /// <summary>A Windows service's own virtual account (NT SERVICE\…), for a LarisVMS service an admin
     /// set to run as one. No one can sign in as one, so its grant stays.</summary>
+    [SupportedOSPlatform("windows")]
     internal static bool IsVirtualServiceAccount(SecurityIdentifier sid) =>
         sid.Value.StartsWith("S-1-5-80-", StringComparison.Ordinal);
 

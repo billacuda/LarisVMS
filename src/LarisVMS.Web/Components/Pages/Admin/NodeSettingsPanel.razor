@@ -234,7 +234,7 @@
     private async Task HandleCreateCodeAsync()
     {
         if (!(await PermissionService.GetGrantedAsync(User)).Has("Settings", "Edit")) return;
-        var lifetime = RK.Lifetimes.FirstOrDefault(t => t.TotalHours == CodeLifetimeHours, TimeSpan.FromHours(24));
+        var lifetime = RK.Lifetimes.FirstOrDefault(t => t == TimeSpan.FromHours(CodeLifetimeHours), TimeSpan.FromHours(24));
         var (code, row) = await RK.CreateAsync(Db, lifetime, User.Identity?.Name, CancellationToken.None);
         NewCode = code;
         await AuditService.LogAsync("Node.RegistrationCodeCreated", User.FindFirst(ClaimTypes.NameIdentifier)?.Value, User.Identity?.Name,

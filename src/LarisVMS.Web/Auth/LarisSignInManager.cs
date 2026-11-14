@@ -15,7 +15,9 @@ public sealed class LarisSignInManager(
     IHttpContextAccessor contextAccessor,
     IUserClaimsPrincipalFactory<ApplicationUser> claimsFactory,
     IOptions<IdentityOptions> optionsAccessor,
+#pragma warning disable S6672 // the base SignInManager constructor requires this logger type
     ILogger<SignInManager<ApplicationUser>> logger,
+#pragma warning restore S6672
     IAuthenticationSchemeProvider schemes,
     IUserConfirmation<ApplicationUser> confirmation)
     : SignInManager<ApplicationUser>(userManager, contextAccessor, claimsFactory, optionsAccessor, logger, schemes, confirmation)

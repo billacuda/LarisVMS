@@ -52,7 +52,9 @@ public sealed class AccountSetupRequiredMiddleware(RequestDelegate next)
             && !context.WebSockets.IsWebSocketRequest)
         {
             var returnUrl = context.Request.PathBase + context.Request.Path + context.Request.QueryString;
+#pragma warning disable SCS0027 // a fixed local page; the request's address is only an escaped returnUrl, checked where it's used
             context.Response.Redirect($"{page}?returnUrl={Uri.EscapeDataString(returnUrl)}");
+#pragma warning restore SCS0027
         }
         else
         {

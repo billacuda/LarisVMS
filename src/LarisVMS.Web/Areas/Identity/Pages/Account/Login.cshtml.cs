@@ -71,7 +71,7 @@ public class LoginModel(
         if (!string.IsNullOrEmpty(ErrorMessage)) ModelState.AddModelError(string.Empty, ErrorMessage);
 
         // Only a page of this site: anything else (or a malformed address) goes to the start page.
-        ReturnUrl = Url.IsLocalUrl(returnUrl) ? returnUrl! : Url.Content("~/");
+        ReturnUrl = Url.IsLocalUrl(returnUrl) ? returnUrl : Url.Content("~/");
         // Clears any half-finished external sign-in attempt (e.g. the user navigated back mid-flow)
         // — same cleanup the default page does before showing the form fresh.
         await HttpContext.SignOutAsync(IdentityConstants.ExternalScheme);
@@ -81,7 +81,7 @@ public class LoginModel(
     public async Task<IActionResult> OnPostAsync(string? returnUrl = null)
     {
         // Only a page of this site: anything else (or a malformed address) goes to the start page.
-        ReturnUrl = Url.IsLocalUrl(returnUrl) ? returnUrl! : Url.Content("~/");
+        ReturnUrl = Url.IsLocalUrl(returnUrl) ? returnUrl : Url.Content("~/");
         var adSettings = await LoadPageStateAsync();
         if (!ModelState.IsValid) return Page();
 

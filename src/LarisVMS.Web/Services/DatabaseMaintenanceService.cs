@@ -107,7 +107,9 @@ public class DatabaseMaintenanceService(IServiceScopeFactory scopeFactory, ILogg
         {
             var action = Decide(ix.Fragmentation, ix.Pages);
             if (action == IndexAction.None) continue;
+#pragma warning disable SCS0002 // ALTER INDEX takes no parameters: names come from sys.indexes and are bracket-quoted (Quote)
             await db.Database.ExecuteSqlRawAsync(Statement(ix.Schema, ix.Table, ix.Index, ix.Clustered, action, online), ct);
+#pragma warning restore SCS0002
             done.Add($"{ix.Index} {(action == IndexAction.Rebuild ? "rebuilt" : "reorganized")} ({ix.Fragmentation:0}%)");
         }
         await db.Database.ExecuteSqlRawAsync("EXEC sp_updatestats", ct);

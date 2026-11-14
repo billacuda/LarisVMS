@@ -75,7 +75,9 @@ public class SetupMiddleware(RequestDelegate next, IServiceScopeFactory scopeFac
             // stayed open to anyone: the node registration key, or repointing the database.
             if (await IsSetupCompleteAsync() && !await IsSuperAdminAsync(context))
             {
+#pragma warning disable SCS0027 // a fixed local page; the request's address is only an escaped ReturnUrl, checked by Login
                 context.Response.Redirect("/Identity/Account/Login?ReturnUrl=" + Uri.EscapeDataString(context.Request.Path + context.Request.QueryString));
+#pragma warning restore SCS0027
                 return;
             }
         }
