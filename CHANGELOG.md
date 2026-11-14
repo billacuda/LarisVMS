@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.221.4] - 2026-11-14
+
+The latest .NET 10 patch: runtime and libraries at 10.0.15.
+
+### ⚙️ Changed
+
+- **.NET 10.0.15.** The installers include the .NET 10.0.15 runtime, and LarisVMS uses the 10.0.15
+  ASP.NET Core, Entity Framework Core, and other .NET libraries. Built with the .NET SDK 10.0.404,
+  which `global.json` now requires.
+
 ## [0.221.3] - 2026-11-14
 
 A maintenance update: a clean build and a working .NET 10 code scan.
@@ -1909,7 +1919,8 @@ Only the 10 most recent versions are kept in this file. Older entries are archiv
 - [v0.21.1 – v0.40.0](changelog-archive/v0.21.1-to-v0.40.0.md) (2026-08-09 – 2026-08-11)
 - [v0.1.0 – v0.21.0](changelog-archive/v0.1.0-to-v0.21.0.md) (2026-08-08 – 2026-08-09)
 
-[Unreleased]: https://github.com/billacuda/LarisVMS/compare/v0.221.3...HEAD
+[Unreleased]: https://github.com/billacuda/LarisVMS/compare/v0.221.4...HEAD
+[0.221.4]: https://github.com/billacuda/LarisVMS/compare/v0.221.3...v0.221.4
 [0.221.3]: https://github.com/billacuda/LarisVMS/compare/v0.221.2...v0.221.3
 [0.221.2]: https://github.com/billacuda/LarisVMS/compare/v0.221.1...v0.221.2
 [0.221.1]: https://github.com/billacuda/LarisVMS/compare/v0.221.0...v0.221.1
