@@ -1,0 +1,33 @@
+name: ".NET 10 Security Build"
+
+on:
+  push:
+    paths: [ '**.cs', '**.csproj', '**.sln', '**.slnx' ]
+  pull_request:
+    paths: [ '**.cs', '**.csproj', '**.sln', '**.slnx' ]
+
+jobs:
+  build-and-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build and generate SARIF
+        # Outputs all C# compiler, .NET analyzer, and SCS warnings to SARIF
+        run: dotnet build --configuration Release /p:ErrorLog=scs-results.sarif,version=2.1
+
+      - name: Upload SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: scs-results.sarif
