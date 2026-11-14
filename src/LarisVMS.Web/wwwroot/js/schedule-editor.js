@@ -25,11 +25,16 @@ window.larisvmsScheduleEditor = (function () {
         catch (e) { /* keep the English abbreviation */ }
     });
 
+    function escHtml(s) {
+        return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // As HTML (escaped), for the schedule list.
     function daysSummary(bitmask) {
         var included = DAYS.filter(function (d) { return (bitmask & d.bit) !== 0; });
-        if (included.length === 7) return larisvmsI18n.t('js.scheduleEditor.everyDay');
-        if (included.length === 0) return larisvmsI18n.t('js.scheduleEditor.noDaysSelected');
-        return included.map(function (d) { return d.abbr; }).join(', ');
+        if (included.length === 7) return larisvmsI18n.html('js.scheduleEditor.everyDay');
+        if (included.length === 0) return larisvmsI18n.html('js.scheduleEditor.noDaysSelected');
+        return escHtml(included.map(function (d) { return d.abbr; }).join(', '));
     }
 
     // HH:mm from the API's TimeOnly (serialized "HH:mm:ss") to a <input type="time"> value, and back.
@@ -51,13 +56,14 @@ window.larisvmsScheduleEditor = (function () {
             sorted.forEach(function (w) {
                 html += '<button type="button" class="list-group-item list-group-item-action py-2' +
                     (w.id === selectedId ? ' active' : '') + '" data-window-id="' + w.id + '">' +
-                    toInputTime(w.startTime) + '&ndash;' + toInputTime(w.endTime) +
+                    escHtml(toInputTime(w.startTime)) + '&ndash;' + escHtml(toInputTime(w.endTime)) +
                     (w.endTime < w.startTime ? ' <span class="text-muted small">' + larisvmsI18n.html('js.scheduleEditor.crossesMidnight') + '</span>' : '') +
                     (w.isEnabled ? '' : ' <span class="text-muted small">' + larisvmsI18n.html('js.scheduleEditor.disabled') + '</span>') +
                     '<div class="text-muted small">' + daysSummary(w.days) + '</div>' +
                     '</button>';
             });
             html += '</div>';
+            // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
             panel.innerHTML = html;
 
             Array.prototype.forEach.call(panel.querySelectorAll('[data-window-id]'), function (el) {

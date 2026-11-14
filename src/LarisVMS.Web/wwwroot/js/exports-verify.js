@@ -61,6 +61,7 @@
 
     // "2026-10-14T18:00:00.1234567Z" -> .NET ticks (BigInt), to the 100 ns the server hashed.
     function ticks(iso) {
+        // eslint-disable-next-line security/detect-unsafe-regex -- reviewed: anchored, no nested repetition
         var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?Z$/.exec(iso || '');
         if (!m) return null;
         var ms = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
@@ -203,9 +204,10 @@
             lines = lines.concat(chainLines);
 
             var range = new Date(payload.requested.fromUtc).toLocaleString(larisvmsI18n.locale) + ' – ' + new Date(payload.requested.toUtc).toLocaleString(larisvmsI18n.locale);
+            // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
             resultEl.innerHTML =
                 '<div class="alert ' + (verdictOk ? 'alert-success' : 'alert-danger') + '"><strong>' +
-                (verdictOk ? larisvmsI18n.t('js.exportsVerify.verified') : larisvmsI18n.t('js.exportsVerify.notVerified')) + '</strong> ' + escapeHtml(payload.camera.name) + ', ' + escapeHtml(range) +
+                (verdictOk ? larisvmsI18n.html('js.exportsVerify.verified') : larisvmsI18n.html('js.exportsVerify.notVerified')) + '</strong> ' + escapeHtml(payload.camera.name) + ', ' + escapeHtml(range) +
                 (payload.redacted ? ' ' + larisvmsI18n.html('js.exportsVerify.redactedNote') : '') + '.</div>' +
                 '<ul class="list-group">' + lines.join('') + '</ul>';
         } catch (e) {

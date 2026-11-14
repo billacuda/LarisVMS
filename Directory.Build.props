@@ -1,0 +1,12 @@
+<Project>
+  <!-- Code scanning: a build given -p:SarifDir=<folder> writes each project's compiler and analyzer
+       results (SecurityCodeScan included) to <folder>/<project>.sarif. A plain build writes none.
+       One file per project, because a relative ErrorLog would land in each project's own folder. -->
+  <PropertyGroup Condition="'$(SarifDir)' != ''">
+    <ErrorLog>$(SarifDir)/$(MSBuildProjectName).sarif,version=2.1</ErrorLog>
+  </PropertyGroup>
+  <!-- The compiler doesn't create the folder itself. -->
+  <Target Name="CreateSarifDir" BeforeTargets="CoreCompile" Condition="'$(SarifDir)' != ''">
+    <MakeDir Directories="$(SarifDir)" />
+  </Target>
+</Project>

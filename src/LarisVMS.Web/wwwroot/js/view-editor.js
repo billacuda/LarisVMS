@@ -103,6 +103,7 @@ window.larisvmsViewEditor = (function () {
     // titlebar controls, and starts video. Shared by every path that produces a cell (initial
     // load, click-to-add, and a successful palette drag-in) so they can't drift apart.
     function fillCell(contentEl, cell) {
+        // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
         contentEl.innerHTML = buildCellHtml(cell);
         var cellEl = contentEl.querySelector('.view-cell');
         if (cellEl) {

@@ -101,11 +101,13 @@ window.larisvmsDashboardReport = (function () {
     // from data.columns; CSV-only columns are left out of the table.
     function renderColumns(data) {
         var cols = data.columns.filter(function (c) { return !c.csvOnly; });
+        // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
         headEl.innerHTML = '<tr>' + cols.map(function (c) {
             var align = c.type === 'number' ? ' class="text-end"' : '';
             return '<th' + align + '>' + (c.sortKey ? sortButton(c.header, c.sortKey)
                 : '<span class="small fw-semibold">' + escapeHtml(c.header) + '</span>') + '</th>';
         }).join('') + '</tr>';
+        // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
         bodyEl.innerHTML = data.rows.length === 0
             ? '<tr><td colspan="' + cols.length + '" class="text-muted">' + larisvmsI18n.html('js.dashboardReport.nothingMatches') + '</td></tr>'
             : data.rows.map(function (r) {
@@ -131,6 +133,7 @@ window.larisvmsDashboardReport = (function () {
             nextEl.disabled = data.page >= data.totalPages;
             return;
         }
+        // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
         if (headEl && headEl.innerHTML !== standardHead) headEl.innerHTML = standardHead;
         valueHeaderEl = document.getElementById('dashboardReportValueHeader');
         nodeColEl = modalEl.querySelector('[data-report-node-col]');
@@ -139,6 +142,7 @@ window.larisvmsDashboardReport = (function () {
         if (nodeColEl) nodeColEl.classList.toggle('d-none', !showNode);
         if (valueHeaderEl) valueHeaderEl.textContent = data.valueHeader || larisvmsI18n.t('js.dashboardReport.value');
 
+        // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
         bodyEl.innerHTML = data.rows.length === 0
             ? '<tr><td colspan="5" class="text-muted">' + larisvmsI18n.html('js.dashboardReport.nothingMatches') + '</td></tr>'
             : data.rows.map(function (r, i) {

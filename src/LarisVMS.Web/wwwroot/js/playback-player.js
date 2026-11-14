@@ -1664,6 +1664,7 @@
             el.style.minWidth = '0';
             el.style.minHeight = '0';
             el.style.overflow = 'hidden';
+            // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
             el.innerHTML = buildTileCardHtml(cam, cell.cameraId === primaryCameraId);
 
             var videoEl = el.querySelector('.pb-video');

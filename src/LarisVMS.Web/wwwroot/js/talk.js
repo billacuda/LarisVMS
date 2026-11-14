@@ -206,6 +206,7 @@ window.larisvmsTalk = (function () {
             navigator.mediaDevices.enumerateDevices().then(function (devices) {
                 var current = window.larisvmsPreferences.get(MIC_PREF, '');
                 var mics = devices.filter(function (d) { return d.kind === 'audioinput'; });
+                // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
                 micSelect.innerHTML = '<option value="">' + larisvmsI18n.html('js.talk.defaultMicrophone') + '</option>' + mics
                     .filter(function (d) { return d.deviceId && d.deviceId !== 'default'; })
                     .map(function (d, i) {

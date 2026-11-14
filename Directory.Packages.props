@@ -88,4 +88,9 @@
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.4" />
     <PackageVersion Include="coverlet.collector" Version="6.0.4" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- SecurityCodeScan: security analyzer in every project, so the .NET 10 Security Build
+         workflow's SARIF carries its findings. A global reference is private and analyzer-only. -->
+    <GlobalPackageReference Include="SecurityCodeScan.VS2019" Version="5.6.7" />
+  </ItemGroup>
 </Project>

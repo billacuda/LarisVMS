@@ -32,6 +32,7 @@ window.larisvmsEventTagRulesEditor = (function () {
                     '</button>';
             });
             html += '</div>';
+            // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
             panel.innerHTML = html;
 
             Array.prototype.forEach.call(panel.querySelectorAll('[data-rule-id]'), function (el) {
@@ -111,6 +112,7 @@ window.larisvmsEventTagRulesEditor = (function () {
             var resp = await fetch('/api/cameras/' + opts.cameraId + '/event-tag-rules/observed-topics');
             var topics = resp.ok ? await resp.json() : [];
 
+            // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
             datalist.innerHTML = topics.map(function (t) {
                 return '<option value="' + escHtml(t.topic) + '">';
             }).join('');
@@ -127,6 +129,7 @@ window.larisvmsEventTagRulesEditor = (function () {
                     '</button>';
             });
             html += '</div>';
+            // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
             panel.innerHTML = html;
 
             Array.prototype.forEach.call(panel.querySelectorAll('[data-topic]'), function (el) {

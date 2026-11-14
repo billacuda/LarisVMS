@@ -35,6 +35,12 @@
           "Microsoft.TestPlatform.TestHost": "17.14.1"
         }
       },
+      "SecurityCodeScan.VS2019": {
+        "type": "Direct",
+        "requested": "[5.6.7, )",
+        "resolved": "5.6.7",
+        "contentHash": "WIE9RJswdSc2j+rLz2gW6U+gMUjMHzY2j7C/CL8/R2olXNM/+twarfMnWqm+rZodDBvaYDApJyxM8mVYf9FGrQ=="
+      },
       "xunit": {
         "type": "Direct",
         "requested": "[2.9.3, )",
@@ -789,7 +795,7 @@
         "type": "Project",
         "dependencies": {
           "Azure.Identity": "[1.21.0, )",
-          "LarisVMS.Core": "[0.221.1, )",
+          "LarisVMS.Core": "[0.221.2, )",
           "LarisVMS.Onvif": "[1.0.0, )",
           "MailKit": "[4.17.0, )",
           "Microsoft.AspNetCore.DataProtection.Abstractions": "[10.0.13, )",
@@ -811,14 +817,14 @@
       "larisvms.media": {
         "type": "Project",
         "dependencies": {
-          "LarisVMS.Core": "[0.221.1, )",
+          "LarisVMS.Core": "[0.221.2, )",
           "Microsoft.Extensions.Logging.Abstractions": "[10.0.13, )"
         }
       },
       "larisvms.node": {
         "type": "Project",
         "dependencies": {
-          "LarisVMS.Core": "[0.221.1, )",
+          "LarisVMS.Core": "[0.221.2, )",
           "LarisVMS.Media": "[1.0.0, )",
           "LarisVMS.Onvif": "[1.0.0, )",
           "LarisVMS.Relay": "[1.0.0, )",
@@ -833,13 +839,13 @@
       "larisvms.onvif": {
         "type": "Project",
         "dependencies": {
-          "LarisVMS.Core": "[0.221.1, )"
+          "LarisVMS.Core": "[0.221.2, )"
         }
       },
       "larisvms.proxy": {
         "type": "Project",
         "dependencies": {
-          "LarisVMS.Core": "[0.221.1, )",
+          "LarisVMS.Core": "[0.221.2, )",
           "LarisVMS.Relay": "[1.0.0, )",
           "Microsoft.Extensions.Hosting.WindowsServices": "[10.0.13, )",
           "System.Security.Cryptography.ProtectedData": "[10.0.13, )"
@@ -865,7 +871,7 @@
       "larisvms.vision.service": {
         "type": "Project",
         "dependencies": {
-          "LarisVMS.Core": "[0.221.1, )",
+          "LarisVMS.Core": "[0.221.2, )",
           "LarisVMS.Vision": "[1.0.0, )",
           "Microsoft.AI.DirectML": "[1.15.4, )",
           "Microsoft.ML.OnnxRuntime.DirectML": "[1.23.0, )",

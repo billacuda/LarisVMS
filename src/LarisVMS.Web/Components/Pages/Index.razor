@@ -103,7 +103,7 @@ else
                 <div class="card-body">
                     <div class="d-flex justify-content-between align-items-center mb-2">
                         <span class="fw-semibold">@n.NodeName</span>
-                        <span class="badge @(n.Online ? "text-bg-success" : "text-bg-secondary")">@(n.Online ? "online" : "offline")</span>
+                        <span class="badge @(n.Online ? "text-bg-success" : "text-bg-secondary")">@L[n.Online ? "dashboard.online" : "dashboard.offline"]</span>
                     </div>
                     @if (n.HostStatsFresh)
                     {
@@ -208,7 +208,7 @@ else
                         else
                         {
                             @r.NodeName
-                            <span class="badge @(r.NodeOnline ? "text-bg-success" : "text-bg-secondary") ms-1">@(r.NodeOnline ? "online" : "offline")</span>
+                            <span class="badge @(r.NodeOnline ? "text-bg-success" : "text-bg-secondary") ms-1">@L[r.NodeOnline ? "dashboard.online" : "dashboard.offline"]</span>
                         }
                     </td>
                     <td>

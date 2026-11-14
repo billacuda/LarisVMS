@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.221.2] - 2026-11-14
+
+Another small security update: page text escaped everywhere, a few labels that stayed in English
+now translated, and more code scanning.
+
+### 🔒 Security
+
+- **Escaped page text.** The Activity page, Dashboard, Map, Export check, and the schedule and zone
+  editors now escape every translated label, count, and ID before showing it, like the rest of
+  their text.
+
+### 🛠️ Fixed
+
+- **Labels in English.** The online/offline badges on the Dashboard and Nodes pages, "unassigned"
+  on the Dashboard, the sort button's tooltip on dashboard widgets, and "(floorplan)" in the map
+  picker now follow your language.
+
+### ⚙️ Changed
+
+- **More code scanning.** DevSkim, ESLint (security rules), SecurityCodeScan, Semgrep, OSV-Scanner,
+  and PSScriptAnalyzer now check every push, alongside CodeQL.
+
 ## [0.221.1] - 2026-11-13
 
 A small security update: three code scanning findings fixed.
@@ -1871,7 +1893,8 @@ Only the 10 most recent versions are kept in this file. Older entries are archiv
 - [v0.21.1 – v0.40.0](changelog-archive/v0.21.1-to-v0.40.0.md) (2026-08-09 – 2026-08-11)
 - [v0.1.0 – v0.21.0](changelog-archive/v0.1.0-to-v0.21.0.md) (2026-08-08 – 2026-08-09)
 
-[Unreleased]: https://github.com/billacuda/LarisVMS/compare/v0.221.1...HEAD
+[Unreleased]: https://github.com/billacuda/LarisVMS/compare/v0.221.2...HEAD
+[0.221.2]: https://github.com/billacuda/LarisVMS/compare/v0.221.1...v0.221.2
 [0.221.1]: https://github.com/billacuda/LarisVMS/compare/v0.221.0...v0.221.1
 [0.221.0]: https://github.com/billacuda/LarisVMS/compare/v0.220.0...v0.221.0
 [0.220.0]: https://github.com/billacuda/LarisVMS/compare/v0.219.0-beta...v0.220.0

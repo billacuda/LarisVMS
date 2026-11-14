@@ -106,7 +106,7 @@ else
                     <tr>
                         <td data-sort-value="@n.Name"><a href="/Admin/Nodes/@n.Id" class="fw-semibold">@n.Name</a></td>
                         <td>
-                            <span class="badge @(online ? "text-bg-success" : "text-bg-secondary")">@(online ? "online" : "offline")</span>
+                            <span class="badge @(online ? "text-bg-success" : "text-bg-secondary")">@L[online ? "dashboard.online" : "dashboard.offline"]</span>
                             @if (n.Status == NodeStatus.Pending)
                             {
                                 <span class="badge text-bg-warning" title="@L["admin.nodes.registeredButItRecordsNothing"]">@L["admin.nodes.waitingForApproval"]</span>

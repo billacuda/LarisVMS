@@ -27,6 +27,10 @@ jobs:
 
       - name: Run DevSkim scanner
         uses: microsoft/DevSkim-Action@v1
+        with:
+          # Production code is scanned; test data, vendored libraries, translations, and the demo
+          # site only produced false positives (sample URLs, localhost, test keys).
+          ignore-globs: "**/.git/**,**/bin/**,**/obj/**,**/tests/**,**/wwwroot/lib/**,**/locales/*.json,**/tools/demo-site/**"
 
       - name: Upload DevSkim scan results to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v3

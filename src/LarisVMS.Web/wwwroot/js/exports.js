@@ -81,6 +81,7 @@
     function render(jobs) {
         if (emptyMessage) emptyMessage.style.display = jobs.length === 0 ? '' : 'none';
         if (tableWrap) tableWrap.style.display = jobs.length === 0 ? 'none' : '';
+        // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
         tbody.innerHTML = jobs.map(renderJob).join('');
     }
 

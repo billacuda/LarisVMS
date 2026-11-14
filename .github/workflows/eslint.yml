@@ -11,9 +11,10 @@ name: "ESLint Security Scan"
 
 on:
   push:
-    paths: [ '**.js', '**.jsx', '**.ts', '**.tsx', 'package.json' ]
+    paths: [ '**.js', '**.mjs', 'eslint.config.mjs', '.github/workflows/eslint.yml' ]
   pull_request:
-    paths: [ '**.js', '**.jsx', '**.ts', '**.tsx', 'package.json' ]
+    paths: [ '**.js', '**.mjs', 'eslint.config.mjs', '.github/workflows/eslint.yml' ]
+  workflow_dispatch:
 
 jobs:
   eslint:
@@ -31,12 +32,21 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Install dependencies
-        run: |
-          if [ -f package-lock.json ]; then npm ci; else npm install; fi
-          npm install --no-save @microsoft/eslint-formatter-sarif
+      # No package.json: the linter and its rules are pinned here (eslint.config.mjs uses them).
+      - name: Install ESLint
+        run: >
+          npm install --no-save --no-audit --no-fund
+          eslint@10.13.0
+          eslint-plugin-security@4.2.0
+          eslint-plugin-no-unsanitized@4.1.5
+          @microsoft/eslint-formatter-sarif@3.1.0
 
+      # Findings exit non-zero; the upload below still runs so they reach code scanning.
+      # Lines marked "eslint-disable-next-line ... -- reviewed: ..." were checked by hand; leave
+      # them out of the upload rather than sending them as suppressed results.
       - name: Run ESLint
+        env:
+          SARIF_ESLINT_IGNORE_SUPPRESSED: "true"
         run: npx eslint . --format @microsoft/eslint-formatter-sarif --output-file eslint-results.sarif
         continue-on-error: true
 
@@ -45,3 +55,4 @@ jobs:
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: eslint-results.sarif
+          category: eslint

@@ -237,6 +237,7 @@ window.larisvmsRedactionEditor = (function () {
     }
 
     function renderList() {
+        // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
         els.list.innerHTML = state.polygons.length === 0
             ? '<li class="list-group-item text-muted">' + larisvmsI18n.html('js.redactionEditor.noneYet') + '</li>'
             : state.polygons.map(function (poly, i) {

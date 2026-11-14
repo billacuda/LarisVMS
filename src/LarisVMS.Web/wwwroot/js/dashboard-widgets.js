@@ -118,7 +118,7 @@
         }
         if (def.hasDirectionToggle) {
             html += '<button type="button" class="btn btn-sm btn-outline-secondary py-0 dashboard-widget-dir" ' +
-                'title="Switch between highest and lowest first">' + (options.asc ? larisvmsI18n.t('js.dashboardWidgets.lowest') : larisvmsI18n.t('js.dashboardWidgets.highest')) + '</button>';
+                'title="' + larisvmsI18n.html('js.dashboardWidgets.switchSortOrder') + '">' + (options.asc ? larisvmsI18n.html('js.dashboardWidgets.lowest') : larisvmsI18n.html('js.dashboardWidgets.highest')) + '</button>';
         }
         if (isHeatmap(def)) {
             var cams = config.activityCameras || [];
@@ -163,6 +163,7 @@
               'title="' + larisvmsI18n.html('js.dashboardWidgets.openReport') + '">' + escapeHtml(def.title) + '</span>'
             : '<span class="fw-semibold text-truncate">' + escapeHtml(def.title) + '</span>';
 
+        // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
         el.innerHTML =
             '<div class="grid-stack-item-content card dashboard-widget' + (def.kind === 'Summary' ? ' dashboard-widget--bare' : '') + '">' +
                 '<div class="card-header d-flex align-items-center gap-2 py-1 px-2 dashboard-widget-header">' +
@@ -306,6 +307,7 @@
         if (result.total > result.rows.length) {
             html += '<div class="text-end px-2 py-1"><button type="button" class="btn btn-link btn-sm p-0 dashboard-view-all">' + larisvmsI18n.html('js.dashboardWidgets.viewAll', { count: result.total }) + '</button></div>';
         }
+        // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
         entry.body.innerHTML = html;
         var viewAll = entry.body.querySelector('.dashboard-view-all');
         if (viewAll) viewAll.addEventListener('click', function () { openReport(def.key); });
@@ -315,8 +317,8 @@
 
     function snapshotHtml(s) {
         var src = s.isAiDetection
-            ? '/snapshot-image/' + s.cameraId + '/' + s.id
-            : '/playback-thumbnail/' + s.cameraId + '?atUtc=' + encodeURIComponent(s.atUtc) + '&exact=true';
+            ? '/snapshot-image/' + encodeURIComponent(s.cameraId) + '/' + encodeURIComponent(s.id)
+            : '/playback-thumbnail/' + encodeURIComponent(s.cameraId) + '?atUtc=' + encodeURIComponent(s.atUtc) + '&exact=true';
         var labels = s.badges && s.badges.length
             ? s.badges.map(function (b) { return (b.emoji ? b.emoji + ' ' : '') + b.label; }).join(', ')
             : (s.emoji ? s.emoji + ' ' : '') + s.label;
@@ -364,6 +366,7 @@
                 el.className = 'dashboard-snapshot text-reset text-decoration-none';
                 el.setAttribute('data-snapshot-id', id);
                 el.href = '/Playback?cameraId=' + s.cameraId + '&atUtc=' + encodeURIComponent(s.playFromUtc);
+                // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
                 el.innerHTML = snapshotHtml(s);
                 if (!firstRender && !reduceMotion) { el.classList.add('dashboard-snapshot--entering'); entering.push(el); }
             }
@@ -420,6 +423,7 @@
             });
         });
         html += '</div>' + (data.peak ? '<div class="small text-muted mt-2">' + escapeHtml(data.peak) + '</div>' : '') + '</div>';
+        // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
         entry.body.innerHTML = html;
     }
 
@@ -472,6 +476,7 @@
     }
 
     function renderKindChecks(selected) {
+        // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
         kindsList.innerHTML = (config.detectionKinds || []).map(function (k, i) {
             var id = 'dashboardKind' + i;
             return '<div class="form-check">' +
@@ -538,6 +543,7 @@
             if (!groups[d.group]) { groups[d.group] = []; order.push(d.group); }
             groups[d.group].push(d);
         });
+        // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
         addList.innerHTML = order.map(function (g) {
             return '<h6 class="mt-2">' + escapeHtml(g) + '</h6><div class="list-group mb-3">' +
                 groups[g].map(function (d) {

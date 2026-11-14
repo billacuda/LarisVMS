@@ -31,7 +31,7 @@ else
 
     <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
         <h1 class="mb-0 me-2">@n.Name</h1>
-        <span class="badge @(online ? "text-bg-success" : "text-bg-secondary")">@(online ? "online" : "offline")</span>
+        <span class="badge @(online ? "text-bg-success" : "text-bg-secondary")">@L[online ? "dashboard.online" : "dashboard.offline"]</span>
         @if (FailoverBadge is { } fb)
         {
             <span class="badge @fb.Css">@fb.Text</span>

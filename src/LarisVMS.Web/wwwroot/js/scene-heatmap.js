@@ -127,6 +127,7 @@
         var framed = !!(options && options.framed);
         var inner = '<img class="scene-heatmap-image" alt="" />' +
             '<canvas class="scene-heatmap-heat" aria-hidden="true"></canvas>';
+        // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
         container.innerHTML = framed
             ? '<div class="scene-heatmap scene-heatmap--framed"><div class="scene-heatmap-fit">' + inner + '</div></div>'
             : '<div class="scene-heatmap">' + inner + '</div>';

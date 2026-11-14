@@ -200,6 +200,7 @@
             ? larisvmsI18n.t('js.activity.hoursBetween', { from: sceneFrom.options[state.fromHour].text, to: sceneTo.options[state.toHour].text }) : '';
         summaryEl.textContent = larisvmsI18n.t('js.activity.sceneSummaryMulti', { range: sceneRangeNames[state.range], hours: hours });
         window.larisvmsSceneHeatmap.reset();
+        // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
         chartEl.innerHTML = '<div class="scene-heatmap-grid">' + heats.map(function (h, i) {
             var busiest = h.maxCount === 0 ? larisvmsI18n.t('js.activity.nothingRecorded')
                 : motion ? larisvmsI18n.plural('js.activity.busiestSpotFrames', h.maxCount)
@@ -211,12 +212,13 @@
         heats.forEach(function (h, i) {
             var panel = chartEl.querySelector('[data-scene-panel="' + i + '"]');
             if (h.maxCount === 0) {
-                panel.innerHTML = '<p class="text-muted small mb-0">' + (motion && !h.motionAvailable
-                    ? larisvmsI18n.t('js.activity.noGridMotionDetectionOn') : larisvmsI18n.t('js.activity.nothingInThisRange')) + '</p>';
+                panel.innerHTML = '<p class="text-muted small mb-0">' + larisvmsI18n.html(motion && !h.motionAvailable
+                    ? 'js.activity.noGridMotionDetectionOn' : 'js.activity.nothingInThisRange') + '</p>';
             } else {
                 window.larisvmsSceneHeatmap.render(panel, h, backgroundUrl(h), { framed: true });
             }
         });
+        // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
         legendEl.innerHTML = window.larisvmsSceneHeatmap.legend('');
         renderBackgroundControls(null);
     }
@@ -377,6 +379,7 @@
             chartEl.innerHTML = '<p class="text-muted mb-0">' + larisvmsI18n.html('js.activity.nothingMatchingTheseEventTypes') + '</p>';
             return;
         }
+        // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
         chartEl.innerHTML = tableToggle.checked ? renderTable(data)
             : data.mode === 'calendar' ? renderCalendar(data) : renderGrid(data);
     }
@@ -387,6 +390,7 @@
         for (var i = 1; i <= STEPS; i++) swatches += '<span class="activity-swatch activity-step-' + i + '"></span>';
         if (speeds()) {
             var speedScale = data.metric === 'avg' || data.metric === 'max';
+            // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
             legendEl.innerHTML = speedScale
                 ? '<span class="small text-muted">' + larisvmsI18n.html('js.activity.legendSlower', { speed: Math.round(data.min), unit: data.unit }) + '</span>' + swatches +
                   '<span class="small text-muted">' + larisvmsI18n.html('js.activity.legendFaster', { speed: Math.round(data.max), unit: data.unit }) + '</span>' +
@@ -395,6 +399,7 @@
                   '<span class="small text-muted">' + larisvmsI18n.html('js.activity.legendMore', { max: data.max }) + '</span>';
             return;
         }
+        // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
         legendEl.innerHTML = '<span class="small text-muted">' + larisvmsI18n.html('js.activity.fewer') + '</span>' + swatches +
             '<span class="small text-muted">' + larisvmsI18n.html('js.activity.legendMore', { max: data.max }) + '</span>';
     }
@@ -413,13 +418,14 @@
             ? larisvmsI18n.plural('js.activity.busiestSpotMotion', data.maxCount)
             : larisvmsI18n.plural('js.activity.busiestSpotPassed', data.maxCount)));
         if (data.maxCount === 0) {
-            chartEl.innerHTML = '<p class="text-muted mb-0">' + (motion
-                ? larisvmsI18n.t('js.activity.noGridMotionRecordedIn')
-                : larisvmsI18n.html('js.activity.noMovingObjects')) + '</p>';
+            chartEl.innerHTML = '<p class="text-muted mb-0">' + larisvmsI18n.html(motion
+                ? 'js.activity.noGridMotionRecordedIn'
+                : 'js.activity.noMovingObjects') + '</p>';
             legendEl.innerHTML = '';
         } else {
             window.larisvmsSceneHeatmap.reset();
             window.larisvmsSceneHeatmap.render(chartEl, data, backgroundUrl(data));
+            // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
             legendEl.innerHTML = window.larisvmsSceneHeatmap.legend(motion
                 ? larisvmsI18n.plural('js.activity.legendFrames', data.maxCount)
                 : larisvmsI18n.plural('js.activity.legendObjects', data.maxCount));
@@ -579,12 +585,13 @@
             filterEl.innerHTML = '<span class="text-muted">' + larisvmsI18n.html('js.activity.noEventsInThisRange') + '</span>';
             return;
         }
+        // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
         filterEl.innerHTML = data.groups.map(function (grp, gi) {
             var whole = isSelected(grp.key);
             var some = !whole && grp.labels.some(function (l) { return isSelected(l.key); });
             var id = 'activityGroup' + gi;
             var labels = grp.labels.length === 0 ? '' :
-                '<details class="ms-4"' + (some ? ' open' : '') + '><summary class="text-muted">' + larisvmsI18n.plural('js.activity.labelCount', grp.labels.length) + '</summary>' +
+                '<details class="ms-4"' + (some ? ' open' : '') + '><summary class="text-muted">' + escapeHtml(larisvmsI18n.plural('js.activity.labelCount', grp.labels.length)) + '</summary>' +
                 grp.labels.map(function (l, li) {
                     var lid = id + '_' + li;
                     return '<div class="form-check"><input class="form-check-input" type="checkbox" id="' + lid + '" data-label="' + escapeHtml(l.key) + '" data-group="' + escapeHtml(grp.key) + '"' +
@@ -647,6 +654,7 @@
             return;
         }
         var all = data.selection.length === 0;
+        // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
         trapsEl.innerHTML = data.traps.map(function (t, i) {
             var id = 'activityTrap' + i;
             return '<div class="form-check"><input class="form-check-input" type="checkbox" id="' + id + '" data-trap="' + escapeHtml(t.id) + '"' +

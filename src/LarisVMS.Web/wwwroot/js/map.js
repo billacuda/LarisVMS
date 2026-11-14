@@ -207,6 +207,7 @@
         if (!selectedEl) return;
         var p = selectedId && placementOf(selectedId);
         if (!p) { selectedEl.innerHTML = '<span class="text-muted">' + larisvmsI18n.html('js.map.clickACameraOnThe') + '</span>'; return; }
+        // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
         selectedEl.innerHTML =
             '<div class="fw-semibold mb-2">' + escapeHtml(p.cameraName) + '</div>' +
             '<label class="form-label mb-0" for="mapFov">' + larisvmsI18n.html('js.map.fieldOfView') + ' <span id="mapFovValue">' + Math.round(p.fovDeg) + '°</span></label>' +
@@ -260,8 +261,9 @@
         (current ? current.placements : []).forEach(function (p) { placed[p.cameraId] = true; });
         var q = (paletteFilter && paletteFilter.value || '').toLowerCase();
         var available = (config.cameras || []).filter(function (c) { return !placed[c.id] && c.name.toLowerCase().indexOf(q) >= 0; });
+        // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
         paletteEl.innerHTML = available.length === 0
-            ? '<div class="text-muted px-2">' + ((config.cameras || []).length ? larisvmsI18n.t('js.map.everyCameraIsOnThis') : larisvmsI18n.t('js.map.noCameras')) + '</div>'
+            ? '<div class="text-muted px-2">' + ((config.cameras || []).length ? larisvmsI18n.html('js.map.everyCameraIsOnThis') : larisvmsI18n.html('js.map.noCameras')) + '</div>'
             : available.map(function (c) {
                 // Not a <button>: Firefox won't drag one. Clicking or pressing Enter places it mid-map.
                 return '<div class="list-group-item list-group-item-action py-1 px-2 lv-map-palette-item" draggable="true" role="button" tabindex="0" ' +
@@ -409,8 +411,9 @@
         return api('/api/maps').then(function (data) {
             maps = data.maps || [];
             tiles = data.tiles || OSM;
+            // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
             select.innerHTML = maps.map(function (m) {
-                return '<option value="' + m.id + '">' + escapeHtml(m.name) + (m.kind === 'Floorplan' ? ' (floorplan)' : '') + '</option>';
+                return '<option value="' + m.id + '">' + (m.kind === 'Floorplan' ? larisvmsI18n.html('js.map.floorplanName', { name: m.name }) : escapeHtml(m.name)) + '</option>';
             }).join('');
             var empty = maps.length === 0;
             emptyEl.classList.toggle('d-none', !empty);

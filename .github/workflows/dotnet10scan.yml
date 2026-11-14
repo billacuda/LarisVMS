@@ -23,11 +23,13 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: Build and generate SARIF
-        # Outputs all C# compiler, .NET analyzer, and SCS warnings to SARIF
-        run: dotnet build --configuration Release /p:ErrorLog=scs-results.sarif,version=2.1
+        # Outputs all C# compiler, .NET analyzer, and SCS warnings to SARIF, one file per project
+        # (see Directory.Build.props).
+        run: dotnet build LarisVMS.slnx --configuration Release -p:SarifDir=${{ github.workspace }}/sarif
 
       - name: Upload SARIF to GitHub Security
         if: always()
         uses: github/codeql-action/upload-sarif@v4
         with:
-          sarif_file: scs-results.sarif
+          sarif_file: sarif
+          category: dotnet10-scs

@@ -525,6 +525,7 @@ window.larisvmsViewPlay = (function () {
             var el = document.createElement('div');
             el.style.gridColumn = (cell.x + 1) + ' / span ' + cell.w;
             el.style.gridRow = (cell.y + 1) + ' / span ' + cell.h;
+            // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
             el.innerHTML = buildCellHtml(cell);
             container.appendChild(el);
             startCellVideo(el, cell);
@@ -617,6 +618,7 @@ window.larisvmsViewPlay = (function () {
             var el = document.createElement('div');
             el.style.aspectRatio = mobileCellRatio(cell).replace(':', '/');
             if (spanFullWidth) el.style.gridColumn = '1 / -1';
+            // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
             el.innerHTML = buildCellHtml(cell);
             container.appendChild(el);
             startCellVideo(el, cell);

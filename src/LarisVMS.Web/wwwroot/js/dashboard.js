@@ -71,6 +71,7 @@
             '" style="width: ' + barWidth(p) + '%"></div></div>';
     }
 
+    // label is HTML (already escaped).
     function countRow(label, c) {
         if (!c) return '';
         return '<tr><td>' + label + '</td>' +
@@ -84,7 +85,7 @@
         var html = '<div class="col-12 col-md-6 col-xl-4"><div class="card h-100"><div class="card-body">' +
             '<div class="d-flex justify-content-between align-items-center mb-2">' +
                 '<span class="fw-semibold">' + escapeHtml(n.nodeName) + '</span>' +
-                '<span class="badge ' + (n.online ? 'text-bg-success' : 'text-bg-secondary') + '">' + (n.online ? 'online' : 'offline') + '</span>' +
+                '<span class="badge ' + (n.online ? 'text-bg-success' : 'text-bg-secondary') + '">' + larisvmsI18n.html(n.online ? 'js.dashboard.online' : 'js.dashboard.offline') + '</span>' +
             '</div>';
         if (n.hostStatsFresh) {
             var mem = memoryPercent(n);
@@ -94,12 +95,12 @@
         } else {
             html += '<div class="small text-muted mb-1">' + larisvmsI18n.html('js.dashboard.noLoadFiguresFromThis') + '</div>';
         }
-        html += '<div class="small mb-1">' + larisvmsI18n.html('js.dashboard.recording') + ' <span class="float-end">' + larisvmsI18n.plural('js.dashboard.recordingValue', n.camerasReporting, { fps: n.totalFps }) + '</span></div>';
+        html += '<div class="small mb-1">' + larisvmsI18n.html('js.dashboard.recording') + ' <span class="float-end">' + escapeHtml(larisvmsI18n.plural('js.dashboard.recordingValue', n.camerasReporting, { fps: n.totalFps })) + '</span></div>';
         if (n.objectDetectionEnabled && n.events) {
             html += '<table class="table table-sm small mb-0 mt-2"><thead><tr><th></th>' +
                 '<th class="text-end">' + larisvmsI18n.html('js.dashboard.window1h') + '</th><th class="text-end">' + larisvmsI18n.html('js.dashboard.window24h') + '</th><th class="text-end">' + larisvmsI18n.html('js.dashboard.window7d') + '</th><th class="text-end">' + larisvmsI18n.html('js.dashboard.window30d') + '</th></tr></thead><tbody>' +
-                countRow(larisvmsI18n.t('js.dashboard.events'), n.events) + countRow(larisvmsI18n.t('js.dashboard.humans'), n.humans) +
-                countRow(larisvmsI18n.t('js.dashboard.vehicles'), n.vehicles) + countRow(larisvmsI18n.t('js.dashboard.animals'), n.animals) +
+                countRow(larisvmsI18n.html('js.dashboard.events'), n.events) + countRow(larisvmsI18n.html('js.dashboard.humans'), n.humans) +
+                countRow(larisvmsI18n.html('js.dashboard.vehicles'), n.vehicles) + countRow(larisvmsI18n.html('js.dashboard.animals'), n.animals) +
                 '</tbody></table>';
         }
         return html + '</div></div></div>';
@@ -107,6 +108,7 @@
 
     function renderNodes(data) {
         if (!nodesContainer) return;
+        // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
         nodesContainer.innerHTML = (data.nodes || []).map(renderNode).join('');
     }
 
@@ -130,7 +132,7 @@
     }
 
     function nodeCell(r) {
-        if (!r.nodeAssigned) return '<span class="text-muted">unassigned</span>';
+        if (!r.nodeAssigned) return '<span class="text-muted">' + larisvmsI18n.html('js.dashboard.unassigned') + '</span>';
         var badgeClass = r.nodeOnline ? 'text-bg-success' : 'text-bg-secondary';
         return escapeHtml(r.nodeName) + ' <span class="badge ' + badgeClass + ' ms-1">' + larisvmsI18n.html(r.nodeOnline ? 'js.dashboard.online' : 'js.dashboard.offline') + '</span>';
     }
@@ -195,6 +197,7 @@
         if (emptyMessage) emptyMessage.style.display = rows.length === 0 ? '' : 'none';
         if (tableWrap) tableWrap.style.display = rows.length === 0 ? 'none' : '';
 
+        // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
         tbody.innerHTML = rows.map(function (r) { return renderRow(r, showThumbnails); }).join('');
         composeAfterRender();
     }

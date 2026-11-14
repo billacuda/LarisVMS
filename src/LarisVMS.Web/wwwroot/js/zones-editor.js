@@ -615,9 +615,8 @@ window.larisvmsZonesEditor = (function () {
             var panel = document.getElementById(opts.listPanelId);
             var shown = visibleZones();
             if (!shown.length) {
-                panel.innerHTML = view === 'Privacy'
-                    ? '<p class="text-muted small">' + larisvmsI18n.html('js.zonesEditor.noPrivacyMasksYetDraw') + '</p>'
-                    : '<p class="text-muted small">' + larisvmsI18n.html('js.zonesEditor.noZonesYetDrawOne') + '</p>';
+                panel.innerHTML = '<p class="text-muted small">' +
+                    larisvmsI18n.html(view === 'Privacy' ? 'js.zonesEditor.noPrivacyMasksYetDraw' : 'js.zonesEditor.noZonesYetDrawOne') + '</p>';
                 return;
             }
             var html = '<div class="list-group">';
@@ -628,10 +627,11 @@ window.larisvmsZonesEditor = (function () {
                     '<span class="d-inline-block rounded-circle me-2" style="width:10px;height:10px;background:' + color + ';"></span>' +
                     escHtml(z.name) +
                     (z.isEnabled ? '' : ' <span class="text-muted small">' + larisvmsI18n.html('js.zonesEditor.disabled') + '</span>') +
-                    '<div class="text-muted small">' + (KIND_LABELS[z.kind] || z.kind) + '</div>' +
+                    '<div class="text-muted small">' + escHtml(KIND_LABELS[z.kind] || z.kind) + '</div>' +
                     '</button>';
             });
             html += '</div>';
+            // eslint-disable-next-line no-unsanitized/property -- reviewed: text is escaped (escapeHtml/escHtml/larisvmsI18n.html); the rest is fixed markup, numbers, or server IDs
             panel.innerHTML = html;
 
             Array.prototype.forEach.call(panel.querySelectorAll('[data-zone-id]'), function (el) {
